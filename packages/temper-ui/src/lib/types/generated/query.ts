@@ -6,6 +6,7 @@ import type { ContextId } from "./ContextId";
 import type { EdgeKind } from "./graph";
 import type { JsonValue } from "./serde_json/JsonValue";
 import type { Polarity } from "./graph";
+import type { RefusalTeaching } from "./artifact_ask";
 import type { ResourceSection } from "./ResourceSection";
 import type { ResourceView } from "./resource_view";
 
@@ -679,7 +680,19 @@ stage: StageName | null, reason: RefusalReason,
 /**
  * Human-readable, at the depth the asker's standing allows.
  */
-detail: string, };
+detail: string, 
+/**
+ * What the refusal teaches, as data rather than prose — the shape's own vocabulary for an
+ * artifact ask refused against it (spec 2026-10-19-asking-artifacts-by-what-they-are §3.5).
+ *
+ * Additive: absent when a refusal has nothing to teach, so a refusal from an older producer
+ * parses unchanged and an older client skips the field.
+ *
+ * **Boxed** so a refusal stays pointer-small: refusals travel by value through the query
+ * pipeline (`Result<_, PlanRefusal>` in the compiler), and a teaching inline would make every
+ * one of them pay its size. A `Box` serializes as what it holds, so the wire is unchanged.
+ */
+teaches: RefusalTeaching | null, };
 
 /**
  * Which [`StageOutput`] variant a stage carries — the tag, as a value.
@@ -775,7 +788,7 @@ trace: CompositionTrace, };
  * change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,
  * matched exhaustively.
  */
-export type RefusalReason = "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "intention_budget_exceeded" | "too_many_filter_values" | "duplicate_set_member" | "malformed_embedding" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | "property_value_too_large" | "property_value_budget_exceeded" | "filter_string_too_long" | "list_too_long" | "text_budget_exceeded" | string;
+export type RefusalReason = "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "intention_budget_exceeded" | "too_many_filter_values" | "duplicate_set_member" | "malformed_embedding" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | "property_value_too_large" | "property_value_budget_exceeded" | "filter_string_too_long" | "list_too_long" | "text_budget_exceeded" | "shape_not_askable" | "shape_superseded" | "shape_schema_uncompilable" | "empty_artifact_path" | "path_outside_shape" | "operator_outside_shape" | "value_outside_shape" | "unknown_artifact_intent" | "unknown_shape_state" | "ask_scope_conflict" | string;
 
 /**
  * One region a `survey` stage matched, and the score it matched at.

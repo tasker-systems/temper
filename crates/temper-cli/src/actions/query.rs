@@ -151,6 +151,7 @@ mod tests {
             stage: stage.map(|s| StageName::parse(s).expect("valid stage name")),
             reason: RefusalReason::UnknownAct,
             detail: detail.to_string(),
+            teaches: None,
         }
     }
 

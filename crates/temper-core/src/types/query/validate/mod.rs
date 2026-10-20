@@ -21,8 +21,14 @@
 mod capability;
 mod shape;
 
+// The per-candidate caps, for the artifact ask's own caps to mirror (spec
+// 2026-10-19-asking-artifacts-by-what-they-are §3.4, *Caps*): one definition of each number.
+pub(crate) use capability::{MAX_PER_CANDIDATE_PREDICATES, MAX_PER_CANDIDATE_PROBES};
+
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+
+use crate::types::artifact_ask::RefusalTeaching;
 
 use super::act::{ActName, ActQuantity, Disclosure};
 use super::composition::{Composition, ReturnSpec, StageNode};
@@ -131,6 +137,17 @@ pub struct PlanRefusal {
     pub reason: RefusalReason,
     /// Human-readable, at the depth the asker's standing allows.
     pub detail: String,
+    /// What the refusal teaches, as data rather than prose — the shape's own vocabulary for an
+    /// artifact ask refused against it (spec 2026-10-19-asking-artifacts-by-what-they-are §3.5).
+    ///
+    /// Additive: absent when a refusal has nothing to teach, so a refusal from an older producer
+    /// parses unchanged and an older client skips the field.
+    ///
+    /// **Boxed** so a refusal stays pointer-small: refusals travel by value through the query
+    /// pipeline (`Result<_, PlanRefusal>` in the compiler), and a teaching inline would make every
+    /// one of them pay its size. A `Box` serializes as what it holds, so the wire is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub teaches: Option<Box<RefusalTeaching>>,
 }
 
 /// A composition that has passed every static check, in topological order.
@@ -167,6 +184,7 @@ fn refusal(
         stage: stage.cloned(),
         reason,
         detail: detail.into(),
+        teaches: None,
     }
 }
 

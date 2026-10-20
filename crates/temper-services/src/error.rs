@@ -576,6 +576,7 @@ mod tests {
             stage: None,
             reason: RefusalReason::UnknownAct,
             detail: detail.to_string(),
+            teaches: None,
         }
     }
 

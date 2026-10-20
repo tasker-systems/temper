@@ -4056,6 +4056,21 @@ export interface components {
             /** @description `"never_declared"` today; will carry conformance verdicts when the shape registry lands. */
             shape_state: string;
         };
+        /**
+         * @description The name of a [`PropertyOp`](crate::types::query::PropertyOp) operator, for a vocabulary to
+         *     list. Not a second operator type: it carries no value, and binds nothing.
+         * @enum {string}
+         */
+        AskOperator: "has_key" | "contains" | "compare";
+        /**
+         * @description One askable path: its segments, what the schema declares there, and the operators feasible at
+         *     it (spec §2.5).
+         */
+        AskablePath: {
+            facts: components["schemas"]["PathFacts"];
+            operators: components["schemas"]["AskOperator"][];
+            path: string[];
+        };
         /** @description Request body for `POST /api/relationships`. */
         AssertRelationshipRequest: components["schemas"]["ActInput"] & {
             edge_kind: components["schemas"]["EdgeKind"];
@@ -4868,6 +4883,11 @@ export interface components {
          * @enum {string}
          */
         BodyStorage: "verbatim" | "derived";
+        /**
+         * @description Which walk bound was met. A truncated vocabulary and a refusal both name it.
+         * @enum {string}
+         */
+        BoundKind: "depth" | "paths" | "schema_bytes";
         /** @description An aggregated cross-territory bridge (Tier-0). */
         Bridge: {
             /** Format: int32 */
@@ -7456,6 +7476,12 @@ export interface components {
             updated: string;
         };
         /**
+         * @description A JSON type as JSON Schema's `type` keyword names it. `integer` is the integral subset of
+         *     `number`, which is why it is its own member here and not in jsonb's `jsonb_typeof`.
+         * @enum {string}
+         */
+        JsonType: "null" | "boolean" | "integer" | "number" | "string" | "array" | "object";
+        /**
          * @description The namespace half of the family name — mirrors `temper_substrate::payloads::KindOwner`
          *     in a temper-core-native shape so the wire type does not depend on the substrate crate.
          *     `None` (the ordinary case) lets the SQL wrapper default the namespace from the owning
@@ -7869,6 +7895,20 @@ export interface components {
             returns: components["schemas"]["ReturnSpec"][];
         };
         /**
+         * @description What the schema declares at one path. Each field is `None` when the schema leaves it
+         *     unconstrained, so an absent field never reads as "nothing is admitted".
+         */
+        PathFacts: {
+            items?: components["schemas"]["PathFacts"] | null;
+            /**
+             * @description The declared JSON types. `None`: no `type` constrains the path. An empty set: the branches
+             *     that apply here declare types with nothing in common, so no value is admissible.
+             */
+            types?: components["schemas"]["JsonType"][] | null;
+            /** @description The `enum` / `const` values. `None`: no value set constrains the path. */
+            values?: unknown[] | null;
+        };
+        /**
          * @description How many invitations are waiting on the caller — the count-shaped answer to
          *     `GET /api/invitations/mine/count`.
          *
@@ -7916,6 +7956,7 @@ export interface components {
             detail: string;
             reason: components["schemas"]["RefusalReason"];
             stage?: components["schemas"]["StageName"] | null;
+            teaches?: components["schemas"]["RefusalTeaching"] | null;
         };
         /**
          * @description Every static reason a composition is not executable, in one payload.
@@ -8668,7 +8709,35 @@ export interface components {
          *     change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,
          *     matched exhaustively.
          */
-        RefusalReason: "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "intention_budget_exceeded" | "too_many_filter_values" | "duplicate_set_member" | "malformed_embedding" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | "property_value_too_large" | "property_value_budget_exceeded" | "filter_string_too_long" | "list_too_long" | "text_budget_exceeded" | string;
+        RefusalReason: "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "intention_budget_exceeded" | "too_many_filter_values" | "duplicate_set_member" | "malformed_embedding" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | "property_value_too_large" | "property_value_budget_exceeded" | "filter_string_too_long" | "list_too_long" | "text_budget_exceeded" | "shape_not_askable" | "shape_superseded" | "shape_schema_uncompilable" | "empty_artifact_path" | "path_outside_shape" | "operator_outside_shape" | "value_outside_shape" | "unknown_artifact_intent" | "unknown_shape_state" | "ask_scope_conflict" | string;
+        /**
+         * @description What a refusal teaches, as data an agent reads without parsing English (spec §3.5).
+         *
+         *     **Open, by being a struct of optional fields** rather than a tagged enum: a later refusal that
+         *     teaches something new adds a field older clients skip, where a new variant would fail their
+         *     parse of the whole refusal list. Each refusal fills what is relevant to it:
+         *
+         *     | reason | teaches |
+         *     |---|---|
+         *     | `path_outside_shape` | `vocabulary` (the askable paths), `beyond_bound` when a walk bound stopped it |
+         *     | `operator_outside_shape` | `vocabulary` (each offending path's facts and feasible operators) |
+         *     | `value_outside_shape` | `vocabulary` (each offending path's declared types and values), `non_closure` |
+         *     | `unknown_artifact_intent`, `unknown_shape_state` | `terms` |
+         *     | `shape_superseded` | `successor` |
+         */
+        RefusalTeaching: {
+            beyond_bound?: components["schemas"]["BoundKind"] | null;
+            elided?: components["schemas"]["TeachingElision"] | null;
+            /**
+             * @description That stored content is not closed by its shape, and the route to values it does not
+             *     declare (spec §3.4).
+             */
+            non_closure?: string | null;
+            successor?: components["schemas"]["ShapeSuccessor"] | null;
+            /** @description A closed vocabulary of terms: the intents, or the askable shape states. */
+            terms?: string[];
+            vocabulary?: components["schemas"]["Vocabulary"] | null;
+        };
         /**
          * @description One region a `survey` stage matched, and the score it matched at.
          *
@@ -10184,6 +10253,12 @@ export interface components {
          *     family within a single home (spec: data-artifact shape registry, 2026-08-21).
          */
         ShapeId: string;
+        /** @description The version in force after a fold: the live row at the same home and family. */
+        ShapeSuccessor: {
+            shape_id: components["schemas"]["ShapeId"];
+            /** Format: int32 */
+            shape_version: number;
+        };
         /**
          * @description One declared shape, as returned by the API and MCP surfaces.
          *
@@ -10885,6 +10960,14 @@ export interface components {
             updated: string;
         };
         /**
+         * @description How much of a teaching was cut, and where the whole of it is read: the shape's by-id read —
+         *     `temper data-artifact schema show`, `GET /api/shapes/{id}`, `get_data_artifact_shape`.
+         */
+        TeachingElision: {
+            omitted_paths: number;
+            shape: components["schemas"]["ShapeId"];
+        };
+        /**
          * @description Request body for `POST /api/teams`.
          *
          *     `parent` is an optional team ref (`+slug` or bare `slug`); when present the
@@ -11185,6 +11268,17 @@ export interface components {
              * @description The edge's own `target_id`, as stored.
              */
             target_id: string;
+        };
+        /**
+         * @description What a shape lets a caller ask: its askable paths, and whether the list was cut at a bound.
+         *
+         *     `truncated` is the walk bound met, never a silent short list (spec §2.5): a recursive tree
+         *     through `properties` is `Depth`, a 2^N `$defs` fan-out is `Paths`, an oversized schema is
+         *     `SchemaBytes` with no paths.
+         */
+        Vocabulary: {
+            paths: components["schemas"]["AskablePath"][];
+            truncated?: components["schemas"]["BoundKind"] | null;
         };
         /** @description The **wide** arm, its disposition, and whether its signal was available at all. */
         WideArm: {

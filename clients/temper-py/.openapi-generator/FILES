@@ -67,6 +67,8 @@ temper/generated/models/append_block_payload.py
 temper/generated/models/artifact_commit_request.py
 temper/generated/models/artifact_commit_response.py
 temper/generated/models/artifact_view.py
+temper/generated/models/ask_operator.py
+temper/generated/models/askable_path.py
 temper/generated/models/assert_relationship_request.py
 temper/generated/models/atlas_edge.py
 temper/generated/models/atlas_entry.py
@@ -118,6 +120,7 @@ temper/generated/models/block_scrub_count.py
 temper/generated/models/block_successor.py
 temper/generated/models/blocks_response.py
 temper/generated/models/body_storage.py
+temper/generated/models/bound_kind.py
 temper/generated/models/bridge.py
 temper/generated/models/bulk_reassign_ack.py
 temper/generated/models/bulk_reassign_request.py
@@ -269,6 +272,7 @@ temper/generated/models/issued_machine_credential.py
 temper/generated/models/join_request.py
 temper/generated/models/join_request_status.py
 temper/generated/models/join_request_with_profile.py
+temper/generated/models/json_type.py
 temper/generated/models/kind_owner_input.py
 temper/generated/models/kind_owner_input_one_of.py
 temper/generated/models/kind_owner_input_one_of1.py
@@ -296,6 +300,7 @@ temper/generated/models/orphan_node.py
 temper/generated/models/other_author_edge.py
 temper/generated/models/other_author_edge_property.py
 temper/generated/models/outcome_declaration.py
+temper/generated/models/path_facts.py
 temper/generated/models/pending_invitation_counts.py
 temper/generated/models/plan_refusal.py
 temper/generated/models/plan_refusal_details.py
@@ -358,6 +363,7 @@ temper/generated/models/reembed_request.py
 temper/generated/models/reembed_summary.py
 temper/generated/models/refusal.py
 temper/generated/models/refusal_reason.py
+temper/generated/models/refusal_teaching.py
 temper/generated/models/region_disclosure.py
 temper/generated/models/region_hit.py
 temper/generated/models/relationship_ack.py
@@ -427,6 +433,7 @@ temper/generated/models/set_tool_manifest_request.py
 temper/generated/models/set_webhook_events_request.py
 temper/generated/models/shape_declare_request.py
 temper/generated/models/shape_emptiness.py
+temper/generated/models/shape_successor.py
 temper/generated/models/shape_view.py
 temper/generated/models/share_context_outcome.py
 temper/generated/models/share_context_request.py
@@ -458,6 +465,7 @@ temper/generated/models/subscription_selector_one_of1.py
 temper/generated/models/subscription_selector_one_of2.py
 temper/generated/models/system_access_details.py
 temper/generated/models/system_settings.py
+temper/generated/models/teaching_elision.py
 temper/generated/models/team_create_request.py
 temper/generated/models/team_detail.py
 temper/generated/models/team_invitation.py
@@ -477,6 +485,7 @@ temper/generated/models/unshare_context_outcome.py
 temper/generated/models/update_settings_request.py
 temper/generated/models/vault_config.py
 temper/generated/models/via_entry.py
+temper/generated/models/vocabulary.py
 temper/generated/models/wide_arm.py
 temper/generated/models/wide_hit.py
 temper/generated/py.typed

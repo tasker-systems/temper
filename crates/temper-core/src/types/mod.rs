@@ -10,6 +10,7 @@
 pub mod access_gate;
 pub mod admin;
 pub mod api;
+pub mod artifact_ask;
 pub mod audit;
 pub mod auditor;
 pub mod auth;
@@ -78,6 +79,7 @@ pub use access_gate::{
     SystemSettings,
 };
 pub use api::{HealthResponse, ProfileUpdateRequest, SearchParams, SearchResultRow};
+pub use artifact_ask::{ArtifactAsk, ArtifactPredicate};
 pub use audit::ResourceAuditRow;
 pub use auth::{
     AuthClaims, AuthProvider, PrincipalKind, ReconcileRequest, ResolvePrincipalRequest,

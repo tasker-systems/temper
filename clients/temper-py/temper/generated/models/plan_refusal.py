@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
 from typing import Any, ClassVar, Dict, List, Optional
 from typing_extensions import Annotated
 from temper.generated.models.refusal_reason import RefusalReason
+from temper.generated.models.refusal_teaching import RefusalTeaching
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
@@ -32,7 +33,8 @@ class PlanRefusal(BaseModel):
     detail: StrictStr = Field(description="Human-readable, at the depth the asker's standing allows.")
     reason: RefusalReason
     stage: Optional[Annotated[str, Field(strict=True)]] = Field(default=None, description="The stage it attaches to, when it attaches to one.  `None` for a refusal about the composition as a whole — a cycle, a dangling reference, a duplicate name.")
-    __properties: ClassVar[List[str]] = ["detail", "reason", "stage"]
+    teaches: Optional[RefusalTeaching] = Field(default=None, description="What the refusal teaches, as data rather than prose — the shape's own vocabulary for an artifact ask refused against it (spec 2026-10-19-asking-artifacts-by-what-they-are §3.5).  Additive: absent when a refusal has nothing to teach, so a refusal from an older producer parses unchanged and an older client skips the field.  **Boxed** so a refusal stays pointer-small: refusals travel by value through the query pipeline (`Result<_, PlanRefusal>` in the compiler), and a teaching inline would make every one of them pay its size. A `Box` serializes as what it holds, so the wire is unchanged.")
+    __properties: ClassVar[List[str]] = ["detail", "reason", "stage", "teaches"]
 
     @field_validator('stage')
     def stage_validate_regular_expression(cls, value):
@@ -89,10 +91,18 @@ class PlanRefusal(BaseModel):
         # override the default output from pydantic by calling `to_dict()` of reason
         if self.reason:
             _dict['reason'] = self.reason.to_dict()
+        # override the default output from pydantic by calling `to_dict()` of teaches
+        if self.teaches:
+            _dict['teaches'] = self.teaches.to_dict()
         # set to None if stage (nullable) is None
         # and model_fields_set contains the field
         if self.stage is None and "stage" in self.model_fields_set:
             _dict['stage'] = None
+
+        # set to None if teaches (nullable) is None
+        # and model_fields_set contains the field
+        if self.teaches is None and "teaches" in self.model_fields_set:
+            _dict['teaches'] = None
 
         return _dict
 
@@ -108,7 +118,8 @@ class PlanRefusal(BaseModel):
         _obj = cls.model_validate({
             "detail": obj.get("detail"),
             "reason": RefusalReason.from_dict(obj["reason"]) if obj.get("reason") is not None else None,
-            "stage": obj.get("stage")
+            "stage": obj.get("stage"),
+            "teaches": RefusalTeaching.from_dict(obj["teaches"]) if obj.get("teaches") is not None else None
         })
         return _obj
 

@@ -417,6 +417,7 @@ fn subtrahend_refusal(
                 .map(|s| s.as_str())
                 .unwrap_or("the minuend"),
         ),
+        teaches: None,
     })
 }
 
@@ -461,6 +462,7 @@ fn emit_act_body(
                          should have refused this stage as `unsupported_seed_kind` before \
                          compilation"
                     .to_string(),
+                teaches: None,
             });
         }
         Ok(narrowing.bound_expr().to_string())
@@ -550,6 +552,7 @@ fn emit_act_body(
                     detail: "a find-about-* stage needs a query embedding; none was supplied and \
                              the server could not compute one"
                         .to_string(),
+                    teaches: None,
                 });
                 return Ok(emitted(refused_body(&act)));
             };
@@ -626,6 +629,7 @@ fn emit_act_body(
                     detail: "a survey stage needs a query embedding; none was supplied and \
                              the server could not compute one"
                         .to_string(),
+                    teaches: None,
                 });
                 return Ok(emitted(refused_body(&act)));
             };
@@ -1121,6 +1125,7 @@ fn narrowing_one(
                              different question than the one asked",
                             ids.ids.len()
                         ),
+                        teaches: None,
                     });
                 };
                 let ai = binds.len() + 1;
@@ -1436,6 +1441,7 @@ fn missing_question(inv: &temper_core::types::query::ActInvocation, detail: &str
         stage: Some(inv.name.clone()),
         reason: RefusalReason::MissingIntention,
         detail: detail.to_string(),
+        teaches: None,
     }
 }
 
