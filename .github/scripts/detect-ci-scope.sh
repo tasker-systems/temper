@@ -288,8 +288,9 @@ fi
 # quality-gate outcome. The Ruby gem is here too: it is inert to cargo for the
 # same reason, and its own drift gate rides test-ruby (keyed below), not the
 # Rust corpus. The Python SDK is here for the identical reason, riding
-# test-python.
-RUST_INERT_ROOTS='^packages/temper-cloud/|^packages/temper-ui/|^packages/agent-workflows/|^clients/temper-ts/|^clients/temper-telemetry-ts/|^clients/temper-rb/|^clients/temper-py/'
+# test-python. The theme contract package (packages/temper-design) is neither a
+# cargo member nor a bun workspace member; its self-check rides test-typescript.
+RUST_INERT_ROOTS='^packages/temper-cloud/|^packages/temper-ui/|^packages/temper-design/|^packages/agent-workflows/|^clients/temper-ts/|^clients/temper-telemetry-ts/|^clients/temper-rb/|^clients/temper-py/'
 
 # RUST_COUPLED: files a Rust gate OWNS — either it regenerates and diffs them,
 # or it compiles them in and asserts against them. Two of them live UNDER an

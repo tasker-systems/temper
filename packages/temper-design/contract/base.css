@@ -1,0 +1,221 @@
+/* Theme-independent base and recipes. Consumes contract roles only — no literal
+   colour appears in this file, so every recipe restyles with the active theme.
+
+   The `t-*` type recipes and `ed-*` editorial classes are carried over from temper's
+   web UI by name, so a component ported from there keeps its class list. They are plain
+   CSS rather than Tailwind utilities: they are recipes a component composes, and they
+   must read the same whether or not the consumer uses Tailwind.
+
+   Import after tailwindcss (when used), contract/tailwind.css, and a theme.css. */
+
+/* ─── Base ──────────────────────────────────────────────────────────────── */
+
+html {
+  background: var(--tp-ground);
+  color: var(--tp-text);
+  font-family: var(--tp-font-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--tp-accent-hover);
+}
+
+:focus-visible {
+  outline: 2px solid var(--tp-focus);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ─── Type recipes ──────────────────────────────────────────────────────── */
+
+.t-hero-title {
+  font-family: var(--tp-font-reading);
+  font-size: clamp(2.4rem, 5vw, 3.8rem);
+  font-weight: 300;
+  line-height: 1.15;
+  letter-spacing: 0.01em;
+  color: var(--tp-text);
+}
+.t-hero-title em { color: var(--tp-accent); font-style: italic; }
+
+.t-ed-hero-name {
+  font-family: var(--tp-font-reading);
+  font-size: clamp(2.5rem, 6vw, 4.5rem);
+  font-weight: 400;
+  letter-spacing: -0.025em;
+  line-height: 0.95;
+  color: var(--tp-text);
+}
+
+.t-h2 {
+  font-family: var(--tp-font-reading);
+  font-size: 1.6rem;
+  font-weight: 300;
+  line-height: 1.3;
+  color: var(--tp-text);
+}
+.t-h2 em { color: var(--tp-accent); font-style: italic; }
+
+.t-label {
+  font-family: var(--tp-font-doing);
+  font-size: 0.65rem;
+  letter-spacing: var(--tp-tracking-label);
+  text-transform: uppercase;
+  color: var(--tp-accent);
+}
+
+.t-body {
+  font-family: var(--tp-font-reading);
+  font-size: 1rem;
+  line-height: 1.8;
+  color: var(--tp-text-muted);
+}
+.t-body strong { color: var(--tp-text); font-weight: 400; }
+
+.t-tagline {
+  font-family: var(--tp-font-reading);
+  font-size: 1.1rem;
+  font-style: italic;
+  line-height: 1.7;
+  color: var(--tp-text-subtle);
+}
+
+.t-ed-deck {
+  font-family: var(--tp-font-reading);
+  font-size: 1.05rem;
+  font-style: italic;
+  line-height: 1.55;
+  color: var(--tp-text-muted);
+}
+
+.t-code {
+  font-family: var(--tp-font-doing);
+  font-size: 0.8rem;
+  color: var(--tp-text-muted);
+}
+.t-code .cmd { color: var(--tp-accent); }
+.t-code .flag { color: var(--tp-text-subtle); }
+
+.t-wordmark {
+  font-family: var(--tp-font-doing);
+  font-weight: 500;
+  letter-spacing: var(--tp-tracking-mark);
+  color: var(--tp-accent);
+}
+
+.t-strip {
+  font-family: var(--tp-font-doing);
+  font-size: 0.62rem;
+  letter-spacing: var(--tp-tracking-strip);
+  text-transform: uppercase;
+  color: var(--tp-text-subtle);
+}
+
+.t-action {
+  font-family: var(--tp-font-doing);
+  font-size: 0.62rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--tp-accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: color var(--tp-motion-quick) var(--tp-motion-easing);
+}
+.t-action:hover { color: var(--tp-text); }
+
+/* ─── Editorial structure ───────────────────────────────────────────────── */
+
+/* The rail: the markdown blockquote marker made structural. */
+.ed-rail {
+  padding-left: 1.8rem;
+  border-left: 2px solid var(--tp-accent-line-soft);
+}
+
+.ed-strip {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--tp-rule);
+  font-family: var(--tp-font-doing);
+  font-size: 0.62rem;
+  letter-spacing: var(--tp-tracking-strip);
+  text-transform: uppercase;
+  color: var(--tp-text-subtle);
+}
+.ed-strip-em { color: var(--tp-text-muted); }
+.ed-strip-accent { color: var(--tp-accent); }
+.ed-strip-sep { opacity: 0.5; }
+.ed-strip-spacer { flex: 1; }
+
+.ed-notice {
+  border-left: 2px solid var(--tp-notice);
+  padding: 0.7rem 1.2rem;
+  background: var(--tp-notice-wash);
+  color: var(--tp-notice);
+  font-family: var(--tp-font-reading);
+  font-style: italic;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+.ed-notice--success {
+  border-left-color: var(--tp-success);
+  background: var(--tp-success-wash);
+  color: var(--tp-success);
+}
+
+.ed-action {
+  font-family: var(--tp-font-doing);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0.4rem 0;
+  transition: color var(--tp-motion-quick) var(--tp-motion-easing);
+}
+.ed-action--primary { color: var(--tp-accent); }
+.ed-action--primary:hover { color: var(--tp-text); }
+.ed-action--ghost { color: var(--tp-text-subtle); }
+.ed-action--ghost:hover { color: var(--tp-text-muted); }
+.ed-action--danger { color: var(--tp-danger); }
+.ed-action:disabled { color: var(--tp-text-faint); cursor: not-allowed; }
+.ed-action-sep { display: inline-block; margin: 0 0.6rem; color: var(--tp-text-faint); }
+
+/* ─── Code ──────────────────────────────────────────────────────────────── */
+
+.hljs .hljs-comment,
+.hljs .hljs-quote { color: var(--tp-code-comment); font-style: italic; }
+.hljs .hljs-attr,
+.hljs .hljs-attribute,
+.hljs .hljs-property,
+.hljs .hljs-selector-tag,
+.hljs .hljs-name,
+.hljs .hljs-meta,
+.hljs .hljs-symbol,
+.hljs .hljs-bullet,
+.hljs .hljs-addition { color: var(--tp-code-key); }
+.hljs .hljs-string,
+.hljs .hljs-regexp { color: var(--tp-code-string); }
+.hljs .hljs-number,
+.hljs .hljs-literal,
+.hljs .hljs-keyword,
+.hljs .hljs-built_in,
+.hljs .hljs-type { color: var(--tp-code-number); }
+.hljs .hljs-title,
+.hljs .hljs-title.function_ { color: var(--tp-text); }
+.hljs .hljs-deletion { color: var(--tp-danger); }
+.hljs .hljs-emphasis { font-style: italic; }
+.hljs .hljs-strong { font-weight: 600; }

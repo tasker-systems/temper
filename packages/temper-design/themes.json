@@ -1,0 +1,14 @@
+[
+  {
+    "name": "quiet-instrument",
+    "title": "Quiet Instrument",
+    "appearance": "dark",
+    "counterpart": "quiet-instrument-paper"
+  },
+  {
+    "name": "quiet-instrument-paper",
+    "title": "Quiet Instrument — Paper",
+    "appearance": "light",
+    "counterpart": "quiet-instrument"
+  }
+]

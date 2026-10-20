@@ -1,0 +1,444 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/tasker-systems/temper/packages/temper-design/contract/theme.schema.json",
+  "title": "temper theme",
+  "description": "A theme is data: values for every role in the contract. Components consume roles, never values; a theme that omits a role or invents one does not validate.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "name",
+    "title",
+    "version",
+    "appearance",
+    "tokens"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "kind": {
+      "const": "theme"
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "Stable identifier; also the value of data-theme."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "description": {
+      "type": "string"
+    },
+    "appearance": {
+      "enum": [
+        "dark",
+        "light"
+      ],
+      "description": "Sets color-scheme; selects this theme when the system appearance matches and the person follows it."
+    },
+    "counterpart": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "The theme of the opposite appearance that pairs with this one."
+    },
+    "provenance": {
+      "type": "string",
+      "description": "Where the values came from."
+    },
+    "tokens": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "color",
+        "font",
+        "radius",
+        "motion",
+        "tracking"
+      ],
+      "properties": {
+        "color": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ground",
+            "surface",
+            "surface-raised",
+            "overlay",
+            "text",
+            "text-muted",
+            "text-subtle",
+            "text-faint",
+            "rule",
+            "rule-strong",
+            "accent",
+            "accent-muted",
+            "accent-line",
+            "accent-line-soft",
+            "accent-wash",
+            "accent-hover",
+            "on-accent",
+            "focus",
+            "notice",
+            "notice-wash",
+            "success",
+            "success-wash",
+            "danger",
+            "danger-wash",
+            "pending",
+            "pending-wash",
+            "region-arriving",
+            "region-arriving-wash",
+            "region-empty",
+            "region-empty-wash",
+            "region-gave-up",
+            "region-gave-up-wash",
+            "region-failed",
+            "region-failed-wash",
+            "author-human",
+            "author-agent",
+            "cat-1",
+            "cat-2",
+            "cat-3",
+            "cat-4",
+            "cat-5",
+            "cat-6",
+            "cat-7",
+            "cat-8",
+            "cat-neutral",
+            "code-key",
+            "code-string",
+            "code-number",
+            "code-comment"
+          ],
+          "properties": {
+            "ground": {
+              "$ref": "#/$defs/color",
+              "description": "The page/window ground. Everything else is composited over it."
+            },
+            "surface": {
+              "$ref": "#/$defs/color",
+              "description": "Panels, cards, docked peeks \u2014 a lifted fill over ground."
+            },
+            "surface-raised": {
+              "$ref": "#/$defs/color",
+              "description": "Popovers, menus, the command palette \u2014 one step above surface."
+            },
+            "overlay": {
+              "$ref": "#/$defs/color",
+              "description": "Scrim behind a modal. Translucent."
+            },
+            "text": {
+              "$ref": "#/$defs/color",
+              "description": "Primary reading text. Floor: 7:1 on ground and surface."
+            },
+            "text-muted": {
+              "$ref": "#/$defs/color",
+              "description": "Secondary text \u2014 decks, body in dense chrome. Floor: 4.5:1."
+            },
+            "text-subtle": {
+              "$ref": "#/$defs/color",
+              "description": "Tertiary text \u2014 mono labels, metadata strips, counts. Floor: 4.5:1."
+            },
+            "text-faint": {
+              "$ref": "#/$defs/color",
+              "description": "Disabled and decorative only; never carries information. Floor: 2.5:1."
+            },
+            "rule": {
+              "$ref": "#/$defs/color",
+              "description": "Hairline dividers."
+            },
+            "rule-strong": {
+              "$ref": "#/$defs/color",
+              "description": "Dividers that must survive a busy surface; input outlines."
+            },
+            "accent": {
+              "$ref": "#/$defs/color",
+              "description": "The single accent: section labels, the rail, links, primary actions. Floor: 4.5:1."
+            },
+            "accent-muted": {
+              "$ref": "#/$defs/color",
+              "description": "Accent at rest where full accent would shout (secondary links, idle markers)."
+            },
+            "accent-line": {
+              "$ref": "#/$defs/color",
+              "description": "Accent borders on buttons and focused inputs."
+            },
+            "accent-line-soft": {
+              "$ref": "#/$defs/color",
+              "description": "The rail motif and soft accent borders."
+            },
+            "accent-wash": {
+              "$ref": "#/$defs/color",
+              "description": "Selected-row / active-chip fill."
+            },
+            "accent-hover": {
+              "$ref": "#/$defs/color",
+              "description": "Hover fill on accent affordances."
+            },
+            "on-accent": {
+              "$ref": "#/$defs/color",
+              "description": "Text on a solid accent fill. Floor: 4.5:1 on accent."
+            },
+            "focus": {
+              "$ref": "#/$defs/color",
+              "description": "Keyboard focus ring. Floor: 3:1 on ground."
+            },
+            "notice": {
+              "$ref": "#/$defs/color",
+              "description": "A condition that wants the reader's attention (not a failure). Floor: 4.5:1 on its wash."
+            },
+            "notice-wash": {
+              "$ref": "#/$defs/color",
+              "description": "Fill behind a notice."
+            },
+            "success": {
+              "$ref": "#/$defs/color",
+              "description": "A completed act confirmed. Floor: 4.5:1 on its wash."
+            },
+            "success-wash": {
+              "$ref": "#/$defs/color",
+              "description": "Fill behind a success note."
+            },
+            "danger": {
+              "$ref": "#/$defs/color",
+              "description": "Destructive affordances (delete, retract). Floor: 4.5:1 on its wash."
+            },
+            "danger-wash": {
+              "$ref": "#/$defs/color",
+              "description": "Fill behind a destructive confirmation."
+            },
+            "pending": {
+              "$ref": "#/$defs/color",
+              "description": "Pending state \u2014 proposals awaiting ratification, threads addressed to you. State, not alarm. Floor: 4.5:1 on its wash."
+            },
+            "pending-wash": {
+              "$ref": "#/$defs/color",
+              "description": "Fill behind pending items."
+            },
+            "region-arriving": {
+              "$ref": "#/$defs/color",
+              "description": "Region state: a read in flight. Floor: 4.5:1 on its wash."
+            },
+            "region-arriving-wash": {
+              "$ref": "#/$defs/color",
+              "description": "Fill behind an arriving region."
+            },
+            "region-empty": {
+              "$ref": "#/$defs/color",
+              "description": "Region state: the read succeeded and there is nothing. Floor: 4.5:1 on its wash."
+            },
+            "region-empty-wash": {
+              "$ref": "#/$defs/color",
+              "description": "Fill behind an empty region."
+            },
+            "region-gave-up": {
+              "$ref": "#/$defs/color",
+              "description": "Region state: the system stopped waiting. A hue nothing else uses. Floor: 4.5:1 on its wash."
+            },
+            "region-gave-up-wash": {
+              "$ref": "#/$defs/color",
+              "description": "Fill behind a gave-up region."
+            },
+            "region-failed": {
+              "$ref": "#/$defs/color",
+              "description": "Region state: the read failed. Floor: 4.5:1 on its wash."
+            },
+            "region-failed-wash": {
+              "$ref": "#/$defs/color",
+              "description": "Fill behind a failed region."
+            },
+            "author-human": {
+              "$ref": "#/$defs/color",
+              "description": "Authorship gutter mark for a person. Floor: 3:1 on ground."
+            },
+            "author-agent": {
+              "$ref": "#/$defs/color",
+              "description": "Authorship gutter mark for an agent acting on someone's behalf. Floor: 3:1 on ground."
+            },
+            "cat-1": {
+              "$ref": "#/$defs/color",
+              "description": "Categorical slot 1 of 8. Vocabularies — core's doc types and plugins' — bind their terms to slots; they never name colours. Floor: 4.5:1 on ground, 3:1 on surface."
+            },
+            "cat-2": {
+              "$ref": "#/$defs/color",
+              "description": "Categorical slot 2 of 8. Vocabularies — core's doc types and plugins' — bind their terms to slots; they never name colours. Floor: 4.5:1 on ground, 3:1 on surface."
+            },
+            "cat-3": {
+              "$ref": "#/$defs/color",
+              "description": "Categorical slot 3 of 8. Vocabularies — core's doc types and plugins' — bind their terms to slots; they never name colours. Floor: 4.5:1 on ground, 3:1 on surface."
+            },
+            "cat-4": {
+              "$ref": "#/$defs/color",
+              "description": "Categorical slot 4 of 8. Vocabularies — core's doc types and plugins' — bind their terms to slots; they never name colours. Floor: 4.5:1 on ground, 3:1 on surface."
+            },
+            "cat-5": {
+              "$ref": "#/$defs/color",
+              "description": "Categorical slot 5 of 8. Vocabularies — core's doc types and plugins' — bind their terms to slots; they never name colours. Floor: 4.5:1 on ground, 3:1 on surface."
+            },
+            "cat-6": {
+              "$ref": "#/$defs/color",
+              "description": "Categorical slot 6 of 8. Vocabularies — core's doc types and plugins' — bind their terms to slots; they never name colours. Floor: 4.5:1 on ground, 3:1 on surface."
+            },
+            "cat-7": {
+              "$ref": "#/$defs/color",
+              "description": "Categorical slot 7 of 8. Vocabularies — core's doc types and plugins' — bind their terms to slots; they never name colours. Floor: 4.5:1 on ground, 3:1 on surface."
+            },
+            "cat-8": {
+              "$ref": "#/$defs/color",
+              "description": "Categorical slot 8 of 8. Vocabularies — core's doc types and plugins' — bind their terms to slots; they never name colours. Floor: 4.5:1 on ground, 3:1 on surface."
+            },
+            "cat-neutral": {
+              "$ref": "#/$defs/color",
+              "description": "The categorical mark bound to no slot: a doc type no vocabulary binds, or a tint deliberately unnamed. Floor: 4.5:1 on ground, 3:1 on surface."
+            },
+            "code-key": {
+              "$ref": "#/$defs/color",
+              "description": "Syntax: keys, attributes, names. Floor: 4.5:1 on surface."
+            },
+            "code-string": {
+              "$ref": "#/$defs/color",
+              "description": "Syntax: strings. Floor: 4.5:1 on surface."
+            },
+            "code-number": {
+              "$ref": "#/$defs/color",
+              "description": "Syntax: numbers, literals, keywords. Floor: 4.5:1 on surface."
+            },
+            "code-comment": {
+              "$ref": "#/$defs/color",
+              "description": "Syntax: comments. Floor: 4.5:1 on surface."
+            }
+          }
+        },
+        "font": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "reading",
+            "doing",
+            "ui"
+          ],
+          "properties": {
+            "reading": {
+              "$ref": "#/$defs/fontStack",
+              "description": "Reading face \u2014 prose, headings, decks."
+            },
+            "doing": {
+              "$ref": "#/$defs/fontStack",
+              "description": "Doing face \u2014 labels, commands, code, metadata."
+            },
+            "ui": {
+              "$ref": "#/$defs/fontStack",
+              "description": "Dense UI face \u2014 grids, form controls."
+            }
+          }
+        },
+        "radius": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "chip",
+            "panel"
+          ],
+          "properties": {
+            "chip": {
+              "$ref": "#/$defs/length",
+              "description": "Chips, code blocks, inputs."
+            },
+            "panel": {
+              "$ref": "#/$defs/length",
+              "description": "Panels and cards. The editorial default is 0."
+            }
+          }
+        },
+        "motion": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "quick",
+            "settle",
+            "easing"
+          ],
+          "properties": {
+            "quick": {
+              "$ref": "#/$defs/duration",
+              "description": "Hover/colour transitions."
+            },
+            "settle": {
+              "$ref": "#/$defs/duration",
+              "description": "Panel slide-in, tier fades."
+            },
+            "easing": {
+              "type": "string",
+              "pattern": "^(ease|ease-in|ease-out|ease-in-out|linear|cubic-bezier\\([^)]*\\))$",
+              "description": "The one easing curve."
+            }
+          }
+        },
+        "tracking": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "label",
+            "strip",
+            "eyebrow",
+            "ui",
+            "mark"
+          ],
+          "properties": {
+            "label": {
+              "$ref": "#/$defs/em",
+              "description": "Section labels."
+            },
+            "strip": {
+              "$ref": "#/$defs/em",
+              "description": "Metadata strips."
+            },
+            "eyebrow": {
+              "$ref": "#/$defs/em",
+              "description": "Hero eyebrows."
+            },
+            "ui": {
+              "$ref": "#/$defs/em",
+              "description": "Buttons, nav."
+            },
+            "mark": {
+              "$ref": "#/$defs/em",
+              "description": "Wordmark."
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "color": {
+      "type": "string",
+      "pattern": "^(#[0-9a-fA-F]{6}|rgba\\(\\s*\\d{1,3}\\s*,\\s*\\d{1,3}\\s*,\\s*\\d{1,3}\\s*,\\s*(0|1|0?\\.\\d+)\\s*\\))$",
+      "description": "#rrggbb or rgba(r, g, b, a). No named colours, no hsl \u2014 the contrast check reads these."
+    },
+    "fontStack": {
+      "type": "string",
+      "minLength": 1,
+      "description": "A CSS font-family list. Fonts are bundled by each surface, never fetched \u2014 a surface must be able to render offline."
+    },
+    "length": {
+      "type": "string",
+      "pattern": "^(0|\\d+(\\.\\d+)?(px|rem))$"
+    },
+    "duration": {
+      "type": "string",
+      "pattern": "^\\d+ms$"
+    },
+    "em": {
+      "type": "string",
+      "pattern": "^-?\\d*\\.?\\d+em$"
+    }
+  }
+}

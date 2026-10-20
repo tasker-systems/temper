@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en" data-theme="quiet-instrument">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>temper themes — preview</title>
+<!-- Preview only: the desktop bundles its fonts and never fetches them. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=JetBrains+Mono:wght@300;400;500&family=Source+Serif+4:ital,opsz,wght@0,8..60,300;0,8..60,400;1,8..60,300;1,8..60,400&display=swap">
+<link rel="stylesheet" href="../quiet-instrument/theme.css">
+<link rel="stylesheet" href="../quiet-instrument-paper/theme.css">
+<link rel="stylesheet" href="../contract/base.css">
+<style>
+  /* Preview layout only. Every colour below is a contract role. */
+  body { margin: 0; }
+  .page { max-width: 64rem; margin: 0 auto; padding: 2.5rem 2rem 6rem; }
+  .masthead { display: flex; align-items: center; gap: 0.8rem; color: var(--tp-accent); }
+  .masthead svg { width: 22px; height: 22px; }
+  .switch { margin-left: auto; display: flex; gap: 1rem; }
+  .switch button[aria-pressed="true"] { color: var(--tp-text); }
+  h2.t-h2 { margin: 3.5rem 0 1.2rem; }
+  .t-label { margin-bottom: 0.4rem; }
+  p.note { font-family: var(--tp-font-reading); font-style: italic; color: var(--tp-text-subtle); font-size: 0.9rem; max-width: 42rem; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); gap: 0.5rem; }
+  .swatch { border: 1px solid var(--tp-rule); background: var(--tp-surface); }
+  .swatch .fill { height: 2.2rem; }
+  .swatch .name { font: 0.62rem/1.4 var(--tp-font-doing); color: var(--tp-text-subtle); padding: 0.35rem 0.5rem; letter-spacing: 0.04em; }
+  .row { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
+  .stack { display: grid; gap: 0.6rem; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+  @media (max-width: 720px) { .cols { grid-template-columns: 1fr; } .page { padding: 1.5rem 1rem 4rem; } }
+  .panel { border: 1px solid var(--tp-rule); background: var(--tp-surface); border-radius: var(--tp-radius-panel); }
+
+  /* ── Chrome: room header ── */
+  .room { display: flex; align-items: center; gap: 1rem; padding: 0.65rem 1rem; border-bottom: 1px solid var(--tp-rule); font: 0.7rem var(--tp-font-doing); color: var(--tp-text-subtle); }
+  .room .out { color: var(--tp-text-muted); background: none; border: none; font: inherit; cursor: pointer; }
+  .room .out:hover { color: var(--tp-text); }
+  .room .title { font-family: var(--tp-font-reading); font-size: 0.95rem; color: var(--tp-text); }
+  .room .title em { color: var(--tp-accent); }
+  .room .spacer { flex: 1; }
+  .stance { letter-spacing: var(--tp-tracking-label); text-transform: uppercase; font-size: 0.6rem; color: var(--tp-accent); border: 1px solid var(--tp-accent-line-soft); padding: 0.2rem 0.5rem; border-radius: var(--tp-radius-chip); }
+  .stance .domain { color: var(--tp-text-subtle); }
+
+  /* ── Chrome: reach indicator. Words carry it; colour only escalates at direct write. ── */
+  .reach { display: inline-flex; align-items: center; gap: 0.45rem; font: 0.6rem var(--tp-font-doing); letter-spacing: var(--tp-tracking-label); text-transform: uppercase; color: var(--tp-text-subtle); }
+  .reach .steps { display: inline-flex; gap: 2px; }
+  .reach .steps i { width: 10px; height: 4px; background: var(--tp-rule-strong); }
+  .reach .steps i.on { background: var(--tp-text-muted); }
+  .reach[data-reach="direct"] { color: var(--tp-notice); }
+  .reach[data-reach="direct"] .steps i.on { background: var(--tp-notice); }
+
+  /* ── Chrome: authorship ── */
+  .author { display: inline-flex; align-items: baseline; gap: 0.35rem; font: 0.62rem var(--tp-font-doing); color: var(--tp-text-subtle); }
+  .author .glyph { font-size: 0.7rem; }
+  .author[data-kind="human"] .glyph { color: var(--tp-author-human); }
+  .author[data-kind="agent"] .glyph { color: var(--tp-author-agent); }
+  .gutter { display: grid; grid-template-columns: 0.9rem 1fr; gap: 0.8rem; }
+  .gutter .mark { border-left: 2px solid; margin-top: 0.3rem; }
+  .gutter .mark[data-kind="human"] { border-color: var(--tp-author-human); opacity: 0.55; }
+  .gutter .mark[data-kind="agent"] { border-color: var(--tp-author-agent); border-left-style: dashed; }
+  .block { font-family: var(--tp-font-reading); color: var(--tp-text-muted); line-height: 1.7; margin: 0 0 0.9rem; }
+
+  /* ── Render frame: the boundary around anything an agent rendered ── */
+  .render-frame { border: 1px dashed var(--tp-accent-line-soft); }
+  .render-frame > header { display: flex; gap: 0.6rem; align-items: center; padding: 0.4rem 0.7rem; border-bottom: 1px dashed var(--tp-accent-line-soft); font: 0.6rem var(--tp-font-doing); letter-spacing: 0.08em; color: var(--tp-text-subtle); }
+  .render-frame > header .spacer { flex: 1; }
+  .render-frame > .body { padding: 1rem; }
+
+  /* ── Catalog: region state (ported vocabulary: four states, four channels) ── */
+  .region { display: flex; align-items: baseline; gap: 8px; margin: 0; padding: 7px 9px; border-left: 2px solid; border-radius: 0 5px 5px 0; font-size: 12.5px; line-height: 1.5; }
+  .region .marker { font: 11px/1.4 var(--tp-font-doing); }
+  .region.arriving { border-left-style: dashed; border-left-color: var(--tp-region-arriving); background: var(--tp-region-arriving-wash); color: var(--tp-region-arriving); }
+  .region.arriving .marker { animation: pulse 1.1s ease-in-out infinite; }
+  .region.empty { border-left-color: var(--tp-rule-strong); background: var(--tp-region-empty-wash); color: var(--tp-region-empty); font-style: italic; }
+  .region.gave-up { border-left-style: dotted; border-left-color: var(--tp-region-gave-up); background: var(--tp-region-gave-up-wash); color: var(--tp-region-gave-up); }
+  .region.failed { border-left-color: var(--tp-region-failed); background: var(--tp-region-failed-wash); color: var(--tp-region-failed); font-weight: 600; }
+  @keyframes pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+
+  /* ── Catalog: resource ref, status chip, vocabulary chip ── */
+  .ref { display: inline-flex; align-items: baseline; gap: 0.45rem; padding: 0.3rem 0.55rem; border: 1px solid var(--tp-rule); background: var(--tp-surface-raised); border-radius: var(--tp-radius-chip); text-decoration: none; }
+  .ref:hover { border-color: var(--tp-accent-line-soft); }
+  .ref .type { font: 0.56rem var(--tp-font-doing); letter-spacing: var(--tp-tracking-label); text-transform: uppercase; }
+  .ref .title { font: italic 0.88rem var(--tp-font-reading); color: var(--tp-text); }
+  .chip { display: inline-flex; align-items: baseline; gap: 0.4rem; padding: 0.22rem 0.55rem; border: 1px solid var(--tp-rule-strong); border-radius: var(--tp-radius-chip); font: 0.62rem var(--tp-font-doing); letter-spacing: 0.06em; color: var(--tp-text-muted); background: none; }
+  .chip[aria-pressed="true"] { background: var(--tp-accent-wash); border-color: var(--tp-accent-line-soft); color: var(--tp-accent); }
+  .chip .count { color: var(--tp-text-subtle); }
+  .chip .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+  .pending { color: var(--tp-pending); background: var(--tp-pending-wash); border-color: var(--tp-accent-line-soft); }
+
+  /* ── Catalog: bounded list ── */
+  .list { list-style: none; margin: 0; padding: 0; }
+  .list li { display: flex; gap: 0.8rem; align-items: baseline; padding: 0.55rem 0; border-bottom: 1px solid var(--tp-rule); font-size: 0.85rem; color: var(--tp-text-muted); }
+  .list li .when { margin-left: auto; font: 0.6rem var(--tp-font-doing); color: var(--tp-text-subtle); }
+  .omits { padding-top: 0.6rem; font: italic 0.82rem var(--tp-font-reading); color: var(--tp-text-subtle); }
+  .omits button { margin-left: 0.4rem; }
+
+  /* ── Catalog: proposal (Review stance) ── */
+  .proposal { border-left: 2px solid var(--tp-pending); background: var(--tp-pending-wash); padding: 0.8rem 1rem; }
+  .proposal .head { display: flex; gap: 0.8rem; align-items: baseline; margin-bottom: 0.5rem; }
+  .proposal del { color: var(--tp-danger); text-decoration-thickness: 1px; }
+  .proposal ins { color: var(--tp-success); text-decoration: none; border-bottom: 1px solid var(--tp-success); }
+  .proposal .why { font: italic 0.85rem var(--tp-font-reading); color: var(--tp-text-subtle); margin: 0.5rem 0; }
+
+  pre.code { margin: 0; padding: 0.9rem 1rem; background: var(--tp-surface); border: 1px solid var(--tp-rule); border-radius: var(--tp-radius-chip); font: 0.78rem/1.6 var(--tp-font-doing); color: var(--tp-text-muted); overflow-x: auto; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="masthead">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M 12 7 L 12 25" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" fill="none"/><path d="M 6 13 L 18 13 Q 23 13 25 16.5 Q 27 20 25 24" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" fill="none"/></svg>
+    <span class="t-wordmark">temper</span>
+    <span class="t-strip">themes · preview</span>
+    <div class="switch" role="group" aria-label="Theme">
+      <button class="t-action" data-set="quiet-instrument" aria-pressed="true">Quiet Instrument</button>
+      <button class="t-action" data-set="quiet-instrument-paper" aria-pressed="false">Paper</button>
+    </div>
+  </div>
+
+  <h2 class="t-h2">One contract, <em>any</em> theme</h2>
+  <p class="t-body">Every mark on this page reads a contract role — <code class="t-code">var(--tp-…)</code> — and nothing else. Switching theme swaps one attribute on the root; no component knows which theme it is in.</p>
+
+  <!-- ─────────────────────────── Tokens ─────────────────────────── -->
+  <h2 class="t-h2">The <em>roles</em></h2>
+  <div class="t-label">Ground, text, rule, accent</div>
+  <div class="grid" id="sw-core"></div>
+  <div class="t-label" style="margin-top:1.4rem">Conditions and region states</div>
+  <div class="grid" id="sw-state"></div>
+  <div class="t-label" style="margin-top:1.4rem">Categorical slots · bound vocabularies, core's doc types and plugins' alike</div>
+  <div class="grid" id="sw-vocab"></div>
+
+  <!-- ─────────────────────────── Chrome ─────────────────────────── -->
+  <h2 class="t-h2">The <em>building</em> — chrome that never leaves</h2>
+  <p class="note">Desktop-owned and deterministic. Nothing here is in any render catalog, so no agent-rendered view can draw a reach indicator, an authorship mark, or a way out.</p>
+
+  <div class="panel">
+    <div class="room">
+      <button class="out" aria-label="Leave the room">← Home</button>
+      <span class="title">Chapter <em>three</em></span>
+      <span class="stance">Editor <span class="domain">· review</span></span>
+      <span class="spacer"></span>
+      <span class="reach" data-reach="propose" title="The agent may propose changes; nothing lands without your ratification.">
+        <span class="steps"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span>
+        Reach · proposals
+      </span>
+    </div>
+    <div style="padding:1.2rem 1rem 0.4rem">
+      <div class="gutter">
+        <span class="mark" data-kind="human" title="Written by you"></span>
+        <p class="block">The ferry left before the fog did. Mara counted the lamps along the quay and lost the count at eleven, the way she always did.</p>
+        <span class="mark" data-kind="agent" title="Written by an agent on your behalf"></span>
+        <p class="block">By the time the horn sounded the harbour had folded itself into one grey sheet.</p>
+      </div>
+    </div>
+    <div class="room" style="border-top:1px solid var(--tp-rule);border-bottom:none">
+      <span class="author" data-kind="human"><span class="glyph">●</span> you · 4 edits</span>
+      <span class="author" data-kind="agent"><span class="glyph">◆</span> claude code · 1 session, 3 edits · on your behalf</span>
+      <span class="spacer"></span>
+      <span class="reach" data-reach="direct">
+        <span class="steps"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span>
+        Reach · direct writes
+      </span>
+    </div>
+  </div>
+  <p class="note">Reach renders in words at every step. Colour escalates only at direct writes — the one level that warrants the attention of double-checking.</p>
+
+  <!-- ─────────────────────────── Catalog ─────────────────────────── -->
+  <h2 class="t-h2">The <em>room</em> — catalog components</h2>
+  <p class="note">Renderable from a json-render spec — by the desktop's own layouts, by a plugin's templates, or by an agent. An agent's render always arrives inside a frame the chrome draws.</p>
+
+  <section class="render-frame">
+    <header>
+      <span>◆ rendered by claude code · this session</span>
+      <span class="spacer"></span>
+      <span>view, not record</span>
+      <button class="ed-action ed-action--primary">Keep as resource</button>
+      <button class="ed-action ed-action--ghost">Close</button>
+    </header>
+    <div class="body cols">
+      <div class="stack">
+        <div class="t-label">Region state</div>
+        <p class="region arriving" role="status"><span class="marker" aria-hidden="true">◌</span>Loading history…</p>
+        <p class="region empty"><span class="marker" aria-hidden="true">—</span>No history.</p>
+        <p class="region gave-up" role="status"><span class="marker" aria-hidden="true">⊘</span>We stopped waiting for history.</p>
+        <p class="region failed" role="alert"><span class="marker" aria-hidden="true">!</span>History unavailable — nothing was read.</p>
+
+        <div class="t-label" style="margin-top:1rem">Resource refs</div>
+        <div class="row">
+          <a class="ref" href="#"><span class="type" style="color:var(--tp-cat-8)">goal</span><span class="title">Temper is worked natively…</span></a>
+          <a class="ref" href="#"><span class="type" style="color:var(--tp-cat-5)">research</span><span class="title">Grounding: chrome and rooms</span></a>
+          <a class="ref" href="#"><span class="type" style="color:var(--tp-cat-7)">decision</span><span class="title">Build rulings</span></a>
+        </div>
+
+        <div class="t-label" style="margin-top:1rem">Plugin vocabulary — author-tools, bound to slots</div>
+        <div class="row">
+          <button class="chip" aria-pressed="true"><span class="dot" style="background:var(--tp-cat-1)"></span>story <span class="count">12</span></button>
+          <button class="chip" aria-pressed="false"><span class="dot" style="background:var(--tp-cat-2)"></span>poem <span class="count">31</span></button>
+          <button class="chip" aria-pressed="false"><span class="dot" style="background:var(--tp-cat-3)"></span>journal <span class="count">88</span></button>
+          <button class="chip" aria-pressed="false"><span class="dot" style="background:var(--tp-cat-4)"></span>reflection <span class="count">9</span></button>
+          <button class="chip" aria-pressed="false"><span class="dot" style="background:var(--tp-cat-5)"></span>spec <span class="count">4</span></button>
+          <span class="chip pending">◇ 2 proposals await you</span>
+        </div>
+      </div>
+
+      <div class="stack">
+        <div class="t-label">Bounded list</div>
+        <ul class="list">
+          <li><span class="author" data-kind="agent"><span class="glyph">◆</span></span>opencode · 14 edits across 3 resources<span class="when">2h ago</span></li>
+          <li><span class="author" data-kind="human"><span class="glyph">●</span></span>You revised <em>Chapter three</em><span class="when">yesterday</span></li>
+          <li><span class="author" data-kind="agent"><span class="glyph">◆</span></span>claude code · decision recorded<span class="when">2d ago</span></li>
+        </ul>
+        <div class="omits">3 of 41 since you last engaged; 38 older not shown.<button class="ed-action ed-action--primary">Show 20 more</button></div>
+
+        <div class="t-label" style="margin-top:1rem">Proposal — Review against a standard</div>
+        <div class="proposal">
+          <div class="head"><span class="t-strip">¶ 2 · chapter three</span><span class="author" data-kind="agent"><span class="glyph">◆</span> editor</span></div>
+          <p class="block" style="margin:0">By the time the horn sounded the harbour had <del>folded itself into one grey sheet</del> <ins>gone to one grey sheet</ins>.</p>
+          <p class="why">Standard: prefer plain verbs where the image already carries the figure.</p>
+          <div class="row"><button class="ed-action ed-action--primary">Ratify</button><span class="ed-action-sep">·</span><button class="ed-action ed-action--ghost">Decline</button></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <h2 class="t-h2">Notices, actions, <em>code</em></h2>
+  <div class="cols">
+    <div class="stack">
+      <div class="ed-notice">Working from cache — last read 6 minutes ago. Changes wait until temper is reachable.</div>
+      <div class="ed-notice ed-notice--success">Compiled <em>Harbour stories</em> — 12 pieces.</div>
+      <div class="row"><button class="ed-action ed-action--primary">Compile</button><button class="ed-action ed-action--ghost">Cancel</button><button class="ed-action ed-action--danger">Retract</button><button class="ed-action" disabled>Unavailable</button></div>
+    </div>
+<pre class="code hljs"><span class="hljs-comment"># author-tools binds its vocabulary to slots</span>
+{
+  <span class="hljs-attr">"vocabulary"</span>: {
+    <span class="hljs-attr">"story"</span>:   { <span class="hljs-attr">"tint"</span>: <span class="hljs-string">"cat-1"</span> },
+    <span class="hljs-attr">"poem"</span>:    { <span class="hljs-attr">"tint"</span>: <span class="hljs-string">"cat-2"</span> },
+    <span class="hljs-attr">"journal"</span>: { <span class="hljs-attr">"tint"</span>: <span class="hljs-string">"cat-3"</span>, <span class="hljs-attr">"order"</span>: <span class="hljs-number">3</span> }
+  }
+}</pre>
+  </div>
+
+  <div class="ed-strip" style="margin-top:4rem"><span>temper</span><span class="ed-strip-sep">·</span><span class="ed-strip-em">temper-design</span><span class="ed-strip-spacer"></span><span class="ed-strip-accent" id="current"></span></div>
+</div>
+
+<script>
+  const groups = {
+    'sw-core': ['ground','surface','surface-raised','text','text-muted','text-subtle','text-faint','rule-strong','accent','accent-muted','accent-wash','focus','author-human','author-agent'],
+    'sw-state': ['notice','success','danger','pending','region-arriving','region-empty','region-gave-up','region-failed'],
+    'sw-vocab': ['cat-1','cat-2','cat-3','cat-4','cat-5','cat-6','cat-7','cat-8','cat-neutral'],
+  };
+  for (const [id, roles] of Object.entries(groups)) {
+    const el = document.getElementById(id);
+    for (const role of roles) {
+      const d = document.createElement('div');
+      d.className = 'swatch';
+      d.innerHTML = `<div class="fill" style="background:var(--tp-${role})"></div><div class="name">${role}</div>`;
+      el.appendChild(d);
+    }
+  }
+  const root = document.documentElement;
+  const setTheme = (name) => {
+    root.dataset.theme = name;
+    document.querySelectorAll('[data-set]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.set === name)));
+    document.getElementById('current').textContent = name;
+  };
+  document.querySelectorAll('[data-set]').forEach(b => b.addEventListener('click', () => setTheme(b.dataset.set)));
+  setTheme(root.dataset.theme);
+</script>
+</body>
+</html>
