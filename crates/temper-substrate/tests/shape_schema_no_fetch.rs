@@ -293,6 +293,97 @@ fn a_custom_schema_uri_below_a_mixed_draft_subschema_is_refused() {
     );
 }
 
+/// `jsonschema` resolves any same-document pointer and compiles what it finds as a schema, so a
+/// `$ref` into a non-keyword position (`x-custom`) pulls a subschema with a custom `$schema` into
+/// the compile although no draft's keyword list walks `x-custom`.
+#[test]
+fn a_custom_schema_uri_below_a_pointer_ref_target_is_refused() {
+    let schema = json!({
+        "$ref": "#/x-custom",
+        "x-custom": { "properties": { "p": { "$schema": "urn:custom", "type": "string" } } },
+    });
+
+    assert!(
+        compile(&schema).is_err(),
+        "a custom $schema below a $ref pointer target must not compile"
+    );
+}
+
+/// The custom `$schema` on the pointer target itself.
+#[test]
+fn a_custom_schema_uri_on_a_pointer_ref_target_is_refused() {
+    let schema = json!({
+        "$ref": "#/x-custom",
+        "x-custom": { "$schema": "urn:custom", "type": "string" },
+    });
+
+    assert!(
+        compile(&schema).is_err(),
+        "a custom $schema on a $ref pointer target must not compile"
+    );
+}
+
+/// A pointer resolves within its enclosing resource: a `#/x-custom` inside an embedded `$id`
+/// subschema names that subschema's `x-custom`, not the root's.
+#[test]
+fn a_pointer_ref_inside_an_embedded_resource_is_resolved_against_it() {
+    let schema = json!({
+        "$defs": {
+            "r": {
+                "$id": "urn:example:r",
+                "$ref": "#/x-custom",
+                "x-custom": { "$schema": "urn:custom", "type": "string" },
+            },
+        },
+    });
+
+    assert!(
+        compile(&schema).is_err(),
+        "a pointer inside an embedded resource must be followed within that resource"
+    );
+}
+
+/// The pointer is decoded before it is followed: percent-escapes and `~0`/`~1`.
+#[test]
+fn escaped_pointer_refs_are_followed() {
+    let escaped = [
+        ("#/x%2Dcustom", "x-custom"),
+        ("#/x%20custom", "x custom"),
+        ("#/x~1custom", "x/custom"),
+        ("#/x~0custom", "x~custom"),
+    ];
+    for (reference, key) in escaped {
+        let schema = json!({
+            "$ref": reference,
+            (key): { "$schema": "urn:custom", "type": "string" },
+        });
+        assert!(
+            compile(&schema).is_err(),
+            "{reference} must be decoded and its target walked"
+        );
+    }
+}
+
+/// Control: a recursive schema (a `$ref` cycle through `$defs`) compiles, so the walk terminates
+/// on cycles and a legitimate pointer reference is not refused.
+#[test]
+fn a_recursive_pointer_ref_schema_still_compiles() {
+    let schema = json!({
+        "$schema": DRAFT_2020_12,
+        "$ref": "#/$defs/node",
+        "$defs": {
+            "node": {
+                "type": "object",
+                "properties": { "next": { "$ref": "#/$defs/node" } },
+            },
+        },
+    });
+
+    let validator = compile(&schema).expect("a recursive schema compiles");
+    assert!(validator.is_valid(&json!({ "next": { "next": {} } })));
+    assert!(!validator.is_valid(&json!({ "next": 1 })));
+}
+
 /// Control: a `$schema` key inside a `const` is data, not a meta-schema declaration. The walk
 /// reads subschema positions only, so this schema compiles and its `const` is enforced.
 #[test]

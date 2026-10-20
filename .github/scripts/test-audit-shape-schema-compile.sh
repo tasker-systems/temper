@@ -185,6 +185,33 @@ version = "0.45"' 1 "crates/demo/Cargo.toml"
 manifest_case "BITE: a [workspace.dependencies] line without it fails" \
 '[workspace.dependencies]
 jsonschema = "0.45"' 1 "crates/demo/Cargo.toml"
+manifest_case "BITE: a trailing comment naming default-features = false does not count" \
+'[dependencies]
+jsonschema = { version = "0.45" } # default-features = false' 1 "crates/demo/Cargo.toml"
+manifest_case "BITE: dotted keys without default-features fail (not invisible)" \
+'[dependencies]
+jsonschema.version = "0.45"' 1 "crates/demo/Cargo.toml"
+manifest_case "BITE: dotted keys with only a commented default-features fail" \
+'[dependencies]
+jsonschema.version = "0.45"
+# jsonschema.default-features = false' 1 "crates/demo/Cargo.toml"
+manifest_case "BITE: an unrecognised quoted key fails closed" \
+'[dependencies]
+"jsonschema" = "0.45"' 1 "unrecognized form"
+manifest_case "BITE: a sibling jsonschema-* key fails closed" \
+'[dependencies]
+jsonschema-extra = "1"' 1 "unrecognized form"
+manifest_case "BITE: a table whose default-features = false is only a comment fails" \
+'[dependencies.jsonschema]
+version = "0.45"
+# default-features = false' 1 "crates/demo/Cargo.toml"
+manifest_case "green: dotted keys with default-features = false" \
+'[dependencies]
+jsonschema.version = "0.45"
+jsonschema.default-features = false' 0
+manifest_case "green: a comment after a compliant line" \
+'[dependencies]
+jsonschema = { version = "0.45", default-features = false } # resolvers off' 0
 manifest_case "green: a one-line dependency with default-features = false" \
 '[dependencies]
 jsonschema = { version = "0.45", default-features = false }' 0

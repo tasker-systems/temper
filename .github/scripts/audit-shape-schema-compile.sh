@@ -36,10 +36,11 @@
 #     type is inferred to be `ValidationOptions`. A reviewer of a new `jsonschema` dependency edge
 #     is the backstop for those. The second layer is `default-features = false` on every
 #     `jsonschema` dependency, which compiles the http and file resolvers out; it has its own check
-#     below (no baseline: a manifest line without it fails outright). That check reads one-line
-#     dependency entries and `[..dependencies.jsonschema]` tables, accepts `workspace = true`
-#     inheritance (the root's `[workspace.dependencies]` line is itself checked), and does not see
-#     a dependency renamed with `package = "jsonschema"`.
+#     below (no baseline: a manifest line without it fails outright). That check strips comments,
+#     reads one-line entries, dotted keys and `[..dependencies.jsonschema]` tables, accepts
+#     `workspace = true` inheritance (the root's `[workspace.dependencies]` line is itself
+#     checked), and FAILS CLOSED on any other line whose key starts with `jsonschema`. It does not
+#     see a dependency renamed with `package = "jsonschema"`, or a multi-line inline table.
 #
 # USAGE
 #   .github/scripts/audit-shape-schema-compile.sh            # verify against the allowlist (CI mode)
@@ -104,28 +105,68 @@ current() {
   || true
 }
 
-# Layer 2: one line per `jsonschema` dependency declaration in any Cargo.toml, "<file>\t<ok|bad>".
+# Layer 2: one line per `jsonschema` dependency declaration in any Cargo.toml,
+# "<file>\t<ok|bad>\t<what was read>".
 # `ok` = default-features = false, or inherited from the workspace (whose own line is checked).
-# A one-line entry and a `[..dependencies.jsonschema]` table are both read.
+# Read, after stripping comments (quote-aware, so `# default-features = false` is not a value):
+#   * a one-line entry, `jsonschema = ..`;
+#   * dotted keys, `jsonschema.workspace = true`, `jsonschema.default-features = false`,
+#     `jsonschema.version = ..`, aggregated per table: any dotted key is `ok` only if the table
+#     also has the default-features or workspace one;
+#   * a `[..dependencies.jsonschema]` table.
+# FAIL CLOSED: any other line whose key starts with `jsonschema` (a quoted key, an unfamiliar
+# spelling, a sibling crate such as `jsonschema-foo`) is `bad`, because the scanner cannot say what
+# it enables. Extend the scanner for a legitimate new form rather than ignoring the line.
 manifest_scan() {
   find "$MANIFEST_ROOT" -name Cargo.toml \
        -not -path '*/target/*' -not -path '*/node_modules/*' -not -path '*/.git/*' -print0 2>/dev/null \
   | xargs -0 awk '
-    function emit(f, good) { print f "\t" (good ? "ok" : "bad") }
-    FNR == 1 { if (intable) emit(tfile, tok); intable = 0 }
-    /^\[/ {
-      if (intable) emit(tfile, tok)
-      intable = 0
-      if ($0 ~ /dependencies\.jsonschema\]/) { intable = 1; tfile = FILENAME; tok = 0 }
-      next
+    function emit(f, good, what) { print f "\t" (good ? "ok" : "bad") "\t" what }
+    # Drop a trailing `# comment`, honouring quotes so a `#` inside a string survives.
+    function strip(line,   i, c, q, out) {
+      q = ""; out = ""
+      for (i = 1; i <= length(line); i++) {
+        c = substr(line, i, 1)
+        if (q == "") {
+          if (c == "#") break
+          if (c == "\"" || c == "\047") q = c
+        } else if (c == "\\" && q == "\"") {
+          out = out c; i++; c = substr(line, i, 1)
+        } else if (c == q) {
+          q = ""
+        }
+        out = out c
+      }
+      return out
     }
-    intable && /^[[:space:]]*default-features[[:space:]]*=[[:space:]]*false/ { tok = 1 }
-    intable && /^[[:space:]]*workspace[[:space:]]*=[[:space:]]*true/ { tok = 1 }
-    /^[[:space:]]*jsonschema\.workspace[[:space:]]*=/ { emit(FILENAME, 1) }
-    /^[[:space:]]*jsonschema[[:space:]]*=/ {
-      emit(FILENAME, ($0 ~ /default-features[[:space:]]*=[[:space:]]*false/ || $0 ~ /workspace[[:space:]]*=[[:space:]]*true/))
+    function flush_table(   ) {
+      if (intable) emit(tfile, tok, "[..dependencies.jsonschema] table")
+      if (dseen) emit(dfile, dok, "dotted jsonschema.* keys")
+      intable = 0; dseen = 0
     }
-    END { if (intable) emit(tfile, tok) }
+    FNR == 1 { flush_table() }
+    {
+      line = strip($0)
+      if (line ~ /^[[:space:]]*\[/) {
+        flush_table()
+        if (line ~ /dependencies\.("?)jsonschema("?)[[:space:]]*\]/) { intable = 1; tfile = FILENAME; tok = 0 }
+        next
+      }
+      if (intable && line ~ /^[[:space:]]*default-features[[:space:]]*=[[:space:]]*false([[:space:]]|$)/) tok = 1
+      if (intable && line ~ /^[[:space:]]*workspace[[:space:]]*=[[:space:]]*true([[:space:]]|$)/) tok = 1
+      if (line ~ /^[[:space:]]*["\047]?jsonschema/) {
+        if (line ~ /^[[:space:]]*jsonschema[[:space:]]*=/) {
+          emit(FILENAME, (line ~ /default-features[[:space:]]*=[[:space:]]*false/ || line ~ /workspace[[:space:]]*=[[:space:]]*true/), "one-line entry: " line)
+        } else if (line ~ /^[[:space:]]*jsonschema\./) {
+          if (!dseen) { dseen = 1; dok = 0; dfile = FILENAME }
+          if (line ~ /^[[:space:]]*jsonschema\.default-features[[:space:]]*=[[:space:]]*false([[:space:]]|$)/) dok = 1
+          if (line ~ /^[[:space:]]*jsonschema\.workspace[[:space:]]*=[[:space:]]*true([[:space:]]|$)/) dok = 1
+        } else {
+          emit(FILENAME, 0, "unrecognized form: " line)
+        }
+      }
+    }
+    END { flush_table() }
   ' 2>/dev/null || true
 }
 
@@ -187,12 +228,12 @@ if [[ -z "$MANIFESTS" ]]; then
   echo "  $MANIFEST_ROOT. The real tree has several, so finding zero means the scan broke." >&2
   fail=1
 else
-  BAD_MANIFESTS="$(printf '%s\n' "$MANIFESTS" | awk -F'\t' '$2 == "bad" {print $1}')"
+  BAD_MANIFESTS="$(printf '%s\n' "$MANIFESTS" | awk -F'\t' '$2 == "bad"')"
   if [[ -n "$BAD_MANIFESTS" ]]; then
     fail=1
     {
       echo "audit-shape-schema-compile: FAIL — a jsonschema dependency lacks default-features = false:"
-      printf '  %s\n' $BAD_MANIFESTS
+      printf '%s\n' "$MANIFESTS" | awk -F'\t' '$2 == "bad" {printf "  %s  (%s)\n", $1, $3}'
       echo "  The default features compile in the http and file resolvers, the second layer behind"
       echo "  shape_schema's refusing retriever. Every dependency edge must say"
       echo "  { version = \"..\", default-features = false }: one edge without it turns the"
