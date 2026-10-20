@@ -16284,7 +16284,7 @@
             "description": "Asked without `limit`: every artifact, unbounded."
           }
         ],
-        "description": "The two answers `GET /api/resources/{id}/artifacts` gives when it lists artifacts (not\ncounts). Untagged, so each arm serializes exactly as its inner type does: a request with\n`limit` answers the [`ArtifactPage`] envelope, and a request without one answers the bare\narray the route has always returned."
+        "description": "The two answers `GET /api/resources/{id}/artifacts` gives when it lists artifacts (not\ncounts). Untagged, so each arm serializes exactly as its inner type does: a request with\n`limit` answers the [`ArtifactPage`] envelope, and a request without one answers the bare\narray the route has always returned.\n\nDeserializable so a client can read either answer from one typed call: a server that predates\n`limit` ignores it and answers the bare array."
       },
       "ArtifactPage": {
         "type": "object",

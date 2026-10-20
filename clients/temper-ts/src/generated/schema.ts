@@ -4054,6 +4054,9 @@ export interface components {
          *     counts). Untagged, so each arm serializes exactly as its inner type does: a request with
          *     `limit` answers the [`ArtifactPage`] envelope, and a request without one answers the bare
          *     array the route has always returned.
+         *
+         *     Deserializable so a client can read either answer from one typed call: a server that predates
+         *     `limit` ignores it and answers the bare array.
          */
         ArtifactListAnswer: components["schemas"]["ArtifactPage"] | components["schemas"]["ArtifactView"][];
         /** @description One bounded page of artifacts, in `(created, id)` order. */
