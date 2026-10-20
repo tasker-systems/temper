@@ -2705,11 +2705,13 @@ export interface paths {
          *     With `counts=true`: returns per-family counts only, no content hydration —
          *     for surfaces that need "3 measurements, 1 extraction" without fetching payloads.
          *
-         *     With `limit`, returns one page as `{ artifacts, next }`: at most `limit` artifacts in
-         *     `(created, id)` order, and `next` — the position to continue after, sent back as
-         *     `after_created` and `after_id` — or `null` on the last page. A `limit` of 0 or above the
-         *     server ceiling `MAX_ARTIFACT_PAGE_ROWS` is refused, not clamped. Without `limit`, returns the
-         *     whole list as a bare array: the unbounded form, which a later release retires.
+         *     With `limit`, returns at most that many artifacts in `(created, id)` order. The body is the same
+         *     bare array either way; when more remain, the response carries a `Link: <...>; rel="next"`
+         *     header whose target is this request with the next page's `after_created` and `after_id` (and
+         *     the caller's own filters), and the header is absent on the last page and on every response
+         *     without `limit`. A `limit` of 0 or above the server ceiling `MAX_ARTIFACT_PAGE_ROWS` is
+         *     refused, not clamped. Without `limit`, returns the whole list: the unbounded form, which a
+         *     later release retires.
          */
         get: operations["list_artifacts"];
         put?: never;
@@ -4031,38 +4033,6 @@ export interface components {
         ArtifactCommitResponse: {
             artifact: components["schemas"]["ArtifactView"];
             artifact_id: components["schemas"]["DataArtifactId"];
-        };
-        /**
-         * @description A position in the `(created, id)` keyset order that `artifacts_for_resource` returns rows in.
-         *
-         *     It carries position and no authority: each page re-runs the read gate for the asker, so a
-         *     cursor handed to another principal, or replayed after access is revoked, reveals nothing
-         *     the read would not. That is why it is a legible object and not an opaque token, and needs
-         *     no decoder in any SDK. Every bounded artifact read continues with this one type.
-         */
-        ArtifactCursor: {
-            /** @description The `artifact_id` of the last artifact on the previous page; breaks ties on `created`. */
-            artifact_id: components["schemas"]["DataArtifactId"];
-            /**
-             * Format: date-time
-             * @description The `created` of the last artifact on the previous page.
-             */
-            created: string;
-        };
-        /**
-         * @description The two answers `GET /api/resources/{id}/artifacts` gives when it lists artifacts (not
-         *     counts). Untagged, so each arm serializes exactly as its inner type does: a request with
-         *     `limit` answers the [`ArtifactPage`] envelope, and a request without one answers the bare
-         *     array the route has always returned.
-         *
-         *     Deserializable so a client can read either answer from one typed call: a server that predates
-         *     `limit` ignores it and answers the bare array.
-         */
-        ArtifactListAnswer: components["schemas"]["ArtifactPage"] | components["schemas"]["ArtifactView"][];
-        /** @description One bounded page of artifacts, in `(created, id)` order. */
-        ArtifactPage: {
-            artifacts: components["schemas"]["ArtifactView"][];
-            next?: components["schemas"]["ArtifactCursor"] | null;
         };
         /**
          * @description One data artifact, as returned by the API and MCP surfaces.
@@ -18744,20 +18714,22 @@ export interface operations {
                  */
                 counts?: boolean | null;
                 /**
-                 * @description Return at most this many artifacts, answering `{ artifacts, next }` instead of a bare
-                 *     array. Must be at least 1 and at most the server ceiling `MAX_ARTIFACT_PAGE_ROWS`; a value outside that
-                 *     range is refused, never clamped. Omit it to receive the whole list as a bare array (the
-                 *     unbounded form, which a later release retires).
+                 * @description Return at most this many artifacts. The body is still the bare array; when more remain, the
+                 *     response carries a `Link: <...>; rel="next"` header whose target is this request with the
+                 *     next page's position, and the header is absent on the last page. Must be at least 1 and at
+                 *     most the server ceiling `MAX_ARTIFACT_PAGE_ROWS`; a value outside that range is refused,
+                 *     never clamped. Omit it to receive the whole list (the unbounded form, which a later release
+                 *     retires).
                  */
                 limit?: number | null;
                 /**
-                 * @description Continue after this position: the `created` half of the previous page's `next` cursor.
+                 * @description Continue after this position: the `after_created` of the previous page's `Link` target.
                  *     Send together with `after_id`, and only with `limit`.
                  */
                 after_created?: string | null;
                 /**
-                 * @description Continue after this position: the `artifact_id` half of the previous page's `next`
-                 *     cursor. Send together with `after_created`, and only with `limit`.
+                 * @description Continue after this position: the `after_id` of the previous page's `Link` target. Send
+                 *     together with `after_created`, and only with `limit`.
                  */
                 after_id?: string | null;
             };
@@ -18773,13 +18745,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Artifacts owned by the resource: a `{ artifacts, next }` page when `limit` is given, a bare array of every artifact otherwise (or per-family counts when `counts=true`) */
+            /** @description Artifacts owned by the resource (full or counts) */
             200: {
                 headers: {
+                    /** @description Present only when `limit` was given and more artifacts remain: `<target>; rel="next"`, where the target is this route with the next page's query (`after_created`, `after_id`, `limit`, and the caller's own filters), percent-encoded. */
+                    Link?: string;
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ArtifactListAnswer"];
+                    "application/json": components["schemas"]["ArtifactView"][];
                 };
             };
             /** @description `limit` is 0 or above the page ceiling, or `after_created` and `after_id` are not sent together with `limit` */

@@ -1,41 +1,8 @@
-title    = "The per-resource artifact list can be bounded: `limit` and a keyset cursor, answering `{ artifacts, next }`"
+title    = "The per-resource artifact list can be bounded: `limit`, with the next page named in a `Link` header"
 pr       = "self"
-classes  = ["additive", "behavioral"]
+classes  = ["additive"]
 surfaces = ["http", "clients", "schema"]
 status   = "signal-only"
 body = '''
-`GET /api/resources/{id}/artifacts` gains three optional query parameters: `limit`, and
-`after_created` with `after_id`, which together carry the position a previous page's `next` named.
-With `limit` the route answers a new envelope, `{ artifacts, next }`, where `next` is an
-`ArtifactCursor` (`created`, `artifact_id`) or null on the last page. Without `limit` the route
-answers the bare array it always has, unchanged, so no existing caller sees a different shape or a
-silently shortened list; that unbounded form retires later, on the retirement train, under its own
-`shape-breaking` entry. A `limit` of 0 or above the server ceiling (`MAX_ARTIFACT_PAGE_ROWS`), a
-continuation position sent in halves, and one sent without `limit` are each refused with a 400
-naming the parameter, never clamped. The envelope type and the cursor are new in `openapi.json`
-(`ArtifactPage`, `ArtifactCursor`, and `ArtifactListAnswer`, the route's 200 as a union of the page
-and the bare array) and in the ts-rs types, and the three SDKs regenerate with them.
-
-Why `behavioral` beside `additive`: the route's documented 200 moved from an array to a union of
-the array and the page, which the crosscheck reads as an envelope change. The bytes a caller
-receives move only when that caller sends `limit`. An old client against a new server sends no
-`limit` and gets the identical bare array. A new `temper-client` against an old server sends
-`limit`, which the old route ignores, and gets the bare array of every artifact back; `list_page`
-reads that answer as the final page (every artifact, `next` null), so `list_all` returns the
-complete set after exactly one request, neither truncated nor failing to decode. Both skew
-directions therefore hold for `temper-client` and for the CLI and MCP callers built on it. A
-generated SDK that pages by hand sees whichever shape the server it talks to answers. The declaration is the
-conversion to the deprecation path (D-C2), not a shape break: the unbounded form's retirement is
-the later `shape-breaking` entry named above.
-
-Behind it, migration `20261102000000` adds an 8-argument arity of the SQL function
-`artifacts_for_resource` (limit and keyset position, no `DEFAULT` on any parameter). The existing
-5-argument function is untouched and still serves the no-`limit` form, so a binary without this
-change keeps working against the new schema.
-
-Who observes: callers of the list route and of the typed clients. `temper-client` gains
-`list_page` and `list_all`; `temper data-artifact list` and the MCP
-`list_data_artifacts` tool now drain the bounded list a page at a time, so each still answers every
-artifact in the same shape. Nothing about either surface's output changes. User-visible: no for
-existing callers; callers that want a bound can now ask for one. Release relevance: signal-only.
+`GET /api/resources/{id}/artifacts` gains optional `limit`, `after_created` and `after_id` query parameters and a documented `Link: <target>; rel="next"` response header on its 200, whose body stays the bare array with its schema unchanged; the header names this route with the caller's filters and the next page's position, and is absent on the last page and on every response without `limit` (a `limit` of 0 or above `MAX_ARTIFACT_PAGE_ROWS` is a 400, never clamped, and the unbounded no-`limit` form retires later under its own `shape-breaking` entry). Skew holds both ways: an old client sends no `limit` and gets the identical array, and a new `temper-client` against an old server gets every artifact with no `Link` and reads it as the final page, so `list_all` returns the complete set in one request, while a `Link` it cannot read is an error, never a silent last page. Behind it, migration `20261102000000` adds an 8-argument arity of `artifacts_for_resource` with no `DEFAULT`, leaving the 5-argument function untouched; `temper data-artifact list` and MCP `list_data_artifacts` drain the bounded list and answer as before. Release relevance: signal-only.
 '''

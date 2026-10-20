@@ -70,18 +70,20 @@ pub struct ArtifactListParams {
     /// `after_*` are not read when this is set.
     #[serde(default)]
     pub counts: Option<bool>,
-    /// Return at most this many artifacts, answering `{ artifacts, next }` instead of a bare
-    /// array. Must be at least 1 and at most the server ceiling `MAX_ARTIFACT_PAGE_ROWS`; a value outside that
-    /// range is refused, never clamped. Omit it to receive the whole list as a bare array (the
-    /// unbounded form, which a later release retires).
+    /// Return at most this many artifacts. The body is still the bare array; when more remain, the
+    /// response carries a `Link: <...>; rel="next"` header whose target is this request with the
+    /// next page's position, and the header is absent on the last page. Must be at least 1 and at
+    /// most the server ceiling `MAX_ARTIFACT_PAGE_ROWS`; a value outside that range is refused,
+    /// never clamped. Omit it to receive the whole list (the unbounded form, which a later release
+    /// retires).
     #[serde(default)]
     pub limit: Option<u32>,
-    /// Continue after this position: the `created` half of the previous page's `next` cursor.
+    /// Continue after this position: the `after_created` of the previous page's `Link` target.
     /// Send together with `after_id`, and only with `limit`.
     #[serde(default)]
     pub after_created: Option<DateTime<Utc>>,
-    /// Continue after this position: the `artifact_id` half of the previous page's `next`
-    /// cursor. Send together with `after_created`, and only with `limit`.
+    /// Continue after this position: the `after_id` of the previous page's `Link` target. Send
+    /// together with `after_created`, and only with `limit`.
     #[serde(default)]
     pub after_id: Option<Uuid>,
 }
@@ -114,33 +116,15 @@ pub struct ArtifactCursor {
 }
 
 /// One bounded page of artifacts, in `(created, id)` order.
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "data_artifact.ts"))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+///
+/// Not a wire type: the route's body is the bare array and the continuation rides the `Link`
+/// response header. This is what the service layer and `temper-client` hand back once the two are
+/// put together, so it has no serde, OpenAPI or TypeScript derive.
+#[derive(Debug, Clone)]
 pub struct ArtifactPage {
     pub artifacts: Vec<ArtifactView>,
-    /// Where to continue, or `null` when this page is the last. Pass it back as `after_created`
-    /// and `after_id`.
+    /// Where to continue, or `None` when this page is the last.
     pub next: Option<ArtifactCursor>,
-}
-
-/// The two answers `GET /api/resources/{id}/artifacts` gives when it lists artifacts (not
-/// counts). Untagged, so each arm serializes exactly as its inner type does: a request with
-/// `limit` answers the [`ArtifactPage`] envelope, and a request without one answers the bare
-/// array the route has always returned.
-///
-/// Deserializable so a client can read either answer from one typed call: a server that predates
-/// `limit` ignores it and answers the bare array.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-#[serde(untagged)]
-pub enum ArtifactListAnswer {
-    /// Asked with `limit`: one page and where to continue.
-    Page(ArtifactPage),
-    /// Asked without `limit`: every artifact, unbounded.
-    Unbounded(Vec<ArtifactView>),
 }
 
 /// A bounded read's request, as [`ArtifactListParams::page_request`] validates it.
@@ -296,41 +280,6 @@ mod tests {
         let wire = serde_json::to_value(cursor()).expect("cursor serializes");
         assert_eq!(wire["created"], "2026-10-19T12:30:45.123456Z");
         assert!(wire["artifact_id"].is_string(), "got {wire}");
-    }
-
-    #[test]
-    fn a_page_serializes_a_null_next_on_the_last_page() {
-        let wire = serde_json::to_value(ArtifactPage {
-            artifacts: vec![],
-            next: None,
-        })
-        .expect("page serializes");
-        assert!(
-            wire.get("next").is_some_and(serde_json::Value::is_null),
-            "`next` must be present and null, got {wire}"
-        );
-    }
-
-    #[test]
-    fn the_unbounded_answer_serializes_as_a_bare_array() {
-        let wire =
-            serde_json::to_value(ArtifactListAnswer::Unbounded(vec![])).expect("answer serializes");
-        assert_eq!(wire, serde_json::json!([]));
-    }
-
-    #[test]
-    fn the_answer_reads_a_bare_array_as_the_unbounded_arm() {
-        let answer: ArtifactListAnswer =
-            serde_json::from_value(serde_json::json!([])).expect("a bare array is an answer");
-        assert!(matches!(answer, ArtifactListAnswer::Unbounded(v) if v.is_empty()));
-    }
-
-    #[test]
-    fn the_answer_reads_an_envelope_as_the_page_arm() {
-        let answer: ArtifactListAnswer =
-            serde_json::from_value(serde_json::json!({ "artifacts": [], "next": null }))
-                .expect("an envelope is an answer");
-        assert!(matches!(answer, ArtifactListAnswer::Page(p) if p.next.is_none()));
     }
 
     #[test]

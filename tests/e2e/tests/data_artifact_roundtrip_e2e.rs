@@ -337,8 +337,10 @@ async fn resource_with_artifacts(
 }
 
 /// **The C2 witness, through the real door.** Five artifacts, `limit = 2`: the pages hold 2, 2
-/// and 1, `next` is `null` on the last page and only there, the union is exactly the five
-/// committed artifacts in order, and none repeats.
+/// and 1, a `Link` continuation is present on the first two and absent on the last, the union is
+/// exactly the five committed artifacts in order, and none repeats. `list_page` follows the
+/// `Link` header, so this is also the end-to-end round trip of the server's link and the
+/// client's parser.
 ///
 /// Witnesses the cursor contract over HTTP. It does not witness the SQL bound (the readback
 /// truncates in Rust; see `the_sql_arity_returns_at_most_p_limit_rows` in temper-substrate). It
@@ -376,7 +378,7 @@ async fn bounded_list_pages_two_two_one_with_an_exact_union(pool: PgPool) {
     assert_eq!(
         nexts,
         vec![true, true, false],
-        "`next` is null on the last page and only there"
+        "a `Link` continuation is present before the last page and only there"
     );
     assert_eq!(
         seen, committed,
@@ -384,40 +386,89 @@ async fn bounded_list_pages_two_two_one_with_an_exact_union(pool: PgPool) {
     );
 }
 
-/// With `limit` the wire answers the `{ artifacts, next }` envelope, and `next` is a legible
-/// `(created, artifact_id)` object rather than an opaque token.
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn a_list_with_limit_answers_the_envelope_with_a_legible_cursor(pool: PgPool) {
-    let app = common::setup(pool).await;
-    let (resource, committed) = resource_with_artifacts(&app, "e2e-envelope", 3).await;
-
-    let answer = app
-        .client
-        .data_artifacts()
-        .list(
-            resource,
-            &ArtifactListParams {
-                limit: Some(2),
-                ..Default::default()
-            },
-        )
+/// One raw `GET` of the list route: the `Link` header (if any) and the body.
+async fn raw_list(app: &common::E2eTestApp, target: &str) -> (Option<String>, serde_json::Value) {
+    let resp = app
+        .reqwest_client
+        .get(app.url(target))
+        .bearer_auth(&app.token)
+        .send()
         .await
-        .expect("bounded list failed");
+        .expect("list request failed");
+    assert!(resp.status().is_success(), "status {}", resp.status());
+    let link = resp
+        .headers()
+        .get(reqwest::header::LINK)
+        .map(|v| v.to_str().expect("Link is ASCII").to_string());
+    (link, resp.json().await.expect("body is JSON"))
+}
 
-    assert_eq!(answer["artifacts"].as_array().map(Vec::len), Some(2));
+/// With `limit` the body is still the bare array, and when more remain the continuation is a
+/// `Link: <target>; rel="next"` header whose target is this route with the next page's position.
+/// Following the target as given answers the rest.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_bounded_list_answers_the_bare_array_and_links_to_the_next_page(pool: PgPool) {
+    let app = common::setup(pool).await;
+    let (resource, committed) = resource_with_artifacts(&app, "e2e-link", 3).await;
+
+    let (link, body) = raw_list(
+        &app,
+        &format!("/api/resources/{resource}/artifacts?limit=2"),
+    )
+    .await;
+    assert_eq!(body.as_array().map(Vec::len), Some(2), "got {body}");
+    let link = link.expect("more artifacts remain, so the page carries a Link");
+    assert!(link.ends_with(">; rel=\"next\""), "got: {link}");
     assert!(
-        answer["next"]["created"].is_string(),
-        "next.created, got {answer}"
+        link.contains(&format!("after_id={}", committed[1].uuid())),
+        "the position names the last artifact on the page, got: {link}"
     );
+
+    let target = link
+        .strip_prefix('<')
+        .and_then(|rest| rest.split_once('>'))
+        .map(|(target, _)| target.to_string())
+        .expect("a <target> link");
+    let (link, body) = raw_list(&app, &target).await;
     assert_eq!(
-        answer["next"]["artifact_id"],
-        json!(committed[1]),
-        "the cursor names the last artifact on the page"
+        body.as_array().map(|a| a[0]["artifact_id"].clone()),
+        Some(json!(committed[2])),
+        "the link's target answers the rest, got {body}"
+    );
+    assert_eq!(link, None, "the last page has no Link");
+}
+
+/// `Link` is absent on a page that exactly exhausts the list and on every response without
+/// `limit`, and the unbounded body is the identical array.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_last_page_and_a_list_without_limit_carry_no_link(pool: PgPool) {
+    let app = common::setup(pool).await;
+    let (resource, committed) = resource_with_artifacts(&app, "e2e-no-link", 3).await;
+
+    let (link, body) = raw_list(
+        &app,
+        &format!("/api/resources/{resource}/artifacts?limit=3"),
+    )
+    .await;
+    assert_eq!(body.as_array().map(Vec::len), Some(3));
+    assert_eq!(link, None, "three of three is the whole list");
+
+    let (link, body) = raw_list(&app, &format!("/api/resources/{resource}/artifacts")).await;
+    assert_eq!(link, None, "an unbounded list never links");
+    let ids: Vec<_> = body
+        .as_array()
+        .expect("a bare array")
+        .iter()
+        .map(|a| a["artifact_id"].clone())
+        .collect();
+    assert_eq!(
+        ids,
+        committed.iter().map(|id| json!(id)).collect::<Vec<_>>()
     );
 }
 
 /// A call with no `limit` still answers the bare array of every artifact, exactly as the route
-/// did before it could be bounded (ruling P11).
+/// did before it could be bounded.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_list_without_limit_still_answers_the_bare_array(pool: PgPool) {
     let app = common::setup(pool).await;

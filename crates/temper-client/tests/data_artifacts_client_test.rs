@@ -1,8 +1,9 @@
-//! `DataArtifactsClient::list_all` against a server that predates `limit`.
+//! `DataArtifactsClient::list_page` / `list_all` and the `Link: rel="next"` continuation.
 //!
-//! Uses `wiremock`, the pattern `reblock_client_test.rs` establishes in this crate. A server
-//! without the bounded list ignores `limit` and answers the bare array of every artifact; the
-//! client must read that as the final page rather than fail to decode it.
+//! Uses `wiremock`, the pattern `reblock_client_test.rs` establishes in this crate. The body is
+//! always the bare array; the continuation rides the `Link` header. A server without the bounded
+//! list ignores `limit` and answers every artifact with no `Link`, which the client reads as the
+//! final page. A `Link` it cannot read is an error, never a silent last page.
 
 use std::sync::Arc;
 
@@ -11,9 +12,11 @@ use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use temper_client::auth::MemoryTokenStore;
+use temper_client::data_artifacts::parse_next_link;
+use temper_client::error::ClientError;
 use temper_client::TemperClient;
 use temper_core::types::data_artifact::{
-    ArtifactListParams, ArtifactView, ARTIFACT_DRAIN_PAGE_ROWS,
+    ArtifactListParams, ArtifactPageRequest, ArtifactView, ARTIFACT_DRAIN_PAGE_ROWS,
 };
 use temper_core::types::ids::{DataArtifactId, ResourceId};
 
@@ -47,10 +50,10 @@ fn artifact(resource: Uuid, n: i64) -> ArtifactView {
 }
 
 /// A new client against an old server: the old route ignores `limit` and answers every artifact
-/// as a bare array. `list_all` returns all of them and asks exactly once, because that answer is
-/// read as the final page (`next: None`), neither truncated nor followed.
+/// as a bare array with no `Link`. `list_all` returns all of them and asks exactly once, because
+/// no `Link` means the final page: neither truncated nor followed.
 #[tokio::test]
-async fn list_all_reads_an_older_servers_bare_array_as_the_final_page() {
+async fn list_all_reads_an_older_servers_answer_with_no_link_as_the_final_page() {
     let resource = Uuid::now_v7();
     // More than one drain page: an old server returns everything regardless of `limit`.
     let everything: Vec<ArtifactView> = (0..i64::from(ARTIFACT_DRAIN_PAGE_ROWS) + 3)
@@ -78,4 +81,136 @@ async fn list_all_reads_an_older_servers_bare_array_as_the_final_page() {
         "every element, in order, none dropped"
     );
     // wiremock verifies `.expect(1)` on drop: exactly one request was made.
+}
+
+const AFTER_ID: &str = "00000000-0000-0000-0000-0000000000aa";
+const AFTER_CREATED: &str = "2026-10-19T12:30:45.123456Z";
+
+fn link_to_next(resource: Uuid) -> String {
+    format!(
+        "</api/resources/{resource}/artifacts?limit={ARTIFACT_DRAIN_PAGE_ROWS}\
+         &after_created=2026-10-19T12%3A30%3A45.123456Z&after_id={AFTER_ID}>; rel=\"next\""
+    )
+}
+
+/// `list_all` follows `Link: rel="next"`: the first page names a position, the second request
+/// carries exactly that position, and the drain ends on the page with no `Link`.
+#[tokio::test]
+async fn list_all_follows_the_link_header_to_the_last_page() {
+    let resource = Uuid::now_v7();
+    let first = vec![artifact(resource, 0), artifact(resource, 1)];
+    let second = vec![artifact(resource, 2)];
+
+    let server = MockServer::start().await;
+    let route = format!("/api/resources/{resource}/artifacts");
+    // The more specific mock is mounted first: wiremock answers with the first that matches.
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .and(query_param("after_id", AFTER_ID))
+        .and(query_param("after_created", AFTER_CREATED))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&second))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(&route))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Link", link_to_next(resource).as_str())
+                .set_body_json(&first),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let drained = test_client(&server.uri())
+        .data_artifacts()
+        .list_all(resource, &ArtifactListParams::default())
+        .await
+        .expect("the drain follows the link");
+
+    assert_eq!(
+        drained.iter().map(|a| a.artifact_id).collect::<Vec<_>>(),
+        first
+            .iter()
+            .chain(&second)
+            .map(|a| a.artifact_id)
+            .collect::<Vec<_>>(),
+    );
+}
+
+/// A `Link` that is present but unreadable is an error: reading it as "no next page" would end a
+/// drain early and hand back a short list as if it were whole.
+#[tokio::test]
+async fn a_malformed_link_is_an_error_not_a_last_page() {
+    let resource = Uuid::now_v7();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("/api/resources/{resource}/artifacts")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                // rel="next" with a target that carries no `after_id`.
+                .insert_header(
+                    "Link",
+                    "</api/resources/x/artifacts?after_created=2026-10-19T12%3A30%3A45Z>; rel=\"next\"",
+                )
+                .set_body_json(vec![artifact(resource, 0)]),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let err = test_client(&server.uri())
+        .data_artifacts()
+        .list_page(
+            resource,
+            &ArtifactListParams::default(),
+            ArtifactPageRequest {
+                limit: 2,
+                after: None,
+            },
+        )
+        .await
+        .expect_err("an unreadable Link must not read as the last page");
+
+    assert!(
+        matches!(&err, ClientError::Other(m) if m.contains("malformed `Link`")),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn parse_next_link_reads_the_servers_form_and_refuses_anything_else() {
+    let resource = Uuid::now_v7();
+    let cursor = parse_next_link(&link_to_next(resource))
+        .expect("the server's form parses")
+        .expect("it names a next page");
+    assert_eq!(
+        cursor.created,
+        AFTER_CREATED
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .unwrap()
+    );
+    assert_eq!(cursor.artifact_id.uuid().to_string(), AFTER_ID);
+
+    // A well-formed link that is not the next page names no next page.
+    assert_eq!(
+        parse_next_link("</api/resources/x/artifacts>; rel=\"prev\"").unwrap(),
+        None
+    );
+    // Anything that is not `<target>`-shaped is malformed, and so is a next link that lost its
+    // position.
+    for bad in [
+        "",
+        "not a link",
+        "<unterminated; rel=\"next\"",
+        "</a?after_id=not-a-uuid&after_created=2026-10-19T12%3A30%3A45Z>; rel=\"next\"",
+        "</a?after_id=00000000-0000-0000-0000-0000000000aa&after_created=yesterday>; rel=\"next\"",
+        "</a>; rel=\"next\"",
+    ] {
+        assert!(
+            parse_next_link(bad).is_err(),
+            "should be malformed: {bad:?}"
+        );
+    }
 }

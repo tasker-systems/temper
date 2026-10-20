@@ -247,36 +247,36 @@ module Temper::Generated
     end
 
     # List artifacts for a resource, or counts with counts=true
-    # Without `counts=true`: returns fully hydrated artifacts (metadata + content). With `counts=true`: returns per-family counts only, no content hydration — for surfaces that need \"3 measurements, 1 extraction\" without fetching payloads.  With `limit`, returns one page as `{ artifacts, next }`: at most `limit` artifacts in `(created, id)` order, and `next` — the position to continue after, sent back as `after_created` and `after_id` — or `null` on the last page. A `limit` of 0 or above the server ceiling `MAX_ARTIFACT_PAGE_ROWS` is refused, not clamped. Without `limit`, returns the whole list as a bare array: the unbounded form, which a later release retires.
+    # Without `counts=true`: returns fully hydrated artifacts (metadata + content). With `counts=true`: returns per-family counts only, no content hydration — for surfaces that need \"3 measurements, 1 extraction\" without fetching payloads.  With `limit`, returns at most that many artifacts in `(created, id)` order. The body is the same bare array either way; when more remain, the response carries a `Link: <...>; rel=\"next\"` header whose target is this request with the next page's `after_created` and `after_id` (and the caller's own filters), and the header is absent on the last page and on every response without `limit`. A `limit` of 0 or above the server ceiling `MAX_ARTIFACT_PAGE_ROWS` is refused, not clamped. Without `limit`, returns the whole list: the unbounded form, which a later release retires.
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :kind Filter by the bare family name (e.g. &#x60;\&quot;measurement\&quot;&#x60;).
     # @option opts [String] :intent Filter by selection intent: &#x60;\&quot;current\&quot;&#x60;, &#x60;\&quot;member\&quot;&#x60;, or &#x60;\&quot;pinned\&quot;&#x60;.
     # @option opts [Boolean] :include_folded Include folded (superseded) artifacts in the result. Default: &#x60;false&#x60;.
     # @option opts [Boolean] :counts Return per-family counts instead of full artifacts. No content hydration. Default: &#x60;false&#x60; (full artifacts with content). Counts are not paged: &#x60;limit&#x60; and &#x60;after_*&#x60; are not read when this is set.
-    # @option opts [Integer] :limit Return at most this many artifacts, answering &#x60;{ artifacts, next }&#x60; instead of a bare array. Must be at least 1 and at most the server ceiling &#x60;MAX_ARTIFACT_PAGE_ROWS&#x60;; a value outside that range is refused, never clamped. Omit it to receive the whole list as a bare array (the unbounded form, which a later release retires).
-    # @option opts [Time] :after_created Continue after this position: the &#x60;created&#x60; half of the previous page&#39;s &#x60;next&#x60; cursor. Send together with &#x60;after_id&#x60;, and only with &#x60;limit&#x60;.
-    # @option opts [String] :after_id Continue after this position: the &#x60;artifact_id&#x60; half of the previous page&#39;s &#x60;next&#x60; cursor. Send together with &#x60;after_created&#x60;, and only with &#x60;limit&#x60;.
+    # @option opts [Integer] :limit Return at most this many artifacts. The body is still the bare array; when more remain, the response carries a &#x60;Link: &lt;...&gt;; rel&#x3D;\&quot;next\&quot;&#x60; header whose target is this request with the next page&#39;s position, and the header is absent on the last page. Must be at least 1 and at most the server ceiling &#x60;MAX_ARTIFACT_PAGE_ROWS&#x60;; a value outside that range is refused, never clamped. Omit it to receive the whole list (the unbounded form, which a later release retires).
+    # @option opts [Time] :after_created Continue after this position: the &#x60;after_created&#x60; of the previous page&#39;s &#x60;Link&#x60; target. Send together with &#x60;after_id&#x60;, and only with &#x60;limit&#x60;.
+    # @option opts [String] :after_id Continue after this position: the &#x60;after_id&#x60; of the previous page&#39;s &#x60;Link&#x60; target. Send together with &#x60;after_created&#x60;, and only with &#x60;limit&#x60;.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [ArtifactListAnswer]
+    # @return [Array<ArtifactView>]
     def list_artifacts(id, opts = {})
       data, _status_code, _headers = list_artifacts_with_http_info(id, opts)
       data
     end
 
     # List artifacts for a resource, or counts with counts&#x3D;true
-    # Without &#x60;counts&#x3D;true&#x60;: returns fully hydrated artifacts (metadata + content). With &#x60;counts&#x3D;true&#x60;: returns per-family counts only, no content hydration — for surfaces that need \&quot;3 measurements, 1 extraction\&quot; without fetching payloads.  With &#x60;limit&#x60;, returns one page as &#x60;{ artifacts, next }&#x60;: at most &#x60;limit&#x60; artifacts in &#x60;(created, id)&#x60; order, and &#x60;next&#x60; — the position to continue after, sent back as &#x60;after_created&#x60; and &#x60;after_id&#x60; — or &#x60;null&#x60; on the last page. A &#x60;limit&#x60; of 0 or above the server ceiling &#x60;MAX_ARTIFACT_PAGE_ROWS&#x60; is refused, not clamped. Without &#x60;limit&#x60;, returns the whole list as a bare array: the unbounded form, which a later release retires.
+    # Without &#x60;counts&#x3D;true&#x60;: returns fully hydrated artifacts (metadata + content). With &#x60;counts&#x3D;true&#x60;: returns per-family counts only, no content hydration — for surfaces that need \&quot;3 measurements, 1 extraction\&quot; without fetching payloads.  With &#x60;limit&#x60;, returns at most that many artifacts in &#x60;(created, id)&#x60; order. The body is the same bare array either way; when more remain, the response carries a &#x60;Link: &lt;...&gt;; rel&#x3D;\&quot;next\&quot;&#x60; header whose target is this request with the next page&#39;s &#x60;after_created&#x60; and &#x60;after_id&#x60; (and the caller&#39;s own filters), and the header is absent on the last page and on every response without &#x60;limit&#x60;. A &#x60;limit&#x60; of 0 or above the server ceiling &#x60;MAX_ARTIFACT_PAGE_ROWS&#x60; is refused, not clamped. Without &#x60;limit&#x60;, returns the whole list: the unbounded form, which a later release retires.
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :kind Filter by the bare family name (e.g. &#x60;\&quot;measurement\&quot;&#x60;).
     # @option opts [String] :intent Filter by selection intent: &#x60;\&quot;current\&quot;&#x60;, &#x60;\&quot;member\&quot;&#x60;, or &#x60;\&quot;pinned\&quot;&#x60;.
     # @option opts [Boolean] :include_folded Include folded (superseded) artifacts in the result. Default: &#x60;false&#x60;.
     # @option opts [Boolean] :counts Return per-family counts instead of full artifacts. No content hydration. Default: &#x60;false&#x60; (full artifacts with content). Counts are not paged: &#x60;limit&#x60; and &#x60;after_*&#x60; are not read when this is set.
-    # @option opts [Integer] :limit Return at most this many artifacts, answering &#x60;{ artifacts, next }&#x60; instead of a bare array. Must be at least 1 and at most the server ceiling &#x60;MAX_ARTIFACT_PAGE_ROWS&#x60;; a value outside that range is refused, never clamped. Omit it to receive the whole list as a bare array (the unbounded form, which a later release retires).
-    # @option opts [Time] :after_created Continue after this position: the &#x60;created&#x60; half of the previous page&#39;s &#x60;next&#x60; cursor. Send together with &#x60;after_id&#x60;, and only with &#x60;limit&#x60;.
-    # @option opts [String] :after_id Continue after this position: the &#x60;artifact_id&#x60; half of the previous page&#39;s &#x60;next&#x60; cursor. Send together with &#x60;after_created&#x60;, and only with &#x60;limit&#x60;.
+    # @option opts [Integer] :limit Return at most this many artifacts. The body is still the bare array; when more remain, the response carries a &#x60;Link: &lt;...&gt;; rel&#x3D;\&quot;next\&quot;&#x60; header whose target is this request with the next page&#39;s position, and the header is absent on the last page. Must be at least 1 and at most the server ceiling &#x60;MAX_ARTIFACT_PAGE_ROWS&#x60;; a value outside that range is refused, never clamped. Omit it to receive the whole list (the unbounded form, which a later release retires).
+    # @option opts [Time] :after_created Continue after this position: the &#x60;after_created&#x60; of the previous page&#39;s &#x60;Link&#x60; target. Send together with &#x60;after_id&#x60;, and only with &#x60;limit&#x60;.
+    # @option opts [String] :after_id Continue after this position: the &#x60;after_id&#x60; of the previous page&#39;s &#x60;Link&#x60; target. Send together with &#x60;after_created&#x60;, and only with &#x60;limit&#x60;.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Array<(ArtifactListAnswer, Integer, Hash)>] ArtifactListAnswer data, response status code and response headers
+    # @return [Array<(Array<ArtifactView>, Integer, Hash)>] Array<ArtifactView> data, response status code and response headers
     def list_artifacts_with_http_info(id, opts = {})
       if @api_client.config.debugging
         @api_client.config.logger.debug 'Calling API: DataArtifactsApi.list_artifacts ...'
@@ -319,7 +319,7 @@ module Temper::Generated
       post_body = opts[:debug_body]
 
       # return_type
-      return_type = opts[:debug_return_type] || 'ArtifactListAnswer'
+      return_type = opts[:debug_return_type] || 'Array<ArtifactView>'
 
       # auth_names
       auth_names = opts[:debug_auth_names] || ['bearer_auth']

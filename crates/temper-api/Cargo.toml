@@ -31,6 +31,9 @@ sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "chron
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Encodes the `Link: rel="next"` target of a bounded artifact list from `ArtifactListParams` itself,
+# the struct `Query` reads back (already in the tree via axum).
+serde_urlencoded = "0.7"
 jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 tracing = "0.1"
@@ -87,7 +90,6 @@ uuid = { version = "1", features = ["v4", "v7", "serde"] }
 anyhow = "1"
 async-trait = "0.1"
 bytes = "1"
-serde_urlencoded = "0.7"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 # `oneshot` drives the rate-limit middleware directly in the seam's witnesses, the same
 # way temper-mcp's transport layer tests drive theirs.

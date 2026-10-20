@@ -94,8 +94,7 @@ pub use config::{
 pub use conflict::{ConflictRecord, TemperSystemAnnotation};
 pub use context::{ContextCreateRequest, ContextRow, ContextRowWithCounts};
 pub use data_artifact::{
-    ArtifactCountRow, ArtifactCursor, ArtifactListAnswer, ArtifactListParams, ArtifactPage,
-    ArtifactView,
+    ArtifactCountRow, ArtifactCursor, ArtifactListParams, ArtifactPage, ArtifactView,
 };
 pub use data_artifact_shape::{EnforcementMode, ShapeDeclareRequest, ShapeView};
 pub use device::DeviceSyncState;

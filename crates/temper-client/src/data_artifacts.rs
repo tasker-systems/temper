@@ -2,11 +2,11 @@
 
 use uuid::Uuid;
 
-use crate::error::Result;
+use crate::error::{ClientError, Result};
 use crate::http::HttpClient;
 use crate::ops;
 use temper_core::types::data_artifact::{
-    ArtifactCommitRequest, ArtifactCommitResponse, ArtifactListAnswer, ArtifactListParams,
+    ArtifactCommitRequest, ArtifactCommitResponse, ArtifactCursor, ArtifactListParams,
     ArtifactPage, ArtifactPageRequest, ArtifactView, ARTIFACT_DRAIN_PAGE_ROWS,
 };
 use temper_core::types::data_artifact_shape::{ShapeDeclareRequest, ShapeView};
@@ -23,6 +23,58 @@ impl std::fmt::Debug for DataArtifactsClient<'_> {
     }
 }
 
+/// The position a `Link` header's `rel="next"` entry continues after, or `None` when the header
+/// names no next page.
+///
+/// Strict, and for exactly the form the server emits: comma-separated entries, each
+/// `<target>` followed by `;`-separated parameters, of which the next page's carries
+/// `rel="next"`. The target's query must hold both `after_created` and `after_id`. An entry that
+/// is not `<...>`-shaped, or a `rel="next"` target that does not carry a readable position, is an
+/// error: reading it as "no next page" would end a drain early without saying so.
+pub fn parse_next_link(header: &str) -> Result<Option<ArtifactCursor>> {
+    for entry in header.split(',') {
+        let entry = entry.trim();
+        let (target, params) = entry
+            .strip_prefix('<')
+            .and_then(|rest| rest.split_once('>'))
+            .ok_or_else(|| malformed_link("an entry is not `<target>`", header))?;
+        if !params.split(';').any(|p| p.trim() == "rel=\"next\"") {
+            continue;
+        }
+        let url = url::Url::parse("http://link.invalid/")
+            .and_then(|base| base.join(target))
+            .map_err(|_| malformed_link("the next target is not a URL", header))?;
+        let mut created = None;
+        let mut id = None;
+        for (key, value) in url.query_pairs() {
+            match key.as_ref() {
+                "after_created" => created = Some(value.into_owned()),
+                "after_id" => id = Some(value.into_owned()),
+                _ => {}
+            }
+        }
+        let created = created
+            .ok_or_else(|| malformed_link("the next target has no `after_created`", header))?
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .map_err(|_| malformed_link("`after_created` is not an RFC 3339 timestamp", header))?;
+        let artifact_id = id
+            .ok_or_else(|| malformed_link("the next target has no `after_id`", header))?
+            .parse::<Uuid>()
+            .map_err(|_| malformed_link("`after_id` is not a UUID", header))?;
+        return Ok(Some(ArtifactCursor {
+            created,
+            artifact_id: artifact_id.into(),
+        }));
+    }
+    Ok(None)
+}
+
+fn malformed_link(why: &str, header: &str) -> ClientError {
+    ClientError::Other(format!(
+        "malformed `Link` header on the artifact list ({why}): {header}"
+    ))
+}
+
 impl<'a> DataArtifactsClient<'a> {
     pub(crate) fn new(http: &'a HttpClient) -> Self {
         Self { http }
@@ -30,9 +82,9 @@ impl<'a> DataArtifactsClient<'a> {
 
     /// List artifacts for a resource, in whatever shape the params ask for.
     ///
-    /// Returns `serde_json::Value` because the endpoint answers one of three shapes, decided
-    /// server-side from the params: a bare array of every artifact (no `limit`), an
-    /// `{ artifacts, next }` page (`limit` set), or `Vec<ArtifactCountRow>` (`counts=true`).
+    /// Returns `serde_json::Value` because the endpoint answers one of two shapes, decided
+    /// server-side from the params: the bare array of artifacts, or `Vec<ArtifactCountRow>`
+    /// (`counts=true`). It does not read the `Link` continuation header.
     ///
     /// This is the raw door, and its no-`limit` form is the unbounded one a later release
     /// retires. A caller that wants artifacts uses [`Self::list_page`] or [`Self::list_all`];
@@ -58,8 +110,10 @@ impl<'a> DataArtifactsClient<'a> {
     /// `params`. Always asks for artifacts, never counts. The server refuses a `limit` of 0 or
     /// above `MAX_ARTIFACT_PAGE_ROWS`.
     ///
-    /// An older server that does not know `limit` answers the bare array, which is every artifact,
-    /// read here as the final page.
+    /// The continuation is the response's `Link: <...>; rel="next"` header; with no such header
+    /// the page is the last. An older server that does not know `limit` answers every artifact
+    /// with no `Link`, which is read here as the final page. A `Link` that is present but cannot
+    /// be read is an error, never a silent last page.
     pub async fn list_page(
         &self,
         resource_id: Uuid,
@@ -77,17 +131,23 @@ impl<'a> DataArtifactsClient<'a> {
         let op = &ops::LIST_ARTIFACTS;
         let path = op.path(&[&resource_id])?;
         let req = self.http.request(op, &path).query(&paged);
-        let answer: ArtifactListAnswer = self
+        let resp = self
             .http
-            .send_json(&op.method(), &path, req, token.as_deref())
+            .send(&op.method(), &path, req, token.as_deref())
             .await?;
-        Ok(match answer {
-            ArtifactListAnswer::Page(page) => page,
-            ArtifactListAnswer::Unbounded(artifacts) => ArtifactPage {
-                artifacts,
-                next: None,
-            },
-        })
+        let mut next = None;
+        for value in resp.headers().get_all(reqwest::header::LINK) {
+            let value = value
+                .to_str()
+                .map_err(|_| malformed_link("not visible ASCII", "<non-ASCII value>"))?;
+            if let Some(cursor) = parse_next_link(value)? {
+                next = Some(cursor);
+                break;
+            }
+        }
+        let bytes = resp.bytes().await?;
+        let artifacts: Vec<ArtifactView> = serde_json::from_slice(&bytes)?;
+        Ok(ArtifactPage { artifacts, next })
     }
 
     /// Every artifact of a resource, fetched a bounded page at a time.

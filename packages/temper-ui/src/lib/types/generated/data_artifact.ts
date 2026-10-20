@@ -97,16 +97,6 @@ created: string,
 artifact_id: DataArtifactId, };
 
 /**
- * One bounded page of artifacts, in `(created, id)` order.
- */
-export type ArtifactPage = { artifacts: Array<ArtifactView>, 
-/**
- * Where to continue, or `null` when this page is the last. Pass it back as `after_created`
- * and `after_id`.
- */
-next: ArtifactCursor | null, };
-
-/**
  * One data artifact, as returned by the API and MCP surfaces.
  *
  * This is the readback `RetrievedArtifact` projected onto a wire shape: the typed enums

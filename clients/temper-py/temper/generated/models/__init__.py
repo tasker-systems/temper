@@ -44,9 +44,6 @@ from temper.generated.models.anchor_verdict import AnchorVerdict
 from temper.generated.models.append_block_payload import AppendBlockPayload
 from temper.generated.models.artifact_commit_request import ArtifactCommitRequest
 from temper.generated.models.artifact_commit_response import ArtifactCommitResponse
-from temper.generated.models.artifact_cursor import ArtifactCursor
-from temper.generated.models.artifact_list_answer import ArtifactListAnswer
-from temper.generated.models.artifact_page import ArtifactPage
 from temper.generated.models.artifact_view import ArtifactView
 from temper.generated.models.assert_relationship_request import AssertRelationshipRequest
 from temper.generated.models.atlas_edge import AtlasEdge
