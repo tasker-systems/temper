@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
-dirs = "5"
+dirs = "7"
 html-to-markdown-rs = "3.1.0"
 kreuzberg = { version = "4.10.4", features = ["tokio-runtime", "bundled-pdfium"], optional = true }
 ndarray = { version = "0.17", optional = true }
