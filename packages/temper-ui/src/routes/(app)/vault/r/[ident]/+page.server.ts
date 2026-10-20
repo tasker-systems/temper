@@ -146,16 +146,17 @@ export const load: PageServerLoad = async ({ locals, params, parent, url }) => {
 	//
 	// ONE bounded page, never the whole history: a resource's artifacts accumulate for good, so
 	// an unbounded read costs every view more as the resource ages. The page this URL names
-	// (`$lib/artifact-page`), and a link to the next one when the read's `Link` header says more
-	// exist. A `Link` that cannot be read fails the region rather than passing one page off as all.
+	// (`$lib/artifact-page`), newest first, and a link to the next, older page when the read's
+	// `Link` header says more exist. A `Link` that cannot be read fails the region rather than
+	// passing one page off as all.
 	const artifacts: Promise<ArtifactRegion> = bounded(
 		apiGetWithHeaders<ArtifactView[]>(artifactListPath(id, url.searchParams), accessToken).then(
 			({ body, headers }) => {
 				const next = nextFromLink(headers.get('link'));
 				return {
 					artifacts: body,
-					laterHref: next ? artifactPageHref(url, next) : null,
-					earliestHref: pastFirstPage(url.searchParams) ? artifactPageHref(url, null) : null,
+					olderHref: next ? artifactPageHref(url, next) : null,
+					newestHref: pastFirstPage(url.searchParams) ? artifactPageHref(url, null) : null,
 				};
 			},
 		),

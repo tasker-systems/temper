@@ -11,10 +11,11 @@
 	 * The load hands over ONE bounded page (`$lib/artifact-page`), folded artifacts included
 	 * (`include_folded=true`): a folded artifact is rendered folded and stays reachable, because
 	 * whether an artifact is live is often exactly the reader's question, and defaulting the read
-	 * to hiding the folded ones would make this section answer it silently wrong. Pages run in
-	 * the read's `(created, id)` order, oldest first, so the page after this one holds LATER
-	 * artifacts; `laterHref` and `earliestHref` move between pages, and when either is present
-	 * the count is this page's, not the resource's. Rows sort newest-first within the page.
+	 * to hiding the folded ones would make this section answer it silently wrong. The read is
+	 * newest first, so the page after this one holds OLDER artifacts; `olderHref` and
+	 * `newestHref` move between pages, and when either is present the count is this page's, not
+	 * the resource's. Rows also sort newest-first here, so the order the reader sees runs one
+	 * way across every page.
 	 *
 	 * `never_declared` is omitted from the summary line rather than hidden everywhere: it is the
 	 * vocabulary's "no shape is in force, there is nothing to conform to" — a non-fact, not a
@@ -23,12 +24,12 @@
 	 */
 	let {
 		artifacts,
-		laterHref = null,
-		earliestHref = null,
-	}: { artifacts: ArtifactView[]; laterHref?: string | null; earliestHref?: string | null } =
+		olderHref = null,
+		newestHref = null,
+	}: { artifacts: ArtifactView[]; olderHref?: string | null; newestHref?: string | null } =
 		$props();
 
-	let paged = $derived(laterHref !== null || earliestHref !== null);
+	let paged = $derived(olderHref !== null || newestHref !== null);
 
 	let rows = $derived(
 		[...artifacts].sort((a, b) => (a.created < b.created ? 1 : a.created > b.created ? -1 : 0))
@@ -97,8 +98,8 @@
 	{/each}
 	{#if paged}
 		<nav class="pages" aria-label="Data artifact pages">
-			{#if earliestHref}<a href={earliestHref}>← Earliest artifacts</a>{/if}
-			{#if laterHref}<a class="later" href={laterHref}>Later artifacts →</a>{/if}
+			{#if newestHref}<a href={newestHref}>← Newest artifacts</a>{/if}
+			{#if olderHref}<a class="older" href={olderHref}>Older artifacts →</a>{/if}
 		</nav>
 	{/if}
 </section>
@@ -205,7 +206,7 @@
 	.pages a {
 		color: color-mix(in srgb, var(--hue) 70%, white);
 	}
-	.pages .later {
+	.pages .older {
 		margin-left: auto;
 	}
 	.content {

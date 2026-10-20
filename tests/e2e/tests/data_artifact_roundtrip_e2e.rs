@@ -16,6 +16,7 @@ use temper_core::types::data_artifact::{
     MAX_ARTIFACT_PAGE_ROWS,
 };
 use temper_core::types::ids::DataArtifactId;
+use temper_core::types::resource::SortOrder;
 use temper_workflow::types::resource::ResourceCreateRequest;
 
 /// Commit a data artifact via the API, then get it back and verify:
@@ -350,10 +351,56 @@ async fn bounded_list_pages_two_two_one_with_an_exact_union(pool: PgPool) {
     let app = common::setup(pool).await;
     let (resource, committed) = resource_with_artifacts(&app, "e2e-page-witness", 5).await;
 
+    let walked = walk_pages(&app, resource, SortOrder::Asc).await;
+
+    assert_eq!(walked.sizes, vec![2, 2, 1], "pages of two, two and one");
+    assert_eq!(
+        walked.nexts,
+        vec![true, true, false],
+        "a `Link` continuation is present before the last page and only there"
+    );
+    assert_eq!(
+        walked.seen, committed,
+        "the union is exactly the committed artifacts, in order, with no repeats"
+    );
+}
+
+/// The same walk newest first: pages of 2, 2 and 1, the union exactly the five committed in
+/// REVERSE order, none repeated. Bite: flip the descending keyset comparison in migration
+/// `20261102000000` from `<` to `>` and the second page reads rows NEWER than the first page's
+/// last: it repeats the newest artifact and the walk stops at `[2, 1]`, skipping the three oldest.
+/// Drop `order` from the request and the pages come back oldest first, which fails the union.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_newest_first_list_pages_two_two_one_in_reverse(pool: PgPool) {
+    let app = common::setup(pool).await;
+    let (resource, committed) = resource_with_artifacts(&app, "e2e-page-desc", 5).await;
+
+    let walked = walk_pages(&app, resource, SortOrder::Desc).await;
+
+    assert_eq!(walked.sizes, vec![2, 2, 1], "pages of two, two and one");
+    assert_eq!(walked.nexts, vec![true, true, false]);
+    let newest_first: Vec<_> = committed.iter().rev().copied().collect();
+    assert_eq!(
+        walked.seen, newest_first,
+        "the union is exactly the committed artifacts, newest first, with no repeats"
+    );
+}
+
+/// What a page walk at `limit = 2` saw: each page's size, whether it named a next page, and every
+/// artifact in the order the pages delivered them.
+struct Walked {
+    sizes: Vec<usize>,
+    nexts: Vec<bool>,
+    seen: Vec<DataArtifactId>,
+}
+
+async fn walk_pages(app: &common::E2eTestApp, resource: uuid::Uuid, order: SortOrder) -> Walked {
+    let mut walked = Walked {
+        sizes: Vec::new(),
+        nexts: Vec::new(),
+        seen: Vec::new(),
+    };
     let mut after = None;
-    let mut sizes = Vec::new();
-    let mut nexts = Vec::new();
-    let mut seen = Vec::new();
     loop {
         let page = app
             .client
@@ -361,29 +408,24 @@ async fn bounded_list_pages_two_two_one_with_an_exact_union(pool: PgPool) {
             .list_page(
                 resource,
                 &ArtifactListParams::default(),
-                ArtifactPageRequest { limit: 2, after },
+                ArtifactPageRequest {
+                    limit: 2,
+                    after,
+                    order,
+                },
             )
             .await
             .expect("list_page failed");
-        sizes.push(page.artifacts.len());
-        nexts.push(page.next.is_some());
-        seen.extend(page.artifacts.iter().map(|a| a.artifact_id));
+        walked.sizes.push(page.artifacts.len());
+        walked.nexts.push(page.next.is_some());
+        walked
+            .seen
+            .extend(page.artifacts.iter().map(|a| a.artifact_id));
         match page.next {
             Some(cursor) => after = Some(cursor),
-            None => break,
+            None => return walked,
         }
     }
-
-    assert_eq!(sizes, vec![2, 2, 1], "pages of two, two and one");
-    assert_eq!(
-        nexts,
-        vec![true, true, false],
-        "a `Link` continuation is present before the last page and only there"
-    );
-    assert_eq!(
-        seen, committed,
-        "the union is exactly the committed artifacts, in order, with no repeats"
-    );
 }
 
 /// One raw `GET` of the list route: the `Link` header (if any) and the body.
@@ -466,6 +508,73 @@ async fn the_last_page_and_a_list_without_limit_carry_no_link(pool: PgPool) {
         ids,
         committed.iter().map(|id| json!(id)).collect::<Vec<_>>()
     );
+}
+
+/// A newest-first page's `Link` carries `order=desc`, so following the target as given continues
+/// newest first: the second page is the next-older artifact, not the oldest.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_newest_first_link_continues_newest_first(pool: PgPool) {
+    let app = common::setup(pool).await;
+    let (resource, committed) = resource_with_artifacts(&app, "e2e-link-desc", 3).await;
+
+    let (link, body) = raw_list(
+        &app,
+        &format!("/api/resources/{resource}/artifacts?limit=2&order=desc"),
+    )
+    .await;
+    assert_eq!(
+        body.as_array().map(|a| a
+            .iter()
+            .map(|r| r["artifact_id"].clone())
+            .collect::<Vec<_>>()),
+        Some(vec![json!(committed[2]), json!(committed[1])]),
+        "the first page is the two newest, newest first"
+    );
+    let link = link.expect("one artifact remains, so the page carries a Link");
+    assert!(
+        link.contains("order=desc"),
+        "the link carries the direction, got: {link}"
+    );
+
+    let target = link
+        .strip_prefix('<')
+        .and_then(|rest| rest.split_once('>'))
+        .map(|(target, _)| target.to_string())
+        .expect("a <target> link");
+    let (link, body) = raw_list(&app, &target).await;
+    assert_eq!(
+        body.as_array().map(|a| a[0]["artifact_id"].clone()),
+        Some(json!(committed[0])),
+        "the link's target answers the oldest, which is what remains newest first, got {body}"
+    );
+    assert_eq!(link, None, "the last page has no Link");
+}
+
+/// An `order` that is neither `asc` nor `desc` is a 400 naming the parameter, never read as a
+/// direction; and `order` without `limit` is refused rather than ignored.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_unknown_order_or_an_order_without_limit_is_refused_by_name(pool: PgPool) {
+    let app = common::setup(pool).await;
+    let (resource, _) = resource_with_artifacts(&app, "e2e-order-refusal", 1).await;
+
+    for (query, named) in [
+        ("limit=2&order=sideways", "order"),
+        ("order=desc", "`order`"),
+    ] {
+        let resp = app
+            .reqwest_client
+            .get(app.url(&format!("/api/resources/{resource}/artifacts?{query}")))
+            .bearer_auth(&app.token)
+            .send()
+            .await
+            .expect("list request failed");
+        assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST, "{query}");
+        let said = resp.text().await.expect("a body");
+        assert!(
+            said.contains(named),
+            "{query}: the refusal names {named}, got: {said}"
+        );
+    }
 }
 
 /// A `limit` of zero and one above the ceiling are refused, each naming the parameter at fault;

@@ -1,12 +1,17 @@
 import { render } from '@testing-library/svelte';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { describeFailure, GaveUp, GIVE_UP_AFTER_MS } from '$lib/server/bounded';
 import type { ElementEvent, EventTrail } from '$lib/types/generated/element_trail';
 import type { GraphEdgeRow, ResourceConnections } from '$lib/types/generated/graph';
+import { resetAppContext, setPage } from '../../../../../test/app-context';
 import { makeRow } from '../../../../../test/fixtures';
 import { sentenceOf } from '../../../../../test/sentence';
 import Page from './+page.svelte';
 import type { PageData } from './$types';
+
+// The change forms build their `action` from the page's own URL (`$lib/form-action`).
+vi.mock('$app/stores', () => import('../../../../../test/app-context'));
+afterEach(() => resetAppContext());
 
 /**
  * The route with the highest defect density and, until this file, no component test at all.
@@ -151,7 +156,7 @@ const data = (fill: Fill = {}): PageData =>
 		// artifacts — because every pre-existing assertion in this file is about that page, and
 		// the artifacts region's contract is that such a page renders exactly as it always did.
 		artifacts:
-			fill.artifacts ?? Promise.resolve({ artifacts: [], laterHref: null, earliestHref: null }),
+			fill.artifacts ?? Promise.resolve({ artifacts: [], olderHref: null, newestHref: null }),
 		// The default is the shape a reader WITHOUT change authority gets: nothing offered,
 		// and no vocabulary asked for. Every pre-existing assertion in this file is about that
 		// reader, so the write arm must leave all of them standing.
@@ -1029,6 +1034,22 @@ describe('a reader attaches and revises their own descriptions where they read t
 		expect(button.disabled).toBe(true);
 	});
 
+	it("keeps the page's own query through every change, so a POST does not lose the artifacts page", () => {
+		// A plain POST to a bare `?/name` replaces the query: a reader three artifact pages in
+		// who changed a state would land back on the first. Each form carries the page's query.
+		setPage('/vault/r/r1?artifacts_after_created=c&artifacts_after_id=i');
+		const { container } = render(Page, {
+			data: data({ ...offering, stateVocabulary: { 'temper-stage': ['backlog', 'done'] } }),
+			form: null,
+		});
+		const actions = [...container.querySelectorAll('.props form')].map((f) =>
+			f.getAttribute('action'),
+		);
+		expect(actions).toContain('?artifacts_after_created=c&artifacts_after_id=i&/changeState');
+		expect(actions).toContain('?artifacts_after_created=c&artifacts_after_id=i&/changeDescription');
+		expect(actions).toContain('?artifacts_after_created=c&artifacts_after_id=i&/attachDescription');
+	});
+
 	it('offers attaching a description the system has no field for', () => {
 		const { container } = render(Page, { data: data(offering), form: null });
 		const attach = container.querySelector('.attach') as HTMLFormElement;
@@ -1163,7 +1184,7 @@ describe('the data artifacts region', () => {
 	it('renders the section whole when the resource owns artifacts', async () => {
 		const { container, unmount } = render(Page, {
 			data: data({
-				artifacts: Promise.resolve({ artifacts: [artifact], laterHref: null, earliestHref: null }),
+				artifacts: Promise.resolve({ artifacts: [artifact], olderHref: null, newestHref: null }),
 			}),
 			form: null,
 		});
@@ -1183,8 +1204,8 @@ describe('the data artifacts region', () => {
 			data: data({
 				artifacts: Promise.resolve({
 					artifacts: [artifact],
-					laterHref: '/vault/r/r1?artifacts_after_created=c&artifacts_after_id=i',
-					earliestHref: null,
+					olderHref: '/vault/r/r1?artifacts_after_created=c&artifacts_after_id=i',
+					newestHref: null,
 				}),
 			}),
 			form: null,
@@ -1194,7 +1215,7 @@ describe('the data artifacts region', () => {
 				'Data artifacts · 1 on this page',
 			);
 		});
-		const later = container.querySelector('.main nav.pages a.later');
+		const later = container.querySelector('.main nav.pages a.older');
 		expect(later?.getAttribute('href')).toBe(
 			'/vault/r/r1?artifacts_after_created=c&artifacts_after_id=i',
 		);
@@ -1204,7 +1225,7 @@ describe('the data artifacts region', () => {
 	it('renders a later page even when it is empty, so the way back to the first is there', async () => {
 		const { container, unmount } = render(Page, {
 			data: data({
-				artifacts: Promise.resolve({ artifacts: [], laterHref: null, earliestHref: '/vault/r/r1' }),
+				artifacts: Promise.resolve({ artifacts: [], olderHref: null, newestHref: '/vault/r/r1' }),
 			}),
 			form: null,
 		});
@@ -1214,7 +1235,7 @@ describe('the data artifacts region', () => {
 			);
 		});
 		expect(container.querySelector('.main nav.pages a[href="/vault/r/r1"]')?.textContent).toContain(
-			'Earliest',
+			'Newest',
 		);
 		unmount();
 	});

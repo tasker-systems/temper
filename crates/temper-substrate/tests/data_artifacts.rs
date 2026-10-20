@@ -24,6 +24,7 @@
 
 mod common;
 
+use temper_core::types::resource::SortOrder;
 use temper_substrate::events::{fire, EventContext, SeedAction};
 use temper_substrate::ids::{ContextId, EntityId, ProfileId, ResourceId};
 use temper_substrate::payloads::AnchorRef;
@@ -1283,13 +1284,25 @@ async fn filtering_by_kind_and_intent(pool: sqlx::PgPool) {
 
 // ── The bounded read (`artifacts_for_resource_page`, migration 20261102000000) ────────────────
 
-/// One bounded page of a resource's live artifacts, no kind/intent filter.
+/// One bounded page of a resource's live artifacts, oldest first, no kind/intent filter.
 async fn page(
     pool: &sqlx::PgPool,
     principal: ProfileId,
     resource: ResourceId,
     limit: u32,
     after: Option<temper_core::types::data_artifact::ArtifactCursor>,
+) -> readback::RetrievedArtifactPage {
+    page_in(pool, principal, resource, limit, after, SortOrder::Asc).await
+}
+
+/// [`page`], in the given direction.
+async fn page_in(
+    pool: &sqlx::PgPool,
+    principal: ProfileId,
+    resource: ResourceId,
+    limit: u32,
+    after: Option<temper_core::types::data_artifact::ArtifactCursor>,
+    order: SortOrder,
 ) -> readback::RetrievedArtifactPage {
     readback::artifacts_for_resource_page(
         pool,
@@ -1301,6 +1314,7 @@ async fn page(
             include_folded: false,
             limit,
             after,
+            order,
         },
     )
     .await
@@ -1363,6 +1377,61 @@ async fn bounded_page_walks_five_artifacts_two_two_one_with_an_exact_union(pool:
     );
 }
 
+/// **The newest-first walk.** The same five artifacts at `limit = 2`, descending: pages of 2, 2
+/// and 1, `next` only before the end, and the union exactly the five committed in REVERSE order,
+/// none repeated.
+///
+/// Bite: flip the descending keyset comparison in migration `20261102000000` from `<` to `>`.
+/// The second page then reads rows newer than the first page's last, which is only the newest:
+/// it repeats it and the walk stops at `[2, 1]`, skipping the three oldest.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn bounded_page_walks_newest_first_two_two_one_with_an_exact_union(pool: sqlx::PgPool) {
+    let (emitter, _home, resource) = world(&pool, "page-witness-desc").await;
+    let (owner, _) = system_actor(&pool).await;
+
+    let mut committed = Vec::new();
+    for n in 0..5 {
+        committed.push(
+            fire_commit(
+                &pool,
+                resource,
+                "measurement",
+                ArtifactIntent::Member,
+                &serde_json::json!({ "n": n }),
+                emitter,
+            )
+            .await,
+        );
+    }
+
+    let mut after = None;
+    let mut sizes = Vec::new();
+    let mut has_next = Vec::new();
+    let mut seen = Vec::new();
+    loop {
+        let this = page_in(&pool, owner, resource, 2, after, SortOrder::Desc).await;
+        sizes.push(this.artifacts.len());
+        has_next.push(this.next.is_some());
+        seen.extend(this.artifacts.iter().map(|a| a.artifact_id));
+        match this.next {
+            Some(cursor) => after = Some(cursor),
+            None => break,
+        }
+    }
+
+    committed.reverse();
+    assert_eq!(sizes, vec![2, 2, 1], "pages of two, two and one");
+    assert_eq!(
+        has_next,
+        vec![true, true, false],
+        "`next` only before the end"
+    );
+    assert_eq!(
+        seen, committed,
+        "the union is exact, newest first, with no repeats"
+    );
+}
+
 /// **THE BOUND'S WITNESS.** The SQL arity itself returns at most `p_limit` rows: five artifacts,
 /// `p_limit = 3`, exactly three rows come back from the database.
 ///
@@ -1388,21 +1457,27 @@ async fn the_sql_arity_returns_at_most_p_limit_rows(pool: sqlx::PgPool) {
         .await;
     }
 
-    let returned: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM artifacts_for_resource(
-             $1, $2, NULL::text, NULL::text, false, $3::bigint, NULL::timestamptz, NULL::uuid)",
-    )
-    .bind(owner.uuid())
-    .bind(resource.uuid())
-    .bind(3_i64)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    // Both directions: each is its own `ORDER BY` arm under the one `LIMIT`.
+    for descending in [false, true] {
+        let returned: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM artifacts_for_resource(
+                 $1, $2, NULL::text, NULL::text, false, $3::bigint, NULL::timestamptz, NULL::uuid,
+                 $4)",
+        )
+        .bind(owner.uuid())
+        .bind(resource.uuid())
+        .bind(3_i64)
+        .bind(descending)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
-    assert_eq!(
-        returned, 3,
-        "five artifacts exist; the database must return only p_limit of them"
-    );
+        assert_eq!(
+            returned, 3,
+            "five artifacts exist; the database must return only p_limit of them \
+             (descending: {descending})"
+        );
+    }
 }
 
 /// Half a keyset position returns no rows. A row comparison against `(created, NULL)` is not
@@ -1437,7 +1512,7 @@ async fn half_a_position_returns_no_rows(pool: sqlx::PgPool) {
 
     let returned: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM artifacts_for_resource(
-             $1, $2, NULL::text, NULL::text, false, $3::bigint, $4::timestamptz, NULL::uuid)",
+             $1, $2, NULL::text, NULL::text, false, $3::bigint, $4::timestamptz, NULL::uuid, false)",
     )
     .bind(owner.uuid())
     .bind(resource.uuid())

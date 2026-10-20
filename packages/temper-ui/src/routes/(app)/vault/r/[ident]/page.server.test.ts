@@ -112,45 +112,69 @@ describe('the artifacts read', () => {
 		const data = await run();
 		await expect(data.artifacts).resolves.toEqual({
 			artifacts: [],
-			laterHref: null,
-			earliestHref: null,
+			olderHref: null,
+			newestHref: null,
 		});
-		expect(asked()).toEqual(['/api/resources/r1/artifacts?include_folded=true&limit=50']);
+		expect(asked()).toEqual([
+			'/api/resources/r1/artifacts?include_folded=true&limit=50&order=desc',
+		]);
 		// Nothing reads the artifacts unbounded behind the bounded read's back.
 		const unbounded = apiGet.mock.calls.map(([path]) => String(path));
 		expect(unbounded.some((p) => p.includes('/artifacts'))).toBe(false);
 	});
 
-	it("offers the next page when the read's `Link` says more exist", async () => {
+	it("offers the next, older page when the read's `Link` says more exist", async () => {
 		apiGetWithHeaders.mockReturnValue(
 			answer(
 				[{ artifact_id: 'a1' }],
-				'</api/resources/r1/artifacts?include_folded=true&limit=50' +
+				'</api/resources/r1/artifacts?include_folded=true&limit=50&order=desc' +
 					`&after_created=2026-10-19T12%3A30%3A45.123456Z&after_id=${AFTER_ID}>; rel="next"`,
 			),
 		);
 		const data = await run();
-		const region = (await data.artifacts) as { laterHref: string; earliestHref: string | null };
-		const later = new URL(region.laterHref, 'http://ui.invalid');
-		expect(later.pathname).toBe('/vault/r/r1');
-		expect(later.searchParams.get('artifacts_after_created')).toBe(AFTER_CREATED);
-		expect(later.searchParams.get('artifacts_after_id')).toBe(AFTER_ID);
-		expect(region.earliestHref).toBeNull();
+		const region = (await data.artifacts) as { olderHref: string; newestHref: string | null };
+		const older = new URL(region.olderHref, 'http://ui.invalid');
+		expect(older.pathname).toBe('/vault/r/r1');
+		expect(older.searchParams.get('artifacts_after_created')).toBe(AFTER_CREATED);
+		expect(older.searchParams.get('artifacts_after_id')).toBe(AFTER_ID);
+		expect(region.newestHref).toBeNull();
 	});
 
-	it('reads the page the URL names, and offers the way back to the first', async () => {
+	it('reads the page the URL names, and offers the way back to the newest', async () => {
 		apiGetWithHeaders.mockReturnValue(answer([{ artifact_id: 'a3' }]));
 		const at =
 			`/vault/r/r1?artifacts_after_created=${encodeURIComponent(AFTER_CREATED)}` +
 			`&artifacts_after_id=${AFTER_ID}`;
 		const data = await run({}, at);
-		const region = (await data.artifacts) as { laterHref: string | null; earliestHref: string };
+		const region = (await data.artifacts) as { olderHref: string | null; newestHref: string };
 		const sent = new URL(asked()[0], 'http://api.invalid');
 		expect(sent.searchParams.get('limit')).toBe('50');
+		expect(sent.searchParams.get('order')).toBe('desc');
 		expect(sent.searchParams.get('after_created')).toBe(AFTER_CREATED);
 		expect(sent.searchParams.get('after_id')).toBe(AFTER_ID);
-		expect(region.laterHref).toBeNull();
-		expect(region.earliestHref).toBe('/vault/r/r1');
+		expect(region.olderHref).toBeNull();
+		expect(region.newestHref).toBe('/vault/r/r1');
+	});
+
+	it('keeps the position through a form action, and puts no action key in a link', async () => {
+		// An unenhanced POST to `formAction(...)` lands on this URL, and the page renders from it.
+		apiGetWithHeaders.mockReturnValue(
+			answer(
+				[{ artifact_id: 'a3' }],
+				`</a?after_created=2026-10-19T12%3A30%3A45.123456Z&after_id=${AFTER_ID}>; rel="next"`,
+			),
+		);
+		const at =
+			`/vault/r/r1?artifacts_after_created=${encodeURIComponent(AFTER_CREATED)}` +
+			`&artifacts_after_id=${AFTER_ID}&/changeState`;
+		const data = await run({}, at);
+		const region = (await data.artifacts) as { olderHref: string; newestHref: string };
+		const sent = new URL(asked()[0], 'http://api.invalid');
+		expect(sent.searchParams.get('after_id')).toBe(AFTER_ID);
+		for (const href of [region.olderHref, region.newestHref]) {
+			expect(href).not.toContain('changeState');
+		}
+		expect(region.newestHref).toBe('/vault/r/r1');
 	});
 
 	it('fails the region on a `Link` it cannot read, rather than passing one page off as all', async () => {

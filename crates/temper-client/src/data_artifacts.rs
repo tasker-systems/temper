@@ -10,6 +10,7 @@ use temper_core::types::data_artifact::{
     ArtifactPage, ArtifactPageRequest, ArtifactView, ARTIFACT_DRAIN_PAGE_ROWS,
 };
 use temper_core::types::data_artifact_shape::{ShapeDeclareRequest, ShapeView};
+use temper_core::types::resource::SortOrder;
 
 /// Sub-client for data artifact reads and writes.
 pub struct DataArtifactsClient<'a> {
@@ -125,9 +126,9 @@ impl<'a> DataArtifactsClient<'a> {
 
     /// One bounded page of a resource's artifacts.
     ///
-    /// `params` carries the filters (`kind`, `intent`, `include_folded`); the bound and the
-    /// continuation position come from `request`, which replaces any `limit` or `after_*` on
-    /// `params`. Always asks for artifacts, never counts. The server refuses a `limit` of 0 or
+    /// `params` carries the filters (`kind`, `intent`, `include_folded`); the bound, the
+    /// continuation position and the direction come from `request`, which replaces any `limit`,
+    /// `after_*` or `order` on `params`. Always asks for artifacts, never counts. The server refuses a `limit` of 0 or
     /// above `MAX_ARTIFACT_PAGE_ROWS`.
     ///
     /// The continuation is the response's `Link: <...>; rel="next"` header; with no such header
@@ -145,6 +146,7 @@ impl<'a> DataArtifactsClient<'a> {
             limit: Some(request.limit),
             after_created: request.after.map(|c| c.created),
             after_id: request.after.map(|c| c.artifact_id.uuid()),
+            order: Some(request.order),
             ..params.clone()
         };
         let token = self.http.resolve_token()?;
@@ -174,8 +176,8 @@ impl<'a> DataArtifactsClient<'a> {
     ///
     /// For a caller whose contract is "everything": it follows `next` until the last page
     /// (`next: null`), so no single response is unbounded and none is silently truncated. The
-    /// page size is [`ARTIFACT_DRAIN_PAGE_ROWS`]. `params.limit` and `after_*` are replaced by
-    /// the drain's own. A `next` that repeats the position it was asked to continue after is an
+    /// page size is [`ARTIFACT_DRAIN_PAGE_ROWS`], oldest first. `params.limit`, `after_*` and
+    /// `order` are replaced by the drain's own. A `next` that repeats the position it was asked to continue after is an
     /// error rather than another lap.
     pub async fn list_all(
         &self,
@@ -192,6 +194,7 @@ impl<'a> DataArtifactsClient<'a> {
                     ArtifactPageRequest {
                         limit: ARTIFACT_DRAIN_PAGE_ROWS,
                         after,
+                        order: SortOrder::Asc,
                     },
                 )
                 .await?;

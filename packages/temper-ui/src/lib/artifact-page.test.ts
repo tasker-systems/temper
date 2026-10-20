@@ -60,6 +60,11 @@ describe('nextFromLink', () => {
 			'</a>; rel="next"',
 			`</a?after_id=${AFTER_ID}>; rel="next"`,
 			`</a?after_created=${encodeURIComponent(AFTER_CREATED)}>; rel="next"`,
+			// Present but not readable: as strict as the client, so no bad Older link is made.
+			`</a?after_created=yesterday&after_id=${AFTER_ID}>; rel="next"`,
+			`</a?after_created=2026-10-19&after_id=${AFTER_ID}>; rel="next"`,
+			`</a?after_created=${encodeURIComponent(AFTER_CREATED)}&after_id=not-a-uuid>; rel="next"`,
+			`</a?after_created=${encodeURIComponent(AFTER_CREATED)}&after_id=0000-aa>; rel="next"`,
 		]) {
 			expect(() => nextFromLink(bad), bad).toThrow(/malformed Link/);
 		}
@@ -67,9 +72,9 @@ describe('nextFromLink', () => {
 });
 
 describe('artifactListPath', () => {
-	it('asks for one bounded first page, folded artifacts included', () => {
+	it('asks for one bounded first page, newest first, folded artifacts included', () => {
 		expect(artifactListPath('r1', new URLSearchParams())).toBe(
-			`/api/resources/r1/artifacts?include_folded=true&limit=${ARTIFACT_PAGE_ROWS}`,
+			`/api/resources/r1/artifacts?include_folded=true&limit=${ARTIFACT_PAGE_ROWS}&order=desc`,
 		);
 	});
 
@@ -81,6 +86,7 @@ describe('artifactListPath', () => {
 		const asked = new URL(artifactListPath('r1', page), 'http://api.invalid');
 		expect(asked.searchParams.get('limit')).toBe(String(ARTIFACT_PAGE_ROWS));
 		expect(asked.searchParams.get('include_folded')).toBe('true');
+		expect(asked.searchParams.get('order')).toBe('desc');
 		expect(asked.searchParams.get('after_created')).toBe(AFTER_CREATED);
 		expect(asked.searchParams.get('after_id')).toBe(AFTER_ID);
 	});
@@ -115,5 +121,25 @@ describe('artifactPageHref and pastFirstPage', () => {
 		);
 		expect(artifactPageHref(at, null)).toBe('/vault/r/r1?tab=x');
 		expect(pastFirstPage(new URL('http://ui.invalid/vault/r/r1').searchParams)).toBe(false);
+	});
+});
+
+describe('artifactPageHref after a form action', () => {
+	it('never carries the action key a plain POST leaves in the URL', () => {
+		// After an unenhanced POST to `?…&/changeState`, the page renders from that URL.
+		const at = new URL(
+			`http://ui.invalid/vault/r/r1?${PAGE_AFTER_CREATED}=c&${PAGE_AFTER_ID}=i&/changeState`,
+		);
+		for (const href of [
+			artifactPageHref(at, { created: AFTER_CREATED, artifact_id: AFTER_ID }),
+			artifactPageHref(at, null),
+		]) {
+			const url = new URL(href, 'http://ui.invalid');
+			expect(
+				[...url.searchParams.keys()].some((k) => k.startsWith('/')),
+				href,
+			).toBe(false);
+		}
+		expect(artifactPageHref(at, null)).toBe('/vault/r/r1');
 	});
 });

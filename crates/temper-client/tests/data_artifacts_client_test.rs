@@ -19,6 +19,7 @@ use temper_core::types::data_artifact::{
     ArtifactListParams, ArtifactPageRequest, ArtifactView, ARTIFACT_DRAIN_PAGE_ROWS,
 };
 use temper_core::types::ids::{DataArtifactId, ResourceId};
+use temper_core::types::resource::SortOrder;
 
 fn test_client(base_url: &str) -> TemperClient {
     TemperClient::with_token(
@@ -168,6 +169,7 @@ async fn a_malformed_link_is_an_error_not_a_last_page() {
             ArtifactPageRequest {
                 limit: 2,
                 after: None,
+                order: SortOrder::Asc,
             },
         )
         .await
@@ -280,4 +282,35 @@ async fn list_all_refuses_a_link_that_does_not_advance() {
         "got: {err}"
     );
     // wiremock verifies `.expect(2)` on drop: the first page, then the one repeat.
+}
+
+/// `list_page` sends the direction it was asked for, so a newest-first page asks for
+/// `order=desc` and is not silently read oldest first.
+#[tokio::test]
+async fn list_page_sends_the_order_it_was_asked_for() {
+    let resource = Uuid::now_v7();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("/api/resources/{resource}/artifacts")))
+        .and(query_param("order", "desc"))
+        .and(query_param("limit", "2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(vec![artifact(resource, 0)]))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let page = test_client(&server.uri())
+        .data_artifacts()
+        .list_page(
+            resource,
+            &ArtifactListParams::default(),
+            ArtifactPageRequest {
+                limit: 2,
+                after: None,
+                order: SortOrder::Desc,
+            },
+        )
+        .await
+        .expect("a desc request matches the stub");
+    assert_eq!(page.artifacts.len(), 1);
 }

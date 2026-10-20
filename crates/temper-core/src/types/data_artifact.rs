@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 use crate::types::authorship::ActInput;
 use crate::types::ids::{DataArtifactId, ResourceId};
+use crate::types::resource::SortOrder;
 
 /// One data artifact, as returned by the API and MCP surfaces.
 ///
@@ -87,6 +88,11 @@ pub struct ArtifactListParams {
     /// together with `after_created`, and only with `limit`.
     #[serde(default)]
     pub after_id: Option<Uuid>,
+    /// The direction of a bounded read over `(created, id)`: `asc`, oldest first, or `desc`,
+    /// newest first. Absent is `asc`. Only with `limit`; the `Link` target carries it, so every
+    /// page continues in the direction the first was asked in. Any other value is refused.
+    #[serde(default)]
+    pub order: Option<SortOrder>,
 }
 
 /// The server ceiling on one page of artifacts. A `limit` above it is refused by name
@@ -118,7 +124,7 @@ pub struct ArtifactCursor {
     pub artifact_id: DataArtifactId,
 }
 
-/// One bounded page of artifacts, in `(created, id)` order.
+/// One bounded page of artifacts, in `(created, id)` order in the requested direction.
 ///
 /// Not a wire type: the route's body is the bare array and the continuation rides the `Link`
 /// response header. This is what the service layer and `temper-client` hand back once the two are
@@ -137,6 +143,8 @@ pub struct ArtifactPageRequest {
     pub limit: u32,
     /// Continue after this position; `None` starts at the beginning.
     pub after: Option<ArtifactCursor>,
+    /// `Asc` is oldest first, `Desc` newest first; the position is beyond `after` in this order.
+    pub order: SortOrder,
 }
 
 /// Why a bounded list request is refused. Each message names the parameter at fault.
@@ -157,6 +165,11 @@ pub enum ArtifactPageRefusal {
          `limit` the whole list is returned and there is nothing to continue"
     )]
     AfterWithoutLimit,
+    #[error(
+        "`order` directs a bounded read and requires `limit`; without `limit` the whole list is \
+         returned oldest first"
+    )]
+    OrderWithoutLimit,
 }
 
 impl ArtifactListParams {
@@ -165,7 +178,9 @@ impl ArtifactListParams {
     /// `limit` is the demarcation: absent, the caller gets the whole list as a bare array.
     /// Present, it is checked against `1..=MAX_ARTIFACT_PAGE_ROWS` and refused by name outside
     /// it. A continuation position that is half-sent, or sent without `limit`, is refused too:
-    /// quietly ignoring it would answer the first page again.
+    /// quietly ignoring it would answer the first page again. So is `order` without `limit`:
+    /// ignoring it would answer oldest first to a caller who asked for newest. An absent `order`
+    /// is `Asc`, never `SortOrder::default()`, which is `Desc`.
     pub fn page_request(&self) -> Result<Option<ArtifactPageRequest>, ArtifactPageRefusal> {
         let after = match (self.after_created, self.after_id) {
             (None, None) => None,
@@ -176,17 +191,23 @@ impl ArtifactListParams {
             _ => return Err(ArtifactPageRefusal::AfterIncomplete),
         };
         let Some(limit) = self.limit else {
-            return match after {
-                Some(_) => Err(ArtifactPageRefusal::AfterWithoutLimit),
-                None => Ok(None),
+            return match (after, self.order) {
+                (Some(_), _) => Err(ArtifactPageRefusal::AfterWithoutLimit),
+                (None, Some(_)) => Err(ArtifactPageRefusal::OrderWithoutLimit),
+                (None, None) => Ok(None),
             };
         };
+        let order = self.order.unwrap_or(SortOrder::Asc);
         match limit {
             0 => Err(ArtifactPageRefusal::LimitZero),
             n if n > MAX_ARTIFACT_PAGE_ROWS => {
                 Err(ArtifactPageRefusal::LimitAboveCeiling { limit: n })
             }
-            n => Ok(Some(ArtifactPageRequest { limit: n, after })),
+            n => Ok(Some(ArtifactPageRequest {
+                limit: n,
+                after,
+                order,
+            })),
         }
     }
 }
@@ -297,7 +318,8 @@ mod tests {
                 params_with(Some(limit), Some(cursor())).page_request(),
                 Ok(Some(ArtifactPageRequest {
                     limit,
-                    after: Some(cursor())
+                    after: Some(cursor()),
+                    order: SortOrder::Asc,
                 })),
             );
         }
@@ -347,5 +369,35 @@ mod tests {
             params_with(None, Some(cursor())).page_request(),
             Err(ArtifactPageRefusal::AfterWithoutLimit)
         );
+    }
+
+    #[test]
+    fn an_absent_order_is_oldest_first_and_desc_is_carried() {
+        let asked = |order| ArtifactListParams {
+            order,
+            ..params_with(Some(2), None)
+        };
+        assert_eq!(
+            asked(None).page_request().map(|r| r.map(|r| r.order)),
+            Ok(Some(SortOrder::Asc)),
+            "absent is asc, never SortOrder's own default (desc)"
+        );
+        assert_eq!(
+            asked(Some(SortOrder::Desc))
+                .page_request()
+                .map(|r| r.map(|r| r.order)),
+            Ok(Some(SortOrder::Desc))
+        );
+    }
+
+    #[test]
+    fn an_order_without_a_limit_is_refused_not_ignored() {
+        let params = ArtifactListParams {
+            order: Some(SortOrder::Desc),
+            ..Default::default()
+        };
+        let refusal = params.page_request().expect_err("order without limit");
+        assert_eq!(refusal, ArtifactPageRefusal::OrderWithoutLimit);
+        assert!(refusal.to_string().contains("`order`"));
     }
 }

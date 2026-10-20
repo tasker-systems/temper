@@ -76,7 +76,7 @@ use crate::ids::{
 };
 use crate::keys::{is_managed_property_key, MANAGED_PROPERTY_KEYS};
 use temper_core::types::managed_meta::ManagedMeta;
-use temper_core::types::resource::{BodyStorage, IngestState};
+use temper_core::types::resource::{BodyStorage, IngestState, SortOrder};
 use temper_core::types::ResourceView;
 
 /// Why a single-resource readback (`resource_row`/`meta`/`body`, via `ensure_visible`) failed, typed so
@@ -2757,24 +2757,29 @@ pub struct ArtifactPageParams<'a> {
     pub include_folded: bool,
     /// Rows wanted. The caller has already checked it against the server ceiling.
     pub limit: u32,
-    /// Continue strictly after this `(created, id)` position; `None` starts at the beginning.
+    /// Continue strictly beyond this `(created, id)` position in `order`; `None` starts at the
+    /// beginning.
     pub after: Option<ArtifactCursor>,
+    /// `Asc` is oldest first, `Desc` newest first.
+    pub order: SortOrder,
 }
 
 /// One bounded page of artifacts and where the next one starts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RetrievedArtifactPage {
-    /// At most `limit` artifacts, in `(created, id)` order.
+    /// At most `limit` artifacts, in `(created, id)` order in the requested direction.
     pub artifacts: Vec<RetrievedArtifact>,
     /// The position to continue after, or `None` when this page reaches the end.
     pub next: Option<ArtifactCursor>,
 }
 
-/// One bounded page of a resource's visible artifacts, keyset-ordered on `(created, id)`.
+/// One bounded page of a resource's visible artifacts, keyset-ordered on `(created, id)`, oldest
+/// or newest first.
 ///
 /// Same gate and projection as [`artifacts_for_resource`], through the bounded arity added in
 /// migration `20261102000000`. It asks the database for `limit + 1` rows: the extra row, if it
-/// arrives, proves another page exists without a count, and is dropped from this one.
+/// arrives, proves another page exists without a count, and is dropped from this one. The last
+/// kept row is the next position in either direction, because the rows arrive in that direction.
 pub async fn artifacts_for_resource_page(
     pool: &PgPool,
     principal: ProfileId,
@@ -2797,7 +2802,7 @@ pub async fn artifacts_for_resource_page(
                   is_folded          AS "is_folded!",
                   created            AS "created!",
                   content
-             FROM artifacts_for_resource($1, $2, $3, $4, $5, $6, $7, $8)"#,
+             FROM artifacts_for_resource($1, $2, $3, $4, $5, $6, $7, $8, $9)"#,
         principal.uuid(),
         resource.uuid(),
         params.kind,
@@ -2806,6 +2811,7 @@ pub async fn artifacts_for_resource_page(
         i64::from(params.limit) + 1,
         params.after.map(|c| c.created),
         params.after.map(|c| c.artifact_id.uuid()),
+        params.order == SortOrder::Desc,
     )
     .fetch_all(pool)
     .await?;

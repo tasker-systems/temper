@@ -1925,7 +1925,8 @@ pub struct ArtifactPageFilter<'a> {
     pub include_folded: bool,
 }
 
-/// One bounded page of data artifacts for a resource, fully hydrated, in `(created, id)` order.
+/// One bounded page of data artifacts for a resource, fully hydrated, in `(created, id)` order,
+/// oldest or newest first as `request.order` asks.
 /// Visibility-gated through `resources_visible_to` in the SQL, re-decided on every page.
 ///
 /// `request` is the validated bound and position ([`ArtifactListParams::page_request`]); this
@@ -1950,6 +1951,7 @@ pub async fn list_artifacts_page(
             include_folded: filter.include_folded,
             limit: request.limit,
             after: request.after,
+            order: request.order,
         },
     )
     .await

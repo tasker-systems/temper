@@ -37,8 +37,8 @@ describe('ArtifactList', () => {
 	it('names a page as a page, and links to the pages either side of it', () => {
 		const { container } = render(ArtifactList, {
 			artifacts: [artifact()],
-			laterHref: '/vault/r/r1?artifacts_after_created=c&artifacts_after_id=i',
-			earliestHref: '/vault/r/r1',
+			olderHref: '/vault/r/r1?artifacts_after_created=c&artifacts_after_id=i',
+			newestHref: '/vault/r/r1',
 		});
 
 		// The count is this page's, never the resource's, once there is more than one page.
@@ -50,8 +50,8 @@ describe('ArtifactList', () => {
 			a.getAttribute('href'),
 		]);
 		expect(links).toEqual([
-			['← Earliest artifacts', '/vault/r/r1'],
-			['Later artifacts →', '/vault/r/r1?artifacts_after_created=c&artifacts_after_id=i'],
+			['← Newest artifacts', '/vault/r/r1'],
+			['Older artifacts →', '/vault/r/r1?artifacts_after_created=c&artifacts_after_id=i'],
 		]);
 	});
 
