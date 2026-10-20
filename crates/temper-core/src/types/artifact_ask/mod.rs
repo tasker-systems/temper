@@ -10,7 +10,7 @@
 //!   and every askable path up to the bounds ([`walk::enumerate`]);
 //! - [`validate`] — [`validate_ask`], refusal step 4 of §3.5, and the steps 1–3 refusals a
 //!   [`ShapeLoad`] carries; the [`RefusalTeaching`] a refusal carries;
-//! - [`reference`] — the Rust reference evaluator the SQL is differential-tested against.
+//! - [`mod@reference`] — the Rust reference evaluator the SQL is differential-tested against.
 //!
 //! **Two halves, one seam** (§2.4). The loader in `temper-services` holds the pool, the principal
 //! and the `jsonschema` compiler, and turns each named [`ShapeId`] into a [`ShapeLoad`]. Everything
