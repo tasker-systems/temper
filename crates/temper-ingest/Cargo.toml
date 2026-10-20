@@ -21,7 +21,7 @@ ort = { version = "2.0.0-rc.14", default-features = false, features = [
 hex = "0.4"
 regex = "1"
 sha2 = "0.11"
-similar = "2"
+similar = "3"
 temperkb-core.workspace = true
 thiserror = "2"
 tokenizers = { version = "0.22", optional = true }
