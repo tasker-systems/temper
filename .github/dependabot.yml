@@ -17,7 +17,8 @@
 #   client packages, and the two agent workflows, each with its own npm lockfile.
 #
 # The cargo and JS entries group minor and patch bumps into one weekly PR per tree; a major bump
-# arrives on its own. The github-actions entry groups majors too (see it below). The question a
+# arrives on its own — except the web surface's toolchain majors, which the bun entry holds for
+# hand adoption (see it below). The github-actions entry groups majors too (see it below). The question a
 # reviewer asks of a bump set is "do I trust this set of upstream revisions", and splitting it
 # across a PR per package makes each look trivial while the aggregate goes unexamined. A major is a
 # different question (what broke), so it is not folded in.
@@ -62,6 +63,37 @@ updates:
     groups:
       bun-workspace:
         update-types: ["minor", "patch"]
+    # The web surface's toolchain majors are adopted by hand, on the web and the desktop together:
+    # the two surfaces build on the same majors (goal 01a1590a-404a-77d7-8ab7-4171395d841a,
+    # `toolchain-moves-together`). The same set is held in tasker-systems/temper-contrib's
+    # .github/dependabot.yml for apps/desktop; change one, change both. The hold covers
+    # temper-cloud's typescript too, which shares this tree.
+    ignore:
+      # The language, adopted together with the tooling that consumes it.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      # The framework, its adapter and its Vite plugin move as one migration.
+      - dependency-name: "svelte"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@sveltejs/kit"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@sveltejs/adapter-vercel"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@sveltejs/vite-plugin-svelte"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "svelte-check"
+        update-types: ["version-update:semver-major"]
+      # The bundler, the test runner, the styling engine and the linter.
+      - dependency-name: "vite"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "vitest"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "tailwindcss"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@tailwindcss/vite"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@biomejs/biome"
+        update-types: ["version-update:semver-major"]
     commit-message:
       prefix: "chore(deps)"
 
