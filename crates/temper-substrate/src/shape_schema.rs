@@ -31,10 +31,11 @@
 //!
 //! The draft is not chosen here: `jsonschema` selects it from the schema's own `$schema`, which is
 //! the selection a validator built any other way would make. A `$schema` outside the five standard
-//! drafts names a custom meta-schema, which is never guessed at: [`compile`] refuses it wherever it
-//! appears (the root or any embedded subschema), including when the schema registers that very
-//! URI as one of its own resources, a case `jsonschema` itself would otherwise compile under a
-//! default draft.
+//! drafts names a custom meta-schema, which is never guessed at: [`compile`] refuses it at the root
+//! and in every subschema position the compiler descends into (the list is on
+//! `names_only_standard_drafts`), including when the schema registers that very URI as one of its
+//! own resources, a case `jsonschema` itself would otherwise compile under a default draft. A
+//! `$schema` key inside `const`, `enum`, `default` or `examples` is data and is not read.
 
 use jsonschema::{Draft, Retrieve, Uri, Validator};
 use serde_json::Value;
@@ -74,18 +75,29 @@ impl Retrieve for RefuseEveryUri {
     }
 }
 
-/// Whether every `$schema` in the document, at the root and in each embedded subschema, names one
-/// of the five standard drafts.
+/// Whether every `$schema` in the document, at the root and in every subschema position the
+/// compiler descends into, names one of the five standard drafts.
 ///
 /// `jsonschema` refuses an unknown `$schema` only when the URI is not among the document's own
 /// resources, so `{"$id": "urn:x", "$schema": "urn:x"}` (or an embedded subschema carrying that
-/// `$id`) registers itself as its meta-schema and compiles under a guessed draft. The walk uses
-/// the draft's own subresource iterator, so it visits exactly the subschemas `jsonschema` treats as
-/// resources, and an explicit stack keeps it off the call stack. It is linear in the schema's size,
-/// which the request body already bounds.
+/// `$id`) registers itself as its meta-schema and compiles under a guessed draft.
+///
+/// **Which positions are walked.** The union of every draft's subschema keywords, through
+/// `Draft::Draft4.subresources_of`: `properties`, `patternProperties`, `additionalProperties`,
+/// `additionalItems`, `items` (a schema or an array of schemas), `prefixItems`, `contains`,
+/// `contentSchema`, `propertyNames`, `not`, `if`/`then`/`else`, `allOf`/`anyOf`/`oneOf`, `$defs`,
+/// `definitions`, `dependentSchemas`, `dependencies` (the schema-valued entries) and
+/// `unevaluatedItems`/`unevaluatedProperties`. The union rather than the root draft's list, because
+/// `jsonschema` compiles `dependencies` and `additionalItems` under every draft, and a subschema
+/// carrying its own `$schema` is compiled under that draft's keywords, not the root's. The
+/// `referencing` 0.45 Draft 4 iterator is that union: it is the only one that lists all of the
+/// above. Nodes are visited by an explicit stack, linear in the schema's size.
+///
+/// **Which positions are not.** Values of `const`, `enum`, `default`, `examples` and unknown
+/// keywords are data, not schemas; a `$schema` key inside one is never read, so a schema that
+/// merely mentions one as data still compiles.
 fn names_only_standard_drafts(schema: &Value) -> bool {
-    let root = Draft::default().detect(schema);
-    if root == Draft::Unknown {
+    if Draft::default().detect(schema) == Draft::Unknown {
         return false;
     }
     let mut pending = vec![schema];
@@ -93,7 +105,7 @@ fn names_only_standard_drafts(schema: &Value) -> bool {
         if Draft::default().detect(node) == Draft::Unknown {
             return false;
         }
-        pending.extend(root.subresources_of(node));
+        pending.extend(Draft::Draft4.subresources_of(node));
     }
     true
 }

@@ -23,7 +23,8 @@
 #   * A hit inside a `#[cfg(test)]` module counts, as in the sibling sink guards.
 #   * Sees: `jsonschema::<entry point>` paths (validator_for, options, validate, is_valid,
 #     evaluate, bundle, draft*, meta, and the async twins); `ValidationOptions::default`;
-#     `Registry::(try_new|try_from_resources|options)`; bare `Validator::(new|options|async_*)`;
+#     `Registry::(try_new|try_from_resources|options)`; `RegistryOptions::(new|default)`; bare
+#     `Validator::(new|options|async_*)`;
 #     single-line `use jsonschema::{..}` imports of an entry point; and the aliasing imports
 #     `use jsonschema as ..`, `use jsonschema::*` and `extern crate jsonschema`, since each one
 #     hides the `jsonschema::` prefix every other pattern keys on.
@@ -34,7 +35,11 @@
 #     a type reached through a re-export from another crate; and `Default::default()` where the
 #     type is inferred to be `ValidationOptions`. A reviewer of a new `jsonschema` dependency edge
 #     is the backstop for those. The second layer is `default-features = false` on every
-#     `jsonschema` dependency, which compiles the http and file resolvers out.
+#     `jsonschema` dependency, which compiles the http and file resolvers out; it has its own check
+#     below (no baseline: a manifest line without it fails outright). That check reads one-line
+#     dependency entries and `[..dependencies.jsonschema]` tables, accepts `workspace = true`
+#     inheritance (the root's `[workspace.dependencies]` line is itself checked), and does not see
+#     a dependency renamed with `package = "jsonschema"`.
 #
 # USAGE
 #   .github/scripts/audit-shape-schema-compile.sh            # verify against the allowlist (CI mode)
@@ -48,6 +53,8 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 SCAN_ROOT="${SCAN_ROOT:-crates}"
+# Where the manifest check looks for Cargo.toml files; overridable for the harness.
+MANIFEST_ROOT="${MANIFEST_ROOT:-.}"
 
 # The reviewed allowlist: <count> <path>, sorted by path.
 #
@@ -82,6 +89,7 @@ current() {
      -e "(^|[^[:alnum:]_])Validator::(new|options|async_new|async_options)([^[:alnum:]_]|$)" \
      -e "ValidationOptions(::<.*>)?::default" \
      -e "Registry::(try_new|try_from_resources|options)" \
+     -e "RegistryOptions::(new|default)" \
      -e "use[[:space:]]+jsonschema::\{[^}]*(validator_for|async_validator_for|options|async_options|validate|is_valid|evaluate|bundle|async_bundle)" \
      -e "use[[:space:]]+jsonschema[[:space:]]+as([^[:alnum:]_]|$)" \
      -e "use[[:space:]]+jsonschema::\*" \
@@ -94,6 +102,31 @@ current() {
   | awk '{printf "%s %s\n", $1, $2}' \
   | sort -k2 \
   || true
+}
+
+# Layer 2: one line per `jsonschema` dependency declaration in any Cargo.toml, "<file>\t<ok|bad>".
+# `ok` = default-features = false, or inherited from the workspace (whose own line is checked).
+# A one-line entry and a `[..dependencies.jsonschema]` table are both read.
+manifest_scan() {
+  find "$MANIFEST_ROOT" -name Cargo.toml \
+       -not -path '*/target/*' -not -path '*/node_modules/*' -not -path '*/.git/*' -print0 2>/dev/null \
+  | xargs -0 awk '
+    function emit(f, good) { print f "\t" (good ? "ok" : "bad") }
+    FNR == 1 { if (intable) emit(tfile, tok); intable = 0 }
+    /^\[/ {
+      if (intable) emit(tfile, tok)
+      intable = 0
+      if ($0 ~ /dependencies\.jsonschema\]/) { intable = 1; tfile = FILENAME; tok = 0 }
+      next
+    }
+    intable && /^[[:space:]]*default-features[[:space:]]*=[[:space:]]*false/ { tok = 1 }
+    intable && /^[[:space:]]*workspace[[:space:]]*=[[:space:]]*true/ { tok = 1 }
+    /^[[:space:]]*jsonschema\.workspace[[:space:]]*=/ { emit(FILENAME, 1) }
+    /^[[:space:]]*jsonschema[[:space:]]*=/ {
+      emit(FILENAME, ($0 ~ /default-features[[:space:]]*=[[:space:]]*false/ || $0 ~ /workspace[[:space:]]*=[[:space:]]*true/))
+    }
+    END { if (intable) emit(tfile, tok) }
+  ' 2>/dev/null || true
 }
 
 CURRENT="$(current)"
@@ -123,13 +156,12 @@ fi
 DIFF_FILE="$(mktemp)"
 trap 'rm -f "$DIFF_FILE"' EXIT
 
-NORM_BASELINE="$(printf '%s\n' "$BASELINE" | sort -k2)"
-if diff <(printf '%s\n' "$NORM_BASELINE") <(printf '%s\n' "$CURRENT") >"$DIFF_FILE" 2>&1; then
-  echo "audit-shape-schema-compile: OK — jsonschema entry points unchanged ($(printf '%s\n' "$CURRENT" | grep -c .) files)."
-  exit 0
-fi
+fail=0
 
-cat >&2 <<'MSG'
+NORM_BASELINE="$(printf '%s\n' "$BASELINE" | sort -k2)"
+if ! diff <(printf '%s\n' "$NORM_BASELINE") <(printf '%s\n' "$CURRENT") >"$DIFF_FILE" 2>&1; then
+  fail=1
+  cat >&2 <<'MSG'
 audit-shape-schema-compile: FAIL — the set of jsonschema compile entry points changed.
 
 Every compile of a shape's schema must go through temper_substrate::shape_schema::compile, which
@@ -142,7 +174,35 @@ trigger. Before accepting this change:
 
 diff (allowlist -> current):
 MSG
-cat "$DIFF_FILE" >&2
-echo >&2
-echo "If the change is reviewed and correct: UPDATE_BASELINE=1 .github/scripts/audit-shape-schema-compile.sh" >&2
+  cat "$DIFF_FILE" >&2
+  echo >&2
+  echo "If the change is reviewed and correct: UPDATE_BASELINE=1 .github/scripts/audit-shape-schema-compile.sh" >&2
+fi
+
+# Layer 2. A scan that finds no `jsonschema` dependency at all has stopped matching (the real tree
+# has several), so it fails rather than passing.
+MANIFESTS="$(manifest_scan | sort)"
+if [[ -z "$MANIFESTS" ]]; then
+  echo "audit-shape-schema-compile: FAIL — the manifest scan found NO jsonschema dependency under" >&2
+  echo "  $MANIFEST_ROOT. The real tree has several, so finding zero means the scan broke." >&2
+  fail=1
+else
+  BAD_MANIFESTS="$(printf '%s\n' "$MANIFESTS" | awk -F'\t' '$2 == "bad" {print $1}')"
+  if [[ -n "$BAD_MANIFESTS" ]]; then
+    fail=1
+    {
+      echo "audit-shape-schema-compile: FAIL — a jsonschema dependency lacks default-features = false:"
+      printf '  %s\n' $BAD_MANIFESTS
+      echo "  The default features compile in the http and file resolvers, the second layer behind"
+      echo "  shape_schema's refusing retriever. Every dependency edge must say"
+      echo "  { version = \"..\", default-features = false }: one edge without it turns the"
+      echo "  resolvers back on for the whole build through feature unification."
+    } >&2
+  fi
+fi
+
+if [[ "$fail" == "0" ]]; then
+  echo "audit-shape-schema-compile: OK — jsonschema entry points unchanged ($(printf '%s\n' "$CURRENT" | grep -c .) files), $(printf '%s\n' "$MANIFESTS" | grep -c .) jsonschema manifest edges, all default-features = false."
+  exit 0
+fi
 exit 1

@@ -380,12 +380,14 @@ jobs:
       - name: Guard test — audit-credential-debug
         run: bash .github/scripts/test-audit-credential-debug.sh
 
-      # Twenty-seven probes. The bite adds `jsonschema::validator_for` under crates/*/src (with a
+      # Forty-three probes. The bite adds `jsonschema::validator_for` under crates/*/src (with a
       # valid manifest, so a concurrent workspace load survives) and asserts the output NAMES the
-      # file; seventeen spellings (free functions, options, bundlers, Registry, bare Validator,
-      # aliasing imports) prove the bite is not specific to one; six green probes (comments,
-      # type-only imports, unrelated `*Validator::new`, tests/) keep the guard from reddening on
-      # prose; the empty-scan canary proves a broken scan fails rather than passing.
+      # file; twenty-four spellings (free functions, options, bundlers, Registry and
+      # RegistryOptions, bare Validator, aliasing imports) prove the bite is not specific to one;
+      # six green probes (comments, type-only imports, unrelated `*Validator::new`, tests/) keep
+      # the guard from reddening on prose; nine manifest probes bite the second layer (a
+      # `jsonschema` dependency without `default-features = false`) and keep inheritance green;
+      # the empty-scan canary proves a broken scan fails rather than passing.
       - name: Guard test — audit-shape-schema-compile (the bite + every spelling)
         run: bash .github/scripts/test-audit-shape-schema-compile.sh
 

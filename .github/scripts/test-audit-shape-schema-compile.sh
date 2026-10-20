@@ -125,6 +125,21 @@ expect_sites "use jsonschema::* glob: detected" \
 expect_sites "extern crate jsonschema: detected" \
     "$(new_src externcrate a.rs 'extern crate jsonschema as js;')" 1
 
+expect_sites "Registry::try_from_resources: detected" \
+    "$(new_src regfromres a.rs 'fn f() { let _ = Registry::try_from_resources(pairs); }')" 1
+expect_sites "RegistryOptions::new: detected" \
+    "$(new_src regoptsnew a.rs 'fn f() { let _ = RegistryOptions::new().build(pairs); }')" 1
+expect_sites "RegistryOptions::default: detected" \
+    "$(new_src regoptsdef a.rs 'fn f() { let _ = RegistryOptions::default(); }')" 1
+expect_sites "bare Validator::async_new: detected" \
+    "$(new_src asyncnew a.rs 'async fn f() { let _ = Validator::async_new(&s).await; }')" 1
+expect_sites "bare Validator::async_options: detected" \
+    "$(new_src asyncopts a.rs 'async fn f() { let _ = Validator::async_options().build(&s).await; }')" 1
+expect_sites "evaluate inside a single-line use import: detected" \
+    "$(new_src useevaluate a.rs 'use jsonschema::{evaluate, Draft};')" 1
+expect_sites "jsonschema::async_bundle on its own: detected" \
+    "$(new_src asyncbundlealone a.rs 'async fn f() { let _ = jsonschema::async_bundle(&s).await; }')" 1
+
 # --- 3. what the guard says it ignores ---
 expect_sites "a whole-line comment naming an entry point: ignored" \
     "$(new_src comment a.rs '// jsonschema::validator_for is forbidden here')" 0
@@ -140,6 +155,62 @@ TESTS_ONLY="${FIXTURE_DIR}/testsdir/crates/demo"
 mkdir -p "${TESTS_ONLY}/tests"
 printf '%s\n' 'fn f() { let _ = jsonschema::validator_for(&s); }' > "${TESTS_ONLY}/tests/t.rs"
 expect_sites "a tests/ directory: out of the field of view" "${FIXTURE_DIR}/testsdir/crates" 0
+
+# --- 3b. layer 2: every jsonschema dependency edge must say default-features = false ---
+# The Rust scan runs on the real tree (green), the manifest scan on a fixture via MANIFEST_ROOT, so
+# these assert the manifest half alone: exit code AND the output naming the offending file.
+manifest_case() {  # NAME CONTENT EXPECTED_EXIT [EXPECTED_SUBSTRING]
+    local name="$1" content="$2" want="$3" substr="${4:-}" root out rc
+    root="${FIXTURE_DIR}/manifest-${name// /-}"
+    mkdir -p "${root}/crates/demo"
+    printf '%s\n' "$content" > "${root}/crates/demo/Cargo.toml"
+    set +e
+    out="$(MANIFEST_ROOT="$root" bash "$AUDIT_SCRIPT" 2>&1)"; rc=$?
+    set -e
+    if [ "$rc" -eq "$want" ] && { [ -z "$substr" ] || printf '%s' "$out" | grep -qF -- "$substr"; }; then
+        ok "manifest: $name"
+    else
+        bad "manifest: $name" "expected exit=${want} ${substr:+containing: ${substr}}" "exit=${rc}" "output: ${out}"
+    fi
+}
+manifest_case "BITE: a one-line dependency without default-features = false fails, naming the file" \
+'[dependencies]
+jsonschema = "0.45"' 1 "crates/demo/Cargo.toml"
+manifest_case "BITE: an inline table that leaves the defaults on fails" \
+'[dependencies]
+jsonschema = { version = "0.45", features = ["arbitrary-precision"] }' 1 "crates/demo/Cargo.toml"
+manifest_case "BITE: a [dependencies.jsonschema] table without it fails" \
+'[dependencies.jsonschema]
+version = "0.45"' 1 "crates/demo/Cargo.toml"
+manifest_case "BITE: a [workspace.dependencies] line without it fails" \
+'[workspace.dependencies]
+jsonschema = "0.45"' 1 "crates/demo/Cargo.toml"
+manifest_case "green: a one-line dependency with default-features = false" \
+'[dependencies]
+jsonschema = { version = "0.45", default-features = false }' 0
+manifest_case "green: a table with default-features = false" \
+'[dependencies.jsonschema]
+version = "0.45"
+default-features = false' 0
+manifest_case "green: workspace inheritance (the root line is checked on its own)" \
+'[dependencies]
+jsonschema = { workspace = true }' 0
+manifest_case "green: dotted workspace inheritance" \
+'[dependencies]
+jsonschema.workspace = true' 0
+
+# A fixture with no jsonschema dependency at all fails: the scan would have found the real ones.
+NOMANIFEST="${FIXTURE_DIR}/manifest-none"
+mkdir -p "${NOMANIFEST}/crates/demo"
+printf '%s\n' '[dependencies]' 'serde = "1"' > "${NOMANIFEST}/crates/demo/Cargo.toml"
+set +e
+OUT="$(MANIFEST_ROOT="$NOMANIFEST" bash "$AUDIT_SCRIPT" 2>&1)"; RC=$?
+set -e
+if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -qF "found NO jsonschema dependency"; then
+    ok "manifest: no jsonschema dependency found fails rather than passing"
+else
+    bad "manifest: no jsonschema dependency found fails rather than passing" "exit=${RC}" "output: ${OUT}"
+fi
 
 # --- 4. an empty scan fails rather than passing ---
 EMPTY="${FIXTURE_DIR}/empty/crates"

@@ -14,8 +14,9 @@
 //!
 //! The rest are controls or property pins, not bites. Local `#/$defs` refs still compile and an
 //! unknown `$schema` is refused, pinning that the refusing retriever did not narrow what compiles.
-//! Two witnesses pin that a custom `$schema` the schema defines for itself is refused too, which
-//! `jsonschema` alone would compile under a guessed draft.
+//! Several witnesses pin that a custom `$schema` is refused wherever the compiler would descend to
+//! it, including when the schema defines it for itself, which `jsonschema` alone would compile
+//! under a guessed draft; one control pins that a `$schema` key inside a `const` is data.
 //!
 //! These are plain `#[test]`s on purpose: the blocking fetch a default compile makes panics inside
 //! a tokio runtime instead of connecting, so the async suites' zero-connection assertions are not
@@ -229,6 +230,81 @@ fn an_embedded_subschema_naming_a_custom_schema_uri_is_refused() {
         compile(&schema).is_err(),
         "an embedded resource with a custom $schema must not compile"
     );
+}
+
+/// `jsonschema` compiles `dependencies` under every draft, including a 2020-12 root whose own
+/// keyword list has no `dependencies`; a custom `$schema` in one of its subschemas must still be
+/// found.
+#[test]
+fn a_custom_schema_uri_under_dependencies_is_refused() {
+    let schema = json!({
+        "$schema": DRAFT_2020_12,
+        "dependencies": { "a": { "$schema": "urn:example:m", "type": "string" } },
+    });
+
+    assert!(
+        compile(&schema).is_err(),
+        "a custom $schema under `dependencies` must not compile"
+    );
+}
+
+/// The same for `additionalItems`, which is compiled under every draft too.
+#[test]
+fn a_custom_schema_uri_under_additional_items_is_refused() {
+    let schema = json!({
+        "$schema": DRAFT_2020_12,
+        "additionalItems": {
+            "$id": "urn:example:m",
+            "$schema": "urn:example:m",
+            "type": "string",
+        },
+    });
+
+    assert!(
+        compile(&schema).is_err(),
+        "a custom $schema under `additionalItems` must not compile"
+    );
+}
+
+/// A subschema is compiled under ITS draft's keywords, not the root's: a draft-07 root whose
+/// `definitions` hold a 2020-12 subschema, whose `$defs` hold a custom `$schema`. The draft-07
+/// keyword list has no `$defs`, so a walk by the root's draft would miss it.
+#[test]
+fn a_custom_schema_uri_below_a_mixed_draft_subschema_is_refused() {
+    let schema = json!({
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "definitions": {
+            "inner": {
+                "$schema": DRAFT_2020_12,
+                "$defs": {
+                    "meta": {
+                        "$id": "urn:example:m",
+                        "$schema": "urn:example:m",
+                        "type": "string",
+                    },
+                },
+            },
+        },
+    });
+
+    assert!(
+        compile(&schema).is_err(),
+        "a custom $schema below a mixed-draft subschema must not compile"
+    );
+}
+
+/// Control: a `$schema` key inside a `const` is data, not a meta-schema declaration. The walk
+/// reads subschema positions only, so this schema compiles and its `const` is enforced.
+#[test]
+fn a_schema_key_inside_a_const_value_is_data_and_still_compiles() {
+    let schema = json!({
+        "$schema": DRAFT_2020_12,
+        "const": { "$schema": "urn:x", "kind": "example" },
+    });
+
+    let validator = compile(&schema).expect("a const holding a $schema key compiles");
+    assert!(validator.is_valid(&json!({ "$schema": "urn:x", "kind": "example" })));
+    assert!(!validator.is_valid(&json!({ "kind": "other" })));
 }
 
 /// Control: a property merely NAMED `$schema` is data, not a meta-schema declaration, and a
