@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# .github/scripts/test-audit-shape-schema-compile.sh
+#
+# Test harness for audit-shape-schema-compile.sh. The claims under test, in the order that matters:
+#   1. THE BITE: a `jsonschema::validator_for` added under crates/*/src makes the guard FAIL and
+#      names the file. This is the whole point — a new default-options compile is the exposure.
+#   2. Every entry-point spelling the guard claims to see is seen (options, validate, async,
+#      single-line imports), so the bite is not specific to one spelling.
+#   3. The guard stays GREEN on what it says it ignores: doc/line comments, tests/ directories, and
+#      the real tree, so prose churn never teaches anyone to re-baseline reflexively.
+#   4. An empty scan fails rather than passing vacuously.
+#
+#   bash .github/scripts/test-audit-shape-schema-compile.sh
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+AUDIT_SCRIPT="${SCRIPT_DIR}/audit-shape-schema-compile.sh"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+PASS=0
+FAIL=0
+
+FIXTURE_DIR="$(mktemp -d)"
+# The in-repo probe crate for claim 1 — always removed, including on failure.
+PROBE_CRATE="${REPO_ROOT}/crates/zz-shape-schema-compile-probe"
+trap 'rm -rf "$FIXTURE_DIR" "$PROBE_CRATE"' EXIT
+
+ok()  { echo "  PASS: $1"; PASS=$((PASS + 1)); }
+bad() { echo "  FAIL: $1"; shift; printf '    %s\n' "$@"; FAIL=$((FAIL + 1)); }
+
+# new_src NAME FILE BODY — write BODY to a fixture crate's src/FILE and echo the scan root.
+new_src() {
+    local root="${FIXTURE_DIR}/$1/crates/demo/src"
+    mkdir -p "$root"
+    printf '%s\n' "$3" > "${root}/$2"
+    echo "${FIXTURE_DIR}/$1/crates"
+}
+
+# expect_sites NAME SCAN_ROOT EXPECTED_FILE_COUNT — the detector's own output, via --list.
+# Fixtures are asserted through --list, never the exit code: a fixture contains none of the real
+# allowlist, so the diff always fires, and an exit-code assertion would pass whether or not the
+# detector saw anything.
+expect_sites() {
+    local name="$1" root="$2" expected="$3" actual
+    actual="$(SCAN_ROOT="$root" bash "$AUDIT_SCRIPT" --list 2>&1 | grep -c . || true)"
+    if [ "$actual" = "$expected" ]; then ok "$name"
+    else bad "$name" "expected ${expected} site file(s), saw ${actual}" "$(SCAN_ROOT="$root" bash "$AUDIT_SCRIPT" --list 2>&1)"; fi
+}
+
+echo "Running audit-shape-schema-compile.sh tests..."
+echo ""
+
+# --- the real tree matches the reviewed allowlist ---
+set +e
+OUT="$(bash "$AUDIT_SCRIPT" 2>&1)"; RC=$?
+set -e
+if [ "$RC" -eq 0 ]; then ok "real repo: the allowlist matches"
+else bad "real repo: the allowlist matches" "exit=${RC}" "output: ${OUT}"; fi
+
+# --- 1. THE BITE: validator_for under crates/*/src fails the guard and names the file ---
+mkdir -p "${PROBE_CRATE}/src"
+cat > "${PROBE_CRATE}/src/lib.rs" <<'RS'
+pub fn compile(schema: &serde_json::Value) {
+    let _ = jsonschema::validator_for(schema);
+}
+RS
+set +e
+OUT="$(bash "$AUDIT_SCRIPT" 2>&1)"; RC=$?
+set -e
+if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -qF "zz-shape-schema-compile-probe/src/lib.rs"; then
+    ok "BITE: jsonschema::validator_for under crates/*/src fails the guard, naming the file"
+else
+    bad "BITE: jsonschema::validator_for under crates/*/src fails the guard, naming the file" "exit=${RC}" "output: ${OUT}"
+fi
+rm -rf "$PROBE_CRATE"
+set +e
+bash "$AUDIT_SCRIPT" >/dev/null 2>&1; RC=$?
+set -e
+if [ "$RC" -eq 0 ]; then ok "  ...and removing the file restores green"
+else bad "  ...and removing the file restores green" "exit=${RC}"; fi
+
+# --- 2. every spelling is seen ---
+expect_sites "options(): detected" \
+    "$(new_src options a.rs 'fn f() { let _ = jsonschema::options().build(&s); }')" 1
+expect_sites "validate(): detected" \
+    "$(new_src validate a.rs 'fn f() { let _ = jsonschema::validate(&s, &i); }')" 1
+expect_sites "async_validator_for(): detected" \
+    "$(new_src asyncfn a.rs 'async fn f() { let _ = jsonschema::async_validator_for(&s).await; }')" 1
+expect_sites "Validator::new via the full path: detected" \
+    "$(new_src vnew a.rs 'fn f() { let _ = jsonschema::Validator::new(&s); }')" 1
+expect_sites "single-line import of an entry point: detected" \
+    "$(new_src import a.rs 'use jsonschema::{validator_for, Draft};')" 1
+
+# --- 3. what the guard says it ignores ---
+expect_sites "a whole-line comment naming an entry point: ignored" \
+    "$(new_src comment a.rs '// jsonschema::validator_for is forbidden here')" 0
+expect_sites "a doc comment naming an entry point: ignored" \
+    "$(new_src doc a.rs '/// Never call `jsonschema::options()` directly.')" 0
+expect_sites "an import of only the types: ignored" \
+    "$(new_src types a.rs 'use jsonschema::{Resource, Validator};')" 0
+TESTS_ONLY="${FIXTURE_DIR}/testsdir/crates/demo"
+mkdir -p "${TESTS_ONLY}/tests"
+printf '%s\n' 'fn f() { let _ = jsonschema::validator_for(&s); }' > "${TESTS_ONLY}/tests/t.rs"
+expect_sites "a tests/ directory: out of the field of view" "${FIXTURE_DIR}/testsdir/crates" 0
+
+# --- 4. an empty scan fails rather than passing ---
+EMPTY="${FIXTURE_DIR}/empty/crates"
+mkdir -p "$EMPTY"
+set +e
+OUT="$(SCAN_ROOT="$EMPTY" bash "$AUDIT_SCRIPT" 2>&1)"; RC=$?
+set -e
+if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -qF "found NO jsonschema entry points"; then
+    ok "empty scan: fails rather than passing vacuously"
+else
+    bad "empty scan: fails rather than passing vacuously" "exit=${RC}" "output: ${OUT}"
+fi
+
+echo ""
+echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"
+[ "$FAIL" -eq 0 ]

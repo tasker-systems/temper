@@ -809,7 +809,9 @@ pub enum Fired {
     /// computed at commit time. Singular — one commit, one artifact (unlike `Facet`, where a
     /// multi-valued key mints a row per inner key). The `shape_state` is `NeverDeclared` when no
     /// shape governs the artifact's family; `DeclaredSatisfied` or `DeclaredNotSatisfied` when a
-    /// shape is in force and the content was validated against it in Rust.
+    /// shape is in force and the content was validated against it in Rust; `DeclaredNotYetChecked`
+    /// when the shape in force could not be compiled and the family is advisory (no verdict row
+    /// is written).
     DataArtifact {
         artifact: DataArtifactId,
         shape_state: payloads::ShapeState,
@@ -1073,6 +1075,20 @@ pub(crate) async fn project_property_unset(
         .await?
         .context("_project_property_unset returned null")?;
     u64::try_from(folded).context("_project_property_unset returned a negative row count")
+}
+
+/// The refusal for a commit into a family whose `enforcing` shape cannot be compiled, whether
+/// the schema is malformed or refers to a document that is never fetched. A fixed sentence true
+/// of both causes: the compiler's text and any URI in the schema never reach the caller. Typed so
+/// the surfaces render it as the data-artifact refusal rather than the 500-class bridge.
+fn uncompilable_shape_refusal() -> anyhow::Error {
+    anyhow::Error::new(crate::writes::DataArtifactRefusal {
+        message: "data_artifact_commit: the enforcing shape in force for this family cannot be \
+                  compiled — it is not a valid JSON Schema, or it refers to a document that is \
+                  never fetched — so the content's conformance cannot be checked and the commit \
+                  is refused; a steward must amend the shape"
+            .to_owned(),
+    })
 }
 
 /// Fire one seeding action: dispatch it to its SQL function (event + projection, one txn) and return the
@@ -1473,7 +1489,8 @@ pub async fn fire_with(
             // (spec §7.2: there is no in-database validator). Under `enforcing` + non-conformance
             // the commit is refused and no artifact row is written. Under `advisory` the commit
             // succeeds and the verdict is DeclaredNotSatisfied. When no shape is in force the
-            // verdict stays NeverDeclared — persistence never requires a prior declaration.
+            // verdict stays NeverDeclared — persistence never requires a prior declaration. A
+            // shape that cannot be compiled has no verdict to give: see the match below.
             let (ko_table, ko_id) = match kind_owner {
                 Some(ref ko) => (ko.owner_table().to_string(), ko.owner_id()),
                 None => {
@@ -1521,31 +1538,52 @@ pub async fn fire_with(
                         .enforcement
                         .as_deref()
                         .context("shape in force returned null enforcement despite CHECK")?;
-                    let validator = jsonschema::validator_for(schema)
-                        .map_err(|e| anyhow::anyhow!("failed to compile shape schema: {e}"))?;
-                    let errors: Vec<(String, String)> = validator
-                        .iter_errors(content)
-                        .map(|e| (e.instance_path().to_string(), e.to_string()))
-                        .collect();
-                    if errors.is_empty() {
-                        (payloads::ShapeState::DeclaredSatisfied, None)
-                    } else if enforcement == "enforcing" {
-                        let detail = errors
-                            .iter()
-                            .map(|(path, msg)| format!("{path}: {msg}"))
-                            .collect::<Vec<_>>()
-                            .join("; ");
-                        // TYPED, not a bare bail: this is a refusal the caller can satisfy, and
-                        // the surfaces must render the violations instead of the 500-class
-                        // bridge. The message names every violating location and reason.
-                        return Err(anyhow::Error::new(crate::writes::DataArtifactRefusal {
-                            message: format!(
-                                "data_artifact_commit: content does not conform to the enforcing \
-                                 shape in force for this family — {detail}"
-                            ),
-                        }));
-                    } else {
-                        (payloads::ShapeState::DeclaredNotSatisfied, Some(errors))
+                    // The family's rule is stated by the shape in force, not by the commit's
+                    // outcome: a shape that cannot be compiled (malformed, or referring to a
+                    // document that is never fetched) cannot be checked, so enforcing refuses and
+                    // advisory records the artifact unchecked (task 01a15661-8460-739d-9ed3-f1e8ccbf9b69). Neither arm
+                    // carries the compiler's text.
+                    match crate::shape_schema::compile(schema) {
+                        Ok(validator) => {
+                            let errors: Vec<(String, String)> = validator
+                                .iter_errors(content)
+                                .map(|e| (e.instance_path().to_string(), e.to_string()))
+                                .collect();
+                            if errors.is_empty() {
+                                (payloads::ShapeState::DeclaredSatisfied, None)
+                            } else if enforcement == "enforcing" {
+                                let detail = errors
+                                    .iter()
+                                    .map(|(path, msg)| format!("{path}: {msg}"))
+                                    .collect::<Vec<_>>()
+                                    .join("; ");
+                                // TYPED, not a bare bail: this is a refusal the caller can
+                                // satisfy, and the surfaces must render the violations instead of
+                                // the 500-class bridge. The message names every violating location
+                                // and reason.
+                                return Err(anyhow::Error::new(
+                                    crate::writes::DataArtifactRefusal {
+                                        message: format!(
+                                        "data_artifact_commit: content does not conform to the \
+                                         enforcing shape in force for this family — {detail}"
+                                    ),
+                                    },
+                                ));
+                            } else {
+                                (payloads::ShapeState::DeclaredNotSatisfied, Some(errors))
+                            }
+                        }
+                        Err(_) if enforcement == "enforcing" => {
+                            return Err(uncompilable_shape_refusal());
+                        }
+                        Err(_) => {
+                            tracing::warn!(
+                                shape_id = ?row.shape_id,
+                                "shape in force cannot be compiled; the advisory commit is \
+                                 recorded without a verdict"
+                            );
+                            (payloads::ShapeState::DeclaredNotYetChecked, None)
+                        }
                     }
                 }
             };
@@ -1610,11 +1648,16 @@ pub async fn fire_with(
             })?;
 
             // Persist the verdict so the read path can match it against the staleness triple
-            // (spec §7.5). Only when a shape is in force — NeverDeclared means no shape governs
-            // the family, so there is nothing to record. The verdict row's (shape_id,
-            // shape_version, content_hash) are written here so _data_artifact_shape_state can
-            // match against them on the read side.
-            if let Some(ref row) = shape {
+            // (spec §7.5). Only when a shape is in force AND was checked — NeverDeclared means no
+            // shape governs the family, and DeclaredNotYetChecked (the shape could not be
+            // compiled) means there was no verdict to record, so no row is written and
+            // _data_artifact_shape_state reads the artifact as not yet checked. The verdict row's
+            // (shape_id, shape_version, content_hash) are written here so
+            // _data_artifact_shape_state can match against them on the read side.
+            let checked_shape = shape
+                .as_ref()
+                .filter(|_| shape_state != payloads::ShapeState::DeclaredNotYetChecked);
+            if let Some(row) = checked_shape {
                 let satisfied = shape_state == payloads::ShapeState::DeclaredSatisfied;
                 let detail = if satisfied {
                     None

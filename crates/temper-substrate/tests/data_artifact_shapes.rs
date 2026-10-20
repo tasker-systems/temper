@@ -23,6 +23,7 @@
 
 mod common;
 
+use common::fetch_probe::FetchProbe;
 use temper_core::types::home::HomeAnchor;
 use temper_substrate::events::{fire, EventContext, Fired, SeedAction};
 use temper_substrate::ids::{
@@ -260,6 +261,37 @@ async fn commit_err(
     let err = result.expect_err("commit should have been refused");
     tx.rollback().await.ok();
     err.to_string()
+}
+
+/// Attempt to commit; expect the TYPED refusal a surface renders as the data-artifact refusal
+/// (not the 500-class bridge). Returns it.
+async fn commit_refusal(
+    pool: &sqlx::PgPool,
+    resource: ResourceId,
+    kind: &str,
+    content: &serde_json::Value,
+    emitter: EntityId,
+) -> writes::DataArtifactRefusal {
+    let mut tx = pool.begin().await.unwrap();
+    let result = fire(
+        &mut tx,
+        SeedAction::DataArtifactCommit {
+            resource,
+            kind,
+            kind_owner: None,
+            intent: ArtifactIntent::Current,
+            precedence: 0.0,
+            content,
+            supersedes: &[],
+            emitter,
+        },
+    )
+    .await;
+    tx.rollback().await.ok();
+    result
+        .expect_err("commit should have been refused")
+        .downcast::<writes::DataArtifactRefusal>()
+        .expect("the refusal must be the typed DataArtifactRefusal, not an internal error")
 }
 
 /// Count artifact rows for a resource (to verify no row was written on refusal).
@@ -610,6 +642,126 @@ async fn a_commit_with_no_shape_in_force_stays_never_declared(pool: sqlx::PgPool
         shape_state,
         ShapeState::NeverDeclared,
         "a commit with no shape in force must stay NeverDeclared"
+    );
+}
+
+// ── A shape in force that cannot be compiled (task 01a15661-8460-739d-9ed3-f1e8ccbf9b69) ────
+
+/// A schema that cannot compile without a fetch: its `$ref` names the probe's listener. The
+/// service's declare refuses this schema, so it is stored here through the substrate write, which
+/// does not compile — the state a shape declared before declare compiled is in.
+fn remote_ref_schema(probe: &FetchProbe) -> serde_json::Value {
+    serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$ref": probe.url("shape.json"),
+    })
+}
+
+/// An `enforcing` family whose shape cannot be compiled has no rule it can check, so its commits
+/// are refused with the typed refusal — whatever the content — and nothing is written or fetched.
+/// The sentence names no URI and no compiler text.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_enforcing_shape_that_cannot_compile_refuses_the_commit(pool: sqlx::PgPool) {
+    let (emitter, home, resource, _owner) = world(&pool, "enforcing-uncompilable").await;
+    let kind = "measurement";
+    let probe = FetchProbe::bind();
+    declare(
+        &pool,
+        emitter,
+        AnchorRef::context(home),
+        None,
+        kind,
+        &remote_ref_schema(&probe),
+        EnforcementMode::Enforcing,
+    )
+    .await;
+
+    // Content that would satisfy any reasonable rule: the refusal is about the shape, not the content.
+    let refusal = commit_refusal(
+        &pool,
+        resource,
+        kind,
+        &serde_json::json!({"value": "42"}),
+        emitter,
+    )
+    .await;
+
+    assert!(
+        refusal.message.contains("cannot be compiled") && refusal.message.contains("amend"),
+        "the refusal must say the shape cannot be compiled and that a steward must amend it, got: {}",
+        refusal.message
+    );
+    assert!(
+        !refusal.message.contains("127.0.0.1")
+            && !refusal.message.contains(&probe.port().to_string()),
+        "the refusal must not echo the URI the schema names, got: {}",
+        refusal.message
+    );
+    assert_eq!(
+        artifact_count(&pool, resource).await,
+        0,
+        "no artifact row is written when the enforcing shape cannot be checked"
+    );
+    assert_eq!(
+        probe.connections(),
+        0,
+        "the commit must not connect to the host the schema names"
+    );
+}
+
+/// **The advisory arm's bite.** An `advisory` family whose shape cannot be compiled still takes
+/// the artifact, whole. No verdict row is written, so it reads `declared_not_yet_checked` rather
+/// than satisfied or not satisfied. A variant that refuses here, or that records a verdict, fails.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_advisory_shape_that_cannot_compile_records_the_artifact_unchecked(pool: sqlx::PgPool) {
+    let (emitter, home, resource, owner) = world(&pool, "advisory-uncompilable").await;
+    let kind = "measurement";
+    let probe = FetchProbe::bind();
+    declare(
+        &pool,
+        emitter,
+        AnchorRef::context(home),
+        None,
+        kind,
+        &remote_ref_schema(&probe),
+        EnforcementMode::Advisory,
+    )
+    .await;
+
+    let content = serde_json::json!({"value": 42, "note": "kept whole"});
+    let (id, shape_state) = commit(&pool, resource, kind, &content, emitter).await;
+
+    assert_eq!(
+        shape_state,
+        ShapeState::DeclaredNotYetChecked,
+        "an advisory commit under an uncompilable shape is recorded unchecked"
+    );
+    let stored: serde_json::Value =
+        sqlx::query_scalar("SELECT content FROM kb_data_artifact_content WHERE artifact_id=$1")
+            .bind(id.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored, content, "the content is stored whole");
+    let verdicts: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_data_artifact_verdicts WHERE artifact_id=$1")
+            .bind(id.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        verdicts, 0,
+        "no verdict row is written for an unchecked artifact"
+    );
+    assert_eq!(
+        read_shape_state(&pool, owner, resource).await,
+        Some(ShapeState::DeclaredNotYetChecked),
+        "the read side reports the artifact as not yet checked"
+    );
+    assert_eq!(
+        probe.connections(),
+        0,
+        "the commit must not connect to the host the schema names"
     );
 }
 

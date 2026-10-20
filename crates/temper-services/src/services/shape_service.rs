@@ -21,6 +21,7 @@ use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ContextId, EntityId, ProfileId, ShapeId};
 use temper_core::types::workflow_job::{AnchorJobPayload, DispatchType, Persona};
 use temper_substrate::payloads::{AnchorRef, EnforcementMode, KindOwner};
+use temper_substrate::shape_schema;
 use temper_substrate::writes::{self, DataArtifactRefusal, DeclareShapeParams};
 
 /// Lease for a claimed shape-reconcile job. Same reasoning as the region lease: MUST exceed the
@@ -44,7 +45,7 @@ pub struct DeclareShapeServiceParams<'a> {
     pub emitter: EntityId,
 }
 
-/// Declare a shape: authority gate → substrate declare → enqueue reconcile job.
+/// Declare a shape: authority gate → compile → substrate declare → enqueue reconcile job.
 ///
 /// The authority gate is the two-arm branch from spec §5: `context_authorable_by_profile` for a
 /// context-homed shape, `cogmap_authorable_by_profile` for a cogmap-homed shape. It calls the
@@ -52,11 +53,21 @@ pub struct DeclareShapeServiceParams<'a> {
 /// `Forbidden` — the same denial `DbBackend::check_context_authorable` /
 /// `DbBackend::check_cogmap_authorable` use.
 ///
+/// The schema is then compiled, before any write, through the one no-fetch constructor. A schema
+/// that cannot be compiled (malformed, or referring to a document that is never fetched) is
+/// refused as a `DataArtifactRefusal` carrying that constructor's fixed sentence, so it is
+/// refused when it is declared rather than accepted and left to fail at commit.
+///
 /// After the declare succeeds, a reconcile job is enqueued on the anchor queue. The single-flight
 /// index collapses N declarations into one job — the second enqueue returns `None`, not an error.
 pub async fn declare_shape(pool: &PgPool, p: DeclareShapeServiceParams<'_>) -> ApiResult<ShapeId> {
     // Authority gate — the two-arm branch from spec §5. Call the predicates, never restate them.
     check_home_authorable(pool, p.principal, &p.home).await?;
+
+    // Auth before writes, and compile before the write: the gate above answers a stranger
+    // `Forbidden` whatever the schema says, so the refusal below teaches only an author.
+    shape_schema::compile(p.schema)
+        .map_err(|uncompilable| ApiError::DataArtifactRefusal(uncompilable.to_string()))?;
 
     // Substrate declare (fires the event, projects the row). A typed refusal (the wrapper's
     // SQL vocabulary, or the declare gate itself) surfaces with its own words — never the
@@ -194,8 +205,17 @@ async fn reconcile_one_anchor(pool: &PgPool, anchor: HomeAnchor) -> ApiResult<us
 
     let mut count = 0usize;
     for row in rows {
-        let validator = jsonschema::validator_for(&row.schema)
-            .map_err(|e| ApiError::Internal(format!("failed to compile shape schema: {e}")))?;
+        // A shape that cannot be compiled (stored before declare compiled, or by direct insert)
+        // gives no verdict: its artifacts stay `declared_not_yet_checked`, and one such shape does
+        // not fail the anchor's other artifacts (task 01a15661-8460-739d-9ed3-f1e8ccbf9b69).
+        let Ok(validator) = shape_schema::compile(&row.schema) else {
+            tracing::warn!(
+                shape_id = %row.shape_id,
+                artifact_id = %row.artifact_id,
+                "shape reconciliation skipped an artifact: its shape cannot be compiled"
+            );
+            continue;
+        };
         let errors: Vec<_> = validator.iter_errors(&row.content).collect();
         let satisfied = errors.is_empty();
 

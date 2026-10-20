@@ -24,6 +24,7 @@ pub mod payloads;
 pub mod readback;
 pub mod replay;
 pub mod scenario;
+pub mod shape_schema;
 pub mod substrate;
 pub mod text;
 pub mod uploads;
