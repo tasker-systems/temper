@@ -130,7 +130,10 @@ pub struct ArtifactPage {
 /// counts). Untagged, so each arm serializes exactly as its inner type does: a request with
 /// `limit` answers the [`ArtifactPage`] envelope, and a request without one answers the bare
 /// array the route has always returned.
-#[derive(Debug, Clone, Serialize)]
+///
+/// Deserializable so a client can read either answer from one typed call: a server that predates
+/// `limit` ignores it and answers the bare array.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[serde(untagged)]
 pub enum ArtifactListAnswer {
@@ -313,6 +316,21 @@ mod tests {
         let wire =
             serde_json::to_value(ArtifactListAnswer::Unbounded(vec![])).expect("answer serializes");
         assert_eq!(wire, serde_json::json!([]));
+    }
+
+    #[test]
+    fn the_answer_reads_a_bare_array_as_the_unbounded_arm() {
+        let answer: ArtifactListAnswer =
+            serde_json::from_value(serde_json::json!([])).expect("a bare array is an answer");
+        assert!(matches!(answer, ArtifactListAnswer::Unbounded(v) if v.is_empty()));
+    }
+
+    #[test]
+    fn the_answer_reads_an_envelope_as_the_page_arm() {
+        let answer: ArtifactListAnswer =
+            serde_json::from_value(serde_json::json!({ "artifacts": [], "next": null }))
+                .expect("an envelope is an answer");
+        assert!(matches!(answer, ArtifactListAnswer::Page(p) if p.next.is_none()));
     }
 
     #[test]

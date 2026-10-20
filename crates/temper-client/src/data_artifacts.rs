@@ -6,8 +6,8 @@ use crate::error::Result;
 use crate::http::HttpClient;
 use crate::ops;
 use temper_core::types::data_artifact::{
-    ArtifactCommitRequest, ArtifactCommitResponse, ArtifactListParams, ArtifactPage,
-    ArtifactPageRequest, ArtifactView, ARTIFACT_DRAIN_PAGE_ROWS,
+    ArtifactCommitRequest, ArtifactCommitResponse, ArtifactListAnswer, ArtifactListParams,
+    ArtifactPage, ArtifactPageRequest, ArtifactView, ARTIFACT_DRAIN_PAGE_ROWS,
 };
 use temper_core::types::data_artifact_shape::{ShapeDeclareRequest, ShapeView};
 
@@ -57,6 +57,9 @@ impl<'a> DataArtifactsClient<'a> {
     /// continuation position come from `request`, which replaces any `limit` or `after_*` on
     /// `params`. Always asks for artifacts, never counts. The server refuses a `limit` of 0 or
     /// above `MAX_ARTIFACT_PAGE_ROWS`.
+    ///
+    /// An older server that does not know `limit` answers the bare array, which is every artifact,
+    /// read here as the final page.
     pub async fn list_page(
         &self,
         resource_id: Uuid,
@@ -74,9 +77,17 @@ impl<'a> DataArtifactsClient<'a> {
         let op = &ops::LIST_ARTIFACTS;
         let path = op.path(&[&resource_id])?;
         let req = self.http.request(op, &path).query(&paged);
-        self.http
+        let answer: ArtifactListAnswer = self
+            .http
             .send_json(&op.method(), &path, req, token.as_deref())
-            .await
+            .await?;
+        Ok(match answer {
+            ArtifactListAnswer::Page(page) => page,
+            ArtifactListAnswer::Unbounded(artifacts) => ArtifactPage {
+                artifacts,
+                next: None,
+            },
+        })
     }
 
     /// Every artifact of a resource, fetched a bounded page at a time.

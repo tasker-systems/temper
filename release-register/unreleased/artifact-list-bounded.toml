@@ -1,6 +1,6 @@
 title    = "The per-resource artifact list can be bounded: `limit` and a keyset cursor, answering `{ artifacts, next }`"
 pr       = "self"
-classes  = ["additive"]
+classes  = ["additive", "behavioral"]
 surfaces = ["http", "clients", "schema"]
 status   = "signal-only"
 body = '''
@@ -15,6 +15,18 @@ continuation position sent in halves, and one sent without `limit` are each refu
 naming the parameter, never clamped. The envelope type and the cursor are new in `openapi.json`
 (`ArtifactPage`, `ArtifactCursor`, and `ArtifactListAnswer`, the route's 200 as a union of the page
 and the bare array) and in the ts-rs types, and the three SDKs regenerate with them.
+
+Why `behavioral` beside `additive`: the route's documented 200 moved from an array to a union of
+the array and the page, which the crosscheck reads as an envelope change. The bytes a caller
+receives move only when that caller sends `limit`. An old client against a new server sends no
+`limit` and gets the identical bare array. A new `temper-client` against an old server sends
+`limit`, which the old route ignores, and gets the bare array of every artifact back; `list_page`
+reads that answer as the final page (every artifact, `next` null), so `list_all` returns the
+complete set after exactly one request, neither truncated nor failing to decode. Both skew
+directions therefore hold for `temper-client` and for the CLI and MCP callers built on it. A
+generated SDK that pages by hand sees whichever shape the server it talks to answers. The declaration is the
+conversion to the deprecation path (D-C2), not a shape break: the unbounded form's retirement is
+the later `shape-breaking` entry named above.
 
 Behind it, migration `20261102000000` adds an 8-argument arity of the SQL function
 `artifacts_for_resource` (limit and keyset position, no `DEFAULT` on any parameter). The existing
