@@ -2709,9 +2709,9 @@ export interface paths {
          *     newest first with `order=desc`. The body is the same bare array either way; when more remain,
          *     the response carries a `Link: <...>; rel="next"` header whose target is this request with the
          *     next page's `after_created` and `after_id` (and the caller's own filters and `order`), and the
-         *     header is absent on the last page and on every response without `limit`. A `limit` of 0 or above the server ceiling `MAX_ARTIFACT_PAGE_ROWS` is
-         *     refused, not clamped. Without `limit`, returns the whole list: the unbounded form, which a
-         *     later release retires.
+         *     header is absent on the last page and on every response without `limit`. A `limit` of 0 or above
+         *     the server ceiling `MAX_ARTIFACT_PAGE_ROWS` is refused, not clamped. Without `limit`, returns
+         *     the whole list: the unbounded form, which a later release retires.
          */
         get: operations["list_artifacts"];
         put?: never;

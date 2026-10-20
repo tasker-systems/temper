@@ -1480,9 +1480,12 @@ async fn the_sql_arity_returns_at_most_p_limit_rows(pool: sqlx::PgPool) {
     }
 }
 
-/// Half a keyset position returns no rows. A row comparison against `(created, NULL)` is not
-/// NULL but true for every later `created`, so without the arity's explicit both-non-NULL arm
-/// half a position would resume from `created` rather than answer nothing.
+/// Half a keyset position returns no rows, in either direction. A row comparison against
+/// `(created, NULL)` is not NULL but true for every `created` beyond it in the comparison's sense
+/// (later ascending, earlier descending), so without the arity's explicit both-non-NULL arm half
+/// a position would resume from `created` rather than answer nothing. Each direction is asked
+/// from the end that leaves rows beyond it: ascending from the earliest, descending from the
+/// latest.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn half_a_position_returns_no_rows(pool: sqlx::PgPool) {
     let (emitter, _home, resource) = world(&pool, "page-half-position").await;
@@ -1499,10 +1502,13 @@ async fn half_a_position_returns_no_rows(pool: sqlx::PgPool) {
         .await;
     }
 
-    // The premise: separate commits carry distinct `created`, so rows exist strictly after the
-    // earliest one, and a bare row comparison would return them.
-    let (distinct, earliest): (i64, chrono::DateTime<chrono::Utc>) = sqlx::query_as(
-        "SELECT count(DISTINCT created), min(created) FROM kb_data_artifacts WHERE resource_id = $1",
+    // The premise: separate commits carry distinct `created`, so rows exist strictly beyond the
+    // earliest one ascending and the latest one descending, and a bare row comparison would
+    // return them.
+    type Instant = chrono::DateTime<chrono::Utc>;
+    let (distinct, earliest, latest): (i64, Instant, Instant) = sqlx::query_as(
+        "SELECT count(DISTINCT created), min(created), max(created)
+           FROM kb_data_artifacts WHERE resource_id = $1",
     )
     .bind(resource.uuid())
     .fetch_one(&pool)
@@ -1510,19 +1516,65 @@ async fn half_a_position_returns_no_rows(pool: sqlx::PgPool) {
     .unwrap();
     assert_eq!(distinct, 3, "premise: three distinct `created` values");
 
-    let returned: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM artifacts_for_resource(
-             $1, $2, NULL::text, NULL::text, false, $3::bigint, $4::timestamptz, NULL::uuid, false)",
-    )
-    .bind(owner.uuid())
-    .bind(resource.uuid())
-    .bind(10_i64)
-    .bind(earliest)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    for (descending, from) in [(false, earliest), (true, latest)] {
+        let returned: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM artifacts_for_resource(
+                 $1, $2, NULL::text, NULL::text, false, $3::bigint, $4::timestamptz, NULL::uuid,
+                 $5)",
+        )
+        .bind(owner.uuid())
+        .bind(resource.uuid())
+        .bind(10_i64)
+        .bind(from)
+        .bind(descending)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
-    assert_eq!(returned, 0, "a position without its id returns nothing");
+        assert_eq!(
+            returned, 0,
+            "a position without its id returns nothing (descending: {descending})"
+        );
+    }
+}
+
+/// A NULL direction returns no rows. The arity's `WHERE p_descending IS NOT NULL` is what says
+/// so: without it the first-page arm admits every row and every `ORDER BY` key is NULL, so the
+/// read would answer the first `p_limit` rows in no order at all — a page with no defined next.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_null_direction_returns_no_rows(pool: sqlx::PgPool) {
+    let (emitter, _home, resource) = world(&pool, "page-null-direction").await;
+    let (owner, _) = system_actor(&pool).await;
+    for n in 0..3 {
+        fire_commit(
+            &pool,
+            resource,
+            "measurement",
+            ArtifactIntent::Member,
+            &serde_json::json!({ "n": n }),
+            emitter,
+        )
+        .await;
+    }
+
+    // The controls: the same call with a direction answers all three, so the zero is the NULL
+    // direction's doing and not an empty fixture.
+    for (descending, expected) in [(Some(false), 3), (Some(true), 3), (None, 0)] {
+        let returned: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM artifacts_for_resource(
+                 $1, $2, NULL::text, NULL::text, false, $3::bigint, NULL::timestamptz, NULL::uuid,
+                 $4::boolean)",
+        )
+        .bind(owner.uuid())
+        .bind(resource.uuid())
+        .bind(10_i64)
+        .bind(descending)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(returned, expected, "p_descending = {descending:?}");
+    }
 }
 
 /// A page that exactly exhausts the remainder has no `next`: the extra row the read asks for is
@@ -1617,6 +1669,81 @@ async fn artifacts_sharing_a_created_page_by_id_without_skipping_or_repeating(po
     assert_eq!(
         seen, expected,
         "a tie on `created` is broken by id, once each"
+    );
+}
+
+/// The descending twin: four artifacts tied on `created`, paged newest first one at a time, must
+/// come back exactly once each in `(created DESC, id DESC)` order — here, id descending.
+///
+/// It fails under either regression of the descending arm in migration `20261102000000`:
+/// - **the descending comparison on `created` alone** (`a.created < p_after_created`): the first
+///   page holds the highest id, and nothing in the tie has an earlier `created`, so the walk ends
+///   after one artifact and skips the other three;
+/// - **the `CASE WHEN p_descending THEN a.id END DESC` key dropped from the `ORDER BY`**: inside
+///   the tie the rows then arrive in no defined order, so a page can hold an id that is not the
+///   highest remaining, and the `id <` keyset then skips every higher one. It passes only if the
+///   database happens to hand back the tie in exact descending id order on every page.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn artifacts_sharing_a_created_page_newest_first_by_id_without_skipping_or_repeating(
+    pool: sqlx::PgPool,
+) {
+    let (emitter, _home, resource) = world(&pool, "page-ties-desc").await;
+    let (owner, _) = system_actor(&pool).await;
+
+    let mut tx = pool.begin().await.unwrap();
+    let mut committed = Vec::new();
+    for n in 0..4 {
+        let content = serde_json::json!({ "n": n });
+        committed.push(
+            fire(
+                &mut tx,
+                SeedAction::DataArtifactCommit {
+                    resource,
+                    kind: "measurement",
+                    kind_owner: None,
+                    intent: ArtifactIntent::Member,
+                    precedence: 0.0,
+                    content: &content,
+                    supersedes: &[],
+                    emitter,
+                },
+            )
+            .await
+            .unwrap()
+            .data_artifact()
+            .unwrap(),
+        );
+    }
+    tx.commit().await.unwrap();
+
+    let created: i64 = sqlx::query_scalar(
+        "SELECT count(DISTINCT created) FROM kb_data_artifacts WHERE resource_id = $1",
+    )
+    .bind(resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        created, 1,
+        "the fixture must tie on `created`, or this proves nothing"
+    );
+
+    let mut after = None;
+    let mut seen = Vec::new();
+    loop {
+        let this = page_in(&pool, owner, resource, 1, after, SortOrder::Desc).await;
+        seen.extend(this.artifacts.iter().map(|a| a.artifact_id));
+        match this.next {
+            Some(cursor) => after = Some(cursor),
+            None => break,
+        }
+    }
+
+    let mut expected = committed;
+    expected.sort_by_key(|id| std::cmp::Reverse(id.uuid()));
+    assert_eq!(
+        seen, expected,
+        "a tie on `created` is broken by id descending, once each"
     );
 }
 

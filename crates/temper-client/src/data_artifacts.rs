@@ -128,8 +128,8 @@ impl<'a> DataArtifactsClient<'a> {
     ///
     /// `params` carries the filters (`kind`, `intent`, `include_folded`); the bound, the
     /// continuation position and the direction come from `request`, which replaces any `limit`,
-    /// `after_*` or `order` on `params`. Always asks for artifacts, never counts. The server refuses a `limit` of 0 or
-    /// above `MAX_ARTIFACT_PAGE_ROWS`.
+    /// `after_*` or `order` on `params`. Always asks for artifacts, never counts. The server
+    /// refuses a `limit` of 0 or above `MAX_ARTIFACT_PAGE_ROWS`.
     ///
     /// The continuation is the response's `Link: <...>; rel="next"` header; with no such header
     /// the page is the last. An older server that does not know `limit` answers every artifact
@@ -177,8 +177,8 @@ impl<'a> DataArtifactsClient<'a> {
     /// For a caller whose contract is "everything": it follows `next` until the last page
     /// (`next: null`), so no single response is unbounded and none is silently truncated. The
     /// page size is [`ARTIFACT_DRAIN_PAGE_ROWS`], oldest first. `params.limit`, `after_*` and
-    /// `order` are replaced by the drain's own. A `next` that repeats the position it was asked to continue after is an
-    /// error rather than another lap.
+    /// `order` are replaced by the drain's own. A `next` that repeats the position it was asked
+    /// to continue after is an error rather than another lap.
     pub async fn list_all(
         &self,
         resource_id: Uuid,

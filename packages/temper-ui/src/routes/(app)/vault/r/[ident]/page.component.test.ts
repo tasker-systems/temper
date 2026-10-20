@@ -1222,7 +1222,7 @@ describe('the data artifacts region', () => {
 		unmount();
 	});
 
-	it('renders a later page even when it is empty, so the way back to the first is there', async () => {
+	it('renders an older page even when it is empty, so the way back to the newest is there', async () => {
 		const { container, unmount } = render(Page, {
 			data: data({
 				artifacts: Promise.resolve({ artifacts: [], olderHref: null, newestHref: '/vault/r/r1' }),
