@@ -11,9 +11,11 @@
 --      against the incumbent, and every existing caller an error (`20260815000040`, point 1).
 --   2. The keyset is `(created, id)` as a ROW comparison, in the same order the `ORDER BY` uses.
 --      Comparing `created` alone drops or repeats the rows that share a timestamp.
---   3. Failing closed. An absent position is BOTH arguments NULL; exactly one NULL compares to
---      NULL and returns nothing. A NULL `p_limit` returns nothing rather than the whole set: the
---      point of this arity is that it cannot be asked for everything.
+--   3. Failing closed. An absent position is BOTH arguments NULL. The continuation arm demands
+--      BOTH non-NULL, spelled out: a row comparison against `(X, NULL)` is not NULL but true for
+--      every `created > X`, so without it half a position would resume. Half a position returns
+--      nothing. A NULL `p_limit` returns nothing rather than the whole set: this arity cannot be
+--      asked for everything.
 --
 -- The caller reads `limit + 1` rows to learn whether a next page exists, without a count.
 
@@ -57,7 +59,8 @@ LANGUAGE sql STABLE AS $$
       JOIN kb_data_artifacts a ON a.id = va.id
       LEFT JOIN kb_data_artifact_content c ON c.artifact_id = a.id
      WHERE (p_after_created IS NULL AND p_after_id IS NULL)
-        OR (a.created, a.id) > (p_after_created, p_after_id)
+        OR (p_after_created IS NOT NULL AND p_after_id IS NOT NULL
+            AND (a.created, a.id) > (p_after_created, p_after_id))
      ORDER BY a.created, a.id
      LIMIT coalesce(p_limit, 0)
 $$;

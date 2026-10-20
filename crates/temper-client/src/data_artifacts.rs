@@ -26,11 +26,13 @@ impl std::fmt::Debug for DataArtifactsClient<'_> {
 /// The position a `Link` header's `rel="next"` entry continues after, or `None` when the header
 /// names no next page.
 ///
-/// Strict, and for exactly the form the server emits: comma-separated entries, each
-/// `<target>` followed by `;`-separated parameters, of which the next page's carries
-/// `rel="next"`. The target's query must hold both `after_created` and `after_id`. An entry that
-/// is not `<...>`-shaped, or a `rel="next"` target that does not carry a readable position, is an
-/// error: reading it as "no next page" would end a drain early without saying so.
+/// Comma-separated entries, each `<target>` followed by `;`-separated parameters. An entry is
+/// the next page's when its `rel` names `next`, read as RFC 8288 allows: the parameter name and
+/// the relation type case-insensitively, the value quoted or bare, and the value a
+/// whitespace-separated list of relation types (`rel="next last"`). Only an entry's first `rel`
+/// counts. The target's query must hold both `after_created` and `after_id`. An entry that is not
+/// `<...>`-shaped, or a next target that does not carry a readable position, is an error: reading
+/// it as "no next page" would end a drain early without saying so.
 pub fn parse_next_link(header: &str) -> Result<Option<ArtifactCursor>> {
     for entry in header.split(',') {
         let entry = entry.trim();
@@ -38,7 +40,7 @@ pub fn parse_next_link(header: &str) -> Result<Option<ArtifactCursor>> {
             .strip_prefix('<')
             .and_then(|rest| rest.split_once('>'))
             .ok_or_else(|| malformed_link("an entry is not `<target>`", header))?;
-        if !params.split(';').any(|p| p.trim() == "rel=\"next\"") {
+        if !names_next(params) {
             continue;
         }
         let url = url::Url::parse("http://link.invalid/")
@@ -67,6 +69,24 @@ pub fn parse_next_link(header: &str) -> Result<Option<ArtifactCursor>> {
         }));
     }
     Ok(None)
+}
+
+/// Whether a link entry's parameters carry a `rel` whose relation types include `next`.
+fn names_next(params: &str) -> bool {
+    params
+        .split(';')
+        .filter_map(|param| param.split_once('='))
+        .find(|(name, _)| name.trim().eq_ignore_ascii_case("rel"))
+        .is_some_and(|(_, value)| {
+            let value = value.trim();
+            let value = value
+                .strip_prefix('"')
+                .and_then(|v| v.strip_suffix('"'))
+                .unwrap_or(value);
+            value
+                .split_whitespace()
+                .any(|rel| rel.eq_ignore_ascii_case("next"))
+        })
 }
 
 fn malformed_link(why: &str, header: &str) -> ClientError {
@@ -155,7 +175,8 @@ impl<'a> DataArtifactsClient<'a> {
     /// For a caller whose contract is "everything": it follows `next` until the last page
     /// (`next: null`), so no single response is unbounded and none is silently truncated. The
     /// page size is [`ARTIFACT_DRAIN_PAGE_ROWS`]. `params.limit` and `after_*` are replaced by
-    /// the drain's own.
+    /// the drain's own. A `next` that repeats the position it was asked to continue after is an
+    /// error rather than another lap.
     pub async fn list_all(
         &self,
         resource_id: Uuid,
@@ -176,6 +197,15 @@ impl<'a> DataArtifactsClient<'a> {
                 .await?;
             artifacts.extend(page.artifacts);
             match page.next {
+                // A `next` equal to the position just asked for would repeat this page forever.
+                Some(cursor) if after == Some(cursor) => {
+                    return Err(ClientError::Other(format!(
+                        "the artifact list did not advance: its `Link` named the position it was \
+                         asked to continue after ({} / {})",
+                        cursor.created.to_rfc3339(),
+                        cursor.artifact_id.uuid()
+                    )));
+                }
                 Some(cursor) => after = Some(cursor),
                 None => return Ok(artifacts),
             }

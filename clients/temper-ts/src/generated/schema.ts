@@ -18717,9 +18717,9 @@ export interface operations {
                  * @description Return at most this many artifacts. The body is still the bare array; when more remain, the
                  *     response carries a `Link: <...>; rel="next"` header whose target is this request with the
                  *     next page's position, and the header is absent on the last page. Must be at least 1 and at
-                 *     most the server ceiling `MAX_ARTIFACT_PAGE_ROWS`; a value outside that range is refused,
-                 *     never clamped. Omit it to receive the whole list (the unbounded form, which a later release
-                 *     retires).
+                 *     most the server ceiling `MAX_ARTIFACT_PAGE_ROWS`, which is 200; a value outside that range
+                 *     is refused, never clamped. Omit it to receive the whole list (the unbounded form, which a
+                 *     later release retires).
                  */
                 limit?: number | null;
                 /**

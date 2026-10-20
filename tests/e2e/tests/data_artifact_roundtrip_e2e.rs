@@ -439,7 +439,8 @@ async fn a_bounded_list_answers_the_bare_array_and_links_to_the_next_page(pool: 
 }
 
 /// `Link` is absent on a page that exactly exhausts the list and on every response without
-/// `limit`, and the unbounded body is the identical array.
+/// `limit`, and a call with no `limit` still answers the bare array of every artifact, in order,
+/// exactly as the route did before it could be bounded.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn the_last_page_and_a_list_without_limit_carry_no_link(pool: PgPool) {
     let app = common::setup(pool).await;
@@ -458,32 +459,6 @@ async fn the_last_page_and_a_list_without_limit_carry_no_link(pool: PgPool) {
     let ids: Vec<_> = body
         .as_array()
         .expect("a bare array")
-        .iter()
-        .map(|a| a["artifact_id"].clone())
-        .collect();
-    assert_eq!(
-        ids,
-        committed.iter().map(|id| json!(id)).collect::<Vec<_>>()
-    );
-}
-
-/// A call with no `limit` still answers the bare array of every artifact, exactly as the route
-/// did before it could be bounded.
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn a_list_without_limit_still_answers_the_bare_array(pool: PgPool) {
-    let app = common::setup(pool).await;
-    let (resource, committed) = resource_with_artifacts(&app, "e2e-bare-array", 3).await;
-
-    let answer = app
-        .client
-        .data_artifacts()
-        .list(resource, &ArtifactListParams::default())
-        .await
-        .expect("unbounded list failed");
-
-    let ids: Vec<_> = answer
-        .as_array()
-        .unwrap_or_else(|| panic!("a no-limit list is a bare array, got {answer}"))
         .iter()
         .map(|a| a["artifact_id"].clone())
         .collect();

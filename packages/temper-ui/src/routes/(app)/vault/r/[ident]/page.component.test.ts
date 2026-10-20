@@ -150,7 +150,8 @@ const data = (fill: Fill = {}): PageData =>
 		// The default is the shape the overwhelming majority of resources arrive in — owning no
 		// artifacts — because every pre-existing assertion in this file is about that page, and
 		// the artifacts region's contract is that such a page renders exactly as it always did.
-		artifacts: fill.artifacts ?? Promise.resolve([]),
+		artifacts:
+			fill.artifacts ?? Promise.resolve({ artifacts: [], laterHref: null, earliestHref: null }),
 		// The default is the shape a reader WITHOUT change authority gets: nothing offered,
 		// and no vocabulary asked for. Every pre-existing assertion in this file is about that
 		// reader, so the write arm must leave all of them standing.
@@ -1153,7 +1154,7 @@ describe('the data artifacts region', () => {
 
 	it('keeps rendering nothing while the artifacts read is still in flight', () => {
 		const { container } = render(Page, {
-			data: data({ artifacts: pending<never[]>() }),
+			data: data({ artifacts: pending() }),
 			form: null,
 		});
 		expect(container.querySelector('.main')?.textContent).not.toContain('Data artifacts');
@@ -1161,7 +1162,9 @@ describe('the data artifacts region', () => {
 
 	it('renders the section whole when the resource owns artifacts', async () => {
 		const { container, unmount } = render(Page, {
-			data: data({ artifacts: Promise.resolve([artifact]) }),
+			data: data({
+				artifacts: Promise.resolve({ artifacts: [artifact], laterHref: null, earliestHref: null }),
+			}),
 			form: null,
 		});
 		await vi.waitFor(() => {
@@ -1169,6 +1172,50 @@ describe('the data artifacts region', () => {
 		});
 		expect(container.querySelector('.main')?.textContent).toContain('measurement');
 		expect(container.querySelector('.main')?.textContent).toContain('1.5 KB');
+		// One page that is the whole list says nothing about pages.
+		expect(container.querySelector('.main')?.textContent).not.toContain('on this page');
+		expect(container.querySelector('.main nav.pages')).toBeNull();
+		unmount();
+	});
+
+	it('says when more artifacts exist than this page shows, and links to them', async () => {
+		const { container, unmount } = render(Page, {
+			data: data({
+				artifacts: Promise.resolve({
+					artifacts: [artifact],
+					laterHref: '/vault/r/r1?artifacts_after_created=c&artifacts_after_id=i',
+					earliestHref: null,
+				}),
+			}),
+			form: null,
+		});
+		await vi.waitFor(() => {
+			expect(container.querySelector('.main')?.textContent).toContain(
+				'Data artifacts · 1 on this page',
+			);
+		});
+		const later = container.querySelector('.main nav.pages a.later');
+		expect(later?.getAttribute('href')).toBe(
+			'/vault/r/r1?artifacts_after_created=c&artifacts_after_id=i',
+		);
+		unmount();
+	});
+
+	it('renders a later page even when it is empty, so the way back to the first is there', async () => {
+		const { container, unmount } = render(Page, {
+			data: data({
+				artifacts: Promise.resolve({ artifacts: [], laterHref: null, earliestHref: '/vault/r/r1' }),
+			}),
+			form: null,
+		});
+		await vi.waitFor(() => {
+			expect(container.querySelector('.main')?.textContent).toContain(
+				'Data artifacts · 0 on this page',
+			);
+		});
+		expect(container.querySelector('.main nav.pages a[href="/vault/r/r1"]')?.textContent).toContain(
+			'Earliest',
+		);
 		unmount();
 	});
 

@@ -1405,6 +1405,51 @@ async fn the_sql_arity_returns_at_most_p_limit_rows(pool: sqlx::PgPool) {
     );
 }
 
+/// Half a keyset position returns no rows. A row comparison against `(created, NULL)` is not
+/// NULL but true for every later `created`, so without the arity's explicit both-non-NULL arm
+/// half a position would resume from `created` rather than answer nothing.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn half_a_position_returns_no_rows(pool: sqlx::PgPool) {
+    let (emitter, _home, resource) = world(&pool, "page-half-position").await;
+    let (owner, _) = system_actor(&pool).await;
+    for n in 0..3 {
+        fire_commit(
+            &pool,
+            resource,
+            "measurement",
+            ArtifactIntent::Member,
+            &serde_json::json!({ "n": n }),
+            emitter,
+        )
+        .await;
+    }
+
+    // The premise: separate commits carry distinct `created`, so rows exist strictly after the
+    // earliest one, and a bare row comparison would return them.
+    let (distinct, earliest): (i64, chrono::DateTime<chrono::Utc>) = sqlx::query_as(
+        "SELECT count(DISTINCT created), min(created) FROM kb_data_artifacts WHERE resource_id = $1",
+    )
+    .bind(resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(distinct, 3, "premise: three distinct `created` values");
+
+    let returned: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM artifacts_for_resource(
+             $1, $2, NULL::text, NULL::text, false, $3::bigint, $4::timestamptz, NULL::uuid)",
+    )
+    .bind(owner.uuid())
+    .bind(resource.uuid())
+    .bind(10_i64)
+    .bind(earliest)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(returned, 0, "a position without its id returns nothing");
+}
+
 /// A page that exactly exhausts the remainder has no `next`: the extra row the read asks for is
 /// what tells a full-but-last page from a full page with more behind it.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]

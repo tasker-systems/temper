@@ -8,18 +8,27 @@
 	/**
 	 * The data artifacts a resource owns, whole — metadata plus the content payload itself.
 	 *
-	 * The list arrives complete from the load (`include_folded=true`): a folded artifact is
-	 * rendered folded and stays reachable, because whether an artifact is live is often exactly
-	 * the reader's question, and defaulting the read to hiding the folded ones would make this
-	 * section answer it silently wrong. Rows sort newest-first here — the read makes no ordering
-	 * promise, so the one that renders must.
+	 * The load hands over ONE bounded page (`$lib/artifact-page`), folded artifacts included
+	 * (`include_folded=true`): a folded artifact is rendered folded and stays reachable, because
+	 * whether an artifact is live is often exactly the reader's question, and defaulting the read
+	 * to hiding the folded ones would make this section answer it silently wrong. Pages run in
+	 * the read's `(created, id)` order, oldest first, so the page after this one holds LATER
+	 * artifacts; `laterHref` and `earliestHref` move between pages, and when either is present
+	 * the count is this page's, not the resource's. Rows sort newest-first within the page.
 	 *
 	 * `never_declared` is omitted from the summary line rather than hidden everywhere: it is the
 	 * vocabulary's "no shape is in force, there is nothing to conform to" — a non-fact, not a
 	 * verdict, and the Rust enum's own doc says the state is not a degradation. A state that IS
 	 * in force (`declared_*`) always shows, unchecked included — unchecked never reads as checked.
 	 */
-	let { artifacts }: { artifacts: ArtifactView[] } = $props();
+	let {
+		artifacts,
+		laterHref = null,
+		earliestHref = null,
+	}: { artifacts: ArtifactView[]; laterHref?: string | null; earliestHref?: string | null } =
+		$props();
+
+	let paged = $derived(laterHref !== null || earliestHref !== null);
 
 	let rows = $derived(
 		[...artifacts].sort((a, b) => (a.created < b.created ? 1 : a.created > b.created ? -1 : 0))
@@ -52,7 +61,7 @@
 </script>
 
 <section>
-	<div class="label">Data artifacts · {rows.length}</div>
+	<div class="label">Data artifacts · {rows.length}{paged ? ' on this page' : ''}</div>
 	{#each rows as artifact (artifact.artifact_id)}
 		{@const content = contentHtml(artifact.content)}
 		<div class="artifact" class:folded={artifact.is_folded}>
@@ -86,6 +95,12 @@
 			{/if}
 		</div>
 	{/each}
+	{#if paged}
+		<nav class="pages" aria-label="Data artifact pages">
+			{#if earliestHref}<a href={earliestHref}>← Earliest artifacts</a>{/if}
+			{#if laterHref}<a class="later" href={laterHref}>Later artifacts →</a>{/if}
+		</nav>
+	{/if}
 </section>
 
 <style>
@@ -178,6 +193,20 @@
 	}
 	.meta-table dd {
 		color: var(--color-quiet-mid);
+	}
+	.pages {
+		display: flex;
+		justify-content: space-between;
+		gap: 12px;
+		margin-top: 10px;
+		font-family: var(--font-mono);
+		font-size: 10px;
+	}
+	.pages a {
+		color: color-mix(in srgb, var(--hue) 70%, white);
+	}
+	.pages .later {
+		margin-left: auto;
 	}
 	.content {
 		margin: 6px 0 0;

@@ -11663,7 +11663,7 @@
           {
             "name": "limit",
             "in": "query",
-            "description": "Return at most this many artifacts. The body is still the bare array; when more remain, the\nresponse carries a `Link: <...>; rel=\"next\"` header whose target is this request with the\nnext page's position, and the header is absent on the last page. Must be at least 1 and at\nmost the server ceiling `MAX_ARTIFACT_PAGE_ROWS`; a value outside that range is refused,\nnever clamped. Omit it to receive the whole list (the unbounded form, which a later release\nretires).",
+            "description": "Return at most this many artifacts. The body is still the bare array; when more remain, the\nresponse carries a `Link: <...>; rel=\"next\"` header whose target is this request with the\nnext page's position, and the header is absent on the last page. Must be at least 1 and at\nmost the server ceiling `MAX_ARTIFACT_PAGE_ROWS`, which is 200; a value outside that range\nis refused, never clamped. Omit it to receive the whole list (the unbounded form, which a\nlater release retires).",
             "required": false,
             "schema": {
               "type": [
@@ -11671,7 +11671,7 @@
                 "null"
               ],
               "format": "int32",
-              "minimum": 0
+              "minimum": 1
             }
           },
           {

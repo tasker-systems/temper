@@ -73,10 +73,11 @@ pub struct ArtifactListParams {
     /// Return at most this many artifacts. The body is still the bare array; when more remain, the
     /// response carries a `Link: <...>; rel="next"` header whose target is this request with the
     /// next page's position, and the header is absent on the last page. Must be at least 1 and at
-    /// most the server ceiling `MAX_ARTIFACT_PAGE_ROWS`; a value outside that range is refused,
-    /// never clamped. Omit it to receive the whole list (the unbounded form, which a later release
-    /// retires).
+    /// most the server ceiling `MAX_ARTIFACT_PAGE_ROWS`, which is 200; a value outside that range
+    /// is refused, never clamped. Omit it to receive the whole list (the unbounded form, which a
+    /// later release retires).
     #[serde(default)]
+    #[cfg_attr(feature = "web-api", param(minimum = 1))]
     pub limit: Option<u32>,
     /// Continue after this position: the `after_created` of the previous page's `Link` target.
     /// Send together with `after_id`, and only with `limit`.
@@ -91,6 +92,8 @@ pub struct ArtifactListParams {
 /// The server ceiling on one page of artifacts. A `limit` above it is refused by name
 /// ([`ArtifactPageRefusal::LimitAboveCeiling`]), never clamped: a caller that asked for more
 /// than it can have is told so, rather than handed a short page it might read as the end.
+/// `ArtifactListParams::limit`'s doc, which is the published OpenAPI text, states this value;
+/// change the two together.
 pub const MAX_ARTIFACT_PAGE_ROWS: u32 = 200;
 
 /// The page size a caller that wants every artifact asks for while draining the list.

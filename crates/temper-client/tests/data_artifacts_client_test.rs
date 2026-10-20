@@ -214,3 +214,70 @@ fn parse_next_link_reads_the_servers_form_and_refuses_anything_else() {
         );
     }
 }
+
+/// RFC 8288 spellings of the same relation: the `rel` name and the relation type compare
+/// case-insensitively, the value may be bare or quoted, and it may list several relation types.
+/// Each must be read as the next page, or a drain against a server that spells it differently
+/// stops after one page and returns a short list as if it were whole.
+#[test]
+fn parse_next_link_reads_rel_as_rfc_8288_allows() {
+    let target = format!("</a?after_created=2026-10-19T12%3A30%3A45.123456Z&after_id={AFTER_ID}>");
+    for params in [
+        "; rel=next",
+        "; REL=\"next\"",
+        "; Rel=NEXT",
+        "; rel=\"next last\"",
+        "; rel=\"prev  next\"",
+        "; title=\"page\"; rel=\"next\"",
+        " ;rel = \"next\" ",
+    ] {
+        let cursor = parse_next_link(&format!("{target}{params}"))
+            .unwrap_or_else(|e| panic!("{params:?} should parse: {e}"))
+            .unwrap_or_else(|| panic!("{params:?} names the next page"));
+        assert_eq!(cursor.artifact_id.uuid().to_string(), AFTER_ID);
+    }
+    // Not the next page: another relation, a relation that only starts with `next`, no `rel`,
+    // and a second `rel` (only the first counts).
+    for params in [
+        "; rel=last",
+        "; rel=\"nextish\"",
+        "; title=\"next\"",
+        "; rel=\"prev\"; rel=\"next\"",
+    ] {
+        assert_eq!(
+            parse_next_link(&format!("{target}{params}")).unwrap(),
+            None,
+            "{params:?} names no next page"
+        );
+    }
+}
+
+/// A server whose `Link` repeats the position the client just sent would lap forever. The drain
+/// refuses on the first repeat: two requests, then an error naming the stall.
+#[tokio::test]
+async fn list_all_refuses_a_link_that_does_not_advance() {
+    let resource = Uuid::now_v7();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("/api/resources/{resource}/artifacts")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Link", link_to_next(resource).as_str())
+                .set_body_json(vec![artifact(resource, 0)]),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let err = test_client(&server.uri())
+        .data_artifacts()
+        .list_all(resource, &ArtifactListParams::default())
+        .await
+        .expect_err("a Link that names the position just asked for must not be followed again");
+
+    assert!(
+        matches!(&err, ClientError::Other(m) if m.contains("did not advance")),
+        "got: {err}"
+    );
+    // wiremock verifies `.expect(2)` on drop: the first page, then the one repeat.
+}

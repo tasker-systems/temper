@@ -254,7 +254,7 @@ module Temper::Generated
     # @option opts [String] :intent Filter by selection intent: &#x60;\&quot;current\&quot;&#x60;, &#x60;\&quot;member\&quot;&#x60;, or &#x60;\&quot;pinned\&quot;&#x60;.
     # @option opts [Boolean] :include_folded Include folded (superseded) artifacts in the result. Default: &#x60;false&#x60;.
     # @option opts [Boolean] :counts Return per-family counts instead of full artifacts. No content hydration. Default: &#x60;false&#x60; (full artifacts with content). Counts are not paged: &#x60;limit&#x60; and &#x60;after_*&#x60; are not read when this is set.
-    # @option opts [Integer] :limit Return at most this many artifacts. The body is still the bare array; when more remain, the response carries a &#x60;Link: &lt;...&gt;; rel&#x3D;\&quot;next\&quot;&#x60; header whose target is this request with the next page&#39;s position, and the header is absent on the last page. Must be at least 1 and at most the server ceiling &#x60;MAX_ARTIFACT_PAGE_ROWS&#x60;; a value outside that range is refused, never clamped. Omit it to receive the whole list (the unbounded form, which a later release retires).
+    # @option opts [Integer] :limit Return at most this many artifacts. The body is still the bare array; when more remain, the response carries a &#x60;Link: &lt;...&gt;; rel&#x3D;\&quot;next\&quot;&#x60; header whose target is this request with the next page&#39;s position, and the header is absent on the last page. Must be at least 1 and at most the server ceiling &#x60;MAX_ARTIFACT_PAGE_ROWS&#x60;, which is 200; a value outside that range is refused, never clamped. Omit it to receive the whole list (the unbounded form, which a later release retires).
     # @option opts [Time] :after_created Continue after this position: the &#x60;after_created&#x60; of the previous page&#39;s &#x60;Link&#x60; target. Send together with &#x60;after_id&#x60;, and only with &#x60;limit&#x60;.
     # @option opts [String] :after_id Continue after this position: the &#x60;after_id&#x60; of the previous page&#39;s &#x60;Link&#x60; target. Send together with &#x60;after_created&#x60;, and only with &#x60;limit&#x60;.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -272,7 +272,7 @@ module Temper::Generated
     # @option opts [String] :intent Filter by selection intent: &#x60;\&quot;current\&quot;&#x60;, &#x60;\&quot;member\&quot;&#x60;, or &#x60;\&quot;pinned\&quot;&#x60;.
     # @option opts [Boolean] :include_folded Include folded (superseded) artifacts in the result. Default: &#x60;false&#x60;.
     # @option opts [Boolean] :counts Return per-family counts instead of full artifacts. No content hydration. Default: &#x60;false&#x60; (full artifacts with content). Counts are not paged: &#x60;limit&#x60; and &#x60;after_*&#x60; are not read when this is set.
-    # @option opts [Integer] :limit Return at most this many artifacts. The body is still the bare array; when more remain, the response carries a &#x60;Link: &lt;...&gt;; rel&#x3D;\&quot;next\&quot;&#x60; header whose target is this request with the next page&#39;s position, and the header is absent on the last page. Must be at least 1 and at most the server ceiling &#x60;MAX_ARTIFACT_PAGE_ROWS&#x60;; a value outside that range is refused, never clamped. Omit it to receive the whole list (the unbounded form, which a later release retires).
+    # @option opts [Integer] :limit Return at most this many artifacts. The body is still the bare array; when more remain, the response carries a &#x60;Link: &lt;...&gt;; rel&#x3D;\&quot;next\&quot;&#x60; header whose target is this request with the next page&#39;s position, and the header is absent on the last page. Must be at least 1 and at most the server ceiling &#x60;MAX_ARTIFACT_PAGE_ROWS&#x60;, which is 200; a value outside that range is refused, never clamped. Omit it to receive the whole list (the unbounded form, which a later release retires).
     # @option opts [Time] :after_created Continue after this position: the &#x60;after_created&#x60; of the previous page&#39;s &#x60;Link&#x60; target. Send together with &#x60;after_id&#x60;, and only with &#x60;limit&#x60;.
     # @option opts [String] :after_id Continue after this position: the &#x60;after_id&#x60; of the previous page&#39;s &#x60;Link&#x60; target. Send together with &#x60;after_created&#x60;, and only with &#x60;limit&#x60;.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -285,8 +285,8 @@ module Temper::Generated
       if @api_client.config.client_side_validation && id.nil?
         fail ArgumentError, "Missing the required parameter 'id' when calling DataArtifactsApi.list_artifacts"
       end
-      if @api_client.config.client_side_validation && !opts[:'limit'].nil? && opts[:'limit'] < 0
-        fail ArgumentError, 'invalid value for "opts[:"limit"]" when calling DataArtifactsApi.list_artifacts, must be greater than or equal to 0.'
+      if @api_client.config.client_side_validation && !opts[:'limit'].nil? && opts[:'limit'] < 1
+        fail ArgumentError, 'invalid value for "opts[:"limit"]" when calling DataArtifactsApi.list_artifacts, must be greater than or equal to 1.'
       end
 
       allowable_values = ["cli", "sdk"]
