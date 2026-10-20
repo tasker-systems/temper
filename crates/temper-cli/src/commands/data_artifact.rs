@@ -22,19 +22,34 @@ pub fn list(_config: &crate::config::Config, params: ListParams<'_>) -> crate::e
         intent: params.intent.map(|s| s.to_string()),
         include_folded: params.include_folded.then_some(true),
         counts: params.counts.then_some(true),
+        ..Default::default()
     };
 
-    let response = runtime::with_client(move |client| {
-        Box::pin(async move {
-            client
-                .data_artifacts()
-                .list(uuid::Uuid::from(id), &api_params)
-                .await
-                .map_err(crate::actions::runtime::client_err_to_temper)
-        })
-    })?;
-
-    let rendered = crate::format::render(&response, params.format)?;
+    // Counts are one row per family and are not paged. Everything else drains the bounded
+    // list: this command's contract is "every artifact", so it follows `next` to the end.
+    let rendered = if params.counts {
+        let response = runtime::with_client(move |client| {
+            Box::pin(async move {
+                client
+                    .data_artifacts()
+                    .list(uuid::Uuid::from(id), &api_params)
+                    .await
+                    .map_err(crate::actions::runtime::client_err_to_temper)
+            })
+        })?;
+        crate::format::render(&response, params.format)?
+    } else {
+        let artifacts = runtime::with_client(move |client| {
+            Box::pin(async move {
+                client
+                    .data_artifacts()
+                    .list_all(uuid::Uuid::from(id), &api_params)
+                    .await
+                    .map_err(crate::actions::runtime::client_err_to_temper)
+            })
+        })?;
+        crate::format::render(&artifacts, params.format)?
+    };
     output::plain(rendered);
     Ok(())
 }

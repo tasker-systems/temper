@@ -1,0 +1,29 @@
+title    = "The per-resource artifact list can be bounded: `limit` and a keyset cursor, answering `{ artifacts, next }`"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["http", "clients", "schema"]
+status   = "signal-only"
+body = '''
+`GET /api/resources/{id}/artifacts` gains three optional query parameters: `limit`, and
+`after_created` with `after_id`, which together carry the position a previous page's `next` named.
+With `limit` the route answers a new envelope, `{ artifacts, next }`, where `next` is an
+`ArtifactCursor` (`created`, `artifact_id`) or null on the last page. Without `limit` the route
+answers the bare array it always has, unchanged, so no existing caller sees a different shape or a
+silently shortened list; that unbounded form retires later, on the retirement train, under its own
+`shape-breaking` entry. A `limit` of 0 or above the server ceiling (`MAX_ARTIFACT_PAGE_ROWS`), a
+continuation position sent in halves, and one sent without `limit` are each refused with a 400
+naming the parameter, never clamped. The envelope type and the cursor are new in `openapi.json`
+(`ArtifactPage`, `ArtifactCursor`, and `ArtifactListAnswer`, the route's 200 as a union of the page
+and the bare array) and in the ts-rs types, and the three SDKs regenerate with them.
+
+Behind it, migration `20261102000000` adds an 8-argument arity of the SQL function
+`artifacts_for_resource` (limit and keyset position, no `DEFAULT` on any parameter). The existing
+5-argument function is untouched and still serves the no-`limit` form, so a binary without this
+change keeps working against the new schema.
+
+Who observes: callers of the list route and of the typed clients. `temper-client` gains
+`list_page` and `list_all`; `temper data-artifact list` and the MCP
+`list_data_artifacts` tool now drain the bounded list a page at a time, so each still answers every
+artifact in the same shape. Nothing about either surface's output changes. User-visible: no for
+existing callers; callers that want a bound can now ask for one. Release relevance: signal-only.
+'''

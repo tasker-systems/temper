@@ -2704,6 +2704,12 @@ export interface paths {
          * @description Without `counts=true`: returns fully hydrated artifacts (metadata + content).
          *     With `counts=true`: returns per-family counts only, no content hydration —
          *     for surfaces that need "3 measurements, 1 extraction" without fetching payloads.
+         *
+         *     With `limit`, returns one page as `{ artifacts, next }`: at most `limit` artifacts in
+         *     `(created, id)` order, and `next` — the position to continue after, sent back as
+         *     `after_created` and `after_id` — or `null` on the last page. A `limit` of 0 or above the
+         *     server ceiling `MAX_ARTIFACT_PAGE_ROWS` is refused, not clamped. Without `limit`, returns the
+         *     whole list as a bare array: the unbounded form, which a later release retires.
          */
         get: operations["list_artifacts"];
         put?: never;
@@ -4025,6 +4031,35 @@ export interface components {
         ArtifactCommitResponse: {
             artifact: components["schemas"]["ArtifactView"];
             artifact_id: components["schemas"]["DataArtifactId"];
+        };
+        /**
+         * @description A position in the `(created, id)` keyset order that `artifacts_for_resource` returns rows in.
+         *
+         *     It carries position and no authority: each page re-runs the read gate for the asker, so a
+         *     cursor handed to another principal, or replayed after access is revoked, reveals nothing
+         *     the read would not. That is why it is a legible object and not an opaque token, and needs
+         *     no decoder in any SDK. Every bounded artifact read continues with this one type.
+         */
+        ArtifactCursor: {
+            /** @description The `artifact_id` of the last artifact on the previous page; breaks ties on `created`. */
+            artifact_id: components["schemas"]["DataArtifactId"];
+            /**
+             * Format: date-time
+             * @description The `created` of the last artifact on the previous page.
+             */
+            created: string;
+        };
+        /**
+         * @description The two answers `GET /api/resources/{id}/artifacts` gives when it lists artifacts (not
+         *     counts). Untagged, so each arm serializes exactly as its inner type does: a request with
+         *     `limit` answers the [`ArtifactPage`] envelope, and a request without one answers the bare
+         *     array the route has always returned.
+         */
+        ArtifactListAnswer: components["schemas"]["ArtifactPage"] | components["schemas"]["ArtifactView"][];
+        /** @description One bounded page of artifacts, in `(created, id)` order. */
+        ArtifactPage: {
+            artifacts: components["schemas"]["ArtifactView"][];
+            next?: components["schemas"]["ArtifactCursor"] | null;
         };
         /**
          * @description One data artifact, as returned by the API and MCP surfaces.
@@ -18701,9 +18736,27 @@ export interface operations {
                 include_folded?: boolean | null;
                 /**
                  * @description Return per-family counts instead of full artifacts. No content hydration.
-                 *     Default: `false` (full artifacts with content).
+                 *     Default: `false` (full artifacts with content). Counts are not paged: `limit` and
+                 *     `after_*` are not read when this is set.
                  */
                 counts?: boolean | null;
+                /**
+                 * @description Return at most this many artifacts, answering `{ artifacts, next }` instead of a bare
+                 *     array. Must be at least 1 and at most the server ceiling `MAX_ARTIFACT_PAGE_ROWS`; a value outside that
+                 *     range is refused, never clamped. Omit it to receive the whole list as a bare array (the
+                 *     unbounded form, which a later release retires).
+                 */
+                limit?: number | null;
+                /**
+                 * @description Continue after this position: the `created` half of the previous page's `next` cursor.
+                 *     Send together with `after_id`, and only with `limit`.
+                 */
+                after_created?: string | null;
+                /**
+                 * @description Continue after this position: the `artifact_id` half of the previous page's `next`
+                 *     cursor. Send together with `after_created`, and only with `limit`.
+                 */
+                after_id?: string | null;
             };
             header?: {
                 /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
@@ -18717,13 +18770,22 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Artifacts owned by the resource (full or counts) */
+            /** @description Artifacts owned by the resource: a `{ artifacts, next }` page when `limit` is given, a bare array of every artifact otherwise (or per-family counts when `counts=true`) */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ArtifactView"][];
+                    "application/json": components["schemas"]["ArtifactListAnswer"];
+                };
+            };
+            /** @description `limit` is 0 or above the page ceiling, or `after_created` and `after_id` are not sent together with `limit` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
                 };
             };
             /** @description Unauthorized */

@@ -73,16 +73,18 @@ pub async fn list_artifacts(
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let resource_id = parse_resource_ref(&input.resource_id)?;
 
+    // The tool's contract is "every artifact", so it drains the bounded list a page at a time
+    // rather than asking the route for the unbounded form.
     let artifacts = svc
         .relay_client(parts)?
         .data_artifacts()
-        .list(
+        .list_all(
             resource_id.uuid(),
             &ArtifactListParams {
                 kind: input.kind,
                 intent: input.intent,
                 include_folded: input.include_folded,
-                counts: None,
+                ..Default::default()
             },
         )
         .await

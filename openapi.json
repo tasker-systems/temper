@@ -11599,7 +11599,7 @@
           "Data Artifacts"
         ],
         "summary": "List artifacts for a resource, or counts with counts=true",
-        "description": "Without `counts=true`: returns fully hydrated artifacts (metadata + content).\nWith `counts=true`: returns per-family counts only, no content hydration —\nfor surfaces that need \"3 measurements, 1 extraction\" without fetching payloads.",
+        "description": "Without `counts=true`: returns fully hydrated artifacts (metadata + content).\nWith `counts=true`: returns per-family counts only, no content hydration —\nfor surfaces that need \"3 measurements, 1 extraction\" without fetching payloads.\n\nWith `limit`, returns one page as `{ artifacts, next }`: at most `limit` artifacts in\n`(created, id)` order, and `next` — the position to continue after, sent back as\n`after_created` and `after_id` — or `null` on the last page. A `limit` of 0 or above the\nserver ceiling `MAX_ARTIFACT_PAGE_ROWS` is refused, not clamped. Without `limit`, returns the\nwhole list as a bare array: the unbounded form, which a later release retires.",
         "operationId": "list_artifacts",
         "parameters": [
           {
@@ -11651,7 +11651,7 @@
           {
             "name": "counts",
             "in": "query",
-            "description": "Return per-family counts instead of full artifacts. No content hydration.\nDefault: `false` (full artifacts with content).",
+            "description": "Return per-family counts instead of full artifacts. No content hydration.\nDefault: `false` (full artifacts with content). Counts are not paged: `limit` and\n`after_*` are not read when this is set.",
             "required": false,
             "schema": {
               "type": [
@@ -11659,18 +11659,65 @@
                 "null"
               ]
             }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Return at most this many artifacts, answering `{ artifacts, next }` instead of a bare\narray. Must be at least 1 and at most the server ceiling `MAX_ARTIFACT_PAGE_ROWS`; a value outside that\nrange is refused, never clamped. Omit it to receive the whole list as a bare array (the\nunbounded form, which a later release retires).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "after_created",
+            "in": "query",
+            "description": "Continue after this position: the `created` half of the previous page's `next` cursor.\nSend together with `after_id`, and only with `limit`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "after_id",
+            "in": "query",
+            "description": "Continue after this position: the `artifact_id` half of the previous page's `next`\ncursor. Send together with `after_created`, and only with `limit`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "Artifacts owned by the resource (full or counts)",
+            "description": "Artifacts owned by the resource: a `{ artifacts, next }` page when `limit` is given, a bare array of every artifact otherwise (or per-family counts when `counts=true`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/ArtifactView"
-                  }
+                  "$ref": "#/components/schemas/ArtifactListAnswer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`limit` is 0 or above the page ceiling, or `after_created` and `after_id` are not sent together with `limit`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -16201,6 +16248,67 @@
           },
           "artifact_id": {
             "$ref": "#/components/schemas/DataArtifactId"
+          }
+        }
+      },
+      "ArtifactCursor": {
+        "type": "object",
+        "description": "A position in the `(created, id)` keyset order that `artifacts_for_resource` returns rows in.\n\nIt carries position and no authority: each page re-runs the read gate for the asker, so a\ncursor handed to another principal, or replayed after access is revoked, reveals nothing\nthe read would not. That is why it is a legible object and not an opaque token, and needs\nno decoder in any SDK. Every bounded artifact read continues with this one type.",
+        "required": [
+          "created",
+          "artifact_id"
+        ],
+        "properties": {
+          "artifact_id": {
+            "$ref": "#/components/schemas/DataArtifactId",
+            "description": "The `artifact_id` of the last artifact on the previous page; breaks ties on `created`."
+          },
+          "created": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The `created` of the last artifact on the previous page."
+          }
+        }
+      },
+      "ArtifactListAnswer": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ArtifactPage",
+            "description": "Asked with `limit`: one page and where to continue."
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactView"
+            },
+            "description": "Asked without `limit`: every artifact, unbounded."
+          }
+        ],
+        "description": "The two answers `GET /api/resources/{id}/artifacts` gives when it lists artifacts (not\ncounts). Untagged, so each arm serializes exactly as its inner type does: a request with\n`limit` answers the [`ArtifactPage`] envelope, and a request without one answers the bare\narray the route has always returned."
+      },
+      "ArtifactPage": {
+        "type": "object",
+        "description": "One bounded page of artifacts, in `(created, id)` order.",
+        "required": [
+          "artifacts"
+        ],
+        "properties": {
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactView"
+            }
+          },
+          "next": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ArtifactCursor",
+                "description": "Where to continue, or `null` when this page is the last. Pass it back as `after_created`\nand `after_id`."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },

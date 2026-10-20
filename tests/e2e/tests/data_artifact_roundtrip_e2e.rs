@@ -11,7 +11,11 @@ mod common;
 
 use serde_json::json;
 use sqlx::PgPool;
-use temper_core::types::data_artifact::{ArtifactCommitRequest, ArtifactListParams, ArtifactView};
+use temper_core::types::data_artifact::{
+    ArtifactCommitRequest, ArtifactListParams, ArtifactPageRequest, ARTIFACT_DRAIN_PAGE_ROWS,
+    MAX_ARTIFACT_PAGE_ROWS,
+};
+use temper_core::types::ids::DataArtifactId;
 use temper_workflow::types::resource::ResourceCreateRequest;
 
 /// Commit a data artifact via the API, then get it back and verify:
@@ -228,23 +232,20 @@ async fn data_artifact_supersedes_folding(pool: PgPool) {
     );
 
     // Default list (include_folded = false) → only the live (second) artifact
-    let live = app
+    let live_artifacts = app
         .client
         .data_artifacts()
-        .list(
+        .list_all(
             resource.id.into(),
             &ArtifactListParams {
                 kind: Some("measurement".to_string()),
-                intent: None,
                 include_folded: Some(false),
-                counts: None,
+                ..Default::default()
             },
         )
         .await
         .expect("list live artifacts failed");
 
-    let live_artifacts: Vec<ArtifactView> =
-        serde_json::from_value(live).expect("deserialize live artifact list");
     assert_eq!(
         live_artifacts.len(),
         1,
@@ -256,27 +257,271 @@ async fn data_artifact_supersedes_folding(pool: PgPool) {
     );
 
     // List with include_folded = true → both artifacts
-    let all = app
+    let all_artifacts = app
         .client
         .data_artifacts()
-        .list(
+        .list_all(
             resource.id.into(),
             &ArtifactListParams {
                 kind: Some("measurement".to_string()),
-                intent: None,
                 include_folded: Some(true),
-                counts: None,
+                ..Default::default()
             },
         )
         .await
         .expect("list all artifacts failed");
 
-    let all_artifacts: Vec<ArtifactView> =
-        serde_json::from_value(all).expect("deserialize all artifact list");
     assert_eq!(
         all_artifacts.len(),
         2,
         "list with include_folded must return both the folded and live artifacts"
+    );
+}
+
+// ── The bounded per-resource list ─────────────────────────────────────────────
+
+/// A resource carrying `count` live artifacts of one family, committed one after another so
+/// `(created, id)` order is commit order. Returns the resource and the ids in that order.
+async fn resource_with_artifacts(
+    app: &common::E2eTestApp,
+    slug: &str,
+    count: usize,
+) -> (uuid::Uuid, Vec<DataArtifactId>) {
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight failed");
+    let context = app
+        .client
+        .contexts()
+        .create(slug, None)
+        .await
+        .expect("context create failed");
+    let resource = app
+        .client
+        .resources()
+        .create(&ResourceCreateRequest {
+            kb_context_id: context.id.into(),
+            idempotency_key: None,
+            doc_type: "research".to_string(),
+            origin_uri: format!("test://e2e/{slug}"),
+            title: format!("Bounded list {slug}"),
+            act: Default::default(),
+        })
+        .await
+        .expect("resource create failed");
+
+    let mut ids = Vec::with_capacity(count);
+    for n in 0..count {
+        let committed = app
+            .client
+            .data_artifacts()
+            .commit(
+                resource.id.into(),
+                &ArtifactCommitRequest {
+                    kind: "measurement".to_string(),
+                    kind_owner: None,
+                    intent: "member".to_string(),
+                    precedence: 0.0,
+                    content: json!({ "n": n }),
+                    supersedes: Vec::new(),
+                    act: Default::default(),
+                },
+            )
+            .await
+            .expect("artifact commit failed");
+        ids.push(committed.artifact_id);
+    }
+    (resource.id.into(), ids)
+}
+
+/// **The C2 witness, through the real door.** Five artifacts, `limit = 2`: the pages hold 2, 2
+/// and 1, `next` is `null` on the last page and only there, the union is exactly the five
+/// committed artifacts in order, and none repeats.
+///
+/// Witnesses the cursor contract over HTTP. It does not witness the SQL bound (the readback
+/// truncates in Rust; see `the_sql_arity_returns_at_most_p_limit_rows` in temper-substrate). It
+/// fails if the keyset predicate is dropped (every page then restarts and the union repeats).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn bounded_list_pages_two_two_one_with_an_exact_union(pool: PgPool) {
+    let app = common::setup(pool).await;
+    let (resource, committed) = resource_with_artifacts(&app, "e2e-page-witness", 5).await;
+
+    let mut after = None;
+    let mut sizes = Vec::new();
+    let mut nexts = Vec::new();
+    let mut seen = Vec::new();
+    loop {
+        let page = app
+            .client
+            .data_artifacts()
+            .list_page(
+                resource,
+                &ArtifactListParams::default(),
+                ArtifactPageRequest { limit: 2, after },
+            )
+            .await
+            .expect("list_page failed");
+        sizes.push(page.artifacts.len());
+        nexts.push(page.next.is_some());
+        seen.extend(page.artifacts.iter().map(|a| a.artifact_id));
+        match page.next {
+            Some(cursor) => after = Some(cursor),
+            None => break,
+        }
+    }
+
+    assert_eq!(sizes, vec![2, 2, 1], "pages of two, two and one");
+    assert_eq!(
+        nexts,
+        vec![true, true, false],
+        "`next` is null on the last page and only there"
+    );
+    assert_eq!(
+        seen, committed,
+        "the union is exactly the committed artifacts, in order, with no repeats"
+    );
+}
+
+/// With `limit` the wire answers the `{ artifacts, next }` envelope, and `next` is a legible
+/// `(created, artifact_id)` object rather than an opaque token.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_list_with_limit_answers_the_envelope_with_a_legible_cursor(pool: PgPool) {
+    let app = common::setup(pool).await;
+    let (resource, committed) = resource_with_artifacts(&app, "e2e-envelope", 3).await;
+
+    let answer = app
+        .client
+        .data_artifacts()
+        .list(
+            resource,
+            &ArtifactListParams {
+                limit: Some(2),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("bounded list failed");
+
+    assert_eq!(answer["artifacts"].as_array().map(Vec::len), Some(2));
+    assert!(
+        answer["next"]["created"].is_string(),
+        "next.created, got {answer}"
+    );
+    assert_eq!(
+        answer["next"]["artifact_id"],
+        json!(committed[1]),
+        "the cursor names the last artifact on the page"
+    );
+}
+
+/// A call with no `limit` still answers the bare array of every artifact, exactly as the route
+/// did before it could be bounded (ruling P11).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_list_without_limit_still_answers_the_bare_array(pool: PgPool) {
+    let app = common::setup(pool).await;
+    let (resource, committed) = resource_with_artifacts(&app, "e2e-bare-array", 3).await;
+
+    let answer = app
+        .client
+        .data_artifacts()
+        .list(resource, &ArtifactListParams::default())
+        .await
+        .expect("unbounded list failed");
+
+    let ids: Vec<_> = answer
+        .as_array()
+        .unwrap_or_else(|| panic!("a no-limit list is a bare array, got {answer}"))
+        .iter()
+        .map(|a| a["artifact_id"].clone())
+        .collect();
+    assert_eq!(
+        ids,
+        committed.iter().map(|id| json!(id)).collect::<Vec<_>>()
+    );
+}
+
+/// A `limit` of zero and one above the ceiling are refused, each naming the parameter at fault;
+/// neither is clamped into a page.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_limit_of_zero_or_above_the_ceiling_is_refused_by_name(pool: PgPool) {
+    let app = common::setup(pool).await;
+    let (resource, _) = resource_with_artifacts(&app, "e2e-limit-refusal", 1).await;
+
+    for (limit, named) in [
+        (0, "`limit`"),
+        (MAX_ARTIFACT_PAGE_ROWS + 1, "MAX_ARTIFACT_PAGE_ROWS"),
+    ] {
+        let refused = app
+            .client
+            .data_artifacts()
+            .list(
+                resource,
+                &ArtifactListParams {
+                    limit: Some(limit),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect_err("an out-of-range limit must be refused, not clamped");
+        let said = refused.to_string();
+        assert!(said.contains("400"), "a 400-class refusal, got: {said}");
+        assert!(
+            said.contains(named),
+            "the refusal names {named}, got: {said}"
+        );
+    }
+}
+
+/// A continuation position sent without `limit` is refused, not ignored: ignoring it would
+/// answer the whole list again to a caller that thinks it is paging.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_continuation_position_without_limit_is_refused(pool: PgPool) {
+    let app = common::setup(pool).await;
+    let (resource, committed) = resource_with_artifacts(&app, "e2e-after-refusal", 2).await;
+
+    let refused = app
+        .client
+        .data_artifacts()
+        .list(
+            resource,
+            &ArtifactListParams {
+                after_created: Some(chrono::Utc::now()),
+                after_id: Some(committed[0].uuid()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("`after_*` without `limit` must be refused");
+    assert!(
+        refused.to_string().contains("require `limit`"),
+        "got: {refused}"
+    );
+}
+
+/// **The C3 drain.** A caller whose contract is "everything" gets everything over a fixture
+/// larger than one drain page: one more artifact than `ARTIFACT_DRAIN_PAGE_ROWS` comes back whole,
+/// in order, none repeated.
+///
+/// Fails if the drain stops after the first page (it would return `ARTIFACT_DRAIN_PAGE_ROWS`).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn draining_the_list_returns_everything_across_pages(pool: PgPool) {
+    let app = common::setup(pool).await;
+    let count = ARTIFACT_DRAIN_PAGE_ROWS as usize + 1;
+    let (resource, committed) = resource_with_artifacts(&app, "e2e-drain", count).await;
+
+    let drained = app
+        .client
+        .data_artifacts()
+        .list_all(resource, &ArtifactListParams::default())
+        .await
+        .expect("drain failed");
+
+    assert_eq!(
+        drained.iter().map(|a| a.artifact_id).collect::<Vec<_>>(),
+        committed,
+        "every artifact, in order, none repeated"
     );
 }
 

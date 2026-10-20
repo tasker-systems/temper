@@ -1281,6 +1281,253 @@ async fn filtering_by_kind_and_intent(pool: sqlx::PgPool) {
     assert_eq!(current_extractions.len(), 1, "one current extraction");
 }
 
+// ── The bounded read (`artifacts_for_resource_page`, migration 20261102000000) ────────────────
+
+/// One bounded page of a resource's live artifacts, no kind/intent filter.
+async fn page(
+    pool: &sqlx::PgPool,
+    principal: ProfileId,
+    resource: ResourceId,
+    limit: u32,
+    after: Option<temper_core::types::data_artifact::ArtifactCursor>,
+) -> readback::RetrievedArtifactPage {
+    readback::artifacts_for_resource_page(
+        pool,
+        principal,
+        resource,
+        readback::ArtifactPageParams {
+            kind: None,
+            intent: None,
+            include_folded: false,
+            limit,
+            after,
+        },
+    )
+    .await
+    .unwrap()
+}
+
+/// **THE C2 CURSOR WITNESS.** Five artifacts, `limit = 2`: the pages hold 2, 2 and 1; `next` is
+/// null on the last page and only there; the union is exactly the five committed, in order; none
+/// repeats.
+///
+/// This witnesses the cursor contract (page sizes, `next`, an exact ordered union). It does not
+/// witness the bound: the readback asks for `limit + 1` rows and truncates in Rust, so the pages
+/// come out the same even if the SQL returned every row. The bound's witness is
+/// `the_sql_arity_returns_at_most_p_limit_rows`. Drop the keyset predicate and every page
+/// restarts at the beginning, which fails the union.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn bounded_page_walks_five_artifacts_two_two_one_with_an_exact_union(pool: sqlx::PgPool) {
+    let (emitter, _home, resource) = world(&pool, "page-witness").await;
+    let (owner, _) = system_actor(&pool).await;
+
+    let mut committed = Vec::new();
+    for n in 0..5 {
+        committed.push(
+            fire_commit(
+                &pool,
+                resource,
+                "measurement",
+                ArtifactIntent::Member,
+                &serde_json::json!({ "n": n }),
+                emitter,
+            )
+            .await,
+        );
+    }
+
+    let mut after = None;
+    let mut sizes = Vec::new();
+    let mut has_next = Vec::new();
+    let mut seen = Vec::new();
+    loop {
+        let this = page(&pool, owner, resource, 2, after).await;
+        sizes.push(this.artifacts.len());
+        has_next.push(this.next.is_some());
+        seen.extend(this.artifacts.iter().map(|a| a.artifact_id));
+        match this.next {
+            Some(cursor) => after = Some(cursor),
+            None => break,
+        }
+    }
+
+    assert_eq!(sizes, vec![2, 2, 1], "pages of two, two and one");
+    assert_eq!(
+        has_next,
+        vec![true, true, false],
+        "`next` only before the end"
+    );
+    assert_eq!(
+        seen, committed,
+        "the union is exact, in order, with no repeats"
+    );
+}
+
+/// **THE BOUND'S WITNESS.** The SQL arity itself returns at most `p_limit` rows: five artifacts,
+/// `p_limit = 3`, exactly three rows come back from the database.
+///
+/// This is the test that fails when the SQL `LIMIT` is dropped, and the page-walk test above
+/// cannot be: `artifacts_for_resource_page` asks for `limit + 1` rows and then truncates in Rust,
+/// so with the `LIMIT` gone the database would hydrate every row, Rust would trim the output, and
+/// the pages would still come out 2, 2, 1. The page walk witnesses the cursor contract; only a
+/// read of what the database returns witnesses that a resource's whole artifact history is not
+/// hydrated. It counts rows and nothing else, so it is a runtime query (no `.sqlx` entry).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_sql_arity_returns_at_most_p_limit_rows(pool: sqlx::PgPool) {
+    let (emitter, _home, resource) = world(&pool, "page-sql-bound").await;
+    let (owner, _) = system_actor(&pool).await;
+    for n in 0..5 {
+        fire_commit(
+            &pool,
+            resource,
+            "measurement",
+            ArtifactIntent::Member,
+            &serde_json::json!({ "n": n }),
+            emitter,
+        )
+        .await;
+    }
+
+    let returned: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM artifacts_for_resource(
+             $1, $2, NULL::text, NULL::text, false, $3::bigint, NULL::timestamptz, NULL::uuid)",
+    )
+    .bind(owner.uuid())
+    .bind(resource.uuid())
+    .bind(3_i64)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        returned, 3,
+        "five artifacts exist; the database must return only p_limit of them"
+    );
+}
+
+/// A page that exactly exhausts the remainder has no `next`: the extra row the read asks for is
+/// what tells a full-but-last page from a full page with more behind it.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_page_that_exactly_fits_the_remainder_has_no_next(pool: sqlx::PgPool) {
+    let (emitter, _home, resource) = world(&pool, "page-exact-fit").await;
+    let (owner, _) = system_actor(&pool).await;
+    for n in 0..3 {
+        fire_commit(
+            &pool,
+            resource,
+            "measurement",
+            ArtifactIntent::Member,
+            &serde_json::json!({ "n": n }),
+            emitter,
+        )
+        .await;
+    }
+
+    let exact = page(&pool, owner, resource, 3, None).await;
+    assert_eq!(exact.artifacts.len(), 3);
+    assert_eq!(exact.next, None, "three of three is the whole list");
+
+    let one_short = page(&pool, owner, resource, 2, None).await;
+    assert_eq!(one_short.artifacts.len(), 2);
+    assert!(
+        one_short.next.is_some(),
+        "two of three leaves a page behind"
+    );
+}
+
+/// Artifacts committed in ONE transaction share a `created` (`now()` is the transaction's start),
+/// so the position that separates them is the id. Paging one at a time must still return each
+/// exactly once; a keyset on `created` alone would skip or repeat the rest of the tie.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn artifacts_sharing_a_created_page_by_id_without_skipping_or_repeating(pool: sqlx::PgPool) {
+    let (emitter, _home, resource) = world(&pool, "page-ties").await;
+    let (owner, _) = system_actor(&pool).await;
+
+    let mut tx = pool.begin().await.unwrap();
+    let mut committed = Vec::new();
+    for n in 0..4 {
+        let content = serde_json::json!({ "n": n });
+        committed.push(
+            fire(
+                &mut tx,
+                SeedAction::DataArtifactCommit {
+                    resource,
+                    kind: "measurement",
+                    kind_owner: None,
+                    intent: ArtifactIntent::Member,
+                    precedence: 0.0,
+                    content: &content,
+                    supersedes: &[],
+                    emitter,
+                },
+            )
+            .await
+            .unwrap()
+            .data_artifact()
+            .unwrap(),
+        );
+    }
+    tx.commit().await.unwrap();
+
+    let created: i64 = sqlx::query_scalar(
+        "SELECT count(DISTINCT created) FROM kb_data_artifacts WHERE resource_id = $1",
+    )
+    .bind(resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        created, 1,
+        "the fixture must tie on `created`, or this proves nothing"
+    );
+
+    let mut after = None;
+    let mut seen = Vec::new();
+    loop {
+        let this = page(&pool, owner, resource, 1, after).await;
+        seen.extend(this.artifacts.iter().map(|a| a.artifact_id));
+        match this.next {
+            Some(cursor) => after = Some(cursor),
+            None => break,
+        }
+    }
+
+    let mut expected = committed;
+    expected.sort_by_key(|id| id.uuid());
+    assert_eq!(
+        seen, expected,
+        "a tie on `created` is broken by id, once each"
+    );
+}
+
+/// The bounded read is gated exactly as the unbounded one: a principal who cannot read the owning
+/// resource gets an empty page and no `next`, however many artifacts exist.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn bounded_page_is_gated_on_the_owning_resource(pool: sqlx::PgPool) {
+    let (emitter, _home, resource, alice, bob) = world_with_team(&pool, "page-gate").await;
+    for n in 0..3 {
+        fire_commit(
+            &pool,
+            resource,
+            "measurement",
+            ArtifactIntent::Member,
+            &serde_json::json!({ "n": n }),
+            emitter,
+        )
+        .await;
+    }
+
+    let seen_by_alice = page(&pool, alice, resource, 2, None).await;
+    assert_eq!(seen_by_alice.artifacts.len(), 2, "the reader gets a page");
+
+    let seen_by_bob = page(&pool, bob, resource, 2, None).await;
+    assert!(seen_by_bob.artifacts.is_empty(), "the gate fails closed");
+    assert_eq!(
+        seen_by_bob.next, None,
+        "an empty page has nowhere to continue"
+    );
+}
+
 /// **THE VISIBILITY GATE.** A profile who cannot read the owning resource gets zero artifacts.
 /// This is the `data-visibility-never-exceeds-its-owners` clause, made testable.
 ///

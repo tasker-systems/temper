@@ -66,6 +66,9 @@ temper/generated/models/anchor_verdict.py
 temper/generated/models/append_block_payload.py
 temper/generated/models/artifact_commit_request.py
 temper/generated/models/artifact_commit_response.py
+temper/generated/models/artifact_cursor.py
+temper/generated/models/artifact_list_answer.py
+temper/generated/models/artifact_page.py
 temper/generated/models/artifact_view.py
 temper/generated/models/assert_relationship_request.py
 temper/generated/models/atlas_edge.py

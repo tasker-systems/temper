@@ -5,9 +5,11 @@ use uuid::Uuid;
 use crate::middleware::auth::AnyPrincipal;
 use crate::middleware::surface::RequestSurface;
 use temper_core::types::data_artifact::{
-    ArtifactCommitRequest, ArtifactCommitResponse, ArtifactListParams, ArtifactView,
+    ArtifactCommitRequest, ArtifactCommitResponse, ArtifactListAnswer, ArtifactListParams,
+    ArtifactView,
 };
 use temper_core::types::ids::{DataArtifactId, ProfileId, ResourceId};
+use temper_services::backend::substrate_read::ArtifactPageFilter;
 use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::state::AppState;
@@ -18,6 +20,12 @@ use temper_workflow::operations::{Backend, CommitDataArtifact};
 /// Without `counts=true`: returns fully hydrated artifacts (metadata + content).
 /// With `counts=true`: returns per-family counts only, no content hydration —
 /// for surfaces that need "3 measurements, 1 extraction" without fetching payloads.
+///
+/// With `limit`, returns one page as `{ artifacts, next }`: at most `limit` artifacts in
+/// `(created, id)` order, and `next` — the position to continue after, sent back as
+/// `after_created` and `after_id` — or `null` on the last page. A `limit` of 0 or above the
+/// server ceiling `MAX_ARTIFACT_PAGE_ROWS` is refused, not clamped. Without `limit`, returns the
+/// whole list as a bare array: the unbounded form, which a later release retires.
 #[utoipa::path(
     get,
     operation_id = "list_artifacts",
@@ -29,7 +37,8 @@ use temper_workflow::operations::{Backend, CommitDataArtifact};
     ),
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "Artifacts owned by the resource (full or counts)", body = Vec<ArtifactView>),
+        (status = 200, description = "Artifacts owned by the resource: a `{ artifacts, next }` page when `limit` is given, a bare array of every artifact otherwise (or per-family counts when `counts=true`)", body = ArtifactListAnswer),
+        (status = 400, description = "`limit` is 0 or above the page ceiling, or `after_created` and `after_id` are not sent together with `limit`", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
     )
 )]
@@ -53,16 +62,37 @@ pub async fn list(
         .await?;
         Ok(Json(serde_json::to_value(counts)?))
     } else {
-        let artifacts = temper_services::backend::substrate_read::list_artifacts(
-            &state.pool,
-            profile,
-            resource,
-            params.kind.as_deref(),
-            params.intent.as_deref(),
-            include_folded,
-        )
-        .await?;
-        Ok(Json(serde_json::to_value(artifacts)?))
+        let page_request = params
+            .page_request()
+            .map_err(|refusal| ApiError::BadRequest(refusal.to_string()))?;
+        let answer = match page_request {
+            Some(request) => ArtifactListAnswer::Page(
+                temper_services::backend::substrate_read::list_artifacts_page(
+                    &state.pool,
+                    profile,
+                    resource,
+                    ArtifactPageFilter {
+                        kind: params.kind.as_deref(),
+                        intent: params.intent.as_deref(),
+                        include_folded,
+                    },
+                    request,
+                )
+                .await?,
+            ),
+            None => ArtifactListAnswer::Unbounded(
+                temper_services::backend::substrate_read::list_artifacts(
+                    &state.pool,
+                    profile,
+                    resource,
+                    params.kind.as_deref(),
+                    params.intent.as_deref(),
+                    include_folded,
+                )
+                .await?,
+            ),
+        };
+        Ok(Json(serde_json::to_value(answer)?))
     }
 }
 

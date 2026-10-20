@@ -66,6 +66,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use sqlx::{PgPool, Row};
+use temper_core::types::data_artifact::ArtifactCursor;
 use temper_core::types::home::HomeAnchor;
 use uuid::Uuid;
 
@@ -2654,9 +2655,61 @@ fn parse_kind_owner(table: &str, id: Uuid) -> Result<crate::payloads::KindOwner>
     })
 }
 
+/// The `artifacts_for_resource` row, as both arities return it. One definition of the 13
+/// columns, so the unbounded and the bounded read cannot decode them differently.
+struct ArtifactRow {
+    artifact_id: Uuid,
+    resource_id: Uuid,
+    kind_owner_table: String,
+    kind_owner_id: Uuid,
+    artifact_kind: String,
+    intent: String,
+    precedence: f64,
+    content_hash: String,
+    content_bytes: i64,
+    shape_state: String,
+    is_folded: bool,
+    created: DateTime<Utc>,
+    content: Option<serde_json::Value>,
+}
+
+impl TryFrom<ArtifactRow> for RetrievedArtifact {
+    type Error = anyhow::Error;
+
+    fn try_from(r: ArtifactRow) -> Result<Self> {
+        Ok(RetrievedArtifact {
+            artifact_id: DataArtifactId::from(r.artifact_id),
+            resource_id: ResourceId::from(r.resource_id),
+            kind_owner: parse_kind_owner(&r.kind_owner_table, r.kind_owner_id)?,
+            artifact_kind: r.artifact_kind,
+            intent: parse_intent(&r.intent)?,
+            precedence: r.precedence,
+            content_hash: r.content_hash,
+            content_bytes: r.content_bytes,
+            shape_state: parse_shape_state(&r.shape_state)?,
+            is_folded: r.is_folded,
+            created: r.created,
+            content: r.content,
+        })
+    }
+}
+
+/// The SQL `intent` text for a typed intent filter.
+fn intent_text(intent: crate::payloads::ArtifactIntent) -> &'static str {
+    match intent {
+        crate::payloads::ArtifactIntent::Current => "current",
+        crate::payloads::ArtifactIntent::Member => "member",
+        crate::payloads::ArtifactIntent::Pinned => "pinned",
+    }
+}
+
 /// Full hydration: metadata + content for every visible artifact of a resource, optionally
 /// filtered by kind and intent. Set reads JOIN-filter the visible set — an invisible resource
 /// yields zero rows, never an error.
+///
+/// **Unbounded.** This returns the resource's whole artifact history; it exists for the route's
+/// no-`limit` form, which a later release retires. A caller that does not need everything reads
+/// [`artifacts_for_resource_page`].
 ///
 /// `include_folded` defaults to `false` (live artifacts only). Folded artifacts are retained (fold
 /// affects visibility, never existence); pass `true` to include them for history/audit.
@@ -2668,13 +2721,8 @@ pub async fn artifacts_for_resource(
     intent: Option<crate::payloads::ArtifactIntent>,
     include_folded: bool,
 ) -> Result<Vec<RetrievedArtifact>> {
-    let intent_str = intent.map(|i| match i {
-        crate::payloads::ArtifactIntent::Current => "current",
-        crate::payloads::ArtifactIntent::Member => "member",
-        crate::payloads::ArtifactIntent::Pinned => "pinned",
-    });
-
-    let rows = sqlx::query!(
+    let rows = sqlx::query_as!(
+        ArtifactRow,
         r#"SELECT artifact_id        AS "artifact_id!",
                   resource_id        AS "resource_id!",
                   kind_owner_table   AS "kind_owner_table!",
@@ -2692,30 +2740,91 @@ pub async fn artifacts_for_resource(
         principal.uuid(),
         resource.uuid(),
         kind,
-        intent_str,
+        intent.map(intent_text),
         include_folded,
     )
     .fetch_all(pool)
     .await?;
 
-    rows.into_iter()
-        .map(|r| {
-            Ok(RetrievedArtifact {
-                artifact_id: DataArtifactId::from(r.artifact_id),
-                resource_id: ResourceId::from(r.resource_id),
-                kind_owner: parse_kind_owner(&r.kind_owner_table, r.kind_owner_id)?,
-                artifact_kind: r.artifact_kind,
-                intent: parse_intent(&r.intent)?,
-                precedence: r.precedence,
-                content_hash: r.content_hash,
-                content_bytes: r.content_bytes,
-                shape_state: parse_shape_state(&r.shape_state)?,
-                is_folded: r.is_folded,
-                created: r.created,
-                content: r.content,
-            })
+    rows.into_iter().map(RetrievedArtifact::try_from).collect()
+}
+
+/// The filters and bound of one [`artifacts_for_resource_page`] read.
+#[derive(Debug, Clone, Copy)]
+pub struct ArtifactPageParams<'a> {
+    pub kind: Option<&'a str>,
+    pub intent: Option<crate::payloads::ArtifactIntent>,
+    pub include_folded: bool,
+    /// Rows wanted. The caller has already checked it against the server ceiling.
+    pub limit: u32,
+    /// Continue strictly after this `(created, id)` position; `None` starts at the beginning.
+    pub after: Option<ArtifactCursor>,
+}
+
+/// One bounded page of artifacts and where the next one starts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RetrievedArtifactPage {
+    /// At most `limit` artifacts, in `(created, id)` order.
+    pub artifacts: Vec<RetrievedArtifact>,
+    /// The position to continue after, or `None` when this page reaches the end.
+    pub next: Option<ArtifactCursor>,
+}
+
+/// One bounded page of a resource's visible artifacts, keyset-ordered on `(created, id)`.
+///
+/// Same gate and projection as [`artifacts_for_resource`], through the bounded arity added in
+/// migration `20261102000000`. It asks the database for `limit + 1` rows: the extra row, if it
+/// arrives, proves another page exists without a count, and is dropped from this one.
+pub async fn artifacts_for_resource_page(
+    pool: &PgPool,
+    principal: ProfileId,
+    resource: ResourceId,
+    params: ArtifactPageParams<'_>,
+) -> Result<RetrievedArtifactPage> {
+    let limit = usize::try_from(params.limit)?;
+    let rows = sqlx::query_as!(
+        ArtifactRow,
+        r#"SELECT artifact_id        AS "artifact_id!",
+                  resource_id        AS "resource_id!",
+                  kind_owner_table   AS "kind_owner_table!",
+                  kind_owner_id      AS "kind_owner_id!",
+                  artifact_kind      AS "artifact_kind!",
+                  intent             AS "intent!",
+                  precedence         AS "precedence!",
+                  content_hash       AS "content_hash!",
+                  content_bytes      AS "content_bytes!",
+                  shape_state        AS "shape_state!",
+                  is_folded          AS "is_folded!",
+                  created            AS "created!",
+                  content
+             FROM artifacts_for_resource($1, $2, $3, $4, $5, $6, $7, $8)"#,
+        principal.uuid(),
+        resource.uuid(),
+        params.kind,
+        params.intent.map(intent_text),
+        params.include_folded,
+        i64::from(params.limit) + 1,
+        params.after.map(|c| c.created),
+        params.after.map(|c| c.artifact_id.uuid()),
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut artifacts = rows
+        .into_iter()
+        .map(RetrievedArtifact::try_from)
+        .collect::<Result<Vec<_>>>()?;
+    let has_more = artifacts.len() > limit;
+    artifacts.truncate(limit);
+    let next = if has_more {
+        artifacts.last().map(|a| ArtifactCursor {
+            created: a.created,
+            artifact_id: a.artifact_id,
         })
-        .collect()
+    } else {
+        None
+    };
+    Ok(RetrievedArtifactPage { artifacts, next })
 }
 
 /// Counts only: per-family counts and total bytes, no content hydration. Same visibility gate.
@@ -2761,11 +2870,7 @@ pub async fn artifact_ids_for_resource(
     intent: Option<crate::payloads::ArtifactIntent>,
     include_folded: bool,
 ) -> Result<Vec<DataArtifactId>> {
-    let intent_str = intent.map(|i| match i {
-        crate::payloads::ArtifactIntent::Current => "current",
-        crate::payloads::ArtifactIntent::Member => "member",
-        crate::payloads::ArtifactIntent::Pinned => "pinned",
-    });
+    let intent_str = intent.map(intent_text);
 
     let rows = sqlx::query!(
         r#"SELECT artifact_id AS "id!" FROM artifact_ids_for_resource($1, $2, $3, $4, $5)"#,

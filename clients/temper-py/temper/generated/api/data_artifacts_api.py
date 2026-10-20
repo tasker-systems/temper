@@ -15,12 +15,14 @@ from pydantic import validate_call, Field, StrictFloat, StrictStr, StrictInt
 from typing import Any, Dict, List, Optional, Tuple, Union
 from typing_extensions import Annotated
 
+from datetime import datetime
 from pydantic import Field, StrictBool, StrictStr, field_validator
-from typing import List, Optional
+from typing import Optional
 from typing_extensions import Annotated
 from uuid import UUID
 from temper.generated.models.artifact_commit_request import ArtifactCommitRequest
 from temper.generated.models.artifact_commit_response import ArtifactCommitResponse
+from temper.generated.models.artifact_list_answer import ArtifactListAnswer
 from temper.generated.models.artifact_view import ArtifactView
 
 from temper.generated.api_client import ApiClient, RequestSerialized
@@ -943,7 +945,10 @@ class DataArtifactsApi:
         kind: Annotated[Optional[StrictStr], Field(description="Filter by the bare family name (e.g. `\"measurement\"`).")] = None,
         intent: Annotated[Optional[StrictStr], Field(description="Filter by selection intent: `\"current\"`, `\"member\"`, or `\"pinned\"`.")] = None,
         include_folded: Annotated[Optional[StrictBool], Field(description="Include folded (superseded) artifacts in the result. Default: `false`.")] = None,
-        counts: Annotated[Optional[StrictBool], Field(description="Return per-family counts instead of full artifacts. No content hydration. Default: `false` (full artifacts with content).")] = None,
+        counts: Annotated[Optional[StrictBool], Field(description="Return per-family counts instead of full artifacts. No content hydration. Default: `false` (full artifacts with content). Counts are not paged: `limit` and `after_*` are not read when this is set.")] = None,
+        limit: Annotated[Optional[Annotated[int, Field(strict=True, ge=0)]], Field(description="Return at most this many artifacts, answering `{ artifacts, next }` instead of a bare array. Must be at least 1 and at most the server ceiling `MAX_ARTIFACT_PAGE_ROWS`; a value outside that range is refused, never clamped. Omit it to receive the whole list as a bare array (the unbounded form, which a later release retires).")] = None,
+        after_created: Annotated[Optional[datetime], Field(description="Continue after this position: the `created` half of the previous page's `next` cursor. Send together with `after_id`, and only with `limit`.")] = None,
+        after_id: Annotated[Optional[UUID], Field(description="Continue after this position: the `artifact_id` half of the previous page's `next` cursor. Send together with `after_created`, and only with `limit`.")] = None,
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -957,10 +962,10 @@ class DataArtifactsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> List[ArtifactView]:
+    ) -> ArtifactListAnswer:
         """List artifacts for a resource, or counts with counts=true
 
-        Without `counts=true`: returns fully hydrated artifacts (metadata + content). With `counts=true`: returns per-family counts only, no content hydration — for surfaces that need \"3 measurements, 1 extraction\" without fetching payloads.
+        Without `counts=true`: returns fully hydrated artifacts (metadata + content). With `counts=true`: returns per-family counts only, no content hydration — for surfaces that need \"3 measurements, 1 extraction\" without fetching payloads.  With `limit`, returns one page as `{ artifacts, next }`: at most `limit` artifacts in `(created, id)` order, and `next` — the position to continue after, sent back as `after_created` and `after_id` — or `null` on the last page. A `limit` of 0 or above the server ceiling `MAX_ARTIFACT_PAGE_ROWS` is refused, not clamped. Without `limit`, returns the whole list as a bare array: the unbounded form, which a later release retires.
 
         :param id: Resource ID (required)
         :type id: UUID
@@ -970,8 +975,14 @@ class DataArtifactsApi:
         :type intent: str
         :param include_folded: Include folded (superseded) artifacts in the result. Default: `false`.
         :type include_folded: bool
-        :param counts: Return per-family counts instead of full artifacts. No content hydration. Default: `false` (full artifacts with content).
+        :param counts: Return per-family counts instead of full artifacts. No content hydration. Default: `false` (full artifacts with content). Counts are not paged: `limit` and `after_*` are not read when this is set.
         :type counts: bool
+        :param limit: Return at most this many artifacts, answering `{ artifacts, next }` instead of a bare array. Must be at least 1 and at most the server ceiling `MAX_ARTIFACT_PAGE_ROWS`; a value outside that range is refused, never clamped. Omit it to receive the whole list as a bare array (the unbounded form, which a later release retires).
+        :type limit: int
+        :param after_created: Continue after this position: the `created` half of the previous page's `next` cursor. Send together with `after_id`, and only with `limit`.
+        :type after_created: datetime
+        :param after_id: Continue after this position: the `artifact_id` half of the previous page's `next` cursor. Send together with `after_created`, and only with `limit`.
+        :type after_id: UUID
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
         :param _request_timeout: timeout setting for this request. If one
@@ -1002,6 +1013,9 @@ class DataArtifactsApi:
             intent=intent,
             include_folded=include_folded,
             counts=counts,
+            limit=limit,
+            after_created=after_created,
+            after_id=after_id,
             x_temper_surface=x_temper_surface,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -1010,7 +1024,8 @@ class DataArtifactsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "List[ArtifactView]",
+            '200': "ArtifactListAnswer",
+            '400': "ErrorBody",
             '401': "ErrorBody",
         }
         response_data = self.api_client.call_api(
@@ -1031,7 +1046,10 @@ class DataArtifactsApi:
         kind: Annotated[Optional[StrictStr], Field(description="Filter by the bare family name (e.g. `\"measurement\"`).")] = None,
         intent: Annotated[Optional[StrictStr], Field(description="Filter by selection intent: `\"current\"`, `\"member\"`, or `\"pinned\"`.")] = None,
         include_folded: Annotated[Optional[StrictBool], Field(description="Include folded (superseded) artifacts in the result. Default: `false`.")] = None,
-        counts: Annotated[Optional[StrictBool], Field(description="Return per-family counts instead of full artifacts. No content hydration. Default: `false` (full artifacts with content).")] = None,
+        counts: Annotated[Optional[StrictBool], Field(description="Return per-family counts instead of full artifacts. No content hydration. Default: `false` (full artifacts with content). Counts are not paged: `limit` and `after_*` are not read when this is set.")] = None,
+        limit: Annotated[Optional[Annotated[int, Field(strict=True, ge=0)]], Field(description="Return at most this many artifacts, answering `{ artifacts, next }` instead of a bare array. Must be at least 1 and at most the server ceiling `MAX_ARTIFACT_PAGE_ROWS`; a value outside that range is refused, never clamped. Omit it to receive the whole list as a bare array (the unbounded form, which a later release retires).")] = None,
+        after_created: Annotated[Optional[datetime], Field(description="Continue after this position: the `created` half of the previous page's `next` cursor. Send together with `after_id`, and only with `limit`.")] = None,
+        after_id: Annotated[Optional[UUID], Field(description="Continue after this position: the `artifact_id` half of the previous page's `next` cursor. Send together with `after_created`, and only with `limit`.")] = None,
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -1045,10 +1063,10 @@ class DataArtifactsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> ApiResponse[List[ArtifactView]]:
+    ) -> ApiResponse[ArtifactListAnswer]:
         """List artifacts for a resource, or counts with counts=true
 
-        Without `counts=true`: returns fully hydrated artifacts (metadata + content). With `counts=true`: returns per-family counts only, no content hydration — for surfaces that need \"3 measurements, 1 extraction\" without fetching payloads.
+        Without `counts=true`: returns fully hydrated artifacts (metadata + content). With `counts=true`: returns per-family counts only, no content hydration — for surfaces that need \"3 measurements, 1 extraction\" without fetching payloads.  With `limit`, returns one page as `{ artifacts, next }`: at most `limit` artifacts in `(created, id)` order, and `next` — the position to continue after, sent back as `after_created` and `after_id` — or `null` on the last page. A `limit` of 0 or above the server ceiling `MAX_ARTIFACT_PAGE_ROWS` is refused, not clamped. Without `limit`, returns the whole list as a bare array: the unbounded form, which a later release retires.
 
         :param id: Resource ID (required)
         :type id: UUID
@@ -1058,8 +1076,14 @@ class DataArtifactsApi:
         :type intent: str
         :param include_folded: Include folded (superseded) artifacts in the result. Default: `false`.
         :type include_folded: bool
-        :param counts: Return per-family counts instead of full artifacts. No content hydration. Default: `false` (full artifacts with content).
+        :param counts: Return per-family counts instead of full artifacts. No content hydration. Default: `false` (full artifacts with content). Counts are not paged: `limit` and `after_*` are not read when this is set.
         :type counts: bool
+        :param limit: Return at most this many artifacts, answering `{ artifacts, next }` instead of a bare array. Must be at least 1 and at most the server ceiling `MAX_ARTIFACT_PAGE_ROWS`; a value outside that range is refused, never clamped. Omit it to receive the whole list as a bare array (the unbounded form, which a later release retires).
+        :type limit: int
+        :param after_created: Continue after this position: the `created` half of the previous page's `next` cursor. Send together with `after_id`, and only with `limit`.
+        :type after_created: datetime
+        :param after_id: Continue after this position: the `artifact_id` half of the previous page's `next` cursor. Send together with `after_created`, and only with `limit`.
+        :type after_id: UUID
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
         :param _request_timeout: timeout setting for this request. If one
@@ -1090,6 +1114,9 @@ class DataArtifactsApi:
             intent=intent,
             include_folded=include_folded,
             counts=counts,
+            limit=limit,
+            after_created=after_created,
+            after_id=after_id,
             x_temper_surface=x_temper_surface,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -1098,7 +1125,8 @@ class DataArtifactsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "List[ArtifactView]",
+            '200': "ArtifactListAnswer",
+            '400': "ErrorBody",
             '401': "ErrorBody",
         }
         response_data = self.api_client.call_api(
@@ -1119,7 +1147,10 @@ class DataArtifactsApi:
         kind: Annotated[Optional[StrictStr], Field(description="Filter by the bare family name (e.g. `\"measurement\"`).")] = None,
         intent: Annotated[Optional[StrictStr], Field(description="Filter by selection intent: `\"current\"`, `\"member\"`, or `\"pinned\"`.")] = None,
         include_folded: Annotated[Optional[StrictBool], Field(description="Include folded (superseded) artifacts in the result. Default: `false`.")] = None,
-        counts: Annotated[Optional[StrictBool], Field(description="Return per-family counts instead of full artifacts. No content hydration. Default: `false` (full artifacts with content).")] = None,
+        counts: Annotated[Optional[StrictBool], Field(description="Return per-family counts instead of full artifacts. No content hydration. Default: `false` (full artifacts with content). Counts are not paged: `limit` and `after_*` are not read when this is set.")] = None,
+        limit: Annotated[Optional[Annotated[int, Field(strict=True, ge=0)]], Field(description="Return at most this many artifacts, answering `{ artifacts, next }` instead of a bare array. Must be at least 1 and at most the server ceiling `MAX_ARTIFACT_PAGE_ROWS`; a value outside that range is refused, never clamped. Omit it to receive the whole list as a bare array (the unbounded form, which a later release retires).")] = None,
+        after_created: Annotated[Optional[datetime], Field(description="Continue after this position: the `created` half of the previous page's `next` cursor. Send together with `after_id`, and only with `limit`.")] = None,
+        after_id: Annotated[Optional[UUID], Field(description="Continue after this position: the `artifact_id` half of the previous page's `next` cursor. Send together with `after_created`, and only with `limit`.")] = None,
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -1136,7 +1167,7 @@ class DataArtifactsApi:
     ) -> RESTResponseType:
         """List artifacts for a resource, or counts with counts=true
 
-        Without `counts=true`: returns fully hydrated artifacts (metadata + content). With `counts=true`: returns per-family counts only, no content hydration — for surfaces that need \"3 measurements, 1 extraction\" without fetching payloads.
+        Without `counts=true`: returns fully hydrated artifacts (metadata + content). With `counts=true`: returns per-family counts only, no content hydration — for surfaces that need \"3 measurements, 1 extraction\" without fetching payloads.  With `limit`, returns one page as `{ artifacts, next }`: at most `limit` artifacts in `(created, id)` order, and `next` — the position to continue after, sent back as `after_created` and `after_id` — or `null` on the last page. A `limit` of 0 or above the server ceiling `MAX_ARTIFACT_PAGE_ROWS` is refused, not clamped. Without `limit`, returns the whole list as a bare array: the unbounded form, which a later release retires.
 
         :param id: Resource ID (required)
         :type id: UUID
@@ -1146,8 +1177,14 @@ class DataArtifactsApi:
         :type intent: str
         :param include_folded: Include folded (superseded) artifacts in the result. Default: `false`.
         :type include_folded: bool
-        :param counts: Return per-family counts instead of full artifacts. No content hydration. Default: `false` (full artifacts with content).
+        :param counts: Return per-family counts instead of full artifacts. No content hydration. Default: `false` (full artifacts with content). Counts are not paged: `limit` and `after_*` are not read when this is set.
         :type counts: bool
+        :param limit: Return at most this many artifacts, answering `{ artifacts, next }` instead of a bare array. Must be at least 1 and at most the server ceiling `MAX_ARTIFACT_PAGE_ROWS`; a value outside that range is refused, never clamped. Omit it to receive the whole list as a bare array (the unbounded form, which a later release retires).
+        :type limit: int
+        :param after_created: Continue after this position: the `created` half of the previous page's `next` cursor. Send together with `after_id`, and only with `limit`.
+        :type after_created: datetime
+        :param after_id: Continue after this position: the `artifact_id` half of the previous page's `next` cursor. Send together with `after_created`, and only with `limit`.
+        :type after_id: UUID
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
         :param _request_timeout: timeout setting for this request. If one
@@ -1178,6 +1215,9 @@ class DataArtifactsApi:
             intent=intent,
             include_folded=include_folded,
             counts=counts,
+            limit=limit,
+            after_created=after_created,
+            after_id=after_id,
             x_temper_surface=x_temper_surface,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -1186,7 +1226,8 @@ class DataArtifactsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "List[ArtifactView]",
+            '200': "ArtifactListAnswer",
+            '400': "ErrorBody",
             '401': "ErrorBody",
         }
         response_data = self.api_client.call_api(
@@ -1203,6 +1244,9 @@ class DataArtifactsApi:
         intent,
         include_folded,
         counts,
+        limit,
+        after_created,
+        after_id,
         x_temper_surface,
         _request_auth,
         _content_type,
@@ -1243,6 +1287,27 @@ class DataArtifactsApi:
         if counts is not None:
             
             _query_params.append(('counts', counts))
+            
+        if limit is not None:
+            
+            _query_params.append(('limit', limit))
+            
+        if after_created is not None:
+            if isinstance(after_created, datetime):
+                _query_params.append(
+                    (
+                        'after_created',
+                        after_created.strftime(
+                            self.api_client.configuration.datetime_format
+                        )
+                    )
+                )
+            else:
+                _query_params.append(('after_created', after_created))
+            
+        if after_id is not None:
+            
+            _query_params.append(('after_id', after_id))
             
         # process the header parameters
         if x_temper_surface is not None:

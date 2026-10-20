@@ -1846,8 +1846,54 @@ pub async fn invocation_list_select(
 
 // ── Data artifact reads ───────────────────────────────────────────────────────────────────────
 
+/// Project a substrate readback artifact onto its wire shape. The one place the typed enums
+/// (`kind_owner`, `intent`, `shape_state`) become the strings the wire carries.
+fn artifact_view(
+    a: readback::RetrievedArtifact,
+) -> temper_core::types::data_artifact::ArtifactView {
+    temper_core::types::data_artifact::ArtifactView {
+        artifact_id: a.artifact_id,
+        resource_id: a.resource_id,
+        kind_owner_table: match a.kind_owner {
+            temper_substrate::payloads::KindOwner::Profile(_) => "kb_profiles".to_owned(),
+            temper_substrate::payloads::KindOwner::Team(_) => "kb_teams".to_owned(),
+        },
+        kind_owner_id: match a.kind_owner {
+            temper_substrate::payloads::KindOwner::Profile(id) => id,
+            temper_substrate::payloads::KindOwner::Team(id) => id,
+        },
+        artifact_kind: a.artifact_kind,
+        intent: match a.intent {
+            temper_substrate::payloads::ArtifactIntent::Current => "current".to_owned(),
+            temper_substrate::payloads::ArtifactIntent::Member => "member".to_owned(),
+            temper_substrate::payloads::ArtifactIntent::Pinned => "pinned".to_owned(),
+        },
+        precedence: a.precedence,
+        content_hash: a.content_hash,
+        content_bytes: a.content_bytes,
+        shape_state: match a.shape_state {
+            temper_substrate::payloads::ShapeState::NeverDeclared => "never_declared".to_owned(),
+            temper_substrate::payloads::ShapeState::DeclaredSatisfied => {
+                "declared_satisfied".to_owned()
+            }
+            temper_substrate::payloads::ShapeState::DeclaredNotSatisfied => {
+                "declared_not_satisfied".to_owned()
+            }
+            temper_substrate::payloads::ShapeState::DeclaredNotYetChecked => {
+                "declared_not_yet_checked".to_owned()
+            }
+        },
+        is_folded: a.is_folded,
+        created: a.created,
+        content: a.content,
+    }
+}
+
 /// List data artifacts for a resource, fully hydrated (metadata + content). Visibility-gated
 /// through `resources_visible_to` in the SQL.
+///
+/// **Unbounded**: the whole artifact history, for the route's no-`limit` form. Callers that do
+/// not need everything use [`list_artifacts_page`].
 pub async fn list_artifacts(
     pool: &PgPool,
     profile_id: ProfileId,
@@ -1868,47 +1914,51 @@ pub async fn list_artifacts(
     .await
     .map_err(|e| ApiError::from(TemperError::Api(e.to_string())))?;
 
-    Ok(artifacts
-        .into_iter()
-        .map(|a| temper_core::types::data_artifact::ArtifactView {
-            artifact_id: a.artifact_id,
-            resource_id: a.resource_id,
-            kind_owner_table: match a.kind_owner {
-                temper_substrate::payloads::KindOwner::Profile(_) => "kb_profiles".to_owned(),
-                temper_substrate::payloads::KindOwner::Team(_) => "kb_teams".to_owned(),
-            },
-            kind_owner_id: match a.kind_owner {
-                temper_substrate::payloads::KindOwner::Profile(id) => id,
-                temper_substrate::payloads::KindOwner::Team(id) => id,
-            },
-            artifact_kind: a.artifact_kind,
-            intent: match a.intent {
-                temper_substrate::payloads::ArtifactIntent::Current => "current".to_owned(),
-                temper_substrate::payloads::ArtifactIntent::Member => "member".to_owned(),
-                temper_substrate::payloads::ArtifactIntent::Pinned => "pinned".to_owned(),
-            },
-            precedence: a.precedence,
-            content_hash: a.content_hash,
-            content_bytes: a.content_bytes,
-            shape_state: match a.shape_state {
-                temper_substrate::payloads::ShapeState::NeverDeclared => {
-                    "never_declared".to_owned()
-                }
-                temper_substrate::payloads::ShapeState::DeclaredSatisfied => {
-                    "declared_satisfied".to_owned()
-                }
-                temper_substrate::payloads::ShapeState::DeclaredNotSatisfied => {
-                    "declared_not_satisfied".to_owned()
-                }
-                temper_substrate::payloads::ShapeState::DeclaredNotYetChecked => {
-                    "declared_not_yet_checked".to_owned()
-                }
-            },
-            is_folded: a.is_folded,
-            created: a.created,
-            content: a.content,
-        })
-        .collect())
+    Ok(artifacts.into_iter().map(artifact_view).collect())
+}
+
+/// The filters of one [`list_artifacts_page`] read, in the wire's own vocabulary.
+#[derive(Debug, Clone, Copy)]
+pub struct ArtifactPageFilter<'a> {
+    pub kind: Option<&'a str>,
+    pub intent: Option<&'a str>,
+    pub include_folded: bool,
+}
+
+/// One bounded page of data artifacts for a resource, fully hydrated, in `(created, id)` order.
+/// Visibility-gated through `resources_visible_to` in the SQL, re-decided on every page.
+///
+/// `request` is the validated bound and position ([`ArtifactListParams::page_request`]); this
+/// does not re-check the ceiling.
+///
+/// [`ArtifactListParams::page_request`]: temper_core::types::data_artifact::ArtifactListParams::page_request
+pub async fn list_artifacts_page(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    resource_id: ResourceId,
+    filter: ArtifactPageFilter<'_>,
+    request: temper_core::types::data_artifact::ArtifactPageRequest,
+) -> ApiResult<temper_core::types::data_artifact::ArtifactPage> {
+    let intent = filter.intent.map(parse_intent_str).transpose()?;
+    let page = readback::artifacts_for_resource_page(
+        pool,
+        profile_id,
+        resource_id,
+        readback::ArtifactPageParams {
+            kind: filter.kind,
+            intent,
+            include_folded: filter.include_folded,
+            limit: request.limit,
+            after: request.after,
+        },
+    )
+    .await
+    .map_err(|e| ApiError::from(TemperError::Api(e.to_string())))?;
+
+    Ok(temper_core::types::data_artifact::ArtifactPage {
+        artifacts: page.artifacts.into_iter().map(artifact_view).collect(),
+        next: page.next,
+    })
 }
 
 /// Per-family artifact counts for a resource, without content hydration.
@@ -1952,46 +2002,7 @@ pub async fn get_artifact(
         .await
         .map_err(|e| ApiError::from(TemperError::Api(e.to_string())))?;
 
-    Ok(
-        artifact.map(|a| temper_core::types::data_artifact::ArtifactView {
-            artifact_id: a.artifact_id,
-            resource_id: a.resource_id,
-            kind_owner_table: match a.kind_owner {
-                temper_substrate::payloads::KindOwner::Profile(_) => "kb_profiles".to_owned(),
-                temper_substrate::payloads::KindOwner::Team(_) => "kb_teams".to_owned(),
-            },
-            kind_owner_id: match a.kind_owner {
-                temper_substrate::payloads::KindOwner::Profile(id) => id,
-                temper_substrate::payloads::KindOwner::Team(id) => id,
-            },
-            artifact_kind: a.artifact_kind,
-            intent: match a.intent {
-                temper_substrate::payloads::ArtifactIntent::Current => "current".to_owned(),
-                temper_substrate::payloads::ArtifactIntent::Member => "member".to_owned(),
-                temper_substrate::payloads::ArtifactIntent::Pinned => "pinned".to_owned(),
-            },
-            precedence: a.precedence,
-            content_hash: a.content_hash,
-            content_bytes: a.content_bytes,
-            shape_state: match a.shape_state {
-                temper_substrate::payloads::ShapeState::NeverDeclared => {
-                    "never_declared".to_owned()
-                }
-                temper_substrate::payloads::ShapeState::DeclaredSatisfied => {
-                    "declared_satisfied".to_owned()
-                }
-                temper_substrate::payloads::ShapeState::DeclaredNotSatisfied => {
-                    "declared_not_satisfied".to_owned()
-                }
-                temper_substrate::payloads::ShapeState::DeclaredNotYetChecked => {
-                    "declared_not_yet_checked".to_owned()
-                }
-            },
-            is_folded: a.is_folded,
-            created: a.created,
-            content: a.content,
-        }),
-    )
+    Ok(artifact.map(artifact_view))
 }
 
 // ── Data-artifact shape reads ─────────────────────────────────────────────────────────────────

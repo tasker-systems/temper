@@ -6,7 +6,8 @@ use crate::error::Result;
 use crate::http::HttpClient;
 use crate::ops;
 use temper_core::types::data_artifact::{
-    ArtifactCommitRequest, ArtifactCommitResponse, ArtifactListParams, ArtifactView,
+    ArtifactCommitRequest, ArtifactCommitResponse, ArtifactListParams, ArtifactPage,
+    ArtifactPageRequest, ArtifactView, ARTIFACT_DRAIN_PAGE_ROWS,
 };
 use temper_core::types::data_artifact_shape::{ShapeDeclareRequest, ShapeView};
 
@@ -27,11 +28,15 @@ impl<'a> DataArtifactsClient<'a> {
         Self { http }
     }
 
-    /// List artifacts for a resource.
+    /// List artifacts for a resource, in whatever shape the params ask for.
     ///
-    /// Returns `serde_json::Value` because the endpoint returns either
-    /// `Vec<ArtifactView>` (full hydration) or `Vec<ArtifactCountRow>` (when
-    /// `counts=true`), decided server-side from the params.
+    /// Returns `serde_json::Value` because the endpoint answers one of three shapes, decided
+    /// server-side from the params: a bare array of every artifact (no `limit`), an
+    /// `{ artifacts, next }` page (`limit` set), or `Vec<ArtifactCountRow>` (`counts=true`).
+    ///
+    /// This is the raw door, and its no-`limit` form is the unbounded one a later release
+    /// retires. A caller that wants artifacts uses [`Self::list_page`] or [`Self::list_all`];
+    /// this one remains for `counts=true`, which is not paged.
     pub async fn list(
         &self,
         resource_id: Uuid,
@@ -44,6 +49,66 @@ impl<'a> DataArtifactsClient<'a> {
         self.http
             .send_json(&op.method(), &path, req, token.as_deref())
             .await
+    }
+
+    /// One bounded page of a resource's artifacts.
+    ///
+    /// `params` carries the filters (`kind`, `intent`, `include_folded`); the bound and the
+    /// continuation position come from `request`, which replaces any `limit` or `after_*` on
+    /// `params`. Always asks for artifacts, never counts. The server refuses a `limit` of 0 or
+    /// above `MAX_ARTIFACT_PAGE_ROWS`.
+    pub async fn list_page(
+        &self,
+        resource_id: Uuid,
+        params: &ArtifactListParams,
+        request: ArtifactPageRequest,
+    ) -> Result<ArtifactPage> {
+        let paged = ArtifactListParams {
+            counts: None,
+            limit: Some(request.limit),
+            after_created: request.after.map(|c| c.created),
+            after_id: request.after.map(|c| c.artifact_id.uuid()),
+            ..params.clone()
+        };
+        let token = self.http.resolve_token()?;
+        let op = &ops::LIST_ARTIFACTS;
+        let path = op.path(&[&resource_id])?;
+        let req = self.http.request(op, &path).query(&paged);
+        self.http
+            .send_json(&op.method(), &path, req, token.as_deref())
+            .await
+    }
+
+    /// Every artifact of a resource, fetched a bounded page at a time.
+    ///
+    /// For a caller whose contract is "everything": it follows `next` until the last page
+    /// (`next: null`), so no single response is unbounded and none is silently truncated. The
+    /// page size is [`ARTIFACT_DRAIN_PAGE_ROWS`]. `params.limit` and `after_*` are replaced by
+    /// the drain's own.
+    pub async fn list_all(
+        &self,
+        resource_id: Uuid,
+        params: &ArtifactListParams,
+    ) -> Result<Vec<ArtifactView>> {
+        let mut artifacts = Vec::new();
+        let mut after = None;
+        loop {
+            let page = self
+                .list_page(
+                    resource_id,
+                    params,
+                    ArtifactPageRequest {
+                        limit: ARTIFACT_DRAIN_PAGE_ROWS,
+                        after,
+                    },
+                )
+                .await?;
+            artifacts.extend(page.artifacts);
+            match page.next {
+                Some(cursor) => after = Some(cursor),
+                None => return Ok(artifacts),
+            }
+        }
     }
 
     /// Get a single artifact by ID under its owning resource.

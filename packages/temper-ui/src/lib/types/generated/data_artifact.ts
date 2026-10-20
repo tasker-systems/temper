@@ -79,6 +79,34 @@ export type ArtifactCommitResponse = { artifact_id: DataArtifactId, artifact: Ar
 export type ArtifactCountRow = { kind_owner_table: string, kind_owner_id: string, artifact_kind: string, count: bigint, total_bytes: bigint, };
 
 /**
+ * A position in the `(created, id)` keyset order that `artifacts_for_resource` returns rows in.
+ *
+ * It carries position and no authority: each page re-runs the read gate for the asker, so a
+ * cursor handed to another principal, or replayed after access is revoked, reveals nothing
+ * the read would not. That is why it is a legible object and not an opaque token, and needs
+ * no decoder in any SDK. Every bounded artifact read continues with this one type.
+ */
+export type ArtifactCursor = { 
+/**
+ * The `created` of the last artifact on the previous page.
+ */
+created: string, 
+/**
+ * The `artifact_id` of the last artifact on the previous page; breaks ties on `created`.
+ */
+artifact_id: DataArtifactId, };
+
+/**
+ * One bounded page of artifacts, in `(created, id)` order.
+ */
+export type ArtifactPage = { artifacts: Array<ArtifactView>, 
+/**
+ * Where to continue, or `null` when this page is the last. Pass it back as `after_created`
+ * and `after_id`.
+ */
+next: ArtifactCursor | null, };
+
+/**
  * One data artifact, as returned by the API and MCP surfaces.
  *
  * This is the readback `RetrievedArtifact` projected onto a wire shape: the typed enums
