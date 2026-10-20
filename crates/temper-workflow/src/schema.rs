@@ -5,7 +5,7 @@
 
 use crate::frontmatter::fields::{KNOWN_TEMPER_FIELDS, SYSTEM_MANAGED_FIELDS};
 use crate::frontmatter::DocTypeSchema;
-use jsonschema::{Resource, Validator};
+use jsonschema::{Registry, Validator};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::OnceLock;
@@ -87,10 +87,13 @@ pub fn load_schema(doc_type: &str) -> Result<Validator> {
     let doc_json: serde_json::Value = serde_json::from_str(doc_schema_str)
         .map_err(|e| TemperError::Config(format!("{doc_type} schema JSON parse error: {e}")))?;
 
-    let base_resource = Resource::from_contents(base_json);
+    let registry = Registry::new()
+        .add(BASE_SCHEMA_URI, base_json)
+        .and_then(|builder| builder.prepare())
+        .map_err(|e| TemperError::Config(format!("base schema registration error: {e}")))?;
 
     let validator = jsonschema::options()
-        .with_resource(BASE_SCHEMA_URI, base_resource)
+        .with_registry(&registry)
         .build(&doc_json)
         .map_err(|e| {
             TemperError::Config(format!("schema compilation error for {doc_type}: {e}"))
