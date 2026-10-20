@@ -282,17 +282,19 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // none of them reaches this act. [`Door`] names a SURFACE, not an endpoint, so the same
             // three variants answer for a different endpoint here.
             //
-            // CLI and API serve it in full. `temper query` takes a raw JSON plan
-            // (`query_cmd.rs` → `resolve_plan`), so every wire field is reachable from it by
-            // construction and there is no term, bound kind or filter it cannot express — which is
-            // a stronger statement than the find acts' empty shortfall lists, and true for a
-            // different reason: theirs is a flag surface that had to be brought level, this is a
-            // document.
+            // All three doors serve it in full. `temper query` takes a raw JSON plan
+            // (`query_cmd.rs` -> `resolve_plan`) and `/api/query` takes the `Composition` itself,
+            // so every wire field is reachable from them by construction. The MCP `run_query` tool
+            // takes the whole `Composition` as its input and relays it, unread, to `/api/query`,
+            // so that door reaches exactly what the route admits. And the route's validator
+            // (including the capability pass) and compiler never learn which door a plan arrived
+            // on, so no term, bound kind or filter field is admitted for one door and refused for
+            // another. That makes the empty shortfall lists a stronger statement than the find
+            // acts' — theirs is a flag surface that had to be brought level, these are a document.
             //
-            // **MCP is `Absent`, and that is the shortfall worth naming**: the MCP server exposes a
-            // `search` tool and no `query` tool, so the door agents use cannot compose at all. Same
-            // shape as `substantiate` being absent from exactly the door that most needs it. Not a
-            // gap this act introduces, and not one it can close.
+            // The door agents use does compose: an MCP `Absent` here would claim a shortfall that
+            // does not exist. `every_act_reached_through_the_query_route_is_served_at_mcp` holds
+            // that line for every act the route can emit.
             door_coverage: BTreeMap::from([
                 (
                     Door::Cli,
@@ -310,7 +312,14 @@ pub fn search_family() -> Vec<ActDeclaration> {
                         filters_unapplied: vec![],
                     },
                 ),
-                (Door::Mcp, DoorReach::Absent),
+                (
+                    Door::Mcp,
+                    DoorReach::Serves {
+                        terms_unreachable: vec![],
+                        bounds_unreachable: vec![],
+                        filters_unapplied: vec![],
+                    },
+                ),
             ]),
             // THE POINT OF THIS ACT, stated where the invariants read it. It orders nothing —
             // there is no quantity, because "has doc_type task" is not more or less true of one
@@ -410,42 +419,22 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // No `scoring_revision` bump: the body did not change, only what we correctly say
             // about it. A revision records a change in the scale or meaning of the quantity.
             //
-            // ABSENT AT EVERY DOOR `[ruled — 2026-08-10, Pete, ADJ-9a]`. This said
-            // `unified_doors(vec![])` — full reach at CLI, API and MCP — and no door reaches this
-            // act at all: `/api/search` calls only the two find fragments, and nothing outside
-            // temper-substrate's tests calls `search_graph_expand`. The mechanic is live and
-            // stranded, which `build_state` records; `door_coverage` answers a different question,
-            // and the answer is none. A declaration describes the DEPLOYED system — the same
-            // principle that retracted `MatchLocation` and `input_contributed` rather than holding
-            // them until their fragments caught up. This restores to `Serves` when `/api/query`
-            // gives the act a door, which is additive.
+            // All three doors serve it in full. `query_follow_from` is in `CALLABLE_FRAGMENTS` and
+            // the compiler emits its core, so a composition can invoke it. `temper query` takes a
+            // raw JSON plan and `/api/query` takes the `Composition` itself, so every wire field
+            // is reachable from them by construction. The MCP `run_query` tool takes the whole
+            // `Composition` and relays it, unread, to `/api/query`, so that door reaches exactly
+            // what the route admits — and the route's validator and compiler never learn which
+            // door a plan arrived on, so none of the three can supply a term, bound kind or
+            // filter field that another cannot.
             //
-            // Note what goes with it. The `Limit` term and the `Edge` filter this act declares are
-            // now shortfalls with nowhere to be declared, because `Absent` carries no lists — which
-            // is correct: a door that cannot invoke the act at all falls short on nothing in
-            // particular. The `accepts_filters: [Edge]` that today's validator refuses outright is
-            // recorded there, in `validate`'s FilterNotApplicable arm, not here.
-            // **Absent -> Serves at CLI and API** `[2026-08-14]`, on the condition the previous
-            // comment set: *"This restores to `Serves` when `/api/query` gives the act a door,
-            // which is additive."* `query_follow_from` is in `CALLABLE_FRAGMENTS` and the compiler
-            // emits its core, so both doors can now invoke it — `temper query` takes a raw JSON
-            // plan, so every wire field is reachable from it by construction.
-            //
-            // **MCP stays `Absent`, and that is not this act's shortfall to close.** The MCP server
-            // exposes a `search` tool and no `query` tool, so the door agents use cannot compose at
-            // all. Flipping this to `Serves` because the mechanic exists would make the declaration
-            // describe the code rather than the DEPLOYED system, which is the whole reason the
-            // three were set to `Absent` in the first place.
-            //
-            // **`Offset` enters no `terms_unreachable` list** `[2026-08-17]`. The two serving doors
-            // take a raw JSON plan (`temper query` -> `resolve_plan`, and `/api/query` takes the
-            // `Composition` itself), so every wire field is reachable at them by construction — the
-            // sentence two paragraphs up, now load-bearing for a second term rather than only for
-            // `Limit`. A newly admitted term reaches those doors the moment it is admitted; there is
+            // **`Limit`, `Offset` and the `Edge` filter enter no shortfall list at any door.** A
+            // newly admitted term or filter reaches all three the moment it is admitted: there is
             // no flag or param to add first, which is what distinguishes these doors from the find
-            // acts' `temper search`, where `--offset` had to ship before the axis could close. MCP
-            // carries no list at all because `Absent` has none: a door that cannot invoke the act
-            // falls short on nothing in particular.
+            // acts' `temper search`, where `--offset` had to ship before the axis could close.
+            // The `Edge` filter is applied, not merely accepted — `edge_filter_for` binds
+            // `edge_kinds`, `labels` and `properties` into the fragment's `p_edge_kinds`,
+            // `p_labels` and `p_edge_properties` — so `filters_unapplied` is empty too.
             door_coverage: BTreeMap::from([
                 (
                     Door::Cli,
@@ -463,7 +452,14 @@ pub fn search_family() -> Vec<ActDeclaration> {
                         filters_unapplied: vec![],
                     },
                 ),
-                (Door::Mcp, DoorReach::Absent),
+                (
+                    Door::Mcp,
+                    DoorReach::Serves {
+                        terms_unreachable: vec![],
+                        bounds_unreachable: vec![],
+                        filters_unapplied: vec![],
+                    },
+                ),
             ]),
             orders_by: Some(ActQuantity {
                 field: "graph_score".to_string(),
@@ -607,7 +603,10 @@ pub fn search_family() -> Vec<ActDeclaration> {
                 ),
                 // Absent from MCP, which is the door agents use — so the substantiate act is
                 // thinnest exactly where it is most needed. Nothing in `crates/temper-mcp` reads
-                // standing; T1 columns 1-3 §6.2 recorded the same.
+                // standing, and `run_query` is no way in: it relays to `/api/query`, which cannot
+                // emit this act (`resource_standing_shape` is not in `CALLABLE_FRAGMENTS`, so a
+                // composition naming it is refused `NotSeparablyReachable`). T1 columns 1-3 §6.2
+                // recorded the same.
                 (Door::Mcp, DoorReach::Absent),
             ]),
             // Standing is THREE axes and a band, never one number — `citation_magnitude`,
@@ -942,7 +941,7 @@ mod tests {
     /// none the whole time.
     ///
     /// `[narrowed to one — 2026-08-14]` **`follow-from` is no longer stranded** — it reaches
-    /// `/api/query` at CLI and API.
+    /// `/api/query`, and with it every door that composes.
     ///
     /// `[closed — 2026-08-16]` **`survey` is no longer stranded either.** The `query_survey`
     /// wrapper (migration 20260816000020) gives it a door, and the `p_lens` blocker was settled
@@ -965,27 +964,29 @@ mod tests {
         }
     }
 
-    /// `follow-from` reaches the two composing doors and **not** MCP, and the asymmetry is the
-    /// point rather than an oversight `[2026-08-14]`.
+    /// `follow-from` reaches every door, and the MCP cell is the API's cell.
     ///
-    /// `temper query` takes a raw JSON plan, so every wire field is reachable from the CLI by
-    /// construction — hence empty shortfall lists rather than a list nobody maintains. MCP exposes a
-    /// `search` tool and no `query` tool, so the door agents actually use cannot compose at all;
-    /// that is a gap this act cannot close and must not paper over by declaring reach it does not
-    /// have.
+    /// `temper query` takes a raw JSON plan and `/api/query` takes the `Composition` itself, so
+    /// every wire field is reachable from the CLI and the API by construction — hence empty
+    /// shortfall lists rather than a list nobody maintains. The MCP `run_query` tool relays the
+    /// whole `Composition` to that same route, so the door agents use reaches what the route
+    /// admits and nothing less. Equality with the API cell, rather than a second literal, is what
+    /// states that: if the route ever admitted something for one door and not the other, this is
+    /// the cell that would have to name the difference.
     #[test]
-    fn follow_from_reaches_the_composing_doors_and_not_mcp() {
+    fn follow_from_reaches_every_door_and_mcp_reaches_what_the_api_does() {
         let a = declaration(&ActName::FollowFrom).unwrap();
-        for door in [Door::Cli, Door::Api] {
+        for door in Door::ALL {
             assert!(
                 matches!(a.door_coverage.get(&door), Some(DoorReach::Serves { .. })),
-                "{door:?} compiles a composition, so it reaches this act"
+                "{door:?} reaches `/api/query`, so it reaches this act"
             );
         }
         assert_eq!(
             a.door_coverage.get(&Door::Mcp),
-            Some(&DoorReach::Absent),
-            "MCP exposes no `query` tool; the mechanic existing does not give that door reach"
+            a.door_coverage.get(&Door::Api),
+            "MCP relays to the API's route; a difference between the two cells is a shortfall \
+             and must be named"
         );
     }
 
@@ -1509,6 +1510,11 @@ mod tests {
     fn substantiate_is_absent_from_the_door_agents_use() {
         // Served on API and CLI, absent from MCP — so the one act about defensibility is missing
         // from the surface agents actually hold. Declared rather than discovered on a 404.
+        //
+        // The reason is that the act is not one `/api/query` can emit, so MCP's `run_query` has no
+        // way to reach it: it is served by `GET /api/resources/{id}/evidence`, which no MCP tool
+        // wraps. Asserted below, so the cell stands on its reason: if `resource_standing_shape`
+        // joins the route's emittable set, MCP reaches it and this cell must become `Serves`.
         let a = declaration(&ActName::Substantiate).unwrap();
         assert_eq!(a.door_coverage.get(&Door::Mcp), Some(&DoorReach::Absent));
         assert!(matches!(
@@ -1516,6 +1522,10 @@ mod tests {
             Some(DoorReach::Serves { .. })
         ));
         assert_eq!(a.served_by.as_deref(), Some("resource_standing_shape"));
+        assert!(
+            crate::types::query::emitted_fragment_for("resource_standing_shape").is_none(),
+            "`/api/query` can now emit this act, so `run_query` reaches it and MCP is not `Absent`"
+        );
         // Annotates rather than selects: no produced set, which is why `claims-carry-standing`
         // has no result shape to land in while `ActResult.produced` is a required `IdSet`.
         assert_eq!(a.produces, None);

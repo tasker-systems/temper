@@ -1,0 +1,15 @@
+title    = "The act registry declares the MCP door as serving `find-resources-with` and `follow-from`"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["internal"]
+status   = "signal-only"
+body = '''
+The two acts' MCP `door_coverage` cells moved from `Absent` to `Serves` with empty shortfall lists.
+The MCP `run_query` tool relays a whole composition to `POST /api/query`, which has admitted both
+acts since they were added, so the cells described a shortfall that did not exist. The registry
+(`ActDeclaration::door_coverage`) is not served by any route: `openapi.json`, the SDKs and the MCP
+tool listing carry the `Door` and `DoorReach` types but never the declared values, so no wire shape
+moves and no request or response changes. A new test derives every act the query route can emit and
+requires its MCP cell to be `Serves`. Who observes: readers of the registry and the tests over it.
+User-visible: no. Release relevance: none; recorded so the correction is findable.
+'''
