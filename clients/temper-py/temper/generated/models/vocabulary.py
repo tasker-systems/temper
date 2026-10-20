@@ -27,10 +27,10 @@ from pydantic_core import to_jsonable_python
 
 class Vocabulary(BaseModel):
     """
-    What a shape lets a caller ask: its askable paths, and whether the list was cut at a bound.  `truncated` is the walk bound met, never a silent short list (spec §2.5): a recursive tree through `properties` is `Depth`, a 2^N `$defs` fan-out is `Paths`, an oversized schema is `SchemaBytes` with no paths.
+    What a shape lets a caller ask: its askable paths, and every bound the list was cut at.  `truncated` names each walk bound met, never a silent short list (spec §2.5): a recursive tree through `properties` is `depth`, a 2^N `$defs` fan-out is `paths`, an oversized schema is `schema_bytes` with no paths, and a walk that spent its budget is `work`. Ordered, and at most one of each.
     """ # noqa: E501
     paths: List[AskablePath]
-    truncated: Optional[BoundKind] = None
+    truncated: Optional[List[BoundKind]] = None
     __properties: ClassVar[List[str]] = ["paths", "truncated"]
 
     model_config = ConfigDict(
@@ -79,11 +79,6 @@ class Vocabulary(BaseModel):
                 if _item_paths:
                     _items.append(_item_paths.to_dict())
             _dict['paths'] = _items
-        # set to None if truncated (nullable) is None
-        # and model_fields_set contains the field
-        if self.truncated is None and "truncated" in self.model_fields_set:
-            _dict['truncated'] = None
-
         return _dict
 
     @classmethod

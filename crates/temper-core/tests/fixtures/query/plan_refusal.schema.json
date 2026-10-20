@@ -52,6 +52,11 @@
           "const": "schema_bytes",
           "description": "[`WalkBounds::max_schema_bytes`] — the schema is larger than the walk reads.",
           "type": "string"
+        },
+        {
+          "const": "work",
+          "description": "[`WalkBounds::max_visits`] — the walk spent its work budget before it could say.",
+          "type": "string"
         }
       ]
     },
@@ -80,7 +85,7 @@
               "type": "null"
             }
           ],
-          "description": "What an element of an array at this path declares. `None`: elements are unconstrained."
+          "description": "What an element of an array at this path declares. `None`: elements are unconstrained.\nNested at most [`MAX_WALK_DEPTH`] arrays deep."
         },
         "types": {
           "description": "The declared JSON types. `None`: no `type` constrains the path. An empty set: the branches\nthat apply here declare types with nothing in common, so no value is admissible.",
@@ -452,7 +457,7 @@
       "type": "object"
     },
     "Vocabulary": {
-      "description": "What a shape lets a caller ask: its askable paths, and whether the list was cut at a bound.\n\n`truncated` is the walk bound met, never a silent short list (spec §2.5): a recursive tree\nthrough `properties` is `Depth`, a 2^N `$defs` fan-out is `Paths`, an oversized schema is\n`SchemaBytes` with no paths.",
+      "description": "What a shape lets a caller ask: its askable paths, and every bound the list was cut at.\n\n`truncated` names each walk bound met, never a silent short list (spec §2.5): a recursive tree\nthrough `properties` is `depth`, a 2^N `$defs` fan-out is `paths`, an oversized schema is\n`schema_bytes` with no paths, and a walk that spent its budget is `work`. Ordered, and at most\none of each.",
       "properties": {
         "paths": {
           "items": {
@@ -461,14 +466,11 @@
           "type": "array"
         },
         "truncated": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/BoundKind"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "items": {
+            "$ref": "#/$defs/BoundKind"
+          },
+          "type": "array",
+          "uniqueItems": true
         }
       },
       "required": [

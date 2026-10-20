@@ -19,14 +19,14 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::reference::{is_integral, jsonb_eq};
+use super::reference::{is_integral, jsonb_contains, jsonb_eq};
 use super::walk::{
     AskablePath, BoundKind, JsonType, PathFacts, PathResolution, Vocabulary, Walk, WalkBounds,
-    MAX_SCHEMA_BYTES, MAX_WALK_DEPTH, MAX_WALK_PATHS,
+    MAX_SCHEMA_BYTES, MAX_WALK_DEPTH, MAX_WALK_PATHS, MAX_WALK_VISITS,
 };
 use super::{
-    ArtifactAsk, ArtifactPredicate, LoadedShape, ShapeLoad, ShapeSuccessor, ARTIFACT_INTENTS,
-    ASKABLE_SHAPE_STATES, DEFAULT_ARTIFACT_INTENTS,
+    ArtifactAsk, ArtifactPredicate, LoadedShape, ShapeIdentity, ShapeLoad, ShapeSuccessor,
+    ARTIFACT_INTENTS, ASKABLE_SHAPE_STATES, DEFAULT_ARTIFACT_INTENTS,
 };
 use crate::types::ids::ShapeId;
 use crate::types::query::filter::{
@@ -140,9 +140,13 @@ pub struct TeachingElision {
 /// Parse-don't-validate: the fields are private and [`validate_ask`] is the only constructor. It is
 /// a validated **output**, not the ask rewritten in place: an array path's `contains` values arrive
 /// wrapped (§3.4, *Why the array row wraps*), and the defaults of §2.1 are applied.
+///
+/// **It carries the identity of the shape it was validated against** — id, version, home and
+/// family, taken from the [`LoadedShape`] and never from the ask — so the seal holds the loaded
+/// shape rows for every ask it admitted (spec §4.3 item 3) and `compile` reads them from one source.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedAsk {
-    shape: ShapeId,
+    shape: ShapeIdentity,
     predicates: Vec<ArtifactPredicate>,
     intent: Vec<&'static str>,
     include_folded: bool,
@@ -150,8 +154,9 @@ pub struct ValidatedAsk {
 }
 
 impl ValidatedAsk {
-    pub fn shape(&self) -> ShapeId {
-        self.shape
+    /// The shape this ask was validated against: the version, home and family the SQL uses.
+    pub fn shape(&self) -> &ShapeIdentity {
+        &self.shape
     }
 
     /// The predicates as bound: every `contains` value at an array path is the one-element array
@@ -173,27 +178,70 @@ impl ValidatedAsk {
     }
 }
 
-/// Refusal step 4 of §3.5: path, operator and value, against the shape the loader admitted.
+/// Refusal step 4 of §3.5: path, operator and value, against the shape the loader admitted. The
+/// shape-free checks are [`validate_ask_form`]'s, run first; steps 1–3 are [`ShapeLoad::loaded`].
 ///
-/// `shape` is the load of `ask.shape`; steps 1–3 are [`ShapeLoad::loaded`].
+/// `shape` must be the load of `ask.shape`. A different shape is a caller defect, and it is
+/// refused `shape_not_askable` rather than validated: an ask is never checked against a schema it
+/// did not name, in any build.
 pub fn validate_ask(
     ask: &ArtifactAsk,
     shape: &LoadedShape,
 ) -> Result<ValidatedAsk, Vec<PlanRefusal>> {
+    if ask.shape != shape.shape_id {
+        return Err(vec![refusal(
+            RefusalReason::ShapeNotAskable,
+            MISMATCHED.to_string(),
+            None,
+        )]);
+    }
     let mut errs = Vec::new();
-    let intent = resolve_terms(&ask.intent, &INTENTS, &mut errs);
-    let shape_states = resolve_terms(&ask.shape_states, &SHAPE_STATES, &mut errs);
-    let predicates = check_predicates(&ask.predicates, shape, &mut errs);
+    let form = check_form(ask, &mut errs);
+    let predicates = against_shape(&ask.predicates, &form.walkable, shape, &mut errs);
     if !errs.is_empty() {
         return Err(errs);
     }
     Ok(ValidatedAsk {
-        shape: ask.shape,
+        shape: shape.identity(),
         predicates,
-        intent,
+        intent: form.intent,
         include_folded: ask.include_folded,
-        shape_states,
+        shape_states: form.shape_states,
     })
+}
+
+/// The checks that need no shape: the term vocabularies, the per-ask caps, and each predicate's
+/// path and value form. Every refusal they raise, at once.
+///
+/// One definition for both callers: [`validate_ask`] runs it before walking the shape, and an
+/// offline check that cannot load shapes (`temper query --check`, spec §4.3 item 5) runs it alone.
+pub fn validate_ask_form(ask: &ArtifactAsk) -> Vec<PlanRefusal> {
+    let mut errs = Vec::new();
+    check_form(ask, &mut errs);
+    errs
+}
+
+/// What the shape-free checks decided: the resolved terms, and which predicates may be walked.
+struct Form {
+    intent: Vec<&'static str>,
+    shape_states: Vec<&'static str>,
+    walkable: Vec<bool>,
+}
+
+fn check_form(ask: &ArtifactAsk, errs: &mut Vec<PlanRefusal>) -> Form {
+    let intent = resolve_terms(&ask.intent, &INTENTS, errs);
+    let shape_states = resolve_terms(&ask.shape_states, &SHAPE_STATES, errs);
+    // Over a count cap nothing is walked: refused once, up front.
+    let walkable = if within_caps(&ask.predicates, errs) {
+        well_formed(&ask.predicates, errs)
+    } else {
+        vec![false; ask.predicates.len()]
+    };
+    Form {
+        intent,
+        shape_states,
+        walkable,
+    }
 }
 
 impl ShapeLoad {
@@ -229,6 +277,9 @@ impl ShapeLoad {
 
 const NOT_ASKABLE: &str =
     "the named shape does not exist or you cannot read it, so nothing can be asked of it";
+
+const MISMATCHED: &str = "the shape loaded for this ask is not the shape it names, so it was not \
+     checked against it";
 
 const SUPERSEDED: &str = "the named shape has been amended. An ask is never re-pointed at a \
      version it was not written against: if its predicates still mean the same thing, ask the \
@@ -370,19 +421,6 @@ fn resolve_terms(
 
 // ── The predicates ──────────────────────────────────────────────────────────────────────────────
 
-/// The predicates as bound, or none when a refusal was raised (the caller discards them then).
-fn check_predicates(
-    predicates: &[ArtifactPredicate],
-    shape: &LoadedShape,
-    errs: &mut Vec<PlanRefusal>,
-) -> Vec<ArtifactPredicate> {
-    if !within_caps(predicates, errs) {
-        return Vec::new();
-    }
-    let formed = well_formed(predicates, errs);
-    against_shape(predicates, &formed, shape, errs)
-}
-
 /// The two per-ask cost caps (spec §3.4, *Caps*), each refused by name and never clamped.
 fn within_caps(predicates: &[ArtifactPredicate], errs: &mut Vec<PlanRefusal>) -> bool {
     let count = predicates.len();
@@ -496,6 +534,9 @@ fn against_shape(
     shape: &LoadedShape,
     errs: &mut Vec<PlanRefusal>,
 ) -> Vec<ArtifactPredicate> {
+    if !formed.contains(&true) {
+        return Vec::new();
+    }
     let walk = Walk::new(&shape.schema, &WalkBounds::BUILD);
     let sorted = sort(predicates, formed, &walk);
     refuse_paths(&sorted, &walk, shape.shape_id, errs);
@@ -586,7 +627,7 @@ fn refuse_paths(
         Ok(walk) => walk.enumerate(),
         Err(at) => Vocabulary {
             paths: Vec::new(),
-            truncated: Some(*at),
+            truncated: BTreeSet::from([*at]),
         },
     };
     let mut rule = "a path is not one the shape declares — only `properties` chains, local \
@@ -618,7 +659,7 @@ fn offending(found: Vec<(usize, AskablePath)>, shape: ShapeId) -> (Vec<usize>, R
     let teaches = teaching(
         Vocabulary {
             paths,
-            truncated: None,
+            truncated: BTreeSet::new(),
         },
         shape,
     );
@@ -632,6 +673,7 @@ fn bound_said(at: BoundKind) -> String {
         BoundKind::SchemaBytes => {
             format!("the walk reads a schema of at most {MAX_SCHEMA_BYTES} bytes")
         }
+        BoundKind::Work => format!("the walk makes at most {MAX_WALK_VISITS} visits"),
     }
 }
 
@@ -670,7 +712,8 @@ fn teaching(vocabulary: Vocabulary, shape: ShapeId) -> RefusalTeaching {
 fn bind(op: &PropertyOp, facts: &PathFacts) -> Result<PropertyOp, Fault> {
     match op {
         PropertyOp::HasKey => Ok(PropertyOp::HasKey),
-        PropertyOp::Contains { .. } if !facts.admits_contains() => Err(Fault::Operator),
+        // Every `contains` refusal is the value's (§3.4: the contains rows refuse
+        // `value_outside_shape`), including at a path whose branches declare no common type.
         PropertyOp::Contains { values } => values
             .iter()
             .map(|v| bind_contains(facts, v).ok_or(Fault::Value))
@@ -682,16 +725,16 @@ fn bind(op: &PropertyOp, facts: &PathFacts) -> Result<PropertyOp, Fault> {
 }
 
 /// The `contains` rows. A value whose own type the path declares is bound as it is — the scalar
-/// row (type, then enum membership) or the object row (an object; containment is partial, so an
-/// object is never an enum-membership question). Otherwise, at a path declaring `array`, the value
-/// is an **element**: admissible under `items` and bound wrapped as `[v]`. An untyped path binds
-/// every value unwrapped, with the incumbent `PropertyOp` semantics.
+/// row or the object row, each then held to the path's enum. Otherwise, at a path declaring
+/// `array`, the value is an **element**: admissible under `items` and bound wrapped as `[v]`. An
+/// untyped path binds every value unwrapped, with the incumbent `PropertyOp` semantics, and is
+/// still held to its enum.
 fn bind_contains(facts: &PathFacts, value: &Value) -> Option<Value> {
     let Some(types) = &facts.types else {
-        return scalar_member(facts.values.as_deref(), value).then(|| value.clone());
+        return member(facts.values.as_deref(), value).then(|| value.clone());
     };
     if !value.is_array() && admits_type(types, value) {
-        return scalar_member(facts.values.as_deref(), value).then(|| value.clone());
+        return member(facts.values.as_deref(), value).then(|| value.clone());
     }
     if types.contains(&JsonType::Array) && element_admitted(facts.items.as_deref(), value) {
         return Some(Value::Array(vec![value.clone()]));
@@ -718,16 +761,20 @@ fn element_admitted(items: Option<&PathFacts>, value: &Value) -> bool {
         return true;
     };
     items.types.as_ref().is_none_or(|t| admits_type(t, value))
-        && scalar_member(items.values.as_deref(), value)
+        && member(items.values.as_deref(), value)
 }
 
-/// Enum membership, by jsonb equality, for a scalar. A container's containment is partial, so it is
-/// not a membership question and is admitted here.
-fn scalar_member(values: Option<&[Value]>, value: &Value) -> bool {
-    if value.is_array() || value.is_object() {
-        return true;
-    }
-    values.is_none_or(|members| members.iter().any(|m| jsonb_eq(m, value)))
+/// Whether a value can match under an enum. A scalar must equal a member (jsonb equality, so `5` is
+/// `5.0`). A container probe matches by containment, which is partial, so it must be contained by
+/// some member — a member of the same kind holding it; otherwise no conforming value contains it.
+fn member(values: Option<&[Value]>, value: &Value) -> bool {
+    values.is_none_or(|members| {
+        if value.is_array() || value.is_object() {
+            members.iter().any(|m| jsonb_contains(m, value))
+        } else {
+            members.iter().any(|m| jsonb_eq(m, value))
+        }
+    })
 }
 
 /// The `compare` row: a number where `number` or `integer` is declared (a non-integral bound at an
@@ -870,10 +917,12 @@ mod tests {
                   contains: [V, V, V, V, A, V, V], compare: [O, O, O, O, O, O, O] },
             Row { declared: json!({ "type": "null", "enum": [null] }), has_key: A,
                   contains: [V, V, V, V, A, V, V], compare: [O, O, O, O, O, O, O] },
-            // object — each value must be an object; containment is partial, not membership
+            // object — each value must be an object; under an enum, one some member contains
             Row { declared: json!({ "type": "object" }), has_key: A,
                   contains: [V, V, V, V, V, A, V], compare: [O, O, O, O, O, O, O] },
             Row { declared: json!({ "type": "object", "enum": [{ "z": 1 }] }), has_key: A,
+                  contains: [V, V, V, V, V, V, V], compare: [O, O, O, O, O, O, O] },
+            Row { declared: json!({ "type": "object", "enum": [{ "k": 1, "z": 2 }] }), has_key: A,
                   contains: [V, V, V, V, V, A, V], compare: [O, O, O, O, O, O, O] },
             // array of strings — each value is an ELEMENT, wrapped; `["a"]` is not a string element
             Row { declared: json!({ "type": "array", "items": { "type": "string" } }), has_key: A,
@@ -881,10 +930,13 @@ mod tests {
             Row { declared: json!({ "type": "array", "items": { "type": "string", "enum": ["z"] } }),
                   has_key: A,
                   contains: [V, V, V, V, V, V, V], compare: [O, O, O, O, O, O, O] },
-            // no type — every operator; an enum constrains scalars only
+            // no type — every operator; an enum holds scalars to membership and containers to
+            // containment by a member of their own kind
             Row { declared: json!({}), has_key: A,
                   contains: [A, A, A, A, A, A, A], compare: [A, A, A, A, A, A, A] },
             Row { declared: json!({ "enum": ["z", 7] }), has_key: A,
+                  contains: [V, V, V, V, V, V, V], compare: [A, A, A, A, A, A, A] },
+            Row { declared: json!({ "enum": [{ "k": 1 }, ["a", "b"]] }), has_key: A,
                   contains: [V, V, V, V, V, A, A], compare: [A, A, A, A, A, A, A] },
         ]
     }
@@ -898,11 +950,19 @@ mod tests {
         ]
     }
 
+    /// A validator under test: `validate_ask`, or a stand-in for one.
+    type Validator = dyn Fn(&ArtifactAsk, &LoadedShape) -> Result<ValidatedAsk, Vec<PlanRefusal>>;
+
     /// What `validate_ask` says about one predicate at `["p"]`.
     fn verdict(schema: &Value, op: PropertyOp) -> Verdict {
+        verdict_by(&validate_ask, schema, op)
+    }
+
+    /// What a validator says about one predicate at `["p"]`.
+    fn verdict_by(validate: &Validator, schema: &Value, op: PropertyOp) -> Verdict {
         let shape = shape_of(schema.clone());
         let original = op.clone();
-        match validate_ask(&ask(vec![at(&["p"], op)]), &shape) {
+        match validate(&ask(vec![at(&["p"], op)]), &shape) {
             Ok(v) => match (&original, &v.predicates()[0].op) {
                 (
                     PropertyOp::Contains { values: asked },
@@ -926,66 +986,92 @@ mod tests {
         json!({ "type": "object", "properties": { "p": declared } })
     }
 
-    #[test]
-    fn every_operator_declared_type_enum_and_value_type_has_its_hand_written_verdict() {
+    /// Every cell of the expectation table and the undeclared paths, as (schema, operator, the
+    /// hand-written verdict).
+    fn cells() -> Vec<(Value, PropertyOp, Verdict)> {
+        let mut out = Vec::new();
         for row in table() {
             let schema = wrapped(&row.declared);
-            assert_eq!(
-                verdict(&schema, PropertyOp::HasKey),
-                row.has_key,
-                "has_key at {}",
-                row.declared
-            );
+            out.push((schema.clone(), PropertyOp::HasKey, row.has_key));
             for (i, probe) in probes().into_iter().enumerate() {
-                assert_eq!(
-                    verdict(&schema, contains(vec![probe.clone()])),
+                out.push((
+                    schema.clone(),
+                    contains(vec![probe.clone()]),
                     row.contains[i],
-                    "contains {probe} at {}",
-                    row.declared
-                );
-                assert_eq!(
-                    verdict(&schema, compare(probe.clone())),
-                    row.compare[i],
-                    "compare {probe} at {}",
-                    row.declared
-                );
+                ));
+                out.push((schema.clone(), compare(probe), row.compare[i]));
             }
         }
+        for schema in undeclared() {
+            out.push((schema.clone(), PropertyOp::HasKey, P));
+            out.push((schema.clone(), contains(vec![json!("a")]), P));
+            out.push((schema, compare(json!(1)), P));
+        }
+        out
     }
 
     #[test]
-    fn an_undeclared_path_is_refused_under_every_operator() {
-        for schema in undeclared() {
-            assert_eq!(verdict(&schema, PropertyOp::HasKey), P, "{schema}");
-            assert_eq!(verdict(&schema, contains(vec![json!("a")])), P, "{schema}");
-            assert_eq!(verdict(&schema, compare(json!(1))), P, "{schema}");
+    fn every_operator_declared_type_enum_and_value_type_has_its_hand_written_verdict() {
+        for (schema, op, expected) in cells() {
+            let said = format!("{op:?} at {schema}");
+            assert_eq!(verdict(&schema, op), expected, "{said}");
         }
+    }
+
+    /// A `validate_ask` that refuses nothing: every predicate admitted as written.
+    fn refuses_nothing(
+        ask: &ArtifactAsk,
+        shape: &LoadedShape,
+    ) -> Result<ValidatedAsk, Vec<PlanRefusal>> {
+        Ok(ValidatedAsk {
+            shape: shape.identity(),
+            predicates: ask.predicates.clone(),
+            intent: vec![],
+            include_folded: false,
+            shape_states: vec![],
+        })
     }
 
     #[test]
     fn a_validator_that_refuses_nothing_fails_the_expectation_table() {
-        // The bite, held by the table's contents: a `validate_ask` returning no refusals answers
-        // A or W for every row, so each of the three shape reasons must be expected somewhere.
-        let rows = table();
-        let expected: Vec<Verdict> = rows
-            .iter()
-            .flat_map(|r| {
-                std::iter::once(r.has_key)
-                    .chain(r.contains)
-                    .chain(r.compare)
+        // The bite: run the same table against a stand-in that refuses nothing, and collect the
+        // verdicts it gets wrong. It must fail rows of all three shape reasons.
+        let failed: Vec<Verdict> = cells()
+            .into_iter()
+            .filter_map(|(schema, op, expected)| {
+                (verdict_by(&refuses_nothing, &schema, op) != expected).then_some(expected)
             })
             .collect();
-        assert!(
-            expected.contains(&V),
-            "value_outside_shape is expected somewhere"
-        );
-        assert!(
-            expected.contains(&O),
-            "operator_outside_shape is expected somewhere"
-        );
-        assert!(
-            !undeclared().is_empty(),
-            "path_outside_shape is expected somewhere"
+        for reason in [P, O, V] {
+            assert!(
+                failed.contains(&reason),
+                "no {reason:?} row fails the stand-in"
+            );
+        }
+    }
+
+    #[test]
+    fn contains_where_the_branches_share_no_type_refuses_the_value() {
+        let schema = wrapped(&json!({ "allOf": [{ "type": "string" }, { "type": "number" }] }));
+        assert_eq!(verdict(&schema, contains(vec![json!("a")])), V);
+        assert_eq!(verdict(&schema, compare(json!("a"))), O);
+    }
+
+    #[test]
+    fn a_container_value_is_held_to_containment_by_an_enum_member() {
+        let schema = wrapped(&json!({ "enum": [{ "k": 1, "z": 2 }, ["a", "b"]] }));
+        assert_eq!(verdict(&schema, contains(vec![json!({ "z": 2 })])), A);
+        assert_eq!(verdict(&schema, contains(vec![json!(["b"])])), A);
+        assert_eq!(verdict(&schema, contains(vec![json!({ "k": 2 })])), V);
+        assert_eq!(verdict(&schema, contains(vec![json!(["c"])])), V);
+        // `{}` is held by the object member, and by no member of the other kind.
+        assert_eq!(verdict(&schema, contains(vec![json!({})])), A);
+        assert_eq!(
+            verdict(
+                &wrapped(&json!({ "enum": [["a"]] })),
+                contains(vec![json!({})])
+            ),
+            V
         );
     }
 
@@ -1042,6 +1128,52 @@ mod tests {
             &[at(&["rows"], contains(vec![json!([{ "a": 1 }])]))]
         );
         assert_eq!(a.predicates[0].op, contains(vec![json!({ "a": 1 })]));
+    }
+
+    // ── The shape a validated ask carries ───────────────────────────────────────────────────
+
+    #[test]
+    fn a_validated_ask_carries_the_loaded_shapes_identity() {
+        let v = validate_ask(&ask(vec![]), &shape_of(json!({}))).unwrap();
+        assert_eq!(
+            v.shape(),
+            &ShapeIdentity {
+                shape_id: ShapeId::from(Uuid::from_u128(7)),
+                shape_version: 1,
+                home_anchor_table: "kb_contexts".to_string(),
+                home_anchor_id: Uuid::from_u128(1),
+                kind_owner_table: "kb_teams".to_string(),
+                kind_owner_id: Uuid::from_u128(2),
+                artifact_kind: "measurement".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_shape_other_than_the_one_the_ask_names_is_refused_not_checked() {
+        let mut a = ask(vec![at(&["undeclared"], PropertyOp::HasKey)]);
+        a.shape = ShapeId::from(Uuid::from_u128(8));
+        let rs = refusals(&a, &shape_of(json!({})));
+        assert_eq!(reasons(&rs), vec![RefusalReason::ShapeNotAskable]);
+        assert_eq!(rs[0].detail, MISMATCHED);
+    }
+
+    #[test]
+    fn the_form_checks_run_alone_and_need_no_shape() {
+        let mut a = ask(vec![
+            at(&[], PropertyOp::HasKey),
+            at(&["anything"], PropertyOp::HasKey),
+        ]);
+        a.intent = vec!["favourite".to_string()];
+        // The undeclared-anywhere path is not judged: there is no shape to judge it by.
+        assert_eq!(
+            reasons(&validate_ask_form(&a)),
+            vec![
+                RefusalReason::UnknownArtifactIntent,
+                RefusalReason::EmptyArtifactPath
+            ]
+        );
+        assert!(validate_ask_form(&ask(vec![at(&["x"], PropertyOp::HasKey)])).is_empty());
     }
 
     // ── The term vocabularies ───────────────────────────────────────────────────────────────
@@ -1216,7 +1348,7 @@ mod tests {
                         ..PathFacts::default()
                     }
                 )],
-                truncated: None,
+                truncated: BTreeSet::new(),
             })
         );
         assert_eq!(teaches.beyond_bound, None);
@@ -1253,7 +1385,7 @@ mod tests {
             teaches.vocabulary,
             Some(Vocabulary {
                 paths: vec![],
-                truncated: Some(BoundKind::SchemaBytes)
+                truncated: BTreeSet::from([BoundKind::SchemaBytes])
             })
         );
     }

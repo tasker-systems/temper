@@ -66,7 +66,7 @@ export type AskablePath = { path: Array<string>, facts: PathFacts, operators: Ar
 /**
  * Which walk bound was met. A truncated vocabulary and a refusal both name it.
  */
-export type BoundKind = "depth" | "paths" | "schema_bytes";
+export type BoundKind = "depth" | "paths" | "schema_bytes" | "work";
 
 /**
  * A JSON type as JSON Schema's `type` keyword names it. `integer` is the integral subset of
@@ -90,6 +90,7 @@ types: Array<JsonType> | null,
 values: Array<JsonValue> | null, 
 /**
  * What an element of an array at this path declares. `None`: elements are unconstrained.
+ * Nested at most [`MAX_WALK_DEPTH`] arrays deep.
  */
 items: PathFacts | null, };
 
@@ -148,10 +149,11 @@ export type ShapeSuccessor = { shape_id: ShapeId, shape_version: number, };
 export type TeachingElision = { omitted_paths: number, shape: ShapeId, };
 
 /**
- * What a shape lets a caller ask: its askable paths, and whether the list was cut at a bound.
+ * What a shape lets a caller ask: its askable paths, and every bound the list was cut at.
  *
- * `truncated` is the walk bound met, never a silent short list (spec §2.5): a recursive tree
- * through `properties` is `Depth`, a 2^N `$defs` fan-out is `Paths`, an oversized schema is
- * `SchemaBytes` with no paths.
+ * `truncated` names each walk bound met, never a silent short list (spec §2.5): a recursive tree
+ * through `properties` is `depth`, a 2^N `$defs` fan-out is `paths`, an oversized schema is
+ * `schema_bytes` with no paths, and a walk that spent its budget is `work`. Ordered, and at most
+ * one of each.
  */
-export type Vocabulary = { paths: Array<AskablePath>, truncated: BoundKind | null, };
+export type Vocabulary = { paths: Array<AskablePath>, truncated: Array<BoundKind>, };

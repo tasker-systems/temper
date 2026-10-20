@@ -18,9 +18,10 @@ module Temper::Generated
     DEPTH = "depth".freeze
     PATHS = "paths".freeze
     SCHEMA_BYTES = "schema_bytes".freeze
+    WORK = "work".freeze
 
     def self.all_vars
-      @all_vars ||= [DEPTH, PATHS, SCHEMA_BYTES].freeze
+      @all_vars ||= [DEPTH, PATHS, SCHEMA_BYTES, WORK].freeze
     end
 
     # Builds the enum from string

@@ -4887,7 +4887,7 @@ export interface components {
          * @description Which walk bound was met. A truncated vocabulary and a refusal both name it.
          * @enum {string}
          */
-        BoundKind: "depth" | "paths" | "schema_bytes";
+        BoundKind: "depth" | "paths" | "schema_bytes" | "work";
         /** @description An aggregated cross-territory bridge (Tier-0). */
         Bridge: {
             /** Format: int32 */
@@ -11270,15 +11270,16 @@ export interface components {
             target_id: string;
         };
         /**
-         * @description What a shape lets a caller ask: its askable paths, and whether the list was cut at a bound.
+         * @description What a shape lets a caller ask: its askable paths, and every bound the list was cut at.
          *
-         *     `truncated` is the walk bound met, never a silent short list (spec §2.5): a recursive tree
-         *     through `properties` is `Depth`, a 2^N `$defs` fan-out is `Paths`, an oversized schema is
-         *     `SchemaBytes` with no paths.
+         *     `truncated` names each walk bound met, never a silent short list (spec §2.5): a recursive tree
+         *     through `properties` is `depth`, a 2^N `$defs` fan-out is `paths`, an oversized schema is
+         *     `schema_bytes` with no paths, and a walk that spent its budget is `work`. Ordered, and at most
+         *     one of each.
          */
         Vocabulary: {
             paths: components["schemas"]["AskablePath"][];
-            truncated?: components["schemas"]["BoundKind"] | null;
+            truncated?: components["schemas"]["BoundKind"][];
         };
         /** @description The **wide** arm, its disposition, and whether its signal was available at all. */
         WideArm: {

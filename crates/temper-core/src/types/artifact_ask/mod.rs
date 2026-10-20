@@ -8,8 +8,9 @@
 //!
 //! - [`walk`] — the bounded schema walk: what a schema declares at one path ([`walk::resolve`]),
 //!   and every askable path up to the bounds ([`walk::enumerate`]);
-//! - [`validate`] — [`validate_ask`], refusal step 4 of §3.5, and the steps 1–3 refusals a
-//!   [`ShapeLoad`] carries; the [`RefusalTeaching`] a refusal carries;
+//! - [`validate`] — [`validate_ask`], refusal step 4 of §3.5, with its shape-free half
+//!   [`validate_ask_form`]; the steps 1–3 refusals a [`ShapeLoad`] carries; the
+//!   [`RefusalTeaching`] a refusal carries;
 //! - [`mod@reference`] — the Rust reference evaluator the SQL is differential-tested against.
 //!
 //! **Two halves, one seam** (§2.4). The loader in `temper-services` holds the pool, the principal
@@ -31,8 +32,9 @@ use crate::types::query::PropertyOp;
 
 pub use reference::matches;
 pub use validate::{
-    validate_ask, RefusalTeaching, TeachingElision, ValidatedAsk, MAX_ARTIFACT_PATH_DEPTH,
-    MAX_ARTIFACT_PATH_SEGMENT_BYTES, MAX_ASK_PREDICATES, MAX_ASK_PROBES, MAX_TEACHING_BYTES,
+    validate_ask, validate_ask_form, RefusalTeaching, TeachingElision, ValidatedAsk,
+    MAX_ARTIFACT_PATH_DEPTH, MAX_ARTIFACT_PATH_SEGMENT_BYTES, MAX_ASK_PREDICATES, MAX_ASK_PROBES,
+    MAX_TEACHING_BYTES,
 };
 pub use walk::{
     enumerate, resolve, AskOperator, AskablePath, BoundKind, JsonType, PathFacts, PathResolution,
@@ -125,6 +127,48 @@ pub struct LoadedShape {
     pub kind_owner_id: Uuid,
     pub artifact_kind: String,
     pub schema: serde_json::Value,
+}
+
+impl LoadedShape {
+    /// Everything that names this version, without its schema: what a validated ask carries to the
+    /// seal and to `compile`.
+    pub fn identity(&self) -> ShapeIdentity {
+        // Destructured whole, so a field added here does not compile until it is placed.
+        let LoadedShape {
+            shape_id,
+            shape_version,
+            home_anchor_table,
+            home_anchor_id,
+            kind_owner_table,
+            kind_owner_id,
+            artifact_kind,
+            schema: _,
+        } = self;
+        ShapeIdentity {
+            shape_id: *shape_id,
+            shape_version: *shape_version,
+            home_anchor_table: home_anchor_table.clone(),
+            home_anchor_id: *home_anchor_id,
+            kind_owner_table: kind_owner_table.clone(),
+            kind_owner_id: *kind_owner_id,
+            artifact_kind: artifact_kind.clone(),
+        }
+    }
+}
+
+/// One shape version's identity — id and version, home pair, family triple — as a validated ask
+/// carries it (spec §4.3 item 3: the seal holds *"the loaded shape rows (id, home, family,
+/// version) for every ask it admitted"*). The home and family define the governed population
+/// (§2.3); the id and version are what the trace discloses as validated against.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShapeIdentity {
+    pub shape_id: ShapeId,
+    pub shape_version: i32,
+    pub home_anchor_table: String,
+    pub home_anchor_id: Uuid,
+    pub kind_owner_table: String,
+    pub kind_owner_id: Uuid,
+    pub artifact_kind: String,
 }
 
 /// The version in force after a fold: the live row at the same home and family.

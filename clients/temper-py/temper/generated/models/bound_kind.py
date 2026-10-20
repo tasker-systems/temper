@@ -29,6 +29,7 @@ class BoundKind(str, Enum):
     DEPTH = 'depth'
     PATHS = 'paths'
     SCHEMA_BYTES = 'schema_bytes'
+    WORK = 'work'
 
     @classmethod
     def from_json(cls, json_str: str) -> Self:

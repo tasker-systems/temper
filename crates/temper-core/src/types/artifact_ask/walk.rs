@@ -1,28 +1,41 @@
 //! The bounded schema walk — what a shape declares at a path, decided over a `serde_json::Value`
 //! with no JSON Schema validator (spec §2.4, §3.3).
 //!
-//! **It walks exactly the constructs of the §3.3 table, and nothing more.** `properties` chains;
-//! a local `$ref` into `#/$defs/…` or `#/definitions/…`; boolean subschemas; `allOf` (merged);
-//! `anyOf` / `oneOf` (unioned). `additionalProperties`, `patternProperties`,
-//! `unevaluatedProperties`, `if`/`then`/`else`, `dependentSchemas`, and every `$ref` that is not a
-//! local definition are **not walked**, so a path reachable only through them is not declared — the
-//! declared hole of spec §11, refused as `path_outside_shape` rather than guessed at.
+//! **It walks exactly the constructs of the §3.3 table, and nothing more.** `properties` chains; a
+//! local `$ref` — any `#`-prefixed JSON pointer into the schema, `#/$defs/…` and `#/definitions/…`
+//! among them; boolean subschemas; `allOf` (merged); `anyOf` / `oneOf` (unioned).
+//! `additionalProperties`, `patternProperties`, `unevaluatedProperties`, `if`/`then`/`else` and
+//! `dependentSchemas` are **not walked**, so a path reachable only through them is not declared —
+//! the declared hole of spec §11, refused as `path_outside_shape` rather than guessed at.
+//!
+//! **A `$ref` the walk does not follow is `true`, under every draft.** An anchor, a reference
+//! resolved against an embedded `$id`, or a remote one: the walk cannot see what it says, so the
+//! subschema it stands for is declared and unconstrained. That never refuses a declared path; a
+//! value admitted there may then match nothing, which is an honest empty.
 //!
 //! **The walk sees only schemas that compiled.** The loader (spec §2.4) compiled the schema with
 //! the no-fetch compiler before handing it here, so an unrecognised `$schema` or a remote `$ref` has
-//! already been decided `Uncompilable`. What this module reads `$schema` for is the one place the
-//! drafts differ for it: whether keywords beside a `$ref` apply (2019-09 and 2020-12) or are
-//! ignored (draft-04/06/07), and whether `const` and `prefixItems` exist. The draft names are the
-//! ones `jsonschema` recognises (`referencing::Draft::from_schema_uri`); an absent `$schema` is
-//! 2020-12, its default.
+//! already been decided `Uncompilable`. What this module reads `$schema` for is where the drafts
+//! differ for it: whether keywords beside a `$ref` apply (2019-09 and 2020-12) or are ignored
+//! (draft-04/06/07), and whether `const` and `prefixItems` exist. The draft names are the ones
+//! `jsonschema` recognises (`referencing::Draft::from_schema_uri`); an absent `$schema` is 2020-12,
+//! its default.
 //!
-//! **Three bounds, each named** ([`BoundKind`]): a schema is written by any author of its home and
-//! read by every reader of it, and a cycle guard alone does not bound the walk — a non-cyclic
-//! `$defs` graph in which each definition references the next twice declares 2^N paths from a few
-//! kilobytes (§3.3, *The walk is bounded*). [`resolve`] walks one path lazily and never enumerates;
-//! its work is bounded by memoising each `(subschema, path position)` pair, so a fan-out that
-//! repeats a definition costs its size once rather than 2^N times. [`enumerate`] produces the
-//! advertised vocabulary and stops at the path budget, saying so.
+//! # Bounded in time, memory and stack (§3.3: the walk "never stalls or exhausts the server")
+//!
+//! A schema is written by any author of its home and read by every reader of it, and a cycle guard
+//! alone does not bound the walk: a non-cyclic `$defs` graph in which each definition references
+//! the next twice declares 2^N paths from a few kilobytes, and an `allOf` of tens of thousands of
+//! branches makes every visit to its schema expensive. So:
+//!
+//! - **Four named bounds** ([`BoundKind`]): path depth, advertised paths, schema bytes, and a
+//!   **work budget** of subschema visits shared by everything one [`resolve`] or one [`enumerate`]
+//!   does. Meeting any of them is reported, never a stall.
+//! - **No recursion over the schema.** A subschema is evaluated from an explicit stack, so a chain
+//!   of thousands of `$ref` hops costs heap, not call stack. The only recursion left is over the
+//!   [`PathFacts`] value built, whose `items` nesting is held to the depth bound.
+//! - **Memoised per walk** by `(subschema, path position)`, so a definition referenced many times
+//!   at one position is evaluated once.
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
@@ -34,7 +47,8 @@ use crate::types::query::filter::json_bytes;
 
 /// The deepest path, in object-key segments, the walk descends to. A deeper ask is
 /// [`PathResolution::BeyondBound`]`(`[`BoundKind::Depth`]`)`, refused `path_outside_shape` with
-/// `teaches` naming the bound (spec §2.5).
+/// `teaches` naming the bound (spec §2.5). It also bounds how many array levels deep element facts
+/// ([`PathFacts::items`]) are reported; past it an element is unconstrained.
 ///
 /// # 16
 ///
@@ -64,16 +78,30 @@ pub const MAX_WALK_PATHS: usize = 1024;
 ///
 /// Today a schema is bounded only by the 25 MiB gated request body (spec §3.3). A JSON Schema for
 /// one family of structured records is kilobytes; 256 KiB admits two orders of magnitude more than
-/// that and keeps every walk — and every memo the walk keeps — small.
+/// that, and it bounds how much any one subschema can hold — the widest `allOf` is under 100,000
+/// branches.
 pub const MAX_SCHEMA_BYTES: usize = 256 * 1024;
 
-/// The walk's three bounds. The values the build runs are [`WalkBounds::BUILD`]; tests construct
+/// The most subschema visits one [`resolve`] or one [`enumerate`] makes, counted as each subschema
+/// is scheduled for evaluation or expansion. Past it the walk stops at [`BoundKind::Work`].
+///
+/// # 65,536
+///
+/// The other three bounds limit the answer, not the work behind it: an `allOf` of ~85,000 empty
+/// branches beside a two-way fan-out fits every one of them and costs ~10⁹ visits to enumerate.
+/// This one limits the work directly. A real shape needs tens of visits per path — a `properties`
+/// step, a `$ref` hop, an `allOf` or two — so the vocabulary of a shape at [`MAX_WALK_PATHS`] with
+/// sixty-four visits each fits, and a pathological schema stops after a few milliseconds of work.
+pub const MAX_WALK_VISITS: usize = 65_536;
+
+/// The walk's four bounds. The values the build runs are [`WalkBounds::BUILD`]; tests construct
 /// smaller ones to reach a bound without a large schema.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WalkBounds {
     pub max_depth: usize,
     pub max_paths: usize,
     pub max_schema_bytes: usize,
+    pub max_visits: usize,
 }
 
 impl WalkBounds {
@@ -82,6 +110,7 @@ impl WalkBounds {
         max_depth: MAX_WALK_DEPTH,
         max_paths: MAX_WALK_PATHS,
         max_schema_bytes: MAX_SCHEMA_BYTES,
+        max_visits: MAX_WALK_VISITS,
     };
 }
 
@@ -99,6 +128,8 @@ pub enum BoundKind {
     Paths,
     /// [`WalkBounds::max_schema_bytes`] — the schema is larger than the walk reads.
     SchemaBytes,
+    /// [`WalkBounds::max_visits`] — the walk spent its work budget before it could say.
+    Work,
 }
 
 /// A JSON type as JSON Schema's `type` keyword names it. `integer` is the integral subset of
@@ -162,6 +193,7 @@ pub struct PathFacts {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub values: Option<Vec<Value>>,
     /// What an element of an array at this path declares. `None`: elements are unconstrained.
+    /// Nested at most [`MAX_WALK_DEPTH`] arrays deep.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "web-api", schema(no_recursion))]
     pub items: Option<Box<PathFacts>>,
@@ -173,11 +205,6 @@ impl PathFacts {
         self.types.is_none() && self.values.is_none() && self.items.is_none()
     }
 
-    /// Whether `contains` can admit any value here: the path is untyped, or declares some type.
-    pub fn admits_contains(&self) -> bool {
-        self.types.as_ref().is_none_or(|t| !t.is_empty())
-    }
-
     /// Whether `compare` is feasible here: the path declares `number`, `integer` or `string`, or
     /// declares no type (spec §3.4, the `compare` row).
     pub fn admits_compare(&self) -> bool {
@@ -187,12 +214,11 @@ impl PathFacts {
         })
     }
 
-    /// The operators feasible at this path, in [`AskOperator`] order.
+    /// The operators feasible at this path, in [`AskOperator`] order. `has_key` and `contains`
+    /// always are — whether a `contains` value is admissible is the value's question
+    /// (`value_outside_shape`), never the operator's.
     pub fn operators(&self) -> Vec<AskOperator> {
-        let mut ops = vec![AskOperator::HasKey];
-        if self.admits_contains() {
-            ops.push(AskOperator::Contains);
-        }
+        let mut ops = vec![AskOperator::HasKey, AskOperator::Contains];
         if self.admits_compare() {
             ops.push(AskOperator::Compare);
         }
@@ -238,11 +264,12 @@ impl AskablePath {
     }
 }
 
-/// What a shape lets a caller ask: its askable paths, and whether the list was cut at a bound.
+/// What a shape lets a caller ask: its askable paths, and every bound the list was cut at.
 ///
-/// `truncated` is the walk bound met, never a silent short list (spec §2.5): a recursive tree
-/// through `properties` is `Depth`, a 2^N `$defs` fan-out is `Paths`, an oversized schema is
-/// `SchemaBytes` with no paths.
+/// `truncated` names each walk bound met, never a silent short list (spec §2.5): a recursive tree
+/// through `properties` is `depth`, a 2^N `$defs` fan-out is `paths`, an oversized schema is
+/// `schema_bytes` with no paths, and a walk that spent its budget is `work`. Ordered, and at most
+/// one of each.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -250,8 +277,8 @@ impl AskablePath {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct Vocabulary {
     pub paths: Vec<AskablePath>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub truncated: Option<BoundKind>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub truncated: BTreeSet<BoundKind>,
 }
 
 /// Where one asked path stands against the schema.
@@ -279,7 +306,7 @@ pub fn enumerate(schema: &Value, bounds: &WalkBounds) -> Vocabulary {
         Ok(walk) => walk.enumerate(),
         Err(bound) => Vocabulary {
             paths: Vec::new(),
-            truncated: Some(bound),
+            truncated: BTreeSet::from([bound]),
         },
     }
 }
@@ -335,6 +362,23 @@ impl Draft {
     }
 }
 
+/// The visits one walk may still make. Shared by everything one `resolve` or one `enumerate` does.
+#[derive(Debug)]
+struct Budget {
+    left: usize,
+}
+
+impl Budget {
+    fn new(visits: usize) -> Budget {
+        Budget { left: visits }
+    }
+
+    fn spend(&mut self, visits: usize) -> Result<(), BoundKind> {
+        self.left = self.left.checked_sub(visits).ok_or(BoundKind::Work)?;
+        Ok(())
+    }
+}
+
 /// One schema, measured and its draft selected, ready to resolve paths against.
 #[derive(Debug)]
 pub(super) struct Walk<'s> {
@@ -356,29 +400,45 @@ impl<'s> Walk<'s> {
         })
     }
 
+    /// One path, under a budget of its own.
     pub(super) fn resolve(&self, path: &[String]) -> PathResolution {
+        self.resolve_within(path, &mut Budget::new(self.bounds.max_visits))
+    }
+
+    fn resolve_within(&self, path: &[String], budget: &mut Budget) -> PathResolution {
         if path.len() > self.bounds.max_depth {
             return PathResolution::BeyondBound(BoundKind::Depth);
         }
         let mut resolver = Resolver {
             walk: self,
             path,
+            budget,
             memo: HashMap::new(),
             active: HashSet::new(),
         };
-        match resolver.reach(self.root, 0) {
-            Reach::Declared(facts) => PathResolution::Declared(facts),
-            Reach::Silent | Reach::Forbidden => PathResolution::NotDeclared,
+        match resolver.run() {
+            Ok(Reach::Declared(facts)) => PathResolution::Declared(facts),
+            Ok(Reach::Silent | Reach::Forbidden) => PathResolution::NotDeclared,
+            Err(bound) => PathResolution::BeyondBound(bound),
         }
     }
 
     /// Breadth-first over property keys, shallowest paths first and keys in byte order within a
-    /// level, so a truncated vocabulary is the shallow part of the full one.
+    /// level, so a truncated vocabulary is the shallow part of the full one. One budget covers
+    /// every frame and every path.
     pub(super) fn enumerate(&self) -> Vocabulary {
+        let mut budget = Budget::new(self.bounds.max_visits);
         let mut paths = Vec::new();
-        let mut truncated = None;
-        let mut queue: VecDeque<(Vec<String>, Vec<&'s Value>)> = VecDeque::new();
-        queue.push_back((Vec::new(), self.frame([self.root])));
+        let mut truncated = BTreeSet::new();
+        let root = match self.frame([self.root], &mut budget) {
+            Ok(frame) => frame,
+            Err(bound) => {
+                truncated.insert(bound);
+                return Vocabulary { paths, truncated };
+            }
+        };
+        let mut queue: VecDeque<(Vec<String>, Vec<&'s Value>)> =
+            VecDeque::from([(Vec::new(), root)]);
         while let Some((prefix, frame)) = queue.pop_front() {
             let keys = child_keys(&frame);
             if keys.is_empty() {
@@ -387,80 +447,112 @@ impl<'s> Walk<'s> {
             if prefix.len() == self.bounds.max_depth {
                 // Keys exist below the bound. Whether each is declared is past the bound too, so
                 // this says "there may be more" — the honest reading of a depth cut.
-                truncated.get_or_insert(BoundKind::Depth);
+                truncated.insert(BoundKind::Depth);
                 continue;
             }
             for key in keys {
                 let mut path = prefix.clone();
                 path.push(key.to_string());
-                let PathResolution::Declared(facts) = self.resolve(&path) else {
-                    continue;
+                let facts = match self.resolve_within(&path, &mut budget) {
+                    PathResolution::Declared(facts) => facts,
+                    PathResolution::NotDeclared => continue,
+                    PathResolution::BeyondBound(bound) => {
+                        truncated.insert(bound);
+                        return Vocabulary { paths, truncated };
+                    }
                 };
                 if paths.len() == self.bounds.max_paths {
-                    return Vocabulary {
-                        paths,
-                        truncated: Some(BoundKind::Paths),
-                    };
+                    truncated.insert(BoundKind::Paths);
+                    return Vocabulary { paths, truncated };
                 }
+                paths.push(AskablePath::new(path.clone(), facts));
                 let children = frame
                     .iter()
                     .copied()
                     .filter_map(|node| node.get("properties").and_then(|p| p.get(key)));
-                queue.push_back((path.clone(), self.frame(children)));
-                paths.push(AskablePath::new(path, facts));
+                match self.frame(children, &mut budget) {
+                    Ok(child_frame) => queue.push_back((path, child_frame)),
+                    Err(bound) => {
+                        truncated.insert(bound);
+                        return Vocabulary { paths, truncated };
+                    }
+                }
             }
         }
         Vocabulary { paths, truncated }
     }
 
-    /// Every schema object whose `properties` apply at one location: the given nodes and what
-    /// their `$ref`, `allOf`, `anyOf` and `oneOf` reach, each once. Deduplicated by identity, so a
-    /// definition referenced from many places joins the frame once.
-    fn frame(&self, nodes: impl IntoIterator<Item = &'s Value>) -> Vec<&'s Value> {
+    /// The schema objects whose `properties` apply at one location — the given nodes and what their
+    /// `$ref`, `allOf`, `anyOf` and `oneOf` reach — and only those: a node without `properties` is
+    /// expanded through and not kept. Each node is visited once, from an explicit stack, and every
+    /// visit is spent from the budget.
+    fn frame(
+        &self,
+        nodes: impl IntoIterator<Item = &'s Value>,
+        budget: &mut Budget,
+    ) -> Result<Vec<&'s Value>, BoundKind> {
         let mut out = Vec::new();
         let mut seen = HashSet::new();
-        for node in nodes {
-            self.expand(node, &mut out, &mut seen);
-        }
-        out
-    }
-
-    fn expand(&self, node: &'s Value, out: &mut Vec<&'s Value>, seen: &mut HashSet<usize>) {
-        let Value::Object(map) = node else {
-            return;
-        };
-        if !seen.insert(identity(node)) {
-            return;
-        }
-        if let Some(target) = map.get("$ref").and_then(|r| self.target(r)) {
-            self.expand(target, out, seen);
-        }
-        if self.draft.ref_overrides_siblings() && map.contains_key("$ref") {
-            return;
-        }
-        out.push(node);
-        for keyword in ["allOf", "anyOf", "oneOf"] {
-            for branch in map
-                .get(keyword)
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-            {
-                self.expand(branch, out, seen);
+        let mut stack: Vec<&'s Value> = nodes.into_iter().collect();
+        while let Some(node) = stack.pop() {
+            let Value::Object(map) = node else {
+                continue;
+            };
+            if !seen.insert(identity(node)) {
+                continue;
+            }
+            budget.spend(1)?;
+            if let Some(target) = map.get("$ref").and_then(|r| self.target(r)) {
+                stack.push(target);
+            }
+            if self.draft.ref_overrides_siblings() && map.contains_key("$ref") {
+                continue;
+            }
+            if map.get("properties").is_some_and(Value::is_object) {
+                out.push(node);
+            }
+            for keyword in ["allOf", "anyOf", "oneOf"] {
+                stack.extend(
+                    map.get(keyword)
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten(),
+                );
             }
         }
+        Ok(out)
     }
 
-    /// The subschema a local `$ref` names: `#/$defs/…` or `#/definitions/…`, as a JSON pointer.
-    /// Anything else is not walked (§3.3, the remote-`$ref` row).
+    /// The subschema a local `$ref` names: the fragment of a `#`-prefixed reference,
+    /// percent-decoded, read as a JSON pointer from the root (`~0`/`~1` unescaped by
+    /// `Value::pointer`). `#` alone is the root. Anything else — an anchor, a remote or `file:`
+    /// URI — is not followed (§3.3, the remote-`$ref` row).
     fn target(&self, reference: &Value) -> Option<&'s Value> {
-        let reference = reference.as_str()?;
-        let pointer = reference.strip_prefix('#')?;
-        if !(pointer.starts_with("/$defs/") || pointer.starts_with("/definitions/")) {
-            return None;
-        }
-        self.root.pointer(pointer)
+        let fragment = reference.as_str()?.strip_prefix('#')?;
+        self.root.pointer(&percent_decode(fragment)?)
     }
+}
+
+/// A URI fragment with its `%XX` escapes decoded, or `None` if an escape is malformed or the
+/// result is not UTF-8.
+fn percent_decode(fragment: &str) -> Option<String> {
+    let bytes = fragment.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = bytes.get(i + 1..i + 3)?;
+            if !hex.iter().all(u8::is_ascii_hexdigit) {
+                return None;
+            }
+            out.push(u8::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
 /// The property keys any schema object in a frame declares, in byte order.
@@ -574,7 +666,35 @@ fn intersect_types(a: BTreeSet<JsonType>, b: BTreeSet<JsonType>) -> BTreeSet<Jso
     out
 }
 
-/// One path's walk, memoised by `(subschema, position)` and cycle-guarded on the same key.
+/// The part a subschema plays for the object that applies it.
+#[derive(Debug, Clone, Copy)]
+enum Role {
+    /// The `$ref` target, when the walk follows it.
+    Ref,
+    /// `properties[segment]`, one segment deeper.
+    Property,
+    /// `items`, at the end of the path: what an element declares.
+    Items,
+    AllOf,
+    AnyOf,
+    OneOf,
+}
+
+/// A subschema to evaluate, and where.
+type Child<'s> = (&'s Value, usize, Role);
+
+/// One step of the evaluation: evaluate a subschema at a position, or combine an object's
+/// children's results once they are all on the value stack.
+enum Task<'s> {
+    Eval(&'s Value, usize),
+    Combine(&'s Map<String, Value>, usize, usize),
+}
+
+/// One path's walk: an explicit-stack evaluation, memoised by `(subschema, position)` and
+/// cycle-guarded on the same key.
+///
+/// A position past the path's end is inside `items`: `path.len() + k` is the element schema `k`
+/// arrays deep, so element facts are memoised and bounded like everything else.
 ///
 /// **A cycle that consumes no segment adds nothing.** `A = {allOf: [{$ref: B}]}`,
 /// `B = {allOf: [{$ref: A}]}` re-enters `A` at the same position; the re-entry is silent, so the
@@ -583,87 +703,180 @@ fn intersect_types(a: BTreeSet<JsonType>, b: BTreeSet<JsonType>) -> BTreeSet<Jso
 struct Resolver<'w, 's> {
     walk: &'w Walk<'s>,
     path: &'w [String],
+    budget: &'w mut Budget,
     memo: HashMap<(usize, usize), Reach>,
     active: HashSet<(usize, usize)>,
 }
 
 impl<'s> Resolver<'_, 's> {
-    fn reach(&mut self, node: &'s Value, at: usize) -> Reach {
-        let key = (identity(node), at);
-        if let Some(known) = self.memo.get(&key) {
-            return known.clone();
+    fn run(&mut self) -> Result<Reach, BoundKind> {
+        self.budget.spend(1)?;
+        let mut tasks = vec![Task::Eval(self.walk.root, 0)];
+        let mut values: Vec<Reach> = Vec::new();
+        while let Some(task) = tasks.pop() {
+            match task {
+                Task::Eval(node, at) => self.eval(node, at, &mut tasks, &mut values)?,
+                Task::Combine(map, at, id) => {
+                    let children = self.children(map, at);
+                    // Each child's evaluation pushed exactly one value, after this task was pushed
+                    // and before it is popped.
+                    let results = values.split_off(values.len() - children.len());
+                    let reached = self.combine(map, at, &children, results);
+                    self.active.remove(&(id, at));
+                    self.memo.insert((id, at), reached.clone());
+                    values.push(reached);
+                }
+            }
         }
-        if !self.active.insert(key) {
-            return Reach::Silent;
-        }
-        let reached = self.reach_uncached(node, at);
-        self.active.remove(&key);
-        self.memo.insert(key, reached.clone());
-        reached
+        Ok(values.pop().unwrap_or(Reach::Silent))
     }
 
-    fn reach_uncached(&mut self, node: &'s Value, at: usize) -> Reach {
-        match node {
+    /// Push one value for a leaf, a memoised object, or a cycle; or schedule an object's children
+    /// and its combination, spending one visit per child.
+    fn eval(
+        &mut self,
+        node: &'s Value,
+        at: usize,
+        tasks: &mut Vec<Task<'s>>,
+        values: &mut Vec<Reach>,
+    ) -> Result<(), BoundKind> {
+        let reached = match node {
             Value::Bool(false) => Reach::Forbidden,
-            // `true` declares the path it sits at and nothing below it: a deeper segment is not
-            // reached through `properties`.
-            Value::Bool(true) if at == self.path.len() => Reach::Declared(PathFacts::default()),
-            Value::Object(map) => self.reach_object(map, at),
+            Value::Bool(true) => self.unconstrained(at),
+            Value::Object(map) => {
+                let key = (identity(node), at);
+                if let Some(known) = self.memo.get(&key) {
+                    known.clone()
+                } else if self.active.contains(&key) {
+                    Reach::Silent
+                } else {
+                    let children = self.children(map, at);
+                    self.budget.spend(children.len())?;
+                    self.active.insert(key);
+                    tasks.push(Task::Combine(map, at, key.0));
+                    tasks.extend(
+                        children
+                            .iter()
+                            .rev()
+                            .map(|&(child, child_at, _)| Task::Eval(child, child_at)),
+                    );
+                    return Ok(());
+                }
+            }
             _ => Reach::Silent,
+        };
+        values.push(reached);
+        Ok(())
+    }
+
+    /// `true`, or a `$ref` the walk does not follow: declared and unconstrained where it sits, and
+    /// declaring nothing below it — a deeper segment is not reached through `properties`.
+    fn unconstrained(&self, at: usize) -> Reach {
+        if at >= self.path.len() {
+            Reach::Declared(PathFacts::default())
+        } else {
+            Reach::Silent
         }
     }
 
-    fn reach_object(&mut self, map: &'s Map<String, Value>, at: usize) -> Reach {
-        // Copied out of `self` so the segment borrows the path, not the resolver.
-        let path = self.path;
-        let by_ref = match map.get("$ref") {
-            // Before 2019-09 the `$ref` is the whole schema object.
-            Some(reference) if self.walk.draft.ref_overrides_siblings() => {
-                return self.reach_ref(reference, at);
+    /// The subschemas an object applies at a position, in a fixed order the combination relies on.
+    fn children(&self, map: &'s Map<String, Value>, at: usize) -> Vec<Child<'s>> {
+        let mut out = Vec::new();
+        if let Some(target) = map.get("$ref").and_then(|r| self.walk.target(r)) {
+            out.push((target, at, Role::Ref));
+        }
+        if self.walk.draft.ref_overrides_siblings() && map.contains_key("$ref") {
+            return out;
+        }
+        match self.path.get(at) {
+            Some(segment) => {
+                if let Some(child) = map.get("properties").and_then(|p| p.get(segment.as_str())) {
+                    out.push((child, at + 1, Role::Property));
+                }
             }
-            Some(reference) => Some(self.reach_ref(reference, at)),
-            None => None,
-        };
-        let mut acc = if at == path.len() {
-            Reach::Declared(self.local_facts(map, at))
+            None => {
+                if let Some(items) = self.items_schema(map, at) {
+                    out.push((items, at + 1, Role::Items));
+                }
+            }
+        }
+        for (keyword, role) in [
+            ("allOf", Role::AllOf),
+            ("anyOf", Role::AnyOf),
+            ("oneOf", Role::OneOf),
+        ] {
+            out.extend(
+                map.get(keyword)
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .map(|branch| (branch, at, role)),
+            );
+        }
+        out
+    }
+
+    /// The element schema, when `items` is a single schema that applies to every element and the
+    /// element is within the depth bound. A tuple (`items` as an array before 2020-12, or
+    /// `prefixItems` in it) gives each position its own schema, so an element anywhere is
+    /// unconstrained here.
+    fn items_schema(&self, map: &'s Map<String, Value>, at: usize) -> Option<&'s Value> {
+        if at - self.path.len() >= self.walk.bounds.max_depth {
+            return None;
+        }
+        if self.walk.draft.has_prefix_items() && map.contains_key("prefixItems") {
+            return None;
+        }
+        map.get("items").filter(|i| i.is_object() || i.is_boolean())
+    }
+
+    /// An object's own reach from its children's. Under draft-04/06/07 an object with a `$ref` is
+    /// the reference alone; otherwise its own facts (or its `properties` step) are conjoined with
+    /// the reference, every `allOf` branch, and each union.
+    fn combine(
+        &self,
+        map: &'s Map<String, Value>,
+        at: usize,
+        children: &[Child<'s>],
+        results: Vec<Reach>,
+    ) -> Reach {
+        if self.walk.draft.ref_overrides_siblings() && map.contains_key("$ref") {
+            return results
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| self.unconstrained(at));
+        }
+        let mut step = Reach::Silent;
+        let mut items = None;
+        let mut conjuncts = Vec::new();
+        let mut any_of: Option<Vec<Reach>> = None;
+        let mut one_of: Option<Vec<Reach>> = None;
+        for ((_, _, role), reach) in children.iter().zip(results) {
+            match role {
+                Role::Property => step = reach,
+                Role::Items => items = Some(reach),
+                Role::Ref | Role::AllOf => conjuncts.push(reach),
+                Role::AnyOf => any_of.get_or_insert_with(Vec::new).push(reach),
+                Role::OneOf => one_of.get_or_insert_with(Vec::new).push(reach),
+            }
+        }
+        let mut acc = if at >= self.path.len() {
+            Reach::Declared(self.local_facts(map, items))
         } else {
-            match map.get("properties").and_then(|p| p.get(path[at].as_str())) {
-                Some(child) => self.reach(child, at + 1),
-                None => Reach::Silent,
-            }
+            step
         };
-        if let Some(by_ref) = by_ref {
-            acc = conjoin(acc, by_ref);
+        for conjunct in conjuncts {
+            acc = conjoin(acc, conjunct);
         }
-        for branch in map
-            .get("allOf")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            let branch = self.reach(branch, at);
-            acc = conjoin(acc, branch);
-        }
-        for keyword in ["anyOf", "oneOf"] {
-            if let Some(branches) = map.get(keyword).and_then(Value::as_array) {
-                let union = branches.iter().map(|b| self.reach(b, at)).collect();
-                acc = conjoin(acc, disjoin(union));
-            }
+        for union in [any_of, one_of].into_iter().flatten() {
+            acc = conjoin(acc, disjoin(union));
         }
         acc
     }
 
-    /// A `$ref` the walk does not follow constrains nothing it can see.
-    fn reach_ref(&mut self, reference: &Value, at: usize) -> Reach {
-        match self.walk.target(reference) {
-            Some(target) => self.reach(target, at),
-            None => Reach::Silent,
-        }
-    }
-
-    /// What one schema object itself declares at the path's end: `type`, `enum` / `const`, and its
-    /// element schema.
-    fn local_facts(&mut self, map: &'s Map<String, Value>, at: usize) -> PathFacts {
+    /// What one schema object itself declares at the path's end: `type`, `enum` / `const`, and
+    /// what its element schema reached.
+    fn local_facts(&self, map: &'s Map<String, Value>, items: Option<Reach>) -> PathFacts {
         let types = map.get("type").map(|t| match t {
             Value::String(name) => JsonType::from_keyword(name).into_iter().collect(),
             Value::Array(names) => names
@@ -684,29 +897,16 @@ impl<'s> Resolver<'_, 's> {
                     .filter(|v| y.iter().any(|w| jsonb_eq(v, w)))
                     .collect()
             }),
-            items: self.item_facts(map, at),
-        }
-    }
-
-    /// The facts of one array element, when `items` is a single schema that applies to every
-    /// element. A tuple (`items` as an array before 2020-12, or `prefixItems` in it) gives each
-    /// position its own schema, so an element anywhere is unconstrained here.
-    fn item_facts(&mut self, map: &'s Map<String, Value>, at: usize) -> Option<Box<PathFacts>> {
-        if self.walk.draft.has_prefix_items() && map.contains_key("prefixItems") {
-            return None;
-        }
-        let items = map
-            .get("items")
-            .filter(|i| i.is_object() || i.is_boolean())?;
-        match self.reach(items, at) {
-            // `items: false` admits no element at all.
-            Reach::Forbidden => Some(Box::new(PathFacts {
-                types: Some(BTreeSet::new()),
-                ..PathFacts::default()
-            })),
-            Reach::Silent => None,
-            Reach::Declared(facts) if facts.is_unconstrained() => None,
-            Reach::Declared(facts) => Some(Box::new(facts)),
+            items: match items {
+                None | Some(Reach::Silent) => None,
+                // `items: false` admits no element at all.
+                Some(Reach::Forbidden) => Some(Box::new(PathFacts {
+                    types: Some(BTreeSet::new()),
+                    ..PathFacts::default()
+                })),
+                Some(Reach::Declared(facts)) if facts.is_unconstrained() => None,
+                Some(Reach::Declared(facts)) => Some(Box::new(facts)),
+            },
         }
     }
 }
@@ -740,6 +940,8 @@ mod tests {
     fn untyped() -> PathResolution {
         PathResolution::Declared(PathFacts::default())
     }
+
+    const DRAFT_07: &str = "http://json-schema.org/draft-07/schema#";
 
     // ── Row 1: `properties` chains ───────────────────────────────────────────────────────────
 
@@ -777,7 +979,7 @@ mod tests {
     #[test]
     fn under_draft_07_keywords_beside_a_ref_are_ignored() {
         let s = json!({
-            "$schema": "http://json-schema.org/draft-07/schema#",
+            "$schema": DRAFT_07,
             "definitions": { "d": { "properties": { "x": { "type": "string" } } } },
             "properties": {
                 "a": { "$ref": "#/definitions/d", "properties": { "y": { "type": "number" } } }
@@ -855,6 +1057,34 @@ mod tests {
     }
 
     #[test]
+    fn a_root_ref_is_followed_alike_under_every_draft() {
+        for schema in [None, Some(DRAFT_07)] {
+            let mut s = json!({
+                "type": "object",
+                "properties": { "child": { "$ref": "#" }, "n": { "type": "integer" } }
+            });
+            if let (Some(uri), Some(map)) = (schema, s.as_object_mut()) {
+                map.insert("$schema".to_string(), json!(uri));
+            }
+            assert_eq!(at(&s, &["child"]), typed(&[JsonType::Object]), "{s}");
+            assert_eq!(at(&s, &["child", "n"]), typed(&[JsonType::Integer]), "{s}");
+        }
+    }
+
+    #[test]
+    fn a_ref_pointer_is_unescaped_and_percent_decoded() {
+        let s = json!({
+            "$defs": { "a/b": { "type": "string" }, "c%d": { "type": "boolean" } },
+            "properties": {
+                "slash": { "$ref": "#/$defs/a~1b" },
+                "percent": { "$ref": "#/$defs/c%25d" }
+            }
+        });
+        assert_eq!(at(&s, &["slash"]), typed(&[JsonType::String]));
+        assert_eq!(at(&s, &["percent"]), typed(&[JsonType::Boolean]));
+    }
+
+    #[test]
     fn a_ref_cycle_that_consumes_no_segment_terminates() {
         let s = json!({
             "$defs": {
@@ -885,6 +1115,45 @@ mod tests {
         );
         let s = json!({ "$defs": defs, "$ref": "#/$defs/d0" });
         assert_eq!(at(&s, &["x"]), typed(&[JsonType::Integer]));
+    }
+
+    #[test]
+    fn a_long_acyclic_ref_chain_resolves_without_deep_recursion() {
+        // 5,000 `$ref` hops at one position. Recursing once per hop would need far more than the
+        // 256 KiB this runs on; the explicit stack needs none of it.
+        let hops = 5_000;
+        let mut defs = Map::new();
+        for i in 0..hops {
+            defs.insert(
+                format!("d{i}"),
+                json!({ "$ref": format!("#/$defs/d{}", i + 1) }),
+            );
+        }
+        defs.insert(
+            format!("d{hops}"),
+            json!({ "properties": { "x": { "type": "integer" } } }),
+        );
+        let s = json!({ "$defs": defs, "$ref": "#/$defs/d0" });
+        let (resolved, vocabulary) = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || (at(&s, &["x"]), enumerate(&s, &WalkBounds::BUILD)))
+            .expect("spawn a small-stack thread")
+            .join()
+            .expect("the walk returns on a 256 KiB stack");
+        assert_eq!(resolved, typed(&[JsonType::Integer]));
+        assert_eq!(
+            vocabulary,
+            Vocabulary {
+                paths: vec![AskablePath::new(
+                    path(&["x"]),
+                    PathFacts {
+                        types: types(&[JsonType::Integer]),
+                        ..PathFacts::default()
+                    }
+                )],
+                truncated: BTreeSet::new(),
+            }
+        );
     }
 
     // ── Row 4: boolean subschemas ─────────────────────────────────────────────────────────────
@@ -993,18 +1262,21 @@ mod tests {
     // ── Row 8: never fetched ──────────────────────────────────────────────────────────────────
 
     #[test]
-    fn a_remote_or_file_ref_is_not_followed() {
+    fn a_ref_the_walk_does_not_follow_declares_its_path_unconstrained_under_every_draft() {
         for reference in [
             "http://169.254.169.254/latest/meta-data",
             "file:///etc/passwd",
             "other.json#/$defs/x",
+            "#an-anchor",
         ] {
-            let s = json!({ "properties": { "a": { "$ref": reference } } });
-            assert_eq!(
-                at(&s, &["a", "x"]),
-                PathResolution::NotDeclared,
-                "{reference}"
-            );
+            for schema in [None, Some(DRAFT_07)] {
+                let mut s = json!({ "properties": { "a": { "$ref": reference } } });
+                if let (Some(uri), Some(map)) = (schema, s.as_object_mut()) {
+                    map.insert("$schema".to_string(), json!(uri));
+                }
+                assert_eq!(at(&s, &["a"]), untyped(), "{s}");
+                assert_eq!(at(&s, &["a", "x"]), PathResolution::NotDeclared, "{s}");
+            }
         }
     }
 
@@ -1045,6 +1317,29 @@ mod tests {
         assert_eq!(at(&s, &["pair"]), typed(&[JsonType::Array]));
     }
 
+    #[test]
+    fn element_facts_stop_at_the_depth_bound() {
+        // An array of arrays of strings, two levels deep, under a depth bound of one.
+        let s = json!({ "properties": { "grid": {
+            "type": "array", "items": { "type": "array", "items": { "type": "string" } }
+        } } });
+        let one = WalkBounds {
+            max_depth: 1,
+            ..WalkBounds::BUILD
+        };
+        assert_eq!(
+            resolve(&s, &path(&["grid"]), &one),
+            PathResolution::Declared(PathFacts {
+                types: types(&[JsonType::Array]),
+                values: None,
+                items: Some(Box::new(PathFacts {
+                    types: types(&[JsonType::Array]),
+                    ..PathFacts::default()
+                })),
+            })
+        );
+    }
+
     // ── The bounds ────────────────────────────────────────────────────────────────────────────
 
     #[test]
@@ -1072,7 +1367,7 @@ mod tests {
             enumerate(&s, &small),
             Vocabulary {
                 paths: vec![],
-                truncated: Some(BoundKind::SchemaBytes)
+                truncated: BTreeSet::from([BoundKind::SchemaBytes]),
             }
         );
     }
@@ -1093,11 +1388,51 @@ mod tests {
         defs.insert(format!("d{n}"), json!({ "type": "string" }));
         let s = json!({ "$defs": defs, "$ref": "#/$defs/d0" });
         let v = enumerate(&s, &WalkBounds::BUILD);
-        assert_eq!(v.truncated, Some(BoundKind::Paths));
+        assert_eq!(v.truncated, BTreeSet::from([BoundKind::Paths]));
         assert_eq!(v.paths.len(), MAX_WALK_PATHS);
         // Breadth-first: the shallowest level is whole.
         assert_eq!(v.paths[0].path, path(&["a"]));
         assert_eq!(v.paths[1].path, path(&["b"]));
+    }
+
+    /// A self-referencing two-way fan-out whose every visit also pays for a wide `allOf`.
+    fn wide_fan_out(width: usize) -> Value {
+        let empties: Vec<Value> = (0..width).map(|_| json!({})).collect();
+        json!({
+            "$defs": { "d": {
+                "properties": { "a": { "$ref": "#/$defs/d" }, "b": { "$ref": "#/$defs/d" } },
+                "allOf": empties
+            } },
+            "$ref": "#/$defs/d"
+        })
+    }
+
+    #[test]
+    fn a_wide_all_of_under_a_fan_out_stops_at_the_work_budget_and_says_so() {
+        let v = enumerate(&wide_fan_out(100), &WalkBounds::BUILD);
+        assert!(v.truncated.contains(&BoundKind::Work), "{:?}", v.truncated);
+        assert!(
+            !v.paths.is_empty(),
+            "the shallow vocabulary is still advertised"
+        );
+        assert!(v.paths.len() < MAX_WALK_PATHS, "{}", v.paths.len());
+    }
+
+    #[test]
+    fn an_all_of_wider_than_the_budget_stops_one_path_at_the_work_budget() {
+        // Under the schema byte bound, and wider than the visit budget.
+        let s = wide_fan_out(MAX_WALK_VISITS + 1);
+        assert_eq!(
+            resolve(&s, &path(&["a"]), &WalkBounds::BUILD),
+            PathResolution::BeyondBound(BoundKind::Work)
+        );
+        assert_eq!(
+            enumerate(&s, &WalkBounds::BUILD),
+            Vocabulary {
+                paths: vec![],
+                truncated: BTreeSet::from([BoundKind::Work]),
+            }
+        );
     }
 
     #[test]
@@ -1129,14 +1464,51 @@ mod tests {
                     AskablePath::new(path(&["child", "child", "child"]), node),
                     AskablePath::new(path(&["child", "child", "v"]), v),
                 ],
-                truncated: Some(BoundKind::Depth),
+                truncated: BTreeSet::from([BoundKind::Depth]),
             }
         );
         // And under the build's bound: two paths per level, to the bound and no further.
         let built = enumerate(&s, &WalkBounds::BUILD);
-        assert_eq!(built.truncated, Some(BoundKind::Depth));
+        assert_eq!(built.truncated, BTreeSet::from([BoundKind::Depth]));
         assert_eq!(built.paths.len(), 2 * MAX_WALK_DEPTH);
         assert!(built.paths.iter().all(|p| p.path.len() <= MAX_WALK_DEPTH));
+    }
+
+    #[test]
+    fn each_cut_names_the_bound_that_made_it() {
+        // A three-way recursive fan-out, cut three different ways.
+        let s = json!({
+            "$defs": { "node": { "properties": {
+                "a": { "$ref": "#/$defs/node" },
+                "b": { "$ref": "#/$defs/node" },
+                "c": { "$ref": "#/$defs/node" }
+            } } },
+            "$ref": "#/$defs/node"
+        });
+        let by_paths = WalkBounds {
+            max_depth: 1,
+            max_paths: 2,
+            ..WalkBounds::BUILD
+        };
+        let v = enumerate(&s, &by_paths);
+        assert_eq!(v.paths.len(), 2);
+        assert_eq!(v.truncated, BTreeSet::from([BoundKind::Paths]));
+        let by_depth = WalkBounds {
+            max_depth: 1,
+            ..WalkBounds::BUILD
+        };
+        let v = enumerate(&s, &by_depth);
+        assert_eq!(v.paths.len(), 3);
+        assert_eq!(v.truncated, BTreeSet::from([BoundKind::Depth]));
+        // Depth two needs twelve paths and about a hundred visits; forty is not enough.
+        let by_work = WalkBounds {
+            max_depth: 2,
+            max_visits: 40,
+            ..WalkBounds::BUILD
+        };
+        let v = enumerate(&s, &by_work);
+        assert_eq!(v.truncated, BTreeSet::from([BoundKind::Work]));
+        assert!(v.paths.len() < 12, "{}", v.paths.len());
     }
 
     #[test]
@@ -1172,7 +1544,7 @@ mod tests {
                         ],
                     },
                 ],
-                truncated: None,
+                truncated: BTreeSet::new(),
             }
         );
     }

@@ -64,7 +64,7 @@ fn predicate_matches(
     };
     match &predicate.op {
         PropertyOp::HasKey => true,
-        PropertyOp::Contains { values } => values.iter().any(|probe| contains(value, probe)),
+        PropertyOp::Contains { values } => values.iter().any(|probe| jsonb_contains(value, probe)),
         PropertyOp::Compare {
             direction,
             value: bound,
@@ -88,8 +88,10 @@ fn get<'v>(content: &'v Value, path: &[String]) -> Option<&'v Value> {
         .try_fold(content, |at, segment| at.as_object()?.get(segment))
 }
 
-/// `stored @> probe`, with the top-level exception: an array contains a primitive.
-fn contains(stored: &Value, probe: &Value) -> bool {
+/// `stored @> probe`, with the top-level exception: an array contains a primitive. What a `contains`
+/// predicate asks of content, and what an enum member must do for a container value to be one it
+/// could match.
+pub(super) fn jsonb_contains(stored: &Value, probe: &Value) -> bool {
     match (stored, probe) {
         (Value::Array(elements), p) if !is_container(p) => elements.iter().any(|e| scalar_eq(e, p)),
         _ => deep_contains(stored, probe),

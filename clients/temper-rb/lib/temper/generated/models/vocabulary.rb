@@ -14,33 +14,11 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # What a shape lets a caller ask: its askable paths, and whether the list was cut at a bound.  `truncated` is the walk bound met, never a silent short list (spec §2.5): a recursive tree through `properties` is `Depth`, a 2^N `$defs` fan-out is `Paths`, an oversized schema is `SchemaBytes` with no paths.
+  # What a shape lets a caller ask: its askable paths, and every bound the list was cut at.  `truncated` names each walk bound met, never a silent short list (spec §2.5): a recursive tree through `properties` is `depth`, a 2^N `$defs` fan-out is `paths`, an oversized schema is `schema_bytes` with no paths, and a walk that spent its budget is `work`. Ordered, and at most one of each.
   class Vocabulary < ApiModelBase
     attr_accessor :paths
 
     attr_accessor :truncated
-
-    class EnumAttributeValidator
-      attr_reader :datatype
-      attr_reader :allowable_values
-
-      def initialize(datatype, allowable_values)
-        @allowable_values = allowable_values.map do |value|
-          case datatype.to_s
-          when /Integer/i
-            value.to_i
-          when /Float/i
-            value.to_f
-          else
-            value
-          end
-        end
-      end
-
-      def valid?(value)
-        !value || allowable_values.include?(value)
-      end
-    end
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
@@ -64,14 +42,13 @@ module Temper::Generated
     def self.openapi_types
       {
         :'paths' => :'Array<AskablePath>',
-        :'truncated' => :'BoundKind'
+        :'truncated' => :'Array<BoundKind>'
       }
     end
 
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
-        :'truncated'
       ])
     end
 
@@ -100,7 +77,9 @@ module Temper::Generated
       end
 
       if attributes.key?(:'truncated')
-        self.truncated = attributes[:'truncated']
+        if (value = attributes[:'truncated']).is_a?(Array)
+          self.truncated = value
+        end
       end
     end
 
@@ -132,6 +111,16 @@ module Temper::Generated
       end
 
       @paths = paths
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] truncated Value to be assigned
+    def truncated=(truncated)
+      if truncated.nil?
+        fail ArgumentError, 'truncated cannot be nil'
+      end
+
+      @truncated = truncated
     end
 
     # Checks equality by comparing each attribute.
