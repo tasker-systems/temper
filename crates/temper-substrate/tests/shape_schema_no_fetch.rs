@@ -235,9 +235,9 @@ fn an_embedded_subschema_naming_a_custom_schema_uri_is_refused() {
     );
 }
 
-/// `jsonschema` compiles `dependencies` under every draft, including a 2020-12 root whose own
-/// keyword list has no `dependencies`; a custom `$schema` in one of its subschemas must still be
-/// found.
+/// A custom `$schema` in a subschema under `dependencies` is refused: the document-wide rule
+/// reaches it wherever it sits, including under a 2020-12 root, which has no `dependencies`
+/// keyword of its own.
 #[test]
 fn a_custom_schema_uri_under_dependencies_is_refused() {
     let schema = json!({
@@ -251,7 +251,8 @@ fn a_custom_schema_uri_under_dependencies_is_refused() {
     );
 }
 
-/// The same for `additionalItems`, which is compiled under every draft too.
+/// The same for a subschema under `additionalItems`, a position the 2020-12 root does not
+/// define either.
 #[test]
 fn a_custom_schema_uri_under_additional_items_is_refused() {
     let schema = json!({
@@ -269,9 +270,10 @@ fn a_custom_schema_uri_under_additional_items_is_refused() {
     );
 }
 
-/// A subschema is compiled under ITS draft's keywords, not the root's: a draft-07 root whose
-/// `definitions` hold a 2020-12 subschema, whose `$defs` hold a custom `$schema`. The draft-07
-/// keyword list has no `$defs`, so a walk by the root's draft would miss it.
+/// A custom `$schema` below a subschema that names a different draft than the root is refused:
+/// a draft-07 root whose `definitions` hold a 2020-12 subschema, whose `$defs` hold the custom
+/// `$schema`. The rule does not depend on which draft's keywords sit between the root and the
+/// object that carries it.
 #[test]
 fn a_custom_schema_uri_below_a_mixed_draft_subschema_is_refused() {
     let schema = json!({
@@ -296,9 +298,8 @@ fn a_custom_schema_uri_below_a_mixed_draft_subschema_is_refused() {
     );
 }
 
-/// `jsonschema` resolves any same-document pointer and compiles what it finds as a schema, so a
-/// `$ref` into a non-keyword position (`x-custom`) pulls a subschema with a custom `$schema` into
-/// the compile although no draft's keyword list walks `x-custom`.
+/// A custom `$schema` below the target of a same-document pointer `$ref` into a non-keyword
+/// position (`x-custom`) is refused: the document-wide rule reaches it wherever it sits.
 #[test]
 fn a_custom_schema_uri_below_a_pointer_ref_target_is_refused() {
     let schema = json!({
@@ -312,7 +313,7 @@ fn a_custom_schema_uri_below_a_pointer_ref_target_is_refused() {
     );
 }
 
-/// The custom `$schema` on the pointer target itself.
+/// A custom `$schema` on the pointer `$ref` target itself is refused.
 #[test]
 fn a_custom_schema_uri_on_a_pointer_ref_target_is_refused() {
     let schema = json!({
@@ -326,8 +327,8 @@ fn a_custom_schema_uri_on_a_pointer_ref_target_is_refused() {
     );
 }
 
-/// A pointer resolves within its enclosing resource: a `#/x-custom` inside an embedded `$id`
-/// subschema names that subschema's `x-custom`, not the root's.
+/// A custom `$schema` under the `x-custom` of an embedded `$id` subschema whose `$ref` is
+/// `#/x-custom` is refused, wherever the pointer would resolve.
 #[test]
 fn a_pointer_ref_inside_an_embedded_resource_is_resolved_against_it() {
     let schema = json!({
@@ -342,13 +343,14 @@ fn a_pointer_ref_inside_an_embedded_resource_is_resolved_against_it() {
 
     assert!(
         compile(&schema).is_err(),
-        "a pointer inside an embedded resource must be followed within that resource"
+        "a custom $schema inside an embedded resource must not compile"
     );
 }
 
-/// The pointer is decoded before it is followed: percent-escapes and `~0`/`~1`.
+/// A custom `$schema` under a key reached through an escaped pointer spelling is refused:
+/// percent-escapes and `~0`/`~1`.
 #[test]
-fn escaped_pointer_refs_are_followed() {
+fn a_custom_schema_uri_under_an_escaped_pointer_is_refused() {
     let escaped = [
         ("#/x%2Dcustom", "x-custom"),
         ("#/x%20custom", "x custom"),
@@ -362,7 +364,7 @@ fn escaped_pointer_refs_are_followed() {
         });
         assert!(
             compile(&schema).is_err(),
-            "{reference} must be decoded and its target walked"
+            "a custom $schema under the key {reference} names must not compile"
         );
     }
 }
@@ -387,8 +389,8 @@ fn a_recursive_pointer_ref_schema_still_compiles() {
     assert!(!validator.is_valid(&json!({ "next": 1 })));
 }
 
-/// A reference written relative to the document root (`/#/x-custom`) names the same document, so
-/// its target is compiled as a schema.
+/// A custom `$schema` under the target of a reference written relative to the document root
+/// (`/#/x-custom`) is refused.
 #[test]
 fn a_custom_schema_uri_under_a_root_relative_ref_is_refused() {
     let schema = json!({
@@ -402,7 +404,7 @@ fn a_custom_schema_uri_under_a_root_relative_ref_is_refused() {
     );
 }
 
-/// The root's default base URI (`json-schema:///`) spelled out names the same document too.
+/// The same for a reference that spells out the root's default base URI (`json-schema:///`).
 #[test]
 fn a_custom_schema_uri_under_the_default_base_uri_ref_is_refused() {
     let schema = json!({
@@ -416,8 +418,8 @@ fn a_custom_schema_uri_under_the_default_base_uri_ref_is_refused() {
     );
 }
 
-/// A reference through a resource's own `$id` (`urn:r#/x-custom`), whether the root or an
-/// embedded subschema carries that `$id`.
+/// The same for a reference through a resource's own `$id` (`urn:r#/x-custom`), whether the root
+/// or an embedded subschema carries that `$id`.
 #[test]
 fn a_custom_schema_uri_under_an_id_qualified_ref_is_refused() {
     let schemas = [
@@ -444,8 +446,8 @@ fn a_custom_schema_uri_under_an_id_qualified_ref_is_refused() {
     }
 }
 
-/// `referencing` parses an array index in a pointer with `str::parse::<usize>`, so `01` and `+1`
-/// name element 1, although `serde_json::Value::pointer` rejects both spellings.
+/// The same for a reference whose pointer spells an array index loosely (`01`, `+1`), reaching an
+/// array element that holds a custom `$schema`.
 #[test]
 fn a_custom_schema_uri_under_a_loosely_spelled_array_index_is_refused() {
     for reference in ["#/x-custom/01", "#/x-custom/+1"] {
@@ -507,6 +509,32 @@ fn a_property_named_schema_is_not_mistaken_for_a_meta_schema_declaration() {
 
     let validator = compile(&schema).expect("a property named $schema compiles");
     assert!(validator.is_valid(&json!({ "$schema": "x", "nested": 1 })));
+}
+
+/// A custom `$schema` object nested inside an array inside an array is refused: the document-wide
+/// walk descends through arrays of arrays, not only through object members.
+#[test]
+fn a_custom_schema_uri_inside_nested_arrays_is_refused() {
+    let schema = json!({ "type": "object", "enum": [[{ "$schema": "urn:example:custom" }]] });
+
+    assert!(
+        compile(&schema).is_err(),
+        "a custom $schema inside an array nested in an array must not compile"
+    );
+}
+
+/// A custom `$schema` carried by the value stored under a key NAMED `$schema` is refused: the
+/// walk descends into that value like any other, although the key looks like a declaration.
+#[test]
+fn a_custom_schema_uri_inside_a_value_under_a_schema_key_is_refused() {
+    let schema = json!({
+        "properties": { "$schema": { "$schema": "urn:example:custom", "type": "string" } },
+    });
+
+    assert!(
+        compile(&schema).is_err(),
+        "a custom $schema inside the value under a `$schema` key must not compile"
+    );
 }
 
 /// Control: a `$schema` the server does not recognise is not guessed at.
