@@ -89,7 +89,7 @@
 //!
 //! **Checked (tier 1b):** the MCP cell of every act reachable through `/api/query`. Tier 1 cannot
 //! tell the three doors of such an act apart (`query_follow_from` is emittable, and that is all it
-//! sees), so before this check an MCP `Absent` on one of them was invisible. The MCP `run_query`
+//! sees), so the MCP cell is checked here. The MCP `run_query`
 //! tool takes a whole `Composition` and relays it, unread, to `POST /api/query`, so for every act
 //! that route can emit, MCP reaches what the route admits.
 //! [`every_act_reached_through_the_query_route_is_served_at_mcp`] derives that set from the
@@ -474,8 +474,10 @@ fn wire_slot(term: BoundTerm) -> Option<&'static str> {
     match term {
         BoundTerm::Limit => Some("limit"),
         BoundTerm::Offset => Some("offset"),
-        // `survey`'s funnel width. No door carries it, and `survey` is `Absent` at all three, so
-        // there is nothing for this to be checked against today.
+        // `survey`'s funnel width. `SearchParams` has no slot for it: `survey` is served through
+        // `/api/query`, where `regions` is a term on the composition's act invocation, so the
+        // shared-params tests skip it (`emitted_fragment_for`) and nothing here is checked against
+        // this arm today.
         BoundTerm::Regions => None,
     }
 }
@@ -544,7 +546,7 @@ fn the_shared_params_doors_declare_exactly_the_terms_that_type_carries() {
 /// Exhaustive bar `IdKind::Other` — `IdKind`'s forward-compat catch-all for a producer newer than
 /// this consumer, which this crate never constructs and no declaration's `accepts_bounds` names.
 /// `Region` also returns `None`: it is `produces`-only in this family (`follow-from`'s seeds are
-/// `Resource`, `survey` produces `Region` but is `Absent` everywhere), and no act's `accepts_bounds`
+/// `Resource`, `survey` produces `Resource` and discloses `Region`), and no act's `accepts_bounds`
 /// contains it today — asserted below rather than assumed.
 fn wire_bound_slot(kind: &IdKind) -> Option<&'static str> {
     match kind {
