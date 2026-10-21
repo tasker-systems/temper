@@ -13,7 +13,7 @@
 #   --from DIR  the PUBLISH stage: push the tarballs in DIR. Installs and builds
 #               nothing, and runs no package script (`--ignore-scripts`).
 #
-# Default packages: clients/temper-ts and clients/temper-telemetry-ts.
+# Default packages: clients/temper-ts, clients/temper-telemetry-ts and packages/temper-design.
 #
 # WHY TWO STAGES. The publish job holds `id-token: write`, and any step in a job
 # that holds it can mint the OIDC token npm accepts. `npm ci` runs every
@@ -38,10 +38,11 @@
 # Auth: npm trusted publishing. In CI, `npm publish --provenance` authenticates
 # via the job's OIDC identity token (id-token: write) — no NPM_TOKEN secret
 # exists or is wanted. The trusted publisher is registered on npmjs.com
-# against this repository and the workflow whose job performs the push
-# (release.yml — the identity claim names the job's OWN workflow file, not the
-# chain's entry; a publisher registered against release-tag.yml is silently
-# unauthorized at push). Locally, `npm login` plus a
+# against this repository and BOTH release-tag.yml and release.yml: inside the
+# release-tag.yml chain npm matches the CALLING workflow (release-tag.yml), and
+# release.yml alone covers the tag-push and workflow_dispatch recovery doors,
+# where it is the top-level workflow (RELEASING.md, "Publishing-side auth").
+# Locally, `npm login` plus a
 # plain `npm publish --access public` is the bootstrap path for claiming a new
 # package name before its trusted publisher is registered; this script's
 # provenance flag is CI-only.
@@ -75,7 +76,7 @@ if [[ -n "$OUT_DIR" && "$DRY_RUN" == "true" ]]; then
 fi
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
-[[ ${#PACKAGES[@]} -gt 0 ]] || PACKAGES=("clients/temper-ts" "clients/temper-telemetry-ts")
+[[ ${#PACKAGES[@]} -gt 0 ]] || PACKAGES=("clients/temper-ts" "clients/temper-telemetry-ts" "packages/temper-design")
 
 # Provenance attests the publish via the job's OIDC identity — CI-only. A local
 # run (the name-claiming bootstrap) publishes under the operator's own login.

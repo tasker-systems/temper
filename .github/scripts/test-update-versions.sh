@@ -60,7 +60,7 @@ sandbox() {
     done
 }
 
-NPM_PACKAGES=(packages/temper-ui packages/temper-cloud clients/temper-ts clients/temper-telemetry-ts)
+NPM_PACKAGES=(packages/temper-ui packages/temper-cloud clients/temper-ts clients/temper-telemetry-ts packages/temper-design)
 
 ws_version() {
     awk -F'"' '/^\[workspace\.package\]/{p=1; next} /^\[/{p=0} p && /^version = /{print $2; exit}' "$1"
@@ -112,13 +112,14 @@ fi
 
 # --- the npm leaves move their package.json and their lockfile record ---------
 # Distinct versions per leaf, so a write landing on the wrong package's entry shows.
-LEAF_ARGS=(--ui 9.9.4 --cloud 9.9.5 --ts 9.9.6 --telemetry 9.9.7)
+LEAF_ARGS=(--ui 9.9.4 --cloud 9.9.5 --ts 9.9.6 --telemetry 9.9.7 --design 9.9.8)
 leaf_version() {
     case "$1" in
         packages/temper-ui) echo 9.9.4 ;;
         packages/temper-cloud) echo 9.9.5 ;;
         clients/temper-ts) echo 9.9.6 ;;
         clients/temper-telemetry-ts) echo 9.9.7 ;;
+        packages/temper-design) echo 9.9.8 ;;
     esac
 }
 lockfile_of() {
@@ -153,7 +154,7 @@ done
 # never the shape of a line or any other line.
 mask() { sed -E 's/"version": "[^"]*"/"version": "X"/' "$1"; }
 SHAPE_DIFF=""
-for lock in bun.lock clients/temper-ts/package-lock.json clients/temper-telemetry-ts/package-lock.json; do
+for lock in bun.lock clients/temper-ts/package-lock.json clients/temper-telemetry-ts/package-lock.json packages/temper-design/package-lock.json; do
     cmp -s <(mask "${REPO}/${lock}") <(mask "${WORK}/sb/${lock}") || SHAPE_DIFF="${SHAPE_DIFF} ${lock}"
 done
 if [[ -z "$SHAPE_DIFF" ]]; then
@@ -212,7 +213,7 @@ expect_red "a stale bun.lock entry beside a stray package-lock.json"
 sandbox
 (cd "${WORK}/sb" && bash tools/scripts/release/update-versions.sh --core "$TARGET" "${LEAF_ARGS[@]}" --dry-run > /dev/null 2>&1)
 UNTOUCHED=true
-for f in Cargo.toml VERSION bun.lock "${NPM_PACKAGES[@]/%//package.json}" clients/temper-ts/package-lock.json clients/temper-telemetry-ts/package-lock.json; do
+for f in Cargo.toml VERSION bun.lock "${NPM_PACKAGES[@]/%//package.json}" clients/temper-ts/package-lock.json clients/temper-telemetry-ts/package-lock.json packages/temper-design/package-lock.json; do
     cmp -s "${REPO}/${f}" "${WORK}/sb/${f}" || { UNTOUCHED=false; echo "    changed: ${f}"; }
 done
 if $UNTOUCHED; then

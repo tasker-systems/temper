@@ -20,6 +20,7 @@
 #   clients/temper-telemetry-ts/package.json   — skin float (--telemetry)
 #   packages/temper-ui/package.json            — npm float (--ui)
 #   packages/temper-cloud/package.json         — npm float (--cloud)
+#   packages/temper-design/package.json        — npm float (--design)
 #   bun.lock, clients/*/package-lock.json      — each package's recorded version moves with
 #                                                its package.json (update_lockfile_version)
 #
@@ -30,7 +31,7 @@
 #
 # Usage:
 #   ./tools/scripts/release/update-versions.sh --core VERSION [--rb VER]
-#       [--py VER] [--ts VER] [--telemetry VER] [--ui VER] [--cloud VER] [--dry-run]
+#       [--py VER] [--ts VER] [--telemetry VER] [--design VER] [--ui VER] [--cloud VER] [--dry-run]
 #
 # --core is always required. Leaf versions are optional and only needed when
 # those leaves are being released.
@@ -49,6 +50,7 @@ RB_VERSION=""
 PY_VERSION=""
 TS_VERSION=""
 TELEMETRY_VERSION=""
+DESIGN_VERSION=""
 UI_VERSION=""
 CLOUD_VERSION=""
 DRY_RUN=false
@@ -65,6 +67,8 @@ while [[ $# -gt 0 ]]; do
         --ts=*)  TS_VERSION="${1#*=}"; shift ;;
         --telemetry)    TELEMETRY_VERSION="$2"; shift 2 ;;
         --telemetry=*)  TELEMETRY_VERSION="${1#*=}"; shift ;;
+        --design)       DESIGN_VERSION="$2"; shift 2 ;;
+        --design=*)     DESIGN_VERSION="${1#*=}"; shift ;;
         --ui)    UI_VERSION="$2"; shift 2 ;;
         --ui=*)  UI_VERSION="${1#*=}"; shift ;;
         --cloud) CLOUD_VERSION="$2"; shift 2 ;;
@@ -75,7 +79,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$CORE_VERSION" ]]; then
-    die "Usage: $0 --core VERSION [--rb VER] [--py VER] [--ts VER] [--telemetry VER] [--ui VER] [--cloud VER] [--dry-run]"
+    die "Usage: $0 --core VERSION [--rb VER] [--py VER] [--ts VER] [--telemetry VER] [--design VER] [--ui VER] [--cloud VER] [--dry-run]"
 fi
 
 # ---------------------------------------------------------------------------
@@ -174,4 +178,10 @@ if [[ -n "$CLOUD_VERSION" ]]; then
     log_section "temper-cloud (npm package)"
     update_package_json_version "packages/temper-cloud/package.json" "$CLOUD_VERSION"
     update_lockfile_version "packages/temper-cloud" "$CLOUD_VERSION"
+fi
+
+if [[ -n "$DESIGN_VERSION" ]]; then
+    log_section "temper-design (npm package)"
+    update_package_json_version "packages/temper-design/package.json" "$DESIGN_VERSION"
+    update_lockfile_version "packages/temper-design" "$DESIGN_VERSION"
 fi

@@ -77,13 +77,13 @@ run_target() {
         STUB_VIEW_RESULT="${STUB_VIEW_RESULT:-1}" bash "$TARGET" "$@")
 }
 
-BOTH_DIRS=(clients/temper-ts clients/temper-telemetry-ts)
-stage_both() {
-    for d in "${BOTH_DIRS[@]}"; do
+DEFAULT_DIRS=(clients/temper-ts clients/temper-telemetry-ts packages/temper-design)
+stage_defaults() {
+    for d in "${DEFAULT_DIRS[@]}"; do
         stage_package "$d" "@tasker-systems/$(basename "$d")" "9.9.9"
     done
 }
-stage_both
+stage_defaults
 
 # --- 1. Build stage, fresh version: probe, then install with no scripts, build, pack ------
 # The positive control: a guard that refused everything would satisfy the negative cases below
@@ -92,7 +92,7 @@ OUT="$TMP/out"
 CALLS_BUILD="$TMP/calls-build"
 run_target "$CALLS_BUILD" "9.9.9" --out "$OUT" > "$TMP/build.log" 2>&1 \
     || fail "a fresh build was refused: $(cat "$TMP/build.log")"
-for d in "${BOTH_DIRS[@]}"; do
+for d in "${DEFAULT_DIRS[@]}"; do
     pkg="@tasker-systems/$(basename "$d")"
     grep -q "npm view ${pkg}@9.9.9 version" "$CALLS_BUILD" \
         || fail "the duplicate probe never ran for ${pkg}: $(cat "$CALLS_BUILD")"
@@ -116,7 +116,7 @@ echo "PASS: the build stage probes, installs without scripts, builds and packs, 
 CALLS_PUB="$TMP/calls-pub"
 run_target "$CALLS_PUB" "9.9.9" --from "$OUT" > "$TMP/pub.log" 2>&1 \
     || fail "a fresh publish was refused: $(cat "$TMP/pub.log")"
-for d in "${BOTH_DIRS[@]}"; do
+for d in "${DEFAULT_DIRS[@]}"; do
     grep -q "npm publish $OUT/tasker-systems-$(basename "$d")-9.9.9.tgz --access public" "$CALLS_PUB" \
         || fail "@tasker-systems/$(basename "$d") was not published from its tarball: $(cat "$CALLS_PUB")"
 done
@@ -139,7 +139,7 @@ cp -R "$OUT" "$REPO/dist"
 CALLS_REL="$TMP/calls-rel"
 run_target "$CALLS_REL" "9.9.9" --from dist > "$TMP/rel.log" 2>&1 \
     || fail "a publish from a relative directory failed: $(cat "$TMP/rel.log")"
-for d in "${BOTH_DIRS[@]}"; do
+for d in "${DEFAULT_DIRS[@]}"; do
     grep -q "npm publish ./dist/tasker-systems-$(basename "$d")-9.9.9.tgz --access public" "$CALLS_REL" \
         || fail "@tasker-systems/$(basename "$d") was not published as a local file: $(cat "$CALLS_REL")"
 done
@@ -149,7 +149,7 @@ echo "PASS: a relative --from directory publishes each tarball as a local file, 
 
 # --- 3. Already-published version: both stages skip loudly, nothing runs ----------------
 # The bite. The stub can't vary its answer per package, so this runs with the probe reporting
-# EVERY version as existing — the strictest form: a re-cut release must skip both packages
+# EVERY version as existing — the strictest form: a re-cut release must skip every default package
 # loudly, exit 0, and run no build and no publish in either stage.
 for stage in out from; do
     CALLS_SKIP="$TMP/calls-skip-$stage"
@@ -157,8 +157,8 @@ for stage in out from; do
         || fail "an all-published re-run of --$stage exited non-zero (idempotent skip must exit 0): $(cat "$TMP/skip.log")"
     grep -Eq "npm (publish|ci|run|pack)" "$CALLS_SKIP" \
         && fail "a fully-published version still built or published in --$stage: $(cat "$CALLS_SKIP")"
-    grep -c "already published — nothing to do" "$TMP/skip.log" | grep -q "^2$" \
-        || fail "both packages did not skip loudly in --$stage: $(cat "$TMP/skip.log")"
+    grep -c "already published — nothing to do" "$TMP/skip.log" | grep -qx "${#DEFAULT_DIRS[@]}" \
+        || fail "every default package did not skip loudly in --$stage: $(cat "$TMP/skip.log")"
 done
 
 echo "PASS: an already-published version skips loudly in both stages and builds or publishes nothing"
@@ -186,7 +186,7 @@ grep -Fq '@tasker-systems/* scope' "$TMP/unscoped.log" \
     || fail "the scope refusal did not name its cause: $(cat "$TMP/unscoped.log")"
 [ ! -s "$CALLS_UNSCOPED" ] \
     || fail "an unscoped package still invoked npm: $(cat "$CALLS_UNSCOPED")"
-stage_both
+stage_defaults
 
 echo "PASS: an unscoped manifest name is refused before any npm call"
 

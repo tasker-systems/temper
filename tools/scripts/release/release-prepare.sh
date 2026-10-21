@@ -12,7 +12,7 @@
 #
 # Usage:
 #   ./tools/scripts/release/release-prepare.sh [--minor] [--override-blocker]
-#       [--rb] [--py] [--ts] [--telemetry] [--ui] [--cloud] [--dry-run] [--yes] [--from TAG]
+#       [--rb] [--py] [--ts] [--telemetry] [--design] [--ui] [--cloud] [--dry-run] [--yes] [--from TAG]
 #
 # Flow:
 #   1. Pre-flight: clean tree, on main, up-to-date, gh available
@@ -47,6 +47,7 @@ while [[ $# -gt 0 ]]; do
         --py)               CALC_ARGS+=(--py); shift ;;
         --ts)               CALC_ARGS+=(--ts); shift ;;
         --telemetry)        CALC_ARGS+=(--telemetry); shift ;;
+        --design)           CALC_ARGS+=(--design); shift ;;
         --ui)               CALC_ARGS+=(--ui); shift ;;
         --cloud)            CALC_ARGS+=(--cloud); shift ;;
         --from)             CALC_ARGS+=(--from "$2"); shift 2 ;;
@@ -123,7 +124,7 @@ NOTHING_TO_RELEASE=true
 if [[ "$NEXT_CORE_VERSION" != "$CURRENT_CORE_VERSION" ]]; then
     NOTHING_TO_RELEASE=false
 fi
-for leaf in RB PY TS TELEMETRY UI CLOUD; do
+for leaf in RB PY TS TELEMETRY DESIGN UI CLOUD; do
     NEXT_VAL_VAR="NEXT_${leaf}_VERSION"
     if [[ "${!NEXT_VAL_VAR}" != "unchanged" ]]; then
         NOTHING_TO_RELEASE=false
@@ -156,6 +157,7 @@ print_leaf_row "temper-rb" RB
 print_leaf_row "temper-py" PY
 print_leaf_row "temper-ts" TS
 print_leaf_row "temper-telemetry-ts" TELEMETRY
+print_leaf_row "temper-design" DESIGN
 print_leaf_row "temper-ui" UI
 print_leaf_row "temper-cloud" CLOUD
 
@@ -211,7 +213,7 @@ fi
 # Build update-versions arguments
 # ---------------------------------------------------------------------------
 UPDATE_ARGS="--core ${NEXT_CORE_VERSION}"
-for leaf in RB PY TS TELEMETRY UI CLOUD; do
+for leaf in RB PY TS TELEMETRY DESIGN UI CLOUD; do
     NEXT_VAL_VAR="NEXT_${leaf}_VERSION"
     if [[ "${!NEXT_VAL_VAR}" != "unchanged" ]]; then
         UPDATE_ARGS+=" --$(echo "${leaf}" | tr '[:upper:]' '[:lower:]') ${!NEXT_VAL_VAR}"
@@ -336,7 +338,7 @@ PR_BODY+="### Version Changes"$'\n\n'
 PR_BODY+="| Component | Current | Next |"$'\n'
 PR_BODY+="|-----------|---------|------|"$'\n'
 PR_BODY+="| Core (VERSION, workspace crates) | ${CURRENT_CORE_VERSION} | ${NEXT_CORE_VERSION} |"$'\n'
-for pair in "temper-rb:RB" "temper-py:PY" "temper-ts:TS" "temper-telemetry-ts:TELEMETRY" "temper-ui:UI" "temper-cloud:CLOUD"; do
+for pair in "temper-rb:RB" "temper-py:PY" "temper-ts:TS" "temper-telemetry-ts:TELEMETRY" "temper-design:DESIGN" "temper-ui:UI" "temper-cloud:CLOUD"; do
     label="${pair%%:*}"; leaf="${pair##*:}"
     cur_var="CURRENT_${leaf}_VERSION"; next_var="NEXT_${leaf}_VERSION"
     if [[ "${!next_var}" != "unchanged" ]]; then
