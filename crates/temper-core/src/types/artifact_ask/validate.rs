@@ -14,7 +14,7 @@
 //! The refusals carry `stage: None`. The composable arm attaches its stage; the batch read has none
 //! (spec §8).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -83,8 +83,10 @@ pub const MAX_ARTIFACT_PATH_SEGMENT_BYTES: usize = MAX_FILTER_STRING_BYTES;
 pub const MAX_TEACHING_BYTES: usize = 16 * 1024;
 
 /// The most containment steps one ask may spend checking its `contains` values against the enums
-/// the shape declares — one step per node compared. Past it the predicate is refused
-/// `path_outside_shape` with `teaches.beyond_bound: work`, never admitted unchecked.
+/// the shape declares — one step per node compared, and one more per 64 bytes of each object key
+/// looked up and of each string compared (`reference::BYTES_PER_STEP`), so a long key or string
+/// costs what it carries. Past it the predicate is refused `path_outside_shape` with
+/// `teaches.beyond_bound: work`, never admitted unchecked.
 ///
 /// # 1,048,576
 ///
@@ -195,18 +197,16 @@ impl ValidatedAsk {
 /// shape-free checks are [`validate_ask_form`]'s, run first; steps 1–3 are [`ShapeLoad::loaded`].
 ///
 /// `shape` must be the load of `ask.shape`. A different shape is a caller defect, and it is
-/// refused `shape_not_askable` rather than validated: an ask is never checked against a schema it
-/// did not name, in any build.
+/// refused rather than validated: an ask is never checked against a schema it did not name, in any
+/// build. The refusal is [`ShapeLoad::NotAskable`]'s exactly — reason, sentence, and nothing taught
+/// — so a loader defect never tells a present shape from an absent one (§3.5: *unreadable and
+/// absent look identical*).
 pub fn validate_ask(
     ask: &ArtifactAsk,
     shape: &LoadedShape,
 ) -> Result<ValidatedAsk, Vec<PlanRefusal>> {
     if ask.shape != shape.shape_id {
-        return Err(vec![refusal(
-            RefusalReason::ShapeNotAskable,
-            MISMATCHED.to_string(),
-            None,
-        )]);
+        return Err(vec![not_askable()]);
     }
     let mut errs = Vec::new();
     let form = check_form(ask, &mut errs);
@@ -266,7 +266,7 @@ impl ShapeLoad {
     pub fn loaded(&self) -> Result<&LoadedShape, PlanRefusal> {
         let (reason, detail, teaches) = match self {
             ShapeLoad::Loaded(shape) => return Ok(shape),
-            ShapeLoad::NotAskable => (RefusalReason::ShapeNotAskable, NOT_ASKABLE, None),
+            ShapeLoad::NotAskable => return Err(not_askable()),
             ShapeLoad::Superseded {
                 successor: Some(successor),
             } => (
@@ -291,8 +291,15 @@ impl ShapeLoad {
 const NOT_ASKABLE: &str =
     "the named shape does not exist or you cannot read it, so nothing can be asked of it";
 
-const MISMATCHED: &str = "the shape loaded for this ask is not the shape it names, so it was not \
-     checked against it";
+/// The one `shape_not_askable` refusal: for a shape absent, unreadable, or not the one the ask
+/// names.
+fn not_askable() -> PlanRefusal {
+    refusal(
+        RefusalReason::ShapeNotAskable,
+        NOT_ASKABLE.to_string(),
+        None,
+    )
+}
 
 const SUPERSEDED: &str = "the named shape has been amended. An ask is never re-pointed at a \
      version it was not written against: if its predicates still mean the same thing, ask the \
@@ -556,7 +563,7 @@ fn against_shape(
     let sorted = sort(predicates, formed, &walk);
     refuse_paths(&sorted, &walk, shape.shape_id, errs);
 
-    let (at, teaches) = offending(sorted.outside_operator, shape.shape_id);
+    let (at, teaches) = offending(&sorted.outside_operator, &sorted.resolved, shape.shape_id);
     refuse_at(
         errs,
         RefusalReason::OperatorOutsideShape,
@@ -565,7 +572,7 @@ fn against_shape(
          `integer` or `string`, or no type, and a bound of a type declared there",
         Some(teaches),
     );
-    let (at, mut teaches) = offending(sorted.outside_value, shape.shape_id);
+    let (at, mut teaches) = offending(&sorted.outside_value, &sorted.resolved, shape.shape_id);
     teaches.non_closure = Some(NON_CLOSURE.to_string());
     refuse_at(
         errs,
@@ -580,31 +587,64 @@ fn against_shape(
 
 /// Each walked predicate, sorted by what the shape says of it.
 #[derive(Default)]
-struct Sorted {
+struct Sorted<'p> {
     bound: Vec<ArtifactPredicate>,
     outside_path: Vec<usize>,
     /// The first walk bound an outside path met.
     beyond: Option<BoundKind>,
-    outside_operator: Vec<(usize, AskablePath)>,
-    outside_value: Vec<(usize, AskablePath)>,
+    /// Each predicate refused for its operator: its index, and its path's slot in `resolved`.
+    outside_operator: Vec<(usize, usize)>,
+    /// Each predicate refused for a value: its index, and its path's slot in `resolved`.
+    outside_value: Vec<(usize, usize)>,
+    /// Each distinct path the ask walks, once, with what the shape says of it.
+    resolved: Vec<(&'p [String], PathResolution)>,
 }
 
-fn sort(
-    predicates: &[ArtifactPredicate],
+/// Every well-formed predicate against the shape.
+///
+/// **One walk per distinct path, all under one budget** (§3.3: the walk "never stalls or exhausts
+/// the server"). A per-predicate budget let one ask spend [`MAX_ASK_PREDICATES`] budgets; memoising
+/// by path alone would still let it spend one per distinct path. Sharing the budget holds what the
+/// ask's paths cost to [`MAX_WALK_VISITS`] however many it names, and the memo makes a repeated
+/// path free. A predicate past the spent budget is refused `path_outside_shape` naming `work` —
+/// visibly, as every bound is. The vocabulary a path refusal teaches is walked under a budget of
+/// its own, so a spent ask still teaches what it may ask.
+///
+/// A refused path's facts stay in `resolved`, and are copied into a teaching once per distinct
+/// path ([`offending`]), never once per predicate.
+fn sort<'p>(
+    predicates: &'p [ArtifactPredicate],
     formed: &[bool],
     walk: &Result<Walk<'_>, BoundKind>,
-) -> Sorted {
-    let mut sorted = Sorted::default();
+) -> Sorted<'p> {
+    let mut slots: HashMap<&'p [String], usize> = HashMap::new();
+    let mut distinct: Vec<&'p [String]> = Vec::new();
+    let slot_of: Vec<Option<usize>> = predicates
+        .iter()
+        .zip(formed)
+        .map(|(predicate, &walkable)| {
+            walkable.then(|| {
+                *slots.entry(predicate.path.as_slice()).or_insert_with(|| {
+                    distinct.push(predicate.path.as_slice());
+                    distinct.len() - 1
+                })
+            })
+        })
+        .collect();
+    let resolutions = match walk {
+        Ok(walk) => walk.resolve_all(&distinct),
+        Err(at) => vec![PathResolution::BeyondBound(*at); distinct.len()],
+    };
+    let mut sorted = Sorted {
+        resolved: distinct.into_iter().zip(resolutions).collect(),
+        ..Sorted::default()
+    };
     let mut steps = MAX_MEMBERSHIP_STEPS;
-    for (i, predicate) in predicates.iter().enumerate() {
-        if !formed[i] {
+    for (i, (predicate, slot)) in predicates.iter().zip(slot_of).enumerate() {
+        let Some(slot) = slot else {
             continue;
-        }
-        let resolution = match walk {
-            Ok(walk) => walk.resolve(&predicate.path),
-            Err(at) => PathResolution::BeyondBound(*at),
         };
-        let facts = match resolution {
+        let facts = match &sorted.resolved[slot].1 {
             PathResolution::Declared(facts) => facts,
             PathResolution::NotDeclared => {
                 sorted.outside_path.push(i);
@@ -612,18 +652,17 @@ fn sort(
             }
             PathResolution::BeyondBound(at) => {
                 sorted.outside_path.push(i);
-                sorted.beyond.get_or_insert(at);
+                sorted.beyond.get_or_insert(*at);
                 continue;
             }
         };
-        let described = || AskablePath::new(predicate.path.clone(), facts.clone());
-        match bind(&predicate.op, &facts, &mut steps) {
+        match bind(&predicate.op, facts, &mut steps) {
             Ok(op) => sorted.bound.push(ArtifactPredicate {
                 path: predicate.path.clone(),
                 op,
             }),
-            Err(Fault::Operator) => sorted.outside_operator.push((i, described())),
-            Err(Fault::Value) => sorted.outside_value.push((i, described())),
+            Err(Fault::Operator) => sorted.outside_operator.push((i, slot)),
+            Err(Fault::Value) => sorted.outside_value.push((i, slot)),
             Err(Fault::Work) => {
                 sorted.outside_path.push(i);
                 sorted.beyond.get_or_insert(BoundKind::Work);
@@ -635,7 +674,7 @@ fn sort(
 
 /// `path_outside_shape`, teaching the askable vocabulary and the bound an asked path met.
 fn refuse_paths(
-    sorted: &Sorted,
+    sorted: &Sorted<'_>,
     walk: &Result<Walk<'_>, BoundKind>,
     shape: ShapeId,
     errs: &mut Vec<PlanRefusal>,
@@ -667,15 +706,29 @@ fn refuse_paths(
     );
 }
 
-/// The offending predicates' indices, and a teaching that describes each offending path once.
-fn offending(found: Vec<(usize, AskablePath)>, shape: ShapeId) -> (Vec<usize>, RefusalTeaching) {
+/// The offending predicates' indices, and a teaching that describes each offending path once:
+/// deduplicated by slot first, so a path's facts are copied once however many predicates name it.
+fn offending(
+    found: &[(usize, usize)],
+    resolved: &[(&[String], PathResolution)],
+    shape: ShapeId,
+) -> (Vec<usize>, RefusalTeaching) {
     let at = found.iter().map(|(i, _)| *i).collect();
-    let mut paths: Vec<AskablePath> = Vec::new();
-    for (_, path) in found {
-        if !paths.iter().any(|p| p.path == path.path) {
-            paths.push(path);
+    let mut slots: Vec<usize> = Vec::new();
+    for &(_, slot) in found {
+        if !slots.contains(&slot) {
+            slots.push(slot);
         }
     }
+    let paths = slots
+        .into_iter()
+        .filter_map(|slot| match &resolved[slot] {
+            (path, PathResolution::Declared(facts)) => {
+                Some(AskablePath::new(path.to_vec(), facts.clone()))
+            }
+            _ => None,
+        })
+        .collect();
     let teaches = teaching(
         Vocabulary {
             paths,
@@ -1128,6 +1181,49 @@ mod tests {
         assert!(validate_ask(&few, &shape).is_ok());
     }
 
+    /// A shape each of whose `MAX_ASK_PREDICATES` properties references one `allOf` of 2,500
+    /// branches: resolving one property costs about 2,504 visits, so one fits the walk budget and
+    /// all of them — about 80,000 — do not.
+    fn heavy_properties() -> LoadedShape {
+        let branches: Vec<Value> = (0..2_500).map(|_| json!({})).collect();
+        let props: serde_json::Map<String, Value> = (0..MAX_ASK_PREDICATES)
+            .map(|i| (format!("p{i}"), json!({ "$ref": "#/$defs/w" })))
+            .collect();
+        shape_of(json!({ "$defs": { "w": { "allOf": branches } }, "properties": props }))
+    }
+
+    /// RG-2 F3: an ask's paths are resolved under one budget, so naming more of them does not buy
+    /// more work. Bites the shared budget in `sort`: with a budget per predicate (or per distinct
+    /// path) each of these fits and the ask validates.
+    #[test]
+    fn an_asks_paths_share_one_walk_budget() {
+        let shape = heavy_properties();
+        let one = ask(vec![at(&["p0"], PropertyOp::HasKey)]);
+        assert!(validate_ask(&one, &shape).is_ok(), "one path fits");
+        let every = ask((0..MAX_ASK_PREDICATES)
+            .map(|i| at(&[format!("p{i}").as_str()], PropertyOp::HasKey))
+            .collect());
+        let rs = refusals(&every, &shape);
+        assert_eq!(reasons(&rs), vec![RefusalReason::PathOutsideShape]);
+        assert_eq!(
+            rs[0].teaches.as_ref().and_then(|t| t.beyond_bound),
+            Some(BoundKind::Work)
+        );
+    }
+
+    /// RG-2 F3: a path named by many predicates is resolved once. Bites the per-path memo in
+    /// `sort`: resolving the same path once per predicate under the shared budget spends it, and
+    /// the ask is refused.
+    #[test]
+    fn a_path_named_by_many_predicates_is_walked_once() {
+        let shape = heavy_properties();
+        let same = ask((0..MAX_ASK_PREDICATES)
+            .map(|_| at(&["p0"], PropertyOp::HasKey))
+            .collect());
+        let v = validate_ask(&same, &shape).expect("one walk of `p0` fits");
+        assert_eq!(v.predicates().len(), MAX_ASK_PREDICATES);
+    }
+
     #[test]
     fn contains_where_the_branches_share_no_type_refuses_the_value() {
         let schema = wrapped(&json!({ "allOf": [{ "type": "string" }, { "type": "number" }] }));
@@ -1227,13 +1323,15 @@ mod tests {
         );
     }
 
+    /// The refusal is `not_askable`'s exactly — reason, sentence, nothing taught (§3.5: unreadable
+    /// and absent look identical). Bites a mismatch-specific refusal: a sentence of its own would
+    /// tell a loader defect from an absent shape.
     #[test]
     fn a_shape_other_than_the_one_the_ask_names_is_refused_not_checked() {
         let mut a = ask(vec![at(&["undeclared"], PropertyOp::HasKey)]);
         a.shape = ShapeId::from(Uuid::from_u128(8));
         let rs = refusals(&a, &shape_of(json!({})));
-        assert_eq!(reasons(&rs), vec![RefusalReason::ShapeNotAskable]);
-        assert_eq!(rs[0].detail, MISMATCHED);
+        assert_eq!(rs, vec![ShapeLoad::NotAskable.loaded().unwrap_err()]);
     }
 
     #[test]

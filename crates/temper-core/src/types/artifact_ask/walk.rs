@@ -32,6 +32,12 @@
 //! - **Four named bounds** ([`BoundKind`]): path depth, advertised paths, schema bytes, and a
 //!   **work budget** of subschema visits shared by everything one [`resolve`] or one [`enumerate`]
 //!   does. Meeting any of them is reported, never a stall.
+//! - **Every size an author controls is charged before work proportional to it is done.** The
+//!   schema is measured only up to its bound; each `$ref` is decoded once, when the walk is built;
+//!   each list a visit reads — branches, `type` names, `enum` members, a frame's property keys —
+//!   costs its length; and each advertised path costs its bytes. A property key longer than an
+//!   asked segment may be (`MAX_ARTIFACT_PATH_SEGMENT_BYTES`) is never advertised and never walked
+//!   below: no ask can name it.
 //! - **No recursion over the schema.** A subschema is evaluated from an explicit stack, so a chain
 //!   of thousands of `$ref` hops costs heap, not call stack. The only recursion left is over the
 //!   [`PathFacts`] value built, whose `items` nesting is held to the depth bound.
@@ -50,7 +56,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::reference::canonical;
-use crate::types::query::filter::json_bytes;
+use super::validate::MAX_ARTIFACT_PATH_SEGMENT_BYTES;
+use crate::types::query::filter::json_string_bytes;
 
 /// The deepest path, in object-key segments, the walk descends to. A deeper ask is
 /// [`PathResolution::BeyondBound`]`(`[`BoundKind::Depth`]`)`, refused `path_outside_shape` with
@@ -71,15 +78,21 @@ pub const MAX_WALK_DEPTH: usize = 16;
 /// # 1024
 ///
 /// The vocabulary is read whole by `schema show`, `GET /api/shapes/{id}` and
-/// `get_data_artifact_shape`, so this bounds a response body and the walk behind it. A path entry
-/// is a few hundred bytes, so 1024 of them is a few hundred kilobytes at most. It is far above a
-/// shape a person writes — a record with tens of fields — and it is the bound the 2^N `$defs`
-/// fan-out meets.
+/// `get_data_artifact_shape`, so this bounds a response body and the walk behind it. It is far
+/// above a shape a person writes — a record with tens of fields — and it is the bound the 2^N
+/// `$defs` fan-out meets.
+///
+/// It bounds how many paths, not how large each is. A path's text is at most [`MAX_WALK_DEPTH`]
+/// segments of at most `MAX_ARTIFACT_PATH_SEGMENT_BYTES` — a longer key is never advertised — so
+/// 4 KiB; and every path built is charged its bytes against [`MAX_WALK_VISITS`] at
+/// [`BYTES_PER_VISIT`], so one walk builds at most about 4 MiB of path text whatever the count. A
+/// path's declared values are charged the same way.
 pub const MAX_WALK_PATHS: usize = 1024;
 
 /// The largest schema the walk reads, in compact serialized JSON bytes. Past it nothing is walked:
 /// every path is [`PathResolution::BeyondBound`]`(`[`BoundKind::SchemaBytes`]`)` and the
-/// vocabulary is empty and says why.
+/// vocabulary is empty and says why. The measurement itself stops at the bound, so a schema far
+/// over it costs no more to refuse than one just over it.
 ///
 /// # 256 KiB
 ///
@@ -375,16 +388,18 @@ impl Draft {
     }
 }
 
-/// How many bytes of a value's canonical text one visit of the budget pays for. A member of an
-/// `enum` or `const` costs one visit, plus one per this many bytes, when the walk first reads it
-/// and each time it is copied into an answer.
+/// How many bytes one visit of the budget pays for, wherever the walk carries text the author
+/// sized. A member of an `enum` or `const` costs one visit, plus one per this many bytes of its
+/// canonical text, when the walk first reads it and each time it is copied into an answer; a path
+/// [`enumerate`] builds costs one visit, plus one per this many bytes of its segments.
 ///
 /// # 64
 ///
-/// An `enum` of short codes costs about one visit a member, so a five-thousand-code enum is well
-/// inside [`MAX_WALK_VISITS`]; a single member of 200 KB costs over three thousand, so no walk can
-/// copy more than about [`MAX_WALK_VISITS`] × 64 bytes — 4 MiB — of declared values.
-pub const VALUE_BYTES_PER_VISIT: usize = 64;
+/// An `enum` of short codes, or a path of short keys, costs about one visit, so a
+/// five-thousand-code enum is well inside [`MAX_WALK_VISITS`]; a single member of 200 KB costs over
+/// three thousand, so no walk can copy more than about [`MAX_WALK_VISITS`] × 64 bytes — 4 MiB — of
+/// declared values, nor build more than that of path text.
+pub const BYTES_PER_VISIT: usize = 64;
 
 /// What one walk may still spend, and the members it has already read. Shared by everything one
 /// `resolve` or one `enumerate` does.
@@ -411,14 +426,16 @@ impl Budget {
         Ok(())
     }
 
-    /// One `enum` or `const` member, read once per walk and charged by its size.
+    /// One `enum` or `const` member, read once per walk and charged by its size. Its canonical text
+    /// is built before the charge can be known; because each member node is read once per budget,
+    /// that work is at most the schema's own size per budget.
     fn member<'s>(&mut self, value: &'s Value) -> Result<Member<'s>, BoundKind> {
         let node = identity(value);
         if let Some(&(id, weight)) = self.read.get(&node) {
             return Ok(Member { id, weight, value });
         }
         let text = canonical(value);
-        let weight = 1 + text.len() / VALUE_BYTES_PER_VISIT;
+        let weight = 1 + text.len() / BYTES_PER_VISIT;
         self.spend(weight)?;
         let next = self.ids.len();
         let id = *self.ids.entry(text).or_insert(next);
@@ -437,36 +454,49 @@ impl Budget {
     }
 }
 
-/// One schema, measured, its draft selected, and its embedded resources found, ready to resolve
-/// paths against.
+/// One schema, measured, its draft selected, and its `$ref`s resolved, ready to resolve paths
+/// against.
 #[derive(Debug)]
 pub(super) struct Walk<'s> {
     root: &'s Value,
     draft: Draft,
     bounds: WalkBounds,
-    /// Schema objects inside a resource the schema embeds (a non-root `$id`), whose `$ref`s
-    /// resolve against that resource rather than the root, and are not followed.
-    embedded: HashSet<usize>,
+    /// Each schema object with a `$ref` the walk follows → the subschema it names. Built once, so a
+    /// visit looks a reference up rather than decoding its text again.
+    refs: HashMap<usize, &'s Value>,
 }
 
 impl<'s> Walk<'s> {
-    /// Measure the schema once. Over [`WalkBounds::max_schema_bytes`] nothing is walked.
+    /// Measure the schema once, no further than the bound. Over [`WalkBounds::max_schema_bytes`]
+    /// nothing is walked. Under it, every `$ref` is resolved here, in passes linear in the schema.
     pub(super) fn new(schema: &'s Value, bounds: &WalkBounds) -> Result<Walk<'s>, BoundKind> {
-        if json_bytes(schema) > bounds.max_schema_bytes {
+        if json_bytes_up_to(schema, bounds.max_schema_bytes) > bounds.max_schema_bytes {
             return Err(BoundKind::SchemaBytes);
         }
         let draft = Draft::of(schema);
+        let embedded = embedded_resources(schema, draft);
         Ok(Walk {
             root: schema,
             draft,
             bounds: *bounds,
-            embedded: embedded_resources(schema, draft),
+            refs: local_references(schema, &embedded),
         })
     }
 
     /// One path, under a budget of its own.
     pub(super) fn resolve(&self, path: &[String]) -> PathResolution {
         self.resolve_within(path, &mut Budget::new(self.bounds.max_visits))
+    }
+
+    /// Several paths under **one** budget, so what reading them costs does not grow with how many
+    /// an ask names (§3.3: the walk "never stalls or exhausts the server"). Once the budget is
+    /// spent every later path is [`PathResolution::BeyondBound`]`(`[`BoundKind::Work`]`)`.
+    pub(super) fn resolve_all(&self, paths: &[&[String]]) -> Vec<PathResolution> {
+        let mut budget = Budget::new(self.bounds.max_visits);
+        paths
+            .iter()
+            .map(|path| self.resolve_within(path, &mut budget))
+            .collect()
     }
 
     fn resolve_within(&self, path: &[String], budget: &mut Budget) -> PathResolution {
@@ -497,64 +527,71 @@ impl<'s> Walk<'s> {
     /// every frame and every path.
     pub(super) fn enumerate(&self) -> Vocabulary {
         let mut budget = Budget::new(self.bounds.max_visits);
-        let mut paths = Vec::new();
-        let mut truncated = BTreeSet::new();
-        let root = match self.frame([self.root], &mut budget) {
-            Ok(frame) => frame,
-            Err(bound) => {
-                truncated.insert(bound);
-                return Vocabulary { paths, truncated };
-            }
-        };
-        let mut queue: VecDeque<(Vec<String>, Vec<&'s Value>)> =
-            VecDeque::from([(Vec::new(), root)]);
-        while let Some((prefix, frame)) = queue.pop_front() {
-            let keys = child_keys(&frame);
-            if keys.is_empty() {
-                continue;
-            }
-            if prefix.len() == self.bounds.max_depth {
-                // Keys exist below the bound. Whether each is declared is past the bound too, so
+        let mut vocabulary = Vocabulary::default();
+        if let Err(bound) = self.enumerate_into(&mut vocabulary, &mut budget) {
+            vocabulary.truncated.insert(bound);
+        }
+        vocabulary
+    }
+
+    /// The breadth-first walk behind [`Walk::enumerate`]. A depth cut is recorded and the walk goes
+    /// on; any other bound stops it, and is returned.
+    ///
+    /// **No prefix is held twice.** A queued frame names the path it sits under by its index in
+    /// `out.paths`, so a prefix lives only in the path the vocabulary carries; and each candidate
+    /// path is charged its bytes before it is built, whether or not it is then advertised.
+    fn enumerate_into(&self, out: &mut Vocabulary, budget: &mut Budget) -> Result<(), BoundKind> {
+        let root = self.frame([self.root], budget)?;
+        // (the index in `out.paths` of the path a frame sits under — none for the root; the frame)
+        let mut queue: VecDeque<(Option<usize>, Vec<&'s Value>)> = VecDeque::from([(None, root)]);
+        while let Some((parent, frame)) = queue.pop_front() {
+            let depth = parent.map_or(0, |at| out.paths[at].path.len());
+            if depth == self.bounds.max_depth {
+                // Whether keys exist below the bound, read without collecting them: a cut costs the
+                // frame, not the keys under it. Whether each is declared is past the bound too, so
                 // this says "there may be more" — the honest reading of a depth cut.
-                truncated.insert(BoundKind::Depth);
+                if frame.iter().any(|node| declares_properties(node)) {
+                    out.truncated.insert(BoundKind::Depth);
+                }
                 continue;
             }
-            for key in keys {
-                let mut path = prefix.clone();
+            for key in child_keys(&frame, budget)? {
+                let prefix: &[String] = match parent {
+                    Some(at) => &out.paths[at].path,
+                    None => &[],
+                };
+                let bytes = prefix.iter().map(String::len).sum::<usize>() + key.len();
+                budget.spend(1 + bytes / BYTES_PER_VISIT)?;
+                let mut path = Vec::with_capacity(prefix.len() + 1);
+                path.extend_from_slice(prefix);
                 path.push(key.to_string());
-                let facts = match self.resolve_within(&path, &mut budget) {
+                let facts = match self.resolve_within(&path, budget) {
                     PathResolution::Declared(facts) => facts,
                     PathResolution::NotDeclared => continue,
-                    PathResolution::BeyondBound(bound) => {
-                        truncated.insert(bound);
-                        return Vocabulary { paths, truncated };
-                    }
+                    PathResolution::BeyondBound(bound) => return Err(bound),
                 };
-                if paths.len() == self.bounds.max_paths {
-                    truncated.insert(BoundKind::Paths);
-                    return Vocabulary { paths, truncated };
+                if out.paths.len() == self.bounds.max_paths {
+                    return Err(BoundKind::Paths);
                 }
-                paths.push(AskablePath::new(path.clone(), facts));
+                out.paths.push(AskablePath::new(path, facts));
+                let at = out.paths.len() - 1;
+                // Each frame node is asked for the key, so the child frame costs the frame's size.
+                budget.spend(frame.len())?;
                 let children = frame
                     .iter()
                     .copied()
                     .filter_map(|node| node.get("properties").and_then(|p| p.get(key)));
-                match self.frame(children, &mut budget) {
-                    Ok(child_frame) => queue.push_back((path, child_frame)),
-                    Err(bound) => {
-                        truncated.insert(bound);
-                        return Vocabulary { paths, truncated };
-                    }
-                }
+                queue.push_back((Some(at), self.frame(children, budget)?));
             }
         }
-        Vocabulary { paths, truncated }
+        Ok(())
     }
 
     /// The schema objects whose `properties` apply at one location — the given nodes and what their
     /// `$ref`, `allOf`, `anyOf` and `oneOf` reach — and only those: a node without `properties` is
-    /// expanded through and not kept. Each node is visited once, from an explicit stack, and every
-    /// visit is spent from the budget.
+    /// expanded through and not kept. Each node is expanded once, from an explicit stack, and every
+    /// node taken off the stack — expanded, already seen, or not a schema object — is spent from
+    /// the budget, so a list of branches costs its length however many of them are skipped.
     fn frame(
         &self,
         nodes: impl IntoIterator<Item = &'s Value>,
@@ -564,14 +601,14 @@ impl<'s> Walk<'s> {
         let mut seen = HashSet::new();
         let mut stack: Vec<&'s Value> = nodes.into_iter().collect();
         while let Some(node) = stack.pop() {
+            budget.spend(1)?;
             let Value::Object(map) = node else {
                 continue;
             };
             if !seen.insert(identity(node)) {
                 continue;
             }
-            budget.spend(1)?;
-            if let Some(target) = map.get("$ref").and_then(|r| self.target(node, r)) {
+            if let Some(target) = self.target(node) {
                 stack.push(target);
             }
             if self.draft.ref_overrides_siblings() && map.contains_key("$ref") {
@@ -592,20 +629,76 @@ impl<'s> Walk<'s> {
         Ok(out)
     }
 
-    /// The subschema a local `$ref` on `from` names: the fragment of a `#`-prefixed reference,
-    /// percent-decoded, read as a JSON pointer from the root (`~0`/`~1` unescaped by
-    /// `Value::pointer`). `#` alone is the root.
-    ///
-    /// Not followed: an anchor, a remote or `file:` URI (§3.3, the remote-`$ref` row), and any
-    /// reference made from inside an embedded resource, where `#` means that resource and not the
-    /// root.
-    fn target(&self, from: &Value, reference: &Value) -> Option<&'s Value> {
-        if self.embedded.contains(&identity(from)) {
-            return None;
-        }
-        let fragment = reference.as_str()?.strip_prefix('#')?;
-        self.root.pointer(&percent_decode(fragment)?)
+    /// The subschema the `$ref` on `from` names, if the walk follows it — read from the references
+    /// [`local_references`] resolved when the walk was built, never from the reference's text.
+    fn target(&self, from: &Value) -> Option<&'s Value> {
+        self.refs.get(&identity(from)).copied()
     }
+}
+
+/// A value's compact JSON size, counted only until it passes `limit`: a result over `limit` says
+/// the value is larger, not by how much. The counting sink refuses the first write past the limit,
+/// which stops the serializer there, so measuring a schema far over [`MAX_SCHEMA_BYTES`] costs
+/// about that much work, not the schema's size.
+fn json_bytes_up_to(value: &Value, limit: usize) -> usize {
+    struct Count {
+        bytes: usize,
+        limit: usize,
+    }
+    impl std::io::Write for Count {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.bytes = self.bytes.saturating_add(buf.len());
+            if self.bytes > self.limit {
+                return Err(std::io::Error::other("past the measured limit"));
+            }
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count { bytes: 0, limit };
+    // A `Value` always serializes, so an error is the sink stopping past the limit — which the
+    // count already says.
+    let _stopped = serde_json::to_writer(&mut count, value);
+    count.bytes
+}
+
+/// Every `$ref` the walk follows, resolved once: each object anywhere in the schema that carries a
+/// `#`-prefixed `$ref` → the subschema its fragment names, percent-decoded and read as a JSON
+/// pointer from the root (`~0`/`~1` unescaped by `Value::pointer`). `#` alone is the root.
+///
+/// Every object, not only schema positions, because a `$ref` may point anywhere and the walk then
+/// reads what it finds there as a schema. One pass from an explicit stack, and each reference's
+/// text is decoded once, so the whole costs time linear in the schema — bounded, like the byte
+/// measurement before it, by [`MAX_SCHEMA_BYTES`] — and a visit costs a lookup.
+///
+/// Not followed, so absent here: an anchor, a remote or `file:` URI (§3.3, the remote-`$ref` row),
+/// a pointer that names nothing, and any reference made from inside an embedded resource, where `#`
+/// means that resource and not the root.
+fn local_references<'s>(root: &'s Value, embedded: &HashSet<usize>) -> HashMap<usize, &'s Value> {
+    let mut refs = HashMap::new();
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        match node {
+            Value::Object(map) => {
+                let target = map
+                    .get("$ref")
+                    .and_then(Value::as_str)
+                    .and_then(|reference| reference.strip_prefix('#'))
+                    .filter(|_| !embedded.contains(&identity(node)))
+                    .and_then(percent_decode)
+                    .and_then(|pointer| root.pointer(&pointer));
+                if let Some(target) = target {
+                    refs.insert(identity(node), target);
+                }
+                stack.extend(map.values());
+            }
+            Value::Array(elements) => stack.extend(elements),
+            _ => {}
+        }
+    }
+    refs
 }
 
 /// The schema objects inside a resource the schema embeds: a non-root object that opens one, and
@@ -672,14 +765,46 @@ fn percent_decode(fragment: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
-/// The property keys any schema object in a frame declares, in byte order.
-fn child_keys<'s>(frame: &[&'s Value]) -> BTreeSet<&'s str> {
-    frame
+/// The askable property keys any schema object in a frame declares, in byte order. Every key read
+/// is charged one visit before it is collected.
+///
+/// A key longer than an asked segment may be (`MAX_ARTIFACT_PATH_SEGMENT_BYTES`, the form cap
+/// `validate_ask` refuses a longer segment by) is skipped: no ask can name it, so it is never
+/// advertised and nothing below it is walked. Its length is read first, which is all a long key
+/// costs — escaping only lengthens a key, so one longer than the cap is past it.
+fn child_keys<'s>(
+    frame: &[&'s Value],
+    budget: &mut Budget,
+) -> Result<BTreeSet<&'s str>, BoundKind> {
+    let mut keys = BTreeSet::new();
+    let declared = frame
         .iter()
         .copied()
-        .filter_map(|node| node.get("properties").and_then(Value::as_object))
-        .flat_map(|props| props.keys().map(String::as_str))
-        .collect()
+        .filter_map(|node| node.get("properties").and_then(Value::as_object));
+    for props in declared {
+        budget.spend(props.len())?;
+        keys.extend(
+            props
+                .keys()
+                .map(String::as_str)
+                .filter(|key| askable_segment(key)),
+        );
+    }
+    Ok(keys)
+}
+
+/// Whether a key could be one segment of an asked path: within `MAX_ARTIFACT_PATH_SEGMENT_BYTES`,
+/// JSON-escaped, as `validate_ask`'s form check measures it.
+fn askable_segment(key: &str) -> bool {
+    key.len() <= MAX_ARTIFACT_PATH_SEGMENT_BYTES
+        && json_string_bytes(key) <= MAX_ARTIFACT_PATH_SEGMENT_BYTES
+}
+
+/// Whether a frame node declares any property at all.
+fn declares_properties(node: &Value) -> bool {
+    node.get("properties")
+        .and_then(Value::as_object)
+        .is_some_and(|props| !props.is_empty())
 }
 
 /// A subschema's identity for memoising and cycle-guarding: its address inside the borrowed root,
@@ -988,7 +1113,7 @@ impl<'s> Resolver<'_, 's> {
     /// The subschemas an object applies at a position, in a fixed order the combination relies on.
     fn children(&self, node: &'s Value, map: &'s Map<String, Value>, at: usize) -> Vec<Child<'s>> {
         let mut out = Vec::new();
-        if let Some(target) = map.get("$ref").and_then(|r| self.walk.target(node, r)) {
+        if let Some(target) = self.walk.target(node) {
             out.push((target, at, Role::Ref));
         }
         if self.walk.draft.ref_overrides_siblings() && map.contains_key("$ref") {
@@ -1082,20 +1207,26 @@ impl<'s> Resolver<'_, 's> {
     }
 
     /// What one schema object itself declares at the path's end: `type`, `enum` / `const`, and
-    /// what its element schema reached.
+    /// what its element schema reached. A list of `type` names costs its length, like an `enum`.
     fn local_facts(
         &mut self,
         map: &'s Map<String, Value>,
         items: Option<Reach<'s>>,
     ) -> Result<Facts<'s>, BoundKind> {
-        let types = map.get("type").map(|t| match t {
-            Value::String(name) => JsonType::from_keyword(name).into_iter().collect(),
-            Value::Array(names) => names
-                .iter()
-                .filter_map(|n| n.as_str().and_then(JsonType::from_keyword))
-                .collect(),
-            _ => BTreeSet::new(),
-        });
+        let types = match map.get("type") {
+            None => None,
+            Some(Value::String(name)) => Some(JsonType::from_keyword(name).into_iter().collect()),
+            Some(Value::Array(names)) => {
+                self.budget.spend(names.len())?;
+                Some(
+                    names
+                        .iter()
+                        .filter_map(|n| n.as_str().and_then(JsonType::from_keyword))
+                        .collect(),
+                )
+            }
+            Some(_) => Some(BTreeSet::new()),
+        };
         let enumerated = match map.get("enum").and_then(Value::as_array) {
             Some(members) => Some(self.budget.members(members)?),
             None => None,
@@ -1131,6 +1262,7 @@ mod tests {
     //! The §3.3 table, row by row, each with a hand-written expected [`PathResolution`].
 
     use super::*;
+    use crate::types::query::filter::json_bytes;
     use serde_json::json;
 
     fn path(segments: &[&str]) -> Vec<String> {
@@ -1845,5 +1977,203 @@ mod tests {
                 truncated: BTreeSet::new(),
             }
         );
+    }
+
+    // ── Every size an author controls is charged (RG-2) ───────────────────────────────────────
+
+    /// The least visit budget under which `enumerate` finishes without a `work` cut, under a depth
+    /// bound. A run spends the same visits whatever its budget, and finishes exactly when they fit,
+    /// so this is what the walk charged — a deterministic measure, not a timing.
+    fn least_visits(schema: &Value, max_depth: usize) -> usize {
+        let finishes = |max_visits| {
+            let bounds = WalkBounds {
+                max_depth,
+                max_visits,
+                ..WalkBounds::BUILD
+            };
+            !enumerate(schema, &bounds)
+                .truncated
+                .contains(&BoundKind::Work)
+        };
+        assert!(finishes(MAX_WALK_VISITS), "fits the build's budget");
+        let (mut lo, mut hi) = (0, MAX_WALK_VISITS);
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if finishes(mid) {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        lo
+    }
+
+    /// RG-2 F1, the reported attack, unscaled: two keys of 131,000 bytes, each referencing the
+    /// root, fit the byte bound and declare a two-way fan-out every path of which carries them.
+    /// Bites the key skip in `child_keys`: without it the vocabulary advertises paths built of
+    /// those keys — about 1 GB of path text at the path bound with no byte charge, a `work` cut
+    /// after about a dozen paths of 131 KB or more with it — where with the skip there is only
+    /// `ok`.
+    #[test]
+    fn a_key_too_long_to_ask_is_never_advertised_nor_walked_below() {
+        let mut props = Map::new();
+        props.insert("a".repeat(131_000), json!({ "$ref": "#" }));
+        props.insert("b".repeat(131_000), json!({ "$ref": "#" }));
+        props.insert("ok".to_string(), json!({ "type": "string" }));
+        let s = json!({ "properties": props });
+        assert!(json_bytes(&s) <= MAX_SCHEMA_BYTES, "{}", json_bytes(&s));
+        assert_eq!(
+            enumerate(&s, &WalkBounds::BUILD),
+            Vocabulary {
+                paths: vec![AskablePath::new(
+                    path(&["ok"]),
+                    PathFacts {
+                        types: types(&[JsonType::String]),
+                        ..PathFacts::default()
+                    }
+                )],
+                truncated: BTreeSet::new(),
+            }
+        );
+    }
+
+    fn two_way_fan_out(a: &str, b: &str) -> Value {
+        json!({ "properties": { a: { "$ref": "#" }, b: { "$ref": "#" } } })
+    }
+
+    /// RG-2 F1, the byte charge. Keys of `MAX_ARTIFACT_PATH_SEGMENT_BYTES` (256) are askable, so
+    /// the skip keeps them and only the charge sees their length. Under a depth bound of 3 the
+    /// fan-out builds 2 paths of one segment, 4 of two and 8 of three; each 256-byte segment costs
+    /// 256 / 64 = 4 visits more than a one-byte one, so the long fan-out costs
+    /// 2·4 + 4·8 + 8·12 = 136 visits more. Bites the per-path charge in `enumerate_into`: without
+    /// it the two cost the same.
+    #[test]
+    fn every_path_built_is_charged_its_bytes() {
+        let short = two_way_fan_out("a", "b");
+        let long = two_way_fan_out(
+            &"a".repeat(MAX_ARTIFACT_PATH_SEGMENT_BYTES),
+            &"b".repeat(MAX_ARTIFACT_PATH_SEGMENT_BYTES),
+        );
+        assert_eq!(least_visits(&long, 3) - least_visits(&short, 3), 136);
+        let three = WalkBounds {
+            max_depth: 3,
+            ..WalkBounds::BUILD
+        };
+        let v = enumerate(&long, &three);
+        assert_eq!(v.paths.len(), 14);
+        assert_eq!(v.truncated, BTreeSet::from([BoundKind::Depth]));
+    }
+
+    /// RG-2 F2(A), the key charge: each key a frame declares costs one visit as it is read, even
+    /// one too long to ask, which is never walked. One hundred such keys beside `ok` cost exactly
+    /// one hundred visits more. Bites the charge in `child_keys`: without it they cost nothing.
+    #[test]
+    fn every_key_a_frame_declares_is_charged_even_one_too_long_to_ask() {
+        let ok = json!({ "properties": { "ok": {} } });
+        let mut props = Map::new();
+        props.insert("ok".to_string(), json!({}));
+        for i in 0..100 {
+            props.insert(
+                format!("{i:03}{}", "k".repeat(MAX_ARTIFACT_PATH_SEGMENT_BYTES)),
+                json!({}),
+            );
+        }
+        let crowded = json!({ "properties": props });
+        assert_eq!(
+            enumerate(&crowded, &WalkBounds::BUILD),
+            enumerate(&ok, &WalkBounds::BUILD),
+            "the long keys are not advertised"
+        );
+        assert_eq!(
+            least_visits(&crowded, MAX_WALK_DEPTH) - least_visits(&ok, MAX_WALK_DEPTH),
+            100
+        );
+    }
+
+    /// RG-2 F2(A), the depth cut: a frame at the depth bound is read for whether it declares any
+    /// property, never for its keys, so a thousand keys under the cut cost what one does. Bites the
+    /// order in `enumerate_into`: collecting (and charging) keys before checking the depth would
+    /// cost 999 visits more here.
+    #[test]
+    fn a_depth_cut_costs_nothing_per_key_below_it() {
+        let under = |n: usize| {
+            let keys: Map<String, Value> = (0..n).map(|i| (format!("k{i}"), json!({}))).collect();
+            json!({ "properties": { "a": { "properties": keys } } })
+        };
+        let (one, many) = (under(1), under(1_000));
+        assert_eq!(least_visits(&many, 1), least_visits(&one, 1));
+        let v = enumerate(
+            &many,
+            &WalkBounds {
+                max_depth: 1,
+                ..WalkBounds::BUILD
+            },
+        );
+        assert_eq!(v.paths.len(), 1);
+        assert_eq!(v.truncated, BTreeSet::from([BoundKind::Depth]));
+    }
+
+    /// RG-2 sweep: a frame expansion charges every node it takes off its stack, so an `allOf` of
+    /// `true`s — not schema objects, never expanded — still costs its length. One thousand of them
+    /// cost 2,000 visits more: 1,000 in the root's frame and 1,000 as the root's children when `x`
+    /// is resolved. Bites the per-pop charge in `frame`: charging only the objects it expands, the
+    /// frame's thousand pops are free and the difference is 1,000.
+    #[test]
+    fn a_frame_charges_every_branch_it_takes_even_one_it_skips() {
+        let with = |n: usize| {
+            let trues: Vec<Value> = (0..n).map(|_| json!(true)).collect();
+            json!({ "properties": { "x": {} }, "allOf": trues })
+        };
+        assert_eq!(
+            least_visits(&with(1_000), MAX_WALK_DEPTH) - least_visits(&with(0), MAX_WALK_DEPTH),
+            2_000
+        );
+    }
+
+    /// RG-2 sweep: a `type` list costs its length each time it is read, like an `enum`. One
+    /// thousand names cost 999 visits more than one. Bites the charge in `local_facts`: without it
+    /// the list is read free at every visit.
+    #[test]
+    fn a_list_of_type_names_is_charged_its_length() {
+        let with = |n: usize| {
+            let names: Vec<Value> = (0..n).map(|_| json!("string")).collect();
+            json!({ "properties": { "x": { "type": names } } })
+        };
+        assert_eq!(
+            least_visits(&with(1_000), MAX_WALK_DEPTH) - least_visits(&with(1), MAX_WALK_DEPTH),
+            999
+        );
+    }
+
+    /// RG-2 F2(B): a `$ref` is decoded and resolved once, when the walk is built, and a visit reads
+    /// that resolution — never the reference's text. Bites resolving per visit: a lookup that read
+    /// the text would resolve the stranger below, which the walk was never built over.
+    #[test]
+    fn a_ref_is_resolved_when_the_walk_is_built_not_when_it_is_visited() {
+        let s = json!({
+            "$defs": { "x": { "type": "string" } },
+            "properties": { "a": { "$ref": "#/$defs/x" } }
+        });
+        let walk = Walk::new(&s, &WalkBounds::BUILD).expect("under the byte bound");
+        assert!(walk
+            .target(&s["properties"]["a"])
+            .is_some_and(|target| std::ptr::eq(target, &s["$defs"]["x"])));
+        let stranger = json!({ "$ref": "#/$defs/x" });
+        assert_eq!(walk.target(&stranger), None);
+    }
+
+    /// RG-2 F4: the schema is measured only until it passes the bound. Serializing an array of
+    /// 100,000 numbers writes each number on its own, so the count stops within one number of the
+    /// limit. Bites the stopping sink in `json_bytes_up_to`: a sink that never stops counts the
+    /// whole value, over half a megabyte.
+    #[test]
+    fn measuring_a_schema_stops_once_it_passes_the_bound() {
+        let numbers: Vec<Value> = (0..100_000).map(|i| json!(i)).collect();
+        let s = json!({ "enum": numbers });
+        let whole = json_bytes(&s);
+        assert!(whole > 500_000, "{whole}");
+        let measured = json_bytes_up_to(&s, 1_024);
+        assert!(measured > 1_024 && measured <= 1_024 + 8, "{measured}");
+        assert_eq!(json_bytes_up_to(&s, whole), whole, "exact within the limit");
     }
 }

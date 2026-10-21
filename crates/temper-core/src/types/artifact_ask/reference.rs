@@ -44,6 +44,11 @@ use crate::types::query::filter::{OrdOp, PropertyOp};
 
 /// Whether `content` satisfies every predicate. An ask with no predicates is the whole governed
 /// population (spec §2.1), so it matches everything.
+///
+/// **A test oracle, never a request path.** It runs unbounded — its containment is O(n·m) over an
+/// array against an array, with no step budget — because it is the reference the SQL is
+/// differential-tested against (§3.6). Code that serves a request uses the counted variants,
+/// `jsonb_contains_within` and `nested_contains_within`, under a step budget.
 pub fn matches(
     ask_predicates: &[ArtifactPredicate],
     content: &Value,
@@ -96,7 +101,8 @@ fn jsonb_contains(stored: &Value, probe: &Value) -> bool {
 }
 
 /// `stored @> probe`, with the top-level exception — an array contains a primitive — spending one
-/// step per node compared. `None` when the steps run out before it can say.
+/// step per node compared, and the bytes of each key looked up and each string compared at
+/// [`BYTES_PER_STEP`]. `None` when the steps run out before it can say.
 ///
 /// One definition for both callers: the evaluator above, unbounded, and the validator's enum
 /// membership, which holds a caller's probes to a budget.
@@ -109,7 +115,7 @@ pub(super) fn jsonb_contains_within(
         (Value::Array(elements), p) if !is_container(p) => {
             for element in elements {
                 take(steps)?;
-                if scalar_eq(element, p) {
+                if scalar_eq_within(element, p, steps)? {
                     return Some(true);
                 }
             }
@@ -122,7 +128,9 @@ pub(super) fn jsonb_contains_within(
 /// jsonb's containment below the top level, where the primitive exception does not apply: an
 /// object contains an object whose every key it has with a contained value; an array contains an
 /// array each of whose elements some element of it contains; a scalar contains only an equal
-/// scalar; and nothing else contains anything. One step per node compared.
+/// scalar; and nothing else contains anything. One step per node compared, and the bytes of each
+/// key looked up and each string compared at [`BYTES_PER_STEP`] — a lookup hashes or compares the
+/// probe's key whatever the map, so its length is charged before it is read.
 pub(super) fn nested_contains_within(
     stored: &Value,
     probe: &Value,
@@ -132,6 +140,7 @@ pub(super) fn nested_contains_within(
     Some(match (stored, probe) {
         (Value::Object(s), Value::Object(p)) => {
             for (key, pv) in p {
+                spend(steps, 1 + key.len() / BYTES_PER_STEP)?;
                 let Some(sv) = s.get(key) else {
                     return Some(false);
                 };
@@ -157,13 +166,40 @@ pub(super) fn nested_contains_within(
             true
         }
         (s, p) if is_container(s) || is_container(p) => false,
-        (s, p) => scalar_eq(s, p),
+        (s, p) => scalar_eq_within(s, p, steps)?,
     })
 }
 
 fn take(steps: &mut usize) -> Option<()> {
-    *steps = steps.checked_sub(1)?;
+    spend(steps, 1)
+}
+
+fn spend(steps: &mut usize, n: usize) -> Option<()> {
+    *steps = steps.checked_sub(n)?;
     Some(())
+}
+
+/// How many bytes one containment step pays for, beyond the step a node already costs: an object
+/// key looked up costs one step plus one per this many of its bytes, and two strings compared
+/// byte for byte cost one per this many bytes of them.
+///
+/// # 64
+///
+/// The walk charges author text at the same rate (`walk::BYTES_PER_VISIT`). A key or a string of
+/// tens of bytes costs one step, so a real ask is unchanged; a 16 KiB probe key costs 257, so the
+/// step budget bounds the bytes hashed and compared — `MAX_MEMBERSHIP_STEPS` × 64, 64 MiB — and not
+/// only the nodes visited.
+const BYTES_PER_STEP: usize = 64;
+
+/// [`scalar_eq`], charged for the bytes it compares. Two strings are compared byte for byte only
+/// when their lengths are equal, so only then is their length charged.
+fn scalar_eq_within(a: &Value, b: &Value, steps: &mut usize) -> Option<bool> {
+    let compared = match (a, b) {
+        (Value::String(x), Value::String(y)) if x.len() == y.len() => x.len(),
+        _ => 0,
+    };
+    spend(steps, compared / BYTES_PER_STEP)?;
+    Some(scalar_eq(a, b))
 }
 
 fn is_container(value: &Value) -> bool {
@@ -740,5 +776,49 @@ mod tests {
             nested_contains_within(&stored, &json!(4), &mut steps),
             Some(false)
         );
+    }
+
+    /// The steps one counted containment spends, with plenty to spend.
+    fn spent(stored: &Value, probe: &Value, top_level: bool) -> usize {
+        let plenty = 1_000;
+        let mut steps = plenty;
+        let held = if top_level {
+            jsonb_contains_within(stored, probe, &mut steps)
+        } else {
+            nested_contains_within(stored, probe, &mut steps)
+        };
+        assert_eq!(held, Some(true), "{stored} @> {probe}");
+        plenty - steps
+    }
+
+    /// RG-2 F2(C): an object key the probe supplies is charged by its length before it is looked
+    /// up, since the lookup hashes (or compares) all of it. `{K: 1}` with a 6,400-byte `K` costs
+    /// the object's step, 1 + 6,400 / 64 = 101 for the key, and the value's step: 103. A one-byte
+    /// key costs 3. Bites the per-key charge in `nested_contains_within`: without it both cost 2.
+    #[test]
+    fn a_probe_key_is_charged_steps_by_its_length() {
+        let key = "k".repeat(6_400);
+        let long = json!({ key: 1 });
+        assert_eq!(spent(&long, &long, false), 103);
+        let short = json!({ "k": 1 });
+        assert_eq!(spent(&short, &short, false), 3);
+    }
+
+    /// RG-2 sweep: two strings of one length are compared byte for byte, so the comparison is
+    /// charged 6,400 / 64 = 100 steps beyond the node's one, nested or as an element at the top
+    /// level. Bites the charge in `scalar_eq_within`: without it each costs one step.
+    #[test]
+    fn strings_compared_byte_for_byte_are_charged_steps_by_their_length() {
+        let long = json!("x".repeat(6_400));
+        assert_eq!(spent(&long, &long, false), 101);
+        assert_eq!(spent(&json!([long.clone()]), &long, true), 101);
+        // Strings of different lengths are unequal without reading them, and cost one step.
+        let mut steps = 1_000;
+        let longer = json!("x".repeat(6_401));
+        assert_eq!(
+            nested_contains_within(&long, &longer, &mut steps),
+            Some(false)
+        );
+        assert_eq!(steps, 999);
     }
 }
