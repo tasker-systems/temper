@@ -44,10 +44,11 @@
 //! - **Memoised per walk** by `(subschema, path position)`, so a definition referenced many times
 //!   at one position is evaluated once.
 //! - **Values cost what they carry.** An `enum` / `const` member is read once per walk and charged
-//!   by its size; value sets are shared rather than copied, intersect and union by member id in
-//!   linear time, and are charged by their sizes each time; and copying them into an answer is
-//!   charged by size again. So a wide `allOf` over a large enum stops at the work budget instead of
-//!   holding millions of values or comparing them pairwise.
+//!   by its size — its bytes and the values nested in it; the set a keyword declares is built once
+//!   per walk and shared rather than copied; sets intersect and union by member id in linear time,
+//!   charged by their sizes each time; and copying them into an answer is charged by size again.
+//!   An ask's paths are never copied at all. So a wide `allOf` over a large enum stops at the work
+//!   budget instead of holding millions of values or comparing them pairwise.
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::rc::Rc;
@@ -57,7 +58,7 @@ use serde_json::{Map, Value};
 
 use super::reference::canonical;
 use super::validate::MAX_ARTIFACT_PATH_SEGMENT_BYTES;
-use crate::types::query::filter::json_string_bytes;
+use crate::types::query::filter::{json_string_bytes, property_value_nodes};
 
 /// The deepest path, in object-key segments, the walk descends to. A deeper ask is
 /// [`PathResolution::BeyondBound`]`(`[`BoundKind::Depth`]`)`, refused `path_outside_shape` with
@@ -390,34 +391,60 @@ impl Draft {
 
 /// How many bytes one visit of the budget pays for, wherever the walk carries text the author
 /// sized. A member of an `enum` or `const` costs one visit, plus one per this many bytes of its
-/// canonical text, when the walk first reads it and each time it is copied into an answer; a path
-/// [`enumerate`] builds costs one visit, plus one per this many bytes of its segments.
+/// canonical text and of its nested values counted at [`NODE_BYTES`] each, when the walk first
+/// reads it and each time it is copied into an answer; a path [`enumerate`] builds costs one
+/// visit, plus one per this many bytes of its segments.
 ///
 /// # 64
 ///
-/// An `enum` of short codes, or a path of short keys, costs about one visit, so a
-/// five-thousand-code enum is well inside [`MAX_WALK_VISITS`]; a single member of 200 KB costs over
-/// three thousand, so no walk can copy more than about [`MAX_WALK_VISITS`] × 64 bytes — 4 MiB — of
-/// declared values, nor build more than that of path text.
+/// A short code, or a path of short keys, costs one visit; a single member of 200 KB costs over
+/// three thousand. So no walk copies more than about [`MAX_WALK_VISITS`] × 64 bytes — 4 MiB — of
+/// declared values, nor builds more than that of path text.
+///
+/// # What that leaves a real shape
+///
+/// An `enum` of `n` short codes costs `2n` visits the first time a walk reads it — `n` for its
+/// members, `n` for the set — and nothing more when another path reaches it under the same
+/// budget, since both are read once per budget. So:
+///
+/// - **An ask** reads its paths without copying their values, so every path an ask names over one
+///   shared 9,000-code enum costs 18,000 visits for the enum and a few visits for each path —
+///   [`MAX_ASK_PREDICATES`](super::validate::MAX_ASK_PREDICATES) such paths fit.
+/// - **A vocabulary** copies each advertised path's values into the answer, `n` visits a copy, so a
+///   shape whose `k` paths each carry one `n`-code enum costs about `(2 + k) · n`: eleven paths
+///   over a 5,000-code enum fit (2 · 5,000 + 11 · 5,000 = 65,000 of 65,536), and the twelfth meets
+///   `work`, visibly. Each of those copies is memory the answer holds, so it is charged every
+///   time.
 pub const BYTES_PER_VISIT: usize = 64;
 
-/// What one walk may still spend, and the members it has already read. Shared by everything one
-/// `resolve` or one `enumerate` does.
+/// The bytes a member's nested value is charged as, beside its canonical text. A value nested in
+/// an `enum` member is cloned with the member as its own `Value` — 32 bytes — held in a container
+/// that is its own allocation, so its heap cost is several times the one or two bytes its canonical
+/// text spends on it (`[[[…]]]` is two bytes a level). Charged as 64 bytes, one visit, a deep or
+/// wide member costs what copying it allocates.
+pub const NODE_BYTES: usize = 64;
+
+/// What one walk may still spend, and the members and value sets it has already read. Shared by
+/// everything one `resolve`, one `enumerate`, or one ask's `resolve_all` does.
 #[derive(Debug)]
-struct Budget {
+struct Budget<'s> {
     left: usize,
     /// Canonical text → member id: jsonb-equal members share an id.
     ids: HashMap<String, usize>,
     /// A member value in the schema → its id and weight, so each is read once per walk.
     read: HashMap<usize, (usize, usize)>,
+    /// An `enum` or `const` keyword in the schema → the value set it declares, built and charged
+    /// once per budget and shared by every path that reaches it.
+    sets: HashMap<usize, Values<'s>>,
 }
 
-impl Budget {
-    fn new(visits: usize) -> Budget {
+impl<'s> Budget<'s> {
+    fn new(visits: usize) -> Budget<'s> {
         Budget {
             left: visits,
             ids: HashMap::new(),
             read: HashMap::new(),
+            sets: HashMap::new(),
         }
     }
 
@@ -426,16 +453,18 @@ impl Budget {
         Ok(())
     }
 
-    /// One `enum` or `const` member, read once per walk and charged by its size. Its canonical text
-    /// is built before the charge can be known; because each member node is read once per budget,
-    /// that work is at most the schema's own size per budget.
-    fn member<'s>(&mut self, value: &'s Value) -> Result<Member<'s>, BoundKind> {
+    /// One `enum` or `const` member, read once per walk and charged by its size: its canonical
+    /// bytes, and its nested values at [`NODE_BYTES`] each. Its canonical text and node count are
+    /// built before the charge can be known; because each member node is read once per budget, that
+    /// work is at most the schema's own size per budget.
+    fn member(&mut self, value: &'s Value) -> Result<Member<'s>, BoundKind> {
         let node = identity(value);
         if let Some(&(id, weight)) = self.read.get(&node) {
             return Ok(Member { id, weight, value });
         }
         let text = canonical(value);
-        let weight = 1 + text.len() / BYTES_PER_VISIT;
+        let nested = property_value_nodes(value) * NODE_BYTES;
+        let weight = 1 + (text.len() + nested) / BYTES_PER_VISIT;
         self.spend(weight)?;
         let next = self.ids.len();
         let id = *self.ids.entry(text).or_insert(next);
@@ -443,14 +472,26 @@ impl Budget {
         Ok(Member { id, weight, value })
     }
 
-    /// A value set: every member read, and the set itself charged once per member.
-    fn members<'s>(&mut self, values: &'s [Value]) -> Result<Values<'s>, BoundKind> {
+    /// The value set an `enum` or `const` keyword declares: every member read, and the set
+    /// charged once per member — once per budget, then shared, so a path reaching it again costs
+    /// nothing more.
+    fn members(
+        &mut self,
+        keyword: &'s Value,
+        values: &'s [Value],
+    ) -> Result<Values<'s>, BoundKind> {
+        let key = identity(keyword);
+        if let Some(set) = self.sets.get(&key) {
+            return Ok(Rc::clone(set));
+        }
         self.spend(values.len())?;
         let members = values
             .iter()
             .map(|v| self.member(v))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Rc::new(members))
+        let set = Rc::new(members);
+        self.sets.insert(key, Rc::clone(&set));
+        Ok(set)
     }
 }
 
@@ -490,35 +531,47 @@ impl<'s> Walk<'s> {
 
     /// Several paths under **one** budget, so what reading them costs does not grow with how many
     /// an ask names (§3.3: the walk "never stalls or exhausts the server"). Once the budget is
-    /// spent every later path is [`PathResolution::BeyondBound`]`(`[`BoundKind::Work`]`)`.
-    pub(super) fn resolve_all(&self, paths: &[&[String]]) -> Vec<PathResolution> {
+    /// spent every later path is [`Resolved::BeyondBound`]`(`[`BoundKind::Work`]`)`.
+    ///
+    /// The facts are the walk's own, borrowed from the schema: no value is copied, so a value set
+    /// many paths share is read once (by [`Budget::members`]) and costs nothing per path after.
+    pub(super) fn resolve_all(&self, paths: &[&[String]]) -> Vec<Resolved<'s>> {
         let mut budget = Budget::new(self.bounds.max_visits);
         paths
             .iter()
-            .map(|path| self.resolve_within(path, &mut budget))
+            .map(|path| self.reach(path, &mut budget))
             .collect()
     }
 
-    fn resolve_within(&self, path: &[String], budget: &mut Budget) -> PathResolution {
+    /// One path, its facts copied onto the wire and charged for the copy.
+    fn resolve_within(&self, path: &[String], budget: &mut Budget<'s>) -> PathResolution {
+        match self.reach(path, budget) {
+            Resolved::Declared(facts) => match into_wire(&facts, budget) {
+                Ok(facts) => PathResolution::Declared(facts),
+                Err(bound) => PathResolution::BeyondBound(bound),
+            },
+            Resolved::NotDeclared => PathResolution::NotDeclared,
+            Resolved::BeyondBound(bound) => PathResolution::BeyondBound(bound),
+        }
+    }
+
+    /// One path, its facts left as the walk found them.
+    fn reach(&self, path: &[String], budget: &mut Budget<'s>) -> Resolved<'s> {
         if path.len() > self.bounds.max_depth {
-            return PathResolution::BeyondBound(BoundKind::Depth);
+            return Resolved::BeyondBound(BoundKind::Depth);
         }
         let reached = Resolver {
             walk: self,
             path,
-            budget: &mut *budget,
+            budget,
             memo: HashMap::new(),
             active: HashSet::new(),
         }
         .run();
-        let facts = match reached {
-            Ok(Reach::Declared(facts)) => facts,
-            Ok(Reach::Silent | Reach::Forbidden) => return PathResolution::NotDeclared,
-            Err(bound) => return PathResolution::BeyondBound(bound),
-        };
-        match into_wire(&facts, budget) {
-            Ok(facts) => PathResolution::Declared(facts),
-            Err(bound) => PathResolution::BeyondBound(bound),
+        match reached {
+            Ok(Reach::Declared(facts)) => Resolved::Declared(facts),
+            Ok(Reach::Silent | Reach::Forbidden) => Resolved::NotDeclared,
+            Err(bound) => Resolved::BeyondBound(bound),
         }
     }
 
@@ -540,7 +593,11 @@ impl<'s> Walk<'s> {
     /// **No prefix is held twice.** A queued frame names the path it sits under by its index in
     /// `out.paths`, so a prefix lives only in the path the vocabulary carries; and each candidate
     /// path is charged its bytes before it is built, whether or not it is then advertised.
-    fn enumerate_into(&self, out: &mut Vocabulary, budget: &mut Budget) -> Result<(), BoundKind> {
+    fn enumerate_into(
+        &self,
+        out: &mut Vocabulary,
+        budget: &mut Budget<'s>,
+    ) -> Result<(), BoundKind> {
         let root = self.frame([self.root], budget)?;
         // (the index in `out.paths` of the path a frame sits under — none for the root; the frame)
         let mut queue: VecDeque<(Option<usize>, Vec<&'s Value>)> = VecDeque::from([(None, root)]);
@@ -595,7 +652,7 @@ impl<'s> Walk<'s> {
     fn frame(
         &self,
         nodes: impl IntoIterator<Item = &'s Value>,
-        budget: &mut Budget,
+        budget: &mut Budget<'_>,
     ) -> Result<Vec<&'s Value>, BoundKind> {
         let mut out = Vec::new();
         let mut seen = HashSet::new();
@@ -640,7 +697,7 @@ impl<'s> Walk<'s> {
 /// the value is larger, not by how much. The counting sink refuses the first write past the limit,
 /// which stops the serializer there, so measuring a schema far over [`MAX_SCHEMA_BYTES`] costs
 /// about that much work, not the schema's size.
-fn json_bytes_up_to(value: &Value, limit: usize) -> usize {
+pub(super) fn json_bytes_up_to<T: Serialize + ?Sized>(value: &T, limit: usize) -> usize {
     struct Count {
         bytes: usize,
         limit: usize,
@@ -658,8 +715,8 @@ fn json_bytes_up_to(value: &Value, limit: usize) -> usize {
         }
     }
     let mut count = Count { bytes: 0, limit };
-    // A `Value` always serializes, so an error is the sink stopping past the limit — which the
-    // count already says.
+    // What this crate measures — a `Value`, or a vocabulary built of them — always serializes, so
+    // an error is the sink stopping past the limit, which the count already says.
     let _stopped = serde_json::to_writer(&mut count, value);
     count.bytes
 }
@@ -774,7 +831,7 @@ fn percent_decode(fragment: &str) -> Option<String> {
 /// costs — escaping only lengthens a key, so one longer than the cap is past it.
 fn child_keys<'s>(
     frame: &[&'s Value],
-    budget: &mut Budget,
+    budget: &mut Budget<'_>,
 ) -> Result<BTreeSet<&'s str>, BoundKind> {
     let mut keys = BTreeSet::new();
     let declared = frame
@@ -816,22 +873,23 @@ fn identity(node: &Value) -> usize {
 /// One `enum` / `const` member as the walk carries it: an id equal for jsonb-equal members, so
 /// sets intersect and union by id in linear time; its weight in visits; and the schema value.
 #[derive(Debug, Clone, Copy)]
-struct Member<'s> {
+pub(super) struct Member<'s> {
     id: usize,
     weight: usize,
-    value: &'s Value,
+    pub(super) value: &'s Value,
 }
 
 /// A value set, shared rather than copied when a result is memoised or reused.
-type Values<'s> = Rc<Vec<Member<'s>>>;
+pub(super) type Values<'s> = Rc<Vec<Member<'s>>>;
 
-/// What the walk has found at a path so far: [`PathFacts`], with its values as members of the
-/// schema and every part shared, so carrying it costs nothing per value.
+/// What the walk has found at a path: [`PathFacts`], with its values as members of the schema and
+/// every part shared, so carrying it costs nothing per value. `validate_ask` reads an ask's paths
+/// in this form and never copies them; only the wire copies, charged by [`into_wire`].
 #[derive(Debug, Clone, Default)]
-struct Facts<'s> {
-    types: Option<BTreeSet<JsonType>>,
-    values: Option<Values<'s>>,
-    items: Option<Rc<Facts<'s>>>,
+pub(super) struct Facts<'s> {
+    pub(super) types: Option<BTreeSet<JsonType>>,
+    pub(super) values: Option<Values<'s>>,
+    pub(super) items: Option<Rc<Facts<'s>>>,
 }
 
 impl Facts<'_> {
@@ -839,26 +897,48 @@ impl Facts<'_> {
     fn is_unconstrained(&self) -> bool {
         self.types.is_none() && self.values.is_none() && self.items.is_none()
     }
+
+    /// The facts as the wire carries them, every value copied. Uncharged here: [`into_wire`]
+    /// charges a copy before making it, and a refusal's teaching copies only what it keeps.
+    pub(super) fn to_wire(&self) -> PathFacts {
+        PathFacts {
+            types: self.types.clone(),
+            values: self
+                .values
+                .as_ref()
+                .map(|members| members.iter().map(|m| m.value.clone()).collect()),
+            items: self
+                .items
+                .as_ref()
+                .map(|element| Box::new(element.to_wire())),
+        }
+    }
 }
 
-/// The facts as the wire carries them, each value copied once and charged by its weight.
-fn into_wire(facts: &Facts<'_>, budget: &mut Budget) -> Result<PathFacts, BoundKind> {
-    let values = match &facts.values {
-        Some(members) => {
-            budget.spend(members.iter().map(|m| m.weight).sum())?;
-            Some(members.iter().map(|m| m.value.clone()).collect())
-        }
-        None => None,
-    };
-    let items = match &facts.items {
-        Some(element) => Some(Box::new(into_wire(element, budget)?)),
-        None => None,
-    };
-    Ok(PathFacts {
-        types: facts.types.clone(),
-        values,
-        items,
-    })
+/// What one path of an ask declares, as the walk found it. The ask's form of
+/// [`PathResolution`], whose facts are copied onto the wire.
+#[derive(Debug, Clone)]
+pub(super) enum Resolved<'s> {
+    Declared(Facts<'s>),
+    NotDeclared,
+    BeyondBound(BoundKind),
+}
+
+/// The facts as the wire carries them, each value copied once and charged by its weight first.
+fn into_wire(facts: &Facts<'_>, budget: &mut Budget<'_>) -> Result<PathFacts, BoundKind> {
+    charge_copy(facts, budget)?;
+    Ok(facts.to_wire())
+}
+
+/// What copying facts onto the wire costs: every member's weight, at every array level.
+fn charge_copy(facts: &Facts<'_>, budget: &mut Budget<'_>) -> Result<(), BoundKind> {
+    if let Some(members) = &facts.values {
+        budget.spend(members.iter().map(|m| m.weight).sum())?;
+    }
+    match &facts.items {
+        Some(element) => charge_copy(element, budget),
+        None => Ok(()),
+    }
 }
 
 /// What one subschema says about the remaining path.
@@ -872,7 +952,11 @@ enum Reach<'s> {
 }
 
 /// Both hold — `allOf`, and keywords beside a `$ref` under 2019-09 / 2020-12.
-fn conjoin<'s>(a: Reach<'s>, b: Reach<'s>, budget: &mut Budget) -> Result<Reach<'s>, BoundKind> {
+fn conjoin<'s>(
+    a: Reach<'s>,
+    b: Reach<'s>,
+    budget: &mut Budget<'_>,
+) -> Result<Reach<'s>, BoundKind> {
     Ok(match (a, b) {
         (Reach::Forbidden, _) | (_, Reach::Forbidden) => Reach::Forbidden,
         (Reach::Silent, other) | (other, Reach::Silent) => other,
@@ -882,7 +966,7 @@ fn conjoin<'s>(a: Reach<'s>, b: Reach<'s>, budget: &mut Budget) -> Result<Reach<
 
 /// One of them holds — `anyOf` / `oneOf` (§3.3 row 6). A branch that does not declare the path
 /// takes no part; if none declares it the union is silent, unless every branch forbids it.
-fn disjoin<'s>(branches: Vec<Reach<'s>>, budget: &mut Budget) -> Result<Reach<'s>, BoundKind> {
+fn disjoin<'s>(branches: Vec<Reach<'s>>, budget: &mut Budget<'_>) -> Result<Reach<'s>, BoundKind> {
     let all_forbidden =
         !branches.is_empty() && branches.iter().all(|b| matches!(b, Reach::Forbidden));
     let mut union: Option<Facts<'s>> = None;
@@ -904,7 +988,7 @@ fn disjoin<'s>(branches: Vec<Reach<'s>>, budget: &mut Budget) -> Result<Reach<'s
 fn conjoin_facts<'s>(
     a: &Facts<'s>,
     b: &Facts<'s>,
-    budget: &mut Budget,
+    budget: &mut Budget<'_>,
 ) -> Result<Facts<'s>, BoundKind> {
     let values = match (&a.values, &b.values) {
         (Some(x), Some(y)) => Some(intersect(x, y, budget)?),
@@ -926,7 +1010,7 @@ fn conjoin_facts<'s>(
 fn disjoin_facts<'s>(
     a: &Facts<'s>,
     b: &Facts<'s>,
-    budget: &mut Budget,
+    budget: &mut Budget<'_>,
 ) -> Result<Facts<'s>, BoundKind> {
     let values = match (&a.values, &b.values) {
         (Some(x), Some(y)) => Some(union(x, y, budget)?),
@@ -950,7 +1034,7 @@ fn disjoin_facts<'s>(
 fn intersect<'s>(
     x: &Values<'s>,
     y: &Values<'s>,
-    budget: &mut Budget,
+    budget: &mut Budget<'_>,
 ) -> Result<Values<'s>, BoundKind> {
     budget.spend(x.len() + y.len())?;
     let keep: HashSet<usize> = y.iter().map(|m| m.id).collect();
@@ -960,7 +1044,11 @@ fn intersect<'s>(
 }
 
 /// `x`, then the members of `y` it lacks. Linear, and charged by both sizes.
-fn union<'s>(x: &Values<'s>, y: &Values<'s>, budget: &mut Budget) -> Result<Values<'s>, BoundKind> {
+fn union<'s>(
+    x: &Values<'s>,
+    y: &Values<'s>,
+    budget: &mut Budget<'_>,
+) -> Result<Values<'s>, BoundKind> {
     budget.spend(x.len() + y.len())?;
     let mut seen: HashSet<usize> = x.iter().map(|m| m.id).collect();
     let mut out: Vec<Member<'s>> = x.to_vec();
@@ -1033,7 +1121,7 @@ enum Task<'s> {
 struct Resolver<'w, 's> {
     walk: &'w Walk<'s>,
     path: &'w [String],
-    budget: &'w mut Budget,
+    budget: &'w mut Budget<'s>,
     memo: HashMap<(usize, usize), Reach<'s>>,
     active: HashSet<(usize, usize)>,
 }
@@ -1227,12 +1315,15 @@ impl<'s> Resolver<'_, 's> {
             }
             Some(_) => Some(BTreeSet::new()),
         };
-        let enumerated = match map.get("enum").and_then(Value::as_array) {
-            Some(members) => Some(self.budget.members(members)?),
+        let enumerated = match map.get("enum") {
+            Some(keyword) => match keyword.as_array() {
+                Some(members) => Some(self.budget.members(keyword, members)?),
+                None => None,
+            },
             None => None,
         };
         let constant = match map.get("const").filter(|_| self.walk.draft.has_const()) {
-            Some(value) => Some(self.budget.members(std::slice::from_ref(value))?),
+            Some(value) => Some(self.budget.members(value, std::slice::from_ref(value))?),
             None => None,
         };
         let values = match (enumerated, constant) {
@@ -2175,5 +2266,74 @@ mod tests {
         let measured = json_bytes_up_to(&s, 1_024);
         assert!(measured > 1_024 && measured <= 1_024 + 8, "{measured}");
         assert_eq!(json_bytes_up_to(&s, whole), whole, "exact within the limit");
+    }
+
+    // ── Copies cost what they allocate, and a shared set is read once (RG-2, round 2) ─────────
+
+    /// RG-2 round 2, N2: a member is charged for the values nested in it, not only for its text. A
+    /// member 31 arrays deep has 62 canonical bytes, as a 60-letter string does, but holds 30
+    /// nested values, each cloned as its own `Value` in its own allocation; charged at `NODE_BYTES`
+    /// each it weighs 1 + (62 + 30 · 64) / 64 = 31 visits against the string's 1. Enumerating its
+    /// one path reads the member once and copies it once: 2 · 30 = 60 visits more. Bites the node
+    /// charge in `Budget::member`: without it the two cost the same.
+    #[test]
+    fn a_member_is_charged_for_its_nested_values_not_only_its_bytes() {
+        let mut deep = json!([]);
+        for _ in 0..30 {
+            deep = json!([deep]);
+        }
+        let text = json!("x".repeat(60));
+        assert_eq!(canonical(&deep).len(), 62);
+        assert_eq!(canonical(&text).len(), 62);
+        let at_x = |member: &Value| json!({ "properties": { "x": { "enum": [member] } } });
+        assert_eq!(
+            least_visits(&at_x(&deep), MAX_WALK_DEPTH) - least_visits(&at_x(&text), MAX_WALK_DEPTH),
+            60
+        );
+    }
+
+    /// The least visit budget under which `resolve_all` declares every path — what it charged.
+    fn least_visits_to_resolve(schema: &Value, paths: &[&[String]]) -> usize {
+        let resolves = |max_visits| {
+            let bounds = WalkBounds {
+                max_visits,
+                ..WalkBounds::BUILD
+            };
+            let walk = Walk::new(schema, &bounds).expect("under the byte bound");
+            walk.resolve_all(paths)
+                .iter()
+                .all(|r| matches!(r, Resolved::Declared(_)))
+        };
+        assert!(resolves(MAX_WALK_VISITS), "fits the build's budget");
+        let (mut lo, mut hi) = (0, MAX_WALK_VISITS);
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if resolves(mid) {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        lo
+    }
+
+    /// RG-2 round 2, N3: eight paths over one shared 5,000-member enum cost what one does, plus a
+    /// few visits a path. One path reads the enum — 5,000 members and the 5,000-member set — so it
+    /// costs at least 10,000; seven more paths cost under 100 more, where reading the set again or
+    /// copying it for each would cost 5,000 or more a path. Bites the per-budget set memo in
+    /// `Budget::members`, and an ask's `resolve_all` copying its values onto the wire.
+    #[test]
+    fn paths_sharing_one_enum_read_it_once_under_one_budget() {
+        let members: Vec<Value> = (0..5_000).map(|i| json!(i)).collect();
+        let props: Map<String, Value> = (0..8)
+            .map(|i| (format!("p{i}"), json!({ "$ref": "#/$defs/e" })))
+            .collect();
+        let s = json!({ "$defs": { "e": { "enum": members } }, "properties": props });
+        let owned: Vec<Vec<String>> = (0..8).map(|i| path(&[format!("p{i}").as_str()])).collect();
+        let paths: Vec<&[String]> = owned.iter().map(Vec::as_slice).collect();
+        let one = least_visits_to_resolve(&s, &paths[..1]);
+        let eight = least_visits_to_resolve(&s, &paths);
+        assert!(one >= 10_000, "{one}");
+        assert!(eight - one < 100, "{one} for one path, {eight} for eight");
     }
 }

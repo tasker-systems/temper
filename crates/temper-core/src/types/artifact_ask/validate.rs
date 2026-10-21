@@ -21,8 +21,8 @@ use serde_json::Value;
 
 use super::reference::{is_integral, jsonb_contains_within, nested_contains_within};
 use super::walk::{
-    AskablePath, BoundKind, JsonType, PathFacts, PathResolution, Vocabulary, Walk, WalkBounds,
-    MAX_SCHEMA_BYTES, MAX_WALK_DEPTH, MAX_WALK_PATHS, MAX_WALK_VISITS,
+    json_bytes_up_to, AskablePath, BoundKind, Facts, JsonType, Member, Resolved, Vocabulary, Walk,
+    WalkBounds, MAX_SCHEMA_BYTES, MAX_WALK_DEPTH, MAX_WALK_PATHS, MAX_WALK_VISITS,
 };
 use super::{
     ArtifactAsk, ArtifactPredicate, LoadedShape, ShapeIdentity, ShapeLoad, ShapeSuccessor,
@@ -30,7 +30,7 @@ use super::{
 };
 use crate::types::ids::ShapeId;
 use crate::types::query::filter::{
-    json_bytes, json_string_bytes, property_value_bytes, property_value_nodes, PropertyOp,
+    json_string_bytes, property_value_bytes, property_value_nodes, PropertyOp,
     MAX_FILTER_STRING_BYTES, MAX_PROPERTY_VALUE_BYTES, MAX_PROPERTY_VALUE_NODES,
 };
 use crate::types::query::validate::{MAX_PER_CANDIDATE_PREDICATES, MAX_PER_CANDIDATE_PROBES};
@@ -201,6 +201,11 @@ impl ValidatedAsk {
 /// build. The refusal is [`ShapeLoad::NotAskable`]'s exactly — reason, sentence, and nothing taught
 /// — so a loader defect never tells a present shape from an absent one (§3.5: *unreadable and
 /// absent look identical*).
+///
+/// **Bounded per call, not per request.** Each call builds its own walk of the schema and its own
+/// budgets — the walk's, the vocabulary's and the membership steps — so a caller that validates
+/// several asks in one request (several stages, or the gate and then the seal) must cache the walk
+/// and the vocabulary per shape and bound the request as a whole.
 pub fn validate_ask(
     ask: &ArtifactAsk,
     shape: &LoadedShape,
@@ -587,7 +592,7 @@ fn against_shape(
 
 /// Each walked predicate, sorted by what the shape says of it.
 #[derive(Default)]
-struct Sorted<'p> {
+struct Sorted<'p, 's> {
     bound: Vec<ArtifactPredicate>,
     outside_path: Vec<usize>,
     /// The first walk bound an outside path met.
@@ -596,8 +601,9 @@ struct Sorted<'p> {
     outside_operator: Vec<(usize, usize)>,
     /// Each predicate refused for a value: its index, and its path's slot in `resolved`.
     outside_value: Vec<(usize, usize)>,
-    /// Each distinct path the ask walks, once, with what the shape says of it.
-    resolved: Vec<(&'p [String], PathResolution)>,
+    /// Each distinct path the ask walks, once, with what the shape says of it — the walk's own
+    /// facts, borrowed from the schema and never copied.
+    resolved: Vec<(&'p [String], Resolved<'s>)>,
 }
 
 /// Every well-formed predicate against the shape.
@@ -610,13 +616,15 @@ struct Sorted<'p> {
 /// visibly, as every bound is. The vocabulary a path refusal teaches is walked under a budget of
 /// its own, so a spent ask still teaches what it may ask.
 ///
-/// A refused path's facts stay in `resolved`, and are copied into a teaching once per distinct
-/// path ([`offending`]), never once per predicate.
-fn sort<'p>(
+/// No path's values are copied to sort it: the facts stay the walk's, borrowed from the schema, so
+/// a value set several paths share is read once and costs nothing per path after. A refused path's
+/// facts are copied only into a teaching, once per distinct path and only as far as the teaching
+/// keeps them ([`offending`], [`teaching`]).
+fn sort<'p, 's>(
     predicates: &'p [ArtifactPredicate],
     formed: &[bool],
-    walk: &Result<Walk<'_>, BoundKind>,
-) -> Sorted<'p> {
+    walk: &Result<Walk<'s>, BoundKind>,
+) -> Sorted<'p, 's> {
     let mut slots: HashMap<&'p [String], usize> = HashMap::new();
     let mut distinct: Vec<&'p [String]> = Vec::new();
     let slot_of: Vec<Option<usize>> = predicates
@@ -633,7 +641,7 @@ fn sort<'p>(
         .collect();
     let resolutions = match walk {
         Ok(walk) => walk.resolve_all(&distinct),
-        Err(at) => vec![PathResolution::BeyondBound(*at); distinct.len()],
+        Err(at) => vec![Resolved::BeyondBound(*at); distinct.len()],
     };
     let mut sorted = Sorted {
         resolved: distinct.into_iter().zip(resolutions).collect(),
@@ -645,12 +653,12 @@ fn sort<'p>(
             continue;
         };
         let facts = match &sorted.resolved[slot].1 {
-            PathResolution::Declared(facts) => facts,
-            PathResolution::NotDeclared => {
+            Resolved::Declared(facts) => facts,
+            Resolved::NotDeclared => {
                 sorted.outside_path.push(i);
                 continue;
             }
-            PathResolution::BeyondBound(at) => {
+            Resolved::BeyondBound(at) => {
                 sorted.outside_path.push(i);
                 sorted.beyond.get_or_insert(*at);
                 continue;
@@ -674,7 +682,7 @@ fn sort<'p>(
 
 /// `path_outside_shape`, teaching the askable vocabulary and the bound an asked path met.
 fn refuse_paths(
-    sorted: &Sorted<'_>,
+    sorted: &Sorted<'_, '_>,
     walk: &Result<Walk<'_>, BoundKind>,
     shape: ShapeId,
     errs: &mut Vec<PlanRefusal>,
@@ -695,7 +703,8 @@ fn refuse_paths(
     if let Some(at) = sorted.beyond {
         rule.push_str(&format!(", and {}", bound_said(at)));
     }
-    let mut teaches = teaching(vocabulary, shape);
+    let Vocabulary { paths, truncated } = vocabulary;
+    let mut teaches = teaching(paths.into_iter(), truncated, shape);
     teaches.beyond_bound = sorted.beyond;
     refuse_at(
         errs,
@@ -707,10 +716,11 @@ fn refuse_paths(
 }
 
 /// The offending predicates' indices, and a teaching that describes each offending path once:
-/// deduplicated by slot first, so a path's facts are copied once however many predicates name it.
+/// deduplicated by slot first, and each path's facts copied onto the wire only when the teaching
+/// reaches it, so a path the teaching cannot hold is never copied whole more than once.
 fn offending(
     found: &[(usize, usize)],
-    resolved: &[(&[String], PathResolution)],
+    resolved: &[(&[String], Resolved<'_>)],
     shape: ShapeId,
 ) -> (Vec<usize>, RefusalTeaching) {
     let at = found.iter().map(|(i, _)| *i).collect();
@@ -720,23 +730,17 @@ fn offending(
             slots.push(slot);
         }
     }
-    let paths = slots
+    let declared: Vec<(&[String], &Facts<'_>)> = slots
         .into_iter()
         .filter_map(|slot| match &resolved[slot] {
-            (path, PathResolution::Declared(facts)) => {
-                Some(AskablePath::new(path.to_vec(), facts.clone()))
-            }
+            (path, Resolved::Declared(facts)) => Some((*path, facts)),
             _ => None,
         })
         .collect();
-    let teaches = teaching(
-        Vocabulary {
-            paths,
-            truncated: BTreeSet::new(),
-        },
-        shape,
-    );
-    (at, teaches)
+    let paths = declared
+        .into_iter()
+        .map(|(path, facts)| AskablePath::new(path.to_vec(), facts.to_wire()));
+    (at, teaching(paths, BTreeSet::new(), shape))
 }
 
 fn bound_said(at: BoundKind) -> String {
@@ -755,14 +759,22 @@ fn bound_said(at: BoundKind) -> String {
 
 /// A vocabulary held to [`MAX_TEACHING_BYTES`]: its paths in order until the next would not fit,
 /// and an elision saying how many were cut.
-fn teaching(vocabulary: Vocabulary, shape: ShapeId) -> RefusalTeaching {
-    let Vocabulary { paths, truncated } = vocabulary;
+///
+/// The paths are taken one at a time, and each is measured only as far as the room left — so a
+/// path far past the bound costs about the bound to refuse, not its size, and paths after the cut
+/// are never produced at all (a lazy iterator copies a path's facts only when it is taken).
+fn teaching(
+    paths: impl ExactSizeIterator<Item = AskablePath>,
+    truncated: BTreeSet<BoundKind>,
+    shape: ShapeId,
+) -> RefusalTeaching {
     let total = paths.len();
     let mut kept = Vec::new();
     let mut used = 0;
     for path in paths {
-        let bytes = json_bytes(&path);
-        if used + bytes > MAX_TEACHING_BYTES {
+        let room = MAX_TEACHING_BYTES - used;
+        let bytes = json_bytes_up_to(&path, room);
+        if bytes > room {
             break;
         }
         used += bytes;
@@ -785,7 +797,7 @@ fn teaching(vocabulary: Vocabulary, shape: ShapeId) -> RefusalTeaching {
 // ── §3.4, the feasibility table ─────────────────────────────────────────────────────────────────
 
 /// The operator as the SQL binds it, or why the declared path refuses it.
-fn bind(op: &PropertyOp, facts: &PathFacts, steps: &mut usize) -> Result<PropertyOp, Fault> {
+fn bind(op: &PropertyOp, facts: &Facts<'_>, steps: &mut usize) -> Result<PropertyOp, Fault> {
     match op {
         PropertyOp::HasKey => Ok(PropertyOp::HasKey),
         // Every `contains` refusal is the value's (§3.4: the contains rows refuse
@@ -805,7 +817,7 @@ fn bind(op: &PropertyOp, facts: &PathFacts, steps: &mut usize) -> Result<Propert
 /// admissible under `items` and bound wrapped as `[v]`. An untyped path binds every value
 /// unwrapped, with the incumbent `PropertyOp` semantics. Whatever is bound is then held to the
 /// path's enum.
-fn bind_contains(facts: &PathFacts, value: &Value, steps: &mut usize) -> Result<Value, Fault> {
+fn bind_contains(facts: &Facts<'_>, value: &Value, steps: &mut usize) -> Result<Value, Fault> {
     let bound = match &facts.types {
         None => value.clone(),
         Some(types) if !value.is_array() && admits_type(types, value) => value.clone(),
@@ -817,7 +829,7 @@ fn bind_contains(facts: &PathFacts, value: &Value, steps: &mut usize) -> Result<
         }
         Some(_) => return Err(Fault::Value),
     };
-    if member(facts.values.as_deref(), &bound, steps)? {
+    if member(facts.values.as_deref().map(Vec::as_slice), &bound, steps)? {
         Ok(bound)
     } else {
         Err(Fault::Value)
@@ -840,7 +852,7 @@ fn admits_type(types: &BTreeSet<JsonType>, value: &Value) -> bool {
 /// `items` enum, contained by a member as an element is — below the top level, so an array member
 /// never holds a primitive.
 fn element_admitted(
-    items: Option<&PathFacts>,
+    items: Option<&Facts<'_>>,
     value: &Value,
     steps: &mut usize,
 ) -> Result<bool, Fault> {
@@ -850,7 +862,7 @@ fn element_admitted(
     if !items.types.as_ref().is_none_or(|t| admits_type(t, value)) {
         return Ok(false);
     }
-    within_enum(items.values.as_deref(), |m| {
+    within_enum(items.values.as_deref().map(Vec::as_slice), |m| {
         nested_contains_within(m, value, steps)
     })
 }
@@ -858,21 +870,21 @@ fn element_admitted(
 /// Whether a bound value can match conforming content under the path's enum: some member, as stored
 /// content, contains it — jsonb's `@>` at the top level, so a scalar must equal a member or be an
 /// element of an array member, and a container must be held by a member of its own kind.
-fn member(values: Option<&[Value]>, bound: &Value, steps: &mut usize) -> Result<bool, Fault> {
+fn member(values: Option<&[Member<'_>]>, bound: &Value, steps: &mut usize) -> Result<bool, Fault> {
     within_enum(values, |m| jsonb_contains_within(m, bound, steps))
 }
 
 /// Whether some member passes a containment test, or `Ok(true)` with no enum. The tests spend
 /// membership steps; running out is [`Fault::Work`].
 fn within_enum(
-    values: Option<&[Value]>,
+    values: Option<&[Member<'_>]>,
     mut holds: impl FnMut(&Value) -> Option<bool>,
 ) -> Result<bool, Fault> {
     let Some(members) = values else {
         return Ok(true);
     };
     for m in members {
-        if holds(m).ok_or(Fault::Work)? {
+        if holds(m.value).ok_or(Fault::Work)? {
             return Ok(true);
         }
     }
@@ -883,8 +895,8 @@ fn within_enum(
 /// `integer` path is admitted — ordering, unlike equality, is meaningful against it), a string
 /// where `string` is; any bound at an untyped path, whose runtime type guard makes a mismatch an
 /// honest empty. A path declaring none of the three refuses every bound, which is
-/// [`PathFacts::admits_compare`] read with the bound in hand.
-fn compare_admits(facts: &PathFacts, bound: &Value) -> bool {
+/// `PathFacts::admits_compare` read with the bound in hand.
+fn compare_admits(facts: &Facts<'_>, bound: &Value) -> bool {
     let Some(types) = &facts.types else {
         return true;
     };
@@ -898,7 +910,8 @@ fn compare_admits(facts: &PathFacts, bound: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::artifact_ask::AskOperator;
+    use crate::types::artifact_ask::{AskOperator, PathFacts};
+    use crate::types::query::filter::json_bytes;
     use crate::types::query::filter::OrdOp;
     use serde_json::json;
     use uuid::Uuid;
@@ -1221,6 +1234,25 @@ mod tests {
             .map(|_| at(&["p0"], PropertyOp::HasKey))
             .collect());
         let v = validate_ask(&same, &shape).expect("one walk of `p0` fits");
+        assert_eq!(v.predicates().len(), MAX_ASK_PREDICATES);
+    }
+
+    /// RG-2 round 2, N3: every path an ask may name, each over one shared 9,000-member enum, fits
+    /// one ask's budget — the enum is read once, about 18,000 visits, and no path's values are
+    /// copied. Before, each path paid for the set again and for a wire copy, about 18,000 visits a
+    /// path, so the fourth met `work`. Bites the per-budget set memo in `Budget::members`, and
+    /// `Walk::resolve_all` copying facts onto the wire.
+    #[test]
+    fn an_ask_may_name_every_path_over_one_large_shared_enum() {
+        let members: Vec<Value> = (0..9_000).map(|i| json!(i)).collect();
+        let props: serde_json::Map<String, Value> = (0..MAX_ASK_PREDICATES)
+            .map(|i| (format!("p{i}"), json!({ "$ref": "#/$defs/e" })))
+            .collect();
+        let shape = shape_of(json!({ "$defs": { "e": { "enum": members } }, "properties": props }));
+        let every = ask((0..MAX_ASK_PREDICATES)
+            .map(|i| at(&[format!("p{i}").as_str()], contains(vec![json!(i)])))
+            .collect());
+        let v = validate_ask(&every, &shape).expect("one read of the enum fits");
         assert_eq!(v.predicates().len(), MAX_ASK_PREDICATES);
     }
 
