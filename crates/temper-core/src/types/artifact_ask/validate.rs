@@ -770,7 +770,8 @@ fn bound_said(at: BoundKind) -> String {
 /// offending path, through an [`AskableView`] over borrowed facts — and only as far as the room
 /// left, then turned into an owned path by `own` only when it fits. So the copies a teaching makes
 /// are at most [`MAX_TEACHING_BYTES`] on the wire, a path that does not fit is never copied, and
-/// measuring it stops at the room left (past the one write that crosses it).
+/// measuring it stops at the first write past the room left. That write may be one long string,
+/// which serde_json scans whole before writing: at most one string per teaching, allocating nothing.
 fn teaching<T: Serialize>(
     candidates: Vec<T>,
     own: impl Fn(T) -> AskablePath,

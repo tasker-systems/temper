@@ -422,9 +422,10 @@ impl Draft {
 ///   shared 9,000-code enum costs 18,000 visits for the enum and a few visits for each path —
 ///   [`MAX_ASK_PREDICATES`](super::validate::MAX_ASK_PREDICATES) such paths fit, in visits. Their
 ///   `contains` values are checked against the enum under a budget of their own,
-///   `MAX_MEMBERSHIP_STEPS`, which they can still spend: 32 predicates of four values each, scanned
-///   against 9,000 members, need about 1.15M steps, past 1,048,576, and are refused
-///   `path_outside_shape` with `beyond_bound: work`.
+///   `MAX_MEMBERSHIP_STEPS`, which they can still spend: 32 predicates of four admissible values
+///   each, matched late against 9,000 members, need about 1.15M steps, past 1,048,576, and the
+///   later predicates are refused `path_outside_shape` with `beyond_bound: work`. A value the enum
+///   does not hold refuses its predicate `value_outside_shape` at that value, before the rest scan.
 /// - **A vocabulary** copies each advertised path's values into the answer, `n` visits a copy, so a
 ///   shape whose `k` paths all carry the same `n`-code enum costs about `(2 + k) · n`: eleven paths
 ///   over one 5,000-code enum fit (2 · 5,000 + 11 · 5,000 = 65,000 of 65,536), and the twelfth
