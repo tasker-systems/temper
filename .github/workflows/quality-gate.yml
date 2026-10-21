@@ -50,7 +50,7 @@ jobs:
       # supply-chain review (`cargo install` resolved and compiled it unpinned on every run);
       # cargo-machete follows for that reason and for this gate's own: `cargo install` compiles.
       - name: Install cargo-machete, cargo-audit and cargo-deny
-        uses: taiki-e/install-action@v2.87.28
+        uses: taiki-e/install-action@v2.87.29
         with:
           tool: cargo-machete,cargo-audit,cargo-deny
 
@@ -216,7 +216,10 @@ jobs:
   guard-tests:
     name: CI Guard Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Cheap per guard, not in sum: test-audit-route-auth alone runs ~3 minutes (45 fixtures, each a
+    # full auditor pass), so 5 minutes left no headroom and the job cancelled under runner load
+    # after every harness had already passed.
+    timeout-minutes: 10
 
     steps:
       # depth 2, not 0. The wire diff needs ONE base revision, not 246 commits of history — a full
