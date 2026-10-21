@@ -65,4 +65,16 @@ ignore = [
     # quinn-proto 0.11.14 → >=0.11.15 (remote memory exhaustion, transitive
     # under the HTTP stack).
     "RUSTSEC-2026-0185",
+
+    # ── NOT EXPOSED — a version-matched shim over the patched crate ─────────
+    # webpki-roots 0.26.11 (distrusted emSign intermediates in the bundled roots;
+    # fixed in >=1.0.10). sqlx-core 0.8.6 pins `webpki-roots ^0.26`, and 0.26.11
+    # carries no roots of its own: its whole lib.rs is
+    # `pub use parent::TLS_SERVER_ROOTS;`, with `parent = { package =
+    # "webpki-roots", version = "1" }`, which the lock resolves to 1.0.10 — the
+    # patched set. The advisory matches the shim's version number, not the roots
+    # compiled in. Delete this line when sqlx stops depending on webpki-roots 0.26,
+    # or if a later 0.26.x ships roots of its own (re-check `cargo tree -p
+    # webpki-roots@0.26.11`).
+    "RUSTSEC-2026-0381",
 ]
