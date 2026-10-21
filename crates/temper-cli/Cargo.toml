@@ -25,7 +25,7 @@ dirs = "7"
 ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
 filetime = "0.2"
 hex = "0.4"
-indicatif = "0.17"
+indicatif = "0.18"
 libc = "0.2"
 pkcs8 = { version = "0.10", features = ["pem"] }
 rand = "0.10"
