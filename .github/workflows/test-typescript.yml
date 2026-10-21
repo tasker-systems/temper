@@ -71,6 +71,12 @@ jobs:
       - name: Run tests
         run: cd packages/temper-ui && bun run test
 
+      # The web resolves the toolchain majors the design package declares, read from this working
+      # tree: a web major cannot move unless packages/temper-design/toolchain/majors.json moves in
+      # the same change, and the desktop takes it with its next pin of the package.
+      - name: Toolchain on the declared majors
+        run: cd packages/temper-ui && bun run toolchain
+
   # The theme contract every surface paints from (packages/temper-design): the contract is
   # valid, every theme clears the legibility floors and stays distinct, the generated CSS and
   # themes.json agree with their sources, and every broken fixture is refused. A refused
@@ -98,6 +104,10 @@ jobs:
 
       - name: Self-check the contract
         run: scripts/themes.sh --self-check
+
+      # Node from the runner image; the check and its harness need nothing installed.
+      - name: The toolchain check refuses what it must
+        run: node --test toolchain/check.test.mjs
 
   integration-tests:
     name: Integration Tests
