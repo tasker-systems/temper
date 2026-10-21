@@ -52,9 +52,9 @@ function check(surface, ...args) {
 	});
 }
 
-function assertRefused(run, names) {
+function assertRefused(run, name) {
 	assert.equal(run.status, 1, `expected a refusal, got ${run.status}:\n${run.stdout}${run.stderr}`);
-	assert.match(run.stderr, new RegExp(`  ${names.replace(/[/@.]/g, '\\$&')} — `));
+	assert.ok(run.stderr.includes(`  ${name} — `), `refusal does not name ${name}:\n${run.stderr}`);
 }
 
 test('a surface on every declared major passes', () => {
