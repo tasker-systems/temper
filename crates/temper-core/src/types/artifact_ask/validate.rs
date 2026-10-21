@@ -21,8 +21,9 @@ use serde_json::Value;
 
 use super::reference::{is_integral, jsonb_contains_within, nested_contains_within};
 use super::walk::{
-    json_bytes_up_to, AskablePath, BoundKind, Facts, JsonType, Member, Resolved, Vocabulary, Walk,
-    WalkBounds, MAX_SCHEMA_BYTES, MAX_WALK_DEPTH, MAX_WALK_PATHS, MAX_WALK_VISITS,
+    json_bytes_up_to, AskablePath, AskableView, BoundKind, Facts, JsonType, Member, Resolved,
+    Vocabulary, Walk, WalkBounds, MAX_SCHEMA_BYTES, MAX_WALK_DEPTH, MAX_WALK_PATHS,
+    MAX_WALK_VISITS,
 };
 use super::{
     ArtifactAsk, ArtifactPredicate, LoadedShape, ShapeIdentity, ShapeLoad, ShapeSuccessor,
@@ -704,7 +705,7 @@ fn refuse_paths(
         rule.push_str(&format!(", and {}", bound_said(at)));
     }
     let Vocabulary { paths, truncated } = vocabulary;
-    let mut teaches = teaching(paths.into_iter(), truncated, shape);
+    let mut teaches = teaching(paths, std::convert::identity, truncated, shape);
     teaches.beyond_bound = sorted.beyond;
     refuse_at(
         errs,
@@ -716,8 +717,9 @@ fn refuse_paths(
 }
 
 /// The offending predicates' indices, and a teaching that describes each offending path once:
-/// deduplicated by slot first, and each path's facts copied onto the wire only when the teaching
-/// reaches it, so a path the teaching cannot hold is never copied whole more than once.
+/// deduplicated by slot first, then each path offered to the teaching as an [`AskableView`] over
+/// the walk's borrowed facts — so a path is measured before it is copied, and one the teaching
+/// cannot hold is never copied at all.
 fn offending(
     found: &[(usize, usize)],
     resolved: &[(&[String], Resolved<'_>)],
@@ -737,10 +739,14 @@ fn offending(
             _ => None,
         })
         .collect();
-    let paths = declared
+    let views = declared
         .into_iter()
-        .map(|(path, facts)| AskablePath::new(path.to_vec(), facts.to_wire()));
-    (at, teaching(paths, BTreeSet::new(), shape))
+        .map(|(path, facts)| AskableView::new(path, facts))
+        .collect();
+    (
+        at,
+        teaching(views, AskableView::into_askable, BTreeSet::new(), shape),
+    )
 }
 
 fn bound_said(at: BoundKind) -> String {
@@ -760,25 +766,28 @@ fn bound_said(at: BoundKind) -> String {
 /// A vocabulary held to [`MAX_TEACHING_BYTES`]: its paths in order until the next would not fit,
 /// and an elision saying how many were cut.
 ///
-/// The paths are taken one at a time, and each is measured only as far as the room left — so a
-/// path far past the bound costs about the bound to refuse, not its size, and paths after the cut
-/// are never produced at all (a lazy iterator copies a path's facts only when it is taken).
-fn teaching(
-    paths: impl ExactSizeIterator<Item = AskablePath>,
+/// **No copy it has not first bounded.** Each candidate is measured as it serializes — for an
+/// offending path, through an [`AskableView`] over borrowed facts — and only as far as the room
+/// left, then turned into an owned path by `own` only when it fits. So the copies a teaching makes
+/// are at most [`MAX_TEACHING_BYTES`] on the wire, a path that does not fit is never copied, and
+/// measuring it stops at the room left (past the one write that crosses it).
+fn teaching<T: Serialize>(
+    candidates: Vec<T>,
+    own: impl Fn(T) -> AskablePath,
     truncated: BTreeSet<BoundKind>,
     shape: ShapeId,
 ) -> RefusalTeaching {
-    let total = paths.len();
+    let total = candidates.len();
     let mut kept = Vec::new();
     let mut used = 0;
-    for path in paths {
+    for candidate in candidates {
         let room = MAX_TEACHING_BYTES - used;
-        let bytes = json_bytes_up_to(&path, room);
+        let bytes = json_bytes_up_to(&candidate, room);
         if bytes > room {
             break;
         }
         used += bytes;
-        kept.push(path);
+        kept.push(own(candidate));
     }
     let omitted_paths = total - kept.len();
     RefusalTeaching {
@@ -1254,6 +1263,48 @@ mod tests {
             .collect());
         let v = validate_ask(&every, &shape).expect("one read of the enum fits");
         assert_eq!(v.predicates().len(), MAX_ASK_PREDICATES);
+    }
+
+    /// The values `Facts::to_wire` copies while one ask is validated, on this thread.
+    fn values_copied_validating(a: &ArtifactAsk, shape: &LoadedShape) -> (usize, Vec<PlanRefusal>) {
+        use crate::types::artifact_ask::walk::VALUES_COPIED;
+        let before = VALUES_COPIED.with(std::cell::Cell::get);
+        let rs = refusals(a, shape);
+        (VALUES_COPIED.with(std::cell::Cell::get) - before, rs)
+    }
+
+    /// RG-2 round 3, R3-1, the reviewer's input: `$defs.a` is an array whose `enum` holds one
+    /// 200,000-byte string and whose `items` is `a` again, so the facts at `x` carry that one set
+    /// at the path's end and at every one of the 16 items levels below it. `compare` there is not
+    /// feasible, so the refusal teaches `x` — which cannot fit 16 KiB, is measured through the
+    /// borrowed view, elided, and never copied. Bites copying a path before measuring it: that
+    /// clones the string at all 17 levels, 3.4 MB, to throw it away.
+    #[test]
+    fn a_teaching_copies_no_path_it_cannot_hold() {
+        let shape = shape_of(json!({
+            "$defs": { "a": {
+                "type": "array",
+                "enum": ["s".repeat(200_000)],
+                "items": { "$ref": "#/$defs/a" }
+            } },
+            "properties": { "x": { "$ref": "#/$defs/a" } }
+        }));
+        let (copied, rs) =
+            values_copied_validating(&ask(vec![at(&["x"], compare(json!(1)))]), &shape);
+        assert_eq!(reasons(&rs), vec![RefusalReason::OperatorOutsideShape]);
+        let teaches = rs[0].teaches.clone().expect("an operator refusal teaches");
+        assert_eq!(teaches.vocabulary.map(|v| v.paths), Some(vec![]));
+        assert_eq!(teaches.elided.map(|e| e.omitted_paths), Some(1));
+        assert_eq!(copied, 0);
+        // A path that fits is copied once: its two values, and nothing else.
+        let small = shape_of(json!({ "properties": {
+            "unit": { "type": "string", "enum": ["ms", "s"] }
+        } }));
+        let (copied, _) = values_copied_validating(
+            &ask(vec![at(&["unit"], contains(vec![json!("fortnights")]))]),
+            &small,
+        );
+        assert_eq!(copied, 2);
     }
 
     #[test]

@@ -225,22 +225,33 @@ impl PathFacts {
     /// Whether `compare` is feasible here: the path declares `number`, `integer` or `string`, or
     /// declares no type (spec §3.4, the `compare` row).
     pub fn admits_compare(&self) -> bool {
-        self.types.as_ref().is_none_or(|t| {
-            t.iter()
-                .any(|t| matches!(t, JsonType::Number | JsonType::Integer | JsonType::String))
-        })
+        admits_compare(self.types.as_ref())
     }
 
     /// The operators feasible at this path, in [`AskOperator`] order. `has_key` and `contains`
     /// always are — whether a `contains` value is admissible is the value's question
     /// (`value_outside_shape`), never the operator's.
     pub fn operators(&self) -> Vec<AskOperator> {
-        let mut ops = vec![AskOperator::HasKey, AskOperator::Contains];
-        if self.admits_compare() {
-            ops.push(AskOperator::Compare);
-        }
-        ops
+        operators(self.types.as_ref())
     }
+}
+
+/// [`PathFacts::admits_compare`], over the declared types alone.
+fn admits_compare(types: Option<&BTreeSet<JsonType>>) -> bool {
+    types.is_none_or(|t| {
+        t.iter()
+            .any(|t| matches!(t, JsonType::Number | JsonType::Integer | JsonType::String))
+    })
+}
+
+/// [`PathFacts::operators`], over the declared types alone, so the wire copy and the borrowed
+/// view of one path list the same operators.
+fn operators(types: Option<&BTreeSet<JsonType>>) -> Vec<AskOperator> {
+    let mut ops = vec![AskOperator::HasKey, AskOperator::Contains];
+    if admits_compare(types) {
+        ops.push(AskOperator::Compare);
+    }
+    ops
 }
 
 /// The name of a `PropertyOp` operator, for a vocabulary to
@@ -409,12 +420,17 @@ impl Draft {
 ///
 /// - **An ask** reads its paths without copying their values, so every path an ask names over one
 ///   shared 9,000-code enum costs 18,000 visits for the enum and a few visits for each path —
-///   [`MAX_ASK_PREDICATES`](super::validate::MAX_ASK_PREDICATES) such paths fit.
+///   [`MAX_ASK_PREDICATES`](super::validate::MAX_ASK_PREDICATES) such paths fit, in visits. Their
+///   `contains` values are checked against the enum under a budget of their own,
+///   `MAX_MEMBERSHIP_STEPS`, which they can still spend: 32 predicates of four values each, scanned
+///   against 9,000 members, need about 1.15M steps, past 1,048,576, and are refused
+///   `path_outside_shape` with `beyond_bound: work`.
 /// - **A vocabulary** copies each advertised path's values into the answer, `n` visits a copy, so a
-///   shape whose `k` paths each carry one `n`-code enum costs about `(2 + k) · n`: eleven paths
-///   over a 5,000-code enum fit (2 · 5,000 + 11 · 5,000 = 65,000 of 65,536), and the twelfth meets
-///   `work`, visibly. Each of those copies is memory the answer holds, so it is charged every
-///   time.
+///   shape whose `k` paths all carry the same `n`-code enum costs about `(2 + k) · n`: eleven paths
+///   over one 5,000-code enum fit (2 · 5,000 + 11 · 5,000 = 65,000 of 65,536), and the twelfth
+///   meets `work`, visibly. Paths over distinct enums each pay the read as well as the copy, `3n`
+///   a path, so about four paths over distinct 5,000-code enums fit (4 · 15,000 = 60,000) and the
+///   fifth meets `work`. Each copy is memory the answer holds, so it is charged every time.
 pub const BYTES_PER_VISIT: usize = 64;
 
 /// The bytes a member's nested value is charged as, beside its canonical text. A value nested in
@@ -899,18 +915,91 @@ impl Facts<'_> {
     }
 
     /// The facts as the wire carries them, every value copied. Uncharged here: [`into_wire`]
-    /// charges a copy before making it, and a refusal's teaching copies only what it keeps.
+    /// charges a copy before making it, and a refusal's teaching copies only a path it has first
+    /// measured, through [`AskableView`], to fit.
     pub(super) fn to_wire(&self) -> PathFacts {
         PathFacts {
             types: self.types.clone(),
-            values: self
-                .values
-                .as_ref()
-                .map(|members| members.iter().map(|m| m.value.clone()).collect()),
+            values: self.values.as_ref().map(|members| {
+                #[cfg(test)]
+                VALUES_COPIED.with(|copied| copied.set(copied.get() + members.len()));
+                members.iter().map(|m| m.value.clone()).collect()
+            }),
             items: self
                 .items
                 .as_ref()
                 .map(|element| Box::new(element.to_wire())),
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Every value [`Facts::to_wire`] has copied on this thread — what a test reads to see that a
+    /// copy was, or was not, made.
+    pub(super) static VALUES_COPIED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The wire form of [`PathFacts`], written from the borrowed facts without copying a value, so a
+/// path can be measured before it is copied. Field for field what `PathFacts`'s derived
+/// `Serialize` writes — each field present only when set — which
+/// `the_borrowed_view_writes_the_wire_bytes` holds it to.
+impl Serialize for Facts<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let fields = usize::from(self.types.is_some())
+            + usize::from(self.values.is_some())
+            + usize::from(self.items.is_some());
+        let mut out = serializer.serialize_struct("PathFacts", fields)?;
+        match &self.types {
+            Some(types) => out.serialize_field("types", types)?,
+            None => out.skip_field("types")?,
+        }
+        match &self.values {
+            Some(members) => out.serialize_field("values", &MemberValues(members.as_slice()))?,
+            None => out.skip_field("values")?,
+        }
+        match &self.items {
+            Some(element) => out.serialize_field("items", &**element)?,
+            None => out.skip_field("items")?,
+        }
+        out.end()
+    }
+}
+
+/// A value set written as the wire writes it: its members' values, in order.
+struct MemberValues<'a, 's>(&'a [Member<'s>]);
+
+impl Serialize for MemberValues<'_, '_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.0.iter().map(|m| m.value))
+    }
+}
+
+/// One askable path over borrowed facts: what [`AskablePath`] writes, byte for byte, with no value
+/// copied. A refusal's teaching measures a path through it, and copies only a path that fits.
+#[derive(Debug, Serialize)]
+pub(super) struct AskableView<'a, 's> {
+    path: &'a [String],
+    facts: &'a Facts<'s>,
+    operators: Vec<AskOperator>,
+}
+
+impl<'a, 's> AskableView<'a, 's> {
+    pub(super) fn new(path: &'a [String], facts: &'a Facts<'s>) -> AskableView<'a, 's> {
+        AskableView {
+            path,
+            facts,
+            operators: operators(facts.types.as_ref()),
+        }
+    }
+
+    /// The path as the wire carries it, its facts copied.
+    pub(super) fn into_askable(self) -> AskablePath {
+        AskablePath {
+            path: self.path.to_vec(),
+            facts: self.facts.to_wire(),
+            operators: self.operators,
         }
     }
 }
@@ -2335,5 +2424,48 @@ mod tests {
         let eight = least_visits_to_resolve(&s, &paths);
         assert!(one >= 10_000, "{one}");
         assert!(eight - one < 100, "{one} for one path, {eight} for eight");
+    }
+
+    /// RG-2 round 3, R3-1: the borrowed view writes exactly the bytes of the copy it stands for —
+    /// every field present only when set, at every items level, over enum members, a `const`, an
+    /// enum and a `const` together, and `items: false` — so measuring the view measures the copy.
+    /// Bites any drift between `Facts`'s `Serialize` and `PathFacts`'s derived one.
+    #[test]
+    fn the_borrowed_view_writes_the_wire_bytes() {
+        let s = json!({
+            "$defs": { "codes": { "enum": ["ms", 7, null, { "k": [1, 2.5] }, ["x"]] } },
+            "properties": {
+                "plain": {},
+                "typed": { "type": ["integer", "null"] },
+                "coded": { "$ref": "#/$defs/codes" },
+                "constant": { "type": "string", "const": "x" },
+                "both": { "enum": ["x", "y"], "const": "x" },
+                "grid": { "type": "array", "items": {
+                    "type": "array", "items": { "$ref": "#/$defs/codes" }
+                } },
+                "never": { "type": "array", "items": false }
+            }
+        });
+        let walk = Walk::new(&s, &WalkBounds::BUILD).expect("under the byte bound");
+        let names = [
+            "plain", "typed", "coded", "constant", "both", "grid", "never",
+        ];
+        let owned: Vec<Vec<String>> = names.iter().map(|name| path(&[*name])).collect();
+        let paths: Vec<&[String]> = owned.iter().map(Vec::as_slice).collect();
+        for (asked, resolved) in paths.iter().zip(walk.resolve_all(&paths)) {
+            let Resolved::Declared(facts) = resolved else {
+                panic!("{asked:?} is declared");
+            };
+            let view = AskableView::new(asked, &facts);
+            let wire = AskablePath::new(asked.to_vec(), facts.to_wire());
+            let viewed = serde_json::to_vec(&view).expect("the view serializes");
+            assert_eq!(
+                viewed,
+                serde_json::to_vec(&wire).expect("the wire serializes"),
+                "{asked:?}"
+            );
+            assert_eq!(json_bytes_up_to(&view, usize::MAX), viewed.len());
+            assert_eq!(view.into_askable(), wire);
+        }
     }
 }
