@@ -332,20 +332,19 @@ async fn enforcing_refusal_names_the_violations_over_http(pool: PgPool) {
     let list = app
         .client
         .data_artifacts()
-        .list(
+        .list_all(
             resource_id,
             &ArtifactListParams {
                 kind: Some("measurement".to_string()),
-                intent: None,
                 include_folded: Some(true),
-                counts: None,
+                ..Default::default()
             },
         )
         .await
         .expect("list after refusal");
     assert!(
-        list.as_array().map(|a| a.is_empty()).unwrap_or(false),
-        "a refused commit must record nothing, got: {list}"
+        list.is_empty(),
+        "a refused commit must record nothing, got: {list:?}"
     );
 }
 

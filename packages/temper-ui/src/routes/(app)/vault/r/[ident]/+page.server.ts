@@ -1,8 +1,15 @@
 import { error, fail } from '@sveltejs/kit';
+import {
+	type ArtifactRegion,
+	artifactListPath,
+	artifactPageHref,
+	nextFromLink,
+	pastFirstPage,
+} from '$lib/artifact-page';
 import { mayChangeResource } from '$lib/authority';
 import { editableKind, revisedValue } from '$lib/descriptions';
 import { parseRef } from '$lib/ref';
-import { ApiError, apiGet, apiPatch } from '$lib/server/api';
+import { ApiError, apiGet, apiGetWithHeaders, apiPatch } from '$lib/server/api';
 import { bounded } from '$lib/server/bounded';
 import { readResourceConnections, readTrail } from '$lib/server/graph-reads';
 import type { ContentResponse, DocTypeDescription, ResourceView } from '$lib/types';
@@ -105,7 +112,7 @@ async function currentDescriptions(
 	}
 }
 
-export const load: PageServerLoad = async ({ locals, params, parent }) => {
+export const load: PageServerLoad = async ({ locals, params, parent, url }) => {
 	const accessToken = locals.accessToken!;
 	const id = parseRef(params.ident);
 
@@ -136,8 +143,23 @@ export const load: PageServerLoad = async ({ locals, params, parent }) => {
 	// reader's question, and the default read (folded hidden) would answer it silently wrong.
 	// Like the other three fills, a failed read must reach the template as a failure — never
 	// degrade into "this resource owns no artifacts".
-	const artifacts = bounded(
-		apiGet<ArtifactView[]>(`/api/resources/${id}/artifacts?include_folded=true`, accessToken),
+	//
+	// ONE bounded page, never the whole history: a resource's artifacts accumulate for good, so
+	// an unbounded read costs every view more as the resource ages. The page this URL names
+	// (`$lib/artifact-page`), newest first, and a link to the next, older page when the read's
+	// `Link` header says more exist. A `Link` that cannot be read fails the region rather than
+	// passing one page off as all.
+	const artifacts: Promise<ArtifactRegion> = bounded(
+		apiGetWithHeaders<ArtifactView[]>(artifactListPath(id, url.searchParams), accessToken).then(
+			({ body, headers }) => {
+				const next = nextFromLink(headers.get('link'));
+				return {
+					artifacts: body,
+					olderHref: next ? artifactPageHref(url, next) : null,
+					newestHref: pastFirstPage(url.searchParams) ? artifactPageHref(url, null) : null,
+				};
+			},
+		),
 		'data artifacts',
 	);
 

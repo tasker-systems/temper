@@ -39,7 +39,8 @@ export class ApiError extends Error {
 	}
 }
 
-export async function apiGet<T>(path: string, accessToken: string): Promise<T> {
+/** A successful GET's response, or the `ApiError` its failure names. */
+async function getOk(path: string, accessToken: string): Promise<Response> {
 	const res = await fetch(`${API_BASE_URL}${path}`, {
 		headers: outbound({ Authorization: `Bearer ${accessToken}` }),
 	});
@@ -51,7 +52,24 @@ export async function apiGet<T>(path: string, accessToken: string): Promise<T> {
 			body,
 		);
 	}
-	return res.json() as Promise<T>;
+	return res;
+}
+
+export async function apiGet<T>(path: string, accessToken: string): Promise<T> {
+	return (await getOk(path, accessToken)).json() as Promise<T>;
+}
+
+/**
+ * `apiGet`, and the response headers beside the body — for a read whose answer is not all in
+ * the body. The bounded artifact list names its next page in a `Link` header (RFC 8288), so
+ * the body alone cannot say whether more exist.
+ */
+export async function apiGetWithHeaders<T>(
+	path: string,
+	accessToken: string,
+): Promise<{ body: T; headers: Headers }> {
+	const res = await getOk(path, accessToken);
+	return { body: (await res.json()) as T, headers: res.headers };
 }
 
 export async function apiPost<T>(path: string, accessToken: string, body: unknown): Promise<T> {

@@ -247,13 +247,17 @@ module Temper::Generated
     end
 
     # List artifacts for a resource, or counts with counts=true
-    # Without `counts=true`: returns fully hydrated artifacts (metadata + content). With `counts=true`: returns per-family counts only, no content hydration — for surfaces that need \"3 measurements, 1 extraction\" without fetching payloads.
+    # Without `counts=true`: returns fully hydrated artifacts (metadata + content). With `counts=true`: returns per-family counts only, no content hydration — for surfaces that need \"3 measurements, 1 extraction\" without fetching payloads.  With `limit`, returns at most that many artifacts in `(created, id)` order: oldest first, or newest first with `order=desc`. The body is the same bare array either way; when more remain, the response carries a `Link: <...>; rel=\"next\"` header whose target is this request with the next page's `after_created` and `after_id` (and the caller's own filters and `order`), and the header is absent on the last page and on every response without `limit`. A `limit` of 0 or above the server ceiling `MAX_ARTIFACT_PAGE_ROWS` is refused, not clamped. Without `limit`, returns the whole list: the unbounded form, which a later release retires.
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :kind Filter by the bare family name (e.g. &#x60;\&quot;measurement\&quot;&#x60;).
     # @option opts [String] :intent Filter by selection intent: &#x60;\&quot;current\&quot;&#x60;, &#x60;\&quot;member\&quot;&#x60;, or &#x60;\&quot;pinned\&quot;&#x60;.
     # @option opts [Boolean] :include_folded Include folded (superseded) artifacts in the result. Default: &#x60;false&#x60;.
-    # @option opts [Boolean] :counts Return per-family counts instead of full artifacts. No content hydration. Default: &#x60;false&#x60; (full artifacts with content).
+    # @option opts [Boolean] :counts Return per-family counts instead of full artifacts. No content hydration. Default: &#x60;false&#x60; (full artifacts with content). Counts are not paged: &#x60;limit&#x60; and &#x60;after_*&#x60; are not read when this is set.
+    # @option opts [Integer] :limit Return at most this many artifacts. The body is still the bare array; when more remain, the response carries a &#x60;Link: &lt;...&gt;; rel&#x3D;\&quot;next\&quot;&#x60; header whose target is this request with the next page&#39;s position, and the header is absent on the last page. Must be at least 1 and at most the server ceiling &#x60;MAX_ARTIFACT_PAGE_ROWS&#x60;, which is 200; a value outside that range is refused, never clamped. Omit it to receive the whole list (the unbounded form, which a later release retires).
+    # @option opts [Time] :after_created Continue after this position: the &#x60;after_created&#x60; of the previous page&#39;s &#x60;Link&#x60; target. Send together with &#x60;after_id&#x60;, and only with &#x60;limit&#x60;.
+    # @option opts [String] :after_id Continue after this position: the &#x60;after_id&#x60; of the previous page&#39;s &#x60;Link&#x60; target. Send together with &#x60;after_created&#x60;, and only with &#x60;limit&#x60;.
+    # @option opts [SortOrder] :order The direction of a bounded read over &#x60;(created, id)&#x60;: &#x60;asc&#x60;, oldest first, or &#x60;desc&#x60;, newest first. Absent is &#x60;asc&#x60;. Only with &#x60;limit&#x60;; the &#x60;Link&#x60; target carries it, so every page continues in the direction the first was asked in. Any other value is refused.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<ArtifactView>]
     def list_artifacts(id, opts = {})
@@ -262,13 +266,17 @@ module Temper::Generated
     end
 
     # List artifacts for a resource, or counts with counts&#x3D;true
-    # Without &#x60;counts&#x3D;true&#x60;: returns fully hydrated artifacts (metadata + content). With &#x60;counts&#x3D;true&#x60;: returns per-family counts only, no content hydration — for surfaces that need \&quot;3 measurements, 1 extraction\&quot; without fetching payloads.
+    # Without &#x60;counts&#x3D;true&#x60;: returns fully hydrated artifacts (metadata + content). With &#x60;counts&#x3D;true&#x60;: returns per-family counts only, no content hydration — for surfaces that need \&quot;3 measurements, 1 extraction\&quot; without fetching payloads.  With &#x60;limit&#x60;, returns at most that many artifacts in &#x60;(created, id)&#x60; order: oldest first, or newest first with &#x60;order&#x3D;desc&#x60;. The body is the same bare array either way; when more remain, the response carries a &#x60;Link: &lt;...&gt;; rel&#x3D;\&quot;next\&quot;&#x60; header whose target is this request with the next page&#39;s &#x60;after_created&#x60; and &#x60;after_id&#x60; (and the caller&#39;s own filters and &#x60;order&#x60;), and the header is absent on the last page and on every response without &#x60;limit&#x60;. A &#x60;limit&#x60; of 0 or above the server ceiling &#x60;MAX_ARTIFACT_PAGE_ROWS&#x60; is refused, not clamped. Without &#x60;limit&#x60;, returns the whole list: the unbounded form, which a later release retires.
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :kind Filter by the bare family name (e.g. &#x60;\&quot;measurement\&quot;&#x60;).
     # @option opts [String] :intent Filter by selection intent: &#x60;\&quot;current\&quot;&#x60;, &#x60;\&quot;member\&quot;&#x60;, or &#x60;\&quot;pinned\&quot;&#x60;.
     # @option opts [Boolean] :include_folded Include folded (superseded) artifacts in the result. Default: &#x60;false&#x60;.
-    # @option opts [Boolean] :counts Return per-family counts instead of full artifacts. No content hydration. Default: &#x60;false&#x60; (full artifacts with content).
+    # @option opts [Boolean] :counts Return per-family counts instead of full artifacts. No content hydration. Default: &#x60;false&#x60; (full artifacts with content). Counts are not paged: &#x60;limit&#x60; and &#x60;after_*&#x60; are not read when this is set.
+    # @option opts [Integer] :limit Return at most this many artifacts. The body is still the bare array; when more remain, the response carries a &#x60;Link: &lt;...&gt;; rel&#x3D;\&quot;next\&quot;&#x60; header whose target is this request with the next page&#39;s position, and the header is absent on the last page. Must be at least 1 and at most the server ceiling &#x60;MAX_ARTIFACT_PAGE_ROWS&#x60;, which is 200; a value outside that range is refused, never clamped. Omit it to receive the whole list (the unbounded form, which a later release retires).
+    # @option opts [Time] :after_created Continue after this position: the &#x60;after_created&#x60; of the previous page&#39;s &#x60;Link&#x60; target. Send together with &#x60;after_id&#x60;, and only with &#x60;limit&#x60;.
+    # @option opts [String] :after_id Continue after this position: the &#x60;after_id&#x60; of the previous page&#39;s &#x60;Link&#x60; target. Send together with &#x60;after_created&#x60;, and only with &#x60;limit&#x60;.
+    # @option opts [SortOrder] :order The direction of a bounded read over &#x60;(created, id)&#x60;: &#x60;asc&#x60;, oldest first, or &#x60;desc&#x60;, newest first. Absent is &#x60;asc&#x60;. Only with &#x60;limit&#x60;; the &#x60;Link&#x60; target carries it, so every page continues in the direction the first was asked in. Any other value is refused.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(Array<ArtifactView>, Integer, Hash)>] Array<ArtifactView> data, response status code and response headers
     def list_artifacts_with_http_info(id, opts = {})
@@ -279,6 +287,10 @@ module Temper::Generated
       if @api_client.config.client_side_validation && id.nil?
         fail ArgumentError, "Missing the required parameter 'id' when calling DataArtifactsApi.list_artifacts"
       end
+      if @api_client.config.client_side_validation && !opts[:'limit'].nil? && opts[:'limit'] < 1
+        fail ArgumentError, 'invalid value for "opts[:"limit"]" when calling DataArtifactsApi.list_artifacts, must be greater than or equal to 1.'
+      end
+
       allowable_values = ["cli", "sdk"]
       if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
@@ -292,6 +304,10 @@ module Temper::Generated
       query_params[:'intent'] = opts[:'intent'] if !opts[:'intent'].nil?
       query_params[:'include_folded'] = opts[:'include_folded'] if !opts[:'include_folded'].nil?
       query_params[:'counts'] = opts[:'counts'] if !opts[:'counts'].nil?
+      query_params[:'limit'] = opts[:'limit'] if !opts[:'limit'].nil?
+      query_params[:'after_created'] = opts[:'after_created'] if !opts[:'after_created'].nil?
+      query_params[:'after_id'] = opts[:'after_id'] if !opts[:'after_id'].nil?
+      query_params[:'order'] = opts[:'order'] if !opts[:'order'].nil?
 
       # header parameters
       header_params = opts[:header_params] || {}

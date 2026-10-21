@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { page } from '$app/stores';
+	import { formAction } from '$lib/form-action';
 	import type { PropertyRow } from '$lib/properties';
 	import DescriptionControl from './DescriptionControl.svelte';
 	import PropertyValue from './PropertyValue.svelte';
@@ -69,7 +71,7 @@
 		{/each}
 	</dl>
 	{#if mayDescribe}
-		<form method="POST" action="?/attachDescription" class="attach">
+		<form method="POST" action={formAction($page.url, 'attachDescription')} class="attach">
 			<input
 				type="text"
 				name="name"

@@ -12,6 +12,7 @@
 //! so. Two hand-assembled stacks are what let that happen, so there is now one function and the
 //! surfaces call it.
 
+use axum::http::header;
 use tower_http::cors::{AllowHeaders, Any, CorsLayer};
 
 /// Read `CORS_ORIGINS` — comma-separated, trimmed, empties dropped. The one parse both surfaces'
@@ -43,7 +44,9 @@ pub fn parse_cors_origins(lookup: impl Fn(&str) -> Option<String>) -> Vec<String
 /// - **an allowlist** — those origins, any method, and the request headers the preflight names,
 ///   echoed back. Echoed rather than `*`: the Fetch standard never lets the `*` wildcard cover
 ///   `Authorization`, so a `*` answer would bar an allowlisted browser client from sending its
-///   bearer.
+///   bearer. `Link` is exposed: a bounded list's continuation rides it (`rel="next"`), and a
+///   browser hides every response header not exposed, so an allowlisted client would otherwise
+///   read the first page as the whole list.
 ///
 /// An origin that fails to parse is skipped rather than fataled, which means a typo narrows the
 /// allowlist instead of widening it.
@@ -62,5 +65,6 @@ pub fn cors_layer(cors_origins: &[String]) -> CorsLayer {
             )
             .allow_methods(Any)
             .allow_headers(AllowHeaders::mirror_request())
+            .expose_headers([header::LINK])
     }
 }

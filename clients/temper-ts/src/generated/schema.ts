@@ -2704,6 +2704,14 @@ export interface paths {
          * @description Without `counts=true`: returns fully hydrated artifacts (metadata + content).
          *     With `counts=true`: returns per-family counts only, no content hydration —
          *     for surfaces that need "3 measurements, 1 extraction" without fetching payloads.
+         *
+         *     With `limit`, returns at most that many artifacts in `(created, id)` order: oldest first, or
+         *     newest first with `order=desc`. The body is the same bare array either way; when more remain,
+         *     the response carries a `Link: <...>; rel="next"` header whose target is this request with the
+         *     next page's `after_created` and `after_id` (and the caller's own filters and `order`), and the
+         *     header is absent on the last page and on every response without `limit`. A `limit` of 0 or above
+         *     the server ceiling `MAX_ARTIFACT_PAGE_ROWS` is refused, not clamped. Without `limit`, returns
+         *     the whole list: the unbounded form, which a later release retires.
          */
         get: operations["list_artifacts"];
         put?: never;
@@ -18701,9 +18709,35 @@ export interface operations {
                 include_folded?: boolean | null;
                 /**
                  * @description Return per-family counts instead of full artifacts. No content hydration.
-                 *     Default: `false` (full artifacts with content).
+                 *     Default: `false` (full artifacts with content). Counts are not paged: `limit` and
+                 *     `after_*` are not read when this is set.
                  */
                 counts?: boolean | null;
+                /**
+                 * @description Return at most this many artifacts. The body is still the bare array; when more remain, the
+                 *     response carries a `Link: <...>; rel="next"` header whose target is this request with the
+                 *     next page's position, and the header is absent on the last page. Must be at least 1 and at
+                 *     most the server ceiling `MAX_ARTIFACT_PAGE_ROWS`, which is 200; a value outside that range
+                 *     is refused, never clamped. Omit it to receive the whole list (the unbounded form, which a
+                 *     later release retires).
+                 */
+                limit?: number | null;
+                /**
+                 * @description Continue after this position: the `after_created` of the previous page's `Link` target.
+                 *     Send together with `after_id`, and only with `limit`.
+                 */
+                after_created?: string | null;
+                /**
+                 * @description Continue after this position: the `after_id` of the previous page's `Link` target. Send
+                 *     together with `after_created`, and only with `limit`.
+                 */
+                after_id?: string | null;
+                /**
+                 * @description The direction of a bounded read over `(created, id)`: `asc`, oldest first, or `desc`,
+                 *     newest first. Absent is `asc`. Only with `limit`; the `Link` target carries it, so every
+                 *     page continues in the direction the first was asked in. Any other value is refused.
+                 */
+                order?: components["schemas"]["SortOrder"] | null;
             };
             header?: {
                 /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
@@ -18720,10 +18754,21 @@ export interface operations {
             /** @description Artifacts owned by the resource (full or counts) */
             200: {
                 headers: {
+                    /** @description Present only when `limit` was given and more artifacts remain: `<target>; rel="next"`, where the target is this route with the next page's query (`after_created`, `after_id`, `limit`, `order`, and the caller's own filters), percent-encoded. */
+                    Link?: string;
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["ArtifactView"][];
+                };
+            };
+            /** @description `limit` is 0 or above the page ceiling, `after_created` and `after_id` are not sent together with `limit`, `order` is sent without `limit`, or `order` is neither `asc` nor `desc` (that last one a plain-text rejection naming the parameter, not an ErrorBody) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
                 };
             };
             /** @description Unauthorized */
