@@ -18,8 +18,9 @@
 #
 # The cargo and JS entries group minor and patch bumps into one weekly PR per tree; a major bump
 # arrives on its own — except the web surface's toolchain majors, which the bun entry holds for
-# hand adoption (see it below). The github-actions entry groups majors too (see it below). The question a
-# reviewer asks of a bump set is "do I trust this set of upstream revisions", and splitting it
+# hand adoption (see it below), and TypeScript majors in the ts-clients entry, held behind
+# openapi-typescript's peer range. The github-actions entry groups majors too (see it below).
+# The question a reviewer asks of a bump set is "do I trust this set of upstream revisions", and splitting it
 # across a PR per package makes each look trivial while the aggregate goes unexamined. A major is a
 # different question (what broke), so it is not folded in.
 #
@@ -106,6 +107,12 @@ updates:
     groups:
       ts-clients:
         update-types: ["minor", "patch"]
+    # temper-ts generates its schema with openapi-typescript, whose peer range is typescript ^5,
+    # so a TypeScript major there fails `npm ci` until openapi-typescript widens it. The hold
+    # is semver-major only: temper-telemetry-ts, already on 7, keeps taking 7.x minors.
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
     commit-message:
       prefix: "chore(deps)"
 
