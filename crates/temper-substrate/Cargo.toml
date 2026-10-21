@@ -60,7 +60,7 @@ futures-core = "0.3"
 futures-util = "0.3"
 # Used in Task 3 (Beat B) for commit-time JSON Schema validation. Added here per the plan so the
 # dependency is in place before the validation code lands.
-jsonschema = "0.45"
+jsonschema = "0.49"
 
 # (No dev-dependencies: the WS6 chunk-3 parity tests that dev-depended on temper-api/temper-core were
 # retired with synthesis at the endgame collapse.)
