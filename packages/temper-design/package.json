@@ -17,7 +17,9 @@
     "*/theme.css",
     "*/theme.json",
     "themes.json",
-    "brand/*.svg"
+    "brand/*.svg",
+    "toolchain/check.mjs",
+    "toolchain/majors.json"
   ],
   "exports": {
     "./themes.json": "./themes.json",

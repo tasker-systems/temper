@@ -67,8 +67,10 @@ updates:
     # The web surface's toolchain majors are adopted by hand, on the web and the desktop together:
     # the two surfaces build on the same majors (goal 01a1590a-404a-77d7-8ab7-4171395d841a,
     # `toolchain-moves-together`). The same set is held in tasker-systems/temper-contrib's
-    # .github/dependabot.yml for apps/desktop; change one, change both. The hold covers
-    # temper-cloud's typescript too, which shares this tree.
+    # .github/dependabot.yml for apps/desktop; change one, change both. The majors themselves
+    # are declared in packages/temper-design/toolchain/majors.json, and each surface's CI fails
+    # when it resolves a different one. The hold covers temper-cloud's typescript too, which
+    # shares this tree.
     ignore:
       # The language, adopted together with the tooling that consumes it.
       - dependency-name: "typescript"

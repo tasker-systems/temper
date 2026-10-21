@@ -53,7 +53,8 @@ dependencies = [
   "migration-order",
   "docs-coverage",
   "ts-check",
-  "design-contract"
+  "design-contract",
+  "design-toolchain"
 ]
 
 [tasks.wire-register-crosscheck]
@@ -512,6 +513,14 @@ description = "Self-check the theme contract: schema, legibility floors, distinc
 cwd = "packages/temper-design"
 command = "scripts/themes.sh"
 args = ["--self-check"]
+
+[tasks.design-toolchain]
+description = "The toolchain check's harness: a surface off a declared major, or missing a named tool, is refused"
+# The check itself runs on each surface (temper-ui's `bun run toolchain`, in CI's Unit Tests job);
+# this proves the check refuses what it must. Node only: no install needed.
+cwd = "packages/temper-design"
+command = "node"
+args = ["--test", "toolchain/check.test.mjs"]
 
 [tasks.ts-check]
 description = "Run TypeScript quality checks (typecheck + biome)"

@@ -1,0 +1,18 @@
+{
+  "majors": {
+    "typescript": 6,
+    "svelte": 5,
+    "@sveltejs/kit": 2,
+    "@sveltejs/vite-plugin-svelte": 7,
+    "svelte-check": 4,
+    "vite": 8,
+    "vitest": 5,
+    "tailwindcss": 4,
+    "@tailwindcss/vite": 4,
+    "@biomejs/biome": 2
+  },
+  "adapters": {
+    "@sveltejs/adapter-vercel": 5,
+    "@sveltejs/adapter-static": 3
+  }
+}

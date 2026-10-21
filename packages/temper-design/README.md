@@ -27,6 +27,7 @@ packages/temper-design/
 ├── brand/                   # the threaded-t mark and wordmark, in currentColor
 ├── preview/index.html       # every role and the foundational components, both themes
 ├── scripts/themes.sh        # build · check · contrast · --self-check
+├── toolchain/               # the toolchain majors every surface builds on, and their check
 └── tests/fixtures/broken/   # themes the check must refuse
 ```
 
@@ -57,9 +58,40 @@ What a consumer imports:
 | `@tasker-systems/temper-design/themes.json` | every theme's name, title, appearance and counterpart — list and pair themes from this, never by globbing the package's directories |
 | `@tasker-systems/temper-design/contract/theme.schema.json` | the contract itself |
 | `@tasker-systems/temper-design/brand/*.svg` | the mark and wordmark, in `currentColor` |
+| `@tasker-systems/temper-design/toolchain/majors.json` | the toolchain majors every surface builds on |
+| `@tasker-systems/temper-design/toolchain/check.mjs` | the check a surface runs against them (see below) |
 
-The checker (`scripts/`, `tests/`, `pyproject.toml`) is not published: it runs in this
-repository's CI, and the package carries only what it proves.
+The theme checker (`scripts/`, `tests/`, `pyproject.toml`) is not published: it runs in this
+repository's CI, and the package carries only what it proves. The toolchain check is
+published, because each surface runs it itself; its harness is not.
+
+## The toolchain
+
+Every surface builds on the same majors of one named set: `typescript`, `svelte`,
+`@sveltejs/kit`, `@sveltejs/vite-plugin-svelte`, `svelte-check`, `vite`, `vitest`,
+`tailwindcss`, `@tailwindcss/vite` and `@biomejs/biome`, plus each surface's own SvelteKit
+adapter. A major upgrade of any of them reaches every surface together. `toolchain/majors.json`
+declares the majors, and each surface checks what it resolves against them:
+
+```bash
+node <package>/toolchain/check.mjs --adapter @sveltejs/adapter-static
+```
+
+The check fails when the surface resolves a different major of a named tool, does not
+resolve one, or names an adapter the declaration lacks. It looks a tool up the way Node
+resolves a bare import, from the surface's directory upward; it reads no lockfile.
+
+- **The web** (`packages/temper-ui`, `bun run toolchain`) reads the declaration from this
+  working tree. A web major cannot move unless `majors.json` moves in the same change.
+- **The desktop** reads it at the version it pins. The pin bump that carries a new major
+  fails until the desktop has taken it too.
+
+So between a release that moves a major and the desktop's next pin bump, the two surfaces
+can differ and nothing fails. That gap is where the check stops, not something it covers.
+
+Both repositories' `dependabot.yml` hold semver-majors of this set, so a major arrives as a
+deliberate change rather than an automatic one. `node --test toolchain/check.test.mjs` is
+the check's harness.
 
 ## The contract
 

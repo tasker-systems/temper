@@ -16,7 +16,8 @@
     "biome": "biome check",
     "biome:fix": "biome check --fix",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "toolchain": "node ../temper-design/toolchain/check.mjs --adapter @sveltejs/adapter-vercel"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",

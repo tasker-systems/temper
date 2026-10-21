@@ -1,0 +1,14 @@
+title    = "`@tasker-systems/temper-design` declares the toolchain majors and ships the check each surface runs against them"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["clients"]
+status   = "signal-only"
+body = '''
+Two new published files in `@tasker-systems/temper-design`: `toolchain/majors.json`, the majors
+of the toolchain every temper surface builds on (the language, the framework and its Vite plugin,
+the type-checker, the bundler, the test runner, the styling engine, the linter, and each surface's
+adapter), and `toolchain/check.mjs`, which fails when a surface resolves a different major. The
+web UI runs it in CI against this repository's copy. Who observes: a surface that pins the package
+and runs the check; nothing else reads them. User-visible: no. Release relevance: additive — new
+files in an existing package; no existing file changes.
+'''
