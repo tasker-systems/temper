@@ -11,6 +11,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const apiGet = vi.fn();
+const apiGetWithHeaders = vi.fn();
 const readTrail = vi.fn();
 const readResourceConnections = vi.fn();
 const apiPatch = vi.fn();
@@ -27,6 +28,7 @@ class ApiErrorStub extends Error {
 
 vi.mock('$lib/server/api', () => ({
 	apiGet: (...a: unknown[]) => apiGet(...a),
+	apiGetWithHeaders: (...a: unknown[]) => apiGetWithHeaders(...a),
 	apiPatch: (...a: unknown[]) => apiPatch(...a),
 	ApiError: ApiErrorStub,
 }));
@@ -44,10 +46,11 @@ const { load, actions } = await import('./+page.server');
 const VIEWER = 'p-viewer';
 const CTX = 'ctx-1';
 
-const run = (parentData: Record<string, unknown> = {}) =>
+const run = (parentData: Record<string, unknown> = {}, at = '/vault/r/r1') =>
 	(load as (e: unknown) => Promise<Record<string, unknown>>)({
 		locals: { accessToken: 'tok' },
 		params: { ident: 'r1' },
+		url: new URL(at, 'http://ui.invalid'),
 		parent: async () => ({
 			contexts: [{ id: CTX, can_write: false }],
 			profile: { id: VIEWER },
@@ -62,10 +65,6 @@ beforeEach(() => {
 	// never-settling promise to the resource read and time out for the wrong reason.
 	apiGet.mockImplementation((path: string) => {
 		if (path.endsWith('/content')) return new Promise(() => {});
-		// The artifacts fill never settles by default, like the other three: the load's contract
-		// is that it hands the template promises, and a settled default would let a load that
-		// awaits this read pass C1 by accident.
-		if (path.includes('/artifacts')) return new Promise(() => {});
 		if (path.includes('/api/schema/doc-types/'))
 			return Promise.resolve({ enum_fields: { 'temper-stage': ['backlog', 'done'] } });
 		return Promise.resolve({
@@ -77,6 +76,10 @@ beforeEach(() => {
 			is_active: true,
 		});
 	});
+	// The artifacts fill never settles by default, like the other three: the load's contract is
+	// that it hands the template promises, and a settled default would let a load that awaits
+	// this read pass C1 by accident.
+	apiGetWithHeaders.mockReturnValue(new Promise(() => {}));
 	readTrail.mockReturnValue(new Promise(() => {}));
 	readResourceConnections.mockReturnValue(new Promise(() => {}));
 });
@@ -96,24 +99,88 @@ describe('the resource page does not block on its fill', () => {
 });
 
 describe('the artifacts read', () => {
-	it("asks for the folded ones too — whether an artifact is live is the reader's question", async () => {
-		apiGet.mockImplementation((path: string) => {
-			if (path.includes('/artifacts')) return Promise.resolve([]);
-			if (path.endsWith('/content')) return Promise.resolve({ markdown: '# b' });
-			if (path.includes('/api/schema/doc-types/')) return Promise.resolve({ enum_fields: {} });
-			return Promise.resolve({
-				id: 'r1',
-				title: 'A resource',
-				doc_type_name: 'task',
-				kb_context_id: CTX,
-				owner_profile_id: 'p-someone-else',
-				is_active: true,
-			});
-		});
+	const AFTER_ID = '00000000-0000-0000-0000-0000000000aa';
+	const AFTER_CREATED = '2026-10-19T12:30:45.123456Z';
+	const answer = (body: unknown[], link: string | null = null) =>
+		Promise.resolve({ body, headers: new Headers(link ? { link } : {}) });
+	const asked = () => apiGetWithHeaders.mock.calls.map(([path]) => String(path));
+
+	it("asks for ONE bounded page, and the folded ones too — whether an artifact is live is the reader's question", async () => {
+		// THE BITE for task AC 2: a resource's artifacts accumulate for good, and the ordinary
+		// view must not read all of them. Without `limit` the route answers the whole history.
+		apiGetWithHeaders.mockReturnValue(answer([]));
 		const data = await run();
-		await expect(data.artifacts).resolves.toEqual([]);
-		const asked = apiGet.mock.calls.map(([path]) => String(path));
-		expect(asked).toContain('/api/resources/r1/artifacts?include_folded=true');
+		await expect(data.artifacts).resolves.toEqual({
+			artifacts: [],
+			olderHref: null,
+			newestHref: null,
+		});
+		expect(asked()).toEqual([
+			'/api/resources/r1/artifacts?include_folded=true&limit=50&order=desc',
+		]);
+		// Nothing reads the artifacts unbounded behind the bounded read's back.
+		const unbounded = apiGet.mock.calls.map(([path]) => String(path));
+		expect(unbounded.some((p) => p.includes('/artifacts'))).toBe(false);
+	});
+
+	it("offers the next, older page when the read's `Link` says more exist", async () => {
+		apiGetWithHeaders.mockReturnValue(
+			answer(
+				[{ artifact_id: 'a1' }],
+				'</api/resources/r1/artifacts?include_folded=true&limit=50&order=desc' +
+					`&after_created=2026-10-19T12%3A30%3A45.123456Z&after_id=${AFTER_ID}>; rel="next"`,
+			),
+		);
+		const data = await run();
+		const region = (await data.artifacts) as { olderHref: string; newestHref: string | null };
+		const older = new URL(region.olderHref, 'http://ui.invalid');
+		expect(older.pathname).toBe('/vault/r/r1');
+		expect(older.searchParams.get('artifacts_after_created')).toBe(AFTER_CREATED);
+		expect(older.searchParams.get('artifacts_after_id')).toBe(AFTER_ID);
+		expect(region.newestHref).toBeNull();
+	});
+
+	it('reads the page the URL names, and offers the way back to the newest', async () => {
+		apiGetWithHeaders.mockReturnValue(answer([{ artifact_id: 'a3' }]));
+		const at =
+			`/vault/r/r1?artifacts_after_created=${encodeURIComponent(AFTER_CREATED)}` +
+			`&artifacts_after_id=${AFTER_ID}`;
+		const data = await run({}, at);
+		const region = (await data.artifacts) as { olderHref: string | null; newestHref: string };
+		const sent = new URL(asked()[0], 'http://api.invalid');
+		expect(sent.searchParams.get('limit')).toBe('50');
+		expect(sent.searchParams.get('order')).toBe('desc');
+		expect(sent.searchParams.get('after_created')).toBe(AFTER_CREATED);
+		expect(sent.searchParams.get('after_id')).toBe(AFTER_ID);
+		expect(region.olderHref).toBeNull();
+		expect(region.newestHref).toBe('/vault/r/r1');
+	});
+
+	it('keeps the position through a form action, and puts no action key in a link', async () => {
+		// An unenhanced POST to `formAction(...)` lands on this URL, and the page renders from it.
+		apiGetWithHeaders.mockReturnValue(
+			answer(
+				[{ artifact_id: 'a3' }],
+				`</a?after_created=2026-10-19T12%3A30%3A45.123456Z&after_id=${AFTER_ID}>; rel="next"`,
+			),
+		);
+		const at =
+			`/vault/r/r1?artifacts_after_created=${encodeURIComponent(AFTER_CREATED)}` +
+			`&artifacts_after_id=${AFTER_ID}&/changeState`;
+		const data = await run({}, at);
+		const region = (await data.artifacts) as { olderHref: string; newestHref: string };
+		const sent = new URL(asked()[0], 'http://api.invalid');
+		expect(sent.searchParams.get('after_id')).toBe(AFTER_ID);
+		for (const href of [region.olderHref, region.newestHref]) {
+			expect(href).not.toContain('changeState');
+		}
+		expect(region.newestHref).toBe('/vault/r/r1');
+	});
+
+	it('fails the region on a `Link` it cannot read, rather than passing one page off as all', async () => {
+		apiGetWithHeaders.mockReturnValue(answer([{ artifact_id: 'a1' }], '</a>; rel="next"'));
+		const data = await run();
+		await expect(data.artifacts).rejects.toThrow(/malformed Link/);
 	});
 });
 

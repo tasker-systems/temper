@@ -490,12 +490,14 @@ impl std::error::Error for BlockAddressError {}
 
 /// A data-artifact write the system DECLINED for reasons the caller can act on: the SQL
 /// wrapper's `RAISE EXCEPTION` refusals (SQLSTATE `P0001` under a `data_artifact_` message
-/// prefix — classified in `events`, beside the two wrapper calls) and the Rust-side
-/// enforcing-shape verdict. Typed so the surfaces render the refusal's own words instead
-/// of the 500-class bridge — the mapping of these refusals onto internal errors is the
-/// defect this type exists to close, and the prefix key is what keeps a genuine server
-/// fault from ever carrying it. The refusal text is the deliverable: it is what teaches
-/// the caller the family's vocabulary (a-declined-act-teaches-its-vocabulary).
+/// prefix — classified in `events`, beside the two wrapper calls), the Rust-side
+/// enforcing-shape verdict, and the shape-schema compile refusals (at declare in
+/// `temper-services`, and at commit under an enforcing shape that cannot be compiled). Typed so
+/// the surfaces render the refusal's own words instead of the 500-class bridge — the mapping
+/// of these refusals onto internal errors is the defect this type exists to close, and the
+/// prefix key is what keeps a genuine server fault from ever carrying it. The refusal text is
+/// the deliverable: it is what teaches the caller the family's vocabulary
+/// (a-declined-act-teaches-its-vocabulary).
 #[derive(Debug)]
 pub struct DataArtifactRefusal {
     pub message: String,

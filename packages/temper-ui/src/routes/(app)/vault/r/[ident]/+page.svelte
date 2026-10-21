@@ -118,10 +118,15 @@
 			  failed-vs-empty defect this page's other fills were cured of.
 		-->
 		<!-- `await … then` (no pending arm) is the arriving-renders-nothing rule, stated
-		     structurally rather than as an empty block. -->
-		{#await data.artifacts then artifacts}
-			{#if artifacts.length > 0}
-				<ArtifactList {artifacts} />
+		     structurally rather than as an empty block. A page past the first renders even when
+		     empty: the reader asked for it, and it carries the way back to the newest. -->
+		{#await data.artifacts then region}
+			{#if region.artifacts.length > 0 || region.newestHref}
+				<ArtifactList
+					artifacts={region.artifacts}
+					olderHref={region.olderHref}
+					newestHref={region.newestHref}
+				/>
 			{/if}
 		{:catch error}
 			<div class="artifacts-failed">

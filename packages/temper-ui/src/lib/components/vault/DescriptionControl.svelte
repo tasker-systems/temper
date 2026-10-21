@@ -1,4 +1,7 @@
 <script lang="ts">
+	import { page } from '$app/stores';
+	import { formAction } from '$lib/form-action';
+
 	/**
 	 * One description the reader attached, offered for revision where it is read.
 	 *
@@ -38,7 +41,7 @@
 	});
 </script>
 
-<form method="POST" action="?/changeDescription" class="ctl">
+<form method="POST" action={formAction($page.url, 'changeDescription')} class="ctl">
 	<input type="hidden" name="name" value={name} />
 	<input
 		type="text"

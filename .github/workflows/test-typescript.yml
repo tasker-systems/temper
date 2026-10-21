@@ -71,6 +71,34 @@ jobs:
       - name: Run tests
         run: cd packages/temper-ui && bun run test
 
+  # The theme contract every surface paints from (packages/temper-design): the contract is
+  # valid, every theme clears the legibility floors and stays distinct, the generated CSS and
+  # themes.json agree with their sources, and every broken fixture is refused. A refused
+  # fixture that passes is the failure this job exists to catch.
+  design-contract:
+    name: Design Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    defaults:
+      run:
+        working-directory: packages/temper-design
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      # uv via pipx, as test-python.yml does: one fewer third-party pin, and the interpreter
+      # comes from this package's `.python-version`.
+      - name: Install uv
+        run: pipx install uv
+
+      - name: Install the checker's dependencies
+        run: uv sync --frozen
+
+      - name: Self-check the contract
+        run: scripts/themes.sh --self-check
+
   integration-tests:
     name: Integration Tests
     runs-on: ubuntu-latest
@@ -112,7 +140,7 @@ jobs:
           prefix-key: ts-integration-v1
 
       - name: Install cargo-sqlx
-        uses: taiki-e/install-action@v2.87.28
+        uses: taiki-e/install-action@v2.87.29
         with:
           tool: sqlx-cli
 

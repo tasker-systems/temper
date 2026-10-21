@@ -66,6 +66,13 @@ const CLIENT_ONLY: &[(&str, &str)] = &[
     ),
     ("data_artifacts.rs", "list_for"),
     (
+        "data_artifacts.rs",
+        // The single-page primitive an SDK consumer pages with (`list_page` hands back `next`).
+        // The CLI's `data-artifact list` contract is every artifact, so it calls `list_all`, which
+        // drains this; a page-at-a-time flag would be a second spelling of the same list.
+        "list_page",
+    ),
+    (
         "ingest.rs",
         // `PUT /api/ingest/{id}` is a second door for updating a resource's content. The CLI
         // updates through `PATCH /api/resources/{id}` (`resources.update`, which carries

@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
-dirs = "5"
+dirs = "7"
 html-to-markdown-rs = "3.1.0"
 kreuzberg = { version = "4.10.4", features = ["tokio-runtime", "bundled-pdfium"], optional = true }
 ndarray = { version = "0.17", optional = true }
@@ -21,7 +21,7 @@ ort = { version = "2.0.0-rc.14", default-features = false, features = [
 hex = "0.4"
 regex = "1"
 sha2 = "0.11"
-similar = "2"
+similar = "3"
 temperkb-core.workspace = true
 thiserror = "2"
 tokenizers = { version = "0.22", optional = true }

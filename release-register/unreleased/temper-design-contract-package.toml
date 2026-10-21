@@ -1,0 +1,14 @@
+title    = "The theme contract and its themes live in the monorepo as `@tasker-systems/temper-design`, self-checked in core CI"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["clients"]
+status   = "signal-only"
+body = '''
+A new package, `packages/temper-design`: the closed role schema every temper surface paints
+from, Quiet Instrument and its Paper counterpart, the contract CSS and recipes, the brand marks,
+and a generated `themes.json` index (name, title, appearance, counterpart per theme). Its
+exports name those files only; the Python checker that proves them is not published. Nothing
+consumes it yet and it is not yet in the npm release lane, so no installed client, SDK or
+surface changes. Who observes: no one until the web UI or the desktop depends on it.
+User-visible: no. Release relevance: additive — a new published name once the lane carries it.
+'''

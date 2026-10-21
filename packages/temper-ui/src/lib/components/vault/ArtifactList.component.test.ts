@@ -34,6 +34,33 @@ const getHead = (container: HTMLElement): HTMLElement => {
 };
 
 describe('ArtifactList', () => {
+	it('names a page as a page, and links to the pages either side of it', () => {
+		const { container } = render(ArtifactList, {
+			artifacts: [artifact()],
+			olderHref: '/vault/r/r1?artifacts_after_created=c&artifacts_after_id=i',
+			newestHref: '/vault/r/r1',
+		});
+
+		// The count is this page's, never the resource's, once there is more than one page.
+		expect(container.querySelector('.label')?.textContent).toContain(
+			'Data artifacts · 1 on this page',
+		);
+		const links = [...container.querySelectorAll('nav.pages a')].map((a) => [
+			a.textContent,
+			a.getAttribute('href'),
+		]);
+		expect(links).toEqual([
+			['← Newest artifacts', '/vault/r/r1'],
+			['Older artifacts →', '/vault/r/r1?artifacts_after_created=c&artifacts_after_id=i'],
+		]);
+	});
+
+	it('says nothing about pages when this page is the whole list', () => {
+		const { container } = render(ArtifactList, { artifacts: [artifact()] });
+		expect(container.querySelector('.label')?.textContent).not.toContain('on this page');
+		expect(container.querySelector('nav.pages')).toBeNull();
+	});
+
 	it('renders one row per artifact, newest first, with family · intent · size', () => {
 		const { container } = render(ArtifactList, {
 			artifacts: [

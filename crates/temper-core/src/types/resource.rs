@@ -160,7 +160,7 @@ pub enum ResourceSortField {
 /// Sort direction.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]

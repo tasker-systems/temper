@@ -1,4 +1,7 @@
 <script lang="ts">
+	import { page } from '$app/stores';
+	import { formAction } from '$lib/form-action';
+
 	/**
 	 * One state the system defines, offered for change where it is read.
 	 *
@@ -48,7 +51,7 @@
 	});
 </script>
 
-<form method="POST" action="?/changeState" class="ctl">
+<form method="POST" action={formAction($page.url, 'changeState')} class="ctl">
 	<input type="hidden" name="field" value={field} />
 	<select name="value" bind:value={selected} aria-label="{field} — change">
 		{#if current === null}

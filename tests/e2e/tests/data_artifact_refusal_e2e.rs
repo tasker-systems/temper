@@ -21,6 +21,12 @@
 
 mod common;
 
+// The counting loopback listener shared with temper-substrate's tests, so every suite agrees on
+// what a connection is.
+#[path = "../../../crates/temper-substrate/tests/common/fetch_probe.rs"]
+mod fetch_probe;
+
+use fetch_probe::FetchProbe;
 use serde_json::json;
 use sqlx::PgPool;
 use temper_client::error::ClientError;
@@ -326,20 +332,19 @@ async fn enforcing_refusal_names_the_violations_over_http(pool: PgPool) {
     let list = app
         .client
         .data_artifacts()
-        .list(
+        .list_all(
             resource_id,
             &ArtifactListParams {
                 kind: Some("measurement".to_string()),
-                intent: None,
                 include_folded: Some(true),
-                counts: None,
+                ..Default::default()
             },
         )
         .await
         .expect("list after refusal");
     assert!(
-        list.as_array().map(|a| a.is_empty()).unwrap_or(false),
-        "a refused commit must record nothing, got: {list}"
+        list.is_empty(),
+        "a refused commit must record nothing, got: {list:?}"
     );
 }
 
@@ -479,4 +484,219 @@ async fn cli_declare_refuses_with_vocabulary_then_succeeds_with_the_flag(pool: P
         stdout.contains("kb_profiles"),
         "the declared shape must carry the named namespace, got: {stdout}"
     );
+}
+
+// ── Declare-time compile: a schema that needs a fetch is refused at every door ──────────────
+//
+// A shape's schema is compiled when it is declared, with a compiler that never fetches. A schema
+// whose `$ref` names a host is refused with one fixed sentence that names neither the host nor the
+// compiler's text, no `kb_data_artifact_shapes` row is written, and the listener the `$ref` names
+// sees no connection. The connection count guards against a regression and is not the fetch
+// witness: the server runs in-process on an async runtime, where a fetching compiler's blocking
+// fetch panics before it connects. The witnesses are the synchronous `shape_schema_no_fetch` tests
+// in temper-substrate and the `audit-shape-schema-compile.sh` tripwire; these tests pin that each
+// door refuses with the fixed sentence and writes no row.
+
+/// The fixed sentence's distinctive words — what a declarer is told to change.
+const UNCOMPILABLE_VOCAB: &str = "never fetched";
+
+/// The schema under test: valid JSON Schema whose `$ref` leaves the document for the probe's host.
+fn remote_ref_schema(probe: &FetchProbe) -> serde_json::Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$ref": probe.url("shape.json"),
+    })
+}
+
+/// Rows in the shape registry, read directly: the witness that a refused declare wrote nothing.
+async fn shape_row_count(app: &common::E2eTestApp) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM kb_data_artifact_shapes")
+        .fetch_one(&app.pool)
+        .await
+        .expect("count shape rows")
+}
+
+/// The refusal text teaches the sentence and echoes nothing of the URI.
+fn assert_fixed_sentence(text: &str, probe: &FetchProbe) {
+    assert!(
+        text.contains(UNCOMPILABLE_VOCAB),
+        "the refusal must carry the fixed sentence, got: {text}"
+    );
+    // The probe's host AND port: the CLI's output may legitimately name the API's own address.
+    assert!(
+        !text.contains(&format!("127.0.0.1:{}", probe.port())),
+        "the refusal must not echo the URI the schema names, got: {text}"
+    );
+}
+
+/// The context declare route (`POST /api/contexts/{id}/shapes`): typed refusal, nothing written.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_uncompilable_schema_is_refused_at_declare_over_http(pool: PgPool) {
+    let app = common::setup(pool).await;
+    let probe = FetchProbe::bind();
+    let (context_id, _resource) = context_with_resource(&app, "e2e-uncompilable-http").await;
+    let rows_before = shape_row_count(&app).await;
+
+    let err = app
+        .client
+        .data_artifacts()
+        .declare_shape(
+            context_id,
+            &ShapeDeclareRequest {
+                kind: "measurement".to_string(),
+                kind_owner: None,
+                schema: remote_ref_schema(&probe),
+                enforcement: EnforcementMode::Advisory,
+                act: Default::default(),
+            },
+        )
+        .await
+        .expect_err("a schema that needs a fetch must be refused at declare");
+
+    let message = match err {
+        ClientError::DataArtifactRefusal { message } => message,
+        other => panic!("the refusal must arrive typed (a 400), not as {other}"),
+    };
+    assert_fixed_sentence(&message, &probe);
+    assert_eq!(
+        shape_row_count(&app).await,
+        rows_before,
+        "a refused declare writes no shape row"
+    );
+    assert_eq!(probe.connections(), 0, "the declare must not fetch");
+}
+
+/// The cogmap declare route (`POST /api/cognitive-maps/{id}/shapes`) is the twin of the context
+/// route and refuses the same schema the same way.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_uncompilable_schema_is_refused_at_declare_over_the_cogmap_route(pool: PgPool) {
+    /// The L0 kernel cognitive map reserved id; the harness profile is granted write on it.
+    const L0_COGMAP: uuid::Uuid = uuid::Uuid::from_u128(0x00000000_0000_0000_0005_000000000001);
+
+    let app = common::setup(pool).await;
+    let owner_id: uuid::Uuid = sqlx::query_scalar("SELECT id FROM kb_profiles WHERE email = $1")
+        .bind("e2e@test.example.com")
+        .fetch_one(&app.pool)
+        .await
+        .expect("the harness profile");
+    common::grant_cogmap_write(&app.pool, L0_COGMAP, owner_id).await;
+    let probe = FetchProbe::bind();
+    let rows_before = shape_row_count(&app).await;
+
+    let err = app
+        .client
+        .data_artifacts()
+        .declare_cogmap_shape(
+            L0_COGMAP,
+            &ShapeDeclareRequest {
+                kind: "measurement".to_string(),
+                kind_owner: None,
+                schema: remote_ref_schema(&probe),
+                enforcement: EnforcementMode::Advisory,
+                act: Default::default(),
+            },
+        )
+        .await
+        .expect_err("a schema that needs a fetch must be refused on the cogmap route too");
+
+    let message = match err {
+        ClientError::DataArtifactRefusal { message } => message,
+        other => panic!("the refusal must arrive typed (a 400), not as {other}"),
+    };
+    assert_fixed_sentence(&message, &probe);
+    assert_eq!(
+        shape_row_count(&app).await,
+        rows_before,
+        "a refused declare writes no shape row"
+    );
+    assert_eq!(probe.connections(), 0, "the declare must not fetch");
+}
+
+/// The MCP door: the refusal is a caller-side `invalid_params` carrying the fixed sentence, never
+/// the internal-error envelope.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_uncompilable_schema_is_refused_at_declare_over_mcp(pool: PgPool) {
+    let app = common::setup_relay(pool.clone()).await;
+    let probe = FetchProbe::bind();
+    let (context_id, _resource) = context_with_resource(&app, "e2e-uncompilable-mcp").await;
+    let (svc, parts) = relay_service_and_parts(&app).await;
+    let rows_before = shape_row_count(&app).await;
+
+    let err = temper_mcp::tools::data_artifact_shapes::declare_shape(
+        &svc,
+        &parts,
+        temper_mcp::tools::data_artifact_shapes::DeclareShapeInput {
+            home_type: "context".to_string(),
+            home_id: context_id.to_string(),
+            kind: "measurement".to_string(),
+            kind_owner: None,
+            schema: remote_ref_schema(&probe),
+            enforcement: EnforcementMode::Advisory,
+            invocation_id: None,
+            correlation_id: None,
+            confidence: None,
+            reasoning: None,
+            rationale: None,
+            persona: None,
+            model: None,
+        },
+    )
+    .await
+    .expect_err("a schema that needs a fetch must be refused over MCP");
+
+    assert_eq!(
+        err.code.0, -32602,
+        "the refusal must arrive as invalid_params, not an internal error: {err:?}"
+    );
+    assert_fixed_sentence(&err.message, &probe);
+    assert_eq!(
+        shape_row_count(&app).await,
+        rows_before,
+        "a refused declare writes no shape row"
+    );
+    assert_eq!(probe.connections(), 0, "the declare must not fetch");
+}
+
+/// The CLI door: the spawned process fails and its output carries the fixed sentence.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_uncompilable_schema_is_refused_at_declare_over_the_cli(pool: PgPool) {
+    let app = common::setup(pool).await;
+    let probe = FetchProbe::bind();
+    let (context_id, _resource) = context_with_resource(&app, "e2e-uncompilable-cli").await;
+    let rows_before = shape_row_count(&app).await;
+
+    let output = common::run_temper_cli_with_stdin(
+        &app,
+        &remote_ref_schema(&probe).to_string(),
+        &[
+            "data-artifact",
+            "schema",
+            "declare",
+            &context_id.to_string(),
+            "--kind",
+            "measurement",
+            "--content",
+            "-",
+        ],
+    )
+    .await
+    .expect("cli run");
+
+    assert!(
+        !output.status.success(),
+        "declaring a schema that needs a fetch must fail: stdout={}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_fixed_sentence(&combined, &probe);
+    assert_eq!(
+        shape_row_count(&app).await,
+        rows_before,
+        "a refused declare writes no shape row"
+    );
+    assert_eq!(probe.connections(), 0, "the declare must not fetch");
 }

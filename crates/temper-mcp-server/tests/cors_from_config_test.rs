@@ -26,9 +26,8 @@ mod common;
 
 const PROBE_ORIGIN: &str = "https://app.example.com";
 
-/// Send a cross-origin GET to the router's public health route and return the
-/// `access-control-allow-origin` it answered with, if any.
-async fn allow_origin_for(cors_origins: Vec<String>) -> Option<String> {
+/// Send a cross-origin GET to the router's public health route and return the response.
+async fn cross_origin_get(cors_origins: Vec<String>) -> axum::response::Response {
     let router = common::build_router(
         common::state_with_cors_origins(cors_origins),
         common::discovery_config(),
@@ -53,8 +52,13 @@ async fn allow_origin_for(cors_origins: Vec<String>) -> Option<String> {
         StatusCode::OK,
         "/mcp/health must be reachable without auth for this probe to mean anything"
     );
-
     response
+}
+
+/// The `access-control-allow-origin` a cross-origin GET was answered with, if any.
+async fn allow_origin_for(cors_origins: Vec<String>) -> Option<String> {
+    cross_origin_get(cors_origins)
+        .await
         .headers()
         .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
         .map(|v| v.to_str().expect("header is ASCII").to_string())
@@ -181,5 +185,22 @@ async fn the_permissive_preflight_never_allows_credentials() {
         header_of(&response, header::ACCESS_CONTROL_ALLOW_CREDENTIALS),
         None,
         "the permissive arm must never allow credentials"
+    );
+}
+
+/// An allowlisted origin can read `Link`. A browser hides every response header the CORS answer
+/// does not expose, and the bounded artifact list's continuation is `Link: <...>; rel="next"`, so
+/// without it an allowlisted browser client reads the first page as the whole list. The layer is
+/// the one `cors_layer` builds for both surfaces, so this probe on MCP's router covers the API's.
+/// FAILS IF: the allowlist arm stops exposing `Link`.
+#[tokio::test]
+async fn an_allowlisted_origin_can_read_the_link_header() {
+    let response = cross_origin_get(vec![PROBE_ORIGIN.to_string()]).await;
+    let exposed = header_of(&response, header::ACCESS_CONTROL_EXPOSE_HEADERS)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    assert!(
+        exposed.split(',').any(|h| h.trim() == "link"),
+        "`Link` must be exposed to an allowlisted origin: {exposed:?}"
     );
 }

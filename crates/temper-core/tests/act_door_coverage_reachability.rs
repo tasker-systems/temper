@@ -83,22 +83,20 @@
 //! **NOT checked, and declared so rather than left silent:** *which* door reaches a mechanic, among
 //! doors that could. Both oracles are workspace-global — they answer "production calls this", never
 //! "the MCP door calls this". Discriminating would need a per-door entry-point table maintained by
-//! hand, i.e. exactly the second copy this field exists to avoid. The live instance was
+//! hand, i.e. exactly the second copy this field exists to avoid. The live instance is
 //! `substantiate`: it declares `Serves` at CLI and API and `Absent` at MCP, and tier 1 sees only
 //! that `resource_standing_shape` is reachable from somewhere. That cell is reviewed, not checked.
 //!
-//! `[restated — 2026-08-14]` **There are now TWO instances of that exact shape, and the second one
-//! arrived by the same route as the first.** `follow-from` declares `Serves` at CLI and API and
-//! `Absent` at MCP, for a reason that is not about its mechanic at all: the MCP server exposes a
-//! `search` tool and no `query` tool, so the door agents use cannot compose. Tier 1 sees only that
-//! `query_follow_from` is emittable and cannot tell the three doors apart, so those three cells are
-//! reviewed too.
-//!
-//! Worth naming as a pattern rather than as a second entry: every act reachable *only* through
-//! `/api/query` will land here with the same MCP asymmetry until MCP gains a query tool, at which
-//! point the whole class resolves at once. The uncovered set is therefore expected to GROW with
-//! composable acts and then shrink to nothing in one step — a shape worth predicting, so that its
-//! growth is not read as coverage decaying.
+//! **Checked (tier 1b):** the MCP cell of every act reachable through `/api/query`. Tier 1 cannot
+//! tell the three doors of such an act apart (`query_follow_from` is emittable, and that is all it
+//! sees), so the MCP cell is checked here. The MCP `run_query`
+//! tool takes a whole `Composition` and relays it, unread, to `POST /api/query`, so for every act
+//! that route can emit, MCP reaches what the route admits.
+//! [`every_act_reached_through_the_query_route_is_served_at_mcp`] derives that set from the
+//! registry and `emitted_fragment_for` (the public face of `CALLABLE_FRAGMENTS`) rather than from a
+//! list, so an act that joins the route is covered the day it joins. It checks the cell is not
+//! `Absent`; it does not check the shortfall lists inside a `Serves`, which for these acts rest on
+//! the route admitting the same terms, bounds and filters at every door.
 //!
 //! [`the_cells_tier_one_cannot_discriminate_are_exactly_these`] pins that uncovered set, so a new
 //! act or a new door lands in it and forces a deliberate restatement instead of quietly inheriting
@@ -356,6 +354,52 @@ fn the_two_oracles_disagree_exactly_where_the_vector_cast_forces_it() {
 }
 
 // ---------------------------------------------------------------------------
+// Tier 1b — the MCP door relays to `/api/query`
+// ---------------------------------------------------------------------------
+
+/// An act `/api/query` can emit is an act the MCP door serves.
+///
+/// MCP's `run_query` takes a whole `Composition` as its input and relays it, unread, to
+/// `POST /api/query` (`temper-mcp`'s `tools/query.rs`), so the reach of that door over these acts is
+/// the route's, whatever tier 1 can or cannot see. The set is derived, not listed: an act is on the
+/// route exactly when `emitted_fragment_for` names a fragment for its mechanic — the same
+/// membership `validate` reads to decide `NotSeparablyReachable`. A new act that joins
+/// `CALLABLE_FRAGMENTS` therefore lands under this check without anyone remembering to add it, and
+/// a cell that says `Absent` while the route emits the act fails here instead of lingering as a
+/// shortfall that does not exist.
+///
+/// The non-vacuity assertion matters: if every `served_by` were renamed out of the map's keys the
+/// set would be empty and the loop would pass over nothing.
+#[test]
+fn every_act_reached_through_the_query_route_is_served_at_mcp() {
+    let through_the_route: Vec<_> = search_family()
+        .into_iter()
+        .filter(|act| {
+            act.served_by.as_deref().is_some_and(|sql_fn| {
+                temper_core::types::query::emitted_fragment_for(sql_fn).is_some()
+            })
+        })
+        .collect();
+    assert!(
+        !through_the_route.is_empty(),
+        "no act is emitted by `/api/query` — the derivation is broken, and an empty set makes \
+         this check pass over nothing"
+    );
+
+    for act in through_the_route {
+        let mcp = act.door_coverage.get(&Door::Mcp);
+        assert!(
+            matches!(mcp, Some(DoorReach::Serves { .. })),
+            "{:?} is emitted by `/api/query` (`{}` is in CALLABLE_FRAGMENTS) and the MCP \
+             `run_query` tool relays whole compositions to that route, yet MCP declares {mcp:?}. \
+             Declare `Serves` and name any genuine shortfall in its lists.",
+            act.name,
+            act.served_by.as_deref().unwrap_or_default(),
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Bite probes — the gate's own non-vacuity
 // ---------------------------------------------------------------------------
 
@@ -430,8 +474,10 @@ fn wire_slot(term: BoundTerm) -> Option<&'static str> {
     match term {
         BoundTerm::Limit => Some("limit"),
         BoundTerm::Offset => Some("offset"),
-        // `survey`'s funnel width. No door carries it, and `survey` is `Absent` at all three, so
-        // there is nothing for this to be checked against today.
+        // `survey`'s funnel width. `SearchParams` has no slot for it: `survey` is served through
+        // `/api/query`, where `regions` is a term on the composition's act invocation, so the
+        // shared-params tests skip it (`emitted_fragment_for`) and nothing here is checked against
+        // this arm today.
         BoundTerm::Regions => None,
     }
 }
@@ -500,7 +546,7 @@ fn the_shared_params_doors_declare_exactly_the_terms_that_type_carries() {
 /// Exhaustive bar `IdKind::Other` — `IdKind`'s forward-compat catch-all for a producer newer than
 /// this consumer, which this crate never constructs and no declaration's `accepts_bounds` names.
 /// `Region` also returns `None`: it is `produces`-only in this family (`follow-from`'s seeds are
-/// `Resource`, `survey` produces `Region` but is `Absent` everywhere), and no act's `accepts_bounds`
+/// `Resource`, `survey` produces `Resource` and discloses `Region`), and no act's `accepts_bounds`
 /// contains it today — asserted below rather than assumed.
 fn wire_bound_slot(kind: &IdKind) -> Option<&'static str> {
     match kind {
@@ -617,8 +663,9 @@ fn the_cells_tier_one_cannot_discriminate_are_exactly_these() {
         ActName::FindAboutWithin,
         ActName::FindResourcesWith,
         // `[joined — 2026-08-14]` Reachable through `/api/query` now that `query_follow_from` is in
-        // `CALLABLE_FRAGMENTS`, so tier 1 stops speaking for it and its three cells rest on review
-        // — including the MCP `Absent`, which no oracle here can distinguish from the other two.
+        // `CALLABLE_FRAGMENTS`, so tier 1 stops speaking for it and its three cells rest on review.
+        // The MCP cell is the exception: `every_act_reached_through_the_query_route_is_served_at_mcp`
+        // checks it.
         ActName::FollowFrom,
         // `[joined — 2026-08-16]` Reachable through `/api/query` now that `query_survey` is in
         // `CALLABLE_FRAGMENTS`. Survey serves all three doors (it is a knowledge subject, so

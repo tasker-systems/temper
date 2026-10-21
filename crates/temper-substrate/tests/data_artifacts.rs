@@ -24,6 +24,7 @@
 
 mod common;
 
+use temper_core::types::resource::SortOrder;
 use temper_substrate::events::{fire, EventContext, SeedAction};
 use temper_substrate::ids::{ContextId, EntityId, ProfileId, ResourceId};
 use temper_substrate::payloads::AnchorRef;
@@ -1279,6 +1280,582 @@ async fn filtering_by_kind_and_intent(pool: sqlx::PgPool) {
     .await
     .unwrap();
     assert_eq!(current_extractions.len(), 1, "one current extraction");
+}
+
+// ── The bounded read (`artifacts_for_resource_page`, migration 20261102000000) ────────────────
+
+/// One bounded page of a resource's live artifacts, oldest first, no kind/intent filter.
+async fn page(
+    pool: &sqlx::PgPool,
+    principal: ProfileId,
+    resource: ResourceId,
+    limit: u32,
+    after: Option<temper_core::types::data_artifact::ArtifactCursor>,
+) -> readback::RetrievedArtifactPage {
+    page_in(pool, principal, resource, limit, after, SortOrder::Asc).await
+}
+
+/// [`page`], in the given direction.
+async fn page_in(
+    pool: &sqlx::PgPool,
+    principal: ProfileId,
+    resource: ResourceId,
+    limit: u32,
+    after: Option<temper_core::types::data_artifact::ArtifactCursor>,
+    order: SortOrder,
+) -> readback::RetrievedArtifactPage {
+    readback::artifacts_for_resource_page(
+        pool,
+        principal,
+        resource,
+        readback::ArtifactPageParams {
+            kind: None,
+            intent: None,
+            include_folded: false,
+            limit,
+            after,
+            order,
+        },
+    )
+    .await
+    .unwrap()
+}
+
+/// **THE C2 CURSOR WITNESS.** Five artifacts, `limit = 2`: the pages hold 2, 2 and 1; `next` is
+/// null on the last page and only there; the union is exactly the five committed, in order; none
+/// repeats.
+///
+/// This witnesses the cursor contract (page sizes, `next`, an exact ordered union). It does not
+/// witness the bound: the readback asks for `limit + 1` rows and truncates in Rust, so the pages
+/// come out the same even if the SQL returned every row. The bound's witness is
+/// `the_sql_arity_returns_at_most_p_limit_rows`. Drop the keyset predicate and every page
+/// restarts at the beginning, which fails the union.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn bounded_page_walks_five_artifacts_two_two_one_with_an_exact_union(pool: sqlx::PgPool) {
+    let (emitter, _home, resource) = world(&pool, "page-witness").await;
+    let (owner, _) = system_actor(&pool).await;
+
+    let mut committed = Vec::new();
+    for n in 0..5 {
+        committed.push(
+            fire_commit(
+                &pool,
+                resource,
+                "measurement",
+                ArtifactIntent::Member,
+                &serde_json::json!({ "n": n }),
+                emitter,
+            )
+            .await,
+        );
+    }
+
+    let mut after = None;
+    let mut sizes = Vec::new();
+    let mut has_next = Vec::new();
+    let mut seen = Vec::new();
+    loop {
+        let this = page(&pool, owner, resource, 2, after).await;
+        sizes.push(this.artifacts.len());
+        has_next.push(this.next.is_some());
+        seen.extend(this.artifacts.iter().map(|a| a.artifact_id));
+        match this.next {
+            Some(cursor) => after = Some(cursor),
+            None => break,
+        }
+    }
+
+    assert_eq!(sizes, vec![2, 2, 1], "pages of two, two and one");
+    assert_eq!(
+        has_next,
+        vec![true, true, false],
+        "`next` only before the end"
+    );
+    assert_eq!(
+        seen, committed,
+        "the union is exact, in order, with no repeats"
+    );
+}
+
+/// **The newest-first walk.** The same five artifacts at `limit = 2`, descending: pages of 2, 2
+/// and 1, `next` only before the end, and the union exactly the five committed in REVERSE order,
+/// none repeated.
+///
+/// Bite: flip the descending keyset comparison in migration `20261102000000` from `<` to `>`.
+/// The second page then reads rows newer than the first page's last, which is only the newest:
+/// it repeats it and the walk stops at `[2, 1]`, skipping the three oldest.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn bounded_page_walks_newest_first_two_two_one_with_an_exact_union(pool: sqlx::PgPool) {
+    let (emitter, _home, resource) = world(&pool, "page-witness-desc").await;
+    let (owner, _) = system_actor(&pool).await;
+
+    let mut committed = Vec::new();
+    for n in 0..5 {
+        committed.push(
+            fire_commit(
+                &pool,
+                resource,
+                "measurement",
+                ArtifactIntent::Member,
+                &serde_json::json!({ "n": n }),
+                emitter,
+            )
+            .await,
+        );
+    }
+
+    let mut after = None;
+    let mut sizes = Vec::new();
+    let mut has_next = Vec::new();
+    let mut seen = Vec::new();
+    loop {
+        let this = page_in(&pool, owner, resource, 2, after, SortOrder::Desc).await;
+        sizes.push(this.artifacts.len());
+        has_next.push(this.next.is_some());
+        seen.extend(this.artifacts.iter().map(|a| a.artifact_id));
+        match this.next {
+            Some(cursor) => after = Some(cursor),
+            None => break,
+        }
+    }
+
+    committed.reverse();
+    assert_eq!(sizes, vec![2, 2, 1], "pages of two, two and one");
+    assert_eq!(
+        has_next,
+        vec![true, true, false],
+        "`next` only before the end"
+    );
+    assert_eq!(
+        seen, committed,
+        "the union is exact, newest first, with no repeats"
+    );
+}
+
+/// **THE BOUND'S WITNESS.** The SQL arity itself returns at most `p_limit` rows: five artifacts,
+/// `p_limit = 3`, exactly three rows come back from the database.
+///
+/// This is the test that fails when the SQL `LIMIT` is dropped, and the page-walk test above
+/// cannot be: `artifacts_for_resource_page` asks for `limit + 1` rows and then truncates in Rust,
+/// so with the `LIMIT` gone the database would hydrate every row, Rust would trim the output, and
+/// the pages would still come out 2, 2, 1. The page walk witnesses the cursor contract; only a
+/// read of what the database returns witnesses that a resource's whole artifact history is not
+/// hydrated. It counts rows and nothing else, so it is a runtime query (no `.sqlx` entry).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_sql_arity_returns_at_most_p_limit_rows(pool: sqlx::PgPool) {
+    let (emitter, _home, resource) = world(&pool, "page-sql-bound").await;
+    let (owner, _) = system_actor(&pool).await;
+    for n in 0..5 {
+        fire_commit(
+            &pool,
+            resource,
+            "measurement",
+            ArtifactIntent::Member,
+            &serde_json::json!({ "n": n }),
+            emitter,
+        )
+        .await;
+    }
+
+    // Both directions: each is its own `ORDER BY` arm under the one `LIMIT`.
+    for descending in [false, true] {
+        let returned: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM artifacts_for_resource(
+                 $1, $2, NULL::text, NULL::text, false, $3::bigint, NULL::timestamptz, NULL::uuid,
+                 $4)",
+        )
+        .bind(owner.uuid())
+        .bind(resource.uuid())
+        .bind(3_i64)
+        .bind(descending)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(
+            returned, 3,
+            "five artifacts exist; the database must return only p_limit of them \
+             (descending: {descending})"
+        );
+    }
+}
+
+/// Half a keyset position returns no rows, in either direction. A row comparison against
+/// `(created, NULL)` is not NULL but true for every `created` beyond it in the comparison's sense
+/// (later ascending, earlier descending), so without the arity's explicit both-non-NULL arm half
+/// a position would resume from `created` rather than answer nothing. Each direction is asked
+/// from the end that leaves rows beyond it: ascending from the earliest, descending from the
+/// latest.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn half_a_position_returns_no_rows(pool: sqlx::PgPool) {
+    let (emitter, _home, resource) = world(&pool, "page-half-position").await;
+    let (owner, _) = system_actor(&pool).await;
+    for n in 0..3 {
+        fire_commit(
+            &pool,
+            resource,
+            "measurement",
+            ArtifactIntent::Member,
+            &serde_json::json!({ "n": n }),
+            emitter,
+        )
+        .await;
+    }
+
+    // The premise: separate commits carry distinct `created`, so rows exist strictly beyond the
+    // earliest one ascending and the latest one descending, and a bare row comparison would
+    // return them.
+    type Instant = chrono::DateTime<chrono::Utc>;
+    let (distinct, earliest, latest): (i64, Instant, Instant) = sqlx::query_as(
+        "SELECT count(DISTINCT created), min(created), max(created)
+           FROM kb_data_artifacts WHERE resource_id = $1",
+    )
+    .bind(resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(distinct, 3, "premise: three distinct `created` values");
+
+    for (descending, from) in [(false, earliest), (true, latest)] {
+        let returned: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM artifacts_for_resource(
+                 $1, $2, NULL::text, NULL::text, false, $3::bigint, $4::timestamptz, NULL::uuid,
+                 $5)",
+        )
+        .bind(owner.uuid())
+        .bind(resource.uuid())
+        .bind(10_i64)
+        .bind(from)
+        .bind(descending)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(
+            returned, 0,
+            "a position without its id returns nothing (descending: {descending})"
+        );
+    }
+}
+
+/// A NULL direction returns no rows. The arity's `WHERE p_descending IS NOT NULL` is what says
+/// so: without it the first-page arm admits every row and every `ORDER BY` key is NULL, so the
+/// read would answer the first `p_limit` rows in no order at all — a page with no defined next.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_null_direction_returns_no_rows(pool: sqlx::PgPool) {
+    let (emitter, _home, resource) = world(&pool, "page-null-direction").await;
+    let (owner, _) = system_actor(&pool).await;
+    for n in 0..3 {
+        fire_commit(
+            &pool,
+            resource,
+            "measurement",
+            ArtifactIntent::Member,
+            &serde_json::json!({ "n": n }),
+            emitter,
+        )
+        .await;
+    }
+
+    // The controls: the same call with a direction answers all three, so the zero is the NULL
+    // direction's doing and not an empty fixture.
+    for (descending, expected) in [(Some(false), 3), (Some(true), 3), (None, 0)] {
+        let returned: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM artifacts_for_resource(
+                 $1, $2, NULL::text, NULL::text, false, $3::bigint, NULL::timestamptz, NULL::uuid,
+                 $4::boolean)",
+        )
+        .bind(owner.uuid())
+        .bind(resource.uuid())
+        .bind(10_i64)
+        .bind(descending)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(returned, expected, "p_descending = {descending:?}");
+    }
+}
+
+/// A page that exactly exhausts the remainder has no `next`: the extra row the read asks for is
+/// what tells a full-but-last page from a full page with more behind it.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_page_that_exactly_fits_the_remainder_has_no_next(pool: sqlx::PgPool) {
+    let (emitter, _home, resource) = world(&pool, "page-exact-fit").await;
+    let (owner, _) = system_actor(&pool).await;
+    for n in 0..3 {
+        fire_commit(
+            &pool,
+            resource,
+            "measurement",
+            ArtifactIntent::Member,
+            &serde_json::json!({ "n": n }),
+            emitter,
+        )
+        .await;
+    }
+
+    let exact = page(&pool, owner, resource, 3, None).await;
+    assert_eq!(exact.artifacts.len(), 3);
+    assert_eq!(exact.next, None, "three of three is the whole list");
+
+    let one_short = page(&pool, owner, resource, 2, None).await;
+    assert_eq!(one_short.artifacts.len(), 2);
+    assert!(
+        one_short.next.is_some(),
+        "two of three leaves a page behind"
+    );
+}
+
+/// Artifacts committed in ONE transaction share a `created` (`now()` is the transaction's start),
+/// so the position that separates them is the id. Paging one at a time must still return each
+/// exactly once; a keyset on `created` alone would skip or repeat the rest of the tie.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn artifacts_sharing_a_created_page_by_id_without_skipping_or_repeating(pool: sqlx::PgPool) {
+    let (emitter, _home, resource) = world(&pool, "page-ties").await;
+    let (owner, _) = system_actor(&pool).await;
+
+    let mut tx = pool.begin().await.unwrap();
+    let mut committed = Vec::new();
+    for n in 0..4 {
+        let content = serde_json::json!({ "n": n });
+        committed.push(
+            fire(
+                &mut tx,
+                SeedAction::DataArtifactCommit {
+                    resource,
+                    kind: "measurement",
+                    kind_owner: None,
+                    intent: ArtifactIntent::Member,
+                    precedence: 0.0,
+                    content: &content,
+                    supersedes: &[],
+                    emitter,
+                },
+            )
+            .await
+            .unwrap()
+            .data_artifact()
+            .unwrap(),
+        );
+    }
+    tx.commit().await.unwrap();
+
+    let created: i64 = sqlx::query_scalar(
+        "SELECT count(DISTINCT created) FROM kb_data_artifacts WHERE resource_id = $1",
+    )
+    .bind(resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        created, 1,
+        "the fixture must tie on `created`, or this proves nothing"
+    );
+
+    let mut after = None;
+    let mut seen = Vec::new();
+    loop {
+        let this = page(&pool, owner, resource, 1, after).await;
+        seen.extend(this.artifacts.iter().map(|a| a.artifact_id));
+        match this.next {
+            Some(cursor) => after = Some(cursor),
+            None => break,
+        }
+    }
+
+    let mut expected = committed;
+    expected.sort_by_key(|id| id.uuid());
+    assert_eq!(
+        seen, expected,
+        "a tie on `created` is broken by id, once each"
+    );
+}
+
+/// The descending twin: four artifacts tied on `created`, paged newest first one at a time, must
+/// come back exactly once each in `(created DESC, id DESC)` order — here, id descending.
+///
+/// It fails under either regression of the descending arm in migration `20261102000000`:
+/// - **the descending comparison on `created` alone** (`a.created < p_after_created`): the first
+///   page holds the highest id, and nothing in the tie has an earlier `created`, so the walk ends
+///   after one artifact and skips the other three;
+/// - **the `CASE WHEN p_descending THEN a.id END DESC` key dropped from the `ORDER BY`**: inside
+///   the tie the rows then arrive in no defined order, so a page can hold an id that is not the
+///   highest remaining, and the `id <` keyset then skips every higher one. It passes only if the
+///   database happens to hand back the tie in exact descending id order on every page.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn artifacts_sharing_a_created_page_newest_first_by_id_without_skipping_or_repeating(
+    pool: sqlx::PgPool,
+) {
+    let (emitter, _home, resource) = world(&pool, "page-ties-desc").await;
+    let (owner, _) = system_actor(&pool).await;
+
+    let mut tx = pool.begin().await.unwrap();
+    let mut committed = Vec::new();
+    for n in 0..4 {
+        let content = serde_json::json!({ "n": n });
+        committed.push(
+            fire(
+                &mut tx,
+                SeedAction::DataArtifactCommit {
+                    resource,
+                    kind: "measurement",
+                    kind_owner: None,
+                    intent: ArtifactIntent::Member,
+                    precedence: 0.0,
+                    content: &content,
+                    supersedes: &[],
+                    emitter,
+                },
+            )
+            .await
+            .unwrap()
+            .data_artifact()
+            .unwrap(),
+        );
+    }
+    tx.commit().await.unwrap();
+
+    let created: i64 = sqlx::query_scalar(
+        "SELECT count(DISTINCT created) FROM kb_data_artifacts WHERE resource_id = $1",
+    )
+    .bind(resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        created, 1,
+        "the fixture must tie on `created`, or this proves nothing"
+    );
+
+    let mut after = None;
+    let mut seen = Vec::new();
+    loop {
+        let this = page_in(&pool, owner, resource, 1, after, SortOrder::Desc).await;
+        seen.extend(this.artifacts.iter().map(|a| a.artifact_id));
+        match this.next {
+            Some(cursor) => after = Some(cursor),
+            None => break,
+        }
+    }
+
+    let mut expected = committed;
+    expected.sort_by_key(|id| std::cmp::Reverse(id.uuid()));
+    assert_eq!(
+        seen, expected,
+        "a tie on `created` is broken by id descending, once each"
+    );
+}
+
+/// The bounded read is gated exactly as the unbounded one: a principal who cannot read the owning
+/// resource gets an empty page and no `next`, however many artifacts exist.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn bounded_page_is_gated_on_the_owning_resource(pool: sqlx::PgPool) {
+    let (emitter, _home, resource, alice, bob) = world_with_team(&pool, "page-gate").await;
+    for n in 0..3 {
+        fire_commit(
+            &pool,
+            resource,
+            "measurement",
+            ArtifactIntent::Member,
+            &serde_json::json!({ "n": n }),
+            emitter,
+        )
+        .await;
+    }
+
+    let seen_by_alice = page(&pool, alice, resource, 2, None).await;
+    assert_eq!(seen_by_alice.artifacts.len(), 2, "the reader gets a page");
+
+    let seen_by_bob = page(&pool, bob, resource, 2, None).await;
+    assert!(seen_by_bob.artifacts.is_empty(), "the gate fails closed");
+    assert_eq!(
+        seen_by_bob.next, None,
+        "an empty page has nowhere to continue"
+    );
+}
+
+/// The gate holds on every shape of the bounded call, not only the ascending first page: the
+/// descending first page, and both directions mid-walk (an `after` position taken from a visible
+/// principal's own page, which is what a replayed or handed-over cursor is).
+///
+/// Each case first shows the visible principal getting rows from the identical call, so an empty
+/// answer for the invisible one is the gate and not a position past the end. Each `bob` assertion
+/// fails if the owning-resource visibility gate is removed from the bounded SQL: the three
+/// artifacts exist and the keyset predicate admits them, so the only thing between Bob and rows
+/// is the gate. A gate that were applied on the ascending-first-page branch alone would pass
+/// `bounded_page_is_gated_on_the_owning_resource` and fail here.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn bounded_page_gate_holds_descending_and_mid_walk(pool: sqlx::PgPool) {
+    let (emitter, _home, resource, alice, bob) = world_with_team(&pool, "page-gate-shapes").await;
+    for n in 0..3 {
+        fire_commit(
+            &pool,
+            resource,
+            "measurement",
+            ArtifactIntent::Member,
+            &serde_json::json!({ "n": n }),
+            emitter,
+        )
+        .await;
+    }
+
+    // Descending first page.
+    let alice_desc = page_in(&pool, alice, resource, 2, None, SortOrder::Desc).await;
+    assert_eq!(
+        alice_desc.artifacts.len(),
+        2,
+        "the reader gets a descending first page"
+    );
+    let bob_desc = page_in(&pool, bob, resource, 2, None, SortOrder::Desc).await;
+    assert!(
+        bob_desc.artifacts.is_empty(),
+        "the gate fails closed on the descending first page"
+    );
+    assert_eq!(bob_desc.next, None);
+
+    // Ascending mid-walk: Alice's first page names where to continue.
+    let alice_asc = page(&pool, alice, resource, 2, None).await;
+    let asc_cursor = alice_asc
+        .next
+        .expect("three artifacts, limit 2: a next page");
+    let alice_asc_rest = page(&pool, alice, resource, 2, Some(asc_cursor)).await;
+    assert_eq!(
+        alice_asc_rest.artifacts.len(),
+        1,
+        "the reader continues the ascending walk"
+    );
+    let bob_asc_rest = page(&pool, bob, resource, 2, Some(asc_cursor)).await;
+    assert!(
+        bob_asc_rest.artifacts.is_empty(),
+        "the gate fails closed mid-walk, ascending, with a position Bob was handed"
+    );
+    assert_eq!(bob_asc_rest.next, None);
+
+    // Descending mid-walk, from Alice's descending first page.
+    let desc_cursor = alice_desc
+        .next
+        .expect("three artifacts, limit 2: a next page");
+    let alice_desc_rest = page_in(
+        &pool,
+        alice,
+        resource,
+        2,
+        Some(desc_cursor),
+        SortOrder::Desc,
+    )
+    .await;
+    assert_eq!(
+        alice_desc_rest.artifacts.len(),
+        1,
+        "the reader continues the descending walk"
+    );
+    let bob_desc_rest = page_in(&pool, bob, resource, 2, Some(desc_cursor), SortOrder::Desc).await;
+    assert!(
+        bob_desc_rest.artifacts.is_empty(),
+        "the gate fails closed mid-walk, descending, with a position Bob was handed"
+    );
+    assert_eq!(bob_desc_rest.next, None);
 }
 
 /// **THE VISIBILITY GATE.** A profile who cannot read the owning resource gets zero artifacts.
