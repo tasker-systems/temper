@@ -64,7 +64,7 @@ futures-util = "0.3"
 # the first is the refusing retriever in `shape_schema`, which survives feature unification. Every
 # `jsonschema` dependency in the workspace must say the same, or unification turns them back on.
 # The remaining features (arbitrary-precision, the async resolvers, the TLS choices) are unused.
-jsonschema = { version = "0.45", default-features = false }
+jsonschema = { version = "0.49", default-features = false }
 
 # (No dev-dependencies: the WS6 chunk-3 parity tests that dev-depended on temper-api/temper-core were
 # retired with synthesis at the endgame collapse.)

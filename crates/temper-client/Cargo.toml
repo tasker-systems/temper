@@ -40,7 +40,7 @@ percent-encoding = "2"
 open = "5"
 sha2 = "0.11"
 base64 = "0.23"
-dirs = "5"
+dirs = "7"
 secrecy = { version = "0.10", features = ["serde"] }
 
 [features]
