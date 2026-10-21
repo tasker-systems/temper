@@ -52,7 +52,8 @@ dependencies = [
   "no-process-artifacts",
   "migration-order",
   "docs-coverage",
-  "ts-check"
+  "ts-check",
+  "design-contract"
 ]
 
 [tasks.wire-register-crosscheck]
@@ -503,6 +504,14 @@ args = ["machete", "--with-metadata"]
 # =============================================================================
 # TypeScript Tasks (packages/temper-cloud)
 # =============================================================================
+
+[tasks.design-contract]
+description = "Self-check the theme contract: schema, legibility floors, distinctness, generated files in sync, broken fixtures refused"
+# The same command CI's Design Contract job runs (test-typescript.yml). The checker needs only
+# jsonschema; `uv sync` in packages/temper-design provides it, and themes.sh says so if it is missing.
+cwd = "packages/temper-design"
+command = "scripts/themes.sh"
+args = ["--self-check"]
 
 [tasks.ts-check]
 description = "Run TypeScript quality checks (typecheck + biome)"

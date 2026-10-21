@@ -1,0 +1,186 @@
+# @tasker-systems/temper-design
+
+temper's theme contract and its themes — the one source every temper surface paints from.
+The web UI (`packages/temper-ui`) and the desktop (`tasker-systems/temper-contrib`) both
+consume it, so the same role, the same term and the same state read alike on each.
+
+A theme is **data**: a `theme.json` that gives a value to every role in the contract.
+Components consume roles, never values, so any theme that satisfies the contract restyles
+everything a surface paints — its chrome, shadcn-svelte primitives, and anything rendered
+from a json-render spec — with no per-theme code.
+
+A closed JSON Schema is the source of truth, the files are validated by a self-check, and a
+hand-broken fixture must be refused for the check to count.
+
+```
+packages/temper-design/
+├── themes.json              # the theme index — name, title, appearance, counterpart (generated)
+├── contract/
+│   ├── theme.schema.json    # the contract — every role, closed (draft 2020-12)
+│   ├── tailwind.css         # roles → Tailwind v4 utilities (generated from the schema)
+│   ├── shadcn-bridge.css    # shadcn-svelte's variable names answered from roles
+│   └── base.css             # base styles + t-*/ed-* recipes, roles only
+├── quiet-instrument/        # dark — temper's house theme
+│   ├── theme.json           # source of truth
+│   └── theme.css            # generated — never edit
+├── quiet-instrument-paper/  # light counterpart
+├── brand/                   # the threaded-t mark and wordmark, in currentColor
+├── preview/index.html       # every role and the foundational components, both themes
+├── scripts/themes.sh        # build · check · contrast · --self-check
+└── tests/fixtures/broken/   # themes the check must refuse
+```
+
+## Installing
+
+Published to npm in lockstep with temper's releases. Inside this repository, consume it as a
+`file:` dependency, as `packages/temper-ui` does with `clients/temper-telemetry-ts`; outside
+it, depend on the published version:
+
+```json
+{ "dependencies": { "@tasker-systems/temper-design": "<temper version>" } }
+```
+
+bun **copies** a `file:` dependency into the consumer's install; it does not link it. An edit
+here reaches a consumer only after that consumer runs `bun install` again — until then it paints
+from the copy it took, and stale styling will look like a bug in your change. Reinstall after
+every edit you want to see in a consuming surface.
+
+What a consumer imports:
+
+| Path | What it is |
+|---|---|
+| `@tasker-systems/temper-design/contract/tailwind.css` | the roles as `tp-` Tailwind v4 utilities; resets the default palette |
+| `@tasker-systems/temper-design/contract/shadcn-bridge.css` | optional: shadcn-svelte's variable names answered from roles |
+| `@tasker-systems/temper-design/contract/base.css` | base styles and the `t-*`/`ed-*` recipes |
+| `@tasker-systems/temper-design/<theme>/theme.css` | one theme's values, under `[data-theme="<theme>"]` |
+| `@tasker-systems/temper-design/<theme>/theme.json` | one theme as data, for applying it without a build |
+| `@tasker-systems/temper-design/themes.json` | every theme's name, title, appearance and counterpart — list and pair themes from this, never by globbing the package's directories |
+| `@tasker-systems/temper-design/contract/theme.schema.json` | the contract itself |
+| `@tasker-systems/temper-design/brand/*.svg` | the mark and wordmark, in `currentColor` |
+
+The checker (`scripts/`, `tests/`, `pyproject.toml`) is not published: it runs in this
+repository's CI, and the package carries only what it proves.
+
+## The contract
+
+`contract/theme.schema.json` names every role a component may read. A theme must supply
+all of them and may not invent more (`additionalProperties: false`): a component that
+needs a colour the contract lacks is a change to the contract, reviewed as one, not a
+theme quietly growing a private name.
+
+| Group | Roles | Used for |
+|---|---|---|
+| Ground | `ground` `surface` `surface-raised` `overlay` | window, panels, popovers, modal scrim |
+| Text | `text` `text-muted` `text-subtle` `text-faint` | reading, secondary, labels, disabled-only |
+| Rule | `rule` `rule-strong` | hairlines, input outlines |
+| Accent | `accent` `accent-muted` `accent-line` `accent-line-soft` `accent-wash` `accent-hover` `on-accent` `focus` | the single accent and its tints; the rail; keyboard focus |
+| Conditions | `notice` `success` `danger` `pending` (+ `-wash` each) | attention, confirmation, destructive, awaiting-you |
+| Region states | `region-arriving` `region-empty` `region-gave-up` `region-failed` (+ `-wash` each) | the four states a read can present as |
+| Authorship | `author-human` `author-agent` | gutter and attribution marks |
+| Categorical | `cat-1` … `cat-8` `cat-neutral` | bound vocabularies — core's doc types and plugins' (see below) |
+| Code | `code-key` `code-string` `code-number` `code-comment` | syntax highlighting |
+| Font | `reading` `doing` `ui` | serif prose, mono technical, dense UI |
+| Radius, motion, tracking | `chip` `panel` · `quick` `settle` `easing` · `label` `strip` `eyebrow` `ui` `mark` | shape and rhythm |
+
+Every role becomes a CSS custom property `--tp-<role>` (`--tp-text-muted`,
+`--tp-font-reading`, `--tp-motion-quick`) and a Tailwind utility with a `tp-` prefix
+(`bg-tp-ground`, `text-tp-text-muted`, `border-tp-rule`, `font-tp-doing`). The prefix keeps
+temper's roles apart from shadcn's names, where `accent` and `muted` mean other things.
+
+### What the check enforces
+
+`scripts/themes.sh --self-check` runs in CI. For every theme it checks:
+
+- **The contract.** Every role present, none invented, every value `#rrggbb` or `rgba()`.
+- **Legibility floors.** Contrast is measured on the colours as they paint — alpha
+  composited over `ground`, washes composited before the text on them is measured.
+  `text` 7:1; secondary and label text, the accent, the categorical slots, conditions,
+  region states and code 4.5:1; slots 3:1 on surface; focus rings, authorship marks
+  3:1; `text-faint` 2.5:1, which is why it is reserved for disabled and decorative
+  marks and never carries information. `themes.sh contrast <theme.json>` prints every pair.
+- **Distinctness.** The four region states, the nine categorical marks (eight slots and
+  the neutral), the two authorship marks and the conditions must stay apart; and no
+  slot may read as a chrome or state role (`accent`, `author-*`, `notice`, `region-*`)
+  — a vocabulary bound to a slot that paints like the accent would dress its terms in
+  meaning they do not carry (CIE76 ΔE on the painted colour).
+  `themes.sh slots <theme.json>` prints the slot canvas. Colour is only one of the
+  channels that separates a failed read from a refused one, but a theme that collapses
+  two of them has removed a channel, and that is checkable.
+- **Generated files agree.** `theme.css` matches its `theme.json`; `contract/tailwind.css`
+  covers every role in the schema.
+- **Counterparts pair.** A theme's `counterpart` exists, points back, and has the
+  opposite `appearance`.
+
+And across the tree: the contract CSS carries no literal colour and references no role the
+contract lacks; the brand marks paint in `currentColor`; every fixture in
+`tests/fixtures/broken/` is refused.
+
+## Using a theme
+
+```css
+@import "tailwindcss";
+@import "<themes>/contract/tailwind.css";      /* roles as utilities; default palette reset */
+@import "<themes>/contract/shadcn-bridge.css"; /* optional: shadcn-svelte components in-theme */
+@import "<themes>/quiet-instrument/theme.css";
+@import "<themes>/quiet-instrument-paper/theme.css";
+@import "<themes>/contract/base.css";
+```
+
+Then choose the theme with one attribute: `<html data-theme="quiet-instrument">`.
+
+`contract/tailwind.css` resets Tailwind's default palette. A component cannot reach for
+`zinc-800` or `white`; if it needs a colour, it names a role.
+
+A theme can also be applied without a build: a surface can read a `theme.json` and set
+each `--tp-*` property on the root element. That is how a theme installed after the app
+was built — or one shipped by a plugin — takes effect.
+
+## Bound vocabularies and categorical slots
+
+Colour is bound, never named. The contract owns eight categorical slots and a neutral;
+**vocabularies own the bindings to them** — core's doc types through core's declared
+default binding, a plugin's doc types through its own definition. A doc type bound
+nowhere renders in the neutral role. Many doc types may share a slot; a binding to
+anything but a slot is refused.
+
+```json
+{ "doctype": "story", "tint": "cat-1" }
+```
+
+The binding is part of the vocabulary that declares the doc type — core's default for
+core's kinds, the package's entry for a plugin's — so the same term keeps the same slot
+in every theme and on every surface that honours it. Nothing in any app names a
+`doctype-*` role, because no such role exists: a view tints by **one vocabulary per
+colour channel**, so one slot never means two words in the same view. Where a hue marks
+a doc type, the doc type's word is shown beside it — hue never carries identity alone.
+
+## Adding a theme
+
+1. Copy a theme directory and rename it; set `name` to the directory name.
+2. Change values in `theme.json` — only values; the roles are fixed.
+3. `scripts/themes.sh build` to regenerate `theme.css`.
+4. `scripts/themes.sh check <name>/theme.json`, and `contrast` to see where you stand.
+5. If it has a light/dark partner, set `counterpart` on both.
+
+## The house theme
+
+**Quiet Instrument** carries temper's visual voice to every surface: obsidian ground,
+parchment text, one steel-blue accent; Source Serif 4 for reading, JetBrains Mono for
+doing, Inter only for dense UI. Semantic colour is a whisper — the conditions and the
+categorical slots exist for meaning, not decoration. Hover shifts colour and nothing
+else; there is no bounce, no shadow, no gradient. The rail — a 2px accent-soft left
+border — is the markdown blockquote marker made structural.
+
+**Quiet Instrument — Paper** keeps the same restraint on a warm paper ground with ink
+text and a deepened accent; every colour was re-chosen to clear the floors, not inverted.
+
+Fonts are bundled by each surface (`@fontsource-variable/*`), never fetched by the contract:
+a surface must be able to render offline. `preview/index.html` loads them from Google Fonts for convenience only.
+
+## Setup
+
+```bash
+cd packages/temper-design
+uv sync
+scripts/themes.sh --self-check
+```

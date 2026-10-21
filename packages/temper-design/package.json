@@ -1,0 +1,32 @@
+{
+  "name": "@tasker-systems/temper-design",
+  "version": "0.6.2",
+  "description": "temper's theme contract and themes: the roles every temper surface paints from",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tasker-systems/temper.git",
+    "directory": "packages/temper-design"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org"
+  },
+  "files": [
+    "contract/*.css",
+    "contract/theme.schema.json",
+    "*/theme.css",
+    "*/theme.json",
+    "themes.json",
+    "brand/*.svg"
+  ],
+  "exports": {
+    "./themes.json": "./themes.json",
+    "./contract/*": "./contract/*",
+    "./brand/*": "./brand/*",
+    "./*/theme.css": "./*/theme.css",
+    "./*/theme.json": "./*/theme.json"
+  },
+  "scripts": {
+    "build": "node -e \"console.log('nothing to compile: every published file is generated and proved by scripts/themes.sh --self-check in CI')\""
+  }
+}

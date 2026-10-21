@@ -426,6 +426,15 @@ run_test "agent-workflows steward source: rust-inert, agents-ts runs" \
     "RUN_TEST_RUST=false" \
     "RUN_TEST_AGENTS_TS=true"
 
+# The theme contract package is inert to cargo and to bun's workspace; its self-check
+# rides test-typescript, which every non-docs change runs.
+run_test "temper-design contract: rust-inert, test-typescript runs" \
+    "packages/temper-design/contract/base.css" \
+    "RUST_INERT=true" \
+    "RUN_RUST_QUALITY=false" \
+    "RUN_TEST_RUST=false" \
+    "RUN_TEST_TYPESCRIPT=true"
+
 # docs never force the rust corpus back on: docs + inert TS is still rust-inert.
 run_test "docs + temper-cloud TS: still rust-inert" \
     "README.md
