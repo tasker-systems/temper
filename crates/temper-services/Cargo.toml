@@ -64,7 +64,6 @@ hmac = "0.13"
 # Path-segment encoding for the Connect mint URL — a connector uid is one
 # url-encoded path segment (`github/acme` → `github%2Facme`).
 percent-encoding = "2"
-jsonschema = "0.49"
 
 [features]
 # Implies test-harness: this crate's own integration suites (`tests/*.rs`) drive `DbBackend::new`,

@@ -122,6 +122,13 @@ jobs:
       - name: Security tripwire — credential types deriving Debug
         run: bash .github/scripts/audit-credential-debug.sh
 
+      # A shape's schema is written by any author of its home, and `jsonschema` under its default
+      # options fetches a `$ref` (http(s) or file:). Every compile goes through
+      # `shape_schema::compile`, which refuses every URI; this pins the set of other entry points
+      # to the reviewed allowlist so a new default-options compile cannot land unread.
+      - name: Security tripwire — shape schemas compile through the no-fetch constructor
+        run: bash .github/scripts/audit-shape-schema-compile.sh
+
       # Preventive, and deliberately landed before the surface exists: Vercel Passport, fronting
       # an origin, injects a Vercel-signed identity JWT that authentically names the edge user —
       # the most tempting possible shortcut past the auth seam, and on the UI origin only, which
@@ -375,6 +382,19 @@ jobs:
 
       - name: Guard test — audit-credential-debug
         run: bash .github/scripts/test-audit-credential-debug.sh
+
+      # Fifty-one probes. The bite adds `jsonschema::validator_for` under crates/*/src (with a
+      # valid manifest, so a concurrent workspace load survives) and asserts the output NAMES the
+      # file; twenty-four spellings (free functions, options, bundlers, Registry and
+      # RegistryOptions, bare Validator, aliasing imports) prove the bite is not specific to one;
+      # six green probes (comments, type-only imports, unrelated `*Validator::new`, tests/) keep
+      # the guard from reddening on prose; seventeen manifest probes bite the second layer (a
+      # `jsonschema` dependency without `default-features = false`, including a value hidden in a
+      # comment, dotted keys, and unrecognised key spellings that must fail closed) and keep
+      # inheritance and compliant lines green; the empty-scan canary proves a broken scan fails
+      # rather than passing.
+      - name: Guard test — audit-shape-schema-compile (the bite + every spelling)
+        run: bash .github/scripts/test-audit-shape-schema-compile.sh
 
       # Five probes, two of them GREEN-direction (markdown may name the header; the ambient
       # edge token is a different, shorter string whose readers are legitimate) — a tripwire

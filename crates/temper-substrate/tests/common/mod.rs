@@ -498,3 +498,6 @@ pub fn at_cos(c: f32) -> Vec<f32> {
 
 /// A real, embedded context to materialize regions over — shared by the telos + two-clock tests.
 pub mod context_fixture;
+
+/// A loopback listener that counts connections — the "nothing was fetched" witness.
+pub mod fetch_probe;
