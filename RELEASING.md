@@ -13,8 +13,8 @@ A `v*` tag invokes [`.github/workflows/release.yml`](.github/workflows/release.y
 
 `determine-version` → `build-cli-darwin-arm64` · `build-cli-linux-x64` · `build-cli-windows-x64` (each a call to `build-cli-binaries.yml`)
 · `build-skill-bundle` · four registry lanes, each a build job then a publish job:
-`publish-npm-clients` (@tasker-systems/temper-ts, @tasker-systems/temper-telemetry-ts
-→ registry.npmjs.org) · `publish-ruby-client` (temper-rb → rubygems.org) ·
+`publish-npm-clients` (@tasker-systems/temper-ts, @tasker-systems/temper-telemetry-ts,
+@tasker-systems/temper-design → registry.npmjs.org) · `publish-ruby-client` (temper-rb → rubygems.org) ·
 `publish-py-client` (temperkb-py → pypi.org) · `publish-rust-crates` (the seven
 temperkb-* crates → crates.io) → `release-summary` (publishes the GitHub Release
 with the CLI binaries and skill bundle attached; the release is created only when
@@ -43,8 +43,8 @@ registry.npmjs.org for the TypeScript packages, pypi.org for the Python client.
 All three paths are token-free for consumers; no `read:packages` PAT, no
 `.npmrc` stanza, no Bundler credentials, no direct URL.
 
-**temper-ts / temper-telemetry-ts (npm)** — `npm install @tasker-systems/temper-ts`
-(telemetry-ts likewise), or pinned to the release being cut:
+**temper-ts / temper-telemetry-ts / temper-design (npm)** — `npm install @tasker-systems/temper-ts`
+(telemetry-ts and temper-design likewise), or pinned to the release being cut:
 `npm install @tasker-systems/temper-ts@<VERSION>` — `<VERSION>` is the repo-root
 `VERSION` file's value, as in the `v<VERSION>` tag below.
 
@@ -187,7 +187,8 @@ What shares the number, what releases independently (spec §3):
 - **Crates never float.** All workspace crates ride `VERSION` together — if any crate
   floated P, `temper --version` would diverge from the shared number.
 - **Leaf packages float P above the floor, never below it**: the client skins
-  (temper-rb, temper-py, temper-ts) and the npm packages (temper-ui, temper-cloud).
+  (temper-rb, temper-py, temper-ts, temper-telemetry-ts) and the npm packages
+  (temper-ui, temper-cloud, temper-design).
   When the floor's M moves, a leaf below the new floor re-bases to it (its float P
   count restarts); a leaf already above stays.
 - **One contract number for the server wire.** `openapi.json` `info.version` derives

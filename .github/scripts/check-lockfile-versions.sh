@@ -3,7 +3,8 @@
 #
 # Every npm package's version agrees with the version its lockfile records for it: bun.lock's
 # workspace entry for packages/temper-ui and packages/temper-cloud, the package-lock.json
-# top-level and root-package entries for clients/temper-ts and clients/temper-telemetry-ts.
+# top-level and root-package entries for clients/temper-ts, clients/temper-telemetry-ts and
+# packages/temper-design.
 #
 # `bun install --frozen-lockfile` and `npm ci` both accept a stale record, so a release bump that
 # moves package.json and leaves the lockfile behind passes everything else. The release's version
@@ -19,7 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=../../tools/scripts/release/lib/common.sh
 source "${SCRIPT_DIR}/../../tools/scripts/release/lib/common.sh"
 
-PACKAGES=(packages/temper-ui packages/temper-cloud clients/temper-ts clients/temper-telemetry-ts)
+PACKAGES=(packages/temper-ui packages/temper-cloud clients/temper-ts clients/temper-telemetry-ts packages/temper-design)
 FAIL=0
 
 for dir in "${PACKAGES[@]}"; do

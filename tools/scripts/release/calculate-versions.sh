@@ -36,14 +36,14 @@
 #     --override-blocker is passed explicitly. (The calculator can mechanically
 #     identify a client-skin release and nothing finer; a blocked row naming a
 #     different release class is surfaced as a warning for the human checklist.)
-#   - Leaf float: --rb/--py/--ts/--telemetry/--ui/--cloud name the leaves being
+#   - Leaf float: --rb/--py/--ts/--telemetry/--design/--ui/--cloud name the leaves being
 #     released; each leaf version = max(bump_patch(current), next core) — never
 #     below the floor; when the floor's M moves, a leaf below it re-bases and
 #     its P count restarts. Crates NEVER float (spec §3 operative text).
 #
 # Usage:
 #   ./tools/scripts/release/calculate-versions.sh [--minor] [--override-blocker]
-#       [--register DIR] [--rb] [--py] [--ts] [--telemetry] [--ui] [--cloud] [--from TAG]
+#       [--register DIR] [--rb] [--py] [--ts] [--telemetry] [--design] [--ui] [--cloud] [--from TAG]
 #
 # Output (eval-safe KEY=VALUE on stdout; warnings and refusals on stderr):
 #   CHANGES_BASE_REF=... and the detect-changes class booleans (re-emitted)
@@ -52,6 +52,7 @@
 #   CURRENT_PY_VERSION=...            NEXT_PY_VERSION=...
 #   CURRENT_TS_VERSION=...            NEXT_TS_VERSION=...
 #   CURRENT_TELEMETRY_VERSION=...     NEXT_TELEMETRY_VERSION=...
+#   CURRENT_DESIGN_VERSION=...        NEXT_DESIGN_VERSION=...
 #   CURRENT_UI_VERSION=...            NEXT_UI_VERSION=...
 #   CURRENT_CLOUD_VERSION=...         NEXT_CLOUD_VERSION=...
 #   REGISTER_WINDOW=v0.4.0            REGISTER_ROWS=10
@@ -76,6 +77,7 @@ RB_RELEASE=false
 PY_RELEASE=false
 TS_RELEASE=false
 TELEMETRY_RELEASE=false
+DESIGN_RELEASE=false
 UI_RELEASE=false
 CLOUD_RELEASE=false
 DETECT_ARGS=()
@@ -91,6 +93,7 @@ while [[ $# -gt 0 ]]; do
         --py)               PY_RELEASE=true; shift ;;
         --ts)               TS_RELEASE=true; shift ;;
         --telemetry)        TELEMETRY_RELEASE=true; shift ;;
+        --design)           DESIGN_RELEASE=true; shift ;;
         --ui)               UI_RELEASE=true; shift ;;
         --cloud)            CLOUD_RELEASE=true; shift ;;
         --from)             DETECT_ARGS+=(--from "$2"); shift 2 ;;
@@ -226,7 +229,7 @@ fi
 # (skins and npm packages alike — spec §3 counts them all as client leaves;
 # §8: "No release exposing block-grain annotations ... can be snuck past it").
 if [[ "$BLOCKED_ROWS" -gt 0 ]]; then
-    if [[ "$RB_RELEASE" == "true" || "$PY_RELEASE" == "true" || "$TS_RELEASE" == "true" || "$TELEMETRY_RELEASE" == "true" || "$UI_RELEASE" == "true" || "$CLOUD_RELEASE" == "true" ]]; then
+    if [[ "$RB_RELEASE" == "true" || "$PY_RELEASE" == "true" || "$TS_RELEASE" == "true" || "$TELEMETRY_RELEASE" == "true" || "$DESIGN_RELEASE" == "true" || "$UI_RELEASE" == "true" || "$CLOUD_RELEASE" == "true" ]]; then
         if [[ "$OVERRIDE_BLOCKER" != "true" ]]; then
             log_error "This release includes client skins and the register carries a blocked release-class:"
             log_error "  ${BLOCKED_CLASSES%; }"
@@ -246,7 +249,7 @@ if [[ "$CORE_CHANGED" == "true" || "$WIRE_CHANGED" == "true" || "$CLIENTS_CHANGE
     # http, mcp, cli-stdout with it, and internal rows gate every release.
     RELEASE_SURFACES="http mcp cli-stdout internal"
 fi
-if [[ "$CLIENTS_CHANGED" == "true" || "$RB_RELEASE" == "true" || "$PY_RELEASE" == "true" || "$TS_RELEASE" == "true" || "$TELEMETRY_RELEASE" == "true" || "$UI_RELEASE" == "true" || "$CLOUD_RELEASE" == "true" ]]; then
+if [[ "$CLIENTS_CHANGED" == "true" || "$RB_RELEASE" == "true" || "$PY_RELEASE" == "true" || "$TS_RELEASE" == "true" || "$TELEMETRY_RELEASE" == "true" || "$DESIGN_RELEASE" == "true" || "$UI_RELEASE" == "true" || "$CLOUD_RELEASE" == "true" ]]; then
     RELEASE_SURFACES+=" clients"
 fi
 if [[ "$SCHEMA_CHANGED" == "true" ]]; then
@@ -338,6 +341,7 @@ emit_leaf RB "clients/temper-rb/lib/temper/version.rb" "^[[:space:]]*VERSION = "
 emit_leaf PY "clients/temper-py/temper/version.py"     "__version__"  "$PY_RELEASE"
 emit_leaf TS "clients/temper-ts/package.json"          '"version"'    "$TS_RELEASE"
 emit_leaf TELEMETRY "clients/temper-telemetry-ts/package.json" '"version"' "$TELEMETRY_RELEASE"
+emit_leaf DESIGN "packages/temper-design/package.json" '"version"' "$DESIGN_RELEASE"
 emit_leaf UI "packages/temper-ui/package.json"         '"version"'    "$UI_RELEASE"
 emit_leaf CLOUD "packages/temper-cloud/package.json"   '"version"'    "$CLOUD_RELEASE"
 

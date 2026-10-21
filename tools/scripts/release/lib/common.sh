@@ -209,7 +209,8 @@ update_package_json_version() {
 
 # A package's version is also recorded in the lockfile that resolves it: the root bun.lock for a
 # workspace member (packages/temper-ui, packages/temper-cloud), its own package-lock.json for a
-# client (clients/temper-ts, clients/temper-telemetry-ts). `bun install --frozen-lockfile` and
+# client (clients/temper-ts, clients/temper-telemetry-ts) or a published package outside the
+# workspace (packages/temper-design). `bun install --frozen-lockfile` and
 # `npm ci` both accept a stale record, so the bump has to move it; check-lockfile-versions.sh
 # holds the tree to it.
 #
