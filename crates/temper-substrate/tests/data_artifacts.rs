@@ -1775,6 +1775,89 @@ async fn bounded_page_is_gated_on_the_owning_resource(pool: sqlx::PgPool) {
     );
 }
 
+/// The gate holds on every shape of the bounded call, not only the ascending first page: the
+/// descending first page, and both directions mid-walk (an `after` position taken from a visible
+/// principal's own page, which is what a replayed or handed-over cursor is).
+///
+/// Each case first shows the visible principal getting rows from the identical call, so an empty
+/// answer for the invisible one is the gate and not a position past the end. Each `bob` assertion
+/// fails if the owning-resource visibility gate is removed from the bounded SQL: the three
+/// artifacts exist and the keyset predicate admits them, so the only thing between Bob and rows
+/// is the gate. A gate that were applied on the ascending-first-page branch alone would pass
+/// `bounded_page_is_gated_on_the_owning_resource` and fail here.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn bounded_page_gate_holds_descending_and_mid_walk(pool: sqlx::PgPool) {
+    let (emitter, _home, resource, alice, bob) = world_with_team(&pool, "page-gate-shapes").await;
+    for n in 0..3 {
+        fire_commit(
+            &pool,
+            resource,
+            "measurement",
+            ArtifactIntent::Member,
+            &serde_json::json!({ "n": n }),
+            emitter,
+        )
+        .await;
+    }
+
+    // Descending first page.
+    let alice_desc = page_in(&pool, alice, resource, 2, None, SortOrder::Desc).await;
+    assert_eq!(
+        alice_desc.artifacts.len(),
+        2,
+        "the reader gets a descending first page"
+    );
+    let bob_desc = page_in(&pool, bob, resource, 2, None, SortOrder::Desc).await;
+    assert!(
+        bob_desc.artifacts.is_empty(),
+        "the gate fails closed on the descending first page"
+    );
+    assert_eq!(bob_desc.next, None);
+
+    // Ascending mid-walk: Alice's first page names where to continue.
+    let alice_asc = page(&pool, alice, resource, 2, None).await;
+    let asc_cursor = alice_asc
+        .next
+        .expect("three artifacts, limit 2: a next page");
+    let alice_asc_rest = page(&pool, alice, resource, 2, Some(asc_cursor)).await;
+    assert_eq!(
+        alice_asc_rest.artifacts.len(),
+        1,
+        "the reader continues the ascending walk"
+    );
+    let bob_asc_rest = page(&pool, bob, resource, 2, Some(asc_cursor)).await;
+    assert!(
+        bob_asc_rest.artifacts.is_empty(),
+        "the gate fails closed mid-walk, ascending, with a position Bob was handed"
+    );
+    assert_eq!(bob_asc_rest.next, None);
+
+    // Descending mid-walk, from Alice's descending first page.
+    let desc_cursor = alice_desc
+        .next
+        .expect("three artifacts, limit 2: a next page");
+    let alice_desc_rest = page_in(
+        &pool,
+        alice,
+        resource,
+        2,
+        Some(desc_cursor),
+        SortOrder::Desc,
+    )
+    .await;
+    assert_eq!(
+        alice_desc_rest.artifacts.len(),
+        1,
+        "the reader continues the descending walk"
+    );
+    let bob_desc_rest = page_in(&pool, bob, resource, 2, Some(desc_cursor), SortOrder::Desc).await;
+    assert!(
+        bob_desc_rest.artifacts.is_empty(),
+        "the gate fails closed mid-walk, descending, with a position Bob was handed"
+    );
+    assert_eq!(bob_desc_rest.next, None);
+}
+
 /// **THE VISIBILITY GATE.** A profile who cannot read the owning resource gets zero artifacts.
 /// This is the `data-visibility-never-exceeds-its-owners` clause, made testable.
 ///

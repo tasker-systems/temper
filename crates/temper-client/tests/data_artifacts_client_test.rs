@@ -284,6 +284,115 @@ async fn list_all_refuses_a_link_that_does_not_advance() {
     // wiremock verifies `.expect(2)` on drop: the first page, then the one repeat.
 }
 
+const POS_EARLY: (&str, &str) = (
+    "2026-10-19T12%3A30%3A45.123456Z",
+    "00000000-0000-0000-0000-0000000000aa",
+);
+const POS_LATE: (&str, &str) = (
+    "2026-10-19T12%3A31%3A45.123456Z",
+    "00000000-0000-0000-0000-0000000000bb",
+);
+/// Same `created` as `POS_LATE`, a lower id: behind it only on the tiebreak.
+const POS_LATE_LOWER_ID: (&str, &str) = (
+    "2026-10-19T12%3A31%3A45.123456Z",
+    "00000000-0000-0000-0000-0000000000ab",
+);
+
+fn link_at(resource: Uuid, (created, id): (&str, &str)) -> String {
+    format!(
+        "</api/resources/{resource}/artifacts?limit={ARTIFACT_DRAIN_PAGE_ROWS}\
+         &after_created={created}&after_id={id}>; rel=\"next\""
+    )
+}
+
+/// Mount `route` so that a request asking to continue after `asked_after` (`None`: the first
+/// page) is answered once with a `Link` to `names`. Each mount answers exactly once and then
+/// stops matching, so a drain that goes on past the walk the test scripts gets a 404 and fails
+/// on that error instead of looping.
+async fn mount_hop(
+    server: &MockServer,
+    resource: Uuid,
+    asked_after: Option<(&str, &str)>,
+    names: (&str, &str),
+) {
+    let mock = Mock::given(method("GET")).and(path(format!("/api/resources/{resource}/artifacts")));
+    let mock = match asked_after {
+        Some((_, id)) => mock.and(query_param("after_id", id)),
+        None => mock,
+    };
+    mock.respond_with(
+        ResponseTemplate::new(200)
+            .insert_header("Link", link_at(resource, names).as_str())
+            .set_body_json(vec![artifact(resource, 0)]),
+    )
+    .up_to_n_times(1)
+    .expect(1)
+    .mount(server)
+    .await;
+}
+
+async fn drain_error(server: &MockServer, resource: Uuid) -> ClientError {
+    test_client(&server.uri())
+        .data_artifacts()
+        .list_all(resource, &ArtifactListParams::default())
+        .await
+        .expect_err("a Link that does not strictly advance must end the drain with an error")
+}
+
+fn assert_did_not_advance(err: &ClientError) {
+    assert!(
+        matches!(err, ClientError::Other(m) if m.contains("did not advance")),
+        "got: {err}"
+    );
+}
+
+/// A server whose `Link` moves backward: the first page names LATE, the continuation after LATE
+/// names EARLY. The drain refuses on that second answer, after exactly two requests. Bites the
+/// guard reverting to exact-repeat only: EARLY is not equal to LATE, so it would be followed, and
+/// the scripted walk has no mount for a third request, which then answers 404 and fails the
+/// message assertion (and `.expect(1)` on each hop).
+#[tokio::test]
+async fn list_all_refuses_a_link_that_moves_backward() {
+    let resource = Uuid::now_v7();
+    let server = MockServer::start().await;
+    // The position-specific mount goes first: wiremock answers with the first that matches.
+    mount_hop(&server, resource, Some(POS_LATE), POS_EARLY).await;
+    mount_hop(&server, resource, None, POS_LATE).await;
+
+    assert_did_not_advance(&drain_error(&server, resource).await);
+    // wiremock verifies `.expect(1)` on each hop on drop: two requests, no third.
+}
+
+/// A server whose `Link` cycles A -> B -> A: every hop differs from the position just asked for,
+/// so an exact-repeat guard never fires and the drain would append pages forever. The drain
+/// refuses when B's continuation names A, after exactly three requests. Bites the guard
+/// reverting to exact-repeat only: the fourth request, after A, has no mount left (each hop
+/// answers once), so it answers 404 and the test fails on that instead of hanging.
+#[tokio::test]
+async fn list_all_refuses_a_link_that_cycles_back_to_an_earlier_position() {
+    let resource = Uuid::now_v7();
+    let server = MockServer::start().await;
+    mount_hop(&server, resource, Some(POS_LATE), POS_EARLY).await;
+    mount_hop(&server, resource, Some(POS_EARLY), POS_LATE).await;
+    mount_hop(&server, resource, None, POS_EARLY).await;
+
+    assert_did_not_advance(&drain_error(&server, resource).await);
+    // wiremock verifies `.expect(1)` on each hop on drop: three requests, no fourth.
+}
+
+/// The position moves backward only on the tiebreak: the same `created`, a lower id. Bites a
+/// guard that compares `created` alone (or `>=` on it): the continuation is not beyond LATE in
+/// `(created, artifact_id)` order, so the drain refuses after two requests.
+#[tokio::test]
+async fn list_all_refuses_a_link_that_moves_backward_on_the_id_tiebreak() {
+    let resource = Uuid::now_v7();
+    let server = MockServer::start().await;
+    mount_hop(&server, resource, Some(POS_LATE), POS_LATE_LOWER_ID).await;
+    mount_hop(&server, resource, None, POS_LATE).await;
+
+    assert_did_not_advance(&drain_error(&server, resource).await);
+}
+
 /// `list_page` sends the direction it was asked for, so a newest-first page asks for
 /// `order=desc` and is not silently read oldest first.
 #[tokio::test]

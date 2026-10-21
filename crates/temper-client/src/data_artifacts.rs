@@ -96,6 +96,15 @@ fn malformed_link(why: &str, header: &str) -> ClientError {
     ))
 }
 
+/// Whether `next` lies strictly beyond `after` in an ascending `(created, artifact_id)` walk.
+/// With no `after` (the first page) any position advances. `ArtifactCursor` has no `Ord` and
+/// gains none here, so the tuple is compared explicitly.
+fn advances(after: Option<ArtifactCursor>, next: ArtifactCursor) -> bool {
+    after.is_none_or(|prev| {
+        (next.created, next.artifact_id.uuid()) > (prev.created, prev.artifact_id.uuid())
+    })
+}
+
 impl<'a> DataArtifactsClient<'a> {
     pub(crate) fn new(http: &'a HttpClient) -> Self {
         Self { http }
@@ -178,7 +187,9 @@ impl<'a> DataArtifactsClient<'a> {
     /// (`next: null`), so no single response is unbounded and none is silently truncated. The
     /// page size is [`ARTIFACT_DRAIN_PAGE_ROWS`], oldest first. `params.limit`, `after_*` and
     /// `order` are replaced by the drain's own. A `next` that repeats the position it was asked
-    /// to continue after is an error rather than another lap.
+    /// to continue after, or that lies behind it in `(created, artifact_id)` order, is an error
+    /// rather than another lap: the walk must strictly advance, so a cycling or backward-moving
+    /// server cannot grow the result without bound.
     pub async fn list_all(
         &self,
         resource_id: Uuid,
@@ -200,11 +211,14 @@ impl<'a> DataArtifactsClient<'a> {
                 .await?;
             artifacts.extend(page.artifacts);
             match page.next {
-                // A `next` equal to the position just asked for would repeat this page forever.
-                Some(cursor) if after == Some(cursor) => {
+                // The drain walks ascending, so each position must lie strictly beyond the one
+                // just asked for. Equal repeats the page; behind it laps (A, B, A) or runs
+                // backward. An honest server's keyset is strict, but a server that is not honest
+                // must not turn the drain into unbounded memory growth.
+                Some(cursor) if !advances(after, cursor) => {
                     return Err(ClientError::Other(format!(
-                        "the artifact list did not advance: its `Link` named the position it was \
-                         asked to continue after ({} / {})",
+                        "the artifact list did not advance: its `Link` named a position at or \
+                         behind the one it was asked to continue after ({} / {})",
                         cursor.created.to_rfc3339(),
                         cursor.artifact_id.uuid()
                     )));
