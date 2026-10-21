@@ -2160,7 +2160,7 @@ mod tests {
         );
     }
 
-    // ── Every size an author controls is charged (RG-2) ───────────────────────────────────────
+    // ── Every size an author controls is charged ─────────────────────────────────────────────
 
     /// The least visit budget under which `enumerate` finishes without a `work` cut, under a depth
     /// bound. A run spends the same visits whatever its budget, and finishes exactly when they fit,
@@ -2189,7 +2189,7 @@ mod tests {
         lo
     }
 
-    /// RG-2 F1, the reported attack, unscaled: two keys of 131,000 bytes, each referencing the
+    /// Two keys of 131,000 bytes, each referencing the
     /// root, fit the byte bound and declare a two-way fan-out every path of which carries them.
     /// Bites the key skip in `child_keys`: without it the vocabulary advertises paths built of
     /// those keys — about 1 GB of path text at the path bound with no byte charge, a `work` cut
@@ -2222,7 +2222,7 @@ mod tests {
         json!({ "properties": { a: { "$ref": "#" }, b: { "$ref": "#" } } })
     }
 
-    /// RG-2 F1, the byte charge. Keys of `MAX_ARTIFACT_PATH_SEGMENT_BYTES` (256) are askable, so
+    /// The byte charge: keys of `MAX_ARTIFACT_PATH_SEGMENT_BYTES` (256) are askable, so
     /// the skip keeps them and only the charge sees their length. Under a depth bound of 3 the
     /// fan-out builds 2 paths of one segment, 4 of two and 8 of three; each 256-byte segment costs
     /// 256 / 64 = 4 visits more than a one-byte one, so the long fan-out costs
@@ -2245,7 +2245,7 @@ mod tests {
         assert_eq!(v.truncated, BTreeSet::from([BoundKind::Depth]));
     }
 
-    /// RG-2 F2(A), the key charge: each key a frame declares costs one visit as it is read, even
+    /// The key charge: each key a frame declares costs one visit as it is read, even
     /// one too long to ask, which is never walked. One hundred such keys beside `ok` cost exactly
     /// one hundred visits more. Bites the charge in `child_keys`: without it they cost nothing.
     #[test]
@@ -2271,7 +2271,7 @@ mod tests {
         );
     }
 
-    /// RG-2 F2(A), the depth cut: a frame at the depth bound is read for whether it declares any
+    /// The depth cut: a frame at the depth bound is read for whether it declares any
     /// property, never for its keys, so a thousand keys under the cut cost what one does. Bites the
     /// order in `enumerate_into`: collecting (and charging) keys before checking the depth would
     /// cost 999 visits more here.
@@ -2294,7 +2294,7 @@ mod tests {
         assert_eq!(v.truncated, BTreeSet::from([BoundKind::Depth]));
     }
 
-    /// RG-2 sweep: a frame expansion charges every node it takes off its stack, so an `allOf` of
+    /// A frame expansion charges every node it takes off its stack, so an `allOf` of
     /// `true`s — not schema objects, never expanded — still costs its length. One thousand of them
     /// cost 2,000 visits more: 1,000 in the root's frame and 1,000 as the root's children when `x`
     /// is resolved. Bites the per-pop charge in `frame`: charging only the objects it expands, the
@@ -2311,7 +2311,7 @@ mod tests {
         );
     }
 
-    /// RG-2 sweep: a `type` list costs its length each time it is read, like an `enum`. One
+    /// A `type` list costs its length each time it is read, like an `enum`. One
     /// thousand names cost 999 visits more than one. Bites the charge in `local_facts`: without it
     /// the list is read free at every visit.
     #[test]
@@ -2326,7 +2326,7 @@ mod tests {
         );
     }
 
-    /// RG-2 F2(B): a `$ref` is decoded and resolved once, when the walk is built, and a visit reads
+    /// A `$ref` is decoded and resolved once, when the walk is built, and a visit reads
     /// that resolution — never the reference's text. Bites resolving per visit: a lookup that read
     /// the text would resolve the stranger below, which the walk was never built over.
     #[test]
@@ -2343,7 +2343,7 @@ mod tests {
         assert_eq!(walk.target(&stranger), None);
     }
 
-    /// RG-2 F4: the schema is measured only until it passes the bound. Serializing an array of
+    /// The schema is measured only until it passes the bound. Serializing an array of
     /// 100,000 numbers writes each number on its own, so the count stops within one number of the
     /// limit. Bites the stopping sink in `json_bytes_up_to`: a sink that never stops counts the
     /// whole value, over half a megabyte.
@@ -2358,9 +2358,9 @@ mod tests {
         assert_eq!(json_bytes_up_to(&s, whole), whole, "exact within the limit");
     }
 
-    // ── Copies cost what they allocate, and a shared set is read once (RG-2, round 2) ─────────
+    // ── Copies cost what they allocate, and a shared set is read once ────────────────────────
 
-    /// RG-2 round 2, N2: a member is charged for the values nested in it, not only for its text. A
+    /// A member is charged for the values nested in it, not only for its text. A
     /// member 31 arrays deep has 62 canonical bytes, as a 60-letter string does, but holds 30
     /// nested values, each cloned as its own `Value` in its own allocation; charged at `NODE_BYTES`
     /// each it weighs 1 + (62 + 30 · 64) / 64 = 31 visits against the string's 1. Enumerating its
@@ -2407,7 +2407,7 @@ mod tests {
         lo
     }
 
-    /// RG-2 round 2, N3: eight paths over one shared 5,000-member enum cost what one does, plus a
+    /// Eight paths over one shared 5,000-member enum cost what one does, plus a
     /// few visits a path. One path reads the enum — 5,000 members and the 5,000-member set — so it
     /// costs at least 10,000; seven more paths cost under 100 more, where reading the set again or
     /// copying it for each would cost 5,000 or more a path. Bites the per-budget set memo in
@@ -2427,7 +2427,7 @@ mod tests {
         assert!(eight - one < 100, "{one} for one path, {eight} for eight");
     }
 
-    /// RG-2 round 3, R3-1: the borrowed view writes exactly the bytes of the copy it stands for —
+    /// The borrowed view writes exactly the bytes of the copy it stands for —
     /// every field present only when set, at every items level, over enum members, a `const`, an
     /// enum and a `const` together, and `items: false` — so measuring the view measures the copy.
     /// Bites any drift between `Facts`'s `Serialize` and `PathFacts`'s derived one.

@@ -1215,7 +1215,7 @@ mod tests {
         shape_of(json!({ "$defs": { "w": { "allOf": branches } }, "properties": props }))
     }
 
-    /// RG-2 F3: an ask's paths are resolved under one budget, so naming more of them does not buy
+    /// An ask's paths are resolved under one budget, so naming more of them does not buy
     /// more work. Bites the shared budget in `sort`: with a budget per predicate (or per distinct
     /// path) each of these fits and the ask validates.
     #[test]
@@ -1234,7 +1234,7 @@ mod tests {
         );
     }
 
-    /// RG-2 F3: a path named by many predicates is resolved once. Bites the per-path memo in
+    /// A path named by many predicates is resolved once. Bites the per-path memo in
     /// `sort`: resolving the same path once per predicate under the shared budget spends it, and
     /// the ask is refused.
     #[test]
@@ -1247,7 +1247,7 @@ mod tests {
         assert_eq!(v.predicates().len(), MAX_ASK_PREDICATES);
     }
 
-    /// RG-2 round 2, N3: every path an ask may name, each over one shared 9,000-member enum, fits
+    /// Every path an ask may name, each over one shared 9,000-member enum, fits
     /// one ask's budget — the enum is read once, about 18,000 visits, and no path's values are
     /// copied. Before, each path paid for the set again and for a wire copy, about 18,000 visits a
     /// path, so the fourth met `work`. Bites the per-budget set memo in `Budget::members`, and
@@ -1274,7 +1274,7 @@ mod tests {
         (VALUES_COPIED.with(std::cell::Cell::get) - before, rs)
     }
 
-    /// RG-2 round 3, R3-1, the reviewer's input: `$defs.a` is an array whose `enum` holds one
+    /// `$defs.a` is an array whose `enum` holds one
     /// 200,000-byte string and whose `items` is `a` again, so the facts at `x` carry that one set
     /// at the path's end and at every one of the 16 items levels below it. `compare` there is not
     /// feasible, so the refusal teaches `x` — which cannot fit 16 KiB, is measured through the

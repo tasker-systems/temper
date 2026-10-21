@@ -791,7 +791,7 @@ mod tests {
         plenty - steps
     }
 
-    /// RG-2 F2(C): an object key the probe supplies is charged by its length before it is looked
+    /// An object key the probe supplies is charged by its length before it is looked
     /// up, since the lookup hashes (or compares) all of it. `{K: 1}` with a 6,400-byte `K` costs
     /// the object's step, 1 + 6,400 / 64 = 101 for the key, and the value's step: 103. A one-byte
     /// key costs 3. Bites the per-key charge in `nested_contains_within`: without it both cost 2.
@@ -804,7 +804,7 @@ mod tests {
         assert_eq!(spent(&short, &short, false), 3);
     }
 
-    /// RG-2 sweep: two strings of one length are compared byte for byte, so the comparison is
+    /// Two strings of one length are compared byte for byte, so the comparison is
     /// charged 6,400 / 64 = 100 steps beyond the node's one, nested or as an element at the top
     /// level. Bites the charge in `scalar_eq_within`: without it each costs one step.
     #[test]
