@@ -21,7 +21,7 @@ base64 = "0.23"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 dialoguer = "0.12"
-dirs = "5"
+dirs = "7"
 ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
 filetime = "0.2"
 hex = "0.4"
@@ -40,7 +40,7 @@ shell-words = "1"
 sigstore-trust-root = "0.15"
 sigstore-types = "0.15"
 sigstore-verify = "0.15"
-similar = "2"
+similar = "3"
 temperkb-client = { workspace = true, features = ["telemetry"] }
 temperkb-core.workspace = true
 temperkb-principal.workspace = true

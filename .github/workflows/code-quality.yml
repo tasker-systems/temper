@@ -38,7 +38,9 @@ jobs:
     # checks that do not live in quality-gate.yml, which ci.yml runs first.
     if: inputs.run-rust-quality == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Runs 11-17 minutes on an idle queue; 20 cancelled it mid-`cargo doc` when a batch of
+    # Dependabot PRs shared the runners.
+    timeout-minutes: 30
 
     # All `sqlx::query!()` macros here verify OFFLINE against the committed workspace .sqlx cache
     # (SQLX_OFFLINE below). The Postgres service + `cargo sqlx migrate run` step remain as a cheap
@@ -82,7 +84,7 @@ jobs:
           prefix-key: code-quality
 
       - name: Install cargo-sqlx, cargo-make, and cargo-audit
-        uses: taiki-e/install-action@v2.87.28
+        uses: taiki-e/install-action@v2.87.29
         with:
           # cargo-make is here for the ts-rs drift gate below, which invokes
           # `cargo make generate-ts-types` — deliberately the same entry point a developer runs,
