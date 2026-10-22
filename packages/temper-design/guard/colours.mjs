@@ -7,8 +7,8 @@
 //   (b) a Tailwind colour utility naming the stock palette, white or black, or a colour name the
 //       surface declares for itself (`--color-<name>` in the theme files it lists);
 //   (c) an opacity modifier on a role utility: a role at 15% is a value no theme chose;
-//   (d) a colour declaration, or an arbitrary colour utility, reading a variable that is not a
-//       role.
+//   (d) a colour declaration, SVG attribute, style directive or arbitrary colour utility reading
+//       a variable that is not a role.
 //
 // A surface commits a config naming what it guards, relative to the config's own directory:
 //
@@ -55,7 +55,7 @@ const LITERAL =
 	/(?<!&)#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|oklch|oklab|lab|lch|hwb)\(|\b(?:white|black|red|green|blue|gray|grey|orange|yellow|purple|pink)\b(?=\s*[;})'"])/g;
 
 const PREFIX =
-	'(?:bg|text|border-[xytrbl]|border-[se]|border|ring-offset|ring|divide|outline|placeholder|from|via|to|fill|stroke|shadow|decoration|accent|caret)';
+	'(?:bg|text-shadow|text|border-[xytrbl]|border-[se]|border|ring-offset|ring|inset-ring|inset-shadow|divide|outline|placeholder|from|via|to|fill|stroke|drop-shadow|shadow|decoration|accent|caret)';
 const VARIANTS = '(?:[a-z0-9-]+:)*';
 // A colour utility with a plain value: `hover:bg-zinc-800/50`, `class:border-zinc-700`.
 const UTILITY = new RegExp(
@@ -73,6 +73,10 @@ const STOCK =
 // A declaration that paints a colour, and the value it paints.
 const DECLARATION =
 	/(?<![\w-])(color|background(?:-color)?|border(?:-(?:top|right|bottom|left|inline|block)(?:-(?:start|end))?)?(?:-color)?|outline(?:-color)?|fill|stroke|box-shadow|text-decoration(?:-color)?|caret-color|accent-color|stop-color|column-rule(?:-color)?)\s*:\s*([^;}"'\n]*)/g;
+// The same, painted through markup: an SVG presentation attribute (`fill="var(--x)"`) or a
+// Svelte style directive (`style:color="var(--x)"`).
+const ATTRIBUTE =
+	/(?<![\w-])(?:style:)?(fill|stroke|stop-color|flood-color|lighting-color|color|background(?:-color)?|border(?:-[a-z]+)*-color|outline-color|caret-color|accent-color|text-decoration-color)\s*=\s*["'{]([^"'}\n]*)/g;
 const PRIVATE_VAR = /var\(\s*(--(?!tp-)[a-zA-Z0-9-]+)/g;
 
 // Blank out every `open … close` span, keeping its newlines so reported line numbers stay true.
@@ -94,7 +98,7 @@ function blank(text, open, close) {
 }
 
 const stripComments = (text) =>
-	blank(blank(text, '/*', '*/'), '<!--', '-->').replace(/^\s*\/\/.*$/gm, '');
+	blank(blank(text, '/*', '*/'), '<!--', '-->').replace(/^[ \t]*\/\/.*$/gm, '');
 
 // The colour names a surface declares for itself: every `--color-<name>` in its theme files that
 // is not a role. These are what `no-private-colour-names` refuses.
@@ -147,7 +151,7 @@ function refusals(line) {
 	for (const m of line.matchAll(ARBITRARY_VAR)) {
 		out.push(`${m[0]} reads ${m[1]}, which is not a role`);
 	}
-	for (const m of line.matchAll(DECLARATION)) {
+	for (const m of [...line.matchAll(DECLARATION), ...line.matchAll(ATTRIBUTE)]) {
 		for (const v of m[2].matchAll(PRIVATE_VAR)) {
 			out.push(`${m[1]} reads var(${v[1]}), which is not a role`);
 		}

@@ -26,6 +26,8 @@ const CLEAN = `<script lang="ts">
 <div class="flex bg-tp-ground text-tp-text hover:bg-tp-accent-hover border-t border-tp-rule text-sm" class:bg-tp-accent-wash={open}>
 	<a href="#ab12c" class="ring-2 ring-tp-focus shadow-lg outline-none border-b-2 text-[10px]">x</a>
 	<kbd>&#8984;K</kbd>
+	<svg><rect fill="var(--tp-surface)" stroke="currentColor" /><stop stop-color="var(--tp-accent)" /></svg>
+	<span style:color="var(--tp-text)">y</span>
 </div>
 
 <style>
@@ -159,6 +161,36 @@ const PLANTED = [
 		'--obsidian',
 	],
 	['a private var in a shorthand utility', '<p class="text-(--chalk)">x</p>\n', 1, '--chalk'],
+	[
+		'a private var in an SVG fill',
+		'<svg>\n<rect fill="var(--obsidian)" />\n</svg>\n',
+		2,
+		'--obsidian',
+	],
+	[
+		'a private var in an SVG stop colour',
+		'<svg><stop stop-color="var(--obsidian)" /></svg>\n',
+		1,
+		'--obsidian',
+	],
+	[
+		'a private var in a style directive',
+		'<div style:color="var(--obsidian)">x</div>\n',
+		1,
+		'--obsidian',
+	],
+	// (b) the colour utilities Tailwind v4 added beside the classic ones
+	['a stock text shadow', '<p class="text-shadow-zinc-500">x</p>\n', 1, 'text-shadow-zinc-500'],
+	['a stock inset ring', '<p class="inset-ring-zinc-700">x</p>\n', 1, 'inset-ring-zinc-700'],
+	['a stock inset shadow', '<p class="inset-shadow-zinc-800">x</p>\n', 1, 'inset-shadow-zinc-800'],
+	['a stock drop shadow', '<p class="drop-shadow-black/50">x</p>\n', 1, 'drop-shadow-black/50'],
+	// a refusal is reported on its own line, whatever comments and blank lines precede it
+	[
+		'a refusal after blank lines and a line comment',
+		"<script>\n\n\n// a comment\nconst c = 'text-zinc-500';\n</script>\n",
+		5,
+		'text-zinc-500',
+	],
 ];
 
 for (const [name, planted, line, found] of PLANTED) {
@@ -193,6 +225,14 @@ test('a listed directory with no components is refused, not passed', () => {
 	mkdirSync(join(root, 'empty'));
 	writeFileSync(config, JSON.stringify({ paths: ['empty'] }));
 	assert.equal(guard(config).status, 2);
+});
+
+test('a listed theme file that does not exist is refused, not skipped', () => {
+	assert.equal(guard(surface(undefined, { themes: ['src/gone.css'] })).status, 2);
+});
+
+test('a themes value that is not a list is refused', () => {
+	assert.equal(guard(surface(undefined, { themes: { path: 'src/theme.css' } })).status, 2);
 });
 
 test('a malformed invocation is a usage error, not a pass', () => {

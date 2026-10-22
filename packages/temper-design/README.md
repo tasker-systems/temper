@@ -208,7 +208,8 @@ fails a surface's build when a component it guards paints anything but a role.
 - **An opacity modifier on a role** (`bg-tp-accent/15`): a strength no theme chose. Use the
   role's `-wash` or `-hover` sibling.
 - **A colour read from a variable that is not a role**, in a declaration
-  (`color: var(--parchment)`) or an arbitrary utility (`bg-[var(--obsidian)]`).
+  (`color: var(--parchment)`), an SVG attribute or Svelte style directive
+  (`fill="var(--obsidian)"`, `style:color=…`), or an arbitrary utility (`bg-[var(--obsidian)]`).
 
 A surface commits a config naming what it guards, relative to the config's own directory,
 and runs the guard against it:
