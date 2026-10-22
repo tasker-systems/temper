@@ -807,9 +807,9 @@ fn plan_nodes<'p>(node: &'p Value, out: &mut Vec<&'p Map<String, Value>>) {
 /// It does not assert which of the two the planner takes, or that the choice is the cheaper one.
 /// The home and family come from the shape row inside the statement, so the planner estimates the
 /// family join from `n_distinct(kind_owner_id)`. Here the other half of the background has a fresh
-/// owner per row, the estimate is about one row, and the planner takes the family index for a
-/// family that holds about 9,000. The plan of the composed statement, under its own estimates, is
-/// the composing arm's to test.
+/// owner per row, so the estimate is about one row for a family that holds about 9,000, and this
+/// test does not pin which index the planner takes for it. The plan of the composed statement,
+/// under its own estimates, is the composing arm's to test.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn the_relations_start_from_the_home_or_the_family_never_a_scan_of_artifacts(pool: PgPool) {
     bootseed::seed_system(&pool).await.unwrap();
