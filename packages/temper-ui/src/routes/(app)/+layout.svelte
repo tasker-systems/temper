@@ -28,7 +28,7 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="flex h-screen bg-zinc-950 text-zinc-100">
+<div class="flex h-screen bg-tp-ground text-tp-text">
 	<NavProgress />
 	<Sidebar
 		contexts={data.contexts}
@@ -50,15 +50,15 @@
 	-->
 	<main class="flex flex-1 min-w-0 flex-col">
 		<header
-			class="flex items-center gap-3 px-6 py-3 bg-zinc-950 border-b border-zinc-800"
+			class="flex items-center gap-3 px-6 py-3 bg-tp-ground border-b border-tp-rule"
 		>
 			<button
 				onclick={() => palette.toggle()}
-				class="flex-1 flex items-center justify-between px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-sm text-zinc-500 hover:border-zinc-700"
+				class="flex-1 flex items-center justify-between px-3 py-1.5 bg-tp-surface border border-tp-rule-strong rounded text-sm text-tp-text-subtle hover:border-tp-accent-line-soft"
 			>
 				<span>Search the vault...</span>
 				<kbd
-					class="text-[10px] bg-zinc-800 border border-zinc-700 rounded px-1.5 py-0.5 text-zinc-500"
+					class="text-[10px] bg-tp-surface-raised border border-tp-rule-strong rounded px-1.5 py-0.5 text-tp-text-subtle"
 					>&#8984;K</kbd
 				>
 			</button>

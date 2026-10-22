@@ -193,25 +193,15 @@ def css_for(theme):
     return "\n".join(lines) + "\n"
 
 
-def tailwind_css():
+def tailwind_utilities():
     """Contract roles as Tailwind v4 utilities, theme-independent: every value is a var.
 
     Generated from the schema, so a role added to the contract cannot lack a utility.
     Utilities carry a `tp-` prefix (`bg-tp-ground`, `text-tp-text-muted`) so they never
     collide with shadcn's names (`accent`, `muted`, `border`), which mean other things.
-    Tailwind's default palette is reset: a component cannot reach for `zinc-800`.
     """
     props = load(SCHEMA_PATH)["properties"]["tokens"]["properties"]
-    out = [
-        "/* Generated from contract/theme.schema.json by themes/scripts/themes.sh build. Do not edit.",
-        "   Import after tailwindcss and before any theme.css. */",
-        "",
-        "@theme {",
-        "  --color-*: initial;",
-        "}",
-        "",
-        "@theme inline {",
-    ]
+    out = ["@theme inline {"]
     for role in props["color"]["properties"]:
         out.append(f"  --color-tp-{role}: var({PREFIX}{role});")
     for key in props["font"]["properties"]:
@@ -226,6 +216,40 @@ def tailwind_css():
         "}",
     ]
     return "\n".join(out) + "\n"
+
+
+def tailwind_roles_css():
+    """The utilities alone, leaving Tailwind's default palette in place — for a consumer moving
+    off that palette one area at a time. It switches to `tailwind.css` once nothing reads it."""
+    return "\n".join(
+        [
+            "/* Generated from contract/theme.schema.json by themes/scripts/themes.sh build. Do not edit.",
+            "   The roles as utilities WITHOUT the default-palette reset: for a consumer still moving",
+            "   off Tailwind's palette. Import after tailwindcss and before any theme.css. */",
+            "",
+            "",
+        ]
+    ) + tailwind_utilities()
+
+
+def tailwind_css():
+    """The utilities with Tailwind's default palette reset: a component cannot reach for
+    `zinc-800`. Both files are built from `tailwind_utilities()`, so they cannot disagree."""
+    return "\n".join(
+        [
+            "/* Generated from contract/theme.schema.json by themes/scripts/themes.sh build. Do not edit.",
+            "   Import after tailwindcss and before any theme.css. */",
+            "",
+            "@theme {",
+            "  --color-*: initial;",
+            "}",
+            "",
+            "",
+        ]
+    ) + tailwind_utilities()
+
+# Both generated Tailwind files: the roles alone, and the roles with the default palette reset.
+TAILWIND_FILES = {"tailwind.css": tailwind_css, "tailwind-roles.css": tailwind_roles_css}
 
 
 def theme_paths():
@@ -277,8 +301,9 @@ def check(path):
 
 
 def cmd_build():
-    (ROOT / "contract" / "tailwind.css").write_text(tailwind_css())
-    print("wrote contract/tailwind.css")
+    for name, generate in TAILWIND_FILES.items():
+        (ROOT / "contract" / name).write_text(generate())
+        print(f"wrote contract/{name}")
     for path in theme_paths():
         theme = load(path)
         errs = schema_errors(theme)
@@ -387,14 +412,15 @@ def cmd_self_check():
     failures = 0
     Draft202012Validator.check_schema(load(SCHEMA_PATH))
     print("ok   contract/theme.schema.json is a valid draft 2020-12 schema")
-    tw = ROOT / "contract" / "tailwind.css"
-    if not tw.exists() or tw.read_text() != tailwind_css():
-        print(
-            "FAIL contract/tailwind.css is stale or missing - run themes.sh build", file=sys.stderr
-        )
-        failures += 1
-    else:
-        print("ok   contract/tailwind.css covers every role in the contract")
+    for name, generate in TAILWIND_FILES.items():
+        tw = ROOT / "contract" / name
+        if not tw.exists() or tw.read_text() != generate():
+            print(
+                f"FAIL contract/{name} is stale or missing - run themes.sh build", file=sys.stderr
+            )
+            failures += 1
+        else:
+            print(f"ok   contract/{name} covers every role in the contract")
     failures += contract_css_failures()
     themes = theme_paths()
     if len(themes) < 2:

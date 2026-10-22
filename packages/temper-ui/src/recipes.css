@@ -1,0 +1,171 @@
+/* ============================================================================
+   The web's own recipes, on contract roles.
+
+   The shared `t-*` / `ed-*` recipes and the highlight.js token theme come from
+   `@tasker-systems/temper-design/contract/base.css` (imported in app.css), which
+   carried them over from this file by name. What stays here is what only the web
+   composes: the masthead and hero, the rail's parts, the notice's parts, the
+   footnote, and the atlas focus ring — plus the layout the web adds to two shared
+   recipes (`.ed-rail`, `.ed-notice`). Colour comes from roles only; the colour
+   guard (`bun run guard:colours`) holds this file to that.
+   ============================================================================ */
+
+.ed-masthead {
+  max-width: 52rem;
+}
+
+/* ─── Strip ───────────────────────────────────────────────────── */
+
+.ed-strip-italic {
+  color: var(--tp-accent);
+  text-transform: none;
+  font-style: italic;
+  letter-spacing: 0;
+  font-family: var(--tp-font-reading);
+  font-size: 0.78rem;
+}
+.ed-strip-meta { color: var(--tp-text-subtle); font-size: 0.6rem; }
+
+/* ─── Hero — editorial header for any page ────────────────────── */
+
+.ed-hero {
+  margin-top: 4.5rem;
+  margin-bottom: 5rem;
+}
+.ed-hero-eyebrow {
+  font-family: var(--tp-font-doing);
+  font-size: 0.62rem;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--tp-accent);
+  margin-bottom: 1.6rem;
+}
+/* Structure only: the type comes from `.t-ed-hero-name` / `.t-ed-deck`, composed at the
+   use-site (<h1 class="ed-hero-name t-ed-hero-name">). */
+.ed-hero-name {
+  margin: 0;
+}
+.ed-hero-deck {
+  margin-top: 1.8rem;
+  max-width: 36rem;
+}
+.ed-hero-num {
+  font-style: normal;
+  font-feature-settings: 'lnum', 'tnum';
+  color: var(--tp-text);
+  font-weight: 400;
+  padding: 0 0.05em;
+}
+.ed-hero-sep {
+  display: inline-block;
+  margin: 0 0.45em;
+  color: var(--tp-text-subtle);
+  font-style: normal;
+}
+.ed-hero-state {
+  color: var(--tp-accent);
+  font-style: italic;
+}
+
+/* ─── Rail — the shared recipe, plus the web's spacing and parts ─ */
+
+.ed-rail {
+  position: relative;
+  margin-bottom: 4.5rem;
+}
+.ed-rail-marker {
+  margin-bottom: 1.8rem;
+}
+.ed-rail-label {
+  font-family: var(--tp-font-doing);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  color: var(--tp-accent);
+  margin-bottom: 0.3rem;
+}
+.ed-rail-sub {
+  font-family: var(--tp-font-reading);
+  font-style: italic;
+  font-size: 0.85rem;
+  color: var(--tp-text-subtle);
+}
+.ed-rail-empty {
+  font-family: var(--tp-font-reading);
+  font-style: italic;
+  color: var(--tp-text-subtle);
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+.ed-rail-empty code {
+  font-family: var(--tp-font-doing);
+  font-style: normal;
+  font-size: 0.78em;
+  padding: 0.1rem 0.45rem;
+  background: var(--tp-surface);
+  color: var(--tp-accent);
+  border-radius: 2px;
+}
+
+/* ─── Notice — the shared recipe sets the voice and colour; the web adds
+   its spacing and the label above the words. ─────────────────── */
+
+.ed-notice {
+  margin-bottom: 3rem;
+}
+.ed-notice-label {
+  font-family: var(--tp-font-doing);
+  font-size: 0.58rem;
+  font-style: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  margin-bottom: 0.4rem;
+}
+.ed-notice ul,
+.ed-notice p {
+  margin: 0;
+  padding-left: 0;
+}
+.ed-notice ul { padding-left: 1rem; }
+.ed-notice p + p { margin-top: 0.4rem; }
+
+/* ─── Footer note — small mono signature line ─────────────────── */
+
+.ed-footnote {
+  margin-top: 6rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--tp-rule);
+  font-family: var(--tp-font-doing);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--tp-text-subtle);
+}
+.ed-footnote a {
+  color: var(--tp-accent);
+  text-decoration: none;
+  margin-left: 0.6rem;
+}
+.ed-footnote a:hover {
+  color: var(--tp-text);
+}
+
+/* ─── Atlas canvas focus ring ─────────────────────────────────────
+   Interactive canvas marks (chips, territory hulls, team zones, node dots, edges, home doors)
+   are focusable <g> groups. A CSS `outline` on an SVG <g> is browser-inconsistent, so each
+   mark draws an explicit `.focus-ring` child shape and supplies its own geometry (+
+   stroke-width). This block is the single source of truth for the ring's colour and for
+   showing it ONLY on keyboard focus, so every tier mark reads the same. */
+.atlas-focusable {
+  outline: none;
+}
+.atlas-focusable .focus-ring {
+  fill: none;
+  stroke: var(--tp-focus);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 90ms ease;
+}
+.atlas-focusable:focus-visible .focus-ring {
+  opacity: 1;
+}
