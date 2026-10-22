@@ -29,7 +29,7 @@
 //! [`shape_schema::compile`] directly, whatever its size.
 //!
 //! **What a compile costs the process is bounded three ways.** Each compile runs on the blocking
-//! pool, under one of a few process-wide permits ([`compile_permits`]), so a burst of reads queues
+//! pool, under one of a few process-wide permits (`compile_permits`), so a burst of reads queues
 //! rather than taking every core; each pattern in it is bounded by the constructor
 //! (`shape_schema::MAX_PATTERN_BYTES`); and a stored shape's verdict is remembered by id, so a shape
 //! read many times is compiled about once per process. A shape row is immutable per id (amendment
