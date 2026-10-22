@@ -79,12 +79,14 @@ const UTILITY = new RegExp(
 	`(?<![\\w-])${VARIANTS}${PREFIX}-([a-z0-9-]+)(/(?:\\d+|\\[[^\\]\\s]+\\]))?(?![\\w-])`,
 	'g',
 );
-// A colour utility with an arbitrary value reading a variable: `bg-[var(--obsidian)]`,
-// `text-(--chalk)`. Only a variable outside the contract is refused.
-const ARBITRARY_VAR = new RegExp(
-	`(?<![\\w-])${VARIANTS}${PREFIX}-(?:\\[|\\()[^\\]\\)\\s]*?(--(?!tp-)[a-zA-Z0-9-]+)`,
+// A colour utility with an arbitrary value: `bg-[var(--obsidian)]`, `text-(--chalk)`,
+// `bg-[color-mix(in_srgb,var(--hue)_15%,var(--obsidian))]`. Every variable in its body outside
+// the contract is refused, not only the first.
+const ARBITRARY = new RegExp(
+	`(?<![\\w-])${VARIANTS}${PREFIX}-(?:\\[([^\\]\\s]+)\\]|\\(([^\\)\\s]+)\\))`,
 	'g',
 );
+const NON_ROLE_NAME = /--(?!tp-)[a-zA-Z0-9-]+/g;
 const STOCK =
 	/^(?:(?:slate|gray|zinc|neutral|stone|mauve|olive|mist|taupe|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-\d{2,3}|white|black)$/;
 // A declaration that paints a colour, and the value it paints.
@@ -98,10 +100,11 @@ const PRIVATE_VAR = /var\(\s*(--(?!tp-)[a-zA-Z0-9-]+)/g;
 const ROLE_VAR = /var\(\s*--tp-/;
 const PENDING_VAR = /var\(\s*(--[a-zA-Z0-9-]+)/g;
 
-// Each `color-mix(…)` on a line, with its balanced argument list. Tailwind's arbitrary values
+// Each outermost `color-mix(…)` on a line, with its balanced argument list. Like every rule here
+// it reads one line at a time: a mix whose role sits on a later line is not seen. Tailwind's arbitrary values
 // spell spaces as `_`, which changes nothing here.
 function* mixes(line) {
-	for (let at = line.indexOf('color-mix('); at >= 0; at = line.indexOf('color-mix(', at + 1)) {
+	for (let at = line.indexOf('color-mix('); at >= 0; ) {
 		let depth = 0;
 		let end = at + 'color-mix'.length;
 		for (; end < line.length; end++) {
@@ -109,6 +112,8 @@ function* mixes(line) {
 			else if (line[end] === ')' && --depth === 0) break;
 		}
 		yield line.slice(at, end + 1);
+		// A mix nested inside this one is part of it, not a second refusal.
+		at = line.indexOf('color-mix(', end + 1);
 	}
 }
 
@@ -192,9 +197,10 @@ function refusals(line) {
 			out.push(`${utility} paints a colour name the contract lacks — use a tp- role`);
 		}
 	}
-	for (const m of line.matchAll(ARBITRARY_VAR)) {
-		if (pending.has(m[1])) continue;
-		out.push(`${m[0]} reads ${m[1]}, which is not a role`);
+	for (const m of line.matchAll(ARBITRARY)) {
+		for (const [name] of (m[1] ?? m[2]).matchAll(NON_ROLE_NAME)) {
+			if (!pending.has(name)) out.push(`${m[0]} reads ${name}, which is not a role`);
+		}
 	}
 	for (const m of [...line.matchAll(DECLARATION), ...line.matchAll(ATTRIBUTE)]) {
 		for (const v of m[2].matchAll(PRIVATE_VAR)) {
@@ -215,8 +221,13 @@ for (const path of files) {
 		}
 	});
 }
+let pendingReads = 0;
 for (const [name, { until, reads }] of pending) {
-	console.log(`pending: ${name} read ${reads} time(s) until ${until} — not a role yet`);
+	pendingReads += reads;
+	if (reads === 0) {
+		console.error(`pending: nothing reads ${name} any more — remove the entry (${until})`);
+		failures++;
+	} else console.log(`pending: ${name} read ${reads} time(s) until ${until} — not a role yet`);
 }
 if (failures) {
 	console.error(
@@ -224,4 +235,6 @@ if (failures) {
 	);
 	process.exit(1);
 }
-console.log(`ok: ${files.length} file(s) paint only contract roles`);
+console.log(
+	`ok: ${files.length} file(s) paint only contract roles${pendingReads ? ', apart from the pending reads above' : ''}`,
+);

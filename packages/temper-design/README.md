@@ -238,8 +238,11 @@ exempted:
 "pending": [{ "var": "--hue", "until": "T10", "why": "doc-type tint; core binds doc types to slots" }]
 ```
 
-Its reads, and any `color-mix()` reading it, pass; every run prints how many there are and what
-closes them. An entry missing `var`, `until` or `why`, or naming a role, is refused.
+Its reads pass, and so does any `color-mix()` reading it, a role inside that mix included,
+since the result is part of the hole. Every other variable beside it is still held. Every run
+prints how many reads there are and what closes them. An entry missing `var`, `until` or
+`why`, or naming a role, is refused, and so is an entry nothing reads any more: its hole has
+closed, and the entry would outlive it.
 
 ## Bound vocabularies and categorical slots
 

@@ -79,8 +79,8 @@
 		font-family: var(--font-mono);
 		font-size: 11px;
 		color: var(--tp-text-muted);
-		background: var(--tp-surface-raised);
-		border: 1px solid var(--tp-rule);
+		background: var(--tp-surface);
+		border: 1px solid var(--tp-rule-strong);
 		border-radius: 3px;
 		padding: 1px 4px;
 	}

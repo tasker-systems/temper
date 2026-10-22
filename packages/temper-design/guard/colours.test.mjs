@@ -235,6 +235,29 @@ test('a declared pending variable is reported, not refused', () => {
 	);
 });
 
+test('a private var beside a pending one in an arbitrary utility is still refused', () => {
+	const planted = '<p class="bg-[color-mix(in_srgb,var(--hue)_15%,var(--obsidian))]">x</p>\n';
+	assertRefused(guard(surface(planted, { pending: [HUE] })), 1, '--obsidian');
+});
+
+test('a pending entry nothing reads is refused: the hole has closed', () => {
+	const run = guard(surface(undefined, { pending: [HUE] }));
+	assert.equal(run.status, 1, `expected a refusal, got ${run.status}:\n${run.stdout}${run.stderr}`);
+	assert.ok(run.stderr.includes('--hue'), run.stderr);
+});
+
+test('a nested mix of a role is refused once', () => {
+	const planted =
+		'<style>\n.x { color: color-mix(in srgb, color-mix(in srgb, var(--tp-accent) 20%, transparent) 50%, var(--tp-ground)); }\n</style>\n';
+	const run = guard(surface(planted));
+	assertRefused(run, 2, 'color-mix(');
+	assert.equal(
+		run.stderr.split('\n').filter((l) => l.includes('Planted.svelte:2:')).length,
+		1,
+		run.stderr,
+	);
+});
+
 test('the same reads with no pending entry are refused', () => {
 	assertRefused(guard(surface(PENDING_MIX)), 2, 'var(--hue)');
 });
