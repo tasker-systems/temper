@@ -1,0 +1,17 @@
+title    = "The database can answer which artifacts a shape governs, in what state, and whether their content matches an ask"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["schema"]
+status   = "signal-only"
+body = '''
+Migration `20261103000000` adds new objects only: the index `idx_kb_data_artifacts_family` on
+`kb_data_artifacts (kind_owner_table, kind_owner_id, artifact_kind) WHERE NOT is_folded`, the path
+helper `_temper_artifact_get` (object keys only, never `#>`), the ask matcher
+`_temper_artifact_ask_match` (presence conjoined with `_temper_property_op_match`, failing closed on
+a malformed predicate list), and two ungated relations: `__temper_ungated_governed_artifacts` and
+`__temper_ungated_governed_artifact_states`, the set-based forms of `_data_artifact_shape_in_force`
+and `_data_artifact_shape_state`, each held to its incumbent by a differential test. No existing
+function, table or signature changes, and no route, tool or command calls the new objects yet, so
+no caller sees a difference. The composable arm and the batch read carry the doors, under their own
+entries. Release relevance: signal-only.
+'''

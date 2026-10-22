@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT a.id AS \"artifact_id!\", f.shape_id, f.shape_version\n             FROM kb_data_artifacts a\n             LEFT JOIN LATERAL _data_artifact_shape_in_force(\n                    a.resource_id, a.kind_owner_table, a.kind_owner_id, a.artifact_kind) AS f\n                    ON true\n            WHERE NOT a.is_folded",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "artifact_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "shape_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "shape_version",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "618211732c862c9ac71d18f055d33fa6e63784135325b59485d812bf1724adc8"
+}

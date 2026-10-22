@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT t.s AS \"s!\", dense_rank() OVER (ORDER BY to_jsonb(t.s)) AS \"rank!\"\n             FROM unnest($1::text[]) AS t(s)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "s!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "rank!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "44ef24a9ad21cfec4e6e5cfff38255156565c59bd4d0cc09457347c63a646985"
+}

@@ -12,7 +12,8 @@ publish = false
 artifact-tests = []
 # Gates DB-only integration tests that need a migrated database but NOT ONNX (unlike `artifact-tests`).
 # Each runs on an ephemeral `public`-schema DB via `#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]`
-# with runtime `sqlx::query` (no macros, no per-crate `.sqlx` cache). Enabled workspace-wide by the
+# with runtime `sqlx::query` for fixtures; substantive queries use the macros, whose entries live in
+# this crate's `.sqlx` (regenerated with `--all-targets --all-features`). Enabled workspace-wide by the
 # Integration & E2E CI job (`--features test-db,test-embed`); run locally: `cargo make test-db` or
 # `cargo nextest run -p temper-substrate --features test-db`.
 test-db = []
