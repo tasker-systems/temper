@@ -89,6 +89,8 @@ __all__ = [
     "ArtifactCommitRequest",
     "ArtifactCommitResponse",
     "ArtifactView",
+    "AskOperator",
+    "AskablePath",
     "AssertRelationshipRequest",
     "AtlasEdge",
     "AtlasEntry",
@@ -140,6 +142,7 @@ __all__ = [
     "BlockSuccessor",
     "BlocksResponse",
     "BodyStorage",
+    "BoundKind",
     "Bridge",
     "BulkReassignAck",
     "BulkReassignRequest",
@@ -291,6 +294,7 @@ __all__ = [
     "JoinRequest",
     "JoinRequestStatus",
     "JoinRequestWithProfile",
+    "JsonType",
     "KindOwnerInput",
     "KindOwnerInputOneOf",
     "KindOwnerInputOneOf1",
@@ -318,6 +322,7 @@ __all__ = [
     "OtherAuthorEdge",
     "OtherAuthorEdgeProperty",
     "OutcomeDeclaration",
+    "PathFacts",
     "PendingInvitationCounts",
     "PlanRefusal",
     "PlanRefusalDetails",
@@ -380,6 +385,7 @@ __all__ = [
     "ReembedSummary",
     "Refusal",
     "RefusalReason",
+    "RefusalTeaching",
     "RegionDisclosure",
     "RegionHit",
     "RelationshipAck",
@@ -449,6 +455,7 @@ __all__ = [
     "SetWebhookEventsRequest",
     "ShapeDeclareRequest",
     "ShapeEmptiness",
+    "ShapeSuccessor",
     "ShapeView",
     "ShareContextOutcome",
     "ShareContextRequest",
@@ -480,6 +487,7 @@ __all__ = [
     "SubscriptionSelectorOneOf2",
     "SystemAccessDetails",
     "SystemSettings",
+    "TeachingElision",
     "TeamCreateRequest",
     "TeamDetail",
     "TeamInvitation",
@@ -499,6 +507,7 @@ __all__ = [
     "UpdateSettingsRequest",
     "VaultConfig",
     "ViaEntry",
+    "Vocabulary",
     "WideArm",
     "WideHit",
 ]
@@ -579,6 +588,8 @@ from temper.generated.models.append_block_payload import AppendBlockPayload as A
 from temper.generated.models.artifact_commit_request import ArtifactCommitRequest as ArtifactCommitRequest
 from temper.generated.models.artifact_commit_response import ArtifactCommitResponse as ArtifactCommitResponse
 from temper.generated.models.artifact_view import ArtifactView as ArtifactView
+from temper.generated.models.ask_operator import AskOperator as AskOperator
+from temper.generated.models.askable_path import AskablePath as AskablePath
 from temper.generated.models.assert_relationship_request import AssertRelationshipRequest as AssertRelationshipRequest
 from temper.generated.models.atlas_edge import AtlasEdge as AtlasEdge
 from temper.generated.models.atlas_entry import AtlasEntry as AtlasEntry
@@ -630,6 +641,7 @@ from temper.generated.models.block_scrub_count import BlockScrubCount as BlockSc
 from temper.generated.models.block_successor import BlockSuccessor as BlockSuccessor
 from temper.generated.models.blocks_response import BlocksResponse as BlocksResponse
 from temper.generated.models.body_storage import BodyStorage as BodyStorage
+from temper.generated.models.bound_kind import BoundKind as BoundKind
 from temper.generated.models.bridge import Bridge as Bridge
 from temper.generated.models.bulk_reassign_ack import BulkReassignAck as BulkReassignAck
 from temper.generated.models.bulk_reassign_request import BulkReassignRequest as BulkReassignRequest
@@ -781,6 +793,7 @@ from temper.generated.models.issued_machine_credential import IssuedMachineCrede
 from temper.generated.models.join_request import JoinRequest as JoinRequest
 from temper.generated.models.join_request_status import JoinRequestStatus as JoinRequestStatus
 from temper.generated.models.join_request_with_profile import JoinRequestWithProfile as JoinRequestWithProfile
+from temper.generated.models.json_type import JsonType as JsonType
 from temper.generated.models.kind_owner_input import KindOwnerInput as KindOwnerInput
 from temper.generated.models.kind_owner_input_one_of import KindOwnerInputOneOf as KindOwnerInputOneOf
 from temper.generated.models.kind_owner_input_one_of1 import KindOwnerInputOneOf1 as KindOwnerInputOneOf1
@@ -808,6 +821,7 @@ from temper.generated.models.orphan_node import OrphanNode as OrphanNode
 from temper.generated.models.other_author_edge import OtherAuthorEdge as OtherAuthorEdge
 from temper.generated.models.other_author_edge_property import OtherAuthorEdgeProperty as OtherAuthorEdgeProperty
 from temper.generated.models.outcome_declaration import OutcomeDeclaration as OutcomeDeclaration
+from temper.generated.models.path_facts import PathFacts as PathFacts
 from temper.generated.models.pending_invitation_counts import PendingInvitationCounts as PendingInvitationCounts
 from temper.generated.models.plan_refusal import PlanRefusal as PlanRefusal
 from temper.generated.models.plan_refusal_details import PlanRefusalDetails as PlanRefusalDetails
@@ -870,6 +884,7 @@ from temper.generated.models.reembed_request import ReembedRequest as ReembedReq
 from temper.generated.models.reembed_summary import ReembedSummary as ReembedSummary
 from temper.generated.models.refusal import Refusal as Refusal
 from temper.generated.models.refusal_reason import RefusalReason as RefusalReason
+from temper.generated.models.refusal_teaching import RefusalTeaching as RefusalTeaching
 from temper.generated.models.region_disclosure import RegionDisclosure as RegionDisclosure
 from temper.generated.models.region_hit import RegionHit as RegionHit
 from temper.generated.models.relationship_ack import RelationshipAck as RelationshipAck
@@ -939,6 +954,7 @@ from temper.generated.models.set_tool_manifest_request import SetToolManifestReq
 from temper.generated.models.set_webhook_events_request import SetWebhookEventsRequest as SetWebhookEventsRequest
 from temper.generated.models.shape_declare_request import ShapeDeclareRequest as ShapeDeclareRequest
 from temper.generated.models.shape_emptiness import ShapeEmptiness as ShapeEmptiness
+from temper.generated.models.shape_successor import ShapeSuccessor as ShapeSuccessor
 from temper.generated.models.shape_view import ShapeView as ShapeView
 from temper.generated.models.share_context_outcome import ShareContextOutcome as ShareContextOutcome
 from temper.generated.models.share_context_request import ShareContextRequest as ShareContextRequest
@@ -970,6 +986,7 @@ from temper.generated.models.subscription_selector_one_of1 import SubscriptionSe
 from temper.generated.models.subscription_selector_one_of2 import SubscriptionSelectorOneOf2 as SubscriptionSelectorOneOf2
 from temper.generated.models.system_access_details import SystemAccessDetails as SystemAccessDetails
 from temper.generated.models.system_settings import SystemSettings as SystemSettings
+from temper.generated.models.teaching_elision import TeachingElision as TeachingElision
 from temper.generated.models.team_create_request import TeamCreateRequest as TeamCreateRequest
 from temper.generated.models.team_detail import TeamDetail as TeamDetail
 from temper.generated.models.team_invitation import TeamInvitation as TeamInvitation
@@ -989,6 +1006,7 @@ from temper.generated.models.unshare_context_outcome import UnshareContextOutcom
 from temper.generated.models.update_settings_request import UpdateSettingsRequest as UpdateSettingsRequest
 from temper.generated.models.vault_config import VaultConfig as VaultConfig
 from temper.generated.models.via_entry import ViaEntry as ViaEntry
+from temper.generated.models.vocabulary import Vocabulary as Vocabulary
 from temper.generated.models.wide_arm import WideArm as WideArm
 from temper.generated.models.wide_hit import WideHit as WideHit
 

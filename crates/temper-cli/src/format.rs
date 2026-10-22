@@ -87,6 +87,13 @@ pub fn render<T: Serialize>(value: &T, fmt: OutputFormat) -> Result<String, Temp
     }
 }
 
+/// Read a Toon rendering back as JSON, for tests that assert what a rendering carries. Here so the
+/// `toon-format` crate stays imported in this module only.
+#[cfg(test)]
+pub(crate) fn decode_toon(rendered: &str) -> serde_json::Value {
+    toon_format::decode_default(rendered).expect("the rendering decodes")
+}
+
 /// `temper resource show` exception: Toon emits markdown body with the
 /// frontmatter at the top; Json emits a composite shape
 /// `{ ...metadata, content: "<body>" }`.

@@ -248,11 +248,13 @@ mod tests {
                 stage: Some(StageName::parse("hits").unwrap()),
                 reason: RefusalReason::MissingIntention,
                 detail: "find-exact needs a query".to_string(),
+                teaches: None,
             },
             PlanRefusal {
                 stage: Some(StageName::parse("wide").unwrap()),
                 reason: RefusalReason::FilterNotApplicable,
                 detail: "find-about-anywhere does not accept an edge filter".to_string(),
+                teaches: None,
             },
         ];
         let err = map_query_error("run_query", ClientError::PlanRefused { refusals });
@@ -285,6 +287,7 @@ mod tests {
             stage: None,
             reason: RefusalReason::NoReturns,
             detail: "outcome.returns is empty".to_string(),
+            teaches: None,
         }];
         let err = map_query_error("run_query", ClientError::PlanRefused { refusals });
         let msg = err.message.as_ref();

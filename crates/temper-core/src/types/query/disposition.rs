@@ -402,6 +402,46 @@ pub enum RefusalReason {
     /// What makes a legal plan fit the body limit under any encoder that escapes per character.
     TextBudgetExceeded,
 
+    // ── Asking data artifacts by what they are `[added — 2026-10-19]` ─────────────────────────
+    //
+    // Spec `2026-10-19-asking-artifacts-by-what-they-are` §3.5. Every one is decided before
+    // execution, against a shape loaded before the gate (§4.3), so none of them is runtime. The
+    // first three are refusal steps 1–3 and come from the load; the rest are step 4,
+    // `artifact_ask::validate_ask`, and carry `PlanRefusal::teaches`.
+    /// The ask names a shape that does not exist or that the asker cannot read. One reason and one
+    /// fixed detail for both, so a refusal is never an existence oracle.
+    ShapeNotAskable,
+    /// The ask names a folded shape version. It is never re-pointed at the successor: the
+    /// predicates were written against a schema that no longer governs. `teaches` carries the
+    /// version now in force, when there is one.
+    ShapeSuperseded,
+    /// The shape's schema does not compile under the no-fetch compiler. The detail is a fixed
+    /// sentence; the compiler's text is never echoed.
+    ShapeSchemaUncompilable,
+    /// An artifact predicate's path has no segments, so it would address the whole document.
+    EmptyArtifactPath,
+    /// An artifact predicate's path is not one the shape declares, or lies beyond a bound of the
+    /// schema walk. `teaches` carries the askable paths, and the bound when one was met.
+    PathOutsideShape,
+    /// The operator is not feasible at the path — `compare` where the path declares no orderable
+    /// type, or with a bound of a type not declared there. `teaches` carries the path's facts and
+    /// feasible operators.
+    OperatorOutsideShape,
+    /// A value lies outside what the shape declares at its path: not of a declared type, not an
+    /// enum member, or not an admissible array element. `teaches` carries the declared values and
+    /// says that stored content is not closed by its shape, with the route to the rest.
+    ValueOutsideShape,
+    /// An ask's `intent` names a term outside `current` / `member` / `pinned`. `teaches` names the
+    /// set.
+    UnknownArtifactIntent,
+    /// An ask's `shape_states` names a term outside the three a live shape admits — including
+    /// `never_declared`, which no artifact under a live shape can have. `teaches` names the set.
+    UnknownShapeState,
+    /// An ask's scope cannot be one home: a stage anchored to a home that is not the shape's, or
+    /// two asks in one filter whose shapes live in different homes. Either is empty by
+    /// construction, since a resource has exactly one home.
+    AskScopeConflict,
+
     /// A reason outside the declared vocabulary.
     ///
     /// `[corrected — 2026-08-09]` This said "Never constructed by this crate — only by
@@ -595,10 +635,54 @@ mod tests {
             RefusalReason::FilterStringTooLong,
             RefusalReason::ListTooLong,
             RefusalReason::TextBudgetExceeded,
+            RefusalReason::ShapeNotAskable,
+            RefusalReason::ShapeSuperseded,
+            RefusalReason::ShapeSchemaUncompilable,
+            RefusalReason::EmptyArtifactPath,
+            RefusalReason::PathOutsideShape,
+            RefusalReason::OperatorOutsideShape,
+            RefusalReason::ValueOutsideShape,
+            RefusalReason::UnknownArtifactIntent,
+            RefusalReason::UnknownShapeState,
+            RefusalReason::AskScopeConflict,
         ] {
             assert!(
                 reason.is_known(),
                 "{reason:?} must not deserialize as `Other`"
+            );
+        }
+    }
+
+    #[test]
+    fn the_artifact_ask_reasons_have_the_wire_names_the_spec_gives_them() {
+        // Spec 2026-10-19-asking-artifacts-by-what-they-are §3.5 names each; the wire is what a
+        // client matches on, so the spelling is pinned rather than left to `rename_all`.
+        for (reason, wire) in [
+            (RefusalReason::ShapeNotAskable, "shape_not_askable"),
+            (RefusalReason::ShapeSuperseded, "shape_superseded"),
+            (
+                RefusalReason::ShapeSchemaUncompilable,
+                "shape_schema_uncompilable",
+            ),
+            (RefusalReason::EmptyArtifactPath, "empty_artifact_path"),
+            (RefusalReason::PathOutsideShape, "path_outside_shape"),
+            (
+                RefusalReason::OperatorOutsideShape,
+                "operator_outside_shape",
+            ),
+            (RefusalReason::ValueOutsideShape, "value_outside_shape"),
+            (
+                RefusalReason::UnknownArtifactIntent,
+                "unknown_artifact_intent",
+            ),
+            (RefusalReason::UnknownShapeState, "unknown_shape_state"),
+            (RefusalReason::AskScopeConflict, "ask_scope_conflict"),
+        ] {
+            let json = serde_json::to_string(&reason).unwrap();
+            assert_eq!(json, format!("\"{wire}\""));
+            assert_eq!(
+                serde_json::from_str::<RefusalReason>(&json).unwrap(),
+                reason
             );
         }
     }

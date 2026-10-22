@@ -494,6 +494,56 @@
           "type": "string"
         },
         {
+          "const": "shape_not_askable",
+          "description": "The ask names a shape that does not exist or that the asker cannot read. One reason and one\nfixed detail for both, so a refusal is never an existence oracle.",
+          "type": "string"
+        },
+        {
+          "const": "shape_superseded",
+          "description": "The ask names a folded shape version. It is never re-pointed at the successor: the\npredicates were written against a schema that no longer governs. `teaches` carries the\nversion now in force, when there is one.",
+          "type": "string"
+        },
+        {
+          "const": "shape_schema_uncompilable",
+          "description": "The shape's schema does not compile under the no-fetch compiler. The detail is a fixed\nsentence; the compiler's text is never echoed.",
+          "type": "string"
+        },
+        {
+          "const": "empty_artifact_path",
+          "description": "An artifact predicate's path has no segments, so it would address the whole document.",
+          "type": "string"
+        },
+        {
+          "const": "path_outside_shape",
+          "description": "An artifact predicate's path is not one the shape declares, or lies beyond a bound of the\nschema walk. `teaches` carries the askable paths, and the bound when one was met.",
+          "type": "string"
+        },
+        {
+          "const": "operator_outside_shape",
+          "description": "The operator is not feasible at the path — `compare` where the path declares no orderable\ntype, or with a bound of a type not declared there. `teaches` carries the path's facts and\nfeasible operators.",
+          "type": "string"
+        },
+        {
+          "const": "value_outside_shape",
+          "description": "A value lies outside what the shape declares at its path: not of a declared type, not an\nenum member, or not an admissible array element. `teaches` carries the declared values and\nsays that stored content is not closed by its shape, with the route to the rest.",
+          "type": "string"
+        },
+        {
+          "const": "unknown_artifact_intent",
+          "description": "An ask's `intent` names a term outside `current` / `member` / `pinned`. `teaches` names the\nset.",
+          "type": "string"
+        },
+        {
+          "const": "unknown_shape_state",
+          "description": "An ask's `shape_states` names a term outside the three a live shape admits — including\n`never_declared`, which no artifact under a live shape can have. `teaches` names the set.",
+          "type": "string"
+        },
+        {
+          "const": "ask_scope_conflict",
+          "description": "An ask's scope cannot be one home: a stage anchored to a home that is not the shape's, or\ntwo asks in one filter whose shapes live in different homes. Either is empty by\nconstruction, since a resource has exactly one home.",
+          "type": "string"
+        },
+        {
           "description": "A reason outside the declared vocabulary.\n\n`[corrected — 2026-08-09]` This said \"Never constructed by this crate — only by\ndeserializing a producer newer than this consumer.\" **That was false at the time**:\n`validate` constructed it for twelve topology and vocabulary refusals, kebab-case, while\nevery declared variant was snake_case — a client's vocabulary was two conventions at once.\nFound in review; recorded rather than repaired then, because promoting twelve strings to\nvariants is a wire change and nothing consumed them yet — `/api/query` did not exist, so\nthe change was free and the door was the moment it would stop being free.\n\n`[promoted — 2026-08-12]` That moment arrived first: the twelve are now the variants\nabove, and this crate no longer constructs `Other` for anything. What `Other` is FOR now is\nexactly what its original doc said — a reason from a producer newer than this consumer, one\nthis binary has never been taught to name. Deserializing it never fails; `is_known` answers\n`false`; a caller degrades gracefully instead of losing the whole response to a parse error.",
           "type": "string"
         }

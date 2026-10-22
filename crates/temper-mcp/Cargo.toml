@@ -80,7 +80,8 @@ syn = { version = "2", features = ["full", "visit"] }
 proc-macro2 = "1"
 # The manifest gate reads this crate's own Cargo.toml.
 toml = "1.1"
-# `resources_read_error_test` serves a canned answer from a real listener.
+# `resources_read_error_test` serves a canned answer in process; `list_data_artifacts_paging_test`
+# serves a stand-in artifact list on a loopback listener.
 axum = "0.8"
 # `declarations_test` drives the mounted service through rmcp's real client over an in-memory
 # transport.

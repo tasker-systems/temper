@@ -476,6 +476,10 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     intent,
                     include_folded,
                     counts,
+                    limit,
+                    order,
+                    after_created,
+                    after_id,
                 } => temper_cli::commands::data_artifact::list(
                     &config,
                     temper_cli::commands::data_artifact::ListParams {
@@ -484,6 +488,10 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         intent: intent.as_deref(),
                         include_folded,
                         counts,
+                        limit,
+                        order: order.map(Into::into),
+                        after_created,
+                        after_id,
                         format: output_format,
                     },
                 ),

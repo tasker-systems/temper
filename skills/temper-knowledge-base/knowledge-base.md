@@ -594,5 +594,11 @@ Contexts are workspaces that group resources. The typical flow:
   listing is capped at 200 items, and its response carries a `truncated` flag —
   read it before asserting a set is complete or a resource is absent; `true`
   means there is more to fetch.
+- **Pass `limit` to `list_data_artifacts`** — with `limit` (1 to 200) it answers one page as
+  `{"artifacts": [...], "next": {"created", "artifact_id"} | null}`, oldest first
+  (`order: "desc"` for newest first). To continue, call it again with `next` passed back
+  unchanged as `after`, and the same filters and `order`. `next` is `null` on the last page; a
+  page with a `next` is not the whole list. Without `limit` it answers every artifact as a bare
+  array, an unbounded default that is retiring.
 - **Access control is automatic** — you only see resources and contexts your
   authenticated profile has access to. No need to handle permissions.

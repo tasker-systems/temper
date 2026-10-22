@@ -1535,6 +1535,7 @@ mod tests {
                 stage: Some(name("wide")),
                 reason: RefusalReason::EmbeddingUnavailable,
                 detail: "the server could not compute one".to_string(),
+                teaches: None,
             }],
         };
 
@@ -1593,6 +1594,7 @@ mod tests {
                 stage: Some(name("wide")),
                 reason: RefusalReason::EmbeddingUnavailable,
                 detail: "the server could not compute one".to_string(),
+                teaches: None,
             }],
         };
 
@@ -2103,6 +2105,7 @@ mod tests {
                 stage: Some(name("wide")),
                 reason: RefusalReason::EmbeddingUnavailable,
                 detail: "no vector".to_string(),
+                teaches: None,
             }],
         };
         let r = assemble(&v, &rows, &Hydrated::default())
