@@ -211,12 +211,12 @@ pub enum TemperError {
     /// whole beside the text it prints, so the structured stdout error can carry each refusal's
     /// `reason` and `teaches` and not only its `detail`.
     ///
-    /// `message` is what the error displays — the caller renders it from `refusals`, once, where
-    /// it is built — so a terminal and the payload's `message` read the same text as before the
-    /// list rode along. It travels the CLI's error payload under the `project` code, the code a
-    /// refused plan has always had there. There is no wire code of its own: the HTTP door speaks
-    /// [`PLAN_REFUSED_CODE`] through `ApiError::PlanRefused`, which this variant converts to.
-    #[error("{message}")]
+    /// `message` is the refusals rendered as text, built once where the error is made. The error
+    /// displays it under the same `Project error: ` prefix as [`Self::Project`], and travels the
+    /// CLI's error payload under the same `project` code. There is no wire code of its own: the
+    /// HTTP door speaks [`PLAN_REFUSED_CODE`] through `ApiError::PlanRefused`, which this variant
+    /// converts to.
+    #[error("Project error: {message}")]
     PlanRefused {
         message: String,
         refusals: Vec<crate::types::query::validate::PlanRefusal>,

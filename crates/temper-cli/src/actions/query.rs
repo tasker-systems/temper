@@ -132,7 +132,8 @@ pub fn render_refusals(refusals: &[PlanRefusal]) -> String {
 /// the list it was rendered from, kept together.
 ///
 /// The list rides along so the structured stdout error can carry what the text cannot: each
-/// refusal's `reason` and `teaches` (`render_error_payload`). The text is unchanged by it.
+/// refusal's `reason` and `teaches` (`render_error_payload`). The error displays as
+/// `TemperError::Project(render_refusals(..))` does.
 pub fn refused(refusals: Vec<PlanRefusal>) -> TemperError {
     TemperError::PlanRefused {
         message: render_refusals(&refusals),
@@ -174,6 +175,12 @@ mod tests {
             refusal(None, "the composition is cyclic"),
         ];
         let text = render_refusals(&refusals);
+        // Tied to the incumbent rendering (`Project`'s prefix and text), not to the variant itself.
+        assert_eq!(
+            refused(refusals.clone()).to_string(),
+            TemperError::Project(text.clone()).to_string(),
+            "a refused plan displays as a project error carrying render_refusals' text"
+        );
         match refused(refusals.clone()) {
             TemperError::PlanRefused {
                 message,

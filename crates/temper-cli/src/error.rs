@@ -75,8 +75,8 @@ impl From<TemperError> for CliError {
 pub type CliResult<T> = std::result::Result<T, CliError>;
 
 /// The structured `details` a [`TemperError`] carries onto the payload, in the shape the HTTP door
-/// puts in `error.details`. Only a refused plan has any; every other error is `None`, so its payload
-/// is byte-for-byte what it was.
+/// puts in `error.details`. Only a refused plan has any; every other error is `None` and its payload
+/// carries no `details` key.
 fn error_details(e: &TemperError) -> Option<ErrorDetails> {
     match e {
         TemperError::PlanRefused { refusals, .. } => {
@@ -117,15 +117,15 @@ pub fn render_error_payload(e: &TemperError, hint: Option<&str>) -> String {
 /// `CliError::Install` maps to code `"install"`; `CliError::Temper` delegates to
 /// the inner [`TemperError`]'s code.
 pub fn render_cli_error_payload(e: &CliError) -> String {
-    let (code, message) = match e {
-        CliError::Install(msg) => ("install", format!("Install error: {msg}")),
-        CliError::Temper(e) => (e.code(), format!("{e}")),
+    let (code, message, details) = match e {
+        CliError::Install(msg) => ("install", format!("Install error: {msg}"), None),
+        CliError::Temper(e) => (e.code(), format!("{e}"), error_details(e)),
     };
     let payload = temper_core::types::ErrorPayload {
         code,
         message,
         hint: None,
-        details: None,
+        details,
     };
     serde_json::to_string_pretty(&payload).unwrap_or_else(|_| {
         format!(
@@ -201,7 +201,21 @@ mod tests {
         assert_eq!(back.refusals, refusals);
     }
 
-    /// Every other error's payload has no `details` key at all: its bytes are what they were.
+    /// The `CliError` payload builder carries a wrapped refused plan's `details` too, not only the
+    /// `TemperError` one. FAILS IF its `Temper` arm sets `details: None`.
+    #[test]
+    fn a_wrapped_refused_plan_keeps_its_details_in_the_cli_error_payload() {
+        let refusals = vec![a_refusal_that_teaches()];
+        let cli = CliError::Temper(crate::actions::query::refused(refusals.clone()));
+        let raw: serde_json::Value =
+            serde_json::from_str(&render_cli_error_payload(&cli)).expect("valid JSON");
+        assert_eq!(raw["code"], "project");
+        let back: PlanRefusalDetails =
+            serde_json::from_value(raw["details"].clone()).expect("the HTTP door's details type");
+        assert_eq!(back.refusals, refusals);
+    }
+
+    /// Every other error's payload carries no `details` key at all.
     #[test]
     fn an_error_that_is_not_a_refused_plan_has_no_details_key() {
         for err in [

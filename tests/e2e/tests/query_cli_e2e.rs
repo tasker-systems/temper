@@ -218,7 +218,7 @@ async fn a_refused_plans_payload_carries_its_refusals_as_details(pool: sqlx::PgP
         payload["message"]
             .as_str()
             .is_some_and(|m| m.contains("2 refusal(s)")),
-        "the message is the text it always was: {payload:#}"
+        "the message is render_refusals' text under the project prefix: {payload:#}"
     );
 
     let refusals = payload["details"]["refusals"]

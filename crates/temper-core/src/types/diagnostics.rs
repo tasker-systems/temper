@@ -76,9 +76,11 @@ pub struct ErrorPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
     /// Structured detail, in the shape the HTTP door puts in `error.details`: the refusal list of
-    /// a plan the server would not run, each with its `reason` and `teaches`. Absent on every
-    /// other error, so their bytes are unchanged.
+    /// a plan the server would not run, each with its `reason` and `teaches`. Present only for a
+    /// refused plan; skipped when `None`, so other errors' payloads carry no `details` key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    // `ErrorDetails` derives no `JsonSchema` and `ErrorPayload`'s schema is published nowhere; a
+    // consumer of that schema must derive it for `ErrorDetails` before dropping this skip.
     #[cfg_attr(feature = "mcp", schemars(skip))]
     pub details: Option<ErrorDetails>,
 }

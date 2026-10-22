@@ -60,7 +60,7 @@ message: string,
 hint: string | null, 
 /**
  * Structured detail, in the shape the HTTP door puts in `error.details`: the refusal list of
- * a plan the server would not run, each with its `reason` and `teaches`. Absent on every
- * other error, so their bytes are unchanged.
+ * a plan the server would not run, each with its `reason` and `teaches`. Present only for a
+ * refused plan; skipped when `None`, so other errors' payloads carry no `details` key.
  */
 details: ErrorDetails | null, };

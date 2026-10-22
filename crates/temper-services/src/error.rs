@@ -613,6 +613,35 @@ mod tests {
         assert_eq!(details, ["first", "second", "third"]);
     }
 
+    /// The core variant a CLI-shaped caller holds converts to the HTTP refusal, not to a generic
+    /// `BadRequest`: 400, its own code, and the whole list (reasons and `teaches`) in
+    /// `error.details`. FAILS IF the `From<TemperError>` arm maps to `BadRequest(message)` — the 400
+    /// survives and `details.refusals` does not.
+    #[tokio::test]
+    async fn the_core_refused_plan_converts_to_the_http_refusal_with_its_list() {
+        use temper_core::types::artifact_ask::RefusalTeaching;
+
+        let mut taught = refusal("first");
+        taught.teaches = Some(Box::new(RefusalTeaching {
+            terms: vec!["current".to_string()],
+            ..RefusalTeaching::default()
+        }));
+        let refusals = vec![taught, refusal("second")];
+
+        let (status, body) = rendered(ApiError::from(TemperError::PlanRefused {
+            message: "the plan will not run".to_string(),
+            refusals: refusals.clone(),
+        }))
+        .await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"]["code"], temper_core::error::PLAN_REFUSED_CODE);
+        let carried: Vec<PlanRefusal> =
+            serde_json::from_value(body["error"]["details"]["refusals"].clone())
+                .expect("details.refusals is the refusal list");
+        assert_eq!(carried, refusals);
+    }
+
     /// The regression boundary from the plan's *Declared risk*: `ErrorDetail` is on every route in
     /// the project, so widening `details` into a `oneOf` must leave the shipped 403 body untouched
     /// — status, code, and every byte of `details`. Asserted, not assumed.
