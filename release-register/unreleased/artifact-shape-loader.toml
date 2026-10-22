@@ -30,9 +30,7 @@ Every compile of a shape schema holds the regex of each `pattern` and `patternPr
 declare, commit and reconcile alike, and is treated as any uncompilable schema is: declare refuses
 it with the existing fixed sentence, an `enforcing` commit is refused, an `advisory` commit is
 stored with no verdict, and reconcile skips it. Patterns written for fields compile as before. The
-limit bounds those regexes, not a whole compile: the regexes `unevaluatedProperties` derives from a
-`patternProperties` map are built with the engine's defaults, and the total work of one compile is
-not yet bounded.
+limit applies to each such regex on its own.
 
 Behind it, `temper-services` gains the shape loader, which turns each shape an ask names into one
 of loaded, not askable (absent or unreadable, one answer for both), superseded (with the version in

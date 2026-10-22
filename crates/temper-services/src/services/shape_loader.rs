@@ -28,13 +28,11 @@
 //! reconcile are not among them: they validate artifacts against a stored schema through
 //! [`shape_schema::compile`] directly, whatever its size.
 //!
-//! **How often and how widely a schema is compiled is bounded; what one compile costs is not
-//! yet.** Each compile runs on the blocking pool, under one of a few process-wide permits
-//! (`compile_permits`), so a burst of reads queues rather than taking every core; and a stored
-//! shape's verdict is remembered by id, so a shape read many times is compiled about once per
-//! process. The constructor holds each `pattern` and `patternProperties` regex to
-//! `shape_schema::MAX_PATTERN_BYTES`, but nothing yet bounds the total work of one compile — how
-//! many regexes it builds, or how many times — which is open as its own follow-up. A shape row is
+//! **How often and how widely a schema is compiled is bounded.** Each compile runs on the blocking
+//! pool, under one of a few process-wide permits (`compile_permits`), so a burst of reads queues
+//! rather than taking every core; and a stored shape's verdict is remembered by id, so a shape
+//! read many times is compiled about once per process. The constructor holds each `pattern` and
+//! `patternProperties` regex to `shape_schema::MAX_PATTERN_BYTES`. A shape row is
 //! immutable per id (amendment mints a new id), so the remembered verdict never goes stale, and it
 //! is consulted only for a row the gated read already returned, so it answers nothing about a
 //! shape the caller cannot read.

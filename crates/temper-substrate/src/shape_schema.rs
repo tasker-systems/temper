@@ -46,17 +46,12 @@
 //! can make any position in the document a schema, and telling them apart would mean reproducing
 //! every spelling of a reference that `jsonschema` resolves. The rule fails closed instead.
 //!
-//! **Each `pattern` and `patternProperties` regex is bounded; a compile's total cost is not, yet.**
-//! `jsonschema` compiles every distinct `pattern` and `patternProperties` key when a schema is
-//! built, and [`compile`] holds each of those regexes to [`MAX_PATTERN_BYTES`] rather than the
-//! engine's 10 MiB default; one past it makes the schema uncompilable, with the same fixed
-//! sentence, for every caller (declare, commit, reconcile and the shape loader all compile here).
-//! What holds is narrower than "a compile is bounded": no schema that compiles carries a `pattern`
-//! or `patternProperties` regex past the bound. The regexes `unevaluatedProperties` builds from a
-//! reachable `patternProperties` map are compiled by `jsonschema` with the engine's defaults, so a
-//! compile can build a regex past the bound before it refuses, and can build the same regex many
-//! times; and nothing bounds how many regexes one compile builds, or its total time and memory.
-//! Bounding a whole compile's cost is open as its own follow-up.
+//! **Each `pattern` and `patternProperties` regex is held to a size.** `jsonschema` compiles every
+//! distinct `pattern` and `patternProperties` key when a schema is built, and [`compile`] holds
+//! each of those regexes to [`MAX_PATTERN_BYTES`] rather than the engine's 10 MiB default; one past
+//! it makes the schema uncompilable, with the same fixed sentence, for every caller (declare,
+//! commit, reconcile and the shape loader all compile here). The bound is per regex: no schema
+//! that compiles carries a `pattern` or `patternProperties` regex past it.
 
 use jsonschema::{Draft, Retrieve, Uri, Validator};
 use serde_json::Value;
@@ -133,7 +128,7 @@ fn names_only_standard_drafts(schema: &Value) -> bool {
 /// writes for a field — a code, a date, an identifier — compiles to kilobytes; 1 MiB admits two
 /// orders of magnitude more. A `pattern` or `patternProperties` key past it fails to compile, so
 /// its schema is [`ShapeSchemaUncompilable`], with the one fixed sentence. It bounds each such
-/// regex, not a compile: see the module doc for what it does not reach.
+/// regex.
 pub const MAX_PATTERN_BYTES: usize = 1 << 20;
 
 /// The most bytes the engine may spend building a **full** DFA for one pattern — what
