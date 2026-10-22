@@ -163,6 +163,8 @@ pub enum ResourceSortField {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+// `list_data_artifacts` takes it as `order`; a scalar enum behind `$ref` reaches a model as null.
+#[cfg_attr(feature = "mcp", schemars(inline))]
 #[serde(rename_all = "snake_case")]
 pub enum SortOrder {
     #[default]

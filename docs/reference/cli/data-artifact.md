@@ -28,23 +28,57 @@ Options:
 ### `temper data-artifact list`
 
 ```text
-List data artifacts owned by a resource
+List data artifacts owned by a resource.
+
+With `--limit`, answers one bounded page as `{"artifacts": [...], "next": {...} | null}`; continue by passing `next.created` and `next.artifact_id` back as `--after-created` and `--after-id`, with the same filters and `--order`. `next` is `null` on the last page. Prefer it. Without `--limit`, answers every artifact as a bare array; that unbounded default is retiring.
 
 Usage: temper data-artifact list [OPTIONS] <REF>
 
 Arguments:
-  <REF>  Resource ref: a UUID or the decorated `slug-<uuid>` form
+  <REF>
+          Resource ref: a UUID or the decorated `slug-<uuid>` form
 
 Options:
-      --kind <KIND>        Filter by the bare family name (e.g. `"measurement"`)
-      --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
-      --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
-      --intent <INTENT>    Filter by selection intent: `"current"`, `"member"`, or `"pinned"`
-      --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
-      --include-folded     Include folded (superseded) artifacts in the result. Default: false
-      --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
-      --counts             Return per-family counts instead of full artifacts. No content hydration
-  -h, --help               Print help
+      --kind <KIND>
+          Filter by the bare family name (e.g. `"measurement"`)
+
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --intent <INTENT>
+          Filter by selection intent: `"current"`, `"member"`, or `"pinned"`
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --include-folded
+          Include folded (superseded) artifacts in the result. Default: false
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+      --counts
+          Return per-family counts instead of full artifacts. No content hydration. Not paged: conflicts with --limit, --order, --after-created and --after-id
+
+      --limit <LIMIT>
+          Answer one page of at most this many artifacts, 1 to 200, in the envelope `{"artifacts": [...], "next": ... | null}`. Out of range is refused, never clamped
+
+      --order <ORDER>
+          Direction of a bounded page over (created, id): asc, oldest first (the default), or desc, newest first. Requires --limit; keep it the same on every page of one walk
+          
+          [possible values: asc, desc]
+
+      --after-created <AFTER_CREATED>
+          Continue after this position: the previous page's `next.created` (RFC 3339), passed back exactly. Requires --limit and --after-id
+
+      --after-id <AFTER_ID>
+          Continue after this position: the previous page's `next.artifact_id`. Requires --limit and --after-created
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 ### `temper data-artifact show`

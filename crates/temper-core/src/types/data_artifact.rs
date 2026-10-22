@@ -117,6 +117,8 @@ pub const ARTIFACT_DRAIN_PAGE_ROWS: u32 = 50;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+// `list_data_artifacts` takes it as `after`, and an MCP tool declaration carries no `$ref`.
+#[cfg_attr(feature = "mcp", schemars(inline))]
 pub struct ArtifactCursor {
     /// The `created` of the last artifact on the previous page.
     pub created: DateTime<Utc>,
@@ -126,13 +128,19 @@ pub struct ArtifactCursor {
 
 /// One bounded page of artifacts, in `(created, id)` order in the requested direction.
 ///
-/// Not a wire type: the route's body is the bare array and the continuation rides the `Link`
-/// response header. This is what the service layer and `temper-client` hand back once the two are
-/// put together, so it has no serde, OpenAPI or TypeScript derive.
-#[derive(Debug, Clone)]
+/// What the service layer and `temper-client` hand back once the route's two halves are put
+/// together: on the route the body is the bare array and the continuation rides the `Link`
+/// response header, so this is not the route's shape and has no OpenAPI or TypeScript derive.
+/// It is the shape the CLI's `data-artifact list --limit` and MCP's `list_data_artifacts` with
+/// `limit` answer, which have no header to carry the continuation: `{"artifacts": [...],
+/// "next": {...} | null}`. `next` is always present and is an explicit `null` on the last page,
+/// so a reader can tell the last page from an answer that lost its continuation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ArtifactPage {
     pub artifacts: Vec<ArtifactView>,
-    /// Where to continue, or `None` when this page is the last.
+    /// Where to continue, or `None` when this page is the last. Pass it back unchanged as the
+    /// next request's position, with the same filters and `order`.
     pub next: Option<ArtifactCursor>,
 }
 
@@ -399,5 +407,35 @@ mod tests {
         let refusal = params.page_request().expect_err("order without limit");
         assert_eq!(refusal, ArtifactPageRefusal::OrderWithoutLimit);
         assert!(refusal.to_string().contains("`order`"));
+    }
+
+    /// The doors' envelope always carries `next`: an explicit `null` on the last page, the
+    /// legible cursor otherwise. FAILS IF `next` is skipped when `None` (a reader could not tell
+    /// the last page from an answer that lost its continuation) or renamed.
+    #[test]
+    fn the_page_envelope_names_next_on_every_page_and_null_on_the_last() {
+        let last = serde_json::to_value(ArtifactPage {
+            artifacts: Vec::new(),
+            next: None,
+        })
+        .expect("page serializes");
+        let keys: Vec<&str> = last
+            .as_object()
+            .expect("an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys, ["artifacts", "next"], "got {last}");
+        assert!(last["next"].is_null(), "got {last}");
+
+        let more = serde_json::to_value(ArtifactPage {
+            artifacts: Vec::new(),
+            next: Some(cursor()),
+        })
+        .expect("page serializes");
+        assert_eq!(
+            more["next"],
+            serde_json::to_value(cursor()).expect("cursor serializes")
+        );
     }
 }

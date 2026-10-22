@@ -37,9 +37,10 @@ use uuid::Uuid;
 use temper_client::error::ClientError;
 use temper_core::types::authorship::ActInput;
 use temper_core::types::data_artifact::{
-    ArtifactCommitRequest, ArtifactListParams, KindOwnerInput,
+    ArtifactCommitRequest, ArtifactCursor, ArtifactListParams, ArtifactPageRequest, KindOwnerInput,
 };
 use temper_core::types::ids::{DataArtifactId, ResourceId};
+use temper_core::types::resource::SortOrder;
 
 use crate::service::{api_error_cause, AcrossAuth, TemperMcpService};
 
@@ -56,6 +57,19 @@ pub struct ListArtifactsInput {
     /// Include folded (superseded) artifacts. Default: false.
     #[serde(default)]
     pub include_folded: Option<bool>,
+    /// Answer one bounded page of at most this many artifacts (1 to 200), as
+    /// `{"artifacts": [...], "next": {...} | null}`. Prefer it. Omit it to receive every
+    /// artifact as a bare array, the unbounded default, which is retiring.
+    #[serde(default)]
+    pub limit: Option<u32>,
+    /// Direction of a bounded page over `(created, artifact_id)`: `asc`, oldest first (the
+    /// default), or `desc`, newest first. Only with `limit`; keep it the same on every page.
+    #[serde(default)]
+    pub order: Option<SortOrder>,
+    /// Continue after this position: the previous page's `next`, passed back unchanged. Only
+    /// with `limit`, and with the same filters and `order` as the page that answered it.
+    #[serde(default)]
+    pub after: Option<ArtifactCursor>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -66,31 +80,64 @@ pub struct GetArtifactInput {
 
 // ── Tool handlers ──────────────────────────────────────────────────────────────
 
+/// The filters and the bounded request a `list_data_artifacts` call asks for, or `None` for
+/// every artifact.
+///
+/// `limit` is the demarcation, as on the route. The paging inputs are checked by
+/// [`ArtifactListParams::page_request`], so the tool refuses the combinations the route refuses
+/// (`after` or `order` without `limit`, a `limit` of 0 or above 200) in the route's own words,
+/// before anything is relayed.
+fn list_request(
+    input: &ListArtifactsInput,
+) -> Result<(ArtifactListParams, Option<ArtifactPageRequest>), rmcp::ErrorData> {
+    let params = ArtifactListParams {
+        kind: input.kind.clone(),
+        intent: input.intent.clone(),
+        include_folded: input.include_folded,
+        counts: None,
+        limit: input.limit,
+        after_created: input.after.map(|cursor| cursor.created),
+        after_id: input.after.map(|cursor| cursor.artifact_id.uuid()),
+        order: input.order,
+    };
+    let request = params
+        .page_request()
+        .map_err(|refusal| rmcp::ErrorData::invalid_params(refusal.to_string(), None))?;
+    Ok((params, request))
+}
+
 pub async fn list_artifacts(
     svc: &TemperMcpService,
     parts: &http::request::Parts,
     input: ListArtifactsInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let resource_id = parse_resource_ref(&input.resource_id)?;
+    let resource_id = parse_resource_ref(&input.resource_id)?.uuid();
+    let (params, request) = list_request(&input)?;
+    let client = svc.relay_client(parts)?;
 
-    // The tool's contract is "every artifact", so it drains the bounded list a page at a time
-    // rather than asking the route for the unbounded form.
-    let artifacts = svc
-        .relay_client(parts)?
-        .data_artifacts()
-        .list_all(
-            resource_id.uuid(),
-            &ArtifactListParams {
-                kind: input.kind,
-                intent: input.intent,
-                include_folded: input.include_folded,
-                ..Default::default()
-            },
-        )
-        .await
-        .across_auth(|e| map_err(e, "list_data_artifacts"))?;
-
-    let json = serde_json::to_string_pretty(&artifacts).unwrap_or_else(|_| "[]".to_string());
+    // With `limit`, one page, and the envelope carries where to continue (`next`, `null` on the
+    // last page): a tool result has no header to put it in. Without `limit`, the unchanged
+    // answer: drain the bounded list a page at a time and answer the bare array of every
+    // artifact.
+    let json = match request {
+        Some(request) => {
+            let page = client
+                .data_artifacts()
+                .list_page(resource_id, &params, request)
+                .await
+                .across_auth(|e| map_err(e, "list_data_artifacts"))?;
+            serde_json::to_string_pretty(&page)
+        }
+        None => {
+            let every = client
+                .data_artifacts()
+                .list_all(resource_id, &params)
+                .await
+                .across_auth(|e| map_err(e, "list_data_artifacts"))?;
+            serde_json::to_string_pretty(&every)
+        }
+    }
+    .map_err(|e| rmcp::ErrorData::internal_error(format!("list_data_artifacts: {e}"), None))?;
     Ok(CallToolResult::success(vec![
         rmcp::model::ContentBlock::text(json),
     ]))

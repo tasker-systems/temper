@@ -852,7 +852,7 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "List data artifacts owned by a resource. Each artifact is structured data committed by an agent session, retrieved whole. Filter by kind (the bare family name) or intent (current/member/pinned). Set include_folded to include superseded artifacts. Visibility-gated: you only see artifacts whose owning resource you can read.",
+        description = "List data artifacts owned by a resource. Each artifact is structured data committed by an agent session, retrieved whole. Filter by kind (the bare family name) or intent (current/member/pinned). Set include_folded to include superseded artifacts. Prefer passing limit (1-200): it returns one bounded page as {\"artifacts\": [...], \"next\": {\"created\", \"artifact_id\"} | null}, oldest first (order: desc for newest first). To continue, call again with next passed back unchanged as after, keeping the same filters and order; next is null on the last page. Without limit it returns every artifact as a bare array; that unbounded default is retiring. Visibility-gated: you only see artifacts whose owning resource you can read.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_data_artifacts(

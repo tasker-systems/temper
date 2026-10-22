@@ -43,6 +43,25 @@ impl From<CliConfidence> for temper_core::types::ConfidenceBand {
     }
 }
 
+/// CLI-local enum mirroring `SortOrder` for clap `value_enum` parsing — the direction of a
+/// bounded read. Kept in `cli.rs` (not `temper-core`) to avoid a `clap` dependency there,
+/// mirroring `CliEdgeKind`. Maps to `temper_core::types::resource::SortOrder`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum CliSortOrder {
+    Asc,
+    Desc,
+}
+
+impl From<CliSortOrder> for temper_core::types::resource::SortOrder {
+    fn from(o: CliSortOrder) -> Self {
+        use temper_core::types::resource::SortOrder;
+        match o {
+            CliSortOrder::Asc => SortOrder::Asc,
+            CliSortOrder::Desc => SortOrder::Desc,
+        }
+    }
+}
+
 /// CLI-local enum mirroring `ElementKind` for clap `value_enum` parsing — the
 /// element a trail belongs to. Kept in `cli.rs` (not `temper-core`) to avoid a
 /// `clap` dependency there, mirroring `CliEdgeKind`/`CliPolarity`. Maps to
@@ -1145,7 +1164,13 @@ pub enum ResourceMetaAction {
 
 #[derive(Subcommand)]
 pub enum DataArtifactAction {
-    /// List data artifacts owned by a resource
+    /// List data artifacts owned by a resource.
+    ///
+    /// With `--limit`, answers one bounded page as `{"artifacts": [...], "next": {...} | null}`;
+    /// continue by passing `next.created` and `next.artifact_id` back as `--after-created` and
+    /// `--after-id`, with the same filters and `--order`. `next` is `null` on the last page.
+    /// Prefer it. Without `--limit`, answers every artifact as a bare array; that unbounded
+    /// default is retiring.
     List {
         /// Resource ref: a UUID or the decorated `slug-<uuid>` form
         r#ref: String,
@@ -1158,9 +1183,26 @@ pub enum DataArtifactAction {
         /// Include folded (superseded) artifacts in the result. Default: false.
         #[arg(long)]
         include_folded: bool,
-        /// Return per-family counts instead of full artifacts. No content hydration.
-        #[arg(long)]
+        /// Return per-family counts instead of full artifacts. No content hydration. Not
+        /// paged: conflicts with --limit, --order, --after-created and --after-id.
+        #[arg(long, conflicts_with_all = ["limit", "order", "after_created", "after_id"])]
         counts: bool,
+        /// Answer one page of at most this many artifacts, 1 to 200, in the envelope
+        /// `{"artifacts": [...], "next": ... | null}`. Out of range is refused, never clamped.
+        #[arg(long)]
+        limit: Option<u32>,
+        /// Direction of a bounded page over (created, id): asc, oldest first (the default), or
+        /// desc, newest first. Requires --limit; keep it the same on every page of one walk.
+        #[arg(long, value_enum)]
+        order: Option<CliSortOrder>,
+        /// Continue after this position: the previous page's `next.created` (RFC 3339), passed
+        /// back exactly. Requires --limit and --after-id.
+        #[arg(long)]
+        after_created: Option<chrono::DateTime<chrono::Utc>>,
+        /// Continue after this position: the previous page's `next.artifact_id`. Requires
+        /// --limit and --after-created.
+        #[arg(long)]
+        after_id: Option<uuid::Uuid>,
     },
     /// Show a single data artifact by ID
     Show {
@@ -3958,5 +4000,132 @@ mod graph_command_tests {
     #[test]
     fn traverse_without_seeds_is_rejected_by_clap() {
         assert!(Cli::try_parse_from(["temper", "graph", "traverse"]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod data_artifact_list_tests {
+    use super::*;
+    use clap::Parser;
+    use temper_core::types::data_artifact::{ArtifactCursor, ArtifactPage};
+    use temper_core::types::ids::DataArtifactId;
+
+    const R: &str = "alpha-019e84ab-26ba-7560-9d34-c60d74a9fbe2";
+
+    /// The paging flags of `data-artifact list`, as parsed.
+    type Paging = (
+        Option<u32>,
+        Option<CliSortOrder>,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<uuid::Uuid>,
+    );
+
+    fn paging(args: &[&str]) -> Paging {
+        let argv = ["temper", "data-artifact", "list", R]
+            .iter()
+            .chain(args)
+            .copied();
+        match Cli::try_parse_from(argv).expect("parses").command {
+            Commands::DataArtifact {
+                action:
+                    DataArtifactAction::List {
+                        limit,
+                        order,
+                        after_created,
+                        after_id,
+                        ..
+                    },
+            } => (limit, order, after_created, after_id),
+            _ => panic!("expected data-artifact list"),
+        }
+    }
+
+    /// No paging flag parses to no paging at all: clap supplies no default page size. FAILS IF
+    /// `--limit` gains a default, which would page the unbounded answer.
+    #[test]
+    fn no_paging_flag_parses_to_no_paging() {
+        assert_eq!(paging(&[]), (None, None, None, None));
+    }
+
+    /// Each paging flag parses to its typed value. FAILS IF a flag is renamed or `--order`
+    /// accepts a value other than `asc`/`desc`.
+    #[test]
+    fn the_paging_flags_parse() {
+        let id = uuid::Uuid::from_u128(7);
+        let id_arg = id.to_string();
+        let (limit, order, created, after_id) = paging(&[
+            "--limit",
+            "3",
+            "--order",
+            "desc",
+            "--after-created",
+            "2026-10-19T12:30:45.123456Z",
+            "--after-id",
+            id_arg.as_str(),
+        ]);
+        assert_eq!(limit, Some(3));
+        assert_eq!(order, Some(CliSortOrder::Desc));
+        assert_eq!(
+            created.map(|c| c.timestamp_subsec_micros()),
+            Some(123_456),
+            "sub-second digits survive the flag"
+        );
+        assert_eq!(after_id, Some(id));
+        assert!(
+            Cli::try_parse_from(["temper", "data-artifact", "list", R, "--order", "newest"])
+                .is_err()
+        );
+    }
+
+    /// `next` as the envelope prints it, fed back through `--after-created` and `--after-id`,
+    /// is the same position. FAILS IF the envelope's `created` loses precision or the flag's
+    /// parser reads it differently: a position that does not round-trip exactly is a defect.
+    #[test]
+    fn the_envelopes_next_round_trips_through_the_continuation_flags() {
+        let next = ArtifactCursor {
+            created: chrono::DateTime::parse_from_rfc3339("2026-10-19T12:30:45.123456789Z")
+                .expect("literal parses")
+                .with_timezone(&chrono::Utc),
+            artifact_id: DataArtifactId::from(uuid::Uuid::from_u128(0x0123_4567_89ab_cdef)),
+        };
+        let printed = serde_json::to_value(ArtifactPage {
+            artifacts: Vec::new(),
+            next: Some(next),
+        })
+        .expect("page serializes");
+        let created = printed["next"]["created"].as_str().expect("a string");
+        let artifact_id = printed["next"]["artifact_id"].as_str().expect("a string");
+        let (_, _, after_created, after_id) = paging(&[
+            "--limit",
+            "2",
+            "--after-created",
+            created,
+            "--after-id",
+            artifact_id,
+        ]);
+        assert_eq!(after_created, Some(next.created), "printed as {created}");
+        assert_eq!(after_id, Some(next.artifact_id.uuid()));
+    }
+
+    /// `--counts` is not paged; a paging flag beside it is refused, never ignored. FAILS IF any
+    /// of the four leaves the conflict set.
+    #[test]
+    fn counts_refuses_every_paging_flag() {
+        let id = uuid::Uuid::from_u128(7).to_string();
+        for flag in [
+            vec!["--limit", "2"],
+            vec!["--order", "asc"],
+            vec!["--after-created", "2026-10-19T12:30:45Z"],
+            vec!["--after-id", id.as_str()],
+        ] {
+            let argv = ["temper", "data-artifact", "list", R, "--counts"]
+                .into_iter()
+                .chain(flag.iter().copied());
+            assert!(
+                Cli::try_parse_from(argv).is_err(),
+                "--counts with {flag:?} must not parse"
+            );
+        }
+        assert!(Cli::try_parse_from(["temper", "data-artifact", "list", R, "--counts"]).is_ok());
     }
 }

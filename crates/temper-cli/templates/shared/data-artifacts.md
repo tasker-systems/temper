@@ -141,15 +141,27 @@ temper data-artifact commit <resource-ref> \
 # Retrieve a single artifact by ID
 temper data-artifact show <resource-ref> <artifact-id>
 
-# List artifacts owned by a resource (with optional filters)
+# List artifacts owned by a resource, one bounded page at a time (with optional filters)
 temper data-artifact list <resource-ref> \
   --kind "measurement" \
   --intent "current" \
-  --include-folded                     # include superseded artifacts
+  --include-folded \
+  --limit 50                           # one page of at most 50 (1 to 200)
+
+# The next page: pass the previous page's `next` back, with the same filters and --order
+temper data-artifact list <resource-ref> --limit 50 \
+  --after-created "<next.created>" --after-id "<next.artifact_id>"
 ```
 
 The `--content` must be valid JSON. The commit returns the artifact with its server-assigned ID,
 content hash, and shape state. See `reference.md` for the full command table.
+
+**Pass `--limit` when you list.** With it, the answer is one page, oldest first (`--order desc` for
+newest first), as `{"artifacts": [...], "next": {"created": ..., "artifact_id": ...} | null}`. To
+continue, pass `next.created` and `next.artifact_id` back exactly as `--after-created` and
+`--after-id`, with the same filters and `--order`. `next` is `null` on the last page, so a page with
+a `next` is not the whole list. Without `--limit`, the answer is every artifact as a bare array; that
+unbounded default is retiring. `--counts` is per-family counts and is not paged.
 
 ```bash
 # Declare a shape for a family within a context (gated on authoring authority)
@@ -182,6 +194,9 @@ Input: { "artifact_id": "<artifact UUID>" }
 Tool: list_data_artifacts
 Input: {
   "resource_id": "<resource UUID>",
+  "limit": 50,                        // one page of at most 50 (1 to 200); pass it
+  "order": "asc",                     // optional: "asc" (default, oldest first) or "desc"
+  "after": { "created": "...", "artifact_id": "..." },  // optional: the previous page's `next`
   "kind": "measurement",              // optional filter
   "intent": "current",                // optional filter
   "include_folded": false             // optional, default false
@@ -190,6 +205,12 @@ Input: {
 
 The `content` field takes a JSON value (object, array, string, number, boolean, or null), not a
 string. The commit returns the artifact with its server-assigned ID, content hash, and shape state.
+
+**Pass `limit` when you list.** With it, `list_data_artifacts` answers one page as
+`{"artifacts": [...], "next": {"created": ..., "artifact_id": ...} | null}`. To continue, call it
+again with `next` passed back unchanged as `after`, and the same filters and `order`. `next` is
+`null` on the last page, so a page with a `next` is not the whole list. Without `limit`, the answer
+is every artifact as a bare array; that unbounded default is retiring.
 
 ```
 Tool: declare_data_artifact_shape
