@@ -114,15 +114,15 @@
 <style>
 	.props {
 		padding: 14px 22px 16px;
-		border-bottom: 1px solid var(--color-quiet-rule);
-		background: rgba(255, 255, 255, 0.015);
+		border-bottom: 1px solid var(--tp-rule);
+		background: var(--tp-surface);
 	}
 	.label {
 		font-family: var(--font-mono);
 		font-size: 9px;
 		letter-spacing: var(--track-label);
 		text-transform: uppercase;
-		color: var(--color-quiet-dim);
+		color: var(--tp-text-subtle);
 		margin-bottom: 9px;
 	}
 	dl {
@@ -138,7 +138,7 @@
 	dt {
 		font-family: var(--font-mono);
 		font-size: 11px;
-		color: var(--color-quiet-dim);
+		color: var(--tp-text-subtle);
 	}
 	dd {
 		margin: 0;
@@ -146,7 +146,7 @@
 	}
 	/* Managed keys tint toward the doc-type hue; open keys stay neutral (spec D2). */
 	.row.is-managed dt {
-		color: color-mix(in srgb, var(--hue) 52%, var(--color-quiet-dim));
+		color: color-mix(in srgb, var(--hue) 52%, var(--tp-text-subtle));
 	}
 	.attach {
 		display: flex;
@@ -158,9 +158,9 @@
 		min-width: 0;
 		font-family: var(--font-mono);
 		font-size: 11px;
-		color: var(--color-quiet-mid);
-		background: rgba(255, 255, 255, 0.03);
-		border: 1px solid var(--color-quiet-rule);
+		color: var(--tp-text-muted);
+		background: var(--tp-surface);
+		border: 1px solid var(--tp-rule-strong);
 		border-radius: 3px;
 		padding: 2px 5px;
 	}
@@ -180,24 +180,24 @@
 		border: 1px solid color-mix(in srgb, var(--hue) 30%, transparent);
 		border-radius: 3px;
 		padding: 2px 7px;
-		color: color-mix(in srgb, var(--hue) 70%, white);
+		color: color-mix(in srgb, var(--hue) 70%, var(--tp-text));
 		cursor: pointer;
 	}
 	.err {
 		font-family: var(--font-mono);
 		font-size: 10.5px;
-		color: #e0755f;
+		color: var(--tp-danger);
 		margin: 6px 0 0;
 	}
 	.unread {
 		font-family: var(--font-mono);
 		font-size: 10.5px;
-		color: var(--color-quiet-dim);
+		color: var(--tp-text-subtle);
 		margin: 9px 0 0;
 	}
 	hr {
 		border: 0;
-		border-top: 1px dashed rgba(255, 255, 255, 0.1);
+		border-top: 1px dashed var(--tp-rule-strong);
 		margin: 8px 0;
 	}
 </style>

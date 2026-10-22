@@ -107,21 +107,21 @@
 <style>
 	section {
 		padding: 18px 22px 24px;
-		border-top: 1px solid var(--color-quiet-rule);
+		border-top: 1px solid var(--tp-rule);
 	}
 	.label {
 		font-family: var(--font-mono);
 		font-size: 9px;
 		letter-spacing: var(--track-label);
 		text-transform: uppercase;
-		color: var(--color-quiet-dim);
+		color: var(--tp-text-subtle);
 		margin-bottom: 10px;
 	}
 	.artifact {
 		padding: 8px 0;
 	}
 	.artifact + .artifact {
-		border-top: 1px solid var(--color-quiet-rule);
+		border-top: 1px solid var(--tp-rule);
 	}
 	.artifact.folded .head,
 	.artifact.folded .summary {
@@ -138,15 +138,15 @@
 		cursor: pointer;
 		font-family: var(--font-mono);
 		font-size: 11px;
-		color: color-mix(in srgb, var(--hue) 70%, white);
+		color: color-mix(in srgb, var(--hue) 70%, var(--tp-text));
 	}
 	.chev {
-		color: var(--color-quiet-dim);
+		color: var(--tp-text-subtle);
 	}
 	.summary {
 		font-family: var(--font-mono);
 		font-size: 10px;
-		color: var(--color-quiet-mid);
+		color: var(--tp-text-muted);
 		margin: 2px 0 1px;
 	}
 	.fold {
@@ -157,20 +157,20 @@
 		letter-spacing: var(--track-label);
 		font-size: 9px;
 	}
-	/* Conformance, colored to be found rather than to alarm: satisfied in the confidence
-	   green the event history already uses; non-conforming in the decision amber — it is a
-	   recorded advisory verdict or a badge on a folded row, never a refusal aimed at the
-	   reader; not-yet-checked stays quiet, because "unchecked" must not dress up as either. */
+	/* Conformance, colored to be found rather than to alarm: satisfied in `success`, as the
+	   event history's confidence is; non-conforming in `notice` — it is a recorded advisory
+	   verdict or a badge on a folded row, never a refusal aimed at the reader; not-yet-checked
+	   stays quiet, because "unchecked" must not dress up as either. */
 	.shape.satisfied {
-		color: #8fd8a8;
+		color: var(--tp-success);
 	}
 	.shape.not-satisfied {
-		color: var(--decision-amber-lt);
+		color: var(--tp-notice);
 	}
 	.meta {
 		font-family: var(--font-mono);
 		font-size: 9px;
-		color: var(--color-quiet-dim);
+		color: var(--tp-text-subtle);
 	}
 	.meta-table {
 		margin: 6px 0 0;
@@ -190,10 +190,10 @@
 		word-break: break-word;
 	}
 	.meta-table dt {
-		color: var(--color-quiet-dim);
+		color: var(--tp-text-subtle);
 	}
 	.meta-table dd {
-		color: var(--color-quiet-mid);
+		color: var(--tp-text-muted);
 	}
 	.pages {
 		display: flex;
@@ -204,7 +204,7 @@
 		font-size: 10px;
 	}
 	.pages a {
-		color: color-mix(in srgb, var(--hue) 70%, white);
+		color: color-mix(in srgb, var(--hue) 70%, var(--tp-text));
 	}
 	.pages .older {
 		margin-left: auto;
@@ -212,12 +212,12 @@
 	.content {
 		margin: 6px 0 0;
 		padding: 8px 10px;
-		background: var(--color-quiet-card);
+		background: var(--tp-surface);
 		border: 1px solid color-mix(in srgb, var(--hue) 18%, transparent);
 		font-family: var(--font-mono);
 		font-size: 10px;
 		line-height: 1.5;
-		color: var(--color-quiet-mid);
+		color: var(--tp-text-muted);
 		overflow-x: auto;
 		white-space: pre;
 	}

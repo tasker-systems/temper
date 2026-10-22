@@ -88,7 +88,7 @@
 <style>
 	section {
 		padding: 12px 14px;
-		border-top: 1px solid var(--color-quiet-rule);
+		border-top: 1px solid var(--tp-rule);
 	}
 	section:first-child {
 		border-top: 0;
@@ -98,13 +98,13 @@
 		font-size: 9px;
 		letter-spacing: var(--track-label);
 		text-transform: uppercase;
-		color: var(--color-quiet-dim);
+		color: var(--tp-text-subtle);
 		margin-bottom: 6px;
 	}
 	.bound {
 		font-family: var(--font-mono);
 		font-size: 9px;
-		color: var(--color-quiet-dim);
+		color: var(--tp-text-subtle);
 		margin: 0 0 6px;
 	}
 	.event {
@@ -121,25 +121,25 @@
 		cursor: pointer;
 		font-family: var(--font-mono);
 		font-size: 10.5px;
-		color: color-mix(in srgb, var(--hue) 70%, white);
+		color: color-mix(in srgb, var(--hue) 70%, var(--tp-text));
 	}
 	.chev {
-		color: var(--color-quiet-dim);
+		color: var(--tp-text-subtle);
 	}
 	.summary {
 		font-family: var(--font-serif);
 		font-style: italic;
 		font-size: 11px;
-		color: var(--color-quiet-mid);
+		color: var(--tp-text-muted);
 		margin: 1px 0;
 	}
 	.meta {
 		font-family: var(--font-mono);
 		font-size: 9px;
-		color: var(--color-quiet-dim);
+		color: var(--tp-text-subtle);
 	}
 	.conf {
-		color: #8fd8a8;
+		color: var(--tp-success);
 	}
 	.payload {
 		margin: 4px 0 0;
@@ -159,9 +159,9 @@
 		word-break: break-word;
 	}
 	.payload dt {
-		color: var(--color-quiet-dim);
+		color: var(--tp-text-subtle);
 	}
 	.payload dd {
-		color: var(--color-quiet-mid);
+		color: var(--tp-text-muted);
 	}
 </style>

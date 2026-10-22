@@ -36,7 +36,7 @@
 	.scalar {
 		font-family: var(--font-mono);
 		font-size: 11px;
-		color: var(--color-quiet-mid);
+		color: var(--tp-text-muted);
 		word-break: break-word;
 	}
 	.toggle {
@@ -46,10 +46,10 @@
 		border: 0;
 		padding: 0;
 		cursor: pointer;
-		color: color-mix(in srgb, var(--hue) 70%, white);
+		color: color-mix(in srgb, var(--hue) 70%, var(--tp-text));
 	}
 	.toggle:hover {
-		color: color-mix(in srgb, var(--hue) 90%, white);
+		color: color-mix(in srgb, var(--hue) 90%, var(--tp-text));
 	}
 	.sub {
 		border-left: 1px solid color-mix(in srgb, var(--hue) 25%, transparent);
@@ -66,7 +66,7 @@
 	.k {
 		font-family: var(--font-mono);
 		font-size: 11px;
-		color: var(--color-quiet-dim);
+		color: var(--tp-text-subtle);
 	}
 	.v {
 		min-width: 0;
@@ -74,11 +74,11 @@
 	.item {
 		font-family: var(--font-mono);
 		font-size: 10.5px;
-		color: var(--color-quiet-mid);
+		color: var(--tp-text-muted);
 		padding: 2px 0;
 	}
 	.item .i {
-		color: var(--color-quiet-dim);
+		color: var(--tp-text-subtle);
 		margin-right: 7px;
 	}
 </style>
