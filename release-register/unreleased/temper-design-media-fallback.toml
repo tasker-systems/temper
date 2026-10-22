@@ -1,0 +1,12 @@
+title    = "A withheld video or audio in a rendered body keeps its author's fallback words"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["clients"]
+status   = "signal-only"
+body = '''
+`@tasker-systems/temper-design/sanitize`'s note for a withheld `<video>` or `<audio>` now carries
+the author's fallback text, as an image's note carries its alt: "video withheld: <the words>"
+rather than a bare "video withheld". Text only; links and markup inside the fallback are not
+carried. Who observes: a reader of a body that embedded media with fallback text. User-visible:
+yes, on the web. Release relevance: additive — the note gains words; what is withheld is unchanged.
+'''
