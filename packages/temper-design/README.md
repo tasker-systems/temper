@@ -19,6 +19,7 @@ packages/temper-design/
 ├── contract/
 │   ├── theme.schema.json    # the contract — every role, closed (draft 2020-12)
 │   ├── tailwind.css         # roles → Tailwind v4 utilities (generated from the schema)
+│   ├── tailwind-roles.css   # the same utilities without the palette reset (generated)
 │   ├── shadcn-bridge.css    # shadcn-svelte's variable names answered from roles
 │   ├── base.css             # base styles + t-*/ed-* recipes, roles only
 │   └── region.css           # the four region states' recipe, roles only
@@ -55,6 +56,7 @@ What a consumer imports:
 | Path | What it is |
 |---|---|
 | `@tasker-systems/temper-design/contract/tailwind.css` | the roles as `tp-` Tailwind v4 utilities; resets the default palette |
+| `@tasker-systems/temper-design/contract/tailwind-roles.css` | the same utilities without the reset — for a surface still moving off the default palette one area at a time; it switches to `tailwind.css` once nothing reads the palette |
 | `@tasker-systems/temper-design/contract/shadcn-bridge.css` | optional: shadcn-svelte's variable names answered from roles |
 | `@tasker-systems/temper-design/contract/base.css` | base styles and the `t-*`/`ed-*` recipes |
 | `@tasker-systems/temper-design/<theme>/theme.css` | one theme's values, under `[data-theme="<theme>"]` |
@@ -163,8 +165,8 @@ temper's roles apart from shadcn's names, where `accent` and `muted` mean other 
   `themes.sh slots <theme.json>` prints the slot canvas. Colour is only one of the
   channels that separates a failed read from a refused one, but a theme that collapses
   two of them has removed a channel, and that is checkable.
-- **Generated files agree.** `theme.css` matches its `theme.json`; `contract/tailwind.css`
-  covers every role in the schema.
+- **Generated files agree.** `theme.css` matches its `theme.json`; `contract/tailwind.css` and
+  `contract/tailwind-roles.css` cover every role in the schema.
 - **Counterparts pair.** A theme's `counterpart` exists, points back, and has the
   opposite `appearance`.
 
@@ -186,7 +188,9 @@ contract lacks; the brand marks paint in `currentColor`; every fixture in
 Then choose the theme with one attribute: `<html data-theme="quiet-instrument">`.
 
 `contract/tailwind.css` resets Tailwind's default palette. A component cannot reach for
-`zinc-800` or `white`; if it needs a colour, it names a role.
+`zinc-800` or `white`; if it needs a colour, it names a role. A surface still painting from
+the default palette imports `contract/tailwind-roles.css` instead until nothing reads it —
+the reset would otherwise turn every unmoved `zinc-*` into a class that paints nothing.
 
 A theme can also be applied without a build: a surface can read a `theme.json` and set
 each `--tp-*` property on the root element. That is how a theme installed after the app

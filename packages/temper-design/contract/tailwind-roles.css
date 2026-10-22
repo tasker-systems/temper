@@ -1,0 +1,67 @@
+/* Generated from contract/theme.schema.json by themes/scripts/themes.sh build. Do not edit.
+   The roles as utilities WITHOUT the default-palette reset: for a consumer still moving
+   off Tailwind's palette. Import after tailwindcss and before any theme.css. */
+
+@theme inline {
+  --color-tp-ground: var(--tp-ground);
+  --color-tp-surface: var(--tp-surface);
+  --color-tp-surface-raised: var(--tp-surface-raised);
+  --color-tp-overlay: var(--tp-overlay);
+  --color-tp-text: var(--tp-text);
+  --color-tp-text-muted: var(--tp-text-muted);
+  --color-tp-text-subtle: var(--tp-text-subtle);
+  --color-tp-text-faint: var(--tp-text-faint);
+  --color-tp-rule: var(--tp-rule);
+  --color-tp-rule-strong: var(--tp-rule-strong);
+  --color-tp-accent: var(--tp-accent);
+  --color-tp-accent-muted: var(--tp-accent-muted);
+  --color-tp-accent-line: var(--tp-accent-line);
+  --color-tp-accent-line-soft: var(--tp-accent-line-soft);
+  --color-tp-accent-wash: var(--tp-accent-wash);
+  --color-tp-accent-hover: var(--tp-accent-hover);
+  --color-tp-on-accent: var(--tp-on-accent);
+  --color-tp-focus: var(--tp-focus);
+  --color-tp-notice: var(--tp-notice);
+  --color-tp-notice-wash: var(--tp-notice-wash);
+  --color-tp-success: var(--tp-success);
+  --color-tp-success-wash: var(--tp-success-wash);
+  --color-tp-danger: var(--tp-danger);
+  --color-tp-danger-wash: var(--tp-danger-wash);
+  --color-tp-pending: var(--tp-pending);
+  --color-tp-pending-wash: var(--tp-pending-wash);
+  --color-tp-region-arriving: var(--tp-region-arriving);
+  --color-tp-region-arriving-wash: var(--tp-region-arriving-wash);
+  --color-tp-region-empty: var(--tp-region-empty);
+  --color-tp-region-empty-wash: var(--tp-region-empty-wash);
+  --color-tp-region-gave-up: var(--tp-region-gave-up);
+  --color-tp-region-gave-up-wash: var(--tp-region-gave-up-wash);
+  --color-tp-region-failed: var(--tp-region-failed);
+  --color-tp-region-failed-wash: var(--tp-region-failed-wash);
+  --color-tp-author-human: var(--tp-author-human);
+  --color-tp-author-agent: var(--tp-author-agent);
+  --color-tp-cat-1: var(--tp-cat-1);
+  --color-tp-cat-2: var(--tp-cat-2);
+  --color-tp-cat-3: var(--tp-cat-3);
+  --color-tp-cat-4: var(--tp-cat-4);
+  --color-tp-cat-5: var(--tp-cat-5);
+  --color-tp-cat-6: var(--tp-cat-6);
+  --color-tp-cat-7: var(--tp-cat-7);
+  --color-tp-cat-8: var(--tp-cat-8);
+  --color-tp-cat-neutral: var(--tp-cat-neutral);
+  --color-tp-code-key: var(--tp-code-key);
+  --color-tp-code-string: var(--tp-code-string);
+  --color-tp-code-number: var(--tp-code-number);
+  --color-tp-code-comment: var(--tp-code-comment);
+  --font-tp-reading: var(--tp-font-reading);
+  --font-tp-doing: var(--tp-font-doing);
+  --font-tp-ui: var(--tp-font-ui);
+  --radius-tp-chip: var(--tp-radius-chip);
+  --radius-tp-panel: var(--tp-radius-panel);
+  --tracking-tp-label: var(--tp-tracking-label);
+  --tracking-tp-strip: var(--tp-tracking-strip);
+  --tracking-tp-eyebrow: var(--tp-tracking-eyebrow);
+  --tracking-tp-ui: var(--tp-tracking-ui);
+  --tracking-tp-mark: var(--tp-tracking-mark);
+  --default-transition-duration: var(--tp-motion-quick);
+  --default-transition-timing-function: var(--tp-motion-easing);
+}
