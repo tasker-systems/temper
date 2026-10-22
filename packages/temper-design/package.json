@@ -1,8 +1,9 @@
 {
   "name": "@tasker-systems/temper-design",
   "version": "0.6.2",
-  "description": "temper's theme contract and themes: the roles every temper surface paints from",
+  "description": "temper's theme contract, themes and shared rendering modules: the one source every temper surface paints from",
   "license": "MIT",
+  "type": "module",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/tasker-systems/temper.git",
@@ -19,9 +20,31 @@
     "themes.json",
     "brand/*.svg",
     "toolchain/check.mjs",
-    "toolchain/majors.json"
+    "toolchain/majors.json",
+    "dist/*.js",
+    "dist/*.d.ts"
   ],
   "exports": {
+    "./markdown": {
+      "types": "./dist/markdown.d.ts",
+      "default": "./dist/markdown.js"
+    },
+    "./sanitize": {
+      "types": "./dist/sanitize.d.ts",
+      "default": "./dist/sanitize.js"
+    },
+    "./highlight": {
+      "types": "./dist/highlight.d.ts",
+      "default": "./dist/highlight.js"
+    },
+    "./region": {
+      "types": "./dist/region.d.ts",
+      "default": "./dist/region.js"
+    },
+    "./omission": {
+      "types": "./dist/omission.d.ts",
+      "default": "./dist/omission.js"
+    },
     "./themes.json": "./themes.json",
     "./contract/*": "./contract/*",
     "./brand/*": "./brand/*",
@@ -29,6 +52,19 @@
     "./*/theme.json": "./*/theme.json"
   },
   "scripts": {
-    "build": "node -e \"console.log('nothing to compile: every published file is generated and proved by scripts/themes.sh --self-check in CI')\""
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "dompurify": "^3.4.17",
+    "highlight.js": "^11.12.0",
+    "marked": "^18.1.1",
+    "marked-highlight": "^2.2.4"
+  },
+  "devDependencies": {
+    "jsdom": "^30",
+    "typescript": "^6.0.3",
+    "vitest": "^5.0.3"
   }
 }

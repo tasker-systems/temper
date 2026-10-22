@@ -1,0 +1,98 @@
+/* The region recipe: how arriving, empty, gave-up and failed look, on every surface.
+
+   `region-states-read-alike` — the four states are distinct signals, carried on more than
+   colour. The words, marker and ARIA role come from the package's `region` module; this recipe
+   carries the other two channels, colour and border, each four-way distinct:
+
+     arriving  dashed edge, a pulsing marker   unfinished
+     empty     solid quiet edge, italic        a settled fact about the reader's material
+     gave-up   dotted edge                     a wait broken off, a decision the system owns
+     failed    solid edge, heavier words       will not resolve
+
+   A component composes it as
+
+     <p class="region-state" data-region="<state>" role="<role>">
+       <span class="region-marker" aria-hidden="true"><marker></span>
+       <span><words><span class="region-qualifier"><qualifier></span></span>
+     </p>
+
+   and adds nothing of its own: a call site that restyles a state is the drift this recipe
+   exists to prevent. Roles only — no literal colour appears here. */
+
+.region-state {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  padding: 7px 9px;
+  border-left: 2px solid;
+  border-radius: 0 5px 5px 0;
+  font-family: var(--tp-font-ui);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.region-marker {
+  flex: none;
+  font: 11px/1.4 var(--tp-font-doing);
+}
+
+.region-qualifier,
+.region-detail {
+  font-weight: 400;
+  opacity: 0.85;
+}
+
+.region-detail {
+  margin-left: 0.35em;
+}
+
+.region-state[data-region="arriving"] {
+  border-left-style: dashed;
+  border-left-color: var(--tp-region-arriving);
+  background: var(--tp-region-arriving-wash);
+  color: var(--tp-region-arriving);
+}
+
+.region-state[data-region="arriving"] .region-marker {
+  animation: region-pulse 1.1s ease-in-out infinite;
+}
+
+.region-state[data-region="empty"] {
+  border-left-color: var(--tp-rule-strong);
+  background: var(--tp-region-empty-wash);
+  color: var(--tp-region-empty);
+  font-style: italic;
+}
+
+.region-state[data-region="gave-up"] {
+  border-left-style: dotted;
+  border-left-color: var(--tp-region-gave-up);
+  background: var(--tp-region-gave-up-wash);
+  color: var(--tp-region-gave-up);
+}
+
+.region-state[data-region="failed"] {
+  border-left-color: var(--tp-region-failed);
+  background: var(--tp-region-failed-wash);
+  color: var(--tp-region-failed);
+  font-weight: 600;
+}
+
+@keyframes region-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* The pulse is the one channel that is motion; a reader who has turned motion off keeps the
+   others. */
+@media (prefers-reduced-motion: reduce) {
+  .region-state[data-region="arriving"] .region-marker {
+    animation: none;
+  }
+}

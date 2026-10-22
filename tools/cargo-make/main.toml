@@ -54,7 +54,8 @@ dependencies = [
   "docs-coverage",
   "ts-check",
   "design-contract",
-  "design-toolchain"
+  "design-toolchain",
+  "design-runtime"
 ]
 
 [tasks.wire-register-crosscheck]
@@ -521,6 +522,13 @@ description = "The toolchain check's harness: a surface off a declared major, or
 cwd = "packages/temper-design"
 command = "node"
 args = ["--test", "toolchain/check.test.mjs"]
+
+[tasks.design-runtime]
+description = "The shared modules bind no surface's runtime: Tauri, SvelteKit, svelte, $lib/$app/$env and Node imports refused"
+# The same two commands CI's Design Contract job runs. Node only: no install needed. The modules'
+# typecheck, dist drift and vitest suite need `npm ci` and run in CI only.
+cwd = "packages/temper-design"
+script = ["node scripts/no-runtime.mjs", "node --test scripts/no-runtime.test.mjs"]
 
 [tasks.ts-check]
 description = "Run TypeScript quality checks (typecheck + biome)"

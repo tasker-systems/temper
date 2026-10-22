@@ -1,96 +1,48 @@
 <script lang="ts">
 	/**
-	 * The region vocabulary — **the single place** arriving, empty, gave-up and failed are given
-	 * their appearance and their words.
+	 * The region vocabulary on the web — arriving, empty, gave-up and failed. What each state
+	 * says (its words, its marker glyph, its ARIA role) is `@tasker-systems/temper-design/region`,
+	 * the one source the desktop reads too; this component only renders it. The reasons behind the
+	 * words and the roles are stated there, once.
 	 *
 	 * `no-two-region-states-present-alike` is a negative-face clause: it is about states never
-	 * presenting alike *anywhere*. If each page spells its own pending and failed markup, they drift
-	 * page by page and the clause is enforced by nobody. One component means the states are defined
-	 * once and every consumer inherits the distinction whether or not it was thinking about it.
+	 * presenting alike *anywhere*. If each page spells its own pending and failed markup, they
+	 * drift page by page and the clause is enforced by nobody. One component means the states are
+	 * defined once and every consumer inherits the distinction whether or not it was thinking
+	 * about it.
 	 *
-	 * **The states differ by more than one channel**, deliberately. Spec §3.3: a test asserting two
-	 * renders differ is satisfied by a single character or one pixel of colour, while the clause is
-	 * about what a *reader* can resolve — a grey "no history" beside a grey "history unavailable" at
-	 * 11px passes the test and fails the clause. So each state carries its own **sentence**, its own
-	 * **marker glyph**, its own **colour** and its own **border treatment**. Removing any one of
-	 * those still leaves them resolvable.
-	 *
-	 * Three rules the words obey, and all three come from the register:
-	 *
-	 * - **A pending region carries text**, never a bare shimmer, so it reaches the accessibility
-	 *   tree rather than being a silent animation.
-	 * - **A failed region names what failed** — "history unavailable", never "something went wrong" —
-	 *   and says that nothing was read, which is exactly what separates it from `empty`. `empty`
-	 *   asserts *there is nothing here*; that is a claim about the reader's material, and a failed
-	 *   read has verified no such thing.
-	 * - **A give-up names what the system stopped waiting for.** Spec §5.4's refusal is well-formed
-	 *   rather than a fault, so it does not borrow the failure's words: *"We stopped waiting for
-	 *   history"*, never a bare *"timeout"*, which describes the mechanism and names nothing the
-	 *   reader was waiting for.
-	 *
-	 * `label` names the region ("history", "excerpt", "connections") and is composed into all four
-	 * sentences, so a consumer cannot word its arrival, its refusal and its failure out of step with
-	 * each other.
-	 *
-	 * **ARIA role is the one channel that cannot be four-way distinct**, and it is said here rather
-	 * than left to be discovered: there are two live-region roles. `arriving` and `gave-up` share
-	 * `role="status"` because neither is a fault — one is not finished, the other is a decision the
-	 * system made and owns. `failed` keeps `role="alert"`. The other four channels carry the
-	 * distinction between the two that share.
+	 * **The states differ by more than one channel**, deliberately: a sentence, a marker glyph, a
+	 * colour and a border treatment each, so removing any one still leaves them resolvable. The
+	 * colour and border are painted below until the web reads the contract's roles; then they come
+	 * from the contract's `region.css` recipe, as they do on the desktop.
 	 *
 	 * **The fifth state, `present`, is deliberately not here.** A region that has its content does
-	 * not need this component to describe it — the consumer renders its own markup in the `{:then}`
-	 * branch. An earlier draft took `children` for that; it was removed because no consumer needs
-	 * it and passing both would have silently dropped the state's words.
+	 * not need this component to describe it — the consumer renders its own markup in the
+	 * `{:then}` branch.
 	 *
 	 * A `{:catch}` does not choose between `gave-up` and `failed` by hand — six call sites spelling
 	 * one predicate is the drift this component exists to prevent. `regionStateFor` in `$lib/region`
 	 * reads the discriminator; see `App.Error` for why it is a value rather than a class.
 	 */
+	import { type RegionStateName, regionWords } from '@tasker-systems/temper-design/region';
+
 	let {
 		state,
 		label,
 	}: {
-		state: 'arriving' | 'empty' | 'gave-up' | 'failed';
+		state: RegionStateName;
 		label: string;
 	} = $props();
 
-	// Only the failure opens its sentence with the label, so only it needs the capital.
-	const named = $derived(label.charAt(0).toUpperCase() + label.slice(1));
+	const said = $derived(regionWords(state, label));
 </script>
 
-{#if state === 'arriving'}
-	<!-- `role="status"` announces politely: an arrival is not an interruption. -->
-	<p class="region arriving" data-testid="region-arriving" role="status">
-		<span class="marker" aria-hidden="true">◌</span>
-		<span class="words">Loading {label}…</span>
-	</p>
-{:else if state === 'empty'}
-	<p class="region empty" data-testid="region-empty">
-		<span class="marker" aria-hidden="true">—</span>
-		<span class="words">No {label}.</span>
-	</p>
-{:else if state === 'gave-up'}
-	<!--
-		`role="status"` and not `alert`: the system declining to keep waiting is a decision it owns,
-		not a fault it suffered. The sentence names the read rather than the mechanism — "timeout"
-		alone would say what happened to the system and nothing about what the reader is missing.
-	-->
-	<p class="region gave-up" data-testid="region-gave-up" role="status">
-		<span class="marker" aria-hidden="true">⊘</span>
-		<span class="words">
-			We stopped waiting for {label}<span class="detail"> — it did not answer in time.</span>
-		</span>
-	</p>
-{:else}
-	<!-- `role="alert"` because a failure is not merely a later arrival; it will not resolve. -->
-	<p class="region failed" data-testid="region-failed" role="alert">
-		<span class="marker" aria-hidden="true">⚠</span>
-		<span class="words">
-			{named} unavailable<span class="detail"> — nothing here was read.</span>
-		</span>
-	</p>
-{/if}
+<p class="region {state}" data-testid="region-{state}" role={said.role ?? undefined}>
+	<span class="marker" aria-hidden="true">{said.marker}</span>
+	<span class="words">
+		{said.words}{#if said.qualifier}<span class="detail">{said.qualifier}</span>{/if}
+	</span>
+</p>
 
 <style>
 	/*

@@ -50,12 +50,9 @@
     "d3-polygon": "^3",
     "d3-selection": "^3",
     "d3-zoom": "^3",
-    "dompurify": "^3.4.17",
-    "highlight.js": "^11.12.0",
     "jose": "^6.2.12",
-    "marked": "^18.1.1",
-    "marked-highlight": "^2.2.4",
     "postgres": "^3",
+    "@tasker-systems/temper-design": "file:../temper-design",
     "@tasker-systems/temper-telemetry-ts": "file:../../clients/temper-telemetry-ts",
     "wx-svelte-grid": "^2.7.0"
   }

@@ -1,6 +1,7 @@
 # @tasker-systems/temper-design
 
-temper's theme contract and its themes — the one source every temper surface paints from.
+temper's theme contract, its themes, and the pure modules every temper surface renders
+through — the one source every temper surface paints from.
 The web UI (`packages/temper-ui`) and the desktop (`tasker-systems/temper-contrib`) both
 consume it, so the same role, the same term and the same state read alike on each.
 
@@ -19,7 +20,8 @@ packages/temper-design/
 │   ├── theme.schema.json    # the contract — every role, closed (draft 2020-12)
 │   ├── tailwind.css         # roles → Tailwind v4 utilities (generated from the schema)
 │   ├── shadcn-bridge.css    # shadcn-svelte's variable names answered from roles
-│   └── base.css             # base styles + t-*/ed-* recipes, roles only
+│   ├── base.css             # base styles + t-*/ed-* recipes, roles only
+│   └── region.css           # the four region states' recipe, roles only
 ├── quiet-instrument/        # dark — temper's house theme
 │   ├── theme.json           # source of truth
 │   └── theme.css            # generated — never edit
@@ -27,6 +29,8 @@ packages/temper-design/
 ├── brand/                   # the threaded-t mark and wordmark, in currentColor
 ├── preview/index.html       # every role and the foundational components, both themes
 ├── scripts/themes.sh        # build · check · contrast · --self-check
+├── src/                     # the shared modules: markdown, sanitize, highlight, region, omission
+├── dist/                    # their compiled output (committed; see "The shared modules")
 ├── toolchain/               # the toolchain majors every surface builds on, and their check
 └── tests/fixtures/broken/   # themes the check must refuse
 ```
@@ -60,6 +64,12 @@ What a consumer imports:
 | `@tasker-systems/temper-design/brand/*.svg` | the mark and wordmark, in `currentColor` |
 | `@tasker-systems/temper-design/toolchain/majors.json` | the toolchain majors every surface builds on |
 | `@tasker-systems/temper-design/toolchain/check.mjs` | the check a surface runs against them (see below) |
+| `@tasker-systems/temper-design/contract/region.css` | the `region-state` recipe: the four region states' colour and border |
+| `@tasker-systems/temper-design/markdown` | markdown → HTML with highlighted fences, bounded; DOM-free |
+| `@tasker-systems/temper-design/sanitize` | the one sanitizer pass for that HTML; needs a DOM |
+| `@tasker-systems/temper-design/highlight` | the one highlight.js registration, for direct code viewers |
+| `@tasker-systems/temper-design/region` | the four region states' words, markers and ARIA roles |
+| `@tasker-systems/temper-design/omission` | the omission sentence a bounded view ends with |
 
 The theme checker (`scripts/`, `tests/`, `pyproject.toml`) is not published: it runs in this
 repository's CI, and the package carries only what it proves. The toolchain check is
@@ -92,6 +102,21 @@ can differ and nothing fails. That gap is where the check stops, not something i
 Both repositories' `dependabot.yml` hold semver-majors of this set, so a major arrives as a
 deliberate change rather than an automatic one. `node --test toolchain/check.test.mjs` is
 the check's harness.
+
+## The shared modules
+
+`src/` holds what both surfaces render through, so a rendered body, a region's state and a
+bounded view's omission read the same on each: one sanitizer policy (what one surface strips
+or refuses, the other does not render), one set of region words, one omission sentence. They
+compile with `tsc` into `dist/`, which is committed — bun copies a `file:` dependency rather
+than building it — and CI rebuilds it and fails when it is stale.
+
+A shared module never binds a surface's runtime: no Tauri, no SvelteKit, no `svelte`, no
+`$lib`/`$app`/`$env`, no Node. The DOM is common ground (the sanitizer needs one; `markdown`
+deliberately does not, so a surface can prepare a body wherever it renders).
+`node scripts/no-runtime.mjs` refuses such an import, and `node --test
+scripts/no-runtime.test.mjs` proves each one is refused. Why a given surface's CSP backs the
+sanitizer up is that surface's comment to keep, next to its CSP — not this package's.
 
 ## The contract
 

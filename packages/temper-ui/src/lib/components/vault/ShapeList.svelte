@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { ShapeView } from '$lib/types/generated/data_artifact_shape';
-	import { highlightCode } from '$lib/highlight';
+	import { highlightCode } from '@tasker-systems/temper-design/highlight';
 
 	/**
 	 * The data-artifact families a context governs — one row per family in force: the family
