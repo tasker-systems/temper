@@ -64,14 +64,9 @@ const CLIENT_ONLY: &[(&str, &str)] = &[
         // spelling of `list_for`.
         "declare_for",
     ),
+    // `list_page` and `list_all` are not here: `data-artifact list --limit` calls `list_page`
+    // for one bounded page, and `data-artifact list` without `--limit` calls `list_all`.
     ("data_artifacts.rs", "list_for"),
-    (
-        "data_artifacts.rs",
-        // The single-page primitive an SDK consumer pages with (`list_page` hands back `next`).
-        // The CLI's `data-artifact list` contract is every artifact, so it calls `list_all`, which
-        // drains this; a page-at-a-time flag would be a second spelling of the same list.
-        "list_page",
-    ),
     (
         "ingest.rs",
         // `PUT /api/ingest/{id}` is a second door for updating a resource's content. The CLI

@@ -37,9 +37,11 @@ use uuid::Uuid;
 use temper_client::error::ClientError;
 use temper_core::types::authorship::ActInput;
 use temper_core::types::data_artifact::{
-    ArtifactCommitRequest, ArtifactListParams, KindOwnerInput,
+    ArtifactCommitRequest, ArtifactCursor, ArtifactListParams, ArtifactPageRefusal,
+    ArtifactPageRequest, KindOwnerInput, MAX_ARTIFACT_PAGE_ROWS,
 };
 use temper_core::types::ids::{DataArtifactId, ResourceId};
+use temper_core::types::resource::SortOrder;
 
 use crate::service::{api_error_cause, AcrossAuth, TemperMcpService};
 
@@ -56,6 +58,20 @@ pub struct ListArtifactsInput {
     /// Include folded (superseded) artifacts. Default: false.
     #[serde(default)]
     pub include_folded: Option<bool>,
+    /// Answer one bounded page of at most this many artifacts (1 to 200), as
+    /// `{"artifacts": [...], "next": {...} | null}`. Omit it to receive
+    /// every artifact as a bare array, the unbounded default, which is retiring.
+    #[serde(default)]
+    #[schemars(range(min = 1, max = MAX_ARTIFACT_PAGE_ROWS))]
+    pub limit: Option<u32>,
+    /// Direction of a bounded page over `(created, artifact_id)`: `asc`, oldest first (the
+    /// default), or `desc`, newest first. Only with `limit`; keep it the same on every page.
+    #[serde(default)]
+    pub order: Option<SortOrder>,
+    /// Continue after this position: the previous page's `next`, passed back unchanged. Only
+    /// with `limit`, and with the same filters and `order` as the page that answered it.
+    #[serde(default)]
+    pub after: Option<ArtifactCursor>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -66,31 +82,97 @@ pub struct GetArtifactInput {
 
 // ── Tool handlers ──────────────────────────────────────────────────────────────
 
+/// The filters and the bounded request a `list_data_artifacts` call asks for, or `None` for
+/// every artifact.
+///
+/// `limit` is the demarcation, as on the route. The paging inputs are checked by
+/// [`ArtifactListParams::page_request`], so the tool refuses exactly the combinations the route
+/// refuses (`after` or `order` without `limit`, a `limit` of 0 or above 200), worded in this
+/// tool's inputs by [`refusal_in_inputs`], before anything is relayed.
+fn list_request(
+    input: &ListArtifactsInput,
+) -> Result<(ArtifactListParams, Option<ArtifactPageRequest>), rmcp::ErrorData> {
+    let params = ArtifactListParams {
+        kind: input.kind.clone(),
+        intent: input.intent.clone(),
+        include_folded: input.include_folded,
+        counts: None,
+        limit: input.limit,
+        after_created: input.after.map(|cursor| cursor.created),
+        after_id: input.after.map(|cursor| cursor.artifact_id.uuid()),
+        order: input.order,
+    };
+    let request = params
+        .page_request()
+        .map_err(|refusal| rmcp::ErrorData::invalid_params(refusal_in_inputs(refusal), None))?;
+    Ok((params, request))
+}
+
+/// A paging refusal, worded in this tool's inputs (`limit`, `order`, `after`) rather than the
+/// route's query parameters (`after_created`, `after_id`).
+///
+/// The combinations refused are the route's (`page_request` decides them); only the words are
+/// this door's. The match is exhaustive on purpose: a new refusal fails to compile here until
+/// it is worded for MCP.
+fn refusal_in_inputs(refusal: ArtifactPageRefusal) -> String {
+    match refusal {
+        ArtifactPageRefusal::LimitZero => {
+            "`limit` must be at least 1; a page of zero artifacts cannot make progress".to_string()
+        }
+        ArtifactPageRefusal::LimitAboveCeiling { limit } => format!(
+            "`limit` {limit} is above the ceiling of {MAX_ARTIFACT_PAGE_ROWS} artifacts per page; \
+             ask for at most {MAX_ARTIFACT_PAGE_ROWS} and continue by passing `next` as `after`"
+        ),
+        // `after` is one object carrying both halves, so this tool cannot send half of one;
+        // worded anyway, because the match must cover every refusal.
+        ArtifactPageRefusal::AfterIncomplete => {
+            "`after` names one position and must carry both `created` and `artifact_id`".to_string()
+        }
+        ArtifactPageRefusal::AfterWithoutLimit => {
+            "`after` continues a bounded list and requires `limit`; without `limit` every \
+             artifact is returned and there is nothing to continue"
+                .to_string()
+        }
+        ArtifactPageRefusal::OrderWithoutLimit => {
+            "`order` directs a bounded list and requires `limit`; without `limit` every artifact \
+             is returned oldest first"
+                .to_string()
+        }
+    }
+}
+
 pub async fn list_artifacts(
     svc: &TemperMcpService,
     parts: &http::request::Parts,
     input: ListArtifactsInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let resource_id = parse_resource_ref(&input.resource_id)?;
+    let resource_id = parse_resource_ref(&input.resource_id)?.uuid();
+    let (params, request) = list_request(&input)?;
+    let client = svc.relay_client(parts)?;
 
-    // The tool's contract is "every artifact", so it drains the bounded list a page at a time
-    // rather than asking the route for the unbounded form.
-    let artifacts = svc
-        .relay_client(parts)?
-        .data_artifacts()
-        .list_all(
-            resource_id.uuid(),
-            &ArtifactListParams {
-                kind: input.kind,
-                intent: input.intent,
-                include_folded: input.include_folded,
-                ..Default::default()
-            },
-        )
-        .await
-        .across_auth(|e| map_err(e, "list_data_artifacts"))?;
-
-    let json = serde_json::to_string_pretty(&artifacts).unwrap_or_else(|_| "[]".to_string());
+    // With `limit`, one page, and the envelope carries where to continue (`next`, `null` on the
+    // last page): a tool result has no header to put it in. Without `limit`, the unchanged
+    // answer: drain the bounded list a page at a time and answer the bare array of every
+    // artifact.
+    let json = match request {
+        Some(request) => {
+            let page = client
+                .data_artifacts()
+                .list_page(resource_id, &params, request)
+                .await
+                .across_auth(|e| map_err(e, "list_data_artifacts"))?;
+            serde_json::to_string_pretty(&page)
+        }
+        None => {
+            let every = client
+                .data_artifacts()
+                .list_all(resource_id, &params)
+                .await
+                .across_auth(|e| map_err(e, "list_data_artifacts"))?;
+            serde_json::to_string_pretty(&every)
+        }
+    }
+    .map_err(|e| rmcp::ErrorData::internal_error(format!("list_data_artifacts: {e}"), None))?;
     Ok(CallToolResult::success(vec![
         rmcp::model::ContentBlock::text(json),
     ]))
@@ -299,5 +381,70 @@ fn map_err(e: ClientError, action: &str) -> rmcp::ErrorData {
             rmcp::ErrorData::invalid_params(message, None)
         }
         other => rmcp::ErrorData::internal_error(format!("{action}: {other}"), None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every refusal names this tool's inputs and never the route's query parameters. FAILS IF
+    /// a variant is worded with `after_created`/`after_id`, or is the refusal's own (route) text.
+    #[test]
+    fn every_refusal_names_the_inputs_not_the_query_parameters() {
+        let over = MAX_ARTIFACT_PAGE_ROWS + 1;
+        let cases: [(ArtifactPageRefusal, &[&str]); 5] = [
+            (ArtifactPageRefusal::LimitZero, &["`limit`"]),
+            (
+                ArtifactPageRefusal::LimitAboveCeiling { limit: over },
+                &["`limit`", "`next`", "`after`"],
+            ),
+            (ArtifactPageRefusal::AfterIncomplete, &["`after`"]),
+            (
+                ArtifactPageRefusal::AfterWithoutLimit,
+                &["`after`", "`limit`"],
+            ),
+            (
+                ArtifactPageRefusal::OrderWithoutLimit,
+                &["`order`", "`limit`"],
+            ),
+        ];
+        for (refusal, inputs) in cases {
+            let said = refusal_in_inputs(refusal);
+            for input in inputs {
+                assert!(
+                    said.contains(input),
+                    "{refusal:?} must name {input}: {said}"
+                );
+            }
+            for route_name in ["after_created", "after_id"] {
+                assert!(
+                    !said.contains(route_name),
+                    "{refusal:?} names the route's `{route_name}`: {said}"
+                );
+            }
+            // `LimitZero` names only `limit`, the same word at the route and here, so its words
+            // may be the route's; every other variant names an input the route spells differently.
+            if !matches!(refusal, ArtifactPageRefusal::LimitZero) {
+                assert_ne!(said, refusal.to_string(), "{refusal:?} is the route's text");
+            }
+        }
+    }
+
+    /// A refused paging input answers `invalid_params` in this tool's words. FAILS IF
+    /// `list_request` passes the route's text through instead of `refusal_in_inputs`.
+    #[test]
+    fn list_request_refuses_in_the_tools_words() {
+        let input: ListArtifactsInput = serde_json::from_value(serde_json::json!({
+            "resource_id": "unused",
+            "order": "desc",
+        }))
+        .expect("input deserializes");
+        let err = list_request(&input).expect_err("order without limit");
+        assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        assert_eq!(
+            err.message.as_ref(),
+            refusal_in_inputs(ArtifactPageRefusal::OrderWithoutLimit)
+        );
     }
 }

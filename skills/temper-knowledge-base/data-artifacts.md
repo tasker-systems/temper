@@ -140,6 +140,9 @@ Input: { "artifact_id": "<artifact UUID>" }
 Tool: list_data_artifacts
 Input: {
   "resource_id": "<resource UUID>",
+  "limit": 50,                        // one page of at most 50 (1 to 200); pass it
+  "order": "asc",                     // optional: "asc" (default, oldest first) or "desc"
+  "after": { "created": "...", "artifact_id": "..." },  // optional: the previous page's `next`
   "kind": "measurement",              // optional filter
   "intent": "current",                // optional filter
   "include_folded": false             // optional, default false
@@ -148,6 +151,12 @@ Input: {
 
 The `content` field takes a JSON value (object, array, string, number, boolean, or null), not a
 string. The commit returns the artifact with its server-assigned ID, content hash, and shape state.
+
+**Pass `limit` when you list.** With it, `list_data_artifacts` answers one page as
+`{"artifacts": [...], "next": {"created": ..., "artifact_id": ...} | null}`. To continue, call it
+again with `next` passed back unchanged as `after`, and the same filters and `order`. `next` is
+`null` on the last page, so a page with a `next` is not the whole list. Without `limit`, the answer
+is every artifact as a bare array; that unbounded default is retiring.
 
 ```
 Tool: declare_data_artifact_shape

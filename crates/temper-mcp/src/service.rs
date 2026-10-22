@@ -852,7 +852,7 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "List data artifacts owned by a resource. Each artifact is structured data committed by an agent session, retrieved whole. Filter by kind (the bare family name) or intent (current/member/pinned). Set include_folded to include superseded artifacts. Visibility-gated: you only see artifacts whose owning resource you can read.",
+        description = "List data artifacts owned by a resource. Each artifact is structured data committed by an agent session, retrieved whole. Filter by kind (the bare family name) or intent (current/member/pinned). Set include_folded to include superseded artifacts. Prefer passing limit (1-200): it returns one bounded page as {\"artifacts\": [...], \"next\": {\"created\", \"artifact_id\"} | null}, oldest first (order: desc for newest first). To continue, call again with next passed back unchanged as after, keeping the same filters and order; next is null on the last page. Without limit it returns every artifact as a bare array; that unbounded default is retiring. Visibility-gated: you only see artifacts whose owning resource you can read.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_data_artifacts(
@@ -1928,6 +1928,30 @@ mod tests {
              `#[schemars(inline)]` to the enum:\n  {}",
             offenders.len(),
             offenders.join("\n  ")
+        );
+    }
+
+    /// The served `list_data_artifacts` schema states `limit`'s range, the one `page_request`
+    /// enforces (1 to `MAX_ARTIFACT_PAGE_ROWS`), and its paging inputs carry no `$ref`. FAILS IF
+    /// the `range` attribute is dropped or drifts from the constant, or `order`/`after` stop
+    /// being inline.
+    #[test]
+    fn list_data_artifacts_serves_limits_range_inline() {
+        use temper_core::types::data_artifact::MAX_ARTIFACT_PAGE_ROWS;
+
+        let tool = TemperMcpService::tool_router()
+            .list_all()
+            .into_iter()
+            .find(|tool| tool.name == "list_data_artifacts")
+            .expect("list_data_artifacts is advertised");
+        let schema = serde_json::to_value(&*tool.input_schema).expect("input schema serializes");
+        let limit = &schema["properties"]["limit"];
+        assert_eq!(limit["minimum"], 1, "{limit}");
+        assert_eq!(limit["maximum"], MAX_ARTIFACT_PAGE_ROWS, "{limit}");
+        let rendered = schema.to_string();
+        assert!(
+            !rendered.contains("$ref") && !rendered.contains("$defs"),
+            "the declaration is self-contained: {schema}"
         );
     }
 

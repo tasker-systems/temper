@@ -141,11 +141,16 @@ A later, unrelated session retrieves the artifact by its ID:
 temper data-artifact show <resource-ref> <artifact-id>
 ```
 
-Or lists all artifacts owned by a resource, with optional filters:
+Or lists the artifacts owned by a resource, a bounded page at a time, with optional filters:
 
 ```bash
-temper data-artifact list <resource-ref> --kind "measurement" --intent "current"
+temper data-artifact list <resource-ref> --kind "measurement" --intent "current" --limit 50
 ```
+
+With `--limit`, the answer is `{"artifacts": [...], "next": {"created": ..., "artifact_id": ...}}`.
+When `next` is not `null`, more follow: pass `next.created` and `next.artifact_id` back as
+`--after-created` and `--after-id`, with the same filters. Without `--limit`, the answer is every
+artifact as a bare array, an unbounded default that is retiring.
 
 The content round-trips byte-identical — the same JSON value the writer committed, without
 reconstruction, reassembly, or inference about its shape. This is the core guarantee: what
