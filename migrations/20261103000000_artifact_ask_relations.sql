@@ -1,7 +1,7 @@
 -- Asking data artifacts by what they are: the relations both arms compose — a path helper, an ask
 -- matcher, the set-based governance and shape-state relations, and an index leading with the family.
 -- Spec: temper-artifacts:specs/2026-10-19-asking-artifacts-by-what-they-are-design.md §2.3, §3.1,
--- §3.2, §5. Nothing calls them yet.
+-- §3.2, §5.
 --
 -- Supersedes the reason 20260820000020 gives for NO GIN index on content ("artifacts are reached
 -- only through what points at them"): an artifact is now also selected by what it is, under its
@@ -31,9 +31,8 @@ CREATE INDEX idx_kb_data_artifacts_family
     ON kb_data_artifacts (kind_owner_table, kind_owner_id, artifact_kind)
     WHERE NOT is_folded;
 
--- The value at a path of object keys, or NULL when the path is absent. A JSON null at the path is
--- present (`'null'::jsonb`, not SQL NULL). An empty path is the content itself; the matcher below
--- never asks for one.
+-- A JSON null at the path is present (`'null'::jsonb`, not SQL NULL). An empty path is the content
+-- itself; the matcher below never asks for one.
 CREATE FUNCTION _temper_artifact_get(p_content jsonb, p_path text[])
 RETURNS jsonb
 LANGUAGE plpgsql IMMUTABLE STRICT AS $$
@@ -50,12 +49,12 @@ BEGIN
 END;
 $$;
 
--- Does this content satisfy every predicate of one ask? `p_predicates` is the ask's predicate list
--- as `ArtifactPredicate` serializes it: [{"path": [...], "op": {"op": ..., ...}}, ...].
---
--- Fails closed, as 20260816000010's guard does: anything but an array — NULL included — matches
--- nothing, and so does a predicate whose path is not a non-empty array of strings. The empty array
--- is the one spelling of "no predicates", and matches every artifact, content or none.
+-- `p_predicates` is the ask's predicate list as `ArtifactPredicate` serializes it:
+-- [{"path": [...], "op": {"op": ..., ...}}, ...]. Each element's operator is read by
+-- `_temper_property_predicates_parse` (20260816000010), one element at a time, so a PropertyOp
+-- field added there reaches this matcher too; its `property_key` column is unused here. The
+-- incumbent's fail-closed guard is restated for the list, as in 20260816000010's core: an absent
+-- argument and a malformed one both parse to no rows, so the distinction does not survive the parse.
 CREATE FUNCTION _temper_artifact_ask_match(p_content jsonb, p_predicates jsonb)
 RETURNS boolean
 LANGUAGE sql IMMUTABLE AS $$
@@ -79,21 +78,17 @@ LANGUAGE sql IMMUTABLE AS $$
                        END AS segments) AS p
               CROSS JOIN LATERAL (
                 SELECT _temper_artifact_get(p_content, p.segments) AS value) AS at
+              CROSS JOIN LATERAL _temper_property_predicates_parse(jsonb_build_array(q)) AS pp
               WHERE NOT COALESCE(
                       at.value IS NOT NULL
-                      AND _temper_property_op_match(
-                            q->'op'->>'op',
-                            CASE jsonb_typeof(q->'op'->'values')
-                              WHEN 'array' THEN q->'op'->'values' ELSE '[]'::jsonb END,
-                            q->'op'->>'direction',
-                            q->'op'->'value',
-                            at.value),
+                      AND _temper_property_op_match(pp.op, pp.vals, pp.direction, pp.bound,
+                                                    at.value),
                       false))
 $$;
 
--- The governed population of a shape's lineage, within the caller's visible set: every live artifact
--- of the shape's family on a resource homed in the shape's home, with the shape in force for it (the
--- lineage's live row) and its content hash. `_data_artifact_shape_in_force`, set-based.
+-- The lineage's live row is joined on the whole family as well as the home: two owners may each
+-- declare a shape of one bare kind in one home, and either owner conjunct missing would pair every
+-- artifact with the other owner's shape as well as its own.
 CREATE FUNCTION __temper_ungated_governed_artifacts(p_visible_ids uuid[], p_shape_id uuid)
 RETURNS TABLE (artifact_id uuid, resource_id uuid, shape_id uuid, shape_version int,
                content_hash text)
@@ -120,9 +115,7 @@ LANGUAGE sql STABLE AS $$
      WHERE s.id = p_shape_id
 $$;
 
--- The governed population with each artifact's shape state, decided by the staleness triple
--- (shape_id, shape_version, content_hash) against the shape in force. `_data_artifact_shape_state`,
--- set-based. `never_declared` cannot occur: a governed artifact has a shape in force.
+-- `never_declared` cannot occur: a governed artifact has a shape in force.
 CREATE FUNCTION __temper_ungated_governed_artifact_states(p_visible_ids uuid[], p_shape_id uuid)
 RETURNS TABLE (artifact_id uuid, resource_id uuid, shape_id uuid, shape_version int,
                content_hash text, shape_state text)
@@ -143,13 +136,13 @@ $$;
 COMMENT ON INDEX idx_kb_data_artifacts_family IS
     'Live artifacts by owner-qualified family: the governance relations'' way in from the family, beside idx_kb_resource_homes_anchor from the home (20261103000000).';
 COMMENT ON FUNCTION _temper_artifact_get(jsonb, text[]) IS
-    'The value at a path of object keys, stepping with -> and requiring an object before each step; NULL when absent. Never #>, which reads a numeric segment as an array index. An artifact ask''s path (20261103000000).';
+    'The value at a path of object keys, stepping with -> and requiring an object before each step; NULL when the path is absent. An artifact ask''s path (20261103000000).';
 COMMENT ON FUNCTION _temper_artifact_ask_match(jsonb, jsonb) IS
-    'Whether content satisfies every predicate of one artifact ask: presence at each path conjoined with _temper_property_op_match. Fails closed: a non-array predicate list, or a path that is not a non-empty array of strings, matches nothing; [] matches everything. Differential witness: artifact_ask_parity.rs (20261103000000).';
+    'Whether content satisfies every predicate of one artifact ask: presence at each path conjoined with _temper_property_op_match, each operator read by _temper_property_predicates_parse. Fails closed: a predicate list that is not an array (NULL included), or a path that is not a non-empty array of strings, matches nothing; [] matches every artifact, content or none. Differential witness: artifact_ask_parity.rs (20261103000000).';
 COMMENT ON FUNCTION __temper_ungated_governed_artifacts(uuid[], uuid) IS
-    'UNGATED. The live artifacts governed by a shape''s lineage — its home and family, read from the named row, folded or not — on resources in p_visible_ids, with the shape in force and the content hash. Set-based _data_artifact_shape_in_force, held to it by artifact_ask_parity.rs (20261103000000).';
+    'UNGATED. The live artifacts governed by a shape''s lineage — its home and family, read from the named row, folded or not — on resources in p_visible_ids (NULL admits none), with the shape in force and the content hash. Set-based _data_artifact_shape_in_force, held to it by artifact_ask_parity.rs. Applies neither the enumeration floor (kb_resources_live) nor the re-check that the shape''s home is readable; the composing arm owes both (spec 2026-10-19-asking-artifacts-by-what-they-are §6.1) (20261103000000).';
 COMMENT ON FUNCTION __temper_ungated_governed_artifact_states(uuid[], uuid) IS
-    'UNGATED. __temper_ungated_governed_artifacts with each row''s shape state by the staleness triple. Set-based _data_artifact_shape_state, held to it by artifact_ask_parity.rs (20261103000000).';
+    'UNGATED. __temper_ungated_governed_artifacts with each row''s shape state by the staleness triple (shape_id, shape_version, content_hash) against the shape in force. Set-based _data_artifact_shape_state, held to it by artifact_ask_parity.rs. Applies neither the enumeration floor (kb_resources_live) nor the re-check that the shape''s home is readable; the composing arm owes both (spec 2026-10-19-asking-artifacts-by-what-they-are §6.1) (20261103000000).';
 
 SELECT declare_migration(
     20261103000000,

@@ -5,10 +5,11 @@
 //! each restatement is held here to the definition it restates.
 //!
 //! - **Governance.** `__temper_ungated_governed_artifacts(visible, shape)` holds a live artifact
-//!   exactly when `_data_artifact_shape_in_force` resolves that artifact to a version of the shape's
-//!   lineage (its home and family), and reports that version.
-//! - **Shape state.** `__temper_ungated_governed_artifact_states` equals `_data_artifact_shape_state`
-//!   row for row, over verdict-ed, stale-verdict and unverdict-ed artifacts.
+//!   exactly when `_data_artifact_shape_in_force` resolves that artifact to a version of the
+//!   shape's lineage (its home and family), and reports that version.
+//! - **Shape state.** `__temper_ungated_governed_artifact_states` equals
+//!   `_data_artifact_shape_state` row for row, over verdict-ed, stale-verdict and unverdict-ed
+//!   artifacts.
 //! - **Predicates.** `_temper_artifact_ask_match` equals `temper_core`'s `reference::matches` on
 //!   every pair of generated content and generated ask, content that does not satisfy any shape
 //!   included.
@@ -19,18 +20,24 @@
 //!
 //! Two context homes, A and B, owned by the system profile P; two families, `measurement` and
 //! `run`, owned by P; a shape for each family in each home, and A's `measurement` shape amended
-//! once. Beside them, in A, three artifacts that share the bare kind `measurement` with P's family
-//! and are governed by nothing — each isolates one conjunct of the family join:
+//! once. Beside them, in A, three more families share the bare kind `measurement`, each with a
+//! shape and an artifact of its own. Each isolates one owner conjunct — on the artifact
+//! (`a.kind_owner_*`) and on the lineage's live row (`live.kind_owner_*`):
 //!
-//! - `(kb_teams, T, measurement)` — another owner in both columns, under a shape of its own;
-//! - `(kb_teams, P, measurement)` — P's own uuid under the other owner table: dropping the relation's
-//!   `a.kind_owner_table` conjunct admits it to P's family, and the differential turns red;
-//! - `(kb_profiles, Q, measurement)` — the same owner table, another owner: dropping
-//!   `a.kind_owner_id` admits it.
+//! - `(kb_teams, T, measurement)` — another owner in both columns;
+//! - `(kb_teams, P, measurement)` — P's own uuid under the other owner table. Dropping
+//!   `a.kind_owner_table` admits its artifact to P's family; dropping `live.kind_owner_table` pairs
+//!   P's artifacts with its shape as well as P's;
+//! - `(kb_profiles, Q, measurement)` — the same owner table, another owner. Dropping
+//!   `a.kind_owner_id` or `live.kind_owner_id` does the same.
 //!
 //! B's shapes are the two-home witness: dropping the relation's home conjunct admits B's artifacts
-//! to A's lineage. One resource is rehomed from A to B after its artifact was committed and
-//! verdict-ed under A's shape, and one artifact is folded by a successor that names it.
+//! to A's lineage. A cogmap home C is minted under **A's own uuid**, with a `measurement` shape
+//! and an artifact, so the home's table is the only thing telling C from A: dropping
+//! `h.anchor_table` admits C's artifact to A's lineage, and dropping `live.home_anchor_table` pairs
+//! A's artifacts with C's shape. One resource is rehomed from A to B after its artifact was
+//! committed and verdict-ed under A's shape, and one artifact is folded by a successor that names
+//! it.
 //!
 //! ## The predicate differential's two traps (decision P9)
 //!
@@ -42,7 +49,10 @@
 //! **Strings.** jsonb orders strings by the database collation. The database is the oracle: every
 //! string the generator can produce, object keys included, is ranked by Postgres as a jsonb string
 //! (`dense_rank() OVER (ORDER BY to_jsonb(s))`, the comparison jsonb's own ordering makes), and the
-//! comparator handed to the reference orders each pair by those ranks.
+//! comparator handed to the reference orders each pair by those ranks. The test asserts that some
+//! ranked pair orders differently bytewise, so the trap is exercised rather than assumed: on a
+//! database whose collation is bytewise, it fails and says so. A hand-picked ask, `unit > "B"` over
+//! `{"unit": "a"}`, is true bytewise and false under a linguistic collation.
 //!
 //! **Determinism.** The generator is a splitmix64 stream from [`SEED`]: [`GENERATED_CONTENTS`]
 //! contents and [`GENERATED_ASKS`] asks, after the hand-picked ones, so a failure reproduces from
@@ -58,8 +68,11 @@ use sqlx::PgPool;
 use temper_core::types::artifact_ask::reference;
 use temper_core::types::query::filter::{OrdOp, PropertyOp};
 use temper_core::types::ArtifactPredicate;
+use temper_substrate::content::{PreparedBlock, PreparedChunk};
 use temper_substrate::events::{fire, EventContext, SeedAction};
-use temper_substrate::ids::{ContextId, DataArtifactId, EntityId, ProfileId, ResourceId};
+use temper_substrate::ids::{
+    BlockId, ChunkId, CogmapId, ContextId, DataArtifactId, EntityId, ProfileId, ResourceId,
+};
 use temper_substrate::payloads::{AnchorRef, ArtifactIntent, EnforcementMode, KindOwner};
 use temper_substrate::scenario::bootseed;
 use temper_substrate::writes::{self, CommitDataArtifactParams, CreateParams, DeclareShapeParams};
@@ -97,7 +110,7 @@ async fn resource(
     pool: &PgPool,
     owner: ProfileId,
     emitter: EntityId,
-    home: ContextId,
+    home: AnchorRef,
     title: &str,
 ) -> ResourceId {
     let origin = format!("test://artifact-ask/{title}");
@@ -109,7 +122,7 @@ async fn resource(
             origin_uri: &origin,
             body: "fixture body",
             doc_type: "research",
-            home: AnchorRef::context(home),
+            home,
             owner,
             originator: owner,
             emitter,
@@ -148,12 +161,12 @@ fn non_conforming() -> Value {
 type Family = (KindOwner, &'static str);
 
 /// Declare (or amend) the advisory shape for a family in a home.
-async fn declare(pool: &PgPool, emitter: EntityId, home: ContextId, family: Family) -> Uuid {
+async fn declare(pool: &PgPool, emitter: EntityId, home: AnchorRef, family: Family) -> Uuid {
     let (owner, kind) = family;
     writes::declare_shape(
         pool,
         DeclareShapeParams {
-            home: AnchorRef::context(home),
+            home,
             kind,
             kind_owner: Some(owner),
             schema: &shape_schema(),
@@ -211,6 +224,11 @@ struct World {
     shape_a_v1: Uuid,
     shape_a_v2: Uuid,
     shape_b: Uuid,
+    /// The cogmap home C's `measurement` shape; C has A's uuid.
+    shape_c: Uuid,
+    /// The shapes of `(kb_teams, P, measurement)` and `(kb_profiles, Q, measurement)` in A.
+    shape_other_table: Uuid,
+    shape_other_owner: Uuid,
     /// Committed before any shape was declared, so it has no verdict.
     unverdicted: DataArtifactId,
     /// Verdict-ed under A's first version, which the amendment folded.
@@ -227,6 +245,55 @@ struct World {
     other_owner_table: DataArtifactId,
     /// `(kb_profiles, Q, measurement)`: the same owner table, another owner.
     other_owner_id: DataArtifactId,
+    /// P's `measurement` artifact on a resource homed in the cogmap C.
+    cogmap_homed: DataArtifactId,
+}
+
+/// Mint a cogmap under a chosen id. The world gives it a context's uuid, so that only the anchor
+/// table tells the two homes apart.
+async fn cogmap_with_id(
+    pool: &PgPool,
+    owner: ProfileId,
+    emitter: EntityId,
+    id: Uuid,
+    name: &str,
+) -> CogmapId {
+    let mut embedding = vec![0.0_f32; 768];
+    embedding[0] = 1.0;
+    let charter = vec![PreparedBlock {
+        incorporated: vec![],
+        raw_text: None,
+        block_id: BlockId::from(Uuid::now_v7()),
+        seq: 0,
+        role: None,
+        chunks: vec![PreparedChunk {
+            chunk_id: ChunkId::from(Uuid::now_v7()),
+            chunk_index: 0,
+            content_hash: format!("{:064x}", Uuid::now_v7().as_u128()),
+            content: "charter statement".to_string(),
+            embedding: Some(embedding),
+            embedded_with: None,
+            header_path: None,
+            heading_depth: None,
+        }],
+    }];
+    let mut tx = pool.begin().await.unwrap();
+    let fired = fire(
+        &mut tx,
+        SeedAction::CogmapGenesis {
+            name,
+            telos_title: "Telos",
+            charter: &charter,
+            cogmap_id: Some(CogmapId::from(id)),
+            telos_resource_id: None,
+            owner,
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    fired.cogmap_genesis().unwrap().0
 }
 
 async fn world(pool: &PgPool) -> World {
@@ -235,27 +302,38 @@ async fn world(pool: &PgPool) -> World {
     let team = common::create_team(pool, "artifact-ask-team").await;
     let stranger = common::create_profile(pool, "artifact-ask-stranger@example.test").await;
 
-    // P's two families, the team's same-named family, and the two governed by nothing.
+    // P's two families, and three more of the bare kind `measurement` under other owners.
     let measured: Family = (KindOwner::Profile(owner.uuid()), MEASUREMENT);
     let runs: Family = (KindOwner::Profile(owner.uuid()), RUN);
     let team_measured: Family = (KindOwner::Team(team), MEASUREMENT);
     let other_table: Family = (KindOwner::Team(owner.uuid()), MEASUREMENT);
     let other_owner: Family = (KindOwner::Profile(stranger), MEASUREMENT);
 
-    let a = context(pool, owner, "artifact-ask-a").await;
-    let b = context(pool, owner, "artifact-ask-b").await;
+    let a_id = context(pool, owner, "artifact-ask-a").await;
+    let b_id = context(pool, owner, "artifact-ask-b").await;
+    let c_id = cogmap_with_id(pool, owner, emitter, a_id.uuid(), "artifact-ask-c").await;
+    assert_eq!(c_id.uuid(), a_id.uuid(), "C is minted under A's uuid");
+    let (a, b, c) = (
+        AnchorRef::context(a_id),
+        AnchorRef::context(b_id),
+        AnchorRef::cogmap(c_id),
+    );
     let r_a1 = resource(pool, owner, emitter, a, "a-one").await;
     let r_a2 = resource(pool, owner, emitter, a, "a-two").await;
     let r_b1 = resource(pool, owner, emitter, b, "b-one").await;
+    let r_c1 = resource(pool, owner, emitter, c, "c-one").await;
     let r_move = resource(pool, owner, emitter, a, "moves-to-b").await;
 
     let unverdicted = commit(pool, emitter, r_a2, measured, &conforming()).await;
 
     let shape_a_v1 = declare(pool, emitter, a, measured).await;
     let shape_b = declare(pool, emitter, b, measured).await;
+    let shape_c = declare(pool, emitter, c, measured).await;
     declare(pool, emitter, a, runs).await;
     declare(pool, emitter, b, runs).await;
     declare(pool, emitter, a, team_measured).await;
+    let shape_other_table = declare(pool, emitter, a, other_table).await;
+    let shape_other_owner = declare(pool, emitter, a, other_owner).await;
 
     let version_stale = commit(pool, emitter, r_a1, measured, &conforming()).await;
     let rehomed = commit(pool, emitter, r_move, measured, &conforming()).await;
@@ -263,6 +341,7 @@ async fn world(pool: &PgPool) -> World {
     commit(pool, emitter, r_a1, team_measured, &conforming()).await;
     let other_owner_table = commit(pool, emitter, r_a1, other_table, &conforming()).await;
     let other_owner_id = commit(pool, emitter, r_a1, other_owner, &conforming()).await;
+    let cogmap_homed = commit(pool, emitter, r_c1, measured, &conforming()).await;
     commit(pool, emitter, r_b1, measured, &conforming()).await;
     commit(pool, emitter, r_b1, runs, &non_conforming()).await;
     let folded = commit(pool, emitter, r_a1, measured, &conforming()).await;
@@ -287,7 +366,7 @@ async fn world(pool: &PgPool) -> World {
         &mut tx,
         SeedAction::ResourceRehome {
             resource: r_move,
-            home: AnchorRef::context(b),
+            home: b,
             emitter,
         },
     )
@@ -319,6 +398,9 @@ async fn world(pool: &PgPool) -> World {
         shape_a_v1,
         shape_a_v2,
         shape_b,
+        shape_c,
+        shape_other_table,
+        shape_other_owner,
         unverdicted,
         version_stale,
         hash_stale,
@@ -328,6 +410,7 @@ async fn world(pool: &PgPool) -> World {
         folded,
         other_owner_table,
         other_owner_id,
+        cogmap_homed,
     }
 }
 
@@ -408,9 +491,18 @@ async fn governed_ids(pool: &PgPool, visible: &[Uuid], shape: Uuid) -> BTreeSet<
 /// relation for that shape exactly when `_data_artifact_shape_in_force` resolves it to a version of
 /// the shape's lineage, and the relation reports the version the incumbent resolves.
 ///
-/// Bites (each applied to `__temper_ungated_governed_artifacts` in `20261103000000`): drop
-/// `a.kind_owner_table = s.kind_owner_table` and `(kb_teams, P, measurement)` joins A's
-/// `measurement` population; drop `h.anchor_id = s.home_anchor_id` and B's artifacts join A's.
+/// Bites, each one line of `__temper_ungated_governed_artifacts` in `20261103000000`, each turning
+/// this test red:
+///
+/// - drop `a.kind_owner_table = s.kind_owner_table`: `(kb_teams, P, measurement)` joins A's
+///   `measurement` population;
+/// - drop `h.anchor_id = s.home_anchor_id`: B's artifacts join A's;
+/// - drop `live.kind_owner_table = s.kind_owner_table`: A's artifacts are paired with the
+///   `(kb_teams, P, measurement)` shape as well as P's;
+/// - drop `live.kind_owner_id = s.kind_owner_id`: the same with `(kb_profiles, Q, measurement)`;
+/// - drop `h.anchor_table = s.home_anchor_table`: the cogmap C, minted under A's uuid, has its
+///   artifact join A's population;
+/// - drop `live.home_anchor_table = s.home_anchor_table`: A's artifacts are paired with C's shape.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn the_governance_relation_is_shape_in_force_set_based(pool: PgPool) {
     let w = world(&pool).await;
@@ -477,6 +569,29 @@ async fn the_governance_relation_is_shape_in_force_set_based(pool: PgPool) {
             .contains(&w.rehomed.uuid()),
         "the rehomed artifact is governed by its new home's shape"
     );
+    for (shape, artifact, what) in [
+        (w.shape_c, w.cogmap_homed, "the cogmap C, under A's uuid"),
+        (
+            w.shape_other_table,
+            w.other_owner_table,
+            "(kb_teams, P, measurement)",
+        ),
+        (
+            w.shape_other_owner,
+            w.other_owner_id,
+            "(kb_profiles, Q, measurement)",
+        ),
+    ] {
+        assert_eq!(
+            governed_ids(&pool, &w.visible, shape).await,
+            BTreeSet::from([artifact.uuid()]),
+            "{what}: its own shape governs its own artifact and nothing of P's in A"
+        );
+        assert!(
+            !a_v2.contains(&artifact.uuid()),
+            "{what}: its artifact is not governed by A's shape"
+        );
+    }
 
     // The namespace witness shares P's uuid and differs only in the owner table, and is live in A.
     let witness = sqlx::query!(
@@ -535,10 +650,21 @@ async fn the_governance_relations_admit_only_the_visible_set(pool: PgPool) {
     .await
     .unwrap();
     let narrowed = governed_ids(&pool, &[owning], w.shape_a_v2).await;
+    // What the one-resource set should admit, decided without it: the artifacts the table says that
+    // resource owns, among those the whole set admits.
+    let on_owning: BTreeSet<Uuid> = sqlx::query_scalar!(
+        "SELECT id FROM kb_data_artifacts WHERE resource_id = $1",
+        owning,
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap()
+    .into_iter()
+    .collect();
     let owned: BTreeSet<Uuid> = governed_ids(&pool, &w.visible, w.shape_a_v2)
         .await
         .into_iter()
-        .filter(|artifact| narrowed.contains(artifact))
+        .filter(|artifact| on_owning.contains(artifact))
         .collect();
     assert!(
         narrowed.contains(&w.unverdicted.uuid()),
@@ -548,7 +674,10 @@ async fn the_governance_relations_admit_only_the_visible_set(pool: PgPool) {
         !narrowed.contains(&w.satisfied.uuid()),
         "an artifact on a resource outside the set is not"
     );
-    assert_eq!(narrowed, owned);
+    assert_eq!(
+        narrowed, owned,
+        "a one-resource set admits exactly that resource's governed artifacts"
+    );
 }
 
 // ── Shape state ─────────────────────────────────────────────────────────────────────────────────
@@ -665,20 +794,28 @@ fn plan_nodes<'p>(node: &'p Value, out: &mut Vec<&'p Map<String, Value>>) {
     }
 }
 
-/// One small home among many larger ones, the visible set every resource (so starting from it is
-/// the expensive way in), and the asked family shared by half of every other home's artifacts (so
-/// the family alone is not selective). Both relations must reach `kb_data_artifacts` by an index —
-/// the home's or the family's — and never scan it.
+/// One small home among 150 larger ones, 18,000 background artifacts of which half are the asked
+/// family, and the visible set every resource, bound as a parameter. Asserted, for both relations,
+/// on `EXPLAIN (FORMAT JSON)` node types and index names, never timings:
 ///
-/// The relations are asserted to be inlined — `kb_data_artifacts` appears in the plan by name —
-/// before the scan is asserted absent, since a plan that called them opaquely would show no scan
-/// of anything and pass for the wrong reason. Asserted on node types and index names, not timings.
+/// 1. `kb_data_artifacts` appears in the plan by name, so the relation was inlined — a plan that
+///    called it opaquely would show no scan of anything, and pass the next check for the wrong
+///    reason;
+/// 2. no node is a `Seq Scan` of `kb_data_artifacts`;
+/// 3. some node uses `idx_kb_data_artifacts_family` or `idx_kb_resource_homes_anchor`.
+///
+/// It does not assert which of the two the planner takes, or that the choice is the cheaper one.
+/// The home and family come from the shape row inside the statement, so the planner estimates the
+/// family join from `n_distinct(kind_owner_id)`. Here the other half of the background has a fresh
+/// owner per row, the estimate is about one row, and the planner takes the family index for a
+/// family that holds about 9,000. The plan of the composed statement, under its own estimates, is
+/// the composing arm's to test.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn the_relations_start_from_the_home_or_the_family_never_a_scan_of_artifacts(pool: PgPool) {
     bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = system_actor(&pool).await;
     let measured: Family = (KindOwner::Profile(owner.uuid()), MEASUREMENT);
-    let home = context(&pool, owner, "artifact-ask-plan").await;
+    let home = AnchorRef::context(context(&pool, owner, "artifact-ask-plan").await);
     let on = resource(&pool, owner, emitter, home, "plan-subject").await;
     let shape = declare(&pool, emitter, home, measured).await;
     for _ in 0..3 {
@@ -843,10 +980,11 @@ async fn the_path_helper_steps_object_keys_only(pool: PgPool) {
     }
 }
 
-/// Review Focus 2: `["rows","0","x"]` over a stored `rows` array is absent on both sides, for every
-/// operator; over an object keyed `"0"` it is present on both. Bite: in `_temper_artifact_ask_match`
-/// (`20261103000000`), replace `_temper_artifact_get(p_content, p.segments)` with
-/// `p_content #> p.segments`, and the array case matches in SQL.
+/// A numeric segment over an array: `["rows","0","x"]` over a stored `rows` array is absent on
+/// both sides, for every operator; over an object keyed `"0"` it is present on both. Bite: in
+/// `_temper_artifact_ask_match` (`20261103000000`), replace
+/// `_temper_artifact_get(p_content, p.segments)` with `p_content #> p.segments`, and the array case
+/// matches in SQL.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn a_numeric_segment_over_an_array_is_absent_on_both_sides(pool: PgPool) {
     let path = vec!["rows".to_string(), "0".to_string(), "x".to_string()];
@@ -962,7 +1100,7 @@ async fn a_malformed_predicate_matches_nothing_beside_a_well_formed_twin(pool: P
         );
     }
 
-    // An artifact with no content: the empty list is the whole population, and every path is absent.
+    // An artifact with no content: the empty list is the whole population; every path is absent.
     assert_eq!(sql_match(&pool, None, Some(json!([]))).await, Some(true));
     assert_eq!(sql_match(&pool, None, Some(has_unit)).await, Some(false));
 }
@@ -1162,7 +1300,7 @@ fn hand_picked_contents() -> Vec<Value> {
         json!({ "rows": { "0": { "x": 1 } } }),
         json!({ "n": 5 }),
         json!({ "n": 5.0 }),
-        json!({ "s": "é", "unit": "e" }),
+        json!({ "s": "é", "unit": "a" }),
         json!({ "unit": null }),
         json!({ "unit": ["ms", "s"] }),
         json!({ "rows": [[1, 3], 2] }),
@@ -1194,7 +1332,7 @@ fn hand_picked_asks() -> Vec<Vec<ArtifactPredicate>> {
             &["unit"],
             PropertyOp::Compare {
                 direction: OrdOp::Gt,
-                value: json!("é"),
+                value: json!("B"),
             },
         )],
         vec![at(
@@ -1250,7 +1388,11 @@ fn operator(op: &PropertyOp) -> &'static str {
 /// [`SEED`]. Strings are ordered by Postgres (P9).
 ///
 /// The corpus is checked for containing both outcomes under every operator and for using every
-/// direction, so an agreement that held only because everything was absent cannot pass.
+/// direction, so an agreement that held only because everything was absent cannot pass, and for
+/// containing a pair of strings that bytewise order and the database collation order differently.
+///
+/// Bite: pass `&bytewise` for `&by_postgres` to `reference::matches`, and the hand-picked
+/// `unit > "B"` over `{"unit": "a"}` disagrees (bytewise `"a" > "B"`, the collation the reverse).
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn the_matcher_agrees_with_the_reference_evaluator(pool: PgPool) {
     let mut s = Stream(SEED);
@@ -1290,6 +1432,13 @@ async fn the_matcher_agrees_with_the_reference_evaluator(pool: PgPool) {
             .unwrap_or_else(|| panic!("{x:?} was never ranked by Postgres"))
     };
     let by_postgres = |a: &str, b: &str| ranked(a).cmp(&ranked(b));
+    assert!(
+        strings.iter().any(|x| strings
+            .iter()
+            .any(|y| bytewise(x, y) != by_postgres(x.as_str(), y.as_str()))),
+        "every ranked pair orders the same bytewise and under the database collation, so the \
+         string trap (P9) is not exercised here"
+    );
 
     let asks_json: Vec<Value> = asks
         .iter()
