@@ -91,7 +91,9 @@ test("the contract's own recipes pass", () => {
 	writeFileSync(
 		join(dir, 'colour-guard.json'),
 		JSON.stringify({
-			paths: ['base.css', 'region.css', 'shadcn-bridge.css'].map((f) => join(contract, f)),
+			paths: ['base.css', 'region.css', 'markdown.css', 'shadcn-bridge.css'].map((f) =>
+				join(contract, f),
+			),
 		}),
 	);
 	const run = guard(join(dir, 'colour-guard.json'));
@@ -179,6 +181,25 @@ const PLANTED = [
 		1,
 		'--obsidian',
 	],
+	// (e) a role mixed down: the CSS twin of (c)
+	[
+		'a role mixed down in a declaration',
+		'<style>\n.x { border-left: 1px solid color-mix(in srgb, var(--tp-accent) 22%, transparent); }\n</style>\n',
+		2,
+		'color-mix(',
+	],
+	[
+		'a role mixed down in an arbitrary utility',
+		'<p class="bg-[color-mix(in_srgb,var(--tp-accent)_15%,transparent)]">x</p>\n',
+		1,
+		'color-mix(',
+	],
+	[
+		'a role mixed with another role',
+		'<style>\n.x { color: color-mix(in srgb, var(--tp-accent) 80%, var(--tp-text)); }\n</style>\n',
+		2,
+		'color-mix(',
+	],
 	// (b) the colour utilities Tailwind v4 added beside the classic ones
 	['a stock text shadow', '<p class="text-shadow-zinc-500">x</p>\n', 1, 'text-shadow-zinc-500'],
 	['a stock inset ring', '<p class="inset-ring-zinc-700">x</p>\n', 1, 'inset-ring-zinc-700'],
@@ -198,6 +219,48 @@ for (const [name, planted, line, found] of PLANTED) {
 		assertRefused(guard(surface(planted)), line, found);
 	});
 }
+
+// A variable a surface has declared pending: a named hole, closed by a named task. Its reads are
+// counted and reported, not refused; anything else in the same expression is still held.
+const HUE = { var: '--hue', until: 'T10', why: 'doc-type tint; core binds doc types to slots' };
+const PENDING_MIX =
+	'<style>\n.x { color: var(--hue); border-left: 1px solid color-mix(in srgb, var(--hue) 22%, transparent); }\n.y { color: color-mix(in srgb, var(--hue) 80%, var(--tp-text)); }\n</style>\n';
+
+test('a declared pending variable is reported, not refused', () => {
+	const run = guard(surface(PENDING_MIX, { pending: [HUE] }));
+	assert.equal(run.status, 0, run.stderr);
+	assert.ok(
+		run.stdout.includes('pending: --hue read 3 time(s) until T10'),
+		`the pending count is not reported:\n${run.stdout}`,
+	);
+});
+
+test('the same reads with no pending entry are refused', () => {
+	assertRefused(guard(surface(PENDING_MIX)), 2, 'var(--hue)');
+});
+
+test('a literal inside a mix of a pending variable is still refused', () => {
+	const planted = '<style>\n.x { color: color-mix(in srgb, var(--hue) 80%, white); }\n</style>\n';
+	assertRefused(guard(surface(planted, { pending: [HUE] })), 2, 'white');
+});
+
+test('a pending entry missing its task or reason is refused', () => {
+	for (const entry of [
+		{ var: '--hue', until: 'T10' },
+		{ var: '--hue', why: 'x' },
+		{ until: 'T10', why: 'x' },
+	]) {
+		assert.equal(guard(surface(undefined, { pending: [entry] })).status, 2, JSON.stringify(entry));
+	}
+});
+
+test('a pending entry naming a role is refused: a role needs no excuse', () => {
+	assert.equal(guard(surface(undefined, { pending: [{ ...HUE, var: '--tp-accent' }] })).status, 2);
+});
+
+test('a pending value that is not a list is refused', () => {
+	assert.equal(guard(surface(undefined, { pending: HUE })).status, 2);
+});
 
 test('a component of any listed directory is read', () => {
 	const config = surface('<p class="text-zinc-500">x</p>\n', { paths: ['src'] });

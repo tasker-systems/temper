@@ -1,0 +1,240 @@
+/* The markdown recipe: how a rendered document reads, on every surface.
+
+   `rendering-agrees` — the package's `markdown` and `sanitize` modules decide what a document
+   becomes; this recipe decides how it looks. A surface wraps the sanitized HTML in one element,
+
+     <div class="md-body">{@html sanitized}</div>
+
+   and adds nothing that paints: a surface that restyles a heading or a table here is the drift
+   this recipe exists to prevent. Layout around the wrapper (width, margins) is the surface's.
+
+   The wrapper is the renderer's, outside the sanitized string; the sanitizer strips the classes a
+   document's author writes, so no document can reach these rules except through it. Fenced code
+   takes its token colours from `base.css`'s `.hljs` rules. Roles only — no literal colour
+   appears here. Import it into the same cascade layer as `base.css`: unlayered, it would
+   outrank a component's own utilities. */
+
+.md-body {
+  font: 1rem/1.7 var(--tp-font-reading);
+  color: var(--tp-text-muted);
+  overflow-wrap: anywhere;
+}
+
+/* ── Headings ─────────────────────────────────────────────────────── */
+
+.md-body h1,
+.md-body h2,
+.md-body h3,
+.md-body h4,
+.md-body h5,
+.md-body h6 {
+  font-family: var(--tp-font-reading);
+  color: var(--tp-text);
+  line-height: 1.3;
+}
+
+.md-body h1 {
+  font-size: 1.5rem;
+  font-weight: 400;
+  margin: 2rem 0 0.7rem;
+}
+
+.md-body h2 {
+  font-size: 1.25rem;
+  font-weight: 400;
+  margin: 1.8rem 0 0.6rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--tp-rule);
+}
+
+.md-body h3 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin: 1.5rem 0 0.4rem;
+}
+
+.md-body h4,
+.md-body h5,
+.md-body h6 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin: 1.2rem 0 0.3rem;
+}
+
+.md-body :is(h1, h2, h3, h4, h5, h6):first-child {
+  margin-top: 0;
+}
+
+/* ── Body text ────────────────────────────────────────────────────── */
+
+.md-body p {
+  margin: 0 0 0.9rem;
+}
+
+.md-body > :last-child {
+  margin-bottom: 0;
+}
+
+.md-body strong {
+  color: var(--tp-text);
+  font-weight: 600;
+}
+
+/* ── Links ────────────────────────────────────────────────────────── */
+
+.md-body a {
+  color: var(--tp-accent);
+  text-decoration: none;
+  border-bottom: 1px solid var(--tp-accent-line-soft);
+  transition: border-color var(--tp-motion-quick) var(--tp-motion-easing);
+}
+
+.md-body a:hover {
+  border-bottom-color: var(--tp-accent);
+}
+
+/* ── Lists ────────────────────────────────────────────────────────── */
+
+.md-body ul,
+.md-body ol {
+  margin: 0 0 0.9rem;
+  padding-left: 1.5rem;
+}
+
+.md-body li {
+  margin-bottom: 0.25rem;
+}
+
+.md-body li::marker {
+  color: var(--tp-accent);
+}
+
+.md-body ul > li {
+  list-style-type: disc;
+}
+
+.md-body ol > li {
+  list-style-type: decimal;
+}
+
+.md-body li > ul,
+.md-body li > ol {
+  margin-top: 0.25rem;
+  margin-bottom: 0;
+}
+
+/* ── Inline code ──────────────────────────────────────────────────── */
+
+.md-body code {
+  font-family: var(--tp-font-doing);
+  font-size: 0.82em;
+  color: var(--tp-text);
+  background: var(--tp-surface-raised);
+  padding: 0.12em 0.35em;
+  border-radius: var(--tp-radius-chip);
+}
+
+/* ── Code blocks ──────────────────────────────────────────────────── */
+
+.md-body pre {
+  background: var(--tp-surface-raised);
+  border: 1px solid var(--tp-rule);
+  border-radius: var(--tp-radius-chip);
+  padding: 0.8rem 1rem;
+  margin: 0 0 0.9rem;
+  overflow-x: auto;
+}
+
+.md-body pre code {
+  background: none;
+  padding: 0;
+  color: var(--tp-text-muted);
+  font-size: 0.8rem;
+  line-height: 1.6;
+  overflow-wrap: normal;
+}
+
+/* ── Blockquotes ──────────────────────────────────────────────────── */
+
+.md-body blockquote {
+  border-left: 2px solid var(--tp-accent-line-soft);
+  margin: 0 0 0.9rem;
+  padding: 0.3rem 0 0.3rem 1.1rem;
+  color: var(--tp-text-subtle);
+  font-style: italic;
+}
+
+.md-body blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+/* ── Horizontal rules ─────────────────────────────────────────────── */
+
+.md-body hr {
+  border: none;
+  border-top: 1px solid var(--tp-rule);
+  margin: 1.6rem 0;
+}
+
+/* ── Tables ───────────────────────────────────────────────────────── */
+
+.md-body table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0 0 0.9rem;
+  font: 0.85rem/1.5 var(--tp-font-ui);
+}
+
+.md-body th {
+  text-align: left;
+  padding: 0.45rem 0.7rem;
+  border-bottom: 1px solid var(--tp-rule-strong);
+  font: 0.62rem var(--tp-font-doing);
+  letter-spacing: var(--tp-tracking-strip);
+  text-transform: uppercase;
+  color: var(--tp-text-subtle);
+}
+
+.md-body td {
+  padding: 0.4rem 0.7rem;
+  border-bottom: 1px solid var(--tp-rule);
+}
+
+.md-body tr:last-child td {
+  border-bottom: none;
+}
+
+/* ── Refusals ─────────────────────────────────────────────────────── */
+
+/* Both arrive inside the sanitized string — `REFUSAL_HTML` from the parse gate (`markdown`),
+   `md-withheld` from the sanitizer's image arm (`sanitize`). A verdict, not an alarm: the muted
+   register for a refusal; for a withheld fetch, the gave-up region's colours, marker and dotted
+   edge (`region.css`), because it is a wait the renderer chose not to make. */
+.md-body .md-refusal {
+  color: var(--tp-text-subtle);
+  font-style: italic;
+}
+
+.md-body .md-withheld {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border: 1px dotted var(--tp-region-gave-up);
+  border-radius: var(--tp-radius-chip);
+  background: var(--tp-region-gave-up-wash);
+  color: var(--tp-region-gave-up);
+  font: 0.75rem var(--tp-font-doing);
+}
+
+.md-body .md-withheld::before {
+  content: '⊘ ';
+}
+
+/* ── Images ───────────────────────────────────────────────────────── */
+
+.md-body img {
+  max-width: 100%;
+  border-radius: var(--tp-radius-chip);
+  margin: 0.4rem 0 0.9rem;
+}

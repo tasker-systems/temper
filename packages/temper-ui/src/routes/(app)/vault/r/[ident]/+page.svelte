@@ -227,14 +227,14 @@
 	}
 	.masthead {
 		padding: 18px 22px;
-		border-bottom: 1px solid var(--color-quiet-rule);
+		border-bottom: 1px solid var(--tp-rule);
 	}
 	.eyebrow {
 		font-family: var(--font-mono);
 		font-size: 9px;
 		letter-spacing: var(--track-label);
 		text-transform: uppercase;
-		color: color-mix(in srgb, var(--hue) 80%, white);
+		color: color-mix(in srgb, var(--hue) 80%, var(--tp-text));
 	}
 	.title {
 		font-family: var(--font-serif);
@@ -252,7 +252,7 @@
 		padding: 0 22px 18px;
 	}
 	.rail {
-		background: var(--color-quiet-card);
+		background: var(--tp-surface);
 		border-left: 1px solid color-mix(in srgb, var(--hue) 22%, transparent);
 	}
 	/* The rail's sections carry their own padding; a bare region needs the same gutter. */
@@ -276,18 +276,18 @@
 		font-size: 9px;
 		letter-spacing: var(--track-label);
 		text-transform: uppercase;
-		color: var(--color-quiet-dim);
+		color: var(--tp-text-subtle);
 		text-decoration: none;
 	}
 	.rail-toggle:hover,
 	.walk:hover {
-		color: var(--color-quiet-mid);
+		color: var(--tp-text-muted);
 	}
 	.rail-closed {
 		padding: 12px 14px;
 		font-family: var(--font-mono);
 		font-size: 10.5px;
-		color: var(--color-quiet-dim);
+		color: var(--tp-text-subtle);
 	}
 	/* Same treatment as `EventHistory`'s and `EdgeList`'s own heading, so a region's label does not
 	   change appearance depending on whether its read has answered. */
@@ -296,7 +296,7 @@
 		font-size: 9px;
 		letter-spacing: var(--track-label);
 		text-transform: uppercase;
-		color: var(--color-quiet-dim);
+		color: var(--tp-text-subtle);
 		margin-bottom: 6px;
 	}
 

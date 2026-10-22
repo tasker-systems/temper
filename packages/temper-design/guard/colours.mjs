@@ -8,12 +8,18 @@
 //       surface declares for itself (`--color-<name>` in the theme files it lists);
 //   (c) an opacity modifier on a role utility: a role at 15% is a value no theme chose;
 //   (d) a colour declaration, SVG attribute, style directive or arbitrary colour utility reading
-//       a variable that is not a role.
+//       a variable that is not a role;
+//   (e) a role mixed down: a `color-mix()` reading a role is (c) spelled in CSS.
 //
 // A surface commits a config naming what it guards, relative to the config's own directory:
 //
 //   { "paths": ["src/lib/components/Sidebar.svelte", "src/routes/(app)"],
-//     "themes": ["src/app.css"] }
+//     "themes": ["src/app.css"],
+//     "pending": [{ "var": "--hue", "until": "T10", "why": "doc-type tint, not yet bound" }] }
+//
+// A `pending` entry is a declared hole: a variable that is not a role yet, the task that makes it
+// one, and why it waits. Its reads — and any `color-mix()` reading it — are counted and reported
+// on every run rather than refused, so the hole stays stated. A literal beside it is still (a).
 //
 // A listed directory is walked for .svelte and .css files; a listed file is read whatever its
 // extension. A surface still moving off the stock palette lists the areas it has moved, and
@@ -47,6 +53,17 @@ const themes = config.themes ?? [];
 if (!Array.isArray(paths) || paths.length === 0)
 	fail('"paths" is empty: an empty scope guards nothing');
 if (!Array.isArray(themes)) fail('"themes" must be a list');
+const pendingEntries = config.pending ?? [];
+if (!Array.isArray(pendingEntries)) fail('"pending" must be a list');
+const pending = new Map();
+for (const entry of pendingEntries) {
+	const { var: name, until, why } = entry ?? {};
+	if (![name, until, why].every((v) => typeof v === 'string' && v.trim()))
+		fail(`pending entry ${JSON.stringify(entry)} needs "var", "until" and "why": a hole is named`);
+	if (!/^--[a-zA-Z0-9-]+$/.test(name)) fail(`pending "var" ${name} is not a custom property`);
+	if (name.startsWith('--tp-')) fail(`pending "var" ${name} is a role: a role needs no excuse`);
+	pending.set(name, { until, reads: 0 });
+}
 
 // The desktop's literal rule: hex, the colour functions, and named colours where a value ends.
 // An id or anchor like `#r0` is not a colour; only hex-shaped runs of 3/4/6/8 count. Nor is an
@@ -78,6 +95,22 @@ const DECLARATION =
 const ATTRIBUTE =
 	/(?<![\w-])(?:style:)?(fill|stroke|stop-color|flood-color|lighting-color|color|background(?:-color)?|border(?:-[a-z]+)*-color|outline-color|caret-color|accent-color|text-decoration-color)\s*=\s*["'{]([^"'}\n]*)/g;
 const PRIVATE_VAR = /var\(\s*(--(?!tp-)[a-zA-Z0-9-]+)/g;
+const ROLE_VAR = /var\(\s*--tp-/;
+const PENDING_VAR = /var\(\s*(--[a-zA-Z0-9-]+)/g;
+
+// Each `color-mix(…)` on a line, with its balanced argument list. Tailwind's arbitrary values
+// spell spaces as `_`, which changes nothing here.
+function* mixes(line) {
+	for (let at = line.indexOf('color-mix('); at >= 0; at = line.indexOf('color-mix(', at + 1)) {
+		let depth = 0;
+		let end = at + 'color-mix'.length;
+		for (; end < line.length; end++) {
+			if (line[end] === '(') depth++;
+			else if (line[end] === ')' && --depth === 0) break;
+		}
+		yield line.slice(at, end + 1);
+	}
+}
 
 // Blank out every `open … close` span, keeping its newlines so reported line numbers stay true.
 // A scan rather than a regex replace: an unterminated comment blanks the rest of the file instead
@@ -132,8 +165,19 @@ for (const listed of paths) {
 	} else files.push(path);
 }
 
+const readsPending = (text) => [...text.matchAll(PENDING_VAR)].some((m) => pending.has(m[1]));
+
 function refusals(line) {
 	const out = [];
+	for (const mix of mixes(line)) {
+		if (ROLE_VAR.test(mix) && !readsPending(mix))
+			out.push(
+				`${mix} mixes a role to a strength no theme chose — use a role (*-wash, accent-hover, …)`,
+			);
+	}
+	for (const m of line.matchAll(PENDING_VAR)) {
+		if (pending.has(m[1])) pending.get(m[1]).reads++;
+	}
 	for (const m of line.matchAll(LITERAL)) {
 		if (m[0].startsWith('#') && ![4, 5, 7, 9].includes(m[0].length)) continue;
 		out.push(`literal colour ${m[0]} — use a theme role`);
@@ -149,10 +193,12 @@ function refusals(line) {
 		}
 	}
 	for (const m of line.matchAll(ARBITRARY_VAR)) {
+		if (pending.has(m[1])) continue;
 		out.push(`${m[0]} reads ${m[1]}, which is not a role`);
 	}
 	for (const m of [...line.matchAll(DECLARATION), ...line.matchAll(ATTRIBUTE)]) {
 		for (const v of m[2].matchAll(PRIVATE_VAR)) {
+			if (pending.has(v[1])) continue;
 			out.push(`${m[1]} reads var(${v[1]}), which is not a role`);
 		}
 	}
@@ -168,6 +214,9 @@ for (const path of files) {
 			failures++;
 		}
 	});
+}
+for (const [name, { until, reads }] of pending) {
+	console.log(`pending: ${name} read ${reads} time(s) until ${until} — not a role yet`);
 }
 if (failures) {
 	console.error(

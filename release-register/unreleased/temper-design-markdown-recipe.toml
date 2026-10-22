@@ -1,0 +1,20 @@
+title    = "`@tasker-systems/temper-design` ships the markdown recipe, and its colour guard refuses a role mixed down and states declared holes; the web's resource view paints from the contract"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["clients"]
+status   = "signal-only"
+body = '''
+`contract/markdown.css` is new in `@tasker-systems/temper-design`: the `md-body` recipe for a
+rendered document (headings, links, lists, code, tables, refusals and withheld media), on roles
+only. `guard/colours.mjs` gains a refusal, a `color-mix()` reading a role (the opacity modifier
+spelled in CSS), and a `pending` config list: a variable named with the task that makes it a role
+and why it waits, whose reads are counted and reported on every run instead of refused. The web's
+resource view (page, document body, properties and their controls, history, connections, data
+artifacts) now paints only contract roles, under the guard. Who observes: a surface running the
+guard, which can now refuse a `color-mix()` of a role it previously passed; a surface importing
+the new recipe; a reader of the web, whose document bodies take the reading face and the desktop's
+recipe (italic blockquotes, mono table heads, tables sized to their content), and whose
+conformance and confidence marks take the success role's paler green. User-visible: yes, on the
+web's resource view. Release relevance: additive (a new file and a new optional config key) and
+behavioral (one new refusal in the guard).
+'''

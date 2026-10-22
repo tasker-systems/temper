@@ -22,7 +22,8 @@ packages/temper-design/
 │   ├── tailwind-roles.css   # the same utilities without the palette reset (generated)
 │   ├── shadcn-bridge.css    # shadcn-svelte's variable names answered from roles
 │   ├── base.css             # base styles + t-*/ed-* recipes, roles only
-│   └── region.css           # the four region states' recipe, roles only
+│   ├── region.css           # the four region states' recipe, roles only
+│   └── markdown.css         # the rendered document's recipe (`.md-body`), roles only
 ├── quiet-instrument/        # dark — temper's house theme
 │   ├── theme.json           # source of truth
 │   └── theme.css            # generated — never edit
@@ -68,6 +69,7 @@ What a consumer imports:
 | `@tasker-systems/temper-design/toolchain/check.mjs` | the check a surface runs against them (see below) |
 | `@tasker-systems/temper-design/guard/colours.mjs` | the colour guard a surface runs over the components it has moved onto roles (see below) |
 | `@tasker-systems/temper-design/contract/region.css` | the `region-state` recipe: the four region states' colour and border |
+| `@tasker-systems/temper-design/contract/markdown.css` | the `md-body` recipe: how a rendered document reads — headings, links, lists, code, tables, refusals |
 | `@tasker-systems/temper-design/markdown` | markdown → HTML with highlighted fences, bounded; DOM-free |
 | `@tasker-systems/temper-design/sanitize` | the one sanitizer pass for that HTML; needs a DOM |
 | `@tasker-systems/temper-design/highlight` | the one highlight.js registration, for direct code viewers |
@@ -210,6 +212,8 @@ fails a surface's build when a component it guards paints anything but a role.
 - **A colour read from a variable that is not a role**, in a declaration
   (`color: var(--parchment)`), an SVG attribute or Svelte style directive
   (`fill="var(--obsidian)"`, `style:color=…`), or an arbitrary utility (`bg-[var(--obsidian)]`).
+- **A role mixed down** (`color-mix(in srgb, var(--tp-accent) 15%, transparent)`): the opacity
+  modifier spelled in CSS, and the same strength no theme chose.
 
 A surface commits a config naming what it guards, relative to the config's own directory,
 and runs the guard against it:
@@ -226,6 +230,16 @@ A surface moving off the stock palette lists the areas it has moved, and each ar
 moves adds its paths. An empty list, a listed path that does not exist, and a listed
 directory with no components are refused rather than passed. `node --test
 guard/colours.test.mjs` plants each class and requires its refusal.
+
+A variable that is not a role yet, but that a named task will make one, is declared rather than
+exempted:
+
+```json
+"pending": [{ "var": "--hue", "until": "T10", "why": "doc-type tint; core binds doc types to slots" }]
+```
+
+Its reads, and any `color-mix()` reading it, pass; every run prints how many there are and what
+closes them. An entry missing `var`, `until` or `why`, or naming a role, is refused.
 
 ## Bound vocabularies and categorical slots
 
