@@ -14,8 +14,12 @@
 //       var(--color-quiet-fg)` launders a private name past (d), which reads only colour
 //       properties by name. A custom property may read roles (fonts included), a pending hole,
 //       or a bridged name: one declared within the guarded paths whose every declaration there
-//       resolves to roles (`--color-background: var(--background)`, where `--background:
-//       var(--tp-ground)`). A name also declared outside the paths is not seen there.
+//       reads a variable and resolves to roles (`--color-background: var(--background)`, where
+//       `--background: var(--tp-ground)`). A declaration outside the paths — a vendor stylesheet,
+//       a selector scope the name is not bridged in — is not seen.
+//
+// Every rule reads one line at a time: a declaration whose value wraps onto the next line is not
+// seen. A colour set from script (`el.style.setProperty`, a JS style object) is out of reach.
 //
 // A surface commits a config naming what it guards, relative to the config's own directory:
 //
@@ -102,8 +106,16 @@ const DECLARATION =
 // Svelte style directive (`style:color="var(--x)"`).
 const ATTRIBUTE =
 	/(?<![\w-])(?:style:)?(fill|stroke|stop-color|flood-color|lighting-color|color|background(?:-color)?|border(?:-[a-z]+)*-color|outline-color|caret-color|accent-color|text-decoration-color)\s*=\s*["'{]([^"'}\n]*)/g;
-// A custom property's declaration and its value: `--wx-color-font: var(--x)`.
+// A custom property's declaration and its value: `--wx-color-font: var(--x)`, or Svelte's
+// directive for one, `style:--wx-color-font="var(--x)"` / `style:--wx-color-font={'var(--x)'}`.
 const CUSTOM_PROPERTY = /(?<![\w-])(--[a-zA-Z0-9-]+)\s*:\s*([^;}"'\n]*)/g;
+const CUSTOM_DIRECTIVE =
+	/(?<![\w-])style:(--[a-zA-Z0-9-]+)\s*=\s*(?:"([^"\n]*)"|'([^'\n]*)'|\{([^}\n]*)\})/g;
+// Each custom-property declaration in `text`, as [name, value].
+function* customProperties(text) {
+	for (const m of text.matchAll(CUSTOM_PROPERTY)) yield [m[1], m[2]];
+	for (const m of text.matchAll(CUSTOM_DIRECTIVE)) yield [m[1], m[2] ?? m[3] ?? m[4]];
+}
 const PRIVATE_VAR = /var\(\s*(--(?!tp-)[a-zA-Z0-9-]+)/g;
 const ROLE_VAR = /var\(\s*--tp-/;
 const PENDING_VAR = /var\(\s*(--[a-zA-Z0-9-]+)/g;
@@ -179,12 +191,16 @@ for (const listed of paths) {
 }
 
 // Bridged names: custom properties declared within the paths whose every declaration reads only
-// roles or other bridged names, to a fixed point. A name with any other read is not bridged.
+// roles or other bridged names, to a fixed point. A name with any other read is not bridged, and
+// nor is one with a declaration reading no variable at all: `style="--hue: {hue}"` is a colour
+// supplied from script, which no theme chose, not a value that resolves to roles.
+const UNRESOLVED = '(no variable)';
 const declared = new Map();
 for (const path of files) {
-	for (const m of stripComments(readFileSync(path, 'utf8')).matchAll(CUSTOM_PROPERTY)) {
-		const reads = [...m[2].matchAll(PRIVATE_VAR)].map((v) => v[1]);
-		declared.set(m[1], [...(declared.get(m[1]) ?? []), ...reads]);
+	for (const [name, value] of customProperties(stripComments(readFileSync(path, 'utf8')))) {
+		const reads = [...value.matchAll(PRIVATE_VAR)].map((v) => v[1]);
+		if (!/var\(/.test(value)) reads.push(UNRESOLVED);
+		declared.set(name, [...(declared.get(name) ?? []), ...reads]);
 	}
 }
 const bridged = new Set();
@@ -236,10 +252,10 @@ function refusals(line) {
 			out.push(`${m[1]} reads var(${v[1]}), which is not a role`);
 		}
 	}
-	for (const m of line.matchAll(CUSTOM_PROPERTY)) {
-		for (const v of m[2].matchAll(PRIVATE_VAR)) {
+	for (const [name, value] of customProperties(line)) {
+		for (const v of value.matchAll(PRIVATE_VAR)) {
 			if (pending.has(v[1]) || bridged.has(v[1])) continue;
-			out.push(`${m[1]} is declared from var(${v[1]}), which is not a role`);
+			out.push(`${name} is declared from var(${v[1]}), which is not a role`);
 		}
 	}
 	return out;

@@ -257,7 +257,8 @@
 	 * The SVAR bridge: WillowDark's variable names, answered from contract roles, so any theme
 	 * restyles the grid with no per-theme work (as contract/shadcn-bridge.css does for shadcn).
 	 * Every colour-valued variable the two WillowDark files declare with a value of their own is
-	 * answered here — the ones they derive (`var(--wx-color-primary)` and the like) follow — so
+	 * answered here — the ones they derive (`var(--wx-color-primary)` and the like) follow — and
+	 * the two component rules wx-svelte-grid@2.7.0 paints with a literal are answered below, so
 	 * no vendor colour is reachable in any grid state, used today or not. Shadows have no role
 	 * and are off. Web-local: the desktop does not use SVAR.
 	 *
@@ -327,9 +328,18 @@
 		--wx-table-editor-dropdown-shadow: none;
 		--wx-header-font-weight: 500;
 	}
-	/* The one vendor colour not spelled through a variable. */
+	/* The vendor colours not spelled through a variable: the table menu's shadow (WillowDark),
+	   the multi-sort index badge (HeaderCell, reachable by ctrl/cmd-clicking a header) and the
+	   search-match fill (Cell, unused here). */
 	.grid-container :global(.wx-willow-dark-theme .wx-table-menu) {
 		box-shadow: none;
+	}
+	.grid-container :global(.wx-order) {
+		color: var(--tp-on-accent);
+		background-color: var(--tp-accent);
+	}
+	.grid-container :global(.wx-search) {
+		background-color: var(--tp-notice-wash);
 	}
 
 	/* Row hover — pointer cursor and the hover fill */

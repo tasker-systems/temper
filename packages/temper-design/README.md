@@ -219,8 +219,11 @@ fails a surface's build when a component it guards paints anything but a role.
   colour-declaration rule does not read by name. Fonts are held too: `var(--tp-font-ui)`, not
   `var(--font-sans)`. A bridge stays legal: a name declared within the guarded paths whose every
   declaration there resolves to roles (`--background: var(--tp-ground)`, then
-  `--color-background: var(--background)`) may be read. A name also declared outside the paths
-  is not seen there.
+  `--color-background: var(--background)`) may be read. A declaration that reads no variable
+  (`style="--hue: {hue}"`, a colour from script) unbridges its name. Svelte's `style:--x=`
+  directive is a declaration like any other. The guard sees only the paths: a name also declared
+  elsewhere (a vendor stylesheet, a selector scope it is not bridged in) is not seen there, and a
+  declaration wrapped across lines is not read.
 
 A surface commits a config naming what it guards, relative to the config's own directory,
 and runs the guard against it:

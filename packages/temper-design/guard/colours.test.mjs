@@ -231,6 +231,24 @@ const PLANTED = [
 		1,
 		'--obsidian',
 	],
+	[
+		'a custom property set by a style directive',
+		'<div style:--wx-color-font="var(--obsidian)">x</div>\n',
+		1,
+		'--obsidian',
+	],
+	[
+		'a custom property set by a style directive expression',
+		"<div style:--wx-color-font={'var(--obsidian)'}>x</div>\n",
+		1,
+		'--obsidian',
+	],
+	[
+		'a custom property declared from a name set from script',
+		'<div style="--c: {brand}">x</div>\n<style>\n.x { --wx-color-font: var(--c); }\n</style>\n',
+		3,
+		'var(--c)',
+	],
 	// (b) the colour utilities Tailwind v4 added beside the classic ones
 	['a stock text shadow', '<p class="text-shadow-zinc-500">x</p>\n', 1, 'text-shadow-zinc-500'],
 	['a stock inset ring', '<p class="inset-ring-zinc-700">x</p>\n', 1, 'inset-ring-zinc-700'],

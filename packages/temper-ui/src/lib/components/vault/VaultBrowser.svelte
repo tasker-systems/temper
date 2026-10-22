@@ -99,8 +99,8 @@
 				{loadError ?? 'The vault could not be read.'}
 			</p>
 			<p class="text-xs text-tp-text-muted">
-				Nothing was retrieved, so nothing here says whether a matching resource exists.
-				This is a failed read, not an empty result.
+				Nothing here says whether a matching resource exists. This is a failed read, not
+				an empty result.
 			</p>
 			<button
 				type="button"
