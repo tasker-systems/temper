@@ -77,12 +77,12 @@
 <aside
 	class="flex flex-col {collapsed
 		? 'w-12'
-		: 'w-52'} bg-zinc-900/50 border-r border-zinc-800 overflow-hidden transition-[width] duration-150"
+		: 'w-52'} bg-tp-surface border-r border-tp-rule overflow-hidden transition-[width] duration-150"
 >
 	<button
 		type="button"
 		onclick={onToggle}
-		class="block px-3 pt-3 pb-2 border-b border-zinc-800 font-mono text-xs tracking-[0.15em] text-zinc-300 hover:text-zinc-100 text-left truncate"
+		class="block px-3 pt-3 pb-2 border-b border-tp-rule font-mono text-xs tracking-[0.15em] text-tp-text-muted hover:text-tp-text text-left truncate"
 		title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
 	>
 		{collapsed ? '≡' : brand}
@@ -91,8 +91,8 @@
 		<a
 			href="/vault/all"
 			class="block px-3 py-2 text-sm {isAllActive
-				? 'text-zinc-100'
-				: 'text-zinc-400 hover:text-zinc-200'} text-center"
+				? 'text-tp-text'
+				: 'text-tp-text-muted hover:text-tp-text'} text-center"
 			title="All resources"
 			aria-label="All resources"
 		>
@@ -101,8 +101,8 @@
 		<a
 			href="/graph/@me"
 			class="flex justify-center px-3 py-2 {isGraphActive
-				? 'text-zinc-100'
-				: 'text-zinc-400 hover:text-zinc-200'}"
+				? 'text-tp-text'
+				: 'text-tp-text-muted hover:text-tp-text'}"
 			title="Graph"
 			aria-label="Graph"
 		>
@@ -111,17 +111,17 @@
 	{/if}
 	{#if !collapsed}
 		<nav class="flex-1 overflow-y-auto py-2">
-			<div class="px-3 pt-2 pb-1 text-[10px] uppercase tracking-widest text-zinc-500">
+			<div class="px-3 pt-2 pb-1 text-[10px] uppercase tracking-widest text-tp-text-subtle">
 				Vault
 			</div>
 			<a
 				href="/vault/all"
 				class="flex items-center gap-2 px-3 py-1.5 text-sm transition-colors
 				       {isAllActive
-					? 'border-l-2 border-quiet-accent bg-zinc-800/50 text-zinc-100 pl-[calc(0.75rem-2px)]'
-					: 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/30'}"
+					? 'border-l-2 border-tp-accent bg-tp-accent-wash text-tp-text pl-[calc(0.75rem-2px)]'
+					: 'text-tp-text-muted hover:text-tp-text hover:bg-tp-accent-hover'}"
 			>
-				<span class="w-1.5 h-1.5 rounded-sm {isAllActive ? 'bg-quiet-accent' : 'bg-zinc-600'}"
+				<span class="w-1.5 h-1.5 rounded-sm {isAllActive ? 'bg-tp-accent' : 'bg-tp-text-faint'}"
 				></span>
 				All resources
 			</a>
@@ -129,10 +129,10 @@
 				href="/graph/@me"
 				class="flex items-center gap-2 px-3 py-1.5 text-sm transition-colors
 				       {isGraphActive
-					? 'border-l-2 border-quiet-accent bg-zinc-800/50 text-zinc-100 pl-[calc(0.75rem-2px)]'
-					: 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/30'}"
+					? 'border-l-2 border-tp-accent bg-tp-accent-wash text-tp-text pl-[calc(0.75rem-2px)]'
+					: 'text-tp-text-muted hover:text-tp-text hover:bg-tp-accent-hover'}"
 			>
-				<span class="w-1.5 h-1.5 rounded-sm {isGraphActive ? 'bg-quiet-accent' : 'bg-zinc-600'}"
+				<span class="w-1.5 h-1.5 rounded-sm {isGraphActive ? 'bg-tp-accent' : 'bg-tp-text-faint'}"
 				></span>
 				Graph
 			</a>
@@ -146,14 +146,14 @@
 			-->
 			{#if navState.kind === 'unavailable'}
 				<div
-					class="mx-3 mt-4 rounded border border-amber-500/30 bg-zinc-800/50 px-2.5 py-1.5
-					       text-xs text-zinc-500"
+					class="mx-3 mt-4 rounded border border-tp-notice bg-tp-notice-wash px-2.5 py-1.5
+					       text-xs text-tp-notice"
 					title="The context list could not be read — reload to try again."
 				>
 					contexts unavailable
 				</div>
 			{:else if navState.kind === 'empty'}
-				<div class="px-3 pt-4 pb-1 text-xs text-zinc-600">No contexts</div>
+				<div class="px-3 pt-4 pb-1 text-xs text-tp-text-subtle">No contexts</div>
 			{:else}
 				{#each navState.groups as group (group.key)}
 					<ContextNavGroup
@@ -165,16 +165,16 @@
 			{/if}
 		</nav>
 
-		<div class="border-t border-zinc-800 py-2">
+		<div class="border-t border-tp-rule py-2">
 			<a
 				href="/auth/logout"
-				class="flex items-center gap-2 px-3 py-1.5 text-sm text-zinc-400 hover:text-zinc-200"
+				class="flex items-center gap-2 px-3 py-1.5 text-sm text-tp-text-muted hover:text-tp-text"
 			>
-				<span class="w-1.5 h-1.5 rounded-sm bg-zinc-600"></span>Sign out
+				<span class="w-1.5 h-1.5 rounded-sm bg-tp-text-faint"></span>Sign out
 			</a>
 			{#if user}
-				<div class="flex items-center gap-2 px-3 py-2 text-xs text-zinc-500">
-					<div class="w-5 h-5 rounded-full bg-zinc-700 flex-shrink-0"></div>
+				<div class="flex items-center gap-2 px-3 py-2 text-xs text-tp-text-subtle">
+					<div class="w-5 h-5 rounded-full bg-tp-surface-raised flex-shrink-0"></div>
 					{user.display_name}
 				</div>
 			{/if}

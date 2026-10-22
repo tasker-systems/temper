@@ -22,14 +22,14 @@
 	   the authed (app) pages render lighter cards on top of it. */
 	.app-shell {
 		min-height: 100vh;
-		background: var(--obsidian);
-		color: var(--parchment);
-		font-family: var(--font-serif);
+		background: var(--tp-ground);
+		color: var(--tp-text);
+		font-family: var(--tp-font-reading);
 		line-height: 1.7;
 		-webkit-font-smoothing: antialiased;
 	}
 
 	:global(body) {
-		background: var(--obsidian);
+		background: var(--tp-ground);
 	}
 </style>

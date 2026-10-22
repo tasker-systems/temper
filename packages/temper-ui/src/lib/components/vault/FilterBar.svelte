@@ -95,7 +95,7 @@
 
 <div class="flex flex-wrap items-end gap-4">
 	<div class="flex flex-col gap-1">
-		<label for="filter-q" class="text-[10px] uppercase tracking-widest text-zinc-500"
+		<label for="filter-q" class="text-[10px] uppercase tracking-widest text-tp-text-subtle"
 			>title contains</label
 		>
 		<input
@@ -104,14 +104,14 @@
 			value={q.draft}
 			oninput={onQInput}
 			placeholder="title contains…"
-			class="w-48 rounded border border-zinc-700/50 bg-zinc-800/50 px-2.5 py-1 text-xs text-zinc-200
-			       placeholder:text-zinc-600 outline-none focus:border-quiet-border"
+			class="w-48 rounded border border-tp-rule-strong bg-tp-surface px-2.5 py-1 text-xs text-tp-text
+			       placeholder:text-tp-text-subtle outline-none focus:border-tp-accent-line"
 		/>
 	</div>
 
 	{#if !fixedContext}
 		<div class="flex flex-col gap-1">
-			<label for="filter-context" class="text-[10px] uppercase tracking-widest text-zinc-500"
+			<label for="filter-context" class="text-[10px] uppercase tracking-widest text-tp-text-subtle"
 				>context</label
 			>
 			<!--
@@ -126,7 +126,7 @@
 					id="filter-context"
 					disabled
 					title="The context list could not be read — reload to try again."
-					class="rounded border border-amber-500/30 bg-zinc-800/50 px-2.5 py-1 text-xs text-zinc-500
+					class="rounded border border-tp-notice bg-tp-notice-wash px-2.5 py-1 text-xs text-tp-notice
 					       outline-none"
 				>
 					<option value="">contexts unavailable</option>
@@ -136,8 +136,8 @@
 					id="filter-context"
 					value={filters.contextRef ?? ''}
 					onchange={onContextChange}
-					class="rounded border border-zinc-700/50 bg-zinc-800/50 px-2.5 py-1 text-xs text-zinc-200
-					       outline-none focus:border-quiet-border"
+					class="rounded border border-tp-rule-strong bg-tp-surface px-2.5 py-1 text-xs text-tp-text
+					       outline-none focus:border-tp-accent-line"
 				>
 					<option value="">All contexts</option>
 					{#each contexts as ctx (ctx.id)}
@@ -149,18 +149,18 @@
 	{/if}
 
 	<div class="flex flex-col gap-1">
-		<label for="filter-tags" class="text-[10px] uppercase tracking-widest text-zinc-500">tags</label>
+		<label for="filter-tags" class="text-[10px] uppercase tracking-widest text-tp-text-subtle">tags</label>
 		<div
-			class="flex min-w-48 flex-wrap items-center gap-1.5 rounded border border-zinc-700/50 bg-zinc-800/50 px-2 py-1"
+			class="flex min-w-48 flex-wrap items-center gap-1.5 rounded border border-tp-rule-strong bg-tp-surface px-2 py-1"
 		>
 			{#each filters.tags as tag (tag)}
 				<span
-					class="inline-flex items-center gap-1 rounded bg-quiet-accent/15 px-1.5 py-0.5 text-[11px] font-mono text-quiet-accent"
+					class="inline-flex items-center gap-1 rounded bg-tp-accent-wash px-1.5 py-0.5 text-[11px] font-mono text-tp-accent"
 				>
 					{tag}
 					<button
 						type="button"
-						class="text-quiet-accent/70 hover:text-quiet-accent"
+						class="text-tp-accent-muted hover:text-tp-accent"
 						onclick={() => removeTag(tag)}
 						aria-label={`Remove tag ${tag}`}
 					>
@@ -175,21 +175,21 @@
 				onkeydown={onTagKeydown}
 				onblur={addTagDraft}
 				placeholder={filters.tags.length ? '' : 'add tag…'}
-				class="min-w-16 flex-1 bg-transparent text-xs text-zinc-200 placeholder:text-zinc-600 outline-none"
+				class="min-w-16 flex-1 bg-transparent text-xs text-tp-text placeholder:text-tp-text-subtle outline-none"
 			/>
 		</div>
 	</div>
 
 	<div class="flex flex-col gap-1">
-		<label for="filter-has-artifacts" class="text-[10px] uppercase tracking-widest text-zinc-500"
+		<label for="filter-has-artifacts" class="text-[10px] uppercase tracking-widest text-tp-text-subtle"
 			>data artifacts</label
 		>
 		<select
 			id="filter-has-artifacts"
 			value={filters.hasArtifacts === null ? '' : String(filters.hasArtifacts)}
 			onchange={onHasArtifactsChange}
-			class="rounded border border-zinc-700/50 bg-zinc-800/50 px-2.5 py-1 text-xs text-zinc-200
-			       outline-none focus:border-quiet-border"
+			class="rounded border border-tp-rule-strong bg-tp-surface px-2.5 py-1 text-xs text-tp-text
+			       outline-none focus:border-tp-accent-line"
 		>
 			<option value="">Any</option>
 			<option value="true">has artifacts</option>
@@ -199,15 +199,15 @@
 
 	{#if revealed === 'task'}
 		<div class="flex flex-col gap-1">
-			<label for="filter-stage" class="text-[10px] uppercase tracking-widest text-zinc-500"
+			<label for="filter-stage" class="text-[10px] uppercase tracking-widest text-tp-text-subtle"
 				>stage</label
 			>
 			<select
 				id="filter-stage"
 				value={filters.stage ?? ''}
 				onchange={onStageChange}
-				class="rounded border border-zinc-700/50 bg-zinc-800/50 px-2.5 py-1 text-xs text-zinc-200
-				       outline-none focus:border-quiet-border"
+				class="rounded border border-tp-rule-strong bg-tp-surface px-2.5 py-1 text-xs text-tp-text
+				       outline-none focus:border-tp-accent-line"
 			>
 				<option value="">Any stage</option>
 				{#each STAGES as s}
@@ -217,15 +217,15 @@
 		</div>
 	{:else if revealed === 'goal'}
 		<div class="flex flex-col gap-1">
-			<label for="filter-status" class="text-[10px] uppercase tracking-widest text-zinc-500"
+			<label for="filter-status" class="text-[10px] uppercase tracking-widest text-tp-text-subtle"
 				>status</label
 			>
 			<select
 				id="filter-status"
 				value={filters.status ?? ''}
 				onchange={onStatusChange}
-				class="rounded border border-zinc-700/50 bg-zinc-800/50 px-2.5 py-1 text-xs text-zinc-200
-				       outline-none focus:border-quiet-border"
+				class="rounded border border-tp-rule-strong bg-tp-surface px-2.5 py-1 text-xs text-tp-text
+				       outline-none focus:border-tp-accent-line"
 			>
 				<option value="">Any status</option>
 				{#each STATUSES as s}

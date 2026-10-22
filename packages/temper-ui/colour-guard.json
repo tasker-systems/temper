@@ -1,4 +1,13 @@
 {
-	"paths": ["src/recipes.css"],
+	"paths": [
+		"src/recipes.css",
+		"src/routes/+layout.svelte",
+		"src/routes/(app)/+layout.svelte",
+		"src/lib/components/Sidebar.svelte",
+		"src/lib/components/CommandPalette.svelte",
+		"src/lib/components/vault/FilterBar.svelte",
+		"src/lib/components/ContextNavGroup.svelte",
+		"src/lib/components/NavProgress.svelte"
+	],
 	"themes": ["src/app.css"]
 }
