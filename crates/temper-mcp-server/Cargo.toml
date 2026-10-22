@@ -60,7 +60,7 @@ tower = { version = "0.5", features = ["util"] }
 flate2 = "1"
 tokio = { version = "1", features = ["full"] }
 # The no-database gate parses this crate's source and the boot (`api/mcp.rs`).
-syn = { version = "2", features = ["full", "visit"] }
+syn = { version = "3", features = ["full", "visit"] }
 proc-macro2 = "1"
 # The `AuthzError` witness (`tests/authz_refusal_witness_test.rs`) constructs a typed `Refusal`
 # and the `ClientError` the relay types each API refusal as.
