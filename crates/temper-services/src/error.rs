@@ -487,6 +487,7 @@ impl From<temper_core::error::TemperError> for ApiError {
             TemperError::IngestEnded(s) => ApiError::IngestEnded(s),
             TemperError::ContentIntegrity(s) => ApiError::ContentIntegrity(s),
             TemperError::DataArtifactRefusal(s) => ApiError::DataArtifactRefusal(s),
+            TemperError::PlanRefused { refusals, .. } => ApiError::PlanRefused { refusals },
             TemperError::ResourceBusy => ApiError::ResourceBusy,
             TemperError::Api(s) => ApiError::Internal(s),
             TemperError::SystemAccessRequired(details) => {

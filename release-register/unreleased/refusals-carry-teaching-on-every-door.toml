@@ -1,0 +1,12 @@
+title    = "A refused plan's `teaches` reaches MCP callers as error `data` and CLI callers as `details` on the JSON error payload"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["mcp", "cli-stdout"]
+status   = "signal-only"
+body = '''
+MCP `run_query` answers a refused plan with `invalid_params` as before, its message unchanged, and now fills the error's `data` with `{"refusals": [...]}`: every refusal as the API sent it, `reason` and `teaches` included. The list is the same `PlanRefusalDetails` the HTTP door puts in `error.details`. A caller that reads only `message` sees what it saw; one that reads `data` gets the structure without parsing prose. `data` was absent on this error before.
+
+`temper query`, under the JSON output format (a non-TTY stdout by default, or `--format json` / `TEMPER_FORMAT` / `[cli].format`), prints the refusal list in the existing stdout error payload as `details`: `{"code": "project", "message": "...", "details": {"refusals": [...]}}`, the shape the HTTP door puts in `error.details`. `ErrorPayload` gains the optional `details`, skipped when absent, so every other error's payload is byte-for-byte unchanged; `code`, `message`, the exit code, the text rendering under the TOON format and `--check` are unchanged too. Stderr gains nothing.
+
+Nothing raises a refusal that carries `teaches` yet, so `teaches` is absent from every refusal today and no caller sees a difference in content. This entry makes the two doors ready to carry it. Release relevance: signal-only.
+'''

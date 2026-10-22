@@ -128,6 +128,18 @@ pub fn render_refusals(refusals: &[PlanRefusal]) -> String {
     )
 }
 
+/// A refused plan as the error `temper query` exits with: the text [`render_refusals`] prints and
+/// the list it was rendered from, kept together.
+///
+/// The list rides along so the structured stdout error can carry what the text cannot: each
+/// refusal's `reason` and `teaches` (`render_error_payload`). The text is unchanged by it.
+pub fn refused(refusals: Vec<PlanRefusal>) -> TemperError {
+    TemperError::PlanRefused {
+        message: render_refusals(&refusals),
+        refusals,
+    }
+}
+
 /// Render one refusal as a single human line: the stage it attaches to, then the reason.
 ///
 /// A refusal with no stage is about the composition as a whole — a cycle, a dangling reference, a
@@ -152,6 +164,25 @@ mod tests {
             reason: RefusalReason::UnknownAct,
             detail: detail.to_string(),
             teaches: None,
+        }
+    }
+
+    #[test]
+    fn a_refused_plan_keeps_its_list_and_its_text() {
+        let refusals = vec![
+            refusal(Some("one"), "needs a question"),
+            refusal(None, "the composition is cyclic"),
+        ];
+        let text = render_refusals(&refusals);
+        match refused(refusals.clone()) {
+            TemperError::PlanRefused {
+                message,
+                refusals: kept,
+            } => {
+                assert_eq!(message, text, "the displayed text is render_refusals'");
+                assert_eq!(kept, refusals, "the list is kept whole");
+            }
+            other => panic!("expected PlanRefused, got {other:?}"),
         }
     }
 

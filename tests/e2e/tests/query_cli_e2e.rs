@@ -183,6 +183,61 @@ async fn a_refused_plan_prints_every_refusal_and_exits_non_zero(pool: sqlx::PgPo
     );
 }
 
+/// **A refused plan's stdout payload carries the refusal list as `details`**, under the non-TTY
+/// JSON format.
+///
+/// The payload's `message` has each refusal's `detail` and none of its `teaches`; `details.refusals`
+/// is the shape the HTTP door puts in `error.details`, which does. No route raises a refusal that
+/// teaches yet, so this witnesses the channel and the shape through the real binary — each refusal
+/// arrives with its stage and reason as fields, beside the unchanged `message` and `code` — and the
+/// unit tests witness that `teaches` rides it. Stdout is one JSON document; stderr is not read.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_refused_plans_payload_carries_its_refusals_as_details(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+
+    let out = common::run_temper_cli_with_stdin(&app, DOUBLY_REFUSED_PLAN, &["query"])
+        .await
+        .expect("spawn temper query");
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "a plan that will not run must exit non-zero\nstdout: {stdout}\nstderr: {stderr}"
+    );
+
+    let payload: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout is one JSON ErrorPayload: {e}\n{stdout}"));
+    assert_eq!(payload["code"], "project");
+    assert!(
+        payload["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("2 refusal(s)")),
+        "the message is the text it always was: {payload:#}"
+    );
+
+    let refusals = payload["details"]["refusals"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no details.refusals array in {payload:#}"));
+    assert!(
+        refusals.len() >= 2,
+        "every refusal, not the first; got {payload:#}"
+    );
+    for stage in ["one", "two"] {
+        assert!(
+            refusals
+                .iter()
+                .any(|r| r["stage"] == stage && r["reason"].is_string() && r["detail"].is_string()),
+            "stage {stage:?} must arrive with its reason and detail as fields; got {payload:#}"
+        );
+    }
+}
+
 /// `--check` reports shape refusals on **stdout** and exits non-zero, touching no network.
 ///
 /// Only reachable through the real binary: the exit code comes from `std::process::exit`, which no
