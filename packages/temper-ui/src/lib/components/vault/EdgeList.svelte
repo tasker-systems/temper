@@ -57,14 +57,14 @@
 <style>
 	section {
 		padding: 12px 14px;
-		border-top: 1px solid var(--color-quiet-rule);
+		border-top: 1px solid var(--tp-rule);
 	}
 	.label {
 		font-family: var(--font-mono);
 		font-size: 9px;
 		letter-spacing: var(--track-label);
 		text-transform: uppercase;
-		color: var(--color-quiet-dim);
+		color: var(--tp-text-subtle);
 		margin-bottom: 6px;
 	}
 	.edge {
@@ -73,14 +73,14 @@
 		font-size: 10.5px;
 	}
 	.rel {
-		color: var(--color-quiet-dim);
+		color: var(--tp-text-subtle);
 	}
 	.peer {
-		color: var(--color-quiet-mid);
+		color: var(--tp-text-muted);
 		text-decoration: none;
 	}
 	.peer:hover {
-		color: var(--color-quiet-fg);
+		color: var(--tp-text);
 		text-decoration: underline;
 	}
 </style>

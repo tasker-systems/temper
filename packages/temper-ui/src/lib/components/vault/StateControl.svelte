@@ -78,9 +78,9 @@
 	select {
 		font-family: var(--font-mono);
 		font-size: 11px;
-		color: var(--color-quiet-mid);
-		background: rgba(255, 255, 255, 0.03);
-		border: 1px solid var(--color-quiet-rule);
+		color: var(--tp-text-muted);
+		background: var(--tp-surface);
+		border: 1px solid var(--tp-rule-strong);
 		border-radius: 3px;
 		padding: 1px 4px;
 	}
@@ -93,22 +93,22 @@
 		border: 1px solid color-mix(in srgb, var(--hue) 30%, transparent);
 		border-radius: 3px;
 		padding: 2px 7px;
-		color: color-mix(in srgb, var(--hue) 70%, white);
+		color: color-mix(in srgb, var(--hue) 70%, var(--tp-text));
 		cursor: pointer;
 	}
 	button:disabled {
-		border-color: var(--color-quiet-rule);
-		color: var(--color-quiet-dim);
+		border-color: var(--tp-rule);
+		color: var(--tp-text-subtle);
 		cursor: default;
 	}
 	button:not(:disabled):hover {
 		border-color: color-mix(in srgb, var(--hue) 55%, transparent);
-		color: color-mix(in srgb, var(--hue) 90%, white);
+		color: color-mix(in srgb, var(--hue) 90%, var(--tp-text));
 	}
 	.err {
 		font-family: var(--font-mono);
 		font-size: 10.5px;
-		color: #e0755f;
+		color: var(--tp-danger);
 		margin: 4px 0 0;
 	}
 </style>

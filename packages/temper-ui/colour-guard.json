@@ -8,7 +8,26 @@
 		"src/lib/components/vault/FilterBar.svelte",
 		"src/lib/components/ContextNavGroup.svelte",
 		"src/lib/components/NavProgress.svelte",
-		"src/lib/components/RegionState.svelte"
+		"src/lib/components/RegionState.svelte",
+		"src/routes/(app)/vault/r/[ident]/+page.svelte",
+		"src/lib/components/MarkdownRenderer.svelte",
+		"src/lib/components/vault/HomeChip.svelte",
+		"src/lib/components/vault/PropertySet.svelte",
+		"src/lib/components/vault/PropertyValue.svelte",
+		"src/lib/components/vault/DescriptionControl.svelte",
+		"src/lib/components/vault/StateControl.svelte",
+		"src/lib/components/vault/EventHistory.svelte",
+		"src/lib/components/vault/EdgeList.svelte",
+		"src/lib/components/vault/ArtifactList.svelte"
 	],
-	"themes": ["src/app.css"]
+	"themes": [
+		"src/app.css"
+	],
+	"pending": [
+		{
+			"var": "--hue",
+			"until": "T10",
+			"why": "the resource view's doc-type tint, from lib/graph/palette.ts; T10 binds core's doc types to categorical slots"
+		}
+	]
 }

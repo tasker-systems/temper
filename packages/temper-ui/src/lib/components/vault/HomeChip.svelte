@@ -35,7 +35,7 @@
 		border-radius: 2px;
 		text-decoration: none;
 		border: 1px solid color-mix(in srgb, var(--hue) 40%, transparent);
-		color: color-mix(in srgb, var(--hue) 72%, white);
+		color: color-mix(in srgb, var(--hue) 72%, var(--tp-text));
 		background: color-mix(in srgb, var(--hue) 8%, transparent);
 	}
 	a.chip:hover {
