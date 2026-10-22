@@ -117,7 +117,8 @@ export type RefusalTeaching = {
  */
 vocabulary: Vocabulary | null, 
 /**
- * The walk bound an asked path lies beyond.
+ * The walk bound an asked path lies beyond, or — on `shape_schema_uncompilable` —
+ * `schema_bytes`, for a whole schema too large for the walk to read.
  */
 beyond_bound: BoundKind | null, 
 /**

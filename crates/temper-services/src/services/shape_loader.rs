@@ -18,22 +18,33 @@
 //!    row step 1 admitted, and the lookup is gated besides.
 //! 3. **Compiles?** First measured: a schema larger than the walk reads
 //!    ([`within_schema_bound`]) is `SchemaTooLarge` and is never compiled. Within the bound,
-//!    through the no-fetch constructor ([`shape_schema::compile`]), off the async executor; a
-//!    schema it refuses is `Uncompilable`, and the compiler's text goes nowhere.
+//!    through the no-fetch constructor ([`shape_schema::compile`]); a schema it refuses is
+//!    `Uncompilable`, and the compiler's text goes nowhere.
 //!
-//! **One decision for every door that judges a stored or declared schema** ([`schema_verdict`]):
-//! the loader, the by-id read's `askable`, and declare (`shape_service::declare_shape`) measure
+//! **One decision for every door that decides whether a schema can be asked** ([`judge`]): the
+//! loader, the by-id read's `askable`, and declare (`shape_service::declare_shape`) measure
 //! against the same bound and compile through the same constructor, so they cannot disagree about
-//! which schemas can be asked. A reader therefore never makes the server compile more than the
-//! walk's bound, however large a schema an author stored before declare refused one.
+//! which schemas can be asked, and none of them compiles a schema past the walk's bound. Commit and
+//! reconcile are not among them: they validate artifacts against a stored schema through
+//! [`shape_schema::compile`] directly, whatever its size.
+//!
+//! **What a compile costs the process is bounded three ways.** Each compile runs on the blocking
+//! pool, under one of a few process-wide permits ([`compile_permits`]), so a burst of reads queues
+//! rather than taking every core; each pattern in it is bounded by the constructor
+//! (`shape_schema::MAX_PATTERN_BYTES`); and a stored shape's verdict is remembered by id, so a shape
+//! read many times is compiled about once per process. A shape row is immutable per id (amendment
+//! mints a new id), so the remembered verdict never goes stale, and it is consulted only for a row
+//! the gated read already returned, so it answers nothing about a shape the caller cannot read.
 //!
 //! The successor lookup reads only the home and family of the row step 1 returned; no caller text
 //! reaches SQL here except the shape id, bound as a `uuid`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
+use std::sync::{LazyLock, Mutex, PoisonError};
 
 use serde_json::Value;
 use sqlx::PgPool;
+use tokio::sync::Semaphore;
 
 use crate::error::{ApiError, ApiResult};
 use temper_core::error::TemperError;
@@ -101,11 +112,7 @@ pub async fn load_one(pool: &PgPool, principal: ProfileId, id: ShapeId) -> ApiRe
     }
 
     // Step 3 — reached only for a live row.
-    let (row, verdict) = off_the_executor(move || {
-        let verdict = schema_verdict(&row.schema);
-        (row, verdict)
-    })
-    .await?;
+    let verdict = verdict_of(row.shape_id, &row.schema).await?;
     Ok(match verdict.refusing_load() {
         Some(refused) => refused,
         None => ShapeLoad::Loaded(loaded(row)),
@@ -132,72 +139,117 @@ impl SchemaVerdict {
     }
 }
 
-/// Step 3's decision, the one every door shares: measure the schema against the walk's byte bound
-/// ([`within_schema_bound`], which reads no further than the bound), and only within it compile
-/// through the no-fetch constructor. Synchronous and CPU-bound: an async caller runs it off the
-/// executor ([`load_one`], [`askable`]).
-pub fn schema_verdict(schema: &Value) -> SchemaVerdict {
+/// Step 3's decision, the one every door that decides whether a schema can be asked shares:
+/// measure the schema against the walk's byte bound ([`within_schema_bound`], which reads no further
+/// than the bound), and only within it compile through the no-fetch constructor — on the blocking
+/// pool, under a compile permit. The schema is copied for the blocking task only once it is known
+/// to be within the bound, so the copy is at most 256 KiB.
+///
+/// # Errors
+/// Only if the permits are closed or the blocking task cannot be joined.
+pub async fn judge(schema: &Value) -> ApiResult<SchemaVerdict> {
     if !within_schema_bound(schema) {
-        return SchemaVerdict::TooLarge;
+        return Ok(SchemaVerdict::TooLarge);
     }
-    if compiles(schema) {
-        SchemaVerdict::Compiles
-    } else {
-        SchemaVerdict::Uncompilable
-    }
+    let schema = schema.clone();
+    off_the_executor(move || {
+        if shape_schema::compile(&schema).is_ok() {
+            SchemaVerdict::Compiles
+        } else {
+            SchemaVerdict::Uncompilable
+        }
+    })
+    .await
 }
 
-/// Every compile the loader has run on a schema past the walk's byte bound — none, while the
-/// measurement holds. A test reads it to see that an oversized schema was never compiled; it is
-/// counted only for oversized schemas so that suites compiling ordinary schemas in parallel cannot
-/// move it.
-#[cfg(any(test, feature = "test-harness"))]
-pub static COMPILES_PAST_THE_BOUND: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+/// The most verdicts the process remembers. A verdict is a shape id and a byte, so this holds the
+/// map to tens of kilobytes; past it an arbitrary entry is forgotten, and that shape is judged
+/// again when it is next read.
+const MAX_REMEMBERED_VERDICTS: usize = 4096;
 
-/// The one compile [`schema_verdict`] runs.
-fn compiles(schema: &Value) -> bool {
-    #[cfg(any(test, feature = "test-harness"))]
-    if !within_schema_bound(schema) {
-        COMPILES_PAST_THE_BOUND.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+/// Each stored shape's verdict, by id, for the life of the process.
+static VERDICTS: LazyLock<Mutex<HashMap<ShapeId, SchemaVerdict>>> = LazyLock::new(Mutex::default);
+
+/// A stored shape's verdict — remembered, or judged now and remembered. Called only with a row the
+/// gated read returned. Two first reads that race both judge, under the permits; after that, none.
+async fn verdict_of(id: ShapeId, schema: &Value) -> ApiResult<SchemaVerdict> {
+    if let Some(verdict) = remembered(id) {
+        return Ok(verdict);
     }
-    shape_schema::compile(schema).is_ok()
+    let verdict = judge(schema).await?;
+    remember(id, verdict);
+    Ok(verdict)
+}
+
+fn remembered(id: ShapeId) -> Option<SchemaVerdict> {
+    VERDICTS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(&id)
+        .copied()
+}
+
+fn remember(id: ShapeId, verdict: SchemaVerdict) {
+    let mut verdicts = VERDICTS.lock().unwrap_or_else(PoisonError::into_inner);
+    if verdicts.len() >= MAX_REMEMBERED_VERDICTS && !verdicts.contains_key(&id) {
+        if let Some(evicted) = verdicts.keys().next().copied() {
+            verdicts.remove(&evicted);
+        }
+    }
+    verdicts.insert(id, verdict);
 }
 
 /// What a caller may ask of a shape, for its by-id read (spec §2.5): the vocabulary the walk
 /// enumerates, and the refusal step 3 gives this version's schema when it cannot be walked — past
 /// the byte bound (`askable` then says `truncated: [schema_bytes]`), or not compiling (`askable`
-/// empty). [`schema_verdict`] decides it, off the async executor, so the read and the loader
-/// judge a schema alike. The row is handed back with the answer.
+/// empty). The verdict is the loader's own ([`judge`], remembered by id), so the read and the
+/// loader judge a schema alike. Called only with a row the gated read returned.
 ///
 /// # Errors
-/// Only if the blocking task cannot be joined.
-pub async fn askable(
-    row: RetrievedShape,
-) -> ApiResult<(RetrievedShape, Vocabulary, Option<PlanRefusal>)> {
-    off_the_executor(move || {
-        let verdict = schema_verdict(&row.schema);
-        let vocabulary = match verdict {
-            // Past the bound, the walk reads nothing and says why: `truncated: [schema_bytes]`.
-            SchemaVerdict::Compiles | SchemaVerdict::TooLarge => {
-                enumerate(&row.schema, &WalkBounds::BUILD)
-            }
-            SchemaVerdict::Uncompilable => Vocabulary::default(),
-        };
-        let refusal = verdict.refusing_load().and_then(|load| load.loaded().err());
-        (row, vocabulary, refusal)
-    })
-    .await
+/// Only if the permits are closed or a blocking task cannot be joined.
+pub async fn askable(id: ShapeId, schema: &Value) -> ApiResult<(Vocabulary, Option<PlanRefusal>)> {
+    let verdict = verdict_of(id, schema).await?;
+    let vocabulary = match verdict {
+        // Within the bound: a walk of at most 256 KiB, bounded in work, off the executor.
+        SchemaVerdict::Compiles => {
+            let schema = schema.clone();
+            off_the_executor(move || enumerate(&schema, &WalkBounds::BUILD)).await?
+        }
+        // Past it the walk reads nothing — the measurement stops at the bound — and says why:
+        // `truncated: [schema_bytes]`.
+        SchemaVerdict::TooLarge => enumerate(schema, &WalkBounds::BUILD),
+        SchemaVerdict::Uncompilable => Vocabulary::default(),
+    };
+    let refusal = verdict.refusing_load().and_then(|load| load.loaded().err());
+    Ok((vocabulary, refusal))
 }
 
-/// Run CPU-bound work — a compile, an enumeration — on the blocking pool, so a slow one holds no
-/// async worker.
+/// How many shape compiles may run at once in this process: half the cores, and at least one.
+/// A compile is CPU-bound, so more at once than there are cores buys no throughput, only memory —
+/// each holds its validator until it is judged — and the blocking pool it runs on is shared with
+/// query embedding, which the other half leaves room for. A burst past it waits for a permit.
+fn compile_permits() -> usize {
+    std::thread::available_parallelism().map_or(1, |cores| (cores.get() / 2).max(1))
+}
+
+static COMPILE_PERMITS: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(compile_permits()));
+
+/// Run CPU-bound shape work — a compile, an enumeration — on the blocking pool, holding a compile
+/// permit for as long as it runs. The permit moves into the blocking task, so a request dropped
+/// while it waits does not release a permit its work still holds.
 async fn off_the_executor<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
 ) -> ApiResult<T> {
-    tokio::task::spawn_blocking(work)
+    let permit = COMPILE_PERMITS
+        .acquire()
         .await
-        .map_err(|e| ApiError::Internal(format!("shape schema task failed: {e}")))
+        .map_err(|e| ApiError::Internal(format!("shape compile permits closed: {e}")))?;
+    tokio::task::spawn_blocking(move || {
+        let _held = permit;
+        work()
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("shape schema task failed: {e}")))
 }
 
 /// A live, compilable row as the pure half reads it.
@@ -217,4 +269,48 @@ fn loaded(row: RetrievedShape) -> LoadedShape {
 /// A read fault, mapped as the neighbouring shape reads map theirs (`substrate_read::get_shape`).
 fn read_fault(e: anyhow::Error) -> ApiError {
     ApiError::from(TemperError::Api(e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// Every permit held, no shape work runs: the work waits for a permit rather than fanning out
+    /// to the blocking pool. Deterministic in the green direction — the work cannot start without a
+    /// permit. Bite: delete the `acquire` (and `let _held = permit;`) from `off_the_executor`; the
+    /// trivial work then finishes well inside the wait and the first assertion goes red.
+    #[tokio::test]
+    async fn shape_work_waits_for_a_compile_permit() {
+        let permits = u32::try_from(compile_permits()).expect("a handful of permits");
+        assert!(permits >= 1);
+        let held = COMPILE_PERMITS
+            .acquire_many(permits)
+            .await
+            .expect("the permits are open");
+        let waited = tokio::time::timeout(Duration::from_millis(500), off_the_executor(|| 7)).await;
+        assert!(
+            waited.is_err(),
+            "no shape work runs while every permit is held"
+        );
+        drop(held);
+        let ran = off_the_executor(|| 7).await;
+        assert_eq!(ran.expect("runs once a permit is free"), 7);
+    }
+
+    /// A remembered verdict is answered without judging, and the map never holds more than its cap.
+    #[test]
+    fn the_verdict_map_is_capped() {
+        for _ in 0..MAX_REMEMBERED_VERDICTS + 8 {
+            remember(ShapeId::new(), SchemaVerdict::Compiles);
+        }
+        let id = ShapeId::new();
+        remember(id, SchemaVerdict::Uncompilable);
+        assert_eq!(remembered(id), Some(SchemaVerdict::Uncompilable));
+        let held = VERDICTS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len();
+        assert!(held <= MAX_REMEMBERED_VERDICTS, "{held}");
+    }
 }

@@ -125,7 +125,8 @@ pub struct RefusalTeaching {
     /// refusal is about, and held to a bounded size.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vocabulary: Option<Vocabulary>,
-    /// The walk bound an asked path lies beyond.
+    /// The walk bound an asked path lies beyond, or — on `shape_schema_uncompilable` —
+    /// `schema_bytes`, for a whole schema too large for the walk to read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub beyond_bound: Option<BoundKind>,
     /// A closed vocabulary of terms: the intents, or the askable shape states.

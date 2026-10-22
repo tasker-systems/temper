@@ -15,7 +15,6 @@
 #![cfg(feature = "test-db")]
 
 use std::collections::BTreeSet;
-use std::sync::atomic::Ordering;
 
 use serde_json::json;
 use sqlx::PgPool;
@@ -29,12 +28,13 @@ use temper_core::types::ids::{ContextId, EntityId, ProfileId, ShapeId};
 use temper_core::types::query::{PlanRefusal, PropertyOp, RefusalReason};
 use temper_services::backend::substrate_read;
 use temper_services::error::ApiError;
-use temper_services::services::shape_loader::{load, load_one, COMPILES_PAST_THE_BOUND};
+use temper_services::services::shape_loader::{load, load_one};
 use temper_services::services::shape_service::{self, DeclareShapeServiceParams};
 use temper_substrate::events::EventContext;
 use temper_substrate::payloads::{AnchorRef, EnforcementMode, KindOwner};
 use temper_substrate::readback;
 use temper_substrate::scenario::bootseed;
+use temper_substrate::shape_schema::test_support::compiles_tagged;
 use temper_substrate::writes::{self, CreateParams, DeclareShapeParams};
 use uuid::Uuid;
 
@@ -189,9 +189,15 @@ async fn store_owned(
     .unwrap()
 }
 
+/// A tag no other fixture carries: the root `$comment` `shape_schema::test_support` counts
+/// compiles by, so this test's count moves only for this test's schema.
+fn fresh_tag() -> String {
+    format!("shape-loader-test-{}", Uuid::now_v7())
+}
+
 /// A schema that compiles but is past the walk's byte bound: one string property per distinct
-/// `pattern`, so a compiler that ran would build thousands of regexes.
-fn patterns_past_the_bound() -> serde_json::Value {
+/// `pattern`, so a compiler that ran would build thousands of regexes. Tagged with `tag`.
+fn patterns_past_the_bound(tag: &str) -> serde_json::Value {
     let properties: serde_json::Map<String, serde_json::Value> = (0..6_000)
         .map(|i| {
             (
@@ -202,6 +208,7 @@ fn patterns_past_the_bound() -> serde_json::Value {
         .collect();
     let schema = json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$comment": tag,
         "type": "object",
         "properties": properties
     });
@@ -577,14 +584,15 @@ async fn an_uncompilable_shape_reads_askable_empty_with_the_reason(pool: PgPool)
 /// the load and answered by the by-id read with the bound, and is never compiled by either: the
 /// load is `SchemaTooLarge`, an ask is told `shape_schema_uncompilable` with
 /// `teaches.beyond_bound: schema_bytes`, the read's `askable` is empty and truncated at
-/// `schema_bytes` with that same refusal as `unaskable`, and the loader's count of compiles past the
-/// bound does not move. Bites removing the measurement from `shape_loader::schema_verdict`: the
-/// schema compiles, the count moves, and it loads `Loaded`.
+/// `schema_bytes` with that same refusal as `unaskable`, and `shape_schema::compile` — counted
+/// wherever it is called — never runs on it. Bites removing the measurement from
+/// `shape_loader::judge` (`if !within_schema_bound(schema) { return Ok(SchemaVerdict::TooLarge); }`):
+/// the schema compiles, the count moves, and it loads `Loaded`.
 #[sqlx::test(migrations = "../../migrations")]
 async fn a_schema_past_the_byte_bound_is_refused_at_load_and_read_and_never_compiled(pool: PgPool) {
     let w = seed_world(&pool, "loader-past-the-bound").await;
-    let id = store(&pool, &w, "measurement", &patterns_past_the_bound()).await;
-    let compiled = COMPILES_PAST_THE_BOUND.load(Ordering::SeqCst);
+    let tag = fresh_tag();
+    let id = store(&pool, &w, "measurement", &patterns_past_the_bound(&tag)).await;
     let too_large = ShapeLoad::SchemaTooLarge
         .loaded()
         .expect_err("a schema past the bound is refused");
@@ -619,21 +627,21 @@ async fn a_schema_past_the_byte_bound_is_refused_at_load_and_read_and_never_comp
     assert_eq!(wire["unaskable"]["teaches"]["beyond_bound"], "schema_bytes");
 
     assert_eq!(
-        COMPILES_PAST_THE_BOUND.load(Ordering::SeqCst),
-        compiled,
+        compiles_tagged(&tag),
+        0,
         "nothing compiled a schema past the bound"
     );
 }
 
 /// Declare refuses a schema past the walk's byte bound before compiling it, with the typed
 /// data-artifact refusal naming the bound and no compiler text, and writes no row; a schema just
-/// within the bound still declares. Bites removing the measurement from
-/// `shape_loader::schema_verdict`: the oversized schema compiles (the count moves) and declares.
+/// within the bound still declares. Bites removing the measurement from `shape_loader::judge`: the
+/// oversized schema compiles (the count moves) and declares.
 #[sqlx::test(migrations = "../../migrations")]
 async fn declaring_a_schema_past_the_byte_bound_is_refused_before_it_compiles(pool: PgPool) {
     let w = seed_world(&pool, "declare-past-the-bound").await;
-    let oversized = patterns_past_the_bound();
-    let compiled = COMPILES_PAST_THE_BOUND.load(Ordering::SeqCst);
+    let tag = fresh_tag();
+    let oversized = patterns_past_the_bound(&tag);
 
     let err = shape_service::declare_shape(
         &pool,
@@ -661,11 +669,7 @@ async fn declaring_a_schema_past_the_byte_bound_is_refused_before_it_compiles(po
         !message.contains("pattern") && !message.contains("^x"),
         "the refusal carries nothing of the schema: {message}"
     );
-    assert_eq!(
-        COMPILES_PAST_THE_BOUND.load(Ordering::SeqCst),
-        compiled,
-        "declare did not compile it"
-    );
+    assert_eq!(compiles_tagged(&tag), 0, "declare did not compile it");
     let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_data_artifact_shapes")
         .fetch_one(&pool)
         .await
@@ -677,4 +681,33 @@ async fn declaring_a_schema_past_the_byte_bound_is_refused_before_it_compiles(po
         load_one(&pool, w.owner, within).await.unwrap(),
         ShapeLoad::Loaded(_)
     ));
+}
+
+// ── A shape read many times is compiled once ────────────────────────────────────────────────
+
+/// Reads of one stored shape — five by-id reads and a load — compile its schema once: the verdict
+/// is remembered by shape id after the first. Counted at `shape_schema::compile` by the fixture's
+/// tag, so other suites' compiles cannot move it. Bites bypassing the remembered verdict (in
+/// `shape_loader::verdict_of`, delete the `if let Some(verdict) = remembered(id)` return): six
+/// compiles.
+#[sqlx::test(migrations = "../../migrations")]
+async fn a_shape_read_many_times_is_compiled_once(pool: PgPool) {
+    let w = seed_world(&pool, "loader-verdict-remembered").await;
+    let tag = fresh_tag();
+    let mut schema = value_schema();
+    schema["$comment"] = json!(tag);
+    let id = store(&pool, &w, "measurement", &schema).await;
+
+    for _ in 0..5 {
+        let shown = substrate_read::get_shape(&pool, w.owner, id)
+            .await
+            .unwrap()
+            .expect("the owner reads the shape");
+        assert!(shown.unaskable.is_none());
+    }
+    assert!(matches!(
+        load_one(&pool, w.owner, id).await.unwrap(),
+        ShapeLoad::Loaded(_)
+    ));
+    assert_eq!(compiles_tagged(&tag), 1, "one compile for six reads");
 }

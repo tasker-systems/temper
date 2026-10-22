@@ -45,6 +45,13 @@
 //! refused too, with the same fixed sentence. Position cannot tell data from schema: a reference
 //! can make any position in the document a schema, and telling them apart would mean reproducing
 //! every spelling of a reference that `jsonschema` resolves. The rule fails closed instead.
+//!
+//! **Each pattern is bounded too.** `jsonschema` compiles every distinct `pattern` and
+//! `patternProperties` key when a schema is built, under the regex engine's limits; [`compile`]
+//! holds each to [`MAX_PATTERN_BYTES`] rather than the engine's 10 MiB default, so one short pattern
+//! cannot make a compile cost megabytes. A pattern past it makes the schema uncompilable, with the
+//! same fixed sentence. Every caller — declare, commit, reconcile, and the shape loader — gets the
+//! bound, because every caller compiles here.
 
 use jsonschema::{Draft, Retrieve, Uri, Validator};
 use serde_json::Value;
@@ -110,18 +117,88 @@ fn names_only_standard_drafts(schema: &Value) -> bool {
     true
 }
 
-/// Compile a shape's JSON Schema into a validator without fetching anything.
+/// The most bytes one `pattern` (or `patternProperties` key) may compile to — the regex engine's
+/// per-regex size limit, which counted repetitions expand into.
+///
+/// # 1 MiB
+///
+/// `jsonschema` compiles every distinct pattern eagerly when a schema is built, and the engine's
+/// own default allows 10 MiB a regex, so a pattern of twenty bytes such as a large Unicode class
+/// repeated a few hundred times can cost milliseconds and megabytes on its own, multiplied by
+/// every pattern a schema carries. A pattern a person writes for a field — a code, a date, an
+/// identifier — compiles to kilobytes; 1 MiB admits two orders of magnitude more. A pattern past it
+/// fails to compile, so its schema is [`ShapeSchemaUncompilable`], with the one fixed sentence.
+pub const MAX_PATTERN_BYTES: usize = 1 << 20;
+
+/// The most bytes the engine may spend building a **full** DFA for one pattern — what
+/// `PatternOptions::dfa_size_limit` reaches (`fancy-regex`'s `delegate_dfa_size_limit`, which is
+/// `regex-automata`'s meta `dfa_size_limit`), not the lazy DFA's search cache. Past it the engine
+/// does not build a full DFA and searches with another engine; nothing is refused.
+///
+/// # 40 KiB
+///
+/// The engine's own default, pinned: a full DFA costs worst-case exponential time and space to
+/// build, which is why the default is this small. Setting it to anything like
+/// [`MAX_PATTERN_BYTES`] would raise it twenty-five-fold; pinning it keeps an upstream change of
+/// default from moving what a compile may cost.
+pub const MAX_PATTERN_DFA_BYTES: usize = 40 << 10;
+
+/// Compile a shape's JSON Schema into a validator without fetching anything, holding each pattern
+/// to [`MAX_PATTERN_BYTES`].
 ///
 /// # Errors
 /// [`ShapeSchemaUncompilable`] when the schema is not valid for its draft, carries a string
 /// `$schema` outside the standard drafts anywhere in the document (even one the schema itself
-/// defines, or one inside a value), or has a `$ref` that leaves the document.
+/// defines, or one inside a value), has a `$ref` that leaves the document, or has a pattern that
+/// compiles past [`MAX_PATTERN_BYTES`].
 pub fn compile(schema: &Value) -> Result<Validator, ShapeSchemaUncompilable> {
+    #[cfg(feature = "test-support")]
+    test_support::record(schema);
     if !names_only_standard_drafts(schema) {
         return Err(ShapeSchemaUncompilable);
     }
+    let patterns = jsonschema::PatternOptions::fancy_regex()
+        .size_limit(MAX_PATTERN_BYTES)
+        .dfa_size_limit(MAX_PATTERN_DFA_BYTES);
     jsonschema::options()
         .with_retriever(RefuseEveryUri)
+        .with_pattern_options(patterns)
         .build(schema)
         .map_err(|_| ShapeSchemaUncompilable)
+}
+
+/// What a test reads to see which schemas [`compile`] was run on — every call, from every caller,
+/// so a compile that skipped a bound is seen wherever it was written.
+#[cfg(feature = "test-support")]
+pub mod test_support {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock, PoisonError};
+
+    use serde_json::Value;
+
+    static COMPILES: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+
+    /// Count one compile of a schema whose root carries a string `$comment` — the tag a test gives
+    /// its fixture, so that suites compiling other schemas in parallel cannot move its count.
+    pub(super) fn record(schema: &Value) {
+        if let Some(tag) = schema.get("$comment").and_then(Value::as_str) {
+            let mut compiles = COMPILES
+                .get_or_init(Mutex::default)
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            *compiles.entry(tag.to_owned()).or_default() += 1;
+        }
+    }
+
+    /// How many times [`compile`](super::compile) has run, in this process, on a schema whose root
+    /// `$comment` is `tag`.
+    pub fn compiles_tagged(tag: &str) -> usize {
+        COMPILES
+            .get_or_init(Mutex::default)
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(tag)
+            .copied()
+            .unwrap_or(0)
+    }
 }

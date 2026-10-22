@@ -56,10 +56,11 @@ pub struct DeclareShapeServiceParams<'a> {
 /// `DbBackend::check_cogmap_authorable` use.
 ///
 /// The schema is then judged, before any write, by the decision the loader and the by-id read
-/// share ([`shape_loader::schema_verdict`]). A schema larger than the walk reads
-/// ([`MAX_SCHEMA_BYTES`]) is refused before it is compiled, with a sentence naming the bound; one
-/// within it that cannot be compiled (malformed, or referring to a document that is never fetched)
-/// is refused with the no-fetch constructor's fixed sentence. Both are a `DataArtifactRefusal`, so
+/// share ([`shape_loader::judge`]), on the blocking pool under the same compile permits. A schema
+/// larger than the walk reads ([`MAX_SCHEMA_BYTES`]) is refused before it is compiled, with a
+/// sentence naming the bound; one within it that cannot be compiled (malformed, referring to a
+/// document that is never fetched, or with a pattern past `shape_schema::MAX_PATTERN_BYTES`) is
+/// refused with the no-fetch constructor's fixed sentence. Both are a `DataArtifactRefusal`, so
 /// a schema no ask could use is refused when it is declared rather than stored.
 ///
 /// After the declare succeeds, a reconcile job is enqueued on the anchor queue. The single-flight
@@ -71,7 +72,7 @@ pub async fn declare_shape(pool: &PgPool, p: DeclareShapeServiceParams<'_>) -> A
     // Auth before writes, and the schema judged before the write: the gate above answers a
     // stranger `Forbidden` whatever the schema says, so the refusals below teach only an author.
     // Measured before compiled — a schema past the walk's byte bound is never compiled.
-    match shape_loader::schema_verdict(p.schema) {
+    match shape_loader::judge(p.schema).await? {
         SchemaVerdict::Compiles => {}
         SchemaVerdict::Uncompilable => {
             return Err(ApiError::DataArtifactRefusal(

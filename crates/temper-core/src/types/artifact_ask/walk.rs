@@ -341,8 +341,9 @@ pub fn enumerate(schema: &Value, bounds: &WalkBounds) -> Vocabulary {
 
 /// Whether a schema is within the size the walk reads ([`MAX_SCHEMA_BYTES`], compact JSON bytes),
 /// measured only as far as the bound — so a schema far over it costs no more to judge than one
-/// just over it. The loader asks this before it compiles a stored schema: a schema the walk will
-/// not read is never compiled (spec §3.3, the walk "never stalls or exhausts the server").
+/// just over it. Asking checks this before it compiles a schema — the shape loader, the by-id
+/// read's `askable` and declare — so none of them compiles a schema the walk will not read (spec
+/// §3.3, the walk "never stalls or exhausts the server"). Commit and reconcile do not ask it.
 pub fn within_schema_bound(schema: &Value) -> bool {
     json_bytes_up_to(schema, MAX_SCHEMA_BYTES) <= MAX_SCHEMA_BYTES
 }
@@ -441,9 +442,9 @@ impl Draft {
 ///   them. Their `contains` values are checked against the enum under a budget of their own,
 ///   `MAX_MEMBERSHIP_STEPS`, shared by the request's asks, which one ask can still spend: 32
 ///   predicates of four admissible values each, matched late against 9,000 members, need about
-///   1.15M steps, past 1,048,576, and the
-///   later predicates are refused `path_outside_shape` with `beyond_bound: work`. A value the enum
-///   does not hold refuses its predicate `value_outside_shape` at that value, before the rest scan.
+///   1.15M steps, past 1,048,576, and the later predicates are refused `path_outside_shape` with
+///   `beyond_bound: work`. A value the enum does not hold refuses its predicate
+///   `value_outside_shape` at that value, before the rest scan.
 /// - **A vocabulary** copies each advertised path's values into the answer, `n` visits a copy, so a
 ///   shape whose `k` paths all carry the same `n`-code enum costs about `(2 + k) · n`: eleven paths
 ///   over one 5,000-code enum fit (2 · 5,000 + 11 · 5,000 = 65,000 of 65,536), and the twelfth

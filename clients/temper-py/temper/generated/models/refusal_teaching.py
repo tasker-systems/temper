@@ -31,7 +31,7 @@ class RefusalTeaching(BaseModel):
     """
     What a refusal teaches, as data an agent reads without parsing English (spec §3.5).  **Open, by being a struct of optional fields** rather than a tagged enum: a later refusal that teaches something new adds a field older clients skip, where a new variant would fail their parse of the whole refusal list. Each refusal fills what is relevant to it:  | reason | teaches | |---|---| | `path_outside_shape` | `vocabulary` (the askable paths), `beyond_bound` when a walk bound stopped it | | `operator_outside_shape` | `vocabulary` (each offending path's facts and feasible operators) | | `value_outside_shape` | `vocabulary` (each offending path's declared types and values), `non_closure` | | `unknown_artifact_intent`, `unknown_shape_state` | `terms` | | `shape_superseded` | `successor` | | `shape_schema_uncompilable` | `beyond_bound: schema_bytes` for a schema past the byte bound |
     """ # noqa: E501
-    beyond_bound: Optional[BoundKind] = Field(default=None, description="The walk bound an asked path lies beyond.")
+    beyond_bound: Optional[BoundKind] = Field(default=None, description="The walk bound an asked path lies beyond, or — on `shape_schema_uncompilable` — `schema_bytes`, for a whole schema too large for the walk to read.")
     elided: Optional[TeachingElision] = Field(default=None, description="Paths cut from `vocabulary` to keep the teaching bounded.")
     non_closure: Optional[StrictStr] = Field(default=None, description="That stored content is not closed by its shape, and the route to values it does not declare (spec §3.4).")
     successor: Optional[ShapeSuccessor] = Field(default=None, description="The version now in force, for a folded shape that has one.")

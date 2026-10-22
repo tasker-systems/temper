@@ -24347,7 +24347,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/BoundKind",
-                "description": "The walk bound an asked path lies beyond."
+                "description": "The walk bound an asked path lies beyond, or — on `shape_schema_uncompilable` —\n`schema_bytes`, for a whole schema too large for the walk to read."
               },
               {
                 "type": "null"
