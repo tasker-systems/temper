@@ -3,7 +3,7 @@
 //! 1–3).
 //!
 //! It turns each shape an ask names, and the principal asking, into a
-//! [`ShapeLoad`](temper_core::types::artifact_ask::ShapeLoad) — `Loaded`, `NotAskable`,
+//! [`ShapeLoad`] — `Loaded`, `NotAskable`,
 //! `Superseded` or `Uncompilable` — so that everything after it is the pure half in `temper-core`,
 //! which holds no pool and no JSON Schema compiler.
 //!
