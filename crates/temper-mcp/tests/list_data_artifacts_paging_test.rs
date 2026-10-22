@@ -37,6 +37,8 @@ const RESOURCE: Uuid = Uuid::from_u128(0x0199_0000_0000_7000_8000_0000_0000_0001
 struct StandIn {
     rows: Vec<ArtifactView>,
     asked: Mutex<Vec<ArtifactListParams>>,
+    /// The `Authorization` header of each request, in order (`None` when absent).
+    authorizations: Mutex<Vec<Option<String>>>,
 }
 
 /// The `(created, id)` position of a row: the keyset the route orders and continues by.
@@ -46,9 +48,16 @@ fn position(row: &ArtifactView) -> (DateTime<Utc>, Uuid) {
 
 async fn answer(
     State(stand_in): State<Arc<StandIn>>,
+    headers: axum::http::HeaderMap,
     Query(q): Query<ArtifactListParams>,
 ) -> Response {
     stand_in.asked.lock().expect("lock").push(q.clone());
+    stand_in.authorizations.lock().expect("lock").push(
+        headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string),
+    );
     let mut rows = stand_in.rows.clone();
     rows.sort_by_key(position);
     let request = match q.page_request() {
@@ -94,6 +103,7 @@ async fn stand_in(rows: Vec<ArtifactView>) -> (Arc<StandIn>, String) {
     let stand_in = Arc::new(StandIn {
         rows,
         asked: Mutex::new(Vec::new()),
+        authorizations: Mutex::new(Vec::new()),
     });
     let app = axum::Router::new()
         .route("/api/resources/{id}/artifacts", axum::routing::get(answer))
@@ -346,12 +356,13 @@ async fn limit_order_after_and_the_filters_reach_the_route_exactly() {
     assert_eq!(q.counts, None);
 }
 
-/// The paging refusals are the route's own words, as `invalid_params`, spoken before anything is
-/// relayed: the service here cannot relay at all, so a call that reached the relay would answer
-/// the host's sentence as an internal error. FAILS IF a combination is ignored, forwarded, or
-/// refused in other words.
+/// The paging refusals are the route's combinations, worded in this tool's inputs, as
+/// `invalid_params`, spoken before anything is relayed: the service here cannot relay at all, so
+/// a call that reached the relay would answer the host's sentence as an internal error. FAILS IF
+/// a combination is ignored or forwarded, or refused in the route's words (`after_created`,
+/// `after_id`, or the refusal's own text).
 #[tokio::test]
-async fn the_paging_refusals_are_the_routes_own_words_before_any_relay() {
+async fn the_paging_refusals_name_the_tools_inputs_before_any_relay() {
     let svc = TemperMcpService::unavailable(
         BlobDoor::Closed {
             refusal: "unused".to_string(),
@@ -363,29 +374,72 @@ async fn the_paging_refusals_are_the_routes_own_words_before_any_relay() {
         "artifact_id": Uuid::from_u128(9).to_string(),
     });
     let over = MAX_ARTIFACT_PAGE_ROWS + 1;
-    let cases = [
-        (json!({ "limit": 0 }), ArtifactPageRefusal::LimitZero),
+    let cases: [(Value, ArtifactPageRefusal, &[&str]); 4] = [
+        (
+            json!({ "limit": 0 }),
+            ArtifactPageRefusal::LimitZero,
+            &["`limit` must be at least 1"],
+        ),
         (
             json!({ "limit": over }),
             ArtifactPageRefusal::LimitAboveCeiling { limit: over },
+            &["`limit`", "passing `next` as `after`"],
         ),
         (
             json!({ "after": position }),
             ArtifactPageRefusal::AfterWithoutLimit,
+            &["`after` continues", "requires `limit`"],
         ),
         (
             json!({ "order": "desc" }),
             ArtifactPageRefusal::OrderWithoutLimit,
+            &["`order` directs", "requires `limit`"],
         ),
     ];
-    for (mut args, refusal) in cases {
+    for (mut args, refusal, words) in cases {
         args["resource_id"] = json!(RESOURCE.to_string());
         let err = list_artifacts(&svc, &empty_parts(), input(args.clone()))
             .await
             .expect_err("refused");
         assert_eq!(err.code, ErrorCode::INVALID_PARAMS, "{args}");
-        assert_eq!(err.message.as_ref(), refusal.to_string(), "{args}");
+        let said = err.message.as_ref();
+        for word in words {
+            assert!(said.contains(word), "{args}: must say {word}: {said}");
+        }
+        for route_name in ["after_created", "after_id"] {
+            assert!(
+                !said.contains(route_name),
+                "{args}: names {route_name}: {said}"
+            );
+        }
+        // `LimitZero` names only `limit`, which the route and this tool spell alike.
+        if !matches!(refusal, ArtifactPageRefusal::LimitZero) {
+            assert_ne!(said, refusal.to_string(), "{args}: the route's own text");
+        }
     }
+}
+
+/// The page request carries the caller's bearer, as every relayed act must. FAILS IF
+/// `list_page` (or the door) sends the page request with no token, or with another one.
+#[tokio::test]
+async fn the_page_request_carries_the_callers_bearer() {
+    let (stand_in, base) = stand_in(six_with_a_tie()).await;
+    let svc = relaying_to(&base);
+
+    list_artifacts(
+        &svc,
+        &empty_parts(),
+        input(json!({ "resource_id": RESOURCE.to_string(), "limit": 2 })),
+    )
+    .await
+    .expect("the page answers");
+
+    let authorizations = stand_in.authorizations.lock().expect("lock").clone();
+    assert_eq!(
+        authorizations,
+        [Some("Bearer tok".to_string())],
+        "one page request, carrying the seam's bearer"
+    );
 }
 
 /// Following `next` visits every artifact exactly once, oldest first, over three pages, with a

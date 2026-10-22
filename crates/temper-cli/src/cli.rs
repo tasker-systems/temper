@@ -1169,8 +1169,8 @@ pub enum DataArtifactAction {
     /// With `--limit`, answers one bounded page as `{"artifacts": [...], "next": {...} | null}`;
     /// continue by passing `next.created` and `next.artifact_id` back as `--after-created` and
     /// `--after-id`, with the same filters and `--order`. `next` is `null` on the last page.
-    /// Prefer it. Without `--limit`, answers every artifact as a bare array; that unbounded
-    /// default is retiring.
+    /// Prefer `--limit`. Without `--limit`, answers every artifact as a bare array; that
+    /// unbounded default is retiring.
     List {
         /// Resource ref: a UUID or the decorated `slug-<uuid>` form
         r#ref: String,

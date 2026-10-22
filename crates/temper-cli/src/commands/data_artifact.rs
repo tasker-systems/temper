@@ -8,7 +8,8 @@ use crate::actions::runtime;
 use crate::format::OutputFormat;
 use crate::output;
 use temper_core::types::data_artifact::{
-    ArtifactCommitRequest, ArtifactListParams, ArtifactPageRequest, KindOwnerInput,
+    ArtifactCommitRequest, ArtifactListParams, ArtifactPage, ArtifactPageRefusal,
+    ArtifactPageRequest, KindOwnerInput, MAX_ARTIFACT_PAGE_ROWS,
 };
 use temper_core::types::data_artifact_shape::{EnforcementMode, ShapeDeclareRequest, ShapeView};
 use temper_core::types::ids::DataArtifactId;
@@ -29,10 +30,10 @@ enum ListAsk {
 /// The filters and the [`ListAsk`] these flags ask for.
 ///
 /// `--limit` is the demarcation, as on the route: the paging flags are checked by
-/// [`ArtifactListParams::page_request`], so this command and the server refuse the same
-/// combinations in the same words (`--after-created` without `--after-id`, either without
-/// `--limit`, `--order` without `--limit`, a `--limit` of 0 or above 200). `--counts` with a
-/// paging flag never reaches here: clap refuses it.
+/// [`ArtifactListParams::page_request`], so this command refuses exactly the combinations the
+/// server refuses (`--after-created` without `--after-id`, either without `--limit`, `--order`
+/// without `--limit`, a `--limit` of 0 or above 200), worded in this command's flags by
+/// [`refusal_in_flags`]. `--counts` with a paging flag never reaches here: clap refuses it.
 fn list_ask(params: &ListParams<'_>) -> crate::error::Result<(ArtifactListParams, ListAsk)> {
     let api_params = ArtifactListParams {
         kind: params.kind.map(str::to_string),
@@ -49,12 +50,52 @@ fn list_ask(params: &ListParams<'_>) -> crate::error::Result<(ArtifactListParams
     }
     let ask = match api_params
         .page_request()
-        .map_err(|refusal| crate::error::TemperError::BadRequest(refusal.to_string()))?
+        .map_err(|refusal| crate::error::TemperError::BadRequest(refusal_in_flags(refusal)))?
     {
         Some(request) => ListAsk::Page(request),
         None => ListAsk::Every,
     };
     Ok((api_params, ask))
+}
+
+/// A paging refusal, worded in this command's flags rather than the route's query parameters.
+///
+/// The combinations refused are the route's (`page_request` decides them); only the words are
+/// this door's. The match is exhaustive on purpose: a new refusal fails to compile here until
+/// it is worded for the CLI.
+fn refusal_in_flags(refusal: ArtifactPageRefusal) -> String {
+    match refusal {
+        ArtifactPageRefusal::LimitZero => {
+            "`--limit` must be at least 1; a page of zero artifacts cannot make progress"
+                .to_string()
+        }
+        ArtifactPageRefusal::LimitAboveCeiling { limit } => format!(
+            "`--limit` {limit} is above the ceiling of {MAX_ARTIFACT_PAGE_ROWS} artifacts per \
+             page; ask for at most {MAX_ARTIFACT_PAGE_ROWS} and continue with `--after-created` \
+             and `--after-id`"
+        ),
+        ArtifactPageRefusal::AfterIncomplete => {
+            "`--after-created` and `--after-id` name one position and must be passed together"
+                .to_string()
+        }
+        ArtifactPageRefusal::AfterWithoutLimit => {
+            "`--after-created` and `--after-id` continue a bounded list and require `--limit`; \
+             without `--limit` every artifact is returned and there is nothing to continue"
+                .to_string()
+        }
+        ArtifactPageRefusal::OrderWithoutLimit => {
+            "`--order` directs a bounded list and requires `--limit`; without `--limit` every \
+             artifact is returned oldest first"
+                .to_string()
+        }
+    }
+}
+
+/// The `--limit` answer as stdout prints it: the whole `{artifacts, next}` envelope, never the
+/// bare `artifacts`, since `next` (an explicit `null` on the last page) is the only place the
+/// continuation is said.
+fn render_page(page: &ArtifactPage, format: OutputFormat) -> crate::error::Result<String> {
+    crate::format::render(page, format)
 }
 
 pub fn list(_config: &crate::config::Config, params: ListParams<'_>) -> crate::error::Result<()> {
@@ -100,7 +141,7 @@ pub fn list(_config: &crate::config::Config, params: ListParams<'_>) -> crate::e
                         .map_err(crate::actions::runtime::client_err_to_temper)
                 })
             })?;
-            crate::format::render(&page, params.format)?
+            render_page(&page, params.format)?
         }
     };
     output::plain(rendered);
@@ -407,9 +448,8 @@ fn parse_kind_owner(s: &str) -> crate::error::Result<KindOwnerInput> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use temper_core::types::data_artifact::{
-        ArtifactCursor, ArtifactPageRefusal, MAX_ARTIFACT_PAGE_ROWS,
-    };
+    use temper_core::types::data_artifact::{ArtifactCursor, ArtifactView};
+    use temper_core::types::ids::ResourceId;
 
     fn created() -> chrono::DateTime<chrono::Utc> {
         // Sub-microsecond precision: a position that does not round-trip exactly is a defect.
@@ -505,10 +545,11 @@ mod tests {
         );
     }
 
-    /// The refusals are `page_request`'s own, word for word. FAILS IF a combination is ignored
-    /// instead of refused, or refused in other words than the server's.
+    /// The combinations refused are `page_request`'s, each worded by [`refusal_in_flags`]. FAILS
+    /// IF a combination is ignored instead of refused, mapped to another refusal's words, or
+    /// passed through in the route's words.
     #[test]
-    fn the_paging_refusals_are_the_servers_own() {
+    fn the_paging_refusals_are_the_routes_combinations_in_this_commands_words() {
         let cases = [
             (
                 ListParams {
@@ -559,7 +600,144 @@ mod tests {
             ),
         ];
         for (asked, refusal) in cases {
-            assert_eq!(refusal_of(&asked), refusal.to_string());
+            assert_eq!(refusal_of(&asked), refusal_in_flags(refusal));
+        }
+    }
+
+    /// Every refusal names this command's flags and never the route's query parameters.
+    /// FAILS IF a variant is worded with `after_created`/`after_id`, a bare `limit`/`order`, or
+    /// the refusal's own (route) text.
+    #[test]
+    fn every_refusal_names_the_flags_not_the_query_parameters() {
+        let over = MAX_ARTIFACT_PAGE_ROWS + 1;
+        let cases: [(ArtifactPageRefusal, &[&str]); 5] = [
+            (ArtifactPageRefusal::LimitZero, &["`--limit`"]),
+            (
+                ArtifactPageRefusal::LimitAboveCeiling { limit: over },
+                &["`--limit`", "`--after-created`", "`--after-id`"],
+            ),
+            (
+                ArtifactPageRefusal::AfterIncomplete,
+                &["`--after-created`", "`--after-id`"],
+            ),
+            (
+                ArtifactPageRefusal::AfterWithoutLimit,
+                &["`--after-created`", "`--after-id`", "`--limit`"],
+            ),
+            (
+                ArtifactPageRefusal::OrderWithoutLimit,
+                &["`--order`", "`--limit`"],
+            ),
+        ];
+        for (refusal, flags) in cases {
+            let said = refusal_in_flags(refusal);
+            for flag in flags {
+                assert!(said.contains(flag), "{refusal:?} must name {flag}: {said}");
+            }
+            for route_name in ["`after_created`", "`after_id`", "`limit`", "`order`"] {
+                assert!(
+                    !said.contains(route_name),
+                    "{refusal:?} names the route's {route_name}: {said}"
+                );
+            }
+            assert_ne!(said, refusal.to_string(), "{refusal:?} is the route's text");
+        }
+    }
+
+    fn page(next: Option<ArtifactCursor>) -> ArtifactPage {
+        ArtifactPage {
+            artifacts: vec![ArtifactView {
+                artifact_id: DataArtifactId::from(uuid::Uuid::from_u128(1)),
+                resource_id: ResourceId::from(uuid::Uuid::from_u128(2)),
+                kind_owner_table: "kb_profiles".to_string(),
+                kind_owner_id: uuid::Uuid::from_u128(3),
+                artifact_kind: "measurement".to_string(),
+                intent: "member".to_string(),
+                precedence: 0.0,
+                content_hash: "hash".to_string(),
+                content_bytes: 2,
+                shape_state: "never_declared".to_string(),
+                is_folded: false,
+                created: created(),
+                content: Some(serde_json::json!({ "n": 1 })),
+            }],
+            next,
+        }
+    }
+
+    fn cursor() -> ArtifactCursor {
+        ArtifactCursor {
+            created: created(),
+            artifact_id: DataArtifactId::from(id()),
+        }
+    }
+
+    /// The JSON rendering is the whole envelope, `next` included and `null` on the last page,
+    /// and `next.created` reads back as the exact position. FAILS IF `render_page` renders
+    /// `page.artifacts` (a bare array), drops `next`, or loses `created`'s precision.
+    #[test]
+    fn the_json_rendering_is_the_envelope_and_next_round_trips() {
+        let more: serde_json::Value = serde_json::from_str(
+            &render_page(&page(Some(cursor())), OutputFormat::Json).expect("renders"),
+        )
+        .expect("JSON");
+        let keys: Vec<&str> = more
+            .as_object()
+            .expect("the envelope, not a bare array")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys, ["artifacts", "next"]);
+        assert_eq!(more["artifacts"].as_array().expect("artifacts").len(), 1);
+        let created_back: chrono::DateTime<chrono::Utc> = more["next"]["created"]
+            .as_str()
+            .expect("a string")
+            .parse()
+            .expect("RFC 3339");
+        assert_eq!(
+            created_back,
+            created(),
+            "printed as {}",
+            more["next"]["created"]
+        );
+        assert_eq!(more["next"]["artifact_id"], id().to_string());
+
+        let last: serde_json::Value =
+            serde_json::from_str(&render_page(&page(None), OutputFormat::Json).expect("renders"))
+                .expect("JSON");
+        let last = last.as_object().expect("the envelope, not a bare array");
+        assert!(
+            last.contains_key("next"),
+            "next is present on the last page"
+        );
+        assert!(last["next"].is_null(), "and null");
+    }
+
+    /// The TOON rendering is the same envelope: decoded, it keeps `artifacts` and `next`, with
+    /// `next` the position or `null`. FAILS IF `render_page` renders `page.artifacts`, or TOON
+    /// drops a `null` `next`.
+    #[test]
+    fn the_toon_rendering_is_the_envelope() {
+        for next in [Some(cursor()), None] {
+            let rendered = render_page(&page(next), OutputFormat::Toon).expect("renders");
+            let decoded: serde_json::Value =
+                toon_format::decode_default(&rendered).expect("the rendering decodes");
+            let envelope = decoded
+                .as_object()
+                .unwrap_or_else(|| panic!("the envelope, not a bare array: {rendered}"));
+            assert!(envelope.contains_key("artifacts"), "{rendered}");
+            assert!(envelope.contains_key("next"), "{rendered}");
+            match next {
+                Some(cursor) => {
+                    let created_back: chrono::DateTime<chrono::Utc> = envelope["next"]["created"]
+                        .as_str()
+                        .expect("a string")
+                        .parse()
+                        .expect("RFC 3339");
+                    assert_eq!(created_back, cursor.created, "{rendered}");
+                }
+                None => assert!(envelope["next"].is_null(), "{rendered}"),
+            }
         }
     }
 

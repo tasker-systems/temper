@@ -134,9 +134,9 @@ pub struct ArtifactCursor {
 /// It is the shape the CLI's `data-artifact list --limit` and MCP's `list_data_artifacts` with
 /// `limit` answer, which have no header to carry the continuation: `{"artifacts": [...],
 /// "next": {...} | null}`. `next` is always present and is an explicit `null` on the last page,
-/// so a reader can tell the last page from an answer that lost its continuation.
+/// so a reader can tell the last page from an answer that lost its continuation. `Deserialize`
+/// is for SDK consumers reading that envelope back.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ArtifactPage {
     pub artifacts: Vec<ArtifactView>,
     /// Where to continue, or `None` when this page is the last. Pass it back unchanged as the

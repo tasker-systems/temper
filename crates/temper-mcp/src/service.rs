@@ -1931,6 +1931,30 @@ mod tests {
         );
     }
 
+    /// The served `list_data_artifacts` schema states `limit`'s range, the one `page_request`
+    /// enforces (1 to `MAX_ARTIFACT_PAGE_ROWS`), and its paging inputs carry no `$ref`. FAILS IF
+    /// the `range` attribute is dropped or drifts from the constant, or `order`/`after` stop
+    /// being inline.
+    #[test]
+    fn list_data_artifacts_serves_limits_range_inline() {
+        use temper_core::types::data_artifact::MAX_ARTIFACT_PAGE_ROWS;
+
+        let tool = TemperMcpService::tool_router()
+            .list_all()
+            .into_iter()
+            .find(|tool| tool.name == "list_data_artifacts")
+            .expect("list_data_artifacts is advertised");
+        let schema = serde_json::to_value(&*tool.input_schema).expect("input schema serializes");
+        let limit = &schema["properties"]["limit"];
+        assert_eq!(limit["minimum"], 1, "{limit}");
+        assert_eq!(limit["maximum"], MAX_ARTIFACT_PAGE_ROWS, "{limit}");
+        let rendered = schema.to_string();
+        assert!(
+            !rendered.contains("$ref") && !rendered.contains("$defs"),
+            "the declaration is self-contained: {schema}"
+        );
+    }
+
     /// MCP 2026-07-28 makes `ttlMs` and `cacheScope` required on `tools/list`, and Claude
     /// Code enforces it: without them it logs `Invalid result for tools/list` and drops
     /// every tool. rmcp's constructor leaves both unset, so assert the serialized answer of
