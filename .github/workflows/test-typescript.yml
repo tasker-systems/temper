@@ -77,6 +77,12 @@ jobs:
       - name: Toolchain on the declared majors
         run: cd packages/temper-ui && bun run toolchain
 
+      # `web-paints-only-roles` / `no-private-colour-names`: every area that has moved onto the
+      # contract's roles is listed in colour-guard.json, and paints nothing else. Each area that
+      # moves adds its paths; the guard and its harness are the design package's.
+      - name: Moved areas paint only contract roles
+        run: cd packages/temper-ui && bun run guard:colours
+
   # The theme contract every surface paints from (packages/temper-design): the contract is
   # valid, every theme clears the legibility floors and stays distinct, the generated CSS and
   # themes.json agree with their sources, and every broken fixture is refused. A refused
@@ -115,6 +121,11 @@ jobs:
         run: |
           node scripts/no-runtime.mjs
           node --test scripts/no-runtime.test.mjs
+
+      # `web-paints-only-roles` / `no-private-colour-names`: the guard every surface runs over the
+      # paths it has moved onto roles; the harness proves each class of colour is refused.
+      - name: The colour guard refuses what it must
+        run: node --test guard/colours.test.mjs
 
       - name: Setup Node
         uses: actions/setup-node@v7

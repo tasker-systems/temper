@@ -19,6 +19,7 @@ packages/temper-design/
 ├── contract/
 │   ├── theme.schema.json    # the contract — every role, closed (draft 2020-12)
 │   ├── tailwind.css         # roles → Tailwind v4 utilities (generated from the schema)
+│   ├── tailwind-roles.css   # the same utilities without the palette reset (generated)
 │   ├── shadcn-bridge.css    # shadcn-svelte's variable names answered from roles
 │   ├── base.css             # base styles + t-*/ed-* recipes, roles only
 │   └── region.css           # the four region states' recipe, roles only
@@ -55,6 +56,7 @@ What a consumer imports:
 | Path | What it is |
 |---|---|
 | `@tasker-systems/temper-design/contract/tailwind.css` | the roles as `tp-` Tailwind v4 utilities; resets the default palette |
+| `@tasker-systems/temper-design/contract/tailwind-roles.css` | the same utilities without the reset — for a surface still moving off the default palette one area at a time; it switches to `tailwind.css` once nothing reads the palette |
 | `@tasker-systems/temper-design/contract/shadcn-bridge.css` | optional: shadcn-svelte's variable names answered from roles |
 | `@tasker-systems/temper-design/contract/base.css` | base styles and the `t-*`/`ed-*` recipes |
 | `@tasker-systems/temper-design/<theme>/theme.css` | one theme's values, under `[data-theme="<theme>"]` |
@@ -64,6 +66,7 @@ What a consumer imports:
 | `@tasker-systems/temper-design/brand/*.svg` | the mark and wordmark, in `currentColor` |
 | `@tasker-systems/temper-design/toolchain/majors.json` | the toolchain majors every surface builds on |
 | `@tasker-systems/temper-design/toolchain/check.mjs` | the check a surface runs against them (see below) |
+| `@tasker-systems/temper-design/guard/colours.mjs` | the colour guard a surface runs over the components it has moved onto roles (see below) |
 | `@tasker-systems/temper-design/contract/region.css` | the `region-state` recipe: the four region states' colour and border |
 | `@tasker-systems/temper-design/markdown` | markdown → HTML with highlighted fences, bounded; DOM-free |
 | `@tasker-systems/temper-design/sanitize` | the one sanitizer pass for that HTML; needs a DOM |
@@ -163,8 +166,8 @@ temper's roles apart from shadcn's names, where `accent` and `muted` mean other 
   `themes.sh slots <theme.json>` prints the slot canvas. Colour is only one of the
   channels that separates a failed read from a refused one, but a theme that collapses
   two of them has removed a channel, and that is checkable.
-- **Generated files agree.** `theme.css` matches its `theme.json`; `contract/tailwind.css`
-  covers every role in the schema.
+- **Generated files agree.** `theme.css` matches its `theme.json`; `contract/tailwind.css` and
+  `contract/tailwind-roles.css` cover every role in the schema.
 - **Counterparts pair.** A theme's `counterpart` exists, points back, and has the
   opposite `appearance`.
 
@@ -186,11 +189,43 @@ contract lacks; the brand marks paint in `currentColor`; every fixture in
 Then choose the theme with one attribute: `<html data-theme="quiet-instrument">`.
 
 `contract/tailwind.css` resets Tailwind's default palette. A component cannot reach for
-`zinc-800` or `white`; if it needs a colour, it names a role.
+`zinc-800` or `white`; if it needs a colour, it names a role. A surface still painting from
+the default palette imports `contract/tailwind-roles.css` instead until nothing reads it —
+the reset would otherwise turn every unmoved `zinc-*` into a class that paints nothing.
 
 A theme can also be applied without a build: a surface can read a `theme.json` and set
 each `--tp-*` property on the root element. That is how a theme installed after the app
 was built — or one shipped by a plugin — takes effect.
+
+## The colour guard
+
+The reset makes a stock colour paint nothing; it does not say so. `guard/colours.mjs` does: it
+fails a surface's build when a component it guards paints anything but a role.
+
+- **A literal colour**: hex, a colour function, or a named colour.
+- **A Tailwind colour utility** naming the stock palette, `white` or `black`, or a colour
+  name the surface declares for itself (`--color-<name>` in the theme files it lists).
+- **An opacity modifier on a role** (`bg-tp-accent/15`): a strength no theme chose. Use the
+  role's `-wash` or `-hover` sibling.
+- **A colour read from a variable that is not a role**, in a declaration
+  (`color: var(--parchment)`), an SVG attribute or Svelte style directive
+  (`fill="var(--obsidian)"`, `style:color=…`), or an arbitrary utility (`bg-[var(--obsidian)]`).
+
+A surface commits a config naming what it guards, relative to the config's own directory,
+and runs the guard against it:
+
+```json
+{ "paths": ["src/lib/components/Sidebar.svelte", "src/routes/(app)"], "themes": ["src/app.css"] }
+```
+
+```sh
+node node_modules/@tasker-systems/temper-design/guard/colours.mjs colour-guard.json
+```
+
+A surface moving off the stock palette lists the areas it has moved, and each area that
+moves adds its paths. An empty list, a listed path that does not exist, and a listed
+directory with no components are refused rather than passed. `node --test
+guard/colours.test.mjs` plants each class and requires its refusal.
 
 ## Bound vocabularies and categorical slots
 

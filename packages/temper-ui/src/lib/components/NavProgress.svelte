@@ -15,9 +15,9 @@
 		role="status"
 		class="pointer-events-none fixed inset-x-0 top-0 z-50 flex items-center gap-2"
 	>
-		<div class="h-0.5 flex-1 animate-pulse bg-quiet-accent"></div>
+		<div class="h-0.5 flex-1 animate-pulse bg-tp-accent"></div>
 		<span
-			class="rounded-b border border-t-0 border-zinc-800 bg-zinc-900 px-2 py-0.5 text-[10px] text-zinc-400"
+			class="rounded-b border border-t-0 border-tp-rule-strong bg-tp-surface-raised px-2 py-0.5 text-[10px] text-tp-text-muted"
 			>{label}</span
 		>
 	</div>
