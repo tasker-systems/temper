@@ -25,6 +25,7 @@ const CLEAN = `<script lang="ts">
 <!-- text-zinc-500 and #ffffff in markup comments are not painted -->
 <div class="flex bg-tp-ground text-tp-text hover:bg-tp-accent-hover border-t border-tp-rule text-sm" class:bg-tp-accent-wash={open}>
 	<a href="#ab12c" class="ring-2 ring-tp-focus shadow-lg outline-none border-b-2 text-[10px]">x</a>
+	<kbd>&#8984;K</kbd>
 </div>
 
 <style>

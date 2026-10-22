@@ -48,10 +48,11 @@ if (!Array.isArray(paths) || paths.length === 0)
 	fail('"paths" is empty: an empty scope guards nothing');
 if (!Array.isArray(themes)) fail('"themes" must be a list');
 
-// The desktop's literal rule, unchanged: hex, the colour functions, and named colours where a
-// value ends. An id or anchor like `#r0` is not a colour; only hex-shaped runs of 3/4/6/8 count.
+// The desktop's literal rule: hex, the colour functions, and named colours where a value ends.
+// An id or anchor like `#r0` is not a colour; only hex-shaped runs of 3/4/6/8 count. Nor is an
+// HTML numeric entity (`&#8984;`, the ⌘ glyph), which the desktop's rule would misread.
 const LITERAL =
-	/#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|oklch|oklab|lab|lch|hwb)\(|\b(?:white|black|red|green|blue|gray|grey|orange|yellow|purple|pink)\b(?=\s*[;})'"])/g;
+	/(?<!&)#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|oklch|oklab|lab|lch|hwb)\(|\b(?:white|black|red|green|blue|gray|grey|orange|yellow|purple|pink)\b(?=\s*[;})'"])/g;
 
 const PREFIX =
 	'(?:bg|text|border-[xytrbl]|border-[se]|border|ring-offset|ring|divide|outline|placeholder|from|via|to|fill|stroke|shadow|decoration|accent|caret)';
