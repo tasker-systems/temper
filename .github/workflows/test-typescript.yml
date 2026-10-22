@@ -116,6 +116,11 @@ jobs:
           node scripts/no-runtime.mjs
           node --test scripts/no-runtime.test.mjs
 
+      # `web-paints-only-roles` / `no-private-colour-names`: the guard every surface runs over the
+      # paths it has moved onto roles; the harness proves each class of colour is refused.
+      - name: The colour guard refuses what it must
+        run: node --test guard/colours.test.mjs
+
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
