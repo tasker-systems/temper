@@ -12,7 +12,7 @@ bounded view ends with); and one new stylesheet, `contract/region.css`, the regi
 recipe on the existing `--tp-region-*` roles. The package gains its first runtime dependencies
 (marked, marked-highlight, highlight.js, dompurify). The web UI renders through these modules
 from this release on. In a rendered body a remote image now reads "remote image withheld" and
-a video or audio element "video withheld" / "audio withheld", rather than a broken image or an
+a video or audio element "video withheld" / "audio withheld" with the author's fallback text, rather than a broken image or an
 empty player (the web's CSP already refused to load them); forms and buttons render their words
 without submitting; srcset, background attributes, SVG image elements and inputs other than a
 task list's checkboxes are removed. Who observes: a surface that imports the new subpaths, and
