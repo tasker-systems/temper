@@ -126,7 +126,8 @@ in a context you cannot read must not verdict your data.
 # List live shapes declared for a context
 temper data-artifact schema list --context <context-ref>
 
-# Show a single shape by ID — the schema, version, and enforcement mode
+# Show a single shape by ID — the schema, version, enforcement mode, and `askable`:
+# every path an artifact ask may name, with its declared types, values and operators
 temper data-artifact schema show <shape-id>
 ```
 

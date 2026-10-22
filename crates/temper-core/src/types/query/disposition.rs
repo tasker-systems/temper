@@ -406,8 +406,8 @@ pub enum RefusalReason {
     //
     // Spec `2026-10-19-asking-artifacts-by-what-they-are` §3.5. Every one is decided before
     // execution, against a shape loaded before the gate (§4.3), so none of them is runtime. The
-    // first three are refusal steps 1–3 and come from the load; the rest are step 4,
-    // `artifact_ask::validate_ask`, and carry `PlanRefusal::teaches`.
+    // first three are refusal steps 1–3 and come from the load; the rest are step 4 and carry
+    // `PlanRefusal::teaches`. `artifact_ask::AskSession::validate` raises all of them.
     /// The ask names a shape that does not exist or that the asker cannot read. One reason and one
     /// fixed detail for both, so a refusal is never an existence oracle.
     ShapeNotAskable,

@@ -3173,9 +3173,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get a single shape by ID.
+         * Get a single shape by ID, with `askable`: every path an artifact ask may name against it.
          * @description Visibility-gated: returns 404 if the shape does not exist or its owning home
          *     anchor is not readable to the caller. Includes folded shapes (audit/history).
+         *     The listing routes leave `askable` absent.
          */
         get: operations["get_shape"];
         put?: never;
@@ -10277,6 +10278,7 @@ export interface components {
          */
         ShapeView: {
             artifact_kind: string;
+            askable?: components["schemas"]["Vocabulary"] | null;
             /** Format: date-time */
             created: string;
             /** @description `"advisory"` or `"enforcing"`. */
@@ -10298,6 +10300,7 @@ export interface components {
              * @description The chain depth of the assert/fold lineage — 1 for the first declaration, N for the Nth.
              */
             shape_version: number;
+            unaskable?: components["schemas"]["PlanRefusal"] | null;
         };
         /**
          * @description Result of sharing a context into a team. `shared` is `false` when the share already
@@ -20190,7 +20193,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The shape with its schema and enforcement mode */
+            /** @description The shape with its schema, enforcement mode and askable vocabulary */
             200: {
                 headers: {
                     [name: string]: unknown;

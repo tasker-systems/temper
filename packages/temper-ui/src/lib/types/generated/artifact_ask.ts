@@ -6,7 +6,7 @@ import type { ShapeId } from "./ShapeId";
 /**
  * One ask: a governing shape, and what the asker holds about artifacts it governs (§2.1).
  *
- * `intent` and `shape_states` are **strings**, validated by `validate_ask` into
+ * `intent` and `shape_states` are **strings**, validated by [`AskSession::validate`] into
  * `unknown_artifact_intent` / `unknown_shape_state` with `teaches` naming the vocabulary — never
  * serde enums, whose unknown-variant failure would land before validation, in the deserializer's
  * words, and outside the every-refusal-at-once body. Empty means the default, applied by the

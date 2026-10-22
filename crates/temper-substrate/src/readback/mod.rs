@@ -3027,6 +3027,55 @@ pub async fn shapes_for_home(
         .collect()
 }
 
+/// The version of a shape in force at one home and family: its id and chain depth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LiveShapeVersion {
+    pub shape_id: ShapeId,
+    pub shape_version: i32,
+}
+
+/// The live shape at one home and family — the one row `uq_kb_data_artifact_shapes_live` admits
+/// there (`20260822000010`), so at most one — or `None` when no version is in force. What a folded
+/// shape's successor is: amendment folds a row and inserts its successor at the same home and
+/// family, and no column records the lineage otherwise.
+///
+/// Gated like [`shape_by_id`]: a principal who cannot read the home sees no row, so this never
+/// answers about a home the caller could not read through `shape_by_id`. Every argument is meant
+/// to come from a row that read already returned, never from caller text.
+pub async fn live_shape_at(
+    pool: &PgPool,
+    principal: ProfileId,
+    home: HomeAnchor,
+    kind_owner: crate::payloads::KindOwner,
+    artifact_kind: &str,
+) -> Result<Option<LiveShapeVersion>> {
+    let row = sqlx::query!(
+        r#"SELECT s.id            AS "shape_id!",
+                  s.shape_version AS "shape_version!"
+             FROM kb_data_artifact_shapes s
+            WHERE s.home_anchor_table = $2
+              AND s.home_anchor_id = $3
+              AND s.kind_owner_table = $4
+              AND s.kind_owner_id = $5
+              AND s.artifact_kind = $6
+              AND NOT s.is_folded
+              AND anchor_readable_by_profile($1, s.home_anchor_table, s.home_anchor_id)"#,
+        principal.uuid(),
+        home.table(),
+        home.uuid(),
+        kind_owner.owner_table(),
+        kind_owner.owner_id(),
+        artifact_kind,
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| LiveShapeVersion {
+        shape_id: ShapeId::from(r.shape_id),
+        shape_version: r.shape_version,
+    }))
+}
+
 /// A single shape by id. Never trusts the caller — even if the caller knows the shape id, the
 /// owning home anchor must be readable to the profile or the shape is absent (fail closed,
 /// returned as `Ok(None)`). Includes folded shapes: a caller that knows a shape id may

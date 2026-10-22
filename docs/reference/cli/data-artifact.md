@@ -170,7 +170,7 @@ Usage: temper data-artifact schema [OPTIONS] <COMMAND>
 
 Commands:
   list     List live shapes declared for a home anchor — what families are governed and how. Exactly one of `--context` / `--cogmap`: a shape's family is homed in one anchor kind
-  show     Show a single shape by its ID — the schema, version, and enforcement mode
+  show     Show a single shape by its ID — the schema, version, enforcement mode, and `askable`, every path an artifact ask may name
   declare  Declare a shape for a data-artifact family within a context or cognitive-map home
   help     Print this message or the help of the given subcommand(s)
 
@@ -202,7 +202,7 @@ Options:
 #### `temper data-artifact schema show`
 
 ```text
-Show a single shape by its ID — the schema, version, and enforcement mode
+Show a single shape by its ID — the schema, version, enforcement mode, and `askable`, every path an artifact ask may name
 
 Usage: temper data-artifact schema show [OPTIONS] <REF>
 

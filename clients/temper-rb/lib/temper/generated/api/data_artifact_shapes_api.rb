@@ -181,8 +181,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # Get a single shape by ID.
-    # Visibility-gated: returns 404 if the shape does not exist or its owning home anchor is not readable to the caller. Includes folded shapes (audit/history).
+    # Get a single shape by ID, with `askable`: every path an artifact ask may name against it.
+    # Visibility-gated: returns 404 if the shape does not exist or its owning home anchor is not readable to the caller. Includes folded shapes (audit/history). The listing routes leave `askable` absent.
     # @param shape_id [String] Shape ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -192,8 +192,8 @@ module Temper::Generated
       data
     end
 
-    # Get a single shape by ID.
-    # Visibility-gated: returns 404 if the shape does not exist or its owning home anchor is not readable to the caller. Includes folded shapes (audit/history).
+    # Get a single shape by ID, with &#x60;askable&#x60;: every path an artifact ask may name against it.
+    # Visibility-gated: returns 404 if the shape does not exist or its owning home anchor is not readable to the caller. Includes folded shapes (audit/history). The listing routes leave &#x60;askable&#x60; absent.
     # @param shape_id [String] Shape ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.

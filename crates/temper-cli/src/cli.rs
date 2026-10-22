@@ -1271,7 +1271,8 @@ pub enum SchemaAction {
         #[arg(long)]
         cogmap: Option<String>,
     },
-    /// Show a single shape by its ID — the schema, version, and enforcement mode
+    /// Show a single shape by its ID — the schema, version, enforcement mode, and `askable`, every
+    /// path an artifact ask may name
     Show {
         /// Shape ref: a UUID or the decorated `slug-<uuid>` form
         r#ref: String,

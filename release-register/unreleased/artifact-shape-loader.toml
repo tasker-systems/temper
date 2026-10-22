@@ -1,0 +1,25 @@
+title    = "A shape's by-id read carries `askable`, the paths an artifact ask may name, and the shape loader decides which shapes can be asked"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["http", "mcp", "cli-stdout", "clients"]
+status   = "signal-only"
+body = '''
+`ShapeView` gains two optional fields, filled only by the by-id read (`GET /api/shapes/{id}`, MCP
+`get_data_artifact_shape`, `temper data-artifact schema show`, and the shape the declare routes
+answer with). `askable` lists every path an artifact ask may name against the shape, each with its
+declared JSON types, its `enum`/`const` values and the operators feasible there; it is bounded, and
+a cut vocabulary names the bound in `truncated`. For a stored shape whose schema cannot be compiled
+without a fetch, `askable` is empty and `unaskable` carries the refusal an ask naming the shape
+meets: `shape_schema_uncompilable`, with its fixed sentence. The listing routes and tools leave both
+fields absent, not empty. Older clients ignore the fields; `openapi.json`, the three SDKs and the
+ts-rs types grow, and the MCP tool's description names the field.
+
+Behind it, `temper-services` gains the shape loader, which turns each shape an ask names into one
+of loaded, not askable (absent or unreadable, one answer for both), superseded (with the version in
+force at the same home and family) or uncompilable, in that order and only through the gated shape
+read; and `temper-core`'s ask validation becomes an `AskSession` begun from the loaded shapes, so
+one request's asks share each shape's walk and one work budget. No door accepts an ask yet, so no
+caller sees a refusal from either.
+
+Release relevance: signal-only. It adds only optional response fields.
+'''

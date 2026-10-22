@@ -13809,8 +13809,8 @@
         "tags": [
           "Data Artifact Shapes"
         ],
-        "summary": "Get a single shape by ID.",
-        "description": "Visibility-gated: returns 404 if the shape does not exist or its owning home\nanchor is not readable to the caller. Includes folded shapes (audit/history).",
+        "summary": "Get a single shape by ID, with `askable`: every path an artifact ask may name against it.",
+        "description": "Visibility-gated: returns 404 if the shape does not exist or its owning home\nanchor is not readable to the caller. Includes folded shapes (audit/history).\nThe listing routes leave `askable` absent.",
         "operationId": "get_shape",
         "parameters": [
           {
@@ -13826,7 +13826,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The shape with its schema and enforcement mode",
+            "description": "The shape with its schema, enforcement mode and askable vocabulary",
             "content": {
               "application/json": {
                 "schema": {
@@ -26628,6 +26628,17 @@
           "artifact_kind": {
             "type": "string"
           },
+          "askable": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Vocabulary",
+                "description": "What an artifact ask may name against this shape: each askable path with its declared\ntypes, its `enum`/`const` values, and the operators feasible at it — the vocabulary a\nrefusal's `teaches` narrows, derived by the same walk that validates an ask. Bounded, and a\ntruncated vocabulary names the bound in `truncated`.\n\n**Present only on the by-id read** (`GET /api/shapes/{id}`, `get_data_artifact_shape`,\n`temper data-artifact schema show`). Listings leave it **absent, which is not empty**: a\nlisting never pays one enumeration per shape, and an absent field never says that nothing\nis askable. Empty when nothing is — then `unaskable` says why, when the schema itself is\nthe reason."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "created": {
             "type": "string",
             "format": "date-time"
@@ -26665,6 +26676,17 @@
             "type": "integer",
             "format": "int32",
             "description": "The chain depth of the assert/fold lineage — 1 for the first declaration, N for the Nth."
+          },
+          "unaskable": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlanRefusal",
+                "description": "Why nothing can be asked of this shape, beside an empty `askable`: the refusal an ask naming\nit meets, word for word — `shape_schema_uncompilable` with its fixed sentence, for a schema\nthat does not compile under the no-fetch compiler. Absent whenever the walk decided\n`askable`, and on listings."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
