@@ -1,0 +1,20 @@
+title    = "`@tasker-systems/temper-design` ships the colour guard and the role utilities without the palette reset; the web's shell paints from the contract"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["clients"]
+status   = "signal-only"
+body = '''
+Two new published files in `@tasker-systems/temper-design`. `contract/tailwind-roles.css` is the
+contract's `tp-` Tailwind utilities without the default-palette reset, for a surface moving off
+Tailwind's palette one area at a time; `contract/tailwind.css` is unchanged, and both are built
+from one function and self-checked. `guard/colours.mjs` is the colour guard a surface runs over
+the components it has moved onto roles: it refuses literal colours, stock palette utilities, the
+surface's own colour names, opacity modifiers on roles, and colours read from variables that are
+not roles, within a committed list of paths. The web UI now loads the contract (the Quiet
+Instrument theme, its recipes and the region recipe) and its authed shell — frame, header,
+sidebar, command palette, filter bar, navigation progress — and the region states paint only
+contract roles. Who observes: a surface that imports the new files; a reader of the web, whose
+shell's greys move from Tailwind's zinc to the Quiet Instrument values and whose region notes
+take the UI face. User-visible: slightly, on the web. Release relevance: additive — new files;
+no existing export changes.
+'''

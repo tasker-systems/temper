@@ -76,14 +76,14 @@ describe('sanitizeMarkdownHtml', () => {
 		expect(container.innerHTML).not.toContain('onerror');
 	});
 
-	it('withholds media as a declared refusal, with its sources, tracks and poster', () => {
+	it('withholds media as a declared refusal, keeping the fallback words and none of its fetches', () => {
 		const container = render(
-			'Before. <video poster="/p.png" src="/v.mp4"><source src="/s.mp4"><track src="/t.vtt">fallback</video> <audio><source src="/a.mp3"></audio> After.',
+			'Before. <video poster="/p.png" src="/v.mp4"><source src="/s.mp4"><track src="/t.vtt">The walkthrough,\n at <a href="https://example.com/v">its page</a>.</video> <audio><source src="/a.mp3"></audio> After.',
 		);
 		expect(container.querySelector('video, audio, source, track')).toBeNull();
 		const withheld = [...container.querySelectorAll('.md-withheld')];
 		expect(withheld.map((s) => s.textContent)).toEqual([
-			WITHHELD_MEDIA.video,
+			`${WITHHELD_MEDIA.video}: The walkthrough, at its page.`,
 			WITHHELD_MEDIA.audio,
 		]);
 		expect(withheld.map((s) => s.getAttribute('title'))).toEqual(['/v.mp4', '/a.mp3']);

@@ -102,7 +102,7 @@
 
 {#if open}
 	<button
-		class="fixed inset-0 bg-black/60 z-40"
+		class="fixed inset-0 bg-tp-overlay z-40"
 		onclick={() => (open = false)}
 		aria-label="Close search"
 	></button>
@@ -110,7 +110,7 @@
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div
 		class="fixed top-[15%] left-1/2 -translate-x-1/2 w-full max-w-xl z-50
-		       bg-zinc-900 border border-zinc-700 rounded-lg shadow-2xl overflow-hidden"
+		       bg-tp-surface-raised border border-tp-rule-strong rounded-lg shadow-2xl overflow-hidden"
 		onkeydown={onKeydown}
 	>
 		<!-- svelte-ignore a11y_autofocus -->
@@ -119,31 +119,31 @@
 			bind:value={query}
 			oninput={onInput}
 			placeholder="Search the vault..."
-			class="w-full px-4 py-3 bg-transparent text-zinc-100 text-sm border-b border-zinc-800 outline-none placeholder:text-zinc-500"
+			class="w-full px-4 py-3 bg-transparent text-tp-text text-sm border-b border-tp-rule outline-none placeholder:text-tp-text-subtle"
 			autofocus
 		/>
 
 		<!-- The arm the answer is being read from, named in reader terms (D4), with the Exact
 		     switch beside it. The header still promises "Search the vault…" — this is what makes
 		     the promise true. -->
-		<div class="flex items-center justify-between px-4 py-1.5 border-b border-zinc-800">
-			<span class="text-xs text-zinc-500" data-testid="arm-caption"
+		<div class="flex items-center justify-between px-4 py-1.5 border-b border-tp-rule">
+			<span class="text-xs text-tp-text-subtle" data-testid="arm-caption"
 				>{exactMode ? 'matching these words' : 'similar in meaning'}</span
 			>
-			<label class="flex items-center gap-1.5 text-xs text-zinc-300 cursor-pointer select-none">
+			<label class="flex items-center gap-1.5 text-xs text-tp-text-muted cursor-pointer select-none">
 				<span>Exact</span>
-				<input type="checkbox" bind:checked={exactMode} class="accent-zinc-500" />
+				<input type="checkbox" bind:checked={exactMode} class="accent-tp-accent" />
 			</label>
 		</div>
 
 		{#if failed && !loading}
 			<!-- Same register as FilterBar's "contexts unavailable": a read that failed is not
 			     a claim about what the vault contains, so it never renders as "No results". -->
-			<div class="px-4 py-6 text-sm text-zinc-500 text-center">Search unavailable</div>
+			<div class="px-4 py-6 text-sm text-tp-text-subtle text-center">Search unavailable</div>
 		{:else if declined && !loading}
 			<!-- D7 — asked for several at once, the palette declines saying so instead of
 			     answering whichever question matched first. -->
-			<div class="px-4 py-6 text-sm text-zinc-500 text-center">
+			<div class="px-4 py-6 text-sm text-tp-text-subtle text-center">
 				One question at a time — this search answers a single question. Ask them one by one.
 			</div>
 		{:else if arm}
@@ -153,10 +153,10 @@
 				     corpus was learned. The wide arm says so here rather than returning an empty
 				     list that reads like an answer, and the Exact switch is offered as the
 				     reader's EXPLICIT action. The system never flips it on its own. -->
-				<div class="px-4 py-6 text-sm text-zinc-500 text-center">
+				<div class="px-4 py-6 text-sm text-tp-text-subtle text-center">
 					<p>Meaning-match couldn't run just now</p>
 					<button
-						class="mt-2 text-xs text-quiet-accent hover:text-zinc-200"
+						class="mt-2 text-xs text-tp-accent hover:text-tp-text"
 						onclick={() => (exactMode = true)}
 					>
 						Exact matches words directly — use it
@@ -164,13 +164,13 @@
 				</div>
 			{:else if arm.reason === 'no_match'}
 				<!-- Rephrasing can help here: the corpus was reachable, the words were not. -->
-				<div class="px-4 py-6 text-sm text-zinc-500 text-center">
+				<div class="px-4 py-6 text-sm text-tp-text-subtle text-center">
 					Nothing matched — try different words
 				</div>
 			{:else if arm.reason === 'out_of_scope'}
 				<!-- Scope-shaped emptiness: rephrasing will never help, and the face says why
 				     instead of rendering a plain zero. -->
-				<div class="px-4 py-6 text-sm text-zinc-500 text-center">
+				<div class="px-4 py-6 text-sm text-tp-text-subtle text-center">
 					No phrasing will reach this — the answer is not inside what your vault shows you
 				</div>
 			{:else if hits.length > 0}
@@ -179,13 +179,13 @@
 						{@const home = hit.resource.cogmap_name ?? hit.resource.context_name}
 						<button
 							class="w-full text-left px-4 py-2.5 flex flex-col gap-0.5 transition-colors
-							       {i === focused ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'}"
+							       {i === focused ? 'bg-tp-accent-wash' : 'hover:bg-tp-accent-hover'}"
 							onclick={() => {
 								goto(resourceHref(hit.resource as ResourceView));
 								open = false;
 							}}
 						>
-							<span class="text-sm text-zinc-100">{hit.resource.title}</span>
+							<span class="text-sm text-tp-text">{hit.resource.title}</span>
 							<!-- A row is homed by exactly one anchor, so the name of the home it does
 							     NOT have is absent from the wire (`skip_serializing_if` — the rule
 							     `isCogmapHomed` owns). Read the home name the row actually carries;
@@ -193,7 +193,7 @@
 							     dangling "· doc_type". The prefix is a JS string because the template
 							     trims a trailing text space at a block boundary, which is what made
 							     the separator collapse onto the doc type. -->
-							<span class="text-xs text-zinc-500"
+							<span class="text-xs text-tp-text-subtle"
 								>{home ? `${home} · ` : ''}{hit.resource.doc_type_name}{#if hit.resource.managed_meta['temper-stage']}
 									&nbsp;&middot; {hit.resource.managed_meta['temper-stage']}{/if}</span
 							>
@@ -203,13 +203,13 @@
 				{#if hits.length >= SEARCH_PAGE_SIZE}
 					<!-- D6 — the palette states its bound instead of pretending the answer is whole. -->
 					<div
-						class="px-4 py-2 text-xs text-zinc-500 border-t border-zinc-800"
+						class="px-4 py-2 text-xs text-tp-text-subtle border-t border-tp-rule"
 					>
 						Showing the first {SEARCH_PAGE_SIZE}
 					</div>
 				{/if}
 			{:else}
-				<div class="px-4 py-6 text-sm text-zinc-500 text-center">No results</div>
+				<div class="px-4 py-6 text-sm text-tp-text-subtle text-center">No results</div>
 			{/if}
 		{/if}
 	</div>

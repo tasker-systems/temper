@@ -56,6 +56,7 @@ dependencies = [
   "design-contract",
   "design-toolchain",
   "design-runtime",
+  "design-colours",
   "design-modules"
 ]
 
@@ -530,6 +531,14 @@ description = "The shared modules bind no surface's runtime: Tauri, SvelteKit, s
 # typecheck, lint, tests and dist drift are `design-modules`.
 cwd = "packages/temper-design"
 script = ["node scripts/no-runtime.mjs", "node --test scripts/no-runtime.test.mjs"]
+
+[tasks.design-colours]
+description = "The shared colour guard refuses every class it names: literals, the stock palette, private colour names, role strengths and non-role variables"
+# The harness CI's Design Contract job runs. Node only: no install needed. A surface runs the
+# guard itself over the paths it has moved onto roles (temper-ui: `bun run guard:colours`).
+cwd = "packages/temper-design"
+command = "node"
+args = ["--test", "guard/colours.test.mjs"]
 
 [tasks.design-modules]
 description = "The shared modules: typecheck, lint, tests, and the committed dist/ rebuilt from an empty dir"

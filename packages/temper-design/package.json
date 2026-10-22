@@ -19,6 +19,7 @@
     "*/theme.json",
     "themes.json",
     "brand/*.svg",
+    "guard/colours.mjs",
     "toolchain/check.mjs",
     "toolchain/majors.json",
     "dist/*.js",
