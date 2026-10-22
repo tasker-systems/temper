@@ -115,7 +115,7 @@ expect "steward SKIPS the mention tree"    0 steward-agent  VERCEL_ENV=preview C
 
 # ---------------------------------------------------------------------------------------
 # The `file:` dependency edges, read out of the package manifests rather than remembered:
-#   temper-ui -> temper-telemetry-ts
+#   temper-ui -> temper-telemetry-ts, temper-design
 #   steward   -> temper-telemetry-ts, temper-ts
 #   mention   -> temper-telemetry-ts, temper-ts
 # A linked client must rebuild its dependants and only its dependants.
@@ -125,6 +125,8 @@ expect "telemetry-ts rebuilds ui"       1 temper-ui      VERCEL_ENV=preview CHAN
 expect "telemetry-ts rebuilds steward"  1 steward-agent  VERCEL_ENV=preview CHANGED_PATHS="clients/temper-telemetry-ts/src/otel.ts"
 expect "telemetry-ts rebuilds mention"  1 temper-mention VERCEL_ENV=preview CHANGED_PATHS="clients/temper-telemetry-ts/src/otel.ts"
 expect "telemetry-ts does NOT rebuild cloud" 0 temper-cloud VERCEL_ENV=preview CHANGED_PATHS="clients/temper-telemetry-ts/src/otel.ts"
+expect "temper-design rebuilds ui"      1 temper-ui      VERCEL_ENV=preview CHANGED_PATHS="packages/temper-design/src/sanitize.ts"
+expect "temper-design does NOT rebuild cloud" 0 temper-cloud VERCEL_ENV=preview CHANGED_PATHS="packages/temper-design/src/sanitize.ts"
 
 expect "temper-ts rebuilds steward"     1 steward-agent  VERCEL_ENV=preview CHANGED_PATHS="clients/temper-ts/src/client.ts"
 expect "temper-ts rebuilds mention"     1 temper-mention VERCEL_ENV=preview CHANGED_PATHS="clients/temper-ts/src/client.ts"

@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { highlightCode } from './highlight';
-import { MAX_SOURCE_LENGTH, parseMarkdown, prepareMarkdown, REFUSAL_HTML } from './markdown';
+import { highlightCode } from './highlight.js';
+import { MAX_SOURCE_LENGTH, parseMarkdown, prepareMarkdown, REFUSAL_HTML } from './markdown.js';
 
 /**
  * The highlighting pipeline's contract, independent of the component: fenced blocks are
  * highlighted ONLY for the registered languages; anything else — unknown, misspelled, or no
  * fence language — renders plaintext-escaped, never auto-detected; and inline code stays
- * un-highlighted. The client-side sanitizer composes with this output in `MarkdownRenderer`, so
+ * un-highlighted. The sanitizer (`sanitize.ts`) composes with this output in each surface's renderer, so
  * the output here is the sanitizer's INPUT — a `<script>` must arrive escaped, or the sanitizer
  * has work to do that this pipeline invented for it.
  */

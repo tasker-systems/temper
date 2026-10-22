@@ -1,0 +1,123 @@
+// sanitize.ts — the one sanitizer pass for rendered markdown, on every surface.
+//
+// `rendering-agrees`: what one surface strips or refuses, the other does not render. So there is
+// one policy, and it lives here; why a given surface's CSP backs it up is that surface's comment
+// to keep, next to its CSP, not this module's.
+//
+// markdown.ts stays DOM-FREE; this module owns the DOM dependency and the one-time hook
+// registration on its own DOMPurify instance, so a renderer that dynamic-imports it on the
+// client never double-adds the hook across remounts.
+//
+// Two attribute channels can carry author-controlled styling into the rendered document; both
+// are closed here, in one pass:
+//
+// • style — FORBID_ATTR. Whatever a surface's CSP says about style attributes, the sanitizer is
+//   the gate for authored content.
+//
+// • class — filtered to the prefixes the markdown pipeline legitimately emits. A CSP has no
+//   lever for this channel: a class value is neither a style attribute nor a fetch. But the
+//   surfaces are Tailwind v4, so their positioning utilities ship in the stylesheet and a
+//   surviving class value still styles the rendered document. The allowlist is exhaustive over
+//   the pipeline's own output: `hljs` / `hljs-*` (highlight.js theme hook and token spans),
+//   `language-*` (marked's langPrefix, also what copy affordances key on), and `md-refusal`
+//   (the static REFUSAL_HTML). Deliberately NOT `FORBID_ATTR: ['class']`, which would strip
+//   those wholesale. A renderer's own wrapper (`.md-body`) is added outside the sanitized string
+//   and needs no entry.
+//
+// Nothing in a rendered body fetches or submits: a body is rendered from what temper holds.
+//
+// • Images are withheld, as a declared refusal. After the pass, every image whose source is not
+//   an embedded `data:image/` URI is replaced by a `md-withheld` span that says so, keeping its
+//   alt text and naming the source on hover — never a silent broken glyph. `md-withheld` is
+//   deliberately NOT in the class allowlist: it is added after sanitizing, so authored content
+//   cannot forge a refusal.
+//
+// • Media is withheld the same way: a `<video>` or `<audio>` — with its sources, tracks and
+//   poster — becomes a `md-withheld` span naming what it was and, on hover, its source. A reader
+//   is told what the body held; nothing disappears without a word.
+//
+// • What is left is removed, because it carries nothing a reader would miss: `srcset` (an
+//   `<img>` or a `<picture>`'s `<source>` keeps its embedded `src`), the legacy `background`
+//   attribute, and SVG `<image>` and `<feImage>` — decoration inside a drawing, with no place in
+//   it for a sentence. A CSP refuses a cross-origin fetch but admits a
+//   same-origin one, which on a surface with a session is a request made with the reader's
+//   credentials — so the sanitizer is the gate here too.
+//
+// • Nothing submits: `<form>` and `<button>` are removed and their words kept, and every
+//   `<input>` but the disabled checkbox a GFM task list renders is removed.
+//
+// • `<template>` is removed with its content, which a query of the document never reaches.
+import DOMPurify from 'dompurify';
+
+const keepClass = (value: string): boolean =>
+	value === 'hljs' ||
+	value.startsWith('hljs-') ||
+	value.startsWith('language-') ||
+	value === 'md-refusal';
+
+// An instance of our own: the hook below is this policy's, and registering it on the shared
+// singleton would filter the classes of every other DOMPurify call in a consumer's bundle.
+const purify = DOMPurify();
+
+purify.addHook('afterSanitizeAttributes', (node) => {
+	if (!(node instanceof Element) || !node.hasAttribute('class')) return;
+	const kept = (node.getAttribute('class') ?? '').split(/\s+/).filter(Boolean).filter(keepClass);
+	if (kept.length) node.setAttribute('class', kept.join(' '));
+	else node.removeAttribute('class');
+});
+
+export const SANITIZE_CONFIG = {
+	FORBID_ATTR: ['style', 'srcset', 'background'],
+	// `action` and `formaction` go with the form and button, and `<input>`'s with the pass below;
+	// neither needs its own entry.
+	FORBID_TAGS: ['image', 'feImage', 'form', 'button', 'template'],
+};
+
+/** Words for a withheld image; exported so the witnesses and the components agree. */
+export const WITHHELD_IMAGE = 'remote image withheld';
+
+/** Words for withheld media, by element; exported for the same reason. */
+export const WITHHELD_MEDIA = { video: 'video withheld', audio: 'audio withheld' } as const;
+
+const embedded = (src: string | null): boolean => /^data:image\//i.test(src?.trim() ?? '');
+
+function withheld(words: string, src: string | null | undefined, doc: Document): HTMLSpanElement {
+	const span = doc.createElement('span');
+	span.className = 'md-withheld';
+	span.textContent = words;
+	if (src?.trim()) span.title = src.trim();
+	return span;
+}
+
+function withheldImage(img: HTMLImageElement): HTMLSpanElement {
+	const alt = img.getAttribute('alt')?.trim();
+	const words = alt ? `${WITHHELD_IMAGE}: ${alt}` : WITHHELD_IMAGE;
+	return withheld(words, img.getAttribute('src'), img.ownerDocument);
+}
+
+function withheldMedia(
+	media: HTMLMediaElement,
+	kind: keyof typeof WITHHELD_MEDIA,
+): HTMLSpanElement {
+	const src = media.getAttribute('src') ?? media.querySelector('source')?.getAttribute('src');
+	return withheld(WITHHELD_MEDIA[kind], src, media.ownerDocument);
+}
+
+export function sanitizeMarkdownHtml(dirty: string): string {
+	const fragment = purify.sanitize(dirty, { ...SANITIZE_CONFIG, RETURN_DOM_FRAGMENT: true });
+	for (const img of fragment.querySelectorAll('img')) {
+		if (!embedded(img.getAttribute('src'))) img.replaceWith(withheldImage(img));
+	}
+	for (const kind of ['video', 'audio'] as const) {
+		for (const media of fragment.querySelectorAll(kind))
+			media.replaceWith(withheldMedia(media, kind));
+	}
+	for (const input of fragment.querySelectorAll('input')) {
+		if (input.getAttribute('type') !== 'checkbox') input.remove();
+	}
+	// The holder comes from the fragment's own inert document, not the live one: adopting the
+	// fragment into a live document would run its elements' steps before `{@html}` does.
+	const holder = fragment.ownerDocument.createElement('div');
+	holder.append(fragment);
+	return holder.innerHTML;
+}

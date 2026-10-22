@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
-	import { prepareMarkdown } from '$lib/markdown';
+	import { prepareMarkdown } from '@tasker-systems/temper-design/markdown';
 
 	interface Props {
 		markdown: string;
@@ -12,11 +12,11 @@
 	// unavailable — on the server render, and for the instant before the dynamic import
 	// resolves on the client — this component renders no body at all. It never falls back to
 	// unsanitized output, which is why `prepareMarkdown`'s parse result is safe to hold here.
-	// The pass itself (config and the attribute hooks) lives in `$lib/sanitize`.
+	// The pass itself (config and the attribute hooks) lives in `@tasker-systems/temper-design/sanitize`.
 	let sanitizer: ((dirty: string) => string) | null = $state(null);
 
 	if (browser) {
-		import('$lib/sanitize').then((m) => {
+		import('@tasker-systems/temper-design/sanitize').then((m) => {
 			sanitizer = m.sanitizeMarkdownHtml;
 		});
 	}
@@ -233,12 +233,28 @@
 
 	/* ── Refusal ──────────────────────────────────────────────────────── */
 
-	/* The refusal paragraph arrives from `renderMarkdown` through `{@html}` (REFUSAL_HTML),
-	   so the rule must be :global to reach it. Same muted register as blockquotes: a verdict,
-	   not an alarm. */
+	/* Both arrive through `{@html}` — REFUSAL_HTML from the parse gate, `md-withheld` from
+	   the sanitizer's withholding of images and media — so the rules must be :global to reach
+	   them. Same muted register as blockquotes: a verdict, not an alarm. The withheld note takes
+	   the gave-up state's colours, marker and dotted edge (`RegionState`): a fetch the renderer
+	   declined to make, said so. */
 	.md-body :global(.md-refusal) {
 		color: rgba(255, 255, 255, 0.55);
 		font-style: italic;
+	}
+
+	.md-body :global(.md-withheld) {
+		display: inline-block;
+		padding: 0.1rem 0.5rem;
+		border: 1px dotted #8f7cc0;
+		border-radius: 4px;
+		background: rgba(143, 124, 192, 0.07);
+		color: #b9a6de;
+		font: 0.75rem ui-monospace, Menlo, monospace;
+	}
+
+	.md-body :global(.md-withheld::before) {
+		content: '⊘ ';
 	}
 
 	/* ── Images ───────────────────────────────────────────────────────── */

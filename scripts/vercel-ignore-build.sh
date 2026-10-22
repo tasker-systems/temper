@@ -123,7 +123,7 @@ PROJECT="${1:-${VERCEL_IGNORE_PROJECT:-}}"
 #
 #   * INERTNESS IS PROVEN, NOT ASSUMED FROM A DIRECTORY NAME. The `file:` dependency
 #     edges below were read out of the package manifests, not remembered:
-#       packages/temper-ui            -> temper-telemetry-ts
+#       packages/temper-ui            -> temper-telemetry-ts, temper-design
 #       packages/agent-workflows/steward -> temper-telemetry-ts, temper-ts
 #       packages/agent-workflows/mention -> temper-telemetry-ts, temper-ts
 #     A change to a linked client therefore rebuilds its dependants, and each dependant's
@@ -148,7 +148,7 @@ case "${PROJECT}" in
     TRIGGERS='^crates/|^packages/temper-cloud/|^api/|^migrations/|^policy/|^\.sqlx/|^Cargo\.(toml|lock)$|^rust-toolchain(\.toml)?$|^(bun\.lock|package\.json)$|^vercel\.json$|^scripts/vercel-[a-z0-9-]*\.sh$'
     ;;
   temper-ui)
-    TRIGGERS='^packages/temper-ui/|^clients/temper-telemetry-ts/|^(bun\.lock|package\.json)$|^scripts/vercel-[a-z0-9-]*\.sh$'
+    TRIGGERS='^packages/temper-ui/|^packages/temper-design/|^clients/temper-telemetry-ts/|^(bun\.lock|package\.json)$|^scripts/vercel-[a-z0-9-]*\.sh$'
     ;;
   steward-agent)
     TRIGGERS='^packages/agent-workflows/steward/|^clients/temper-ts/|^clients/temper-telemetry-ts/|^scripts/vercel-[a-z0-9-]*\.sh$'

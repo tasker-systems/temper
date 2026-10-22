@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { ArtifactView } from '$lib/types';
 	import { humanBytes } from '$lib/bytes';
-	import { highlightCode } from '$lib/highlight';
+	import { highlightCode } from '@tasker-systems/temper-design/highlight';
 	import { flattenPayload } from '$lib/graph/payloadRows';
 	import { relativeTime } from '$lib/graph/relativeTime';
 

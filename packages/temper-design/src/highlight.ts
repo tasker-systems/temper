@@ -1,8 +1,7 @@
 // highlight.ts — the one highlight.js registration, and the direct-code highlight helper.
 //
-// `markdown.ts` (fenced blocks in document bodies) and the JSON viewers (`ArtifactList`
-// content, `ShapeList` schema) share this: one registration list, one set of span classes,
-// one theme wherever `.hljs` appears.
+// `markdown.ts` (fenced blocks in document bodies) and any surface's direct-code viewers share
+// this: one registration list, one set of span classes, one theme wherever `.hljs` appears.
 //
 // **Why `{@html highlightCode(...)}` is safe by construction:** hljs escapes the input text
 // and emits only its own `<span class="hljs-*">` wrappers — no input byte can become markup.

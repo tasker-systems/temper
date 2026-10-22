@@ -109,6 +109,42 @@ jobs:
       - name: The toolchain check refuses what it must
         run: node --test toolchain/check.test.mjs
 
+      # `shared-never-binds-a-runtime`: the published modules import neither surface's runtime,
+      # and the harness proves each forbidden import is refused. Nothing installed either.
+      - name: The shared modules bind no runtime
+        run: |
+          node scripts/no-runtime.mjs
+          node --test scripts/no-runtime.test.mjs
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      # npm, not bun: like the TS clients, this package is not a bun workspace member. It ships
+      # compiled `dist/`, consumed by temper-ui as a `file:` dependency, which bun copies rather
+      # than builds — so dist/ is committed, and a src/ change that forgot to rebuild it fails here.
+      - name: Install the modules' dependencies
+        run: npm ci
+
+      - name: Type-check and lint the shared modules
+        run: |
+          npm run typecheck
+          npm run lint
+
+      # From an empty dist/: tsc never removes the output of a deleted module (git diff sees the
+      # deletion), and output that was never committed shows up as untracked.
+      - name: Build and verify committed dist is current
+        run: |
+          rm -rf dist
+          npm run build
+          git diff --exit-code --stat -- dist && [ -z "$(git ls-files --others -- dist)" ] \
+            || { git ls-files --others -- dist; echo "::error::dist/ is stale — run 'rm -rf dist && npm ci && npm run build' in packages/temper-design and commit the result"; exit 1; }
+
+      # The sanitize battery is `rendering-agrees`: every surface renders through this one pass.
+      - name: The shared modules' tests
+        run: npm test
+
   integration-tests:
     name: Integration Tests
     runs-on: ubuntu-latest

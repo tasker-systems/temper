@@ -1,0 +1,20 @@
+title    = "`@tasker-systems/temper-design` ships the shared rendering modules — markdown, sanitize, highlight, region, omission — and the region recipe"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["clients"]
+status   = "signal-only"
+body = '''
+Five new subpath exports in `@tasker-systems/temper-design`, compiled into a published `dist/`:
+`markdown` (markdown to HTML with highlighted fences, bounded), `sanitize` (the one sanitizer
+pass for that HTML, under which nothing in a body fetches or submits), `highlight`, `region`
+(the four region states' words, markers and ARIA roles) and `omission` (the omission sentence a
+bounded view ends with); and one new stylesheet, `contract/region.css`, the region states'
+recipe on the existing `--tp-region-*` roles. The package gains its first runtime dependencies
+(marked, marked-highlight, highlight.js, dompurify). The web UI renders through these modules
+from this release on. In a rendered body a remote image now reads "remote image withheld" and
+a video or audio element "video withheld" / "audio withheld", rather than a broken image or an
+empty player (the web's CSP already refused to load them); forms and buttons render their words
+without submitting; srcset, background attributes, SVG image elements and inputs other than a
+task list's checkboxes are removed. Who observes: a surface that imports the new subpaths, and
+a reader of a body that embedded media or forms. User-visible: yes, on the web. Release relevance: additive — new exports and files; no existing export changes.
+'''
