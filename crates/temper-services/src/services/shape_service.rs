@@ -16,12 +16,14 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
+use crate::services::shape_loader::{self, SchemaVerdict};
 use crate::services::workflow_job_service;
+use temper_core::types::artifact_ask::walk::MAX_SCHEMA_BYTES;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ContextId, EntityId, ProfileId, ShapeId};
 use temper_core::types::workflow_job::{AnchorJobPayload, DispatchType, Persona};
 use temper_substrate::payloads::{AnchorRef, EnforcementMode, KindOwner};
-use temper_substrate::shape_schema;
+use temper_substrate::shape_schema::{self, ShapeSchemaUncompilable};
 use temper_substrate::writes::{self, DataArtifactRefusal, DeclareShapeParams};
 
 /// Lease for a claimed shape-reconcile job. Same reasoning as the region lease: MUST exceed the
@@ -53,10 +55,12 @@ pub struct DeclareShapeServiceParams<'a> {
 /// `Forbidden` — the same denial `DbBackend::check_context_authorable` /
 /// `DbBackend::check_cogmap_authorable` use.
 ///
-/// The schema is then compiled, before any write, through the one no-fetch constructor. A schema
-/// that cannot be compiled (malformed, or referring to a document that is never fetched) is
-/// refused as a `DataArtifactRefusal` carrying that constructor's fixed sentence, so it is
-/// refused when it is declared rather than accepted and left to fail at commit.
+/// The schema is then judged, before any write, by the decision the loader and the by-id read
+/// share ([`shape_loader::schema_verdict`]). A schema larger than the walk reads
+/// ([`MAX_SCHEMA_BYTES`]) is refused before it is compiled, with a sentence naming the bound; one
+/// within it that cannot be compiled (malformed, or referring to a document that is never fetched)
+/// is refused with the no-fetch constructor's fixed sentence. Both are a `DataArtifactRefusal`, so
+/// a schema no ask could use is refused when it is declared rather than stored.
 ///
 /// After the declare succeeds, a reconcile job is enqueued on the anchor queue. The single-flight
 /// index collapses N declarations into one job — the second enqueue returns `None`, not an error.
@@ -64,10 +68,18 @@ pub async fn declare_shape(pool: &PgPool, p: DeclareShapeServiceParams<'_>) -> A
     // Authority gate — the two-arm branch from spec §5. Call the predicates, never restate them.
     check_home_authorable(pool, p.principal, &p.home).await?;
 
-    // Auth before writes, and compile before the write: the gate above answers a stranger
-    // `Forbidden` whatever the schema says, so the refusal below teaches only an author.
-    shape_schema::compile(p.schema)
-        .map_err(|uncompilable| ApiError::DataArtifactRefusal(uncompilable.to_string()))?;
+    // Auth before writes, and the schema judged before the write: the gate above answers a
+    // stranger `Forbidden` whatever the schema says, so the refusals below teach only an author.
+    // Measured before compiled — a schema past the walk's byte bound is never compiled.
+    match shape_loader::schema_verdict(p.schema) {
+        SchemaVerdict::Compiles => {}
+        SchemaVerdict::Uncompilable => {
+            return Err(ApiError::DataArtifactRefusal(
+                ShapeSchemaUncompilable.to_string(),
+            ))
+        }
+        SchemaVerdict::TooLarge => return Err(ApiError::DataArtifactRefusal(too_large())),
+    }
 
     // Substrate declare (fires the event, projects the row). A typed refusal (the wrapper's
     // SQL vocabulary, or the declare gate itself) surfaces with its own words — never the
@@ -104,6 +116,15 @@ pub async fn declare_shape(pool: &PgPool, p: DeclareShapeServiceParams<'_>) -> A
     .await?;
 
     Ok(shape_id)
+}
+
+/// The declare refusal for a schema past the walk's byte bound: names the bound, and carries no
+/// compiler text — the schema was never compiled.
+fn too_large() -> String {
+    format!(
+        "the shape's JSON Schema is larger than {MAX_SCHEMA_BYTES} bytes of compact JSON, the most \
+         this server reads, so it is not compiled; declare a smaller schema"
+    )
 }
 
 /// Run one shape-reconciliation pass: claim anchor-keyed jobs, verdict pre-existing artifacts by

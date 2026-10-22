@@ -2945,10 +2945,11 @@ pub async fn artifact_by_id(
 
 // ── Data artifact shape reads (Beat C, Task 5) ────────────────────────────────────────────────
 //
-// Two read surfaces over `kb_data_artifact_shapes`, gated through `anchor_readable_by_profile` in
-// the SQL (migration `20260822000030`). A shape is homed polymorphically over
-// (kb_contexts, kb_cogmaps); a principal who cannot read the home anchor sees zero shapes —
-// fail closed, never an error. The gate is the same container visibility spine
+// Three read surfaces over `kb_data_artifact_shapes`, each gated through
+// `anchor_readable_by_profile`: `shapes_for_home` and `shape_by_id` in the SQL functions of
+// migration `20260822000030`, and `live_shape_at` with the same scalar gate inline in its query.
+// A shape is homed polymorphically over (kb_contexts, kb_cogmaps); a principal who cannot read the
+// home anchor sees zero shapes — fail closed, never an error. The gate is the same container visibility spine
 // edges_visible_to / anchor_shape / cogmap_analytics use.
 
 /// One declared shape, as returned by [`shapes_for_home`] and [`shape_by_id`].

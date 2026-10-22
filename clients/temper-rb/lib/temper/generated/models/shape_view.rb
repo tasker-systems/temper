@@ -18,7 +18,7 @@ module Temper::Generated
   class ShapeView < ApiModelBase
     attr_accessor :artifact_kind
 
-    # What an artifact ask may name against this shape: each askable path with its declared types, its `enum`/`const` values, and the operators feasible at it — the vocabulary a refusal's `teaches` narrows, derived by the same walk that validates an ask. Bounded, and a truncated vocabulary names the bound in `truncated`.  **Present only on the by-id read** (`GET /api/shapes/{id}`, `get_data_artifact_shape`, `temper data-artifact schema show`). Listings leave it **absent, which is not empty**: a listing never pays one enumeration per shape, and an absent field never says that nothing is askable. Empty when nothing is — then `unaskable` says why, when the schema itself is the reason.
+    # What an artifact ask may name against this version of the shape: each askable path with its declared types, its `enum`/`const` values, and the operators feasible at it — the vocabulary a refusal's `teaches` narrows, derived by the same walk that validates an ask. Bounded, and a truncated vocabulary names the bound in `truncated`.  **Present only on the by-id read** (`GET /api/shapes/{id}`, `get_data_artifact_shape`, `temper data-artifact schema show`). Listings leave it **absent, which is not empty**: a listing never pays one enumeration per shape, and an absent field never says that nothing is askable. Empty when this version's schema cannot be walked — `unaskable` then says why — and `truncated: [schema_bytes]` when the schema is past the byte bound the walk reads.
     attr_accessor :askable
 
     attr_accessor :created
@@ -46,7 +46,7 @@ module Temper::Generated
     # The chain depth of the assert/fold lineage — 1 for the first declaration, N for the Nth.
     attr_accessor :shape_version
 
-    # Why nothing can be asked of this shape, beside an empty `askable`: the refusal an ask naming it meets, word for word — `shape_schema_uncompilable` with its fixed sentence, for a schema that does not compile under the no-fetch compiler. Absent whenever the walk decided `askable`, and on listings.
+    # Why this version's schema cannot be walked: the refusal step 3 of asking gives it — `shape_schema_uncompilable`, with its fixed sentence for a schema that does not compile under the no-fetch compiler, or with a sentence naming the byte bound and `teaches.beyond_bound: schema_bytes` for one too large to read, which is never compiled. What an ask naming this shape is told can differ: an ask naming a folded version is refused `shape_superseded` first (`is_folded`). Absent whenever the schema can be walked, and on listings.
     attr_accessor :unaskable
 
     class EnumAttributeValidator

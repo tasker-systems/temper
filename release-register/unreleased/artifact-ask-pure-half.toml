@@ -13,7 +13,8 @@ client that predates them reads each as an unknown reason. Both appear in the `/
 error schema, so `openapi.json`, the three SDKs and the ts-rs types grow.
 
 Behind the shapes is the pure half of asking data artifacts by what they are, in `temper-core`:
-the `ArtifactAsk` type, the bounded schema walk, `validate_ask`, and a reference evaluator.
+the `ArtifactAsk` type, the bounded schema walk, `validate_ask_form` and the `AskSession` that
+validates a request's asks against the shapes it loaded, and a reference evaluator.
 Nothing raises the new reasons yet and no door accepts an ask, so no caller sees a difference.
 The composable arm and the batch read carry the doors, under their own entries.
 

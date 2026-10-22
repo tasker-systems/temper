@@ -106,7 +106,7 @@ class RefusalReason(BaseModel):
     # data type: str
     oneof_schema_39_validator: Optional[StrictStr] = Field(default=None, description="The ask names a folded shape version. It is never re-pointed at the successor: the predicates were written against a schema that no longer governs. `teaches` carries the version now in force, when there is one.")
     # data type: str
-    oneof_schema_40_validator: Optional[StrictStr] = Field(default=None, description="The shape's schema does not compile under the no-fetch compiler. The detail is a fixed sentence; the compiler's text is never echoed.")
+    oneof_schema_40_validator: Optional[StrictStr] = Field(default=None, description="The shape's schema does not compile under the no-fetch compiler, or is larger than the walk reads and so is never compiled (then `teaches.beyond_bound` is `schema_bytes`). The detail is a fixed sentence; the compiler's text is never echoed.")
     # data type: str
     oneof_schema_41_validator: Optional[StrictStr] = Field(default=None, description="An artifact predicate's path has no segments, so it would address the whole document.")
     # data type: str

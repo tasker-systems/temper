@@ -2062,10 +2062,12 @@ pub async fn list_shapes(
 /// or the owning home anchor is not readable to the caller. Includes folded shapes
 /// (audit/history).
 ///
-/// The one read that carries `askable` (spec §2.5): the shape's vocabulary, or — for a schema the
-/// no-fetch compiler refuses — an empty one beside `unaskable`, the refusal an ask naming it meets
-/// ([`shape_loader::askable`]). A folded shape answers its own version's vocabulary; an ask naming
-/// it is refused `shape_superseded`, which `is_folded` already says.
+/// The one read that carries `askable` (spec §2.5): the shape's vocabulary, and beside it, when
+/// this version's schema cannot be walked, `unaskable` — the refusal step 3 gives it: past the
+/// walk's byte bound (never compiled; `askable` says `truncated: [schema_bytes]`) or not compiling
+/// under the no-fetch compiler (`askable` empty). [`shape_loader::askable`] decides it as the
+/// loader does, off the async executor. A folded shape answers its own version's vocabulary; an ask
+/// naming it is refused `shape_superseded` first, which `is_folded` already says.
 pub async fn get_shape(
     pool: &PgPool,
     profile_id: ProfileId,
@@ -2073,17 +2075,18 @@ pub async fn get_shape(
 ) -> ApiResult<Option<temper_core::types::data_artifact_shape::ShapeView>> {
     use temper_core::types::data_artifact_shape::ShapeView;
 
-    let shape = readback::shape_by_id(pool, profile_id, shape_id)
+    let Some(shape) = readback::shape_by_id(pool, profile_id, shape_id)
         .await
-        .map_err(|e| ApiError::from(TemperError::Api(e.to_string())))?;
+        .map_err(|e| ApiError::from(TemperError::Api(e.to_string())))?
+    else {
+        return Ok(None);
+    };
 
-    Ok(shape.map(|s| {
-        let (askable, unaskable) = shape_loader::askable(&s.schema);
-        ShapeView {
-            askable: Some(askable),
-            unaskable,
-            ..shape_to_view(s)
-        }
+    let (shape, askable, unaskable) = shape_loader::askable(shape).await?;
+    Ok(Some(ShapeView {
+        askable: Some(askable),
+        unaskable,
+        ..shape_to_view(shape)
     }))
 }
 

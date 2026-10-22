@@ -15,19 +15,25 @@
 #![cfg(feature = "test-db")]
 
 use std::collections::BTreeSet;
+use std::sync::atomic::Ordering;
 
+use serde_json::json;
 use sqlx::PgPool;
+use temper_core::types::artifact_ask::walk::MAX_SCHEMA_BYTES;
 use temper_core::types::artifact_ask::{
-    ArtifactAsk, ArtifactPredicate, JsonType, PathFacts, ShapeContext, ShapeLoad, ShapeSuccessor,
+    within_schema_bound, ArtifactAsk, ArtifactPredicate, BoundKind, JsonType, PathFacts,
+    ShapeContext, ShapeLoad, ShapeSuccessor, Vocabulary,
 };
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, EntityId, ProfileId, ShapeId};
 use temper_core::types::query::{PlanRefusal, PropertyOp, RefusalReason};
 use temper_services::backend::substrate_read;
-use temper_services::services::shape_loader::{load, load_one};
+use temper_services::error::ApiError;
+use temper_services::services::shape_loader::{load, load_one, COMPILES_PAST_THE_BOUND};
 use temper_services::services::shape_service::{self, DeclareShapeServiceParams};
 use temper_substrate::events::EventContext;
-use temper_substrate::payloads::{AnchorRef, EnforcementMode};
+use temper_substrate::payloads::{AnchorRef, EnforcementMode, KindOwner};
+use temper_substrate::readback;
 use temper_substrate::scenario::bootseed;
 use temper_substrate::writes::{self, CreateParams, DeclareShapeParams};
 use uuid::Uuid;
@@ -160,6 +166,67 @@ async fn store(pool: &PgPool, w: &World, kind: &str, schema: &serde_json::Value)
     .unwrap()
 }
 
+/// Store through the substrate write under an explicit family owner.
+async fn store_owned(
+    pool: &PgPool,
+    w: &World,
+    kind: &str,
+    owner: KindOwner,
+    schema: &serde_json::Value,
+) -> ShapeId {
+    writes::declare_shape(
+        pool,
+        DeclareShapeParams {
+            home: AnchorRef::context(ContextId::from(w.context)),
+            kind,
+            kind_owner: Some(owner),
+            schema,
+            enforcement: EnforcementMode::Advisory,
+            emitter: w.emitter,
+        },
+    )
+    .await
+    .unwrap()
+}
+
+/// A schema that compiles but is past the walk's byte bound: one string property per distinct
+/// `pattern`, so a compiler that ran would build thousands of regexes.
+fn patterns_past_the_bound() -> serde_json::Value {
+    let properties: serde_json::Map<String, serde_json::Value> = (0..6_000)
+        .map(|i| {
+            (
+                format!("p{i}"),
+                json!({ "type": "string", "pattern": format!("^x{i}[a-z]+$") }),
+            )
+        })
+        .collect();
+    let schema = json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": properties
+    });
+    assert!(
+        !within_schema_bound(&schema),
+        "the fixture is past the bound"
+    );
+    schema
+}
+
+/// A schema just within the walk's byte bound: the incumbent value schema, padded with a
+/// description to within 64 bytes of the bound.
+fn schema_just_within_the_bound() -> serde_json::Value {
+    let mut schema = value_schema();
+    let base = serde_json::to_vec(&schema).unwrap().len();
+    schema["description"] = json!("x".repeat(MAX_SCHEMA_BYTES - base - 64));
+    let bytes = serde_json::to_vec(&schema).unwrap().len();
+    assert!(
+        bytes <= MAX_SCHEMA_BYTES && bytes > MAX_SCHEMA_BYTES - 128,
+        "{bytes}"
+    );
+    assert!(within_schema_bound(&schema));
+    schema
+}
+
 fn ask_naming(shape: ShapeId) -> ArtifactAsk {
     ArtifactAsk {
         shape,
@@ -254,15 +321,31 @@ async fn unreadable_and_absent_shapes_load_identically(pool: PgPool) {
 }
 
 /// An amended shape's earlier version loads `Superseded`, carrying the version now in force at
-/// the same home and family. Bites a successor looked up by anything other than the home and
-/// family, or not looked up at all.
+/// the same home and family — and not another live row in the same home. Two such rows are stored
+/// before the successor, each where a lookup blind to one column finds it first, in insertion
+/// order and in the live index's order alike: a sibling family of the same owner whose kind sorts
+/// before `measurement`, and the same kind under another owner, whose `kb_profiles` sorts before the
+/// family's `kb_teams`. Bites a successor lookup that drops the kind, or the owner, or both, and
+/// one that is not made at all.
 #[sqlx::test(migrations = "../../migrations")]
 async fn a_folded_shape_loads_superseded_with_its_live_successor(pool: PgPool) {
     let w = seed_world(&pool, "loader-folded").await;
-    let first = declare(&pool, &w, "measurement", &value_schema()).await;
-    // A sibling family in the same home: never the successor.
-    declare(&pool, &w, "reading", &value_schema()).await;
-    let second = declare(&pool, &w, "measurement", &value_schema()).await;
+    let team: Uuid = sqlx::query_scalar("SELECT id FROM kb_teams WHERE slug = 'temper-system'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let family = KindOwner::Team(team);
+    let first = store_owned(&pool, &w, "measurement", family, &value_schema()).await;
+    store_owned(&pool, &w, "a-sibling", family, &value_schema()).await;
+    store_owned(
+        &pool,
+        &w,
+        "measurement",
+        KindOwner::Profile(w.owner.uuid()),
+        &value_schema(),
+    )
+    .await;
+    let second = store_owned(&pool, &w, "measurement", family, &value_schema()).await;
 
     assert_eq!(
         load_one(&pool, w.owner, first).await.unwrap(),
@@ -273,6 +356,40 @@ async fn a_folded_shape_loads_superseded_with_its_live_successor(pool: PgPool) {
             }),
         }
     );
+}
+
+/// The successor lookup carries the anchor gate itself, so it never answers about a home its
+/// caller cannot read — whoever calls it, not only the loader, whose step 1 gates first. Bites
+/// dropping `anchor_readable_by_profile` from `readback::live_shape_at`.
+#[sqlx::test(migrations = "../../migrations")]
+async fn the_successor_lookup_answers_only_a_principal_who_can_read_the_home(pool: PgPool) {
+    let w = seed_world(&pool, "loader-live-at-gate").await;
+    let id = declare(&pool, &w, "measurement", &value_schema()).await;
+    let row = readback::shape_by_id(&pool, w.owner, id)
+        .await
+        .unwrap()
+        .expect("the owner reads the shape");
+
+    let for_owner = readback::live_shape_at(
+        &pool,
+        w.owner,
+        row.home_anchor,
+        row.kind_owner,
+        &row.artifact_kind,
+    )
+    .await
+    .unwrap();
+    assert_eq!(for_owner.map(|live| live.shape_id), Some(id));
+    let for_stranger = readback::live_shape_at(
+        &pool,
+        w.stranger,
+        row.home_anchor,
+        row.kind_owner,
+        &row.artifact_kind,
+    )
+    .await
+    .unwrap();
+    assert_eq!(for_stranger, None);
 }
 
 /// A folded shape with no live row at its home and family loads `Superseded` with no successor,
@@ -452,4 +569,112 @@ async fn an_uncompilable_shape_reads_askable_empty_with_the_reason(pool: PgPool)
     assert_eq!(wire["askable"], serde_json::json!({ "paths": [] }));
     assert_eq!(wire["unaskable"]["reason"], "shape_schema_uncompilable");
     assert_eq!(probe.connections(), 0, "the read must not fetch");
+}
+
+// ── The byte bound comes before the compile ──────────────────────────────────────────────────
+
+/// A stored schema past the walk's byte bound — compilable, and costly to compile — is refused at
+/// the load and answered by the by-id read with the bound, and is never compiled by either: the
+/// load is `SchemaTooLarge`, an ask is told `shape_schema_uncompilable` with
+/// `teaches.beyond_bound: schema_bytes`, the read's `askable` is empty and truncated at
+/// `schema_bytes` with that same refusal as `unaskable`, and the loader's count of compiles past the
+/// bound does not move. Bites removing the measurement from `shape_loader::schema_verdict`: the
+/// schema compiles, the count moves, and it loads `Loaded`.
+#[sqlx::test(migrations = "../../migrations")]
+async fn a_schema_past_the_byte_bound_is_refused_at_load_and_read_and_never_compiled(pool: PgPool) {
+    let w = seed_world(&pool, "loader-past-the-bound").await;
+    let id = store(&pool, &w, "measurement", &patterns_past_the_bound()).await;
+    let compiled = COMPILES_PAST_THE_BOUND.load(Ordering::SeqCst);
+    let too_large = ShapeLoad::SchemaTooLarge
+        .loaded()
+        .expect_err("a schema past the bound is refused");
+
+    assert_eq!(
+        load_one(&pool, w.owner, id).await.unwrap(),
+        ShapeLoad::SchemaTooLarge
+    );
+    assert_eq!(
+        refusals_for(&pool, w.owner, id).await,
+        vec![too_large.clone()]
+    );
+
+    let shown = substrate_read::get_shape(&pool, w.owner, id)
+        .await
+        .unwrap()
+        .expect("the owner reads the shape");
+    assert_eq!(
+        shown.askable,
+        Some(Vocabulary {
+            paths: vec![],
+            truncated: BTreeSet::from([BoundKind::SchemaBytes]),
+        })
+    );
+    assert_eq!(shown.unaskable, Some(too_large));
+    let wire = serde_json::to_value(&shown).unwrap();
+    assert_eq!(
+        wire["askable"],
+        json!({ "paths": [], "truncated": ["schema_bytes"] })
+    );
+    assert_eq!(wire["unaskable"]["reason"], "shape_schema_uncompilable");
+    assert_eq!(wire["unaskable"]["teaches"]["beyond_bound"], "schema_bytes");
+
+    assert_eq!(
+        COMPILES_PAST_THE_BOUND.load(Ordering::SeqCst),
+        compiled,
+        "nothing compiled a schema past the bound"
+    );
+}
+
+/// Declare refuses a schema past the walk's byte bound before compiling it, with the typed
+/// data-artifact refusal naming the bound and no compiler text, and writes no row; a schema just
+/// within the bound still declares. Bites removing the measurement from
+/// `shape_loader::schema_verdict`: the oversized schema compiles (the count moves) and declares.
+#[sqlx::test(migrations = "../../migrations")]
+async fn declaring_a_schema_past_the_byte_bound_is_refused_before_it_compiles(pool: PgPool) {
+    let w = seed_world(&pool, "declare-past-the-bound").await;
+    let oversized = patterns_past_the_bound();
+    let compiled = COMPILES_PAST_THE_BOUND.load(Ordering::SeqCst);
+
+    let err = shape_service::declare_shape(
+        &pool,
+        DeclareShapeServiceParams {
+            home: AnchorRef::context(ContextId::from(w.context)),
+            kind: "measurement",
+            kind_owner: None,
+            schema: &oversized,
+            enforcement: EnforcementMode::Advisory,
+            principal: w.owner,
+            emitter: w.emitter,
+        },
+    )
+    .await
+    .expect_err("a schema past the bound is refused at declare");
+    let message = match err {
+        ApiError::DataArtifactRefusal(message) => message,
+        other => panic!("the refusal must be the typed data-artifact refusal, got {other:?}"),
+    };
+    assert!(
+        message.contains(&MAX_SCHEMA_BYTES.to_string()),
+        "the refusal names the bound: {message}"
+    );
+    assert!(
+        !message.contains("pattern") && !message.contains("^x"),
+        "the refusal carries nothing of the schema: {message}"
+    );
+    assert_eq!(
+        COMPILES_PAST_THE_BOUND.load(Ordering::SeqCst),
+        compiled,
+        "declare did not compile it"
+    );
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_data_artifact_shapes")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0, "a refused declare writes no row");
+
+    let within = declare(&pool, &w, "measurement", &schema_just_within_the_bound()).await;
+    assert!(matches!(
+        load_one(&pool, w.owner, within).await.unwrap(),
+        ShapeLoad::Loaded(_)
+    ));
 }

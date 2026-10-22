@@ -76,14 +76,8 @@ async fn askable_rides_the_by_id_read_at_every_door_and_no_listing(pool: PgPool)
         }]
     });
 
-    // HTTP
-    let http = app
-        .client
-        .data_artifacts()
-        .get_shape(shape_id)
-        .await
-        .expect("get shape over http");
-    let http = serde_json::to_value(&http).unwrap();
+    // HTTP, read as the raw body, so a field the wire carries as `null` is seen, not defaulted
+    let http = raw_json(&app, &format!("/api/shapes/{shape_id}")).await;
     assert_eq!(http["askable"], expected, "{http}");
     assert!(http.get("unaskable").is_none(), "{http}");
 
@@ -123,13 +117,27 @@ async fn askable_rides_the_by_id_read_at_every_door_and_no_listing(pool: PgPool)
     let cli: Value = serde_json::from_slice(&output.stdout).expect("schema show prints JSON");
     assert_eq!(cli["askable"], expected, "{cli}");
 
-    // The listing: absent, not empty.
-    let listed = app
-        .client
-        .data_artifacts()
-        .list_shapes(*context.id)
-        .await
-        .expect("list shapes");
+    // The listing: absent from the wire, not empty and not null.
+    let listed = raw_json(&app, &format!("/api/contexts/{}/shapes", *context.id)).await;
+    let listed = listed.as_array().expect("the listing is an array");
     assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0].askable, None);
+    assert!(listed[0].get("askable").is_none(), "{}", listed[0]);
+    assert!(listed[0].get("unaskable").is_none(), "{}", listed[0]);
+}
+
+/// A GET on the app's own listener with the harness bearer, its body parsed as JSON untyped.
+async fn raw_json(app: &common::E2eTestApp, path: &str) -> Value {
+    let response = app
+        .reqwest_client
+        .get(app.url(path))
+        .bearer_auth(&app.token)
+        .send()
+        .await
+        .expect("request");
+    assert!(
+        response.status().is_success(),
+        "{path}: {}",
+        response.status()
+    );
+    response.json().await.expect("a JSON body")
 }

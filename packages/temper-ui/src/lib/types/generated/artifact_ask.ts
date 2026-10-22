@@ -108,6 +108,7 @@ items: PathFacts | null, };
  * | `value_outside_shape` | `vocabulary` (each offending path's declared types and values), `non_closure` |
  * | `unknown_artifact_intent`, `unknown_shape_state` | `terms` |
  * | `shape_superseded` | `successor` |
+ * | `shape_schema_uncompilable` | `beyond_bound: schema_bytes` for a schema past the byte bound |
  */
 export type RefusalTeaching = { 
 /**

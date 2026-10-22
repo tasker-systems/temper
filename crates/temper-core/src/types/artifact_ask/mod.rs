@@ -40,8 +40,8 @@ pub use validate::{
     MAX_TEACHING_BYTES,
 };
 pub use walk::{
-    enumerate, resolve, AskOperator, AskablePath, BoundKind, JsonType, PathFacts, PathResolution,
-    Vocabulary, WalkBounds,
+    enumerate, resolve, within_schema_bound, AskOperator, AskablePath, BoundKind, JsonType,
+    PathFacts, PathResolution, Vocabulary, WalkBounds,
 };
 
 /// The selection intents an ask may narrow by — the closed vocabulary of
@@ -199,14 +199,20 @@ pub enum ShapeLoad {
     },
     /// The schema did not compile under the no-fetch compiler.
     Uncompilable,
+    /// The schema is larger than the walk reads ([`walk::MAX_SCHEMA_BYTES`]), so it was never
+    /// compiled. Step 3 still: the loader decides compilability (§2.4), and a schema this server
+    /// will not read is one it does not compile. Refused `shape_schema_uncompilable` like
+    /// [`ShapeLoad::Uncompilable`], with its own sentence and `teaches.beyond_bound: schema_bytes`,
+    /// so the bound is said as data, the way a path refusal says it (§3.3).
+    SchemaTooLarge,
 }
 
 /// Every shape an ask in one request names, loaded before the gate (§4.3): plain data, fixed
 /// before validation runs and untouched by anything after it.
 ///
 /// What a request derives from these shapes — each one's walk, the paths it has resolved, its
-/// vocabulary — and the work budget its asks share live in the [`AskSession`] begun from it with
-/// [`ShapeContext::session`], which borrows the shapes held here.
+/// vocabulary, each ask's answer — and the work budget its asks share live in the [`AskSession`]
+/// begun from it with [`ShapeContext::session`], which borrows the shapes held here.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ShapeContext {
     loads: BTreeMap<ShapeId, ShapeLoad>,

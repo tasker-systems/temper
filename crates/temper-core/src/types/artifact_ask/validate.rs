@@ -114,6 +114,7 @@ pub const MAX_MEMBERSHIP_STEPS: usize = 1 << 20;
 /// | `value_outside_shape` | `vocabulary` (each offending path's declared types and values), `non_closure` |
 /// | `unknown_artifact_intent`, `unknown_shape_state` | `terms` |
 /// | `shape_superseded` | `successor` |
+/// | `shape_schema_uncompilable` | `beyond_bound: schema_bytes` for a schema past the byte bound |
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -265,7 +266,9 @@ impl ShapeLoad {
     ///
     /// **Fixed sentences.** `shape_not_askable` reads the same for a shape that does not exist and
     /// one the asker cannot read, because they are one arm. `shape_schema_uncompilable` never
-    /// echoes the compiler: its text is the author's material, not the asker's.
+    /// echoes the compiler: its text is the author's material, not the asker's. A schema past the
+    /// walk's byte bound is refused with the same reason, its own sentence naming the bound, and
+    /// `teaches.beyond_bound: schema_bytes` — the bound as data, never a compiler's words.
     pub fn loaded(&self) -> Result<&LoadedShape, PlanRefusal> {
         let (reason, detail, teaches) = match self {
             ShapeLoad::Loaded(shape) => return Ok(shape),
@@ -286,6 +289,16 @@ impl ShapeLoad {
                 None,
             ),
             ShapeLoad::Uncompilable => (RefusalReason::ShapeSchemaUncompilable, UNCOMPILABLE, None),
+            ShapeLoad::SchemaTooLarge => {
+                return Err(refusal(
+                    RefusalReason::ShapeSchemaUncompilable,
+                    schema_too_large(),
+                    Some(RefusalTeaching {
+                        beyond_bound: Some(BoundKind::SchemaBytes),
+                        ..RefusalTeaching::default()
+                    }),
+                ))
+            }
         };
         Err(refusal(reason, detail.to_string(), teaches))
     }
@@ -313,6 +326,15 @@ const SUPERSEDED_NO_SUCCESSOR: &str = "the named shape has been amended, and no 
 
 const UNCOMPILABLE: &str =
     "the shape's schema does not compile, so nothing can be asked of it until the shape is amended";
+
+/// The sentence for a schema past the walk's byte bound: never compiled, so never "does not
+/// compile" — the reason is the size, and the sentence says which.
+fn schema_too_large() -> String {
+    format!(
+        "the shape's schema is larger than the {MAX_SCHEMA_BYTES} bytes this server reads, so it is \
+         not compiled and nothing can be asked of it until the shape is amended to a smaller schema"
+    )
+}
 
 /// The second half of every `value_outside_shape` (spec §3.4, ruled 2026-10-19): what the refusal
 /// does not claim, and the route to the values it does not declare.
@@ -1774,6 +1796,26 @@ mod tests {
         let uncompilable = ShapeLoad::Uncompilable.loaded().unwrap_err();
         assert_eq!(uncompilable.reason, RefusalReason::ShapeSchemaUncompilable);
         assert_eq!(uncompilable.detail, UNCOMPILABLE);
+    }
+
+    /// A schema past the walk's byte bound is refused at the load with the compile step's reason,
+    /// a sentence of its own naming the bound, and `teaches.beyond_bound: schema_bytes`. Bites a
+    /// `SchemaTooLarge` arm that answers `Uncompilable`'s refusal, which would say the schema does
+    /// not compile when it was never compiled.
+    #[test]
+    fn a_schema_past_the_byte_bound_is_refused_at_the_load_naming_the_bound() {
+        let r = ShapeLoad::SchemaTooLarge.loaded().unwrap_err();
+        assert_eq!(r.reason, RefusalReason::ShapeSchemaUncompilable);
+        assert_ne!(r.detail, UNCOMPILABLE);
+        assert!(
+            r.detail.contains(&MAX_SCHEMA_BYTES.to_string()),
+            "{}",
+            r.detail
+        );
+        assert_eq!(
+            r.teaches.and_then(|t| t.beyond_bound),
+            Some(BoundKind::SchemaBytes)
+        );
     }
 
     #[test]
