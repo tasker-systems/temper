@@ -4,6 +4,7 @@
 	// Self-hosted variable fonts — no third-party font CDN, so no IP/User-Agent
 	// egress to Google on every page load (and no `fonts.googleapis.com` in CSP).
 	// `standard` carries the opsz+wght axes the old Google Fonts URL requested.
+	import '@fontsource-variable/inter';
 	import '@fontsource-variable/jetbrains-mono';
 	import '@fontsource-variable/source-serif-4/standard.css';
 	import '@fontsource-variable/source-serif-4/standard-italic.css';
