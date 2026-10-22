@@ -579,8 +579,8 @@ impl<'s> Walk<'s> {
     }
 
     /// Several paths under **one** budget of the walk's own, so what reading them costs does not
-    /// grow with how many are named (§3.3: the walk "never stalls or exhausts the server"). Once the
-    /// budget is spent every later path is [`Resolved::BeyondBound`]`(`[`BoundKind::Work`]`)`.
+    /// grow with how many are named (§3.3: the walk "never stalls or exhausts the server"). Once
+    /// the budget is spent every later path is [`Resolved::BeyondBound`]`(`[`BoundKind::Work`]`)`.
     ///
     /// The facts are the walk's own, borrowed from the schema: no value is copied, so a value set
     /// many paths share is read once (by [`Budget::members`]) and costs nothing per path after.

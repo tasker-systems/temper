@@ -2067,8 +2067,8 @@ pub async fn list_shapes(
 /// walk's byte bound (never compiled; `askable` says `truncated: [schema_bytes]`) or not compiling
 /// under the no-fetch compiler (`askable` empty). [`shape_loader::askable`] decides it as the
 /// loader does — the verdict remembered by id, a compile under a permit off the async executor. A
-/// folded shape answers its own version's vocabulary; an ask
-/// naming it is refused `shape_superseded` first, which `is_folded` already says.
+/// folded shape answers its own version's vocabulary; an ask naming it is refused
+/// `shape_superseded` first, which `is_folded` already says.
 pub async fn get_shape(
     pool: &PgPool,
     profile_id: ProfileId,
@@ -2083,7 +2083,7 @@ pub async fn get_shape(
         return Ok(None);
     };
 
-    let (askable, unaskable) = shape_loader::askable(shape.shape_id, &shape.schema).await?;
+    let (askable, unaskable) = shape_loader::askable(&shape).await?;
     Ok(Some(ShapeView {
         askable: Some(askable),
         unaskable,

@@ -46,12 +46,17 @@
 //! can make any position in the document a schema, and telling them apart would mean reproducing
 //! every spelling of a reference that `jsonschema` resolves. The rule fails closed instead.
 //!
-//! **Each pattern is bounded too.** `jsonschema` compiles every distinct `pattern` and
-//! `patternProperties` key when a schema is built, under the regex engine's limits; [`compile`]
-//! holds each to [`MAX_PATTERN_BYTES`] rather than the engine's 10 MiB default, so one short pattern
-//! cannot make a compile cost megabytes. A pattern past it makes the schema uncompilable, with the
-//! same fixed sentence. Every caller — declare, commit, reconcile, and the shape loader — gets the
-//! bound, because every caller compiles here.
+//! **Each `pattern` and `patternProperties` regex is bounded; a compile's total cost is not, yet.**
+//! `jsonschema` compiles every distinct `pattern` and `patternProperties` key when a schema is
+//! built, and [`compile`] holds each of those regexes to [`MAX_PATTERN_BYTES`] rather than the
+//! engine's 10 MiB default; one past it makes the schema uncompilable, with the same fixed
+//! sentence, for every caller (declare, commit, reconcile and the shape loader all compile here).
+//! What holds is narrower than "a compile is bounded": no schema that compiles carries a `pattern`
+//! or `patternProperties` regex past the bound. The regexes `unevaluatedProperties` builds from a
+//! reachable `patternProperties` map are compiled by `jsonschema` with the engine's defaults, so a
+//! compile can build a regex past the bound before it refuses, and can build the same regex many
+//! times; and nothing bounds how many regexes one compile builds, or its total time and memory.
+//! Bounding a whole compile's cost is open as its own follow-up.
 
 use jsonschema::{Draft, Retrieve, Uri, Validator};
 use serde_json::Value;
@@ -124,10 +129,11 @@ fn names_only_standard_drafts(schema: &Value) -> bool {
 ///
 /// `jsonschema` compiles every distinct pattern eagerly when a schema is built, and the engine's
 /// own default allows 10 MiB a regex, so a pattern of twenty bytes such as a large Unicode class
-/// repeated a few hundred times can cost milliseconds and megabytes on its own, multiplied by
-/// every pattern a schema carries. A pattern a person writes for a field — a code, a date, an
-/// identifier — compiles to kilobytes; 1 MiB admits two orders of magnitude more. A pattern past it
-/// fails to compile, so its schema is [`ShapeSchemaUncompilable`], with the one fixed sentence.
+/// repeated a few hundred times can cost milliseconds and megabytes on its own. A pattern a person
+/// writes for a field — a code, a date, an identifier — compiles to kilobytes; 1 MiB admits two
+/// orders of magnitude more. A `pattern` or `patternProperties` key past it fails to compile, so
+/// its schema is [`ShapeSchemaUncompilable`], with the one fixed sentence. It bounds each such
+/// regex, not a compile: see the module doc for what it does not reach.
 pub const MAX_PATTERN_BYTES: usize = 1 << 20;
 
 /// The most bytes the engine may spend building a **full** DFA for one pattern — what
@@ -140,7 +146,7 @@ pub const MAX_PATTERN_BYTES: usize = 1 << 20;
 /// The engine's own default, pinned: a full DFA costs worst-case exponential time and space to
 /// build, which is why the default is this small. Setting it to anything like
 /// [`MAX_PATTERN_BYTES`] would raise it twenty-five-fold; pinning it keeps an upstream change of
-/// default from moving what a compile may cost.
+/// default from moving what building one pattern's full DFA may cost.
 pub const MAX_PATTERN_DFA_BYTES: usize = 40 << 10;
 
 /// Compile a shape's JSON Schema into a validator without fetching anything, holding each pattern

@@ -2,8 +2,8 @@
 //! under the regex engine's own 10 MiB default but not under the bound makes its schema
 //! uncompilable, with the one fixed error; an ordinary pattern still compiles.
 //!
-//! Bite: drop `.with_pattern_options(patterns)` from `shape_schema::compile`. The large pattern then
-//! compiles under the engine's default, and the refusal test goes red.
+//! Bite: drop `.with_pattern_options(patterns)` from `shape_schema::compile`. The large pattern
+//! then compiles under the engine's default, and the refusal test goes red.
 //!
 //! Needs no database: runs in the Unit CI job.
 

@@ -332,8 +332,9 @@ const UNCOMPILABLE: &str =
 /// compile" — the reason is the size, and the sentence says which.
 fn schema_too_large() -> String {
     format!(
-        "the shape's schema is larger than the {MAX_SCHEMA_BYTES} bytes this server reads, so it is \
-         not compiled and nothing can be asked of it until the shape is amended to a smaller schema"
+        "the shape's schema is larger than the {MAX_SCHEMA_BYTES} bytes this server reads, so it \
+         is not compiled and nothing can be asked of it until the shape is amended to a smaller \
+         schema"
     )
 }
 

@@ -11,7 +11,8 @@
 //! The connection count of the loopback listener a stored schema's `$ref` names guards against a
 //! regression; it is not the fetch witness, because a fetching compiler's blocking fetch panics
 //! inside this async runtime before it connects. The witnesses are the synchronous
-//! `shape_schema_no_fetch` tests in temper-substrate, whose constructor the loader compiles through.
+//! `shape_schema_no_fetch` tests in temper-substrate, whose constructor the loader compiles
+//! through.
 #![cfg(feature = "test-db")]
 
 use std::collections::BTreeSet;
@@ -331,8 +332,8 @@ async fn unreadable_and_absent_shapes_load_identically(pool: PgPool) {
 /// the same home and family — and not another live row in the same home. Two such rows are stored
 /// before the successor, each where a lookup blind to one column finds it first, in insertion
 /// order and in the live index's order alike: a sibling family of the same owner whose kind sorts
-/// before `measurement`, and the same kind under another owner, whose `kb_profiles` sorts before the
-/// family's `kb_teams`. Bites a successor lookup that drops the kind, or the owner, or both, and
+/// before `measurement`, and the same kind under another owner, whose `kb_profiles` sorts before
+/// the family's `kb_teams`. Bites a successor lookup that drops the kind, or the owner, or both, and
 /// one that is not made at all.
 #[sqlx::test(migrations = "../../migrations")]
 async fn a_folded_shape_loads_superseded_with_its_live_successor(pool: PgPool) {
@@ -586,8 +587,8 @@ async fn an_uncompilable_shape_reads_askable_empty_with_the_reason(pool: PgPool)
 /// `teaches.beyond_bound: schema_bytes`, the read's `askable` is empty and truncated at
 /// `schema_bytes` with that same refusal as `unaskable`, and `shape_schema::compile` — counted
 /// wherever it is called — never runs on it. Bites removing the measurement from
-/// `shape_loader::judge` (`if !within_schema_bound(schema) { return Ok(SchemaVerdict::TooLarge); }`):
-/// the schema compiles, the count moves, and it loads `Loaded`.
+/// `shape_loader::judge` (the `if !within_schema_bound(schema)` return of `TooLarge`): the schema
+/// compiles, the count moves, and it loads `Loaded`.
 #[sqlx::test(migrations = "../../migrations")]
 async fn a_schema_past_the_byte_bound_is_refused_at_load_and_read_and_never_compiled(pool: PgPool) {
     let w = seed_world(&pool, "loader-past-the-bound").await;

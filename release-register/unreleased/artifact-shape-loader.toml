@@ -1,4 +1,4 @@
-title    = "A shape's by-id read carries `askable`, the paths an artifact ask may name; declaring a shape refuses a schema larger than 256 KiB"
+title    = "A shape's by-id read carries `askable`; a shape schema over 256 KiB, or with a pattern past 1 MiB of regex, is refused"
 pr       = "self"
 classes  = ["additive", "behavioral"]
 surfaces = ["http", "mcp", "cli-stdout", "clients"]
@@ -25,20 +25,23 @@ sentence that names the bound and no compiler text; no shape row is written. Sch
 bound declare as before. Shapes already stored above the bound are unchanged for commit and
 reconcile.
 
-Every compile of a shape schema holds each `pattern` and `patternProperties` key to 1 MiB of
-compiled regex (the engine's default is 10 MiB). A schema with a pattern past it does not compile,
-at declare, commit and reconcile alike, and is treated as any uncompilable schema is: declare
-refuses it with the existing fixed sentence, an `enforcing` commit is refused, an `advisory` commit
-is stored with no verdict, and reconcile skips it. Patterns written for fields compile as before.
+Every compile of a shape schema holds the regex of each `pattern` and `patternProperties` key to
+1 MiB (the engine's default is 10 MiB). A schema with such a regex past it does not compile, at
+declare, commit and reconcile alike, and is treated as any uncompilable schema is: declare refuses
+it with the existing fixed sentence, an `enforcing` commit is refused, an `advisory` commit is
+stored with no verdict, and reconcile skips it. Patterns written for fields compile as before. The
+limit bounds those regexes, not a whole compile: the regexes `unevaluatedProperties` derives from a
+`patternProperties` map are built with the engine's defaults, and the total work of one compile is
+not yet bounded.
 
 Behind it, `temper-services` gains the shape loader, which turns each shape an ask names into one
 of loaded, not askable (absent or unreadable, one answer for both), superseded (with the version in
 force at the same home and family), too large, or uncompilable, in that order and only through the
 gated shape read; the compile runs off the async executor under a few process-wide permits, and a
-stored shape's verdict is remembered by id, so a shape read many times compiles about once. `temper-core` validates asks through an
-`AskSession` begun from the loaded shapes, so one request's asks share each shape's walk and one
-work budget, and an ask validated twice is answered the same way without spending again. No door
-accepts an ask yet, so no caller sees an ask refusal.
+stored shape's verdict is remembered by id, so a shape read many times compiles about once.
+`temper-core` validates asks through an `AskSession` begun from the loaded shapes, so one request's
+asks share each shape's walk and one work budget, and an ask validated twice is answered the same
+way without spending again. No door accepts an ask yet, so no caller sees an ask refusal.
 
 Who observes: shape authors declaring through the doors above, and readers of a shape by id.
 Release relevance: signal-only.
