@@ -12,6 +12,7 @@
 	import { invalidateAll } from '$app/navigation';
 	import { page } from '$app/stores';
 	import FacetChips from '$lib/components/FacetChips.svelte';
+	import RegionState from '$lib/components/RegionState.svelte';
 	import RuleHeading from '$lib/components/RuleHeading.svelte';
 	import VaultGrid from '$lib/components/VaultGrid.svelte';
 	import FilterBar from '$lib/components/vault/FilterBar.svelte';
@@ -90,20 +91,20 @@
 			offset={list.offset}
 		/>
 	{:else}
-		<div
-			role="alert"
-			class="flex flex-col items-start gap-2 rounded border border-amber-500/40 bg-amber-500/5 px-4 py-3"
-		>
-			<p class="text-sm text-amber-200">
+		<!-- The state is the shared failed region (its words, marker, alert role and paint); what
+			follows is only what this read adds — the reason, what it does not claim, and the way out. -->
+		<div class="flex flex-col items-start gap-2">
+			<RegionState state="failed" label="vault" />
+			<p class="text-sm text-tp-text">
 				{loadError ?? 'The vault could not be read.'}
 			</p>
-			<p class="text-xs text-zinc-400">
+			<p class="text-xs text-tp-text-muted">
 				Nothing was retrieved, so nothing here says whether a matching resource exists.
 				This is a failed read, not an empty result.
 			</p>
 			<button
 				type="button"
-				class="rounded border border-zinc-700 px-3 py-1 text-xs text-quiet-accent hover:text-quiet-fg hover:border-quiet-border"
+				class="rounded border border-tp-rule-strong px-3 py-1 text-xs text-tp-accent hover:text-tp-text hover:border-tp-accent-line"
 				onclick={() => invalidateAll()}
 			>
 				Try again

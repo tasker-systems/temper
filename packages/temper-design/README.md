@@ -214,6 +214,13 @@ fails a surface's build when a component it guards paints anything but a role.
   (`fill="var(--obsidian)"`, `style:color=…`), or an arbitrary utility (`bg-[var(--obsidian)]`).
 - **A role mixed down** (`color-mix(in srgb, var(--tp-accent) 15%, transparent)`): the opacity
   modifier spelled in CSS, and the same strength no theme chose.
+- **A custom property declared from a variable that is not a role**
+  (`--wx-color-font: var(--color-quiet-fg)`): a private name laundered through a property the
+  colour-declaration rule does not read by name. Fonts are held too: `var(--tp-font-ui)`, not
+  `var(--font-sans)`. A bridge stays legal: a name declared within the guarded paths whose every
+  declaration there resolves to roles (`--background: var(--tp-ground)`, then
+  `--color-background: var(--background)`) may be read. A name also declared outside the paths
+  is not seen there.
 
 A surface commits a config naming what it guards, relative to the config's own directory,
 and runs the guard against it:

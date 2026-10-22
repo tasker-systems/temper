@@ -53,21 +53,21 @@
 <style>
 	section {
 		padding: 18px 22px 24px;
-		border-top: 1px solid var(--color-quiet-rule);
+		border-top: 1px solid var(--tp-rule);
 	}
 	.label {
 		font-family: var(--font-mono);
 		font-size: 9px;
 		letter-spacing: var(--track-label);
 		text-transform: uppercase;
-		color: var(--color-quiet-dim);
+		color: var(--tp-text-subtle);
 		margin-bottom: 10px;
 	}
 	.shape {
 		padding: 6px 0;
 	}
 	.shape + .shape {
-		border-top: 1px solid var(--color-quiet-rule);
+		border-top: 1px solid var(--tp-rule);
 	}
 	.head {
 		display: flex;
@@ -83,16 +83,16 @@
 	.family {
 		font-family: var(--font-mono);
 		font-size: 11px;
-		color: color-mix(in srgb, var(--hue) 70%, white);
+		color: var(--tp-text);
 	}
 	.posture {
 		font-family: var(--font-mono);
 		font-size: 9px;
-		color: var(--color-quiet-dim);
+		color: var(--tp-text-subtle);
 		margin-left: auto;
 	}
 	.enforcing {
-		color: var(--decision-amber-lt);
+		color: var(--tp-notice);
 		text-transform: uppercase;
 		letter-spacing: var(--track-label);
 	}
@@ -103,17 +103,17 @@
 	.chev {
 		font-family: var(--font-mono);
 		font-size: 10px;
-		color: var(--color-quiet-dim);
+		color: var(--tp-text-subtle);
 	}
 	.schema {
 		margin: 6px 0 0;
 		padding: 8px 10px;
-		background: var(--color-quiet-card);
-		border: 1px solid color-mix(in srgb, var(--hue) 18%, transparent);
+		background: var(--tp-surface);
+		border: 1px solid var(--tp-rule);
 		font-family: var(--font-mono);
 		font-size: 10px;
 		line-height: 1.5;
-		color: var(--color-quiet-mid);
+		color: var(--tp-text-muted);
 		overflow-x: auto;
 		white-space: pre;
 	}

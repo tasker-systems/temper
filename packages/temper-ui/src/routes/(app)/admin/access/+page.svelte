@@ -108,7 +108,7 @@
 		grid-template-columns: 2.4rem 1fr;
 		gap: 1.2rem;
 		padding: 1.8rem 0;
-		border-bottom: 1px solid var(--color-quiet-rule);
+		border-bottom: 1px solid var(--tp-rule);
 	}
 	.queue-entry:last-child {
 		border-bottom: none;
@@ -116,7 +116,7 @@
 	.queue-num {
 		font-family: var(--font-mono);
 		font-size: 0.68rem;
-		color: var(--color-quiet-dim);
+		color: var(--tp-text-subtle);
 		letter-spacing: 0.05em;
 		font-feature-settings: 'tnum';
 		padding-top: 0.4rem;
@@ -127,7 +127,7 @@
 	.queue-name {
 		font-family: var(--font-serif);
 		font-size: 1.4rem;
-		color: var(--color-quiet-fg);
+		color: var(--tp-text);
 		margin-bottom: 0.4rem;
 		line-height: 1.2;
 	}
@@ -136,7 +136,7 @@
 		font-size: 0.6rem;
 		text-transform: uppercase;
 		letter-spacing: 0.18em;
-		color: var(--color-quiet-dim);
+		color: var(--tp-text-subtle);
 		display: flex;
 		gap: 0.5rem;
 		flex-wrap: wrap;
@@ -149,14 +149,14 @@
 		font-family: var(--font-serif);
 		font-size: 1rem;
 		font-style: italic;
-		color: var(--color-quiet-mid);
+		color: var(--tp-text-muted);
 		line-height: 1.55;
 		padding-left: 1rem;
-		border-left: 1px solid var(--color-quiet-rule);
+		border-left: 1px solid var(--tp-rule);
 		margin: 0 0 1.4rem 0;
 	}
 	.queue-message--silent {
-		color: var(--color-quiet-dim);
+		color: var(--tp-text-subtle);
 		font-size: 0.9rem;
 	}
 	.queue-actions {
@@ -176,18 +176,13 @@
 		font-size: 0.85rem;
 		background: transparent;
 		border: none;
-		border-bottom: 1px solid var(--color-quiet-rule);
-		color: var(--color-quiet-fg);
+		border-bottom: 1px solid var(--tp-rule);
+		color: var(--tp-text);
 		padding: 0.3rem 0.4rem;
 		width: 13rem;
-		transition: border-color 0.18s ease;
 	}
 	.queue-decline-input::placeholder {
-		color: var(--color-quiet-dim);
-	}
-	.queue-decline-input:focus {
-		outline: none;
-		border-bottom-color: var(--color-quiet-accent);
+		color: var(--tp-text-subtle);
 	}
 
 	@media (max-width: 38rem) {
