@@ -1,7 +1,7 @@
 //! `temper query` — thin CLI wrapper over actions::query (cloud-only).
 
 use crate::actions::{query as query_actions, runtime};
-use crate::error::{Result, TemperError};
+use crate::error::Result;
 use crate::format::OutputFormat;
 
 /// Run a composition.
@@ -9,11 +9,17 @@ use crate::format::OutputFormat;
 /// `plan_flag` is `--plan`'s raw value; `stdin_is_tty` is resolved by the caller so the body-source
 /// precedence stays testable without a terminal — see `main.rs`'s `Commands::Query` arm.
 ///
-/// **A refused plan exits non-zero with every refusal on stderr**, like every other caller error in
-/// this CLI. It is a caller fault — that is exactly what `ClientError::PlanRefused` establishes by
-/// not being a `Server` error — and inventing a fourth output shape for it would make a refusal the
-/// one error an agent has to special-case. The answer, when there is one, goes to stdout in the
-/// resolved format, which with a non-TTY stdout is JSON.
+/// **A refused plan exits non-zero**, like every other caller error in this CLI. It is a caller
+/// fault — that is exactly what `ClientError::PlanRefused` establishes by not being a `Server`
+/// error — and inventing a fourth output shape for it would make a refusal the one error an agent
+/// has to special-case. The answer, when there is one, goes to stdout in the resolved format, which
+/// with a non-TTY stdout is JSON.
+///
+/// The refusal travels as [`crate::error::TemperError::PlanRefused`]: every refusal in the message,
+/// and the list itself beside it. `main` prints the message on stderr at a terminal; under the JSON
+/// format it prints the one `ErrorPayload` on stdout, whose `details.refusals` carries each
+/// refusal's `reason` and `teaches` — the HTTP door's `error.details`. The prose has each refusal's
+/// `detail` and none of its `teaches`, which is why the list is carried and not only the text.
 pub fn run(
     plan_flag: Option<&str>,
     check: bool,
@@ -39,9 +45,7 @@ pub fn run(
             crate::output::plain(rendered);
             Ok(())
         }
-        Err(refusals) => Err(TemperError::Project(query_actions::render_refusals(
-            &refusals,
-        ))),
+        Err(refusals) => Err(query_actions::refused(refusals)),
     }
 }
 

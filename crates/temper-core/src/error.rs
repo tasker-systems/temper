@@ -207,6 +207,21 @@ pub enum TemperError {
     #[error("{0}")]
     DataArtifactRefusal(String),
 
+    /// A plan the server refused, as the CLI's `temper query` meets it: the refusal list kept
+    /// whole beside the text it prints, so the structured stdout error can carry each refusal's
+    /// `reason` and `teaches` and not only its `detail`.
+    ///
+    /// `message` is the refusals rendered as text, built once where the error is made. The error
+    /// displays it under the same `Project error: ` prefix as [`Self::Project`], and travels the
+    /// CLI's error payload under the same `project` code. There is no wire code of its own: the
+    /// HTTP door speaks [`PLAN_REFUSED_CODE`] through `ApiError::PlanRefused`, which this variant
+    /// converts to.
+    #[error("Project error: {message}")]
+    PlanRefused {
+        message: String,
+        refusals: Vec<crate::types::query::validate::PlanRefusal>,
+    },
+
     #[error("Forbidden")]
     Forbidden,
 
@@ -275,6 +290,7 @@ impl TemperError {
             Self::ContentIntegrity(_) => "content-integrity",
             Self::ResourceBusy => RESOURCE_BUSY_CODE,
             Self::DataArtifactRefusal(_) => DATA_ARTIFACT_REFUSAL_CODE,
+            Self::PlanRefused { .. } => "project",
             Self::Forbidden => "forbidden",
             Self::ForbiddenDetail(_) => FORBIDDEN_DETAIL_CODE,
             Self::Unauthorized(_) => "unauthorized",
