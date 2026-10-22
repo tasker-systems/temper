@@ -7,7 +7,10 @@
    guard (`bun run guard:colours`, scoped by colour-guard.json). */
 @import "@tasker-systems/temper-design/contract/tailwind-roles.css";
 @import "@tasker-systems/temper-design/quiet-instrument/theme.css";
-@import "@tasker-systems/temper-design/contract/base.css";
+/* The contract's base and recipes go in Tailwind's base layer, so a component's own utilities
+   override them: unlayered, its global `:focus-visible` ring beat every `outline-none`, and an
+   input with its own focus border showed two treatments (or, in the palette, a clipped one). */
+@import "@tasker-systems/temper-design/contract/base.css" layer(base);
 @import "@tasker-systems/temper-design/contract/region.css";
 @import "./recipes.css";
 
