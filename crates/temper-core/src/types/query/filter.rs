@@ -533,7 +533,7 @@ pub fn json_string_bytes(s: &str) -> usize {
     json_bytes(s) - 2
 }
 
-fn json_bytes<T: Serialize + ?Sized>(value: &T) -> usize {
+pub(crate) fn json_bytes<T: Serialize + ?Sized>(value: &T) -> usize {
     struct Count(usize);
     impl std::io::Write for Count {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
@@ -545,8 +545,8 @@ fn json_bytes<T: Serialize + ?Sized>(value: &T) -> usize {
         }
     }
     let mut count = Count(0);
-    // Writing to an infallible sink cannot fail for a string or a `Value`: every map key is a
-    // string.
+    // Writing to an infallible sink cannot fail for what this crate measures — a string, a `Value`,
+    // or an artifact-ask vocabulary built of them: every map key is a string.
     serde_json::to_writer(&mut count, value).expect("a string or Value always serializes");
     count.0
 }
@@ -559,6 +559,18 @@ impl PropertyOp {
             PropertyOp::HasKey => &[],
             PropertyOp::Contains { values } => values,
             PropertyOp::Compare { value, .. } => std::slice::from_ref(value),
+        }
+    }
+
+    /// The probes this operator makes per candidate, as `MAX_PER_CANDIDATE_PROBES` counts them: one
+    /// per `contains` value, and one for `has_key` and for `compare`.
+    ///
+    /// `max(1, …)` for `contains` rather than `values.len()`: an empty list still costs a lookup, and
+    /// counting it as zero would let a caller pad a predicate list for free against the other cap.
+    pub fn probes(&self) -> usize {
+        match self {
+            PropertyOp::Contains { values } => values.len().max(1),
+            PropertyOp::HasKey | PropertyOp::Compare { .. } => 1,
         }
     }
 }

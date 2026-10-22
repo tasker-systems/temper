@@ -16344,6 +16344,41 @@
           }
         }
       },
+      "AskOperator": {
+        "type": "string",
+        "description": "The name of a `PropertyOp` operator, for a vocabulary to\nlist. Not a second operator type: it carries no value, and binds nothing.",
+        "enum": [
+          "has_key",
+          "contains",
+          "compare"
+        ]
+      },
+      "AskablePath": {
+        "type": "object",
+        "description": "One askable path: its segments, what the schema declares there, and the operators feasible at\nit (spec §2.5).",
+        "required": [
+          "path",
+          "facts",
+          "operators"
+        ],
+        "properties": {
+          "facts": {
+            "$ref": "#/components/schemas/PathFacts"
+          },
+          "operators": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AskOperator"
+            }
+          },
+          "path": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "AssertRelationshipRequest": {
         "allOf": [
           {
@@ -17676,6 +17711,16 @@
         "enum": [
           "verbatim",
           "derived"
+        ]
+      },
+      "BoundKind": {
+        "type": "string",
+        "description": "Which walk bound was met. A truncated vocabulary and a refusal both name it.",
+        "enum": [
+          "depth",
+          "paths",
+          "schema_bytes",
+          "work"
         ]
       },
       "Bridge": {
@@ -21721,6 +21766,19 @@
           }
         }
       },
+      "JsonType": {
+        "type": "string",
+        "description": "A JSON type as JSON Schema's `type` keyword names it. `integer` is the integral subset of\n`number`, which is why it is its own member here and not in jsonb's `jsonb_typeof`.",
+        "enum": [
+          "null",
+          "boolean",
+          "integer",
+          "number",
+          "string",
+          "array",
+          "object"
+        ]
+      },
       "KindOwnerInput": {
         "oneOf": [
           {
@@ -22402,6 +22460,42 @@
           }
         }
       },
+      "PathFacts": {
+        "type": "object",
+        "description": "What the schema declares at one path. Each field is `None` when the schema leaves it\nunconstrained, so an absent field never reads as \"nothing is admitted\".",
+        "properties": {
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PathFacts",
+                "description": "What an element of an array at this path declares. `None`: elements are unconstrained.\nReported at most as many arrays deep as the walk's depth bound."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "types": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/JsonType"
+            },
+            "description": "The declared JSON types. `None`: no `type` constrains the path. An empty set: the branches\nthat apply here declare types with nothing in common, so no value is admissible.",
+            "uniqueItems": true
+          },
+          "values": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {},
+            "description": "The `enum` / `const` values. `None`: no value set constrains the path."
+          }
+        }
+      },
       "PendingInvitationCounts": {
         "type": "object",
         "description": "How many invitations are waiting on the caller — the count-shaped answer to\n`GET /api/invitations/mine/count`.\n\n**This exists so that asking \"how many?\" does not require being handed them.** The\nsibling `GET /api/invitations/mine` returns [`InviteeInvitation`] rows, each carrying a\nredemption `token` — a private capability. It is legitimately the caller's to see, but\n`temper warmup` runs from the `SessionStart` hook and needs only `.len()`, so every\nsession on every machine was moving credential material across the wire to produce an\ninteger. Reporting how many things await someone does not require transferring them.\n\n**`matching` is `Option` because absent and zero are different answers.** `None` means\nno team was asked about; `Some(0)` means one was and the caller holds no invitation to\nit. Collapsing them would let \"I did not ask\" wear the same shape as \"I asked and the\nanswer is no\" — and the difference is exactly what decides whether `temper warmup` may\ntell a reader that an invitation explains the context it could not read.",
@@ -22444,6 +22538,17 @@
               {
                 "$ref": "#/components/schemas/StageName",
                 "description": "The stage it attaches to, when it attaches to one.\n\n`None` for a refusal about the composition as a whole — a cycle, a dangling reference, a\nduplicate name."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "teaches": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RefusalTeaching",
+                "description": "What the refusal teaches, as data rather than prose — the shape's own vocabulary for an\nartifact ask refused against it (spec 2026-10-19-asking-artifacts-by-what-they-are §3.5).\n\nAdditive: absent when a refusal has nothing to teach, so a refusal from an older producer\nparses unchanged and an older client skips the field.\n\n**Boxed** so a refusal stays pointer-small: refusals travel by value through the query\npipeline (`Result<_, PlanRefusal>` in the compiler), and a teaching inline would make every\none of them pay its size. A `Box` serializes as what it holds, so the wire is unchanged."
               },
               {
                 "type": "null"
@@ -24159,10 +24264,144 @@
           },
           {
             "type": "string",
+            "description": "The ask names a shape that does not exist or that the asker cannot read. One reason and one\nfixed detail for both, so a refusal is never an existence oracle.",
+            "enum": [
+              "shape_not_askable"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "The ask names a folded shape version. It is never re-pointed at the successor: the\npredicates were written against a schema that no longer governs. `teaches` carries the\nversion now in force, when there is one.",
+            "enum": [
+              "shape_superseded"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "The shape's schema does not compile under the no-fetch compiler. The detail is a fixed\nsentence; the compiler's text is never echoed.",
+            "enum": [
+              "shape_schema_uncompilable"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "An artifact predicate's path has no segments, so it would address the whole document.",
+            "enum": [
+              "empty_artifact_path"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "An artifact predicate's path is not one the shape declares, or lies beyond a bound of the\nschema walk. `teaches` carries the askable paths, and the bound when one was met.",
+            "enum": [
+              "path_outside_shape"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "The operator is not feasible at the path — `compare` where the path declares no orderable\ntype, or with a bound of a type not declared there. `teaches` carries the path's facts and\nfeasible operators.",
+            "enum": [
+              "operator_outside_shape"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "A value lies outside what the shape declares at its path: not of a declared type, not an\nenum member, or not an admissible array element. `teaches` carries the declared values and\nsays that stored content is not closed by its shape, with the route to the rest.",
+            "enum": [
+              "value_outside_shape"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "An ask's `intent` names a term outside `current` / `member` / `pinned`. `teaches` names the\nset.",
+            "enum": [
+              "unknown_artifact_intent"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "An ask's `shape_states` names a term outside the three a live shape admits — including\n`never_declared`, which no artifact under a live shape can have. `teaches` names the set.",
+            "enum": [
+              "unknown_shape_state"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "An ask's scope cannot be one home: a stage anchored to a home that is not the shape's, or\ntwo asks in one filter whose shapes live in different homes. Either is empty by\nconstruction, since a resource has exactly one home.",
+            "enum": [
+              "ask_scope_conflict"
+            ]
+          },
+          {
+            "type": "string",
             "description": "A reason outside the declared vocabulary.\n\n`[corrected — 2026-08-09]` This said \"Never constructed by this crate — only by\ndeserializing a producer newer than this consumer.\" **That was false at the time**:\n`validate` constructed it for twelve topology and vocabulary refusals, kebab-case, while\nevery declared variant was snake_case — a client's vocabulary was two conventions at once.\nFound in review; recorded rather than repaired then, because promoting twelve strings to\nvariants is a wire change and nothing consumed them yet — `/api/query` did not exist, so\nthe change was free and the door was the moment it would stop being free.\n\n`[promoted — 2026-08-12]` That moment arrived first: the twelve are now the variants\nabove, and this crate no longer constructs `Other` for anything. What `Other` is FOR now is\nexactly what its original doc said — a reason from a producer newer than this consumer, one\nthis binary has never been taught to name. Deserializing it never fails; `is_known` answers\n`false`; a caller degrades gracefully instead of losing the whole response to a parse error."
           }
         ],
         "description": "Why an act refused. A typed variant so every door renders the same value; how a door\nTRANSPORTS it (HTTP status, MCP error code) stays a door concern.\n\nOPEN vocabulary, deliberately — design §6.1 settled openness for the `act` discriminator and\nfor `disposition` but never ruled on refusals, and v0 first shipped this closed by default.\nCorrected by decision `019fcd13-4e65-7213-ac6f-20c3c8ccfce1`: the growth this contract wants\nincludes new ways to decline, so a closed enum would make every future reason a breaking\nchange. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,\nmatched exhaustively."
+      },
+      "RefusalTeaching": {
+        "type": "object",
+        "description": "What a refusal teaches, as data an agent reads without parsing English (spec §3.5).\n\n**Open, by being a struct of optional fields** rather than a tagged enum: a later refusal that\nteaches something new adds a field older clients skip, where a new variant would fail their\nparse of the whole refusal list. Each refusal fills what is relevant to it:\n\n| reason | teaches |\n|---|---|\n| `path_outside_shape` | `vocabulary` (the askable paths), `beyond_bound` when a walk bound stopped it |\n| `operator_outside_shape` | `vocabulary` (each offending path's facts and feasible operators) |\n| `value_outside_shape` | `vocabulary` (each offending path's declared types and values), `non_closure` |\n| `unknown_artifact_intent`, `unknown_shape_state` | `terms` |\n| `shape_superseded` | `successor` |",
+        "properties": {
+          "beyond_bound": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BoundKind",
+                "description": "The walk bound an asked path lies beyond."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "elided": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TeachingElision",
+                "description": "Paths cut from `vocabulary` to keep the teaching bounded."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "non_closure": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "That stored content is not closed by its shape, and the route to values it does not\ndeclare (spec §3.4)."
+          },
+          "successor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ShapeSuccessor",
+                "description": "The version now in force, for a folded shape that has one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "terms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "A closed vocabulary of terms: the intents, or the askable shape states."
+          },
+          "vocabulary": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Vocabulary",
+                "description": "The shape's askable paths — the same structure as a shape's `askable` — narrowed to what the\nrefusal is about, and held to a bounded size."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
       },
       "RegionDisclosure": {
         "type": "object",
@@ -26352,6 +26591,23 @@
         "format": "uuid",
         "description": "A `kb_data_artifact_shapes.id` value — one declared JSON Schema governing a data-artifact\nfamily within a single home (spec: data-artifact shape registry, 2026-08-21)."
       },
+      "ShapeSuccessor": {
+        "type": "object",
+        "description": "The version in force after a fold: the live row at the same home and family.",
+        "required": [
+          "shape_id",
+          "shape_version"
+        ],
+        "properties": {
+          "shape_id": {
+            "$ref": "#/components/schemas/ShapeId"
+          },
+          "shape_version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
       "ShapeView": {
         "type": "object",
         "description": "One declared shape, as returned by the API and MCP surfaces.\n\nThis is the readback `RetrievedShape` projected onto a wire shape: `HomeAnchor` and `KindOwner`\nare rendered as their `(table, id)` scalar pairs (the same split `ArtifactView` uses for\n`kind_owner_table`/`kind_owner_id`) so a consumer that does not share the Rust types still gets a\nself-describing response.",
@@ -27244,6 +27500,23 @@
           }
         }
       },
+      "TeachingElision": {
+        "type": "object",
+        "description": "How much of a teaching was cut, and where the whole of it is read: the shape's by-id read —\n`temper data-artifact schema show`, `GET /api/shapes/{id}`, `get_data_artifact_shape`.",
+        "required": [
+          "omitted_paths",
+          "shape"
+        ],
+        "properties": {
+          "omitted_paths": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "shape": {
+            "$ref": "#/components/schemas/ShapeId"
+          }
+        }
+      },
       "TeamCreateRequest": {
         "type": "object",
         "description": "Request body for `POST /api/teams`.\n\n`parent` is an optional team ref (`+slug` or bare `slug`); when present the\nnew team is created as a child in `kb_teams_parents` and the caller must be\n`owner`/`maintainer` on the parent. `auto_join_role` is admin-gated.",
@@ -27770,6 +28043,28 @@
             "type": "string",
             "format": "uuid",
             "description": "The edge's own `target_id`, as stored."
+          }
+        }
+      },
+      "Vocabulary": {
+        "type": "object",
+        "description": "What a shape lets a caller ask: its askable paths, and every bound the list was cut at.\n\n`truncated` names each walk bound met, never a silent short list (spec §2.5): a recursive tree\nthrough `properties` is `depth`, a 2^N `$defs` fan-out is `paths`, an oversized schema is\n`schema_bytes` with no paths, and a walk that spent its budget is `work`. Ordered, and at most\none of each.",
+        "required": [
+          "paths"
+        ],
+        "properties": {
+          "paths": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AskablePath"
+            }
+          },
+          "truncated": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BoundKind"
+            },
+            "uniqueItems": true
           }
         }
       },

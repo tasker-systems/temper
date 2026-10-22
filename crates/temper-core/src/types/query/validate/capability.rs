@@ -55,7 +55,7 @@ use crate::types::query::composition::{
 use crate::types::query::disposition::RefusalReason;
 use crate::types::query::envelope::ActInvocation;
 use crate::types::query::filter::{
-    json_string_bytes, FilterField, PropertyOp, PropertyPredicate, MAX_FILTER_STRING_BYTES,
+    json_string_bytes, FilterField, PropertyPredicate, MAX_FILTER_STRING_BYTES,
 };
 use crate::types::query::id_set::IdKind;
 use crate::types::query::registry::declaration;
@@ -130,7 +130,7 @@ pub(super) fn validate_intention_budget(c: &Composition, errs: &mut Vec<PlanRefu
 /// **One consequence, stated rather than discovered:** a caller sending 32 facets who adds a single
 /// open-key predicate is now refused where before they were admitted. That is a widening of an
 /// existing refusal, and it is the direction that fails safe.
-const MAX_PER_CANDIDATE_PREDICATES: usize = 32;
+pub(crate) const MAX_PER_CANDIDATE_PREDICATES: usize = 32;
 
 /// The most containment PROBES one stage may ask per candidate — `Σ` over its predicates of how
 /// many values each carries.
@@ -139,7 +139,7 @@ const MAX_PER_CANDIDATE_PREDICATES: usize = 32;
 ///
 /// `[added — 2026-08-15, found in review]` [`MAX_PER_CANDIDATE_PREDICATES`] shipped describing
 /// itself as bounding *"the second factor of `|candidates| × |predicates|`"*, **and for
-/// [`PropertyOp::Contains`] that is the wrong factor.** The fragment runs
+/// [`PropertyOp::Contains`](crate::types::query::filter::PropertyOp::Contains) that is the wrong factor.** The fragment runs
 /// `EXISTS (SELECT 1 FROM jsonb_array_elements(q.vals) v WHERE rp.property_value @> v)` per
 /// candidate, and that inner `EXISTS` short-circuits only when a value MATCHES — so a list of
 /// values that all miss is scanned in full, every time. The real second factor is `Σ|values|`, and
@@ -158,23 +158,17 @@ const MAX_PER_CANDIDATE_PREDICATES: usize = 32;
 ///
 /// A `has_key` predicate counts as **one** probe: it is a row-existence test with no value list, so
 /// counting it as zero would let a caller pad the predicate list for free against the other cap.
-const MAX_PER_CANDIDATE_PROBES: usize = 256;
+pub(crate) const MAX_PER_CANDIDATE_PROBES: usize = 256;
 
 /// How many containment probes a predicate list costs per candidate row.
 ///
-/// `max(1, …)` rather than `values.len()`: `has_key` carries no list and still costs a lookup.
-/// `Compare` carries one bound, not a list, so it counts as one probe for the same reason — and a
-/// range composed from `gte` AND `lte` costs two predicates, not one probe with two bounds, which
-/// is what keeps the cap arithmetic honest against the composed form.
+/// Each operator's count is [`PropertyOp::probes`](crate::types::query::filter::PropertyOp::probes), which an artifact ask's cap counts too.
+/// `has_key` carries no list and still costs a lookup. `Compare` carries one bound, not a list, so
+/// it counts as one probe for the same reason — and a range composed from `gte` AND `lte` costs two
+/// predicates, not one probe with two bounds, which is what keeps the cap arithmetic honest against
+/// the composed form.
 fn probe_count(props: &[PropertyPredicate]) -> usize {
-    props
-        .iter()
-        .map(|p| match &p.op {
-            PropertyOp::Contains { values } => values.len().max(1),
-            PropertyOp::HasKey => 1,
-            PropertyOp::Compare { .. } => 1,
-        })
-        .sum()
+    props.iter().map(|p| p.op.probes()).sum()
 }
 
 /// The nouns one property-predicate container speaks its refusals in.
@@ -225,7 +219,7 @@ impl PredicateContainer {
 /// **The two caps bound different factors and both are needed** — see [`MAX_PER_CANDIDATE_PROBES`]
 /// for the measurement that established the second. The probe cap bounds `Σ|values|`; the predicate
 /// cap bounds the list length. Neither subsumes the other, and the probe cap shipped only because a
-/// reviewer noticed the predicate cap was the wrong factor for [`PropertyOp::Contains`].
+/// reviewer noticed the predicate cap was the wrong factor for [`PropertyOp::Contains`](crate::types::query::filter::PropertyOp::Contains).
 ///
 /// **`facets` is summed in only where it shares the candidate set.** The resource container passes
 /// its facet count because `ResourceFilter::facets` walks the same candidate ROWS; the edge

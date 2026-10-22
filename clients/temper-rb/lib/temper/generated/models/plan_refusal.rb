@@ -24,12 +24,16 @@ module Temper::Generated
     # The stage it attaches to, when it attaches to one.  `None` for a refusal about the composition as a whole — a cycle, a dangling reference, a duplicate name.
     attr_accessor :stage
 
+    # What the refusal teaches, as data rather than prose — the shape's own vocabulary for an artifact ask refused against it (spec 2026-10-19-asking-artifacts-by-what-they-are §3.5).  Additive: absent when a refusal has nothing to teach, so a refusal from an older producer parses unchanged and an older client skips the field.  **Boxed** so a refusal stays pointer-small: refusals travel by value through the query pipeline (`Result<_, PlanRefusal>` in the compiler), and a teaching inline would make every one of them pay its size. A `Box` serializes as what it holds, so the wire is unchanged.
+    attr_accessor :teaches
+
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
         :'detail' => :'detail',
         :'reason' => :'reason',
-        :'stage' => :'stage'
+        :'stage' => :'stage',
+        :'teaches' => :'teaches'
       }
     end
 
@@ -48,14 +52,16 @@ module Temper::Generated
       {
         :'detail' => :'String',
         :'reason' => :'RefusalReason',
-        :'stage' => :'String'
+        :'stage' => :'String',
+        :'teaches' => :'RefusalTeaching'
       }
     end
 
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
-        :'stage'
+        :'stage',
+        :'teaches'
       ])
     end
 
@@ -89,6 +95,10 @@ module Temper::Generated
 
       if attributes.key?(:'stage')
         self.stage = attributes[:'stage']
+      end
+
+      if attributes.key?(:'teaches')
+        self.teaches = attributes[:'teaches']
       end
     end
 
@@ -161,7 +171,8 @@ module Temper::Generated
       self.class == o.class &&
           detail == o.detail &&
           reason == o.reason &&
-          stage == o.stage
+          stage == o.stage &&
+          teaches == o.teaches
     end
 
     # @see the `==` method
@@ -173,7 +184,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [detail, reason, stage].hash
+      [detail, reason, stage, teaches].hash
     end
 
     # Builds the object from hash

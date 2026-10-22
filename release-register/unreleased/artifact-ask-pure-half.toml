@@ -1,0 +1,21 @@
+title    = "A plan refusal can carry a typed `teaches`, and ten artifact-ask refusal reasons are named on the wire"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["http", "clients"]
+status   = "signal-only"
+body = '''
+`PlanRefusal` gains an optional `teaches` (`RefusalTeaching`), skipped when absent, so a refusal
+from an older producer parses unchanged and an older client ignores the field. `RefusalReason`
+gains `shape_not_askable`, `shape_superseded`, `shape_schema_uncompilable`,
+`empty_artifact_path`, `path_outside_shape`, `operator_outside_shape`, `value_outside_shape`,
+`unknown_artifact_intent`, `unknown_shape_state` and `ask_scope_conflict`. The enum is open, so a
+client that predates them reads each as an unknown reason. Both appear in the `/api/query` 400
+error schema, so `openapi.json`, the three SDKs and the ts-rs types grow.
+
+Behind the shapes is the pure half of asking data artifacts by what they are, in `temper-core`:
+the `ArtifactAsk` type, the bounded schema walk, `validate_ask`, and a reference evaluator.
+Nothing raises the new reasons yet and no door accepts an ask, so no caller sees a difference.
+The composable arm and the batch read carry the doors, under their own entries.
+
+Release relevance: signal-only. It adds only optional fields and new reasons.
+'''

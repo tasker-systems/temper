@@ -293,6 +293,7 @@ mod tests {
                 stage: Some(StageName::parse("c").expect("legal stage name")),
                 reason: RefusalReason::EmbeddingUnavailable,
                 detail: "the server tried and could not".to_string(),
+                teaches: None,
             }],
         };
         let index = rows.index();

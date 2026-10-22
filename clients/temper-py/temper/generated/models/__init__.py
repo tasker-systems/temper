@@ -45,6 +45,8 @@ from temper.generated.models.append_block_payload import AppendBlockPayload
 from temper.generated.models.artifact_commit_request import ArtifactCommitRequest
 from temper.generated.models.artifact_commit_response import ArtifactCommitResponse
 from temper.generated.models.artifact_view import ArtifactView
+from temper.generated.models.ask_operator import AskOperator
+from temper.generated.models.askable_path import AskablePath
 from temper.generated.models.assert_relationship_request import AssertRelationshipRequest
 from temper.generated.models.atlas_edge import AtlasEdge
 from temper.generated.models.atlas_entry import AtlasEntry
@@ -96,6 +98,7 @@ from temper.generated.models.block_scrub_count import BlockScrubCount
 from temper.generated.models.block_successor import BlockSuccessor
 from temper.generated.models.blocks_response import BlocksResponse
 from temper.generated.models.body_storage import BodyStorage
+from temper.generated.models.bound_kind import BoundKind
 from temper.generated.models.bridge import Bridge
 from temper.generated.models.bulk_reassign_ack import BulkReassignAck
 from temper.generated.models.bulk_reassign_request import BulkReassignRequest
@@ -247,6 +250,7 @@ from temper.generated.models.issued_machine_credential import IssuedMachineCrede
 from temper.generated.models.join_request import JoinRequest
 from temper.generated.models.join_request_status import JoinRequestStatus
 from temper.generated.models.join_request_with_profile import JoinRequestWithProfile
+from temper.generated.models.json_type import JsonType
 from temper.generated.models.kind_owner_input import KindOwnerInput
 from temper.generated.models.kind_owner_input_one_of import KindOwnerInputOneOf
 from temper.generated.models.kind_owner_input_one_of1 import KindOwnerInputOneOf1
@@ -274,6 +278,7 @@ from temper.generated.models.orphan_node import OrphanNode
 from temper.generated.models.other_author_edge import OtherAuthorEdge
 from temper.generated.models.other_author_edge_property import OtherAuthorEdgeProperty
 from temper.generated.models.outcome_declaration import OutcomeDeclaration
+from temper.generated.models.path_facts import PathFacts
 from temper.generated.models.pending_invitation_counts import PendingInvitationCounts
 from temper.generated.models.plan_refusal import PlanRefusal
 from temper.generated.models.plan_refusal_details import PlanRefusalDetails
@@ -336,6 +341,7 @@ from temper.generated.models.reembed_request import ReembedRequest
 from temper.generated.models.reembed_summary import ReembedSummary
 from temper.generated.models.refusal import Refusal
 from temper.generated.models.refusal_reason import RefusalReason
+from temper.generated.models.refusal_teaching import RefusalTeaching
 from temper.generated.models.region_disclosure import RegionDisclosure
 from temper.generated.models.region_hit import RegionHit
 from temper.generated.models.relationship_ack import RelationshipAck
@@ -405,6 +411,7 @@ from temper.generated.models.set_tool_manifest_request import SetToolManifestReq
 from temper.generated.models.set_webhook_events_request import SetWebhookEventsRequest
 from temper.generated.models.shape_declare_request import ShapeDeclareRequest
 from temper.generated.models.shape_emptiness import ShapeEmptiness
+from temper.generated.models.shape_successor import ShapeSuccessor
 from temper.generated.models.shape_view import ShapeView
 from temper.generated.models.share_context_outcome import ShareContextOutcome
 from temper.generated.models.share_context_request import ShareContextRequest
@@ -436,6 +443,7 @@ from temper.generated.models.subscription_selector_one_of1 import SubscriptionSe
 from temper.generated.models.subscription_selector_one_of2 import SubscriptionSelectorOneOf2
 from temper.generated.models.system_access_details import SystemAccessDetails
 from temper.generated.models.system_settings import SystemSettings
+from temper.generated.models.teaching_elision import TeachingElision
 from temper.generated.models.team_create_request import TeamCreateRequest
 from temper.generated.models.team_detail import TeamDetail
 from temper.generated.models.team_invitation import TeamInvitation
@@ -455,6 +463,7 @@ from temper.generated.models.unshare_context_outcome import UnshareContextOutcom
 from temper.generated.models.update_settings_request import UpdateSettingsRequest
 from temper.generated.models.vault_config import VaultConfig
 from temper.generated.models.via_entry import ViaEntry
+from temper.generated.models.vocabulary import Vocabulary
 from temper.generated.models.wide_arm import WideArm
 from temper.generated.models.wide_hit import WideHit
 
