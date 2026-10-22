@@ -13809,8 +13809,8 @@
         "tags": [
           "Data Artifact Shapes"
         ],
-        "summary": "Get a single shape by ID, with `askable`: every path an artifact ask may name against it.",
-        "description": "Visibility-gated: returns 404 if the shape does not exist or its owning home\nanchor is not readable to the caller. Includes folded shapes (audit/history).\nThe listing routes leave `askable` absent.",
+        "summary": "Get a single shape by ID, with what an ask may name",
+        "description": "`askable` lists every path an artifact ask may name against the shape.\n\nVisibility-gated: returns 404 if the shape does not exist or its owning home\nanchor is not readable to the caller. Includes folded shapes (audit/history).\nThe listing routes leave `askable` absent.",
         "operationId": "get_shape",
         "parameters": [
           {

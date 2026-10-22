@@ -3173,8 +3173,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get a single shape by ID, with `askable`: every path an artifact ask may name against it.
-         * @description Visibility-gated: returns 404 if the shape does not exist or its owning home
+         * Get a single shape by ID, with what an ask may name
+         * @description `askable` lists every path an artifact ask may name against the shape.
+         *
+         *     Visibility-gated: returns 404 if the shape does not exist or its owning home
          *     anchor is not readable to the caller. Includes folded shapes (audit/history).
          *     The listing routes leave `askable` absent.
          */

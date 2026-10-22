@@ -684,9 +684,9 @@ class DataArtifactShapesApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ShapeView:
-        """Get a single shape by ID, with `askable`: every path an artifact ask may name against it.
+        """Get a single shape by ID, with what an ask may name
 
-        Visibility-gated: returns 404 if the shape does not exist or its owning home anchor is not readable to the caller. Includes folded shapes (audit/history). The listing routes leave `askable` absent.
+        `askable` lists every path an artifact ask may name against the shape.  Visibility-gated: returns 404 if the shape does not exist or its owning home anchor is not readable to the caller. Includes folded shapes (audit/history). The listing routes leave `askable` absent.
 
         :param shape_id: Shape ID (required)
         :type shape_id: UUID
@@ -757,9 +757,9 @@ class DataArtifactShapesApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ApiResponse[ShapeView]:
-        """Get a single shape by ID, with `askable`: every path an artifact ask may name against it.
+        """Get a single shape by ID, with what an ask may name
 
-        Visibility-gated: returns 404 if the shape does not exist or its owning home anchor is not readable to the caller. Includes folded shapes (audit/history). The listing routes leave `askable` absent.
+        `askable` lists every path an artifact ask may name against the shape.  Visibility-gated: returns 404 if the shape does not exist or its owning home anchor is not readable to the caller. Includes folded shapes (audit/history). The listing routes leave `askable` absent.
 
         :param shape_id: Shape ID (required)
         :type shape_id: UUID
@@ -830,9 +830,9 @@ class DataArtifactShapesApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> RESTResponseType:
-        """Get a single shape by ID, with `askable`: every path an artifact ask may name against it.
+        """Get a single shape by ID, with what an ask may name
 
-        Visibility-gated: returns 404 if the shape does not exist or its owning home anchor is not readable to the caller. Includes folded shapes (audit/history). The listing routes leave `askable` absent.
+        `askable` lists every path an artifact ask may name against the shape.  Visibility-gated: returns 404 if the shape does not exist or its owning home anchor is not readable to the caller. Includes folded shapes (audit/history). The listing routes leave `askable` absent.
 
         :param shape_id: Shape ID (required)
         :type shape_id: UUID

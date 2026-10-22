@@ -45,7 +45,9 @@ pub async fn list_shapes(
     Ok(Json(shapes))
 }
 
-/// Get a single shape by ID, with `askable`: every path an artifact ask may name against it.
+/// Get a single shape by ID, with what an ask may name
+///
+/// `askable` lists every path an artifact ask may name against the shape.
 ///
 /// Visibility-gated: returns 404 if the shape does not exist or its owning home
 /// anchor is not readable to the caller. Includes folded shapes (audit/history).
