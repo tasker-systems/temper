@@ -33,8 +33,9 @@
 //   cannot forge a refusal.
 //
 // • Media is withheld the same way: a `<video>` or `<audio>` — with its sources, tracks and
-//   poster — becomes a `md-withheld` span naming what it was and, on hover, its source. A reader
-//   is told what the body held; nothing disappears without a word.
+//   poster — becomes a `md-withheld` span naming what it was, carrying the author's fallback text
+//   as an image's note carries its alt, and naming its source on hover. A reader is told what the
+//   body held; nothing disappears without a word.
 //
 // • What is left is removed, because it carries nothing a reader would miss: `srcset` (an
 //   `<img>` or a `<picture>`'s `<source>` keeps its embedded `src`), the legacy `background`
@@ -100,7 +101,11 @@ function withheldMedia(
 	kind: keyof typeof WITHHELD_MEDIA,
 ): HTMLSpanElement {
 	const src = media.getAttribute('src') ?? media.querySelector('source')?.getAttribute('src');
-	return withheld(WITHHELD_MEDIA[kind], src, media.ownerDocument);
+	// The author's fallback, as an image's note carries its alt: a `<source>` or `<track>` holds no
+	// text, so what remains is the words written for a reader who cannot play it.
+	const fallback = media.textContent?.replace(/\s+/g, ' ').trim();
+	const words = fallback ? `${WITHHELD_MEDIA[kind]}: ${fallback}` : WITHHELD_MEDIA[kind];
+	return withheld(words, src, media.ownerDocument);
 }
 
 export function sanitizeMarkdownHtml(dirty: string): string {
