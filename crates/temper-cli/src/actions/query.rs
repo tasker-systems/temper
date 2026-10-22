@@ -175,7 +175,7 @@ mod tests {
             refusal(None, "the composition is cyclic"),
         ];
         let text = render_refusals(&refusals);
-        // Tied to the incumbent rendering (`Project`'s prefix and text), not to the variant itself.
+        // Tied to `Project`'s rendering (its prefix and text), not to the variant itself.
         assert_eq!(
             refused(refusals.clone()).to_string(),
             TemperError::Project(text.clone()).to_string(),

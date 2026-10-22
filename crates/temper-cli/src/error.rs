@@ -178,14 +178,11 @@ mod tests {
         let rendered = render_error_payload(&err, None);
         let raw: serde_json::Value = serde_json::from_str(&rendered).expect("valid JSON");
 
-        assert_eq!(
-            raw["code"], "project",
-            "the code a refused plan has always had"
-        );
+        assert_eq!(raw["code"], "project", "a refused plan's code is `project`");
         assert_eq!(
             raw["message"].as_str(),
             Some(err.to_string().as_str()),
-            "the message is the displayed text, unchanged"
+            "the message is the displayed text"
         );
         assert_eq!(
             raw["details"]["refusals"][0]["teaches"]["terms"],

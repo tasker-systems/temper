@@ -189,7 +189,7 @@ async fn a_refused_plan_prints_every_refusal_and_exits_non_zero(pool: sqlx::PgPo
 /// The payload's `message` has each refusal's `detail` and none of its `teaches`; `details.refusals`
 /// is the shape the HTTP door puts in `error.details`, which does. No route raises a refusal that
 /// teaches yet, so this witnesses the channel and the shape through the real binary — each refusal
-/// arrives with its stage and reason as fields, beside the unchanged `message` and `code` — and the
+/// arrives with its stage and reason as fields, beside `message` and `code` — and the
 /// unit tests witness that `teaches` rides it. Stdout is one JSON document; stderr is not read.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_refused_plans_payload_carries_its_refusals_as_details(pool: sqlx::PgPool) {

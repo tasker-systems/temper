@@ -427,11 +427,11 @@ impl From<ApiError> for temper_core::error::TemperError {
             ApiError::ForbiddenDetail(s) => TemperError::ForbiddenDetail(s),
             ApiError::Unauthorized(s) => TemperError::Unauthorized(s),
             ApiError::BadRequest(s) => TemperError::BadRequest(s),
-            // Degrades to the joined text rather than earning a `TemperError` arm of its own.
-            // This conversion is the server-side DbBackend → CLI-shaped-error path, which a route
-            // refusal never travels: `POST /api/query` renders `PlanRefused` straight to HTTP, and
-            // the CLI meets the refusal list as a `ClientError` parsed back off the wire. Adding an
-            // arm here would be a second, colder representation of the same list with no producer.
+            // Degrades to the joined text, not `TemperError::PlanRefused`. This conversion is the
+            // server-side DbBackend → CLI-shaped-error path, which a route refusal never travels:
+            // `POST /api/query` renders `PlanRefused` straight to HTTP, and the CLI builds its own
+            // `TemperError::PlanRefused` from the `ClientError` parsed back off the wire. Nothing
+            // reaches this arm with a list a caller would read.
             ApiError::PlanRefused { refusals } => TemperError::BadRequest(
                 refusals
                     .iter()
