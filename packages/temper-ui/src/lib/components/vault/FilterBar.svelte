@@ -126,7 +126,7 @@
 					id="filter-context"
 					disabled
 					title="The context list could not be read — reload to try again."
-					class="rounded border border-tp-notice bg-tp-notice-wash px-2.5 py-1 text-xs text-tp-notice
+					class="rounded border border-tp-notice bg-tp-notice-wash px-2.5 py-1 text-xs text-tp-text-subtle
 					       outline-none"
 				>
 					<option value="">contexts unavailable</option>

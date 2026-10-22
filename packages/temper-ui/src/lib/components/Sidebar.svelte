@@ -147,7 +147,7 @@
 			{#if navState.kind === 'unavailable'}
 				<div
 					class="mx-3 mt-4 rounded border border-tp-notice bg-tp-notice-wash px-2.5 py-1.5
-					       text-xs text-tp-notice"
+					       text-xs text-tp-text-subtle"
 					title="The context list could not be read — reload to try again."
 				>
 					contexts unavailable
@@ -174,7 +174,7 @@
 			</a>
 			{#if user}
 				<div class="flex items-center gap-2 px-3 py-2 text-xs text-tp-text-subtle">
-					<div class="w-5 h-5 rounded-full bg-tp-surface-raised flex-shrink-0"></div>
+					<div class="w-5 h-5 rounded-full bg-tp-text-faint flex-shrink-0"></div>
 					{user.display_name}
 				</div>
 			{/if}
