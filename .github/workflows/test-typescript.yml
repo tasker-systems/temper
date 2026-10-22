@@ -127,14 +127,19 @@ jobs:
       - name: Install the modules' dependencies
         run: npm ci
 
-      - name: Type-check the shared modules
-        run: npm run typecheck
+      - name: Type-check and lint the shared modules
+        run: |
+          npm run typecheck
+          npm run lint
 
+      # From an empty dist/: tsc never removes the output of a deleted module (git diff sees the
+      # deletion), and output that was never committed shows up as untracked.
       - name: Build and verify committed dist is current
         run: |
+          rm -rf dist
           npm run build
-          git diff --exit-code -- dist \
-            || { echo "::error::dist/ is stale — run 'npm ci && npm run build' in packages/temper-design and commit the result"; exit 1; }
+          git diff --exit-code --stat -- dist && [ -z "$(git ls-files --others -- dist)" ] \
+            || { git ls-files --others -- dist; echo "::error::dist/ is stale — run 'rm -rf dist && npm ci && npm run build' in packages/temper-design and commit the result"; exit 1; }
 
       # The sanitize battery is `rendering-agrees`: every surface renders through this one pass.
       - name: The shared modules' tests

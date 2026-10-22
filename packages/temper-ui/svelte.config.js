@@ -73,10 +73,15 @@ const config = {
 				// Stylesheets are same-origin only — fonts are self-hosted
 				// (@fontsource-variable, +layout.svelte), so no Google Fonts origin.
 				'style-src': ['self'],
-				// d3 + app.html inline style attributes — see the note above.
+				// d3 + app.html inline style attributes — see the note above. Admitting
+				// them here is why, for authored markdown, the sanitizer is the gate on
+				// style: `@tasker-systems/temper-design/sanitize` forbids the attribute.
 				'style-src-attr': ['unsafe-inline'],
 				// Self-hosted woff2 files, bundled into _app/immutable by Vite.
 				'font-src': ['self'],
+				// A rendered body never fetches: the shared sanitizer withholds a remote
+				// image as a stated refusal, so this refuses nothing a reader sees. It still
+				// admits 'self', which is why the sanitizer, not this, is the gate.
 				'img-src': ['self', 'data:'],
 				'connect-src': ['self'],
 				'form-action': ['self'],

@@ -31,7 +31,10 @@ function check(...args) {
 
 function assertRefused(run, specifier) {
 	assert.equal(run.status, 1, `expected a refusal, got ${run.status}:\n${run.stdout}${run.stderr}`);
-	assert.ok(run.stderr.includes(`  ${specifier} — `), `refusal does not name ${specifier}:\n${run.stderr}`);
+	assert.ok(
+		run.stderr.includes(`  ${specifier} — `),
+		`refusal does not name ${specifier}:\n${run.stderr}`,
+	);
 }
 
 test('a tree importing only shared dependencies passes', () => {
@@ -50,6 +53,9 @@ const PLANTED = [
 	['$app/environment', "import { browser } from '$app/environment';"],
 	['$env/dynamic/private', "import { env } from '$env/dynamic/private';"],
 	['$lib/server/bounded', "export { GaveUp } from '$lib/server/bounded';"],
+	['$lib', "import { thing } from '$lib';"],
+	['node:path', 'const path = await import(`node:path`);'],
+	['node', '/// <reference types="node" />'],
 	['node:fs', "const fs = await import('node:fs');"],
 	['fs', "const fs = require('fs');"],
 	['svelte', "import { mount } from 'svelte';"],
@@ -62,9 +68,27 @@ for (const [specifier, line] of PLANTED) {
 	});
 }
 
+test('a module of every script extension is read', () => {
+	for (const ext of ['mts', 'cts', 'tsx', 'cjs', 'jsx']) {
+		const src = tree();
+		writeFileSync(join(src, `planted.${ext}`), "const fs = require('fs');\n");
+		assertRefused(check('--src', src), 'fs');
+		rmSync(root, { recursive: true, force: true });
+	}
+	root = undefined;
+});
+
+test('a tree with no modules is refused, not passed', () => {
+	root = mkdtempSync(join(tmpdir(), 'no-runtime-'));
+	assert.equal(check('--src', root).status, 1);
+});
+
 test('a test file is not a published module, and is not read', () => {
 	const src = tree();
-	writeFileSync(join(src, 'clean.test.ts'), "import { describe } from 'vitest';\nimport 'node:fs';\n");
+	writeFileSync(
+		join(src, 'clean.test.ts'),
+		"import { describe } from 'vitest';\nimport 'node:fs';\n",
+	);
 	assert.equal(check('--src', src).status, 0);
 });
 

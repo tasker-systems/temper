@@ -23,8 +23,13 @@ export const FORBIDDEN = [
 	['node:', 'Node, which only the server has'],
 ];
 
-/** Refused exactly or as a subpath: the UI framework, which a pure module never needs. */
-const FRAMEWORK = 'svelte';
+/** Refused exactly or as a subpath, what each binds. */
+const EXACT = [
+	['svelte', 'the UI framework'],
+	['$lib', "one surface's own source"],
+	// `/// <reference types="node" />` names Node's types by the bare word.
+	['node', 'Node, which only the server has'],
+];
 
 const pkg = join(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -35,27 +40,38 @@ if (args.length && (at !== 0 || args.length !== 2)) {
 }
 const src = at === 0 ? args[1] : join(pkg, 'src');
 
-// Static imports, re-exports, dynamic imports and requires: every way a module names another.
-const SPECIFIER = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+|\brequire\s*\(\s*)(['"])([^'"]+)\1/g;
+// Static imports, re-exports, dynamic imports (template literals too), requires, and triple-slash
+// references: every way a module names another.
+const SPECIFIER =
+	/(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+|\brequire\s*\(\s*|<reference\s+(?:types|path)\s*=\s*)(['"`])([^'"`]+)\1/g;
 
 function why(specifier) {
 	for (const [prefix, binds] of FORBIDDEN) if (specifier.startsWith(prefix)) return binds;
-	if (specifier === FRAMEWORK || specifier.startsWith(`${FRAMEWORK}/`)) return 'the UI framework';
+	for (const [name, binds] of EXACT) {
+		if (specifier === name || specifier.startsWith(`${name}/`)) return binds;
+	}
 	if (builtinModules.includes(specifier.split('/')[0])) return 'Node, which only the server has';
 	return null;
 }
 
 const modules = readdirSync(src, { recursive: true })
 	.map(String)
-	.filter((file) => /\.(ts|js|mjs)$/.test(file) && !/\.test\.(ts|js|mjs)$/.test(file))
+	.filter((file) => /\.[cm]?[jt]sx?$/.test(file) && !/\.test\.[cm]?[jt]sx?$/.test(file))
 	.sort();
+
+// A scan of nothing is not a pass: a wrong path, or an emptied tree, would otherwise read clean.
+if (modules.length === 0) {
+	console.error(`no modules to check under ${src}`);
+	process.exit(1);
+}
 
 const refusals = [];
 for (const file of modules) {
 	const text = readFileSync(join(src, file), 'utf8');
 	for (const [, , specifier] of text.matchAll(SPECIFIER)) {
 		const binds = why(specifier);
-		if (binds) refusals.push(`  ${specifier} — in ${relative(src, join(src, file))}: binds ${binds}`);
+		if (binds)
+			refusals.push(`  ${specifier} — in ${relative(src, join(src, file))}: binds ${binds}`);
 	}
 }
 

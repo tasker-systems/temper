@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
 import { prepareMarkdown } from './markdown.js';
-import { sanitizeMarkdownHtml, WITHHELD_IMAGE } from './sanitize.js';
+import { sanitizeMarkdownHtml, WITHHELD_IMAGE, WITHHELD_MEDIA } from './sanitize.js';
 
 /**
  * The payload battery for `rendering-agrees`: every surface renders a body through this one pass,
@@ -76,6 +76,23 @@ describe('sanitizeMarkdownHtml', () => {
 		expect(container.innerHTML).not.toContain('onerror');
 	});
 
+	it('withholds media as a declared refusal, with its sources, tracks and poster', () => {
+		const container = render(
+			'Before. <video poster="/p.png" src="/v.mp4"><source src="/s.mp4"><track src="/t.vtt">fallback</video> <audio><source src="/a.mp3"></audio> After.',
+		);
+		expect(container.querySelector('video, audio, source, track')).toBeNull();
+		const withheld = [...container.querySelectorAll('.md-withheld')];
+		expect(withheld.map((s) => s.textContent)).toEqual([
+			WITHHELD_MEDIA.video,
+			WITHHELD_MEDIA.audio,
+		]);
+		expect(withheld.map((s) => s.getAttribute('title'))).toEqual(['/v.mp4', '/a.mp3']);
+		expect(container.innerHTML).not.toContain('/p.png');
+		expect(container.innerHTML).not.toContain('/t.vtt');
+		expect(container.textContent).toContain('Before.');
+		expect(container.textContent).toContain('After.');
+	});
+
 	it('does not let authored content forge a withheld-image refusal', () => {
 		const container = render('<span class="md-withheld">remote image withheld</span>');
 		expect(container.textContent).toContain('remote image withheld');
@@ -99,24 +116,79 @@ describe('sanitizeMarkdownHtml', () => {
 		expect(container.innerHTML).not.toContain('data:text/html');
 	});
 
-	it('strips DOM-clobbering name attributes from form controls', () => {
-		const container = render('<form><input name="attributes"><input name="tagName"></form>');
-		expect(container.querySelector('form')).not.toBeNull();
+	it('strips DOM-clobbering name attributes from the controls it keeps', () => {
+		const container = render(
+			'<input type="checkbox" name="attributes" disabled><input type="checkbox" name="tagName" disabled>',
+		);
+		expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(2);
 		expect(container.innerHTML).not.toContain('name="attributes"');
 		expect(container.innerHTML).not.toContain('name="tagName"');
 	});
 
-	it('strips template contents and removes iframe and base wholesale', () => {
+	it('keeps the checkboxes a task list renders', () => {
+		const container = render('- [x] done\n- [ ] not yet');
+		const boxes = [...container.querySelectorAll('input[type="checkbox"]')];
+		expect(boxes).toHaveLength(2);
+		expect(boxes[0].hasAttribute('checked')).toBe(true);
+		expect(container.textContent).toContain('not yet');
+	});
+
+	it('removes template, iframe and base wholesale, contents and all', () => {
 		const container = render(
-			'Kept.<template><script>alert(1)</script></template><iframe srcdoc="<script>alert(1)</script>"></iframe><base href="https://evil.example/">',
+			'Kept.<template><script>alert(1)</script><img src="/t.png"></template><iframe srcdoc="<script>alert(1)</script>"></iframe><base href="https://evil.example/">',
 		);
-		// DOMPurify keeps an inert empty <template> shell but strips everything inside it;
-		// iframe and base are dropped entirely.
 		expect(container.textContent).toContain('Kept.');
+		expect(container.innerHTML).not.toContain('<template');
+		expect(container.innerHTML).not.toContain('t.png');
 		expect(container.innerHTML).not.toContain('<script');
 		expect(container.innerHTML).not.toContain('alert');
 		expect(container.innerHTML).not.toContain('<iframe');
 		expect(container.innerHTML).not.toContain('<base');
 		expect(container.innerHTML).not.toContain('evil.example');
+	});
+});
+
+/**
+ * Nothing in a rendered body fetches. A CSP refuses a cross-origin fetch but admits a same-origin
+ * one, so every channel here is planted with a same-origin path: the sanitizer must be the gate
+ * on its own. Each case keeps a retention face — the text around the channel survives.
+ */
+describe('sanitizeMarkdownHtml: no fetch channel survives', () => {
+	const CHANNELS: [string, string][] = [
+		[
+			'srcset on an embedded image',
+			'<img src="data:image/png;base64,iVBORw0KGgo=" srcset="/fetch 1x">',
+		],
+		[
+			'picture and source',
+			'<picture><source srcset="/fetch"><img src="data:image/png;base64,iVBORw0KGgo="></picture>',
+		],
+		['an image input', '<input type="image" src="/fetch">'],
+		['SVG image (href)', '<svg><image href="/fetch"></image></svg>'],
+		['SVG image (xlink:href)', '<svg><image xlink:href="/fetch"></image></svg>'],
+		['SVG feImage', '<svg><filter><feImage href="/fetch"></feImage></filter></svg>'],
+		[
+			'a table background',
+			'<table background="/fetch"><tr><td background="/fetch">cell</td></tr></table>',
+		],
+	];
+
+	for (const [channel, html] of CHANNELS) {
+		it(`removes ${channel}`, () => {
+			const container = render(`Before. ${html} After.`);
+			expect(container.textContent).toContain('Before.');
+			expect(container.textContent).toContain('After.');
+			expect(container.innerHTML).not.toContain('/fetch');
+		});
+	}
+
+	it('removes what would submit, keeping the words', () => {
+		const container = render(
+			'<form action="/api/delete" method="post"><input value="1"><button formaction="/api/delete">Click to continue</button></form>',
+		);
+		expect(container.textContent).toContain('Click to continue');
+		for (const gone of ['<form', '<button', '<input', 'action=', '/api/delete']) {
+			expect(container.innerHTML).not.toContain(gone);
+		}
 	});
 });

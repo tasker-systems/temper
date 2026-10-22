@@ -54,7 +54,8 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "lint": "biome check"
   },
   "dependencies": {
     "dompurify": "^3.4.17",
@@ -63,6 +64,7 @@
     "marked-highlight": "^2.2.4"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.15",
     "jsdom": "^30",
     "typescript": "^6.0.3",
     "vitest": "^5.0.3"
