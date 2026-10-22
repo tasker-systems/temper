@@ -427,11 +427,11 @@ impl From<ApiError> for temper_core::error::TemperError {
             ApiError::ForbiddenDetail(s) => TemperError::ForbiddenDetail(s),
             ApiError::Unauthorized(s) => TemperError::Unauthorized(s),
             ApiError::BadRequest(s) => TemperError::BadRequest(s),
-            // Degrades to the joined text rather than earning a `TemperError` arm of its own.
-            // This conversion is the server-side DbBackend → CLI-shaped-error path, which a route
-            // refusal never travels: `POST /api/query` renders `PlanRefused` straight to HTTP, and
-            // the CLI meets the refusal list as a `ClientError` parsed back off the wire. Adding an
-            // arm here would be a second, colder representation of the same list with no producer.
+            // Degrades to the joined text, not `TemperError::PlanRefused`. This conversion is the
+            // server-side DbBackend → CLI-shaped-error path, which a route refusal never travels:
+            // `POST /api/query` renders `PlanRefused` straight to HTTP, and the CLI builds its own
+            // `TemperError::PlanRefused` from the `ClientError` parsed back off the wire. Nothing
+            // reaches this arm with a list a caller would read.
             ApiError::PlanRefused { refusals } => TemperError::BadRequest(
                 refusals
                     .iter()
@@ -487,6 +487,7 @@ impl From<temper_core::error::TemperError> for ApiError {
             TemperError::IngestEnded(s) => ApiError::IngestEnded(s),
             TemperError::ContentIntegrity(s) => ApiError::ContentIntegrity(s),
             TemperError::DataArtifactRefusal(s) => ApiError::DataArtifactRefusal(s),
+            TemperError::PlanRefused { refusals, .. } => ApiError::PlanRefused { refusals },
             TemperError::ResourceBusy => ApiError::ResourceBusy,
             TemperError::Api(s) => ApiError::Internal(s),
             TemperError::SystemAccessRequired(details) => {
@@ -610,6 +611,35 @@ mod tests {
             .map(|r| r["detail"].as_str().expect("detail is a string"))
             .collect();
         assert_eq!(details, ["first", "second", "third"]);
+    }
+
+    /// The core variant a CLI-shaped caller holds converts to the HTTP refusal, not to a generic
+    /// `BadRequest`: 400, its own code, and the whole list (reasons and `teaches`) in
+    /// `error.details`. FAILS IF the `From<TemperError>` arm maps to `BadRequest(message)` — the 400
+    /// survives and `details.refusals` does not.
+    #[tokio::test]
+    async fn the_core_refused_plan_converts_to_the_http_refusal_with_its_list() {
+        use temper_core::types::artifact_ask::RefusalTeaching;
+
+        let mut taught = refusal("first");
+        taught.teaches = Some(Box::new(RefusalTeaching {
+            terms: vec!["current".to_string()],
+            ..RefusalTeaching::default()
+        }));
+        let refusals = vec![taught, refusal("second")];
+
+        let (status, body) = rendered(ApiError::from(TemperError::PlanRefused {
+            message: "the plan will not run".to_string(),
+            refusals: refusals.clone(),
+        }))
+        .await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"]["code"], temper_core::error::PLAN_REFUSED_CODE);
+        let carried: Vec<PlanRefusal> =
+            serde_json::from_value(body["error"]["details"]["refusals"].clone())
+                .expect("details.refusals is the refusal list");
+        assert_eq!(carried, refusals);
     }
 
     /// The regression boundary from the plan's *Declared risk*: `ErrorDetail` is on every route in

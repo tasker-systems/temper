@@ -41,6 +41,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer};
 
 use temper_client::error::ClientError;
+use temper_core::types::error_details::PlanRefusalDetails;
 use temper_core::types::query::Composition;
 
 use crate::service::{AcrossAuth, TemperMcpService};
@@ -153,6 +154,13 @@ pub async fn run_query(
 /// trip, the same care `contexts.rs::map_api_error` gives `BadRequest`, because `PlanRefused` IS
 /// a `BadRequest` variant at the HTTP layer. Everything else stays opaque, matching the
 /// established pattern.
+///
+/// **A refusal reaches the agent twice, for two readers.** The message is the prose line per
+/// refusal, which a reader that only shows `message` still gets. The error's `data` slot carries
+/// the same list as [`PlanRefusalDetails`] — the type `error.details` carries on the HTTP door —
+/// so `reason` and `teaches` arrive as fields an agent reads without parsing English. Without the
+/// `data`, a refusal's `teaches` would survive the API and the client and be dropped here, at the
+/// last hop.
 fn map_query_error(context: &str, err: ClientError) -> rmcp::ErrorData {
     match err {
         ClientError::PlanRefused { refusals } => {
@@ -179,7 +187,14 @@ fn map_query_error(context: &str, err: ClientError) -> rmcp::ErrorData {
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            rmcp::ErrorData::invalid_params(format!("{context}: plan refused — {details}"), None)
+            // Typed, not `json!`: the same struct the HTTP door serializes into `error.details`,
+            // so the two doors cannot disagree about the shape of a refusal list.
+            let data = serde_json::to_value(PlanRefusalDetails { refusals })
+                .inspect_err(|error| {
+                    tracing::error!(context, %error, "plan refusals did not serialize");
+                })
+                .ok();
+            rmcp::ErrorData::invalid_params(format!("{context}: plan refused — {details}"), data)
         }
         // The API could not read the plan this door relayed unread. A caller error, in the API's
         // own words (bounded there), so the agent can repair it.
@@ -234,7 +249,11 @@ mod tests {
             err.message
         );
     }
+    use std::collections::BTreeSet;
     use temper_client::error::ClientError;
+    use temper_core::types::artifact_ask::{
+        AskOperator, AskablePath, BoundKind, JsonType, PathFacts, RefusalTeaching, Vocabulary,
+    };
     use temper_core::types::query::PlanRefusal;
     use temper_core::types::query::RefusalReason;
     use temper_core::types::query::StageName;
@@ -278,6 +297,94 @@ mod tests {
             msg.contains("does not accept an edge filter"),
             "carries both refusals, not just the first: {msg}"
         );
+    }
+
+    /// A refusal that teaches, built by hand: no door raises one on this route yet, so the
+    /// carrying is witnessed with the refusal a door will raise (`path_outside_shape`).
+    fn a_refusal_that_teaches() -> PlanRefusal {
+        let facts = PathFacts {
+            types: Some(BTreeSet::from([JsonType::String])),
+            values: Some(vec![serde_json::json!("open"), serde_json::json!("closed")]),
+            items: None,
+        };
+        PlanRefusal {
+            stage: Some(StageName::parse("artifacts").unwrap()),
+            reason: RefusalReason::PathOutsideShape,
+            detail: "the shape does not declare that path".to_string(),
+            teaches: Some(Box::new(RefusalTeaching {
+                vocabulary: Some(Vocabulary {
+                    paths: vec![AskablePath {
+                        path: vec!["status".to_string()],
+                        facts,
+                        operators: vec![AskOperator::HasKey, AskOperator::Contains],
+                    }],
+                    truncated: BTreeSet::from([BoundKind::Paths]),
+                }),
+                non_closure: Some("stored content is not closed by its shape".to_string()),
+                ..RefusalTeaching::default()
+            })),
+        }
+    }
+
+    /// **The refusal list rides the error's `data` slot with `teaches` intact.** An agent reads
+    /// the vocabulary as fields; if the slot is `None`, or carries the list without `teaches`,
+    /// the read comes back empty. FAILS IF `data` reverts to `None`, or the typed list drops
+    /// `teaches` (`PlanRefusal.teaches` loses its serialization).
+    #[test]
+    fn plan_refused_carries_teaches_in_the_data_slot() {
+        let taught = a_refusal_that_teaches();
+        let plain = PlanRefusal {
+            stage: None,
+            reason: RefusalReason::NoReturns,
+            detail: "outcome.returns is empty".to_string(),
+            teaches: None,
+        };
+        let err = map_query_error(
+            "run_query",
+            ClientError::PlanRefused {
+                refusals: vec![taught.clone(), plain.clone()],
+            },
+        );
+
+        let data = err.data.expect("a refusal carries its list as data");
+        assert!(
+            data["refusals"][0]["teaches"]["vocabulary"].is_object(),
+            "teaches is a field of the first refusal: {data}"
+        );
+        assert!(
+            data["refusals"][1].get("teaches").is_none(),
+            "a refusal with nothing to teach carries no teaches: {data}"
+        );
+        let back: PlanRefusalDetails =
+            serde_json::from_value(data).expect("data is the typed list");
+        assert_eq!(back.refusals, vec![taught, plain]);
+    }
+
+    /// The prose message is unchanged by the data: a reader that shows only `message` still gets
+    /// every refusal's stage and detail.
+    #[test]
+    fn the_message_is_the_same_with_or_without_teaches() {
+        let mut bare = a_refusal_that_teaches();
+        let taught_msg = map_query_error(
+            "run_query",
+            ClientError::PlanRefused {
+                refusals: vec![bare.clone()],
+            },
+        )
+        .message;
+        bare.teaches = None;
+        let bare_msg = map_query_error(
+            "run_query",
+            ClientError::PlanRefused {
+                refusals: vec![bare],
+            },
+        )
+        .message;
+        assert_eq!(
+            taught_msg, bare_msg,
+            "teaches rides data, never the message"
+        );
+        assert!(taught_msg.contains("stage 'artifacts'"), "{taught_msg}");
     }
 
     /// A composition-level refusal (no stage) still renders, without an empty "stage ''" prefix.
