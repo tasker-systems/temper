@@ -333,8 +333,8 @@ async fn unreadable_and_absent_shapes_load_identically(pool: PgPool) {
 /// before the successor, each where a lookup blind to one column finds it first, in insertion
 /// order and in the live index's order alike: a sibling family of the same owner whose kind sorts
 /// before `measurement`, and the same kind under another owner, whose `kb_profiles` sorts before
-/// the family's `kb_teams`. Bites a successor lookup that drops the kind, or the owner, or both, and
-/// one that is not made at all.
+/// the family's `kb_teams`. Bites a successor lookup that drops the kind, or the owner, or both,
+/// and one that is not made at all.
 #[sqlx::test(migrations = "../../migrations")]
 async fn a_folded_shape_loads_superseded_with_its_live_successor(pool: PgPool) {
     let w = seed_world(&pool, "loader-folded").await;

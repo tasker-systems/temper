@@ -209,7 +209,8 @@ fn remember(id: ShapeId, verdict: SchemaVerdict) {
 /// loader judge a schema alike.
 ///
 /// Takes the row the gated read returned, whole, so the id the verdict is remembered by and the
-/// schema it was judged on are one value's, and only a gated read can supply them.
+/// schema it was judged on are one value's. `RetrievedShape` is built only by `readback`'s gated
+/// reads, so its caller holds a row the gate admitted.
 ///
 /// # Errors
 /// Only if the permits are closed or a blocking task cannot be joined.

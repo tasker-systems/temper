@@ -1,4 +1,4 @@
-title    = "A shape's by-id read carries `askable`; a shape schema over 256 KiB, or with a pattern past 1 MiB of regex, is refused"
+title    = "A shape's by-id read carries `askable`; a schema over 256 KiB, or a pattern over 1 MiB, is refused"
 pr       = "self"
 classes  = ["additive", "behavioral"]
 surfaces = ["http", "mcp", "cli-stdout", "clients"]
