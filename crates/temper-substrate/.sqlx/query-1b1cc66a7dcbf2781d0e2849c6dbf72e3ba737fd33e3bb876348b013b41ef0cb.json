@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT v.shape_id, v.shape_version, v.satisfied, v.content_hash = a.content_hash AS \"hash_matches!\" FROM kb_data_artifact_verdicts v JOIN kb_data_artifacts a ON a.id = v.artifact_id WHERE v.artifact_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "shape_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "shape_version",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "satisfied",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "hash_matches!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "1b1cc66a7dcbf2781d0e2849c6dbf72e3ba737fd33e3bb876348b013b41ef0cb"
+}

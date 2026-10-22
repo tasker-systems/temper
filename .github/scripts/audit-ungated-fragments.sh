@@ -182,11 +182,35 @@ PREFIX='__temper_ungated_'
 #     position (after `p_visible_ids`), not the first. The other ungated cores take only
 #     `p_visible_ids`; survey takes `p_visible_ids` THEN `p_principal`. A future widening that
 #     moves `p_principal` or adds a second id set would be the thing to review here.
+#
+# REVIEWED 2026-10-21 (`__temper_ungated_governed_artifacts` and
+# `__temper_ungated_governed_artifact_states`, migration 20261103000000, asking data artifacts by
+# what they are). The function-NAME set grows by two, the SQL-file set by one, and the relation
+# watch by the three migrations that create the tables the two bodies read. The Rust half does not
+# move: nothing in Rust names either function yet.
+#
+#   VERDICT: both take `p_visible_ids` first and join it with `unnest`, as every core above does, so
+#     a NULL set admits nothing. They have no caller in this migration. Each arm that composes them
+#     owes this file the answer to who computes the set it hands over.
+#   EMITTER: none yet. A compiler arm that emits either must do so through `emit_ungated_core_call`,
+#     which writes `VISIBLE_IDS` itself.
+#   RESIDUE: unchanged and accepted.
+#
+#   THEY ARE RELATIONS, NOT CORES, and the difference is the thing to check. Neither selects
+#   resources: each returns the ARTIFACTS a shape's lineage governs (its home and family) on the
+#   resources the set admits. Neither takes a principal, so neither re-checks that the shape's home
+#   is readable. That conjunct belongs to the composing arm (spec 2026-10-19-asking-artifacts-by-
+#   what-they-are §6.1): a principal can read a resource by direct grant without reading its home,
+#   and an arm that composes these without the home check answers under a shape that principal
+#   cannot read. The second function composes the first, so the two cannot disagree on the
+#   population; both are held to their plpgsql incumbents by `artifact_ask_parity.rs`.
 read -r -d '' SQL_BASELINE <<'EOF' || true
 __temper_ungated_find_exact
 __temper_ungated_find_resources_with
 __temper_ungated_find_wide
 __temper_ungated_follow_from
+__temper_ungated_governed_artifact_states
+__temper_ungated_governed_artifacts
 __temper_ungated_survey
 EOF
 
@@ -517,6 +541,9 @@ sql_relations_current() {
 #   the derived file scan, which cannot tell a comment from a definition and is not being asked to.
 #   Recorded rather than dodged: rewording the migration until a text-derived guard fell silent
 #   would have traded a checkable citation for a quiet tick.
+# Reviewed 2026-10-21, migration 20261103000000: it DEFINES two ungated functions, the governance
+#   relations. The review is the SQL_BASELINE entry of the same date; this list moves for the same
+#   reason.
 read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260808000030_composable_find_family.sql
 20260810000010_anchor_readability_both_kinds.sql
@@ -533,6 +560,7 @@ read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260820000010_survey_honors_funnel_width.sql
 20260825000020_staleness_member_gate.sql
 20260828000050_follow_from_depth_clamp.sql
+20261103000000_artifact_ask_relations.sql
 EOF
 
 # ── THE RELATION WATCH — derived from what the cores READ, not what names them ──
@@ -559,6 +587,12 @@ EOF
 # put most migrations in scope (the task's own warning); the second is not this guard's subject.
 # `resources_visible_to` is the gate itself, not a relation the cores read for data — it is the one
 # thing the cores are handed rather than consulting.
+#
+# Reviewed 2026-10-21, migration 20261103000000: the governance relations read
+# `kb_data_artifact_shapes`, `kb_data_artifacts` and `kb_data_artifact_verdicts`, so the three
+# migrations that create those tables join the watch. They predate the relations and redefine
+# nothing an ungated body reads; they are listed because the derivation now reaches them, and a
+# later migration that ALTERs one of those tables lands here too.
 read -r -d '' SQL_RELATIONS_BASELINE <<'EOF' || true
 20260624000001_canonical_schema.sql
 20260626000001_fts_search_index.sql
@@ -571,6 +605,9 @@ read -r -d '' SQL_RELATIONS_BASELINE <<'EOF' || true
 20260815000030_property_elements_and_tag_normalization.sql
 20260815000040_resource_property_predicates.sql
 20260815000050_owner_agnostic_property_view.sql
+20260820000020_data_artifacts.sql
+20260822000010_data_artifact_shapes.sql
+20260822000020_data_artifact_verdicts.sql
 EOF
 
 # The Rust half: production files naming an ungated fragment, per file. Comment lines are excluded
