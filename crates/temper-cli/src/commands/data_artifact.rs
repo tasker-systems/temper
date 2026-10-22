@@ -720,8 +720,7 @@ mod tests {
     fn the_toon_rendering_is_the_envelope() {
         for next in [Some(cursor()), None] {
             let rendered = render_page(&page(next), OutputFormat::Toon).expect("renders");
-            let decoded: serde_json::Value =
-                toon_format::decode_default(&rendered).expect("the rendering decodes");
+            let decoded = crate::format::decode_toon(&rendered);
             let envelope = decoded
                 .as_object()
                 .unwrap_or_else(|| panic!("the envelope, not a bare array: {rendered}"));

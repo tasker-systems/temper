@@ -59,7 +59,7 @@ pub struct ListArtifactsInput {
     #[serde(default)]
     pub include_folded: Option<bool>,
     /// Answer one bounded page of at most this many artifacts (1 to 200), as
-    /// `{"artifacts": [...], "next": {...} | null}`. Prefer passing `limit`. Omit it to receive
+    /// `{"artifacts": [...], "next": {...} | null}`. Omit it to receive
     /// every artifact as a bare array, the unbounded default, which is retiring.
     #[serde(default)]
     #[schemars(range(min = 1, max = MAX_ARTIFACT_PAGE_ROWS))]
