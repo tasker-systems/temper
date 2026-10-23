@@ -253,6 +253,7 @@ pub struct ExactArm {
     /// past the page — never inferred from `hits.len()` reaching the limit, which a page that ends
     /// exactly on the last match would mistake for more.
     #[serde(default)]
+    #[cfg_attr(feature = "web-api", schema(required = true))]
     pub truncated: bool,
 }
 
@@ -278,6 +279,7 @@ pub struct WideArm {
     /// page, as on the exact arm. Unscoped, the arm draws a bounded set of nearest chunks first,
     /// so `false` means nothing more within that draw, not nothing more similar anywhere.
     #[serde(default)]
+    #[cfg_attr(feature = "web-api", schema(required = true))]
     pub truncated: bool,
 }
 

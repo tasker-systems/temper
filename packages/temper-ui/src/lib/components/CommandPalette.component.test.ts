@@ -207,37 +207,70 @@ describe('CommandPalette — the bound it states (D6)', () => {
 		expect(container.textContent).not.toContain('See all');
 	});
 
-	it('calls a full page all of them when the arm says nothing more matched', async () => {
+	it('calls a full exact page all of them when the exact arm says nothing more matched', async () => {
 		vi.useFakeTimers();
 		// A page that ends exactly on the last match: a count-based guess would say "more".
 		answer(
 			200,
 			arms({
-				wide: {
-					hits: Array.from({ length: SEARCH_PAGE_SIZE }, (_, i) => wideHit(`Find ${i}`)),
+				exact: {
+					hits: Array.from({ length: SEARCH_PAGE_SIZE }, (_, i) => exactHit(`Find ${i}`)),
 					reason: 'ok',
 					hint: null,
 					truncated: false,
 				},
 			}),
 		);
-		const { getByPlaceholderText, getByTestId } = await mountOpen();
+		const { getByPlaceholderText, getByTestId, getByLabelText } = await mountOpen();
 
 		await type(getByPlaceholderText('Search the vault...'), 'ledger');
+		await fireEvent.click(getByLabelText('Exact'));
 
 		expect(getByTestId('omission').textContent?.trim()).toBe(
-			`All ${SEARCH_PAGE_SIZE} results similar in meaning.`,
+			`All ${SEARCH_PAGE_SIZE} results matching these words.`,
 		);
 	});
 
-	it('states the bound under a partial page too — silence would read as a claim', async () => {
+	it('never calls the wide arm all of them — its draw is bounded before visibility', async () => {
 		vi.useFakeTimers();
 		answer(200, arms({ wide: { hits: [wideHit('Find one')], reason: 'ok', hint: null } }));
 		const { getByPlaceholderText, getByTestId } = await mountOpen();
 
 		await type(getByPlaceholderText('Search the vault...'), 'ledger');
 
-		expect(getByTestId('omission').textContent?.trim()).toBe('All 1 result similar in meaning.');
+		expect(getByTestId('omission').textContent?.trim()).toBe(
+			'1 result similar in meaning; more not reported.',
+		);
+	});
+
+	it('says not reported when the server sends no truncated at all', async () => {
+		vi.useFakeTimers();
+		const old = arms({ exact: { hits: [exactHit('Find one')], reason: 'ok', hint: null } });
+		delete (old.exact as { truncated?: boolean }).truncated;
+		answer(200, old);
+		const { getByPlaceholderText, getByTestId, getByLabelText } = await mountOpen();
+
+		await type(getByPlaceholderText('Search the vault...'), 'ledger');
+		await fireEvent.click(getByLabelText('Exact'));
+
+		expect(getByTestId('omission').textContent?.trim()).toBe(
+			'1 result matching these words; more not reported.',
+		);
+	});
+
+	it('does not say "No results" when a page emptied after the read but the arm says more follow', async () => {
+		vi.useFakeTimers();
+		answer(200, arms({ exact: { hits: [], reason: 'no_match', hint: null, truncated: true } }));
+		const { getByPlaceholderText, getByTestId, getByLabelText, container } = await mountOpen();
+
+		await type(getByPlaceholderText('Search the vault...'), 'ledger');
+		await fireEvent.click(getByLabelText('Exact'));
+
+		expect(container.textContent).not.toContain('No results');
+		expect(container.textContent).not.toContain('Nothing matched');
+		expect(getByTestId('omission').textContent?.trim()).toBe(
+			'0 results matching these words; more not shown.',
+		);
 	});
 
 	it('the bare-Enter hand-off to the list door is gone', async () => {

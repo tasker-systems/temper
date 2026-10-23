@@ -35,6 +35,18 @@ describe('the omission sentence', () => {
 		);
 	});
 
+	it('states what the count leaves after a page even when the read says nothing follows', () => {
+		expect(omissionSentence(50, 48, 'resources', { offset: 0, size: 50, more: false })).toBe(
+			'1–48 of 50 resources; 2 after it.',
+		);
+	});
+
+	it('never says "0 after it" when the read says more follow a stale count', () => {
+		expect(omissionSentence(50, 50, 'resources', { offset: 0, size: 50, more: true })).toBe(
+			'1–50 of 50 resources; more after it.',
+		);
+	});
+
 	it('calls a single whole page all of them', () => {
 		expect(omissionSentence(7, 7, 'tasks', { offset: 0, size: 50, more: false })).toBe(
 			'All 7 tasks.',

@@ -19940,7 +19940,8 @@
         "description": "The **exact** arm and its own disposition.\n\nThe `reason` is per-arm because one shared reason has to describe both arms at once, and would\nreport `NoMatch` for a response whose other arm returned hits — a rollup that reads as an answer\nabout the question asked when it is not.",
         "required": [
           "hits",
-          "reason"
+          "reason",
+          "truncated"
         ],
         "properties": {
           "hint": {
@@ -28100,7 +28101,8 @@
         "required": [
           "hits",
           "reason",
-          "degraded"
+          "degraded",
+          "truncated"
         ],
         "properties": {
           "degraded": {

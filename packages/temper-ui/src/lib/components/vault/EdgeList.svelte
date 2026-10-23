@@ -90,8 +90,10 @@
 	.rel {
 		color: var(--tp-text-subtle);
 	}
-	/* `.peer` is also set on `ResourceLink`'s own element, which this component's scope does not reach. */
-	.edge :global(.peer) {
+	/* A resolved peer is `ResourceLink`'s own anchor, which this component's scope does not reach.
+	   Only the anchor and the blob span are styled here, so an unresolved peer keeps its own look. */
+	.edge :global(a.peer),
+	.edge span.peer {
 		color: var(--tp-text-muted);
 		text-decoration: none;
 	}

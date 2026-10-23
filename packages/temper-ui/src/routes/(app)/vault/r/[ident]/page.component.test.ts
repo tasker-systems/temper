@@ -1257,16 +1257,6 @@ describe('the data artifacts region', () => {
 	});
 });
 
-/**
- * D-F4 — the connections bound line is chrome, not a warning.
- *
- * The omission sentence reads `shown of total` off the one envelope the read returned: present
- * when the read was clipped (stating what was withheld) and present when it was not (so complete is
- * something the reader is TOLD, never something they infer from silence — the `bound.ts`
- * SeedAxis form). A version that renders the bound only when it binds, or a count-only
- * heading, fails here: either one makes a clipped view distinguishable from a complete one
- * only by silence, which is the silent-slice defect one level down.
- */
 /** `references-show-held-truth` — a connection links only once the read returned its title. */
 describe('a connection whose peer the read returned no title for', () => {
 	it('reads as unresolved and does not link', async () => {
@@ -1289,6 +1279,16 @@ describe('a connection whose peer the read returned no title for', () => {
 	});
 });
 
+/**
+ * D-F4 — the connections bound line is chrome, not a warning.
+ *
+ * The omission sentence reads `shown of total` off the one envelope the read returned: present
+ * when the read was clipped (stating what was withheld) and present when it was not (so complete is
+ * something the reader is TOLD, never something they infer from silence — the `bound.ts`
+ * SeedAxis form). A version that renders the bound only when it binds, or a count-only
+ * heading, fails here: either one makes a clipped view distinguishable from a complete one
+ * only by silence, which is the silent-slice defect one level down.
+ */
 describe('the connections bound line is chrome, not a warning', () => {
 	it('a clipped read states how much was withheld — the heading carries both halves', async () => {
 		const { container, unmount } = render(Page, {

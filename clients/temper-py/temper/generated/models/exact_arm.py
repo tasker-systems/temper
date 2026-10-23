@@ -32,7 +32,7 @@ class ExactArm(BaseModel):
     hint: Optional[StrictStr] = Field(default=None, description="One-liner explaining a non-`Ok` reason and suggesting a next step.")
     hits: List[ExactHit]
     reason: SearchReason
-    truncated: Optional[StrictBool] = Field(default=None, description="Are there matching hits beyond this page? The arm's own word, from the probe row it read past the page — never inferred from `hits.len()` reaching the limit, which a page that ends exactly on the last match would mistake for more.")
+    truncated: StrictBool = Field(description="Are there matching hits beyond this page? The arm's own word, from the probe row it read past the page — never inferred from `hits.len()` reaching the limit, which a page that ends exactly on the last match would mistake for more.")
     __properties: ClassVar[List[str]] = ["hint", "hits", "reason", "truncated"]
 
     model_config = ConfigDict(

@@ -10,8 +10,11 @@ export function omissionSentence(total, shown, scope, page) {
         return `All ${total} ${scope}.`;
     // A page past the end (an offset beyond the total) has every row before it, not `offset` rows.
     const before = Math.min(offset, total);
-    const after = more ? Math.max(0, total - offset - shown) : 0;
-    const either = [before > 0 && `${before} before this page`, more && `${after} after it`]
+    // What the count leaves after this page is stated whenever there is some, whatever `more`
+    // says; `more` with nothing left in the count says "more", never "0".
+    const after = Math.max(0, total - offset - shown);
+    const afterClause = after > 0 ? `${after} after it` : more ? 'more after it' : null;
+    const either = [before > 0 && `${before} before this page`, afterClause]
         .filter(Boolean)
         .join(', ');
     const rows = shown === 0 ? `None of ${total}` : `${offset + 1}–${offset + shown} of ${total}`;
