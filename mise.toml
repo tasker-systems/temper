@@ -22,7 +22,11 @@ lockfile_platforms = ["linux-x64", "macos-arm64"]
 # 3.12 agrees with clients/temper-py/.python-version, which uv reads in CI.
 python = "3.12"
 uv = "0.12"
-node = "24"   # == setup-node in CI
+# Exact, not fuzzy, until 24.22.1 clears the release-age window: it is the 2026-10-21 security
+# release (Brotli decoder RCE plus TLS/DNS fixes), and a fuzzy "24" would still resolve to the vulnerable
+# 24.21.0 under minimum_release_age. Return it to "24" once the fix is a week old. CI pins the same
+# exact version in every setup-node step, where a bare "24" can be met by an older cached 24.x.
+node = "24.22.1"
 bun = "1.4"
 
 # Lint and secret-scan binaries the gates and githooks/pre-commit call.
