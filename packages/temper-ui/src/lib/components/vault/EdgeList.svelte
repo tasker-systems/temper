@@ -1,15 +1,23 @@
 <script lang="ts">
+	import { omissionSentence } from '@tasker-systems/temper-design/omission';
 	import type { ResourceConnections } from '$lib/types/generated/graph';
 	import RegionState from '$lib/components/RegionState.svelte';
+	import ResourceLink from '$lib/components/ResourceLink.svelte';
 
 	/**
-	 * The bounded connections read, consumed whole. The heading IS the bound line: `rows.length`
-	 * of `total`, both read off the one envelope the server returned, so the count, the stated
-	 * denominator and the rendered slice cannot disagree — and the line is chrome, present
-	 * whether or not the read was clipped (spec D-F4 / `bound.ts` SeedAxis: complete is something
-	 * the reader is TOLD, never something they infer from silence).
+	 * The bounded connections read, consumed whole. The bound line is the package's omission
+	 * sentence over `returned` of `total`, both read off the one envelope the server returned, so
+	 * the count, the stated denominator and the rendered slice cannot disagree — and the line is
+	 * chrome, present whether or not the read was clipped (spec D-F4 / `bound.ts` SeedAxis:
+	 * complete is something the reader is TOLD, never something they infer from silence). Unpaged:
+	 * the rail offers no next page, so what the read left out is "not shown", not "after it".
 	 */
 	let { connections }: { connections: ResourceConnections } = $props();
+
+	let total = $derived(Number(connections.total));
+	let omission = $derived(
+		omissionSentence(total, connections.rows.length, total === 1 ? 'connection' : 'connections')
+	);
 </script>
 
 <!--
@@ -22,10 +30,11 @@
 	<!-- "Connections", not "Edges": the region below says "No connections", and one region must not
 	     name the same thing two ways. "Edges" was this file's only reader-facing use of the word
 	     anywhere in the UI, so aligning it introduces no inconsistency elsewhere. -->
-	<div class="label">Connections · {connections.rows.length} of {connections.total}</div>
+	<div class="label">Connections · {total}</div>
 	{#if connections.rows.length === 0}
 		<RegionState state="empty" label="connections" />
 	{:else}
+		<p class="bound" data-testid="omission">{omission}</p>
 		{#each connections.rows as edge (edge.edge_id)}
 			<div class="edge">
 				<!--
@@ -45,7 +54,7 @@
 				<!-- A blob peer is addressed by id alone (no title) and is not a resource: it
 				     never links into /vault/r, which would route a blob id into a resource page. -->
 				{#if edge.peer_table === 'kb_resources'}
-					<a class="peer" href="/vault/r/{edge.peer_id}">{edge.peer_title}</a>
+					<ResourceLink class="peer" id={edge.peer_id} title={edge.peer_title} />
 				{:else}
 					<span class="peer">blob · {edge.peer_id.slice(0, 8)}</span>
 				{/if}
@@ -67,6 +76,12 @@
 		color: var(--tp-text-subtle);
 		margin-bottom: 6px;
 	}
+	.bound {
+		font-family: var(--font-mono);
+		font-size: 9px;
+		color: var(--tp-text-subtle);
+		margin: 0 0 6px;
+	}
 	.edge {
 		padding: 4px 0;
 		font-family: var(--font-mono);
@@ -75,11 +90,12 @@
 	.rel {
 		color: var(--tp-text-subtle);
 	}
-	.peer {
+	/* `.peer` is also set on `ResourceLink`'s own element, which this component's scope does not reach. */
+	.edge :global(.peer) {
 		color: var(--tp-text-muted);
 		text-decoration: none;
 	}
-	.peer:hover {
+	.edge :global(a.peer:hover) {
 		color: var(--tp-text);
 		text-decoration: underline;
 	}

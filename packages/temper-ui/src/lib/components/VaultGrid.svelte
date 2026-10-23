@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { omissionSentence } from '@tasker-systems/temper-design/omission';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { Grid, WillowDark } from 'wx-svelte-grid';
@@ -74,6 +75,16 @@
 	// Paging chrome, derived from the page the server actually returned. Every number here
 	// comes out of the envelope; none of it is recomputed from the request URL.
 	let paging = $derived(pageState({ total, returned, truncated, limit, offset }));
+	// What this page leaves out, in the package's words. A capped read is a page; `truncated` is the
+	// envelope's own word that rows follow it.
+	let omission = $derived(
+		omissionSentence(
+			total,
+			returned,
+			total === 1 ? 'resource' : 'resources',
+			limit !== null && limit > 0 ? { offset, size: limit, more: truncated } : null
+		)
+	);
 
 	// An active sort no visible column can mark — see `orphanSort`. Rendered as its own chip
 	// so the ordering the door is applying is never invisible.
@@ -146,7 +157,11 @@
 <div class="vault-grid-wrapper">
 	{#if rows.length === 0}
 		<div class="flex flex-col items-center justify-center gap-3 py-16 text-tp-text-subtle">
-			{#if filterCount > 0}
+			{#if total > 0}
+				<!-- A page past the end of a non-empty set: "no resources" would be false of the set. -->
+				<p class="text-sm" data-testid="omission">{omission}</p>
+				<button class="text-xs underline" onclick={() => goToPage(0)}>First page</button>
+			{:else if filterCount > 0}
 				<p class="text-sm">
 					No resources match the current filter{filterCount > 1 ? 's' : ''}.
 				</p>
@@ -158,8 +173,8 @@
 	{:else}
 		<div class="grid-chrome">
 			<div class="flex items-center gap-3">
-				<span class="text-xs text-tp-text-subtle font-mono tracking-wide">
-					{paging.rangeStart}–{paging.rangeEnd} of {total}
+				<span class="text-xs text-tp-text-subtle font-mono tracking-wide" data-testid="omission">
+					{omission}
 				</span>
 				{#if orphaned}
 					<span

@@ -1,3 +1,4 @@
+import { uncountedSentence } from '@tasker-systems/temper-design/omission';
 import { fireEvent, render } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -60,8 +61,8 @@ const arms = ({
 	exact?: Partial<ExactArm>;
 	wide?: Partial<WideArm>;
 } = {}): SearchResponse => ({
-	exact: { hits: [], reason: 'no_match', hint: null, ...exact },
-	wide: { hits: [], reason: 'no_match', hint: null, degraded: false, ...wide },
+	exact: { hits: [], reason: 'no_match', hint: null, truncated: false, ...exact },
+	wide: { hits: [], reason: 'no_match', hint: null, degraded: false, truncated: false, ...wide },
 	scope: { kind: 'global', size: null },
 });
 
@@ -183,7 +184,7 @@ describe('CommandPalette — an answered arm that found nothing', () => {
 });
 
 describe('CommandPalette — the bound it states (D6)', () => {
-	it('states the bound under a full page', async () => {
+	it('says more were not shown when the arm says more matched', async () => {
 		vi.useFakeTimers();
 		answer(
 			200,
@@ -192,27 +193,51 @@ describe('CommandPalette — the bound it states (D6)', () => {
 					hits: Array.from({ length: SEARCH_PAGE_SIZE }, (_, i) => wideHit(`Find ${i}`)),
 					reason: 'ok',
 					hint: null,
+					truncated: true,
 				},
 			}),
 		);
-		const { getByPlaceholderText, container } = await mountOpen();
+		const { getByPlaceholderText, getByTestId, container } = await mountOpen();
 
 		await type(getByPlaceholderText('Search the vault...'), 'ledger');
 
-		// The answer may be truncated at the page size; a palette that hides that fact
-		// reads as complete what is a first page.
-		expect(container.textContent).toContain(`Showing the first ${SEARCH_PAGE_SIZE}`);
+		expect(getByTestId('omission').textContent?.trim()).toBe(
+			uncountedSentence(SEARCH_PAGE_SIZE, 'results similar in meaning', { more: true }),
+		);
 		expect(container.textContent).not.toContain('See all');
 	});
 
-	it('states no bound under a partial page — everything is there', async () => {
+	it('calls a full page all of them when the arm says nothing more matched', async () => {
 		vi.useFakeTimers();
-		answer(200, arms({ wide: { hits: [wideHit('Find one')], reason: 'ok', hint: null } }));
-		const { getByPlaceholderText, container } = await mountOpen();
+		// A page that ends exactly on the last match: a count-based guess would say "more".
+		answer(
+			200,
+			arms({
+				wide: {
+					hits: Array.from({ length: SEARCH_PAGE_SIZE }, (_, i) => wideHit(`Find ${i}`)),
+					reason: 'ok',
+					hint: null,
+					truncated: false,
+				},
+			}),
+		);
+		const { getByPlaceholderText, getByTestId } = await mountOpen();
 
 		await type(getByPlaceholderText('Search the vault...'), 'ledger');
 
-		expect(container.textContent).not.toContain('Showing the first');
+		expect(getByTestId('omission').textContent?.trim()).toBe(
+			`All ${SEARCH_PAGE_SIZE} results similar in meaning.`,
+		);
+	});
+
+	it('states the bound under a partial page too — silence would read as a claim', async () => {
+		vi.useFakeTimers();
+		answer(200, arms({ wide: { hits: [wideHit('Find one')], reason: 'ok', hint: null } }));
+		const { getByPlaceholderText, getByTestId } = await mountOpen();
+
+		await type(getByPlaceholderText('Search the vault...'), 'ledger');
+
+		expect(getByTestId('omission').textContent?.trim()).toBe('All 1 result similar in meaning.');
 	});
 
 	it('the bare-Enter hand-off to the list door is gone', async () => {

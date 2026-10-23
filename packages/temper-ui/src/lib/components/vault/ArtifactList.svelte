@@ -2,6 +2,7 @@
 	import type { ArtifactView } from '$lib/types';
 	import { humanBytes } from '$lib/bytes';
 	import { highlightCode } from '@tasker-systems/temper-design/highlight';
+	import { uncountedSentence } from '@tasker-systems/temper-design/omission';
 	import { flattenPayload } from '$lib/graph/payloadRows';
 	import { relativeTime } from '$lib/graph/relativeTime';
 
@@ -30,6 +31,15 @@
 		$props();
 
 	let paged = $derived(olderHref !== null || newestHref !== null);
+	// The read counts nothing: the page knows only whether it is the first and whether older ones
+	// follow, both from the links the answer carried.
+	let omission = $derived(
+		uncountedSentence(
+			artifacts.length,
+			`${artifacts.length === 1 ? 'artifact' : 'artifacts'}, newest first`,
+			{ first: newestHref === null, more: olderHref !== null }
+		)
+	);
 
 	let rows = $derived(
 		[...artifacts].sort((a, b) => (a.created < b.created ? 1 : a.created > b.created ? -1 : 0))
@@ -63,6 +73,7 @@
 
 <section>
 	<div class="label">Data artifacts · {rows.length}{paged ? ' on this page' : ''}</div>
+	<p class="bound" data-testid="omission">{omission}</p>
 	{#each rows as artifact (artifact.artifact_id)}
 		{@const content = contentHtml(artifact.content)}
 		<div class="artifact" class:folded={artifact.is_folded}>
@@ -108,6 +119,12 @@
 	section {
 		padding: 18px 22px 24px;
 		border-top: 1px solid var(--tp-rule);
+	}
+	.bound {
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: var(--tp-text-subtle);
+		margin: 0 0 8px;
 	}
 	.label {
 		font-family: var(--font-mono);

@@ -1,3 +1,4 @@
+import { uncountedSentence } from '@tasker-systems/temper-design/omission';
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import { describe, expect, it } from 'vitest';
 import type { ArtifactView } from '$lib/types/generated/data_artifact';
@@ -150,5 +151,32 @@ describe('ArtifactList', () => {
 		await fireEvent.click(head);
 		expect(head.getAttribute('aria-expanded')).toBe('true');
 		expect(screen.getByRole('button', { name: /measurement/ })).toBeDefined();
+	});
+});
+
+/** `omission-is-stated` — the read counts nothing, so the page says what its links say. */
+describe('ArtifactList — the omission sentence', () => {
+	const sentence = (props: { olderHref?: string | null; newestHref?: string | null }) =>
+		render(ArtifactList, { artifacts: [artifact(), artifact({ artifact_id: 'a2' })], ...props })
+			.container.querySelector('[data-testid="omission"]')
+			?.textContent?.trim();
+
+	it('calls a single page all of them', () => {
+		expect(sentence({})).toBe('All 2 artifacts, newest first.');
+	});
+
+	it('says older artifacts follow the first page', () => {
+		expect(sentence({ olderHref: '/vault/r/r1?older' })).toBe(
+			uncountedSentence(2, 'artifacts, newest first', { first: true, more: true }),
+		);
+	});
+
+	it('says which sides more lie on past the first page', () => {
+		expect(sentence({ olderHref: '/o', newestHref: '/n' })).toBe(
+			'2 artifacts, newest first; more before this page, more after it.',
+		);
+		expect(sentence({ newestHref: '/n' })).toBe(
+			'2 artifacts, newest first; more before this page.',
+		);
 	});
 });

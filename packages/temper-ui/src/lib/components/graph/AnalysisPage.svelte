@@ -18,6 +18,7 @@
 	 * @see temper-artifacts:specs/2026-08-20-graph-successor-surface-design.md §4 (Beat C)
 	 */
 	import RegionState from '$lib/components/RegionState.svelte';
+	import ResourceLink from '$lib/components/ResourceLink.svelte';
 	import GroupingStrips from './GroupingStrips.svelte';
 	import {
 		CONTEXT_HAS_NO_MAP_READOUT,
@@ -35,7 +36,7 @@
 	} from '$lib/graph/analysis';
 	import type { AnalysisViewData } from '$lib/graph/view';
 	import { regionStateFor } from '$lib/region';
-	import { graphAnalysisHref, graphHref, resourceHref } from '$lib/vault-url';
+	import { graphAnalysisHref, graphHref } from '$lib/vault-url';
 
 	let { data }: { data: AnalysisViewData } = $props();
 
@@ -186,9 +187,7 @@
 				{#if map}
 					{#if map.kind === 'cogmap'}
 						<p>
-							Its charter is <a href={resourceHref({ id: map.telos.id })}
-								>{map.telos.title ?? 'the charter resource'}</a
-							>.
+							Its charter is <ResourceLink id={map.telos.id} title={map.telos.title} />.
 						</p>
 					{:else}
 						<!-- Declared, not fabricated. A context has no charter and no regulation set even
@@ -212,7 +211,7 @@
 						{#if map.regulation.length > 0}
 							<ul class="regulation">
 								{#each map.regulation as r (r.resource_id)}
-									<li><a href={resourceHref({ id: r.resource_id })}>{r.title}</a></li>
+									<li><ResourceLink id={r.resource_id} title={r.title} /></li>
 								{/each}
 							</ul>
 						{/if}
@@ -531,7 +530,9 @@
 	td.absent {
 		color: var(--tp-text-subtle);
 	}
-	a {
+	/* `ResourceLink` renders its own anchor, so the page's link colour reaches it through `:global`. */
+	a,
+	.map-level :global(a) {
 		color: var(--tp-accent);
 	}
 </style>

@@ -2,7 +2,7 @@
 	import { goto } from '$app/navigation';
 	import type { ResourceView } from '$lib/types';
 	import type { SearchResponse } from '$lib/types/generated/search';
-	import { SEARCH_PAGE_SIZE } from '$lib/search-page-size';
+	import { uncountedSentence } from '@tasker-systems/temper-design/omission';
 	import { resourceHref } from '$lib/vault-url';
 
 	let open = $state(false);
@@ -30,6 +30,17 @@
 	const arm = $derived(answer && (exactMode ? answer.exact : answer.wide));
 	const hits = $derived(arm?.hits ?? []);
 	const declined = $derived(namesSeveralQuestions(query));
+	// D6 — the palette states its bound on every answer. The search read counts nothing but each
+	// arm says whether more matched (`truncated`, from the row it read past the page), so the
+	// sentence is "all" or "more not shown" in the arm's own word, never "more" inferred from a
+	// full page.
+	const omission = $derived(
+		uncountedSentence(
+			hits.length,
+			`${hits.length === 1 ? 'result' : 'results'} ${exactMode ? 'matching these words' : 'similar in meaning'}`,
+			{ more: arm?.truncated ?? false }
+		)
+	);
 	// Degraded belongs to the wide arm alone — the exact arm has no such case — so the face is
 	// decided here rather than by touching a field the union only sometimes carries.
 	const wideDegraded = $derived(!exactMode && (answer?.wide.degraded ?? false));
@@ -200,14 +211,12 @@
 						</button>
 					{/each}
 				</div>
-				{#if hits.length >= SEARCH_PAGE_SIZE}
-					<!-- D6 — the palette states its bound instead of pretending the answer is whole. -->
-					<div
-						class="px-4 py-2 text-xs text-tp-text-subtle border-t border-tp-rule"
-					>
-						Showing the first {SEARCH_PAGE_SIZE}
-					</div>
-				{/if}
+				<div
+					class="px-4 py-2 text-xs text-tp-text-subtle border-t border-tp-rule"
+					data-testid="omission"
+				>
+					{omission}
+				</div>
 			{:else}
 				<div class="px-4 py-6 text-sm text-tp-text-subtle text-center">No results</div>
 			{/if}

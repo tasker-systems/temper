@@ -10,6 +10,7 @@
 		"src/lib/components/ContextNavGroup.svelte",
 		"src/lib/components/NavProgress.svelte",
 		"src/lib/components/RegionState.svelte",
+		"src/lib/components/ResourceLink.svelte",
 		"src/lib/components/MarkdownRenderer.svelte",
 		"src/lib/components/vault/HomeChip.svelte",
 		"src/lib/components/vault/PropertySet.svelte",
