@@ -79,8 +79,11 @@ export const EDGE_COLORS = {
 	derived: 'var(--tp-text-subtle)',
 } as const;
 
-/** Atlas canvas ground — the `surface` role; a `var()` string, applied through `style`. */
-export const CANVAS_BG = 'var(--tp-surface)';
+/**
+ * Atlas canvas ground — `surface-raised`, so the drawing reads as a region lifted from the page
+ * (as the old slate did); a `var()` string, applied through `style`.
+ */
+export const CANVAS_BG = 'var(--tp-surface-raised)';
 
 export function docTypeHue(docType: string | null): string {
 	if (docType && docType in DOC_TYPE_HUES) return DOC_TYPE_HUES[docType as AtlasDocType];
@@ -104,6 +107,12 @@ export interface EdgeStyle {
 	dash: string | null;
 	markerStart: boolean;
 	markerEnd: boolean;
+	/**
+	 * A cross at the midpoint: contradicts' channel beyond hue. Its colour sits too close to
+	 * structural's in luminance for a colour-blind reader, and dash (kind) and width (weight) are
+	 * taken, so it carries a shape of its own.
+	 */
+	cross: boolean;
 }
 
 const KIND_DASH: Record<EdgeKind, string | null> = {
@@ -162,5 +171,6 @@ export function edgeStyle(edge: EdgeMark): EdgeStyle {
 		dash,
 		markerStart: !symmetric && edge.polarity === 'inverse',
 		markerEnd: !symmetric && edge.polarity === 'forward',
+		cross: edge.label === 'contradicts',
 	};
 }

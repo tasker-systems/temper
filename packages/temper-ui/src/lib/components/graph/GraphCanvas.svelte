@@ -304,7 +304,7 @@
 	}
 	.labels text {
 		paint-order: stroke;
-		stroke: var(--tp-surface);
+		stroke: var(--tp-surface-raised);
 		stroke-width: 3px;
 		stroke-linejoin: round;
 	}

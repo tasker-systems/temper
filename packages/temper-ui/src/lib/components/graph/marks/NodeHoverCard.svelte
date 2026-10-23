@@ -85,7 +85,9 @@
 		backdrop-filter: blur(8px);
 		border: 1px solid color-mix(in srgb, var(--hue) 34%, transparent);
 		border-radius: 9px;
-		box-shadow: none;
+		/* No shadow role: the card stands off the raised canvas by a rule-strong ring outside its
+		   doc-type border, not by a drop shadow. */
+		box-shadow: 0 0 0 1px var(--tp-rule-strong);
 		color: var(--tp-text);
 		text-align: left;
 		padding: 10px 12px;
