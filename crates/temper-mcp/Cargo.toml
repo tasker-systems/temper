@@ -75,7 +75,7 @@ uuid = { version = "1", features = ["v7", "serde"] }
 [dev-dependencies]
 # The source gates (`src/source_gates.rs`) parse the crate's own tool modules: real function
 # bodies, real `#[cfg(test)]` attributes and real call/await chains instead of a hand lexer.
-syn = { version = "2", features = ["full", "visit"] }
+syn = { version = "3", features = ["full", "visit"] }
 # Macro bodies are token streams; the gates read their identifiers.
 proc-macro2 = "1"
 # The manifest gate reads this crate's own Cargo.toml.

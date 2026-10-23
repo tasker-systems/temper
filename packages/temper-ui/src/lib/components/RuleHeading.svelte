@@ -7,9 +7,9 @@
 	let { title, caption }: Props = $props();
 </script>
 
-<div class="border-l-2 border-quiet-accent pl-3">
-	<h2 class="text-lg font-medium text-zinc-100">{title}</h2>
+<div class="border-l-2 border-tp-accent pl-3">
+	<h2 class="text-lg font-medium text-tp-text">{title}</h2>
 	{#if caption}
-		<p class="text-xs text-zinc-400">{caption}</p>
+		<p class="text-xs text-tp-text-muted">{caption}</p>
 	{/if}
 </div>

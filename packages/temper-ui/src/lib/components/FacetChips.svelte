@@ -27,13 +27,13 @@
 			<button
 				class="inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-mono tracking-wide transition-colors
 					{active
-					? 'bg-quiet-accent/15 text-quiet-accent border border-quiet-border'
-					: 'bg-zinc-800/50 text-zinc-400 border border-zinc-700/50 hover:text-zinc-200 hover:border-zinc-600'}"
+					? 'bg-tp-accent-wash text-tp-accent border border-tp-accent-line-soft'
+					: 'bg-tp-surface-raised text-tp-text-muted border border-tp-rule hover:text-tp-text hover:border-tp-rule-strong'}"
 				onclick={() => toggle(name)}
 				aria-pressed={active}
 			>
 				{name}
-				<span class="text-[10px] {active ? 'text-quiet-accent/70' : 'text-zinc-600'}">{count}</span>
+				<span class="text-[10px] {active ? 'text-tp-accent-muted' : 'text-tp-text-subtle'}">{count}</span>
 			</button>
 		{/each}
 	</div>

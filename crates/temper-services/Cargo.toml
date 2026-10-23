@@ -56,7 +56,7 @@ base64 = "0.23"
 # The Slack grant vault seals each stored refresh/access token with XChaCha20-Poly1305 (24-byte
 # random nonce per row, so nonce reuse is a non-issue). Pure Rust, no OpenSSL — matches the
 # rustls-only posture. `getrandom` backs the nonce/key RNG (`OsRng`).
-chacha20poly1305 = "0.10"
+chacha20poly1305 = "0.11"
 # Derives the vault key's non-secret fingerprint (HMAC-SHA256 under the key, truncated), which
 # each vault row records so an open failure can say which key sealed it. Already in the graph via
 # temper-core's internal signatures.

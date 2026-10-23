@@ -18,7 +18,17 @@
 		"src/lib/components/vault/StateControl.svelte",
 		"src/lib/components/vault/EventHistory.svelte",
 		"src/lib/components/vault/EdgeList.svelte",
-		"src/lib/components/vault/ArtifactList.svelte"
+		"src/lib/components/vault/ArtifactList.svelte",
+		"src/routes/(app)/vault/[owner]/[context]/+page.svelte",
+		"src/routes/(app)/vault/all/+page.svelte",
+		"src/routes/(app)/vault/search/+page.svelte",
+		"src/lib/components/vault/VaultBrowser.svelte",
+		"src/lib/components/VaultGrid.svelte",
+		"src/lib/components/FacetChips.svelte",
+		"src/lib/components/RuleHeading.svelte",
+		"src/lib/components/vault/ShapeList.svelte",
+		"src/routes/(app)/admin/access/+page.svelte",
+		"src/routes/(app)/+error.svelte"
 	],
 	"themes": [
 		"src/app.css"

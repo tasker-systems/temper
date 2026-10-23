@@ -22,12 +22,14 @@ chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 dialoguer = "0.12"
 dirs = "7"
-ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
+# `pem` turns on `alloc`, which 3.x dropped from its defaults; without it `SigningKey` loses
+# `EncodePrivateKey` and `to_pkcs8_pem` disappears. `pkcs8` below must track the same 0.x line.
+ed25519-dalek = { version = "3", features = ["pem", "rand_core"] }
 filetime = "0.2"
 hex = "0.4"
 indicatif = "0.18"
 libc = "0.2"
-pkcs8 = { version = "0.10", features = ["pem"] }
+pkcs8 = { version = "0.11", features = ["pem"] }
 rand = "0.10"
 reqwest = { version = "0.12", default-features = false, features = [
   "rustls-tls"

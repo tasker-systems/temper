@@ -28,6 +28,7 @@ const CLEAN = `<script lang="ts">
 	<kbd>&#8984;K</kbd>
 	<svg><rect fill="var(--tp-surface)" stroke="currentColor" /><stop stop-color="var(--tp-accent)" /></svg>
 	<span style:color="var(--tp-text)">y</span>
+	<span style="--lift: 2px">z</span>
 </div>
 
 <style>
@@ -38,6 +39,11 @@ const CLEAN = `<script lang="ts">
 		background: var(--tp-surface);
 		font-family: var(--font-mono);
 		padding: var(--space-column);
+	}
+	.bridged {
+		--wx-color-font: var(--tp-text);
+		--wx-font-family: var(--tp-font-ui);
+		--wx-border: 1px solid var(--tp-rule);
 	}
 </style>
 `;
@@ -200,6 +206,49 @@ const PLANTED = [
 		2,
 		'color-mix(',
 	],
+	// (f) a custom property declared from a variable that is not a role
+	[
+		'a custom property declared from a private colour',
+		'<style>\n.x { --wx-color-font: var(--color-quiet-fg); }\n</style>\n',
+		2,
+		'--color-quiet-fg',
+	],
+	[
+		'a custom property declared from a private font',
+		'<style>\n.x { --wx-font-family: var(--font-sans); }\n</style>\n',
+		2,
+		'--font-sans',
+	],
+	[
+		'a custom property in a shorthand value',
+		'<style>\n.x { --wx-border: 1px solid var(--color-quiet-rule); }\n</style>\n',
+		2,
+		'--color-quiet-rule',
+	],
+	[
+		'a custom property declared in a style attribute',
+		'<div style="--wx-background: var(--obsidian)">x</div>\n',
+		1,
+		'--obsidian',
+	],
+	[
+		'a custom property set by a style directive',
+		'<div style:--wx-color-font="var(--obsidian)">x</div>\n',
+		1,
+		'--obsidian',
+	],
+	[
+		'a custom property set by a style directive expression',
+		"<div style:--wx-color-font={'var(--obsidian)'}>x</div>\n",
+		1,
+		'--obsidian',
+	],
+	[
+		'a custom property declared from a name set from script',
+		'<div style="--c: {brand}">x</div>\n<style>\n.x { --wx-color-font: var(--c); }\n</style>\n',
+		3,
+		'var(--c)',
+	],
 	// (b) the colour utilities Tailwind v4 added beside the classic ones
 	['a stock text shadow', '<p class="text-shadow-zinc-500">x</p>\n', 1, 'text-shadow-zinc-500'],
 	['a stock inset ring', '<p class="inset-ring-zinc-700">x</p>\n', 1, 'inset-ring-zinc-700'],
@@ -244,6 +293,33 @@ test('a pending entry nothing reads is refused: the hole has closed', () => {
 	const run = guard(surface(undefined, { pending: [HUE] }));
 	assert.equal(run.status, 1, `expected a refusal, got ${run.status}:\n${run.stdout}${run.stderr}`);
 	assert.ok(run.stderr.includes('--hue'), run.stderr);
+});
+
+test('a custom property declared from a pending variable is counted, not refused', () => {
+	const run = guard(surface('<style>\n.x { --tint: var(--hue); }\n</style>\n', { pending: [HUE] }));
+	assert.equal(run.status, 0, run.stderr);
+	assert.ok(run.stdout.includes('pending: --hue read 1 time(s)'), run.stdout);
+});
+
+test('a custom property declared from a bridged name passes', () => {
+	const bridge =
+		'<style>\n.x { --background: var(--tp-ground); --border: var(--border-base); --border-base: var(--tp-rule); }\n.y { --color-background: var(--background); --color-border: var(--border); }\n</style>\n';
+	const run = guard(surface(bridge));
+	assert.equal(run.status, 0, run.stderr);
+});
+
+test('a name bridged from a private variable is not bridged', () => {
+	const planted =
+		'<style>\n.x { --background: var(--obsidian); }\n.y { --color-background: var(--background); }\n</style>\n';
+	const run = guard(surface(planted));
+	assertRefused(run, 2, '--obsidian');
+	assertRefused(run, 3, 'var(--background)');
+});
+
+test('a name declared once from a role and once from a private variable is not bridged', () => {
+	const planted =
+		'<style>\n.x { --background: var(--tp-ground); }\n.z { --background: var(--obsidian); }\n.y { --color-background: var(--background); }\n</style>\n';
+	assertRefused(guard(surface(planted)), 4, 'var(--background)');
 });
 
 test('a nested mix of a role is refused once', () => {

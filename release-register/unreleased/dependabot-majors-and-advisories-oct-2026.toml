@@ -1,0 +1,16 @@
+title    = "Rust crypto/parser majors adopted; temper-ui and temper-cloud off two npm advisories"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["internal"]
+status   = "signal-only"
+body = '''
+Rust: chacha20poly1305 0.11 (Slack grant vault), ed25519-dalek 3 with pkcs8 0.11 (`temper saml`
+keygen) and syn 3 (the MCP source gates, dev-only). The vault's XChaCha20-Poly1305 output is
+byte-identical across 0.10 and 0.11, so sealed rows still open; the generated PKCS#8 PEM is the
+same encoding the TypeScript AS imports. JS: temper-ui moves to @sveltejs/adapter-vercel 6.3
+(GHSA-9pq4-5hcf-288c, cache poisoning of missing immutable assets), still on SvelteKit 2; and
+temper-cloud's vitest floor rises to 4.1.12 (GHSA-qxg6-89mg-rqv8, GHSA-xp26-3454-mjgp, test-only).
+No route, response shape, MCP tool or client surface changes. Who observes: temper-ui users only
+through Vercel's asset caching, which now no longer pins a missing asset's 404. Release relevance:
+behavioral, dependency-only.
+'''

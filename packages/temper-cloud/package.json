@@ -33,7 +33,7 @@
     "pdf-lib": "^1.17.1",
     "postgres": "^3.4.9",
     "typescript": "^5.8",
-    "vitest": "^4.1.11",
+    "vitest": "^4.1.12",
     "xml-crypto": "^6.4.0"
   }
 }
