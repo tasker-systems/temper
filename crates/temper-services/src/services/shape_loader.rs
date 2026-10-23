@@ -31,17 +31,19 @@
 //! **How often and how widely a schema is compiled is bounded.** Each compile runs on the blocking
 //! pool, under one of a few process-wide permits (`compile_permits`), so a burst of reads queues
 //! rather than taking every core; and a stored shape's verdict is remembered by id, so a shape
-//! read many times is compiled about once per process. The constructor holds each `pattern` and
-//! `patternProperties` regex to `shape_schema::MAX_PATTERN_BYTES`. A shape row is
-//! immutable per id (amendment mints a new id), so the remembered verdict never goes stale, and it
-//! is consulted only for a row the gated read already returned, so it answers nothing about a
-//! shape the caller cannot read.
+//! read many times is compiled about once per process. The vocabulary a compiling shape's by-id
+//! read advertises is remembered by id as well, bounded by the bytes it weighs rather than by how
+//! many there are, so the same shape is enumerated about once per process too. The constructor
+//! holds each `pattern` and `patternProperties` regex to `shape_schema::MAX_PATTERN_BYTES`. A
+//! shape row is immutable per id (amendment mints a new id), so a remembered verdict or vocabulary
+//! never goes stale, and each is consulted only for a row the gated read already returned, so
+//! neither answers anything about a shape the caller cannot read.
 //!
 //! The successor lookup reads only the home and family of the row step 1 returned; no caller text
 //! reaches SQL here except the shape id, bound as a `uuid`.
 
 use std::collections::{BTreeSet, HashMap};
-use std::sync::{LazyLock, Mutex, PoisonError};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 use serde_json::Value;
 use sqlx::PgPool;
@@ -200,15 +202,104 @@ fn remember(id: ShapeId, verdict: SchemaVerdict) {
     verdicts.insert(id, verdict);
 }
 
+/// The most bytes of vocabulary the process remembers, each weighed as its compact serialized
+/// length.
+///
+/// # 32 MiB
+///
+/// A count cap would not bound this: one vocabulary is at most about 4 MiB of path text and
+/// declared values — the walk charges both against `MAX_WALK_VISITS` at `BYTES_PER_VISIT` — plus
+/// the structure around up to `MAX_WALK_PATHS` paths, so the largest shapes alone would fill a
+/// count cap many times over. Weighed instead, 32 MiB holds about eight of the largest and, since
+/// an ordinary shape's vocabulary is a few KiB, thousands of ordinary ones. What the map holds in
+/// memory is a small multiple of its weight. Past the cap an arbitrary entry is forgotten, and
+/// that shape is enumerated again when it is next read.
+const MAX_REMEMBERED_VOCABULARY_BYTES: usize = 32 << 20;
+
+/// The vocabularies remembered, by shape id, and what they weigh together. The running total
+/// lives beside the map, under one lock, so it cannot drift from what the map holds.
+#[derive(Debug, Default)]
+struct RememberedVocabularies {
+    /// Each entry's vocabulary and its weight.
+    entries: HashMap<ShapeId, (Arc<Vocabulary>, usize)>,
+    bytes: usize,
+}
+
+impl RememberedVocabularies {
+    fn get(&self, id: ShapeId) -> Option<Arc<Vocabulary>> {
+        self.entries
+            .get(&id)
+            .map(|(vocabulary, _)| Arc::clone(vocabulary))
+    }
+
+    /// Remember `vocabulary`, weighing `weight`, forgetting arbitrary entries until it fits
+    /// `budget`. One heavier than the whole budget is not remembered.
+    fn insert(&mut self, id: ShapeId, vocabulary: Arc<Vocabulary>, weight: usize, budget: usize) {
+        if weight > budget {
+            return;
+        }
+        if let Some((_, replaced)) = self.entries.remove(&id) {
+            self.bytes -= replaced;
+        }
+        while self.bytes + weight > budget {
+            let Some(evicted) = self.entries.keys().next().copied() else {
+                break;
+            };
+            if let Some((_, forgotten)) = self.entries.remove(&evicted) {
+                self.bytes -= forgotten;
+            }
+        }
+        self.entries.insert(id, (vocabulary, weight));
+        self.bytes += weight;
+    }
+}
+
+/// Each compiling shape's vocabulary, by id, for the life of the process.
+static VOCABULARIES: LazyLock<Mutex<RememberedVocabularies>> = LazyLock::new(Mutex::default);
+
+fn remembered_vocabulary(id: ShapeId) -> Option<Arc<Vocabulary>> {
+    VOCABULARIES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(id)
+}
+
+/// What a vocabulary weighs in the map: its compact serialized length, or `None` if it somehow
+/// does not serialize.
+fn vocabulary_weight(vocabulary: &Vocabulary) -> Option<usize> {
+    serde_json::to_vec(vocabulary).ok().map(|bytes| bytes.len())
+}
+
+/// Remember `vocabulary` for `id`, weighed once here. One that does not serialize is not
+/// remembered: it is returned to its caller all the same, and enumerated again next time.
+fn remember_vocabulary(id: ShapeId, vocabulary: &Vocabulary) {
+    let Some(weight) = vocabulary_weight(vocabulary) else {
+        return;
+    };
+    if weight > MAX_REMEMBERED_VOCABULARY_BYTES {
+        return;
+    }
+    let vocabulary = Arc::new(vocabulary.clone());
+    VOCABULARIES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(id, vocabulary, weight, MAX_REMEMBERED_VOCABULARY_BYTES);
+}
+
 /// What a caller may ask of a shape, for its by-id read (spec §2.5): the vocabulary the walk
 /// enumerates, and the refusal step 3 gives this version's schema when it cannot be walked — past
 /// the byte bound (`askable` then says `truncated: [schema_bytes]`), or not compiling (`askable`
 /// empty). The verdict is the loader's own ([`judge`], remembered by id), so the read and the
 /// loader judge a schema alike.
 ///
-/// Takes the row the gated read returned, whole, so the id the verdict is remembered by and the
-/// schema it was judged on are one value's. `RetrievedShape` is built only by `readback`'s gated
-/// reads, so its caller holds a row the gate admitted.
+/// A compiling shape's vocabulary is remembered by id too, bounded by bytes
+/// ([`MAX_REMEMBERED_VOCABULARY_BYTES`]): it is looked up before a permit is taken, and only a miss
+/// enumerates, under the permit. Two first reads that race both enumerate; after that, none. A
+/// schema past the bound or not compiling is not walked, so there is nothing to remember.
+///
+/// Takes the row the gated read returned, whole, so the id the verdict and the vocabulary are
+/// remembered by and the schema they were derived from are one value's. `RetrievedShape` is built
+/// only by `readback`'s gated reads, so its caller holds a row the gate admitted.
 ///
 /// # Errors
 /// Only if the permits are closed or a blocking task cannot be joined.
@@ -216,12 +307,19 @@ pub async fn askable(row: &RetrievedShape) -> ApiResult<(Vocabulary, Option<Plan
     let verdict = verdict_of(row.shape_id, &row.schema).await?;
     let vocabulary = match verdict {
         // Within the bound: a walk of at most 256 KiB, bounded in work, off the executor.
-        SchemaVerdict::Compiles => {
-            with_schema_off_the_executor(&row.schema, |schema| {
-                enumerate(schema, &WalkBounds::BUILD)
-            })
-            .await?
-        }
+        SchemaVerdict::Compiles => match remembered_vocabulary(row.shape_id) {
+            Some(vocabulary) => Vocabulary::clone(&vocabulary),
+            None => {
+                #[cfg(feature = "test-db")]
+                test_support::record(&row.schema);
+                let vocabulary = with_schema_off_the_executor(&row.schema, |schema| {
+                    enumerate(schema, &WalkBounds::BUILD)
+                })
+                .await?;
+                remember_vocabulary(row.shape_id, &vocabulary);
+                vocabulary
+            }
+        },
         // Past it the walk reads nothing — the measurement stops at the bound — and says why:
         // `truncated: [schema_bytes]`.
         SchemaVerdict::TooLarge => enumerate(&row.schema, &WalkBounds::BUILD),
@@ -263,6 +361,42 @@ async fn with_schema_off_the_executor<T: Send + 'static>(
     .map_err(|e| ApiError::Internal(format!("shape schema task failed: {e}")))
 }
 
+/// What a test reads to see how often [`askable`] enumerated a compiling shape — every enumeration,
+/// whichever read asked for it.
+#[cfg(feature = "test-db")]
+pub mod test_support {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock, PoisonError};
+
+    use serde_json::Value;
+
+    static ENUMERATIONS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+
+    /// Count one enumeration of a schema whose root carries a string `$comment` — the tag a test
+    /// gives its fixture, so that suites reading other shapes in parallel cannot move its count.
+    pub(super) fn record(schema: &Value) {
+        if let Some(tag) = schema.get("$comment").and_then(Value::as_str) {
+            let mut enumerations = ENUMERATIONS
+                .get_or_init(Mutex::default)
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            *enumerations.entry(tag.to_owned()).or_default() += 1;
+        }
+    }
+
+    /// How many times [`askable`](super::askable) has enumerated, in this process, a schema whose
+    /// root `$comment` is `tag`.
+    pub fn enumerations_tagged(tag: &str) -> usize {
+        ENUMERATIONS
+            .get_or_init(Mutex::default)
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(tag)
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
 /// A live, compilable row as the pure half reads it.
 fn loaded(row: RetrievedShape) -> LoadedShape {
     LoadedShape {
@@ -286,6 +420,7 @@ fn read_fault(e: anyhow::Error) -> ApiError {
 mod tests {
     use super::*;
     use std::time::Duration;
+    use temper_core::types::artifact_ask::{AskablePath, PathFacts};
 
     /// Every permit held, no shape work runs: the work waits for a permit rather than fanning out
     /// to the blocking pool. Deterministic in the green direction — the work cannot start without
@@ -328,5 +463,50 @@ mod tests {
             .unwrap_or_else(PoisonError::into_inner)
             .len();
         assert!(held <= MAX_REMEMBERED_VERDICTS, "{held}");
+    }
+
+    /// A vocabulary of one path whose single segment is `segment_bytes` long.
+    fn vocabulary_of(segment_bytes: usize) -> Arc<Vocabulary> {
+        Arc::new(Vocabulary {
+            paths: vec![AskablePath {
+                path: vec!["x".repeat(segment_bytes)],
+                facts: PathFacts::default(),
+                operators: vec![],
+            }],
+            truncated: BTreeSet::new(),
+        })
+    }
+
+    /// The vocabulary map holds no more than its byte budget, however many entries are offered,
+    /// the entry offered last reads back, the running total is the sum of the weights held, and an
+    /// entry heavier than the whole budget is not remembered. That a remembered vocabulary spares
+    /// an enumeration is witnessed by the integration test
+    /// `a_shape_read_many_times_is_enumerated_once`. Bite: delete the `while` that forgets entries
+    /// from `RememberedVocabularies::insert`; the total passes the budget on the fifth entry.
+    #[test]
+    fn the_vocabulary_map_is_capped_by_bytes() {
+        let each = vocabulary_of(1_000);
+        let weight = vocabulary_weight(&each).expect("a vocabulary serializes");
+        let budget = 4 * weight + weight / 2;
+        let mut map = RememberedVocabularies::default();
+
+        let mut last = ShapeId::new();
+        for _ in 0..20 {
+            last = ShapeId::new();
+            map.insert(last, Arc::clone(&each), weight, budget);
+            assert!(map.bytes <= budget, "{} > {budget}", map.bytes);
+        }
+        assert_eq!(map.entries.len(), 4);
+        assert_eq!(
+            map.bytes,
+            map.entries.values().map(|(_, held)| held).sum::<usize>()
+        );
+        assert_eq!(map.get(last).as_deref(), Some(&*each));
+
+        let too_heavy = ShapeId::new();
+        map.insert(too_heavy, Arc::clone(&each), budget + 1, budget);
+        assert!(map.get(too_heavy).is_none());
+        assert!(map.bytes <= budget);
+        assert!(map.get(last).is_some(), "nothing was forgotten for it");
     }
 }

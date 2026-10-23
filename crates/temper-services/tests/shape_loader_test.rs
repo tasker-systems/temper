@@ -29,6 +29,7 @@ use temper_core::types::ids::{ContextId, EntityId, ProfileId, ShapeId};
 use temper_core::types::query::{PlanRefusal, PropertyOp, RefusalReason};
 use temper_services::backend::substrate_read;
 use temper_services::error::ApiError;
+use temper_services::services::shape_loader::test_support::enumerations_tagged;
 use temper_services::services::shape_loader::{load, load_one};
 use temper_services::services::shape_service::{self, DeclareShapeServiceParams};
 use temper_substrate::events::EventContext;
@@ -711,4 +712,38 @@ async fn a_shape_read_many_times_is_compiled_once(pool: PgPool) {
         ShapeLoad::Loaded(_)
     ));
     assert_eq!(compiles_tagged(&tag), 1, "one compile for six reads");
+}
+
+/// Five by-id reads of one stored compiling shape enumerate its vocabulary once: the vocabulary is
+/// remembered by shape id after the first, and every read advertises the same one. Counted at
+/// `shape_loader::askable`'s enumeration by the fixture's tag, so other suites' reads cannot move
+/// it. Bites bypassing the remembered vocabulary (in `shape_loader::askable`, delete the
+/// `remembered_vocabulary(row.shape_id)` lookup): five enumerations.
+#[sqlx::test(migrations = "../../migrations")]
+async fn a_shape_read_many_times_is_enumerated_once(pool: PgPool) {
+    let w = seed_world(&pool, "loader-vocabulary-remembered").await;
+    let tag = fresh_tag();
+    let mut schema = value_schema();
+    schema["$comment"] = json!(tag);
+    let id = store(&pool, &w, "measurement", &schema).await;
+
+    let mut reads = Vec::new();
+    for _ in 0..5 {
+        let shown = substrate_read::get_shape(&pool, w.owner, id)
+            .await
+            .unwrap()
+            .expect("the owner reads the shape");
+        reads.push(shown.askable.expect("the by-id read carries askable"));
+    }
+    assert_eq!(reads[0].paths.len(), 1);
+    assert_eq!(reads[0].paths[0].path, vec!["value".to_string()]);
+    assert!(
+        reads.iter().all(|askable| *askable == reads[0]),
+        "every read advertises the same vocabulary"
+    );
+    assert_eq!(
+        enumerations_tagged(&tag),
+        1,
+        "one enumeration for five reads"
+    );
 }
