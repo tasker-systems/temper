@@ -78,7 +78,7 @@ use temper_substrate::shape_schema;
 /// resolution and membership ([`AskSession`](temper_core::types::artifact_ask::AskSession)).
 ///
 /// **Each shape loaded live and compiling carries its remembered [`PathTeaching`]**, if the
-/// process remembers one ([`remember_path_teachings`]), so a path refusal on it teaches without
+/// process remembers one (`remember_path_teachings`), so a path refusal on it teaches without
 /// enumerating. Only such a shape's is looked up: a shape the gated read did not return, or one it
 /// returned folded or not compiling, is never walked, and nothing remembered of it is consulted.
 ///
