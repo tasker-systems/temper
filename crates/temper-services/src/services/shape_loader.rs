@@ -58,9 +58,9 @@ use tokio::sync::Semaphore;
 use crate::error::{ApiError, ApiResult};
 use temper_core::error::TemperError;
 use temper_core::types::artifact_ask::{
-    enumerate, within_schema_bound, AskOperator, AskablePath, JsonType, LoadedShape, PathFacts,
-    PathTeaching, RefusalTeaching, ShapeContext, ShapeLoad, ShapeSuccessor, Vocabulary, WalkBounds,
-    NODE_BYTES,
+    enumerate, within_schema_bound, AskOperator, AskablePath, BoundKind, JsonType, LoadedShape,
+    PathFacts, PathTeaching, RefusalTeaching, ShapeContext, ShapeLoad, ShapeSuccessor, Vocabulary,
+    WalkBounds, NODE_BYTES,
 };
 use temper_core::types::ids::{ProfileId, ShapeId};
 use temper_core::types::query::filter::{property_value_bytes, property_value_nodes};
@@ -441,9 +441,9 @@ fn remembered_path_teaching(id: ShapeId) -> Option<PathTeaching> {
 
 /// What a path teaching weighs in the map: an estimate of the memory it holds, in the vocabulary
 /// map's model (`MAX_REMEMBERED_VOCABULARY_BYTES`). Its place in the map, the teaching's own size,
-/// and each path it sends. Its `truncated` set holds at most one of each bound and its elision is
-/// inline, both left at the teaching's own size; its paths are held with no spare capacity, so they
-/// are weighed by their count.
+/// and each path it sends. A non-empty `truncated` set holds one B-tree leaf node, at most one entry
+/// per bound, weighed as one; its elision is inline, left at the teaching's own size; its paths are
+/// held with no spare capacity, so they are weighed by their count.
 fn teaching_weight(teaching: &PathTeaching) -> usize {
     entry_bytes::<PathTeaching>()
         + size_of::<RefusalTeaching>()
@@ -454,7 +454,16 @@ fn teaching_weight(teaching: &PathTeaching) -> usize {
             .flat_map(|vocabulary| &vocabulary.paths)
             .map(path_weight)
             .sum::<usize>()
+        + teaching
+            .teaching()
+            .vocabulary
+            .as_ref()
+            .filter(|vocabulary| !vocabulary.truncated.is_empty())
+            .map_or(0, |_| TRUNCATED_NODE_BYTES)
 }
+
+/// A B-tree leaf node of a `truncated` set: eleven keys, a parent pointer, and its index and length.
+const TRUNCATED_NODE_BYTES: usize = 11 * size_of::<BoundKind>() + size_of::<usize>() + 4;
 
 /// Remember each path teaching one request's ask session made ([`AskSession::taught`]), by the
 /// shape it teaches, for later requests' contexts ([`load`]). Called once the request's asks are
@@ -466,7 +475,7 @@ fn teaching_weight(teaching: &PathTeaching) -> usize {
 /// caller passes. What the map lets go of is freed here, after its lock is released.
 ///
 /// [`AskSession::taught`]: temper_core::types::artifact_ask::AskSession::taught
-pub fn remember_path_teachings(
+pub(crate) fn remember_path_teachings(
     shapes: &ShapeContext,
     taught: impl IntoIterator<Item = PathTeaching>,
 ) {
