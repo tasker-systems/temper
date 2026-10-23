@@ -25,9 +25,9 @@
 	.bound {
 		margin: 0;
 		padding: 8px 14px;
-		border-top: 1px solid rgba(255, 255, 255, 0.07);
-		background: rgba(255, 255, 255, 0.02);
-		color: #98a2b0;
+		border-top: 1px solid var(--tp-rule);
+		background: var(--tp-surface);
+		color: var(--tp-text-muted);
 		font:
 			12px/1.5 ui-monospace,
 			SFMono-Regular,

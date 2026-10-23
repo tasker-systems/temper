@@ -150,17 +150,17 @@
 		margin: 0;
 		font-size: 11px;
 		line-height: 1.7;
-		color: #8b94a5;
+		color: var(--tp-text-subtle);
 	}
 	.measured a {
-		color: #8fb6e8;
+		color: var(--tp-accent);
 	}
 	.back {
 		margin: 0;
 		font-size: 12px;
 	}
 	.back a {
-		color: #8fb6e8;
+		color: var(--tp-accent);
 	}
 	.why {
 		display: flex;
@@ -168,9 +168,9 @@
 		gap: 10px;
 		padding: 14px;
 		overflow: auto;
-		border-left: 1px solid rgba(255, 255, 255, 0.07);
-		background: rgba(255, 255, 255, 0.015);
-		color: #9aa3b0;
+		border-left: 1px solid var(--tp-rule);
+		background: var(--tp-surface);
+		color: var(--tp-text-muted);
 		font-size: 13px;
 		line-height: 1.5;
 	}
@@ -182,20 +182,20 @@
 			monospace;
 		letter-spacing: 0.18em;
 		text-transform: uppercase;
-		color: #6f7886;
+		color: var(--tp-text-subtle);
 	}
 	p {
 		margin: 0;
 	}
 	.asked {
-		color: #c3cbd6;
+		color: var(--tp-text);
 	}
 	.asked em {
 		font-family: Georgia, serif;
 		font-style: italic;
 	}
 	.lead {
-		color: #8b95a3;
+		color: var(--tp-text-subtle);
 	}
 	.groupings {
 		margin: 0;
@@ -206,22 +206,22 @@
 	}
 	.groupings li {
 		padding: 7px 9px;
-		border-left: 2px solid rgba(180, 120, 200, 0.55);
-		background: rgba(180, 120, 200, 0.06);
+		border-left: 2px solid var(--tp-accent-line-soft);
+		background: var(--tp-accent-wash);
 		border-radius: 0 5px 5px 0;
-		color: #c3cbd6;
+		color: var(--tp-text);
 		font-size: 12.5px;
 	}
 	/* A grouping that is gone or unchecked is stated quietly — it is information about the
 	   machine's own bookkeeping, never a fault the reader is being shown. */
 	.groupings li.absent {
-		border-left-color: rgba(255, 255, 255, 0.12);
-		background: rgba(255, 255, 255, 0.02);
-		color: #79828f;
+		border-left-color: var(--tp-rule-strong);
+		background: var(--tp-surface-raised);
+		color: var(--tp-text-subtle);
 		font-style: italic;
 	}
 	.withheld {
-		color: #79828f;
+		color: var(--tp-text-subtle);
 		font-size: 12px;
 		font-style: italic;
 	}
@@ -231,7 +231,7 @@
 	}
 	.accounting summary {
 		cursor: pointer;
-		color: #6f7886;
+		color: var(--tp-text-subtle);
 		font:
 			9px/1.6 ui-monospace,
 			Menlo,
@@ -253,16 +253,16 @@
 		align-items: baseline;
 	}
 	.act {
-		color: #c3cbd6;
+		color: var(--tp-text);
 		font-family: ui-monospace, Menlo, monospace;
 		font-size: 11px;
 	}
 	.n {
-		color: #79828f;
+		color: var(--tp-text-subtle);
 		font-size: 11px;
 		font-variant-numeric: tabular-nums;
 	}
 	.unusable {
-		color: #b58b6a;
+		color: var(--tp-notice);
 	}
 </style>

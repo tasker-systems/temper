@@ -40,13 +40,13 @@
 		{y1}
 		{x2}
 		{y2}
-		stroke={s.color}
+		style:stroke={s.color}
 		stroke-width={s.width}
 		stroke-dasharray={s.dash ?? undefined}
 		marker-end={s.markerEnd ? 'url(#arrow-end)' : undefined}
 		marker-start={s.markerStart ? 'url(#arrow-start)' : undefined}
 	/>
 	{#if label && edge.label}
-		<text x={midX} y={midY - 3} text-anchor="middle" fill="#c9b183" font-size="9">{edge.label}</text>
+		<text x={midX} y={midY - 3} text-anchor="middle" style="fill: var(--tp-accent)" font-size="9">{edge.label}</text>
 	{/if}
 </g>

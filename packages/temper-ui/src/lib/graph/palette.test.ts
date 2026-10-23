@@ -52,8 +52,15 @@ describe('isAuthored', () => {
 describe('chrome', () => {
 	// The `TERRITORY_TINTS` half of this block went with the tints in Beat D; the canvas
 	// background outlived them and keeps its lock.
-	it('locks the canvas background', () => {
-		expect(CANVAS_BG).toBe('#1b1e26');
+	it('paints the canvas on the surface role', () => {
+		expect(CANVAS_BG).toBe('var(--tp-surface)');
+	});
+	it('paints the edges on roles: structural, contradicts and derived stay distinct', () => {
+		expect(EDGE_COLORS).toEqual({
+			structural: 'var(--tp-text-muted)',
+			contradicts: 'var(--tp-danger)',
+			derived: 'var(--tp-text-subtle)',
+		});
 	});
 });
 

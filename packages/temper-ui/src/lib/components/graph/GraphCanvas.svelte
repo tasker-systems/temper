@@ -162,7 +162,7 @@
 
 <div class="graph-canvas" style={paletteStyleVars()}>
 	<svg bind:this={svgEl} viewBox={`0 0 ${W} ${H}`} role="img" aria-label={ariaLabel}>
-		<rect x="0" y="0" width={W} height={H} fill={CANVAS_BG} />
+		<rect x="0" y="0" width={W} height={H} style:fill={CANVAS_BG} />
 		<defs>
 			<marker id="arrow-end" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
 				<path d="M0,0 L10,5 L0,10 z" fill="context-stroke" />
@@ -176,7 +176,7 @@
 				<!-- Two different facts, two different sentences: nothing came back at all, versus this
 				     answer came back and connected none of it. The second used to be unreachable, because
 				     the band drew those marks here. -->
-				<text x={W / 2} y={H / 2} text-anchor="middle" fill="#7d8496" font-size="14"
+				<text x={W / 2} y={H / 2} text-anchor="middle" style="fill: var(--tp-text-subtle)" font-size="14"
 					>{model.nodes.length === 0 ? emptyMessage : nothingConnected}</text
 				>
 			{:else}
@@ -228,7 +228,7 @@
 							y={l.y}
 							text-anchor="middle"
 							font-size="10"
-							fill={l.id === selected ? '#e6edf5' : '#aab4c0'}>{l.text}</text
+							style:fill={l.id === selected ? 'var(--tp-text)' : 'var(--tp-text-muted)'}>{l.text}</text
 						>
 					{/each}
 				</g>
@@ -245,7 +245,7 @@
 							y={s.y + nodeRadius(s.degree) + 12}
 							text-anchor="middle"
 							font-size="10"
-							fill="#e6edf5">{s.title.length > 28 ? `${s.title.slice(0, 27)}…` : s.title}</text
+							style="fill: var(--tp-text)">{s.title.length > 28 ? `${s.title.slice(0, 27)}…` : s.title}</text
 						>
 					{/if}
 				{/if}
@@ -304,7 +304,7 @@
 	}
 	.labels text {
 		paint-order: stroke;
-		stroke: rgba(27, 30, 38, 0.85);
+		stroke: var(--tp-surface);
 		stroke-width: 3px;
 		stroke-linejoin: round;
 	}

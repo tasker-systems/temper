@@ -2,14 +2,13 @@
 	"paths": [
 		"src/recipes.css",
 		"src/routes/+layout.svelte",
-		"src/routes/(app)/+layout.svelte",
+		"src/routes/(app)",
 		"src/lib/components/Sidebar.svelte",
 		"src/lib/components/CommandPalette.svelte",
 		"src/lib/components/vault/FilterBar.svelte",
 		"src/lib/components/ContextNavGroup.svelte",
 		"src/lib/components/NavProgress.svelte",
 		"src/lib/components/RegionState.svelte",
-		"src/routes/(app)/vault/r/[ident]/+page.svelte",
 		"src/lib/components/MarkdownRenderer.svelte",
 		"src/lib/components/vault/HomeChip.svelte",
 		"src/lib/components/vault/PropertySet.svelte",
@@ -19,16 +18,12 @@
 		"src/lib/components/vault/EventHistory.svelte",
 		"src/lib/components/vault/EdgeList.svelte",
 		"src/lib/components/vault/ArtifactList.svelte",
-		"src/routes/(app)/vault/[owner]/[context]/+page.svelte",
-		"src/routes/(app)/vault/all/+page.svelte",
-		"src/routes/(app)/vault/search/+page.svelte",
 		"src/lib/components/vault/VaultBrowser.svelte",
 		"src/lib/components/VaultGrid.svelte",
 		"src/lib/components/FacetChips.svelte",
 		"src/lib/components/RuleHeading.svelte",
 		"src/lib/components/vault/ShapeList.svelte",
-		"src/routes/(app)/admin/access/+page.svelte",
-		"src/routes/(app)/+error.svelte"
+		"src/lib/components/graph"
 	],
 	"themes": [
 		"src/app.css"

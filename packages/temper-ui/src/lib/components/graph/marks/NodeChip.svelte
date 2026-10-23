@@ -84,7 +84,7 @@
 		<!-- Classed so a test can assert its ABSENCE: a channel that fires on every mark encodes
 		     nothing, and nothing in the type system could have caught that. Not a mark — the
 		     vocabulary test counts `<g class>`, and this is a bare circle inside one. -->
-		<circle class="arm-ring" cx={x} cy={y} r={r + 6} fill="none" stroke="#cfd6e2" stroke-width="1.5" />
+		<circle class="arm-ring" cx={x} cy={y} r={r + 6} fill="none" style="stroke: var(--tp-text)" stroke-width="1.5" />
 	{/if}
 	{#if shape === 'circle'}
 		<!-- cogmap facet = an idea in the map -->
@@ -99,12 +99,12 @@
 			height={2 * r}
 			rx={Math.max(2, r * 0.32)}
 			fill={color}
-			stroke={CANVAS_BG}
+			style:stroke={CANVAS_BG}
 			stroke-width="1.5"
 		/>
 	{/if}
 	{#if showLabel}
-		<text x={x} y={y + r + 13} text-anchor="middle" fill="#c7d0da" font-size="10">{truncateLabel(title, 22)}</text>
+		<text x={x} y={y + r + 13} text-anchor="middle" style="fill: var(--tp-text)" font-size="10">{truncateLabel(title, 22)}</text>
 	{/if}
 	<circle class="focus-ring" cx={x} cy={y} r={r + 4} stroke-width="2" />
 </g>

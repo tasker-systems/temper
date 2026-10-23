@@ -103,15 +103,15 @@
 		max-height: 40%;
 		overflow: auto;
 		padding: 8px 14px 10px;
-		border-top: 1px solid rgba(255, 255, 255, 0.07);
-		background: rgba(255, 255, 255, 0.015);
-		color: #8b94a5;
+		border-top: 1px solid var(--tp-rule);
+		background: var(--tp-surface);
+		color: var(--tp-text-subtle);
 		font-size: 11.5px;
 		line-height: 1.6;
 	}
 	summary {
 		cursor: pointer;
-		color: #8b94a5;
+		color: var(--tp-text-subtle);
 	}
 	ul {
 		margin: 8px 0 0;
@@ -137,16 +137,16 @@
 	}
 	.row:hover,
 	.row:focus-visible {
-		background: rgba(255, 255, 255, 0.05);
+		background: var(--tp-accent-hover);
 	}
 	.row[aria-current='true'] {
-		background: rgba(255, 255, 255, 0.08);
+		background: var(--tp-accent-wash);
 	}
 	.title {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		color: #c3cbd6;
+		color: var(--tp-text);
 		font-size: 12.5px;
 	}
 	.kind {
@@ -158,7 +158,7 @@
 		text-transform: uppercase;
 	}
 	.elsewhere {
-		color: #79828f;
+		color: var(--tp-text-subtle);
 		font-variant-numeric: tabular-nums;
 	}
 	@media (max-width: 900px) {

@@ -388,25 +388,25 @@
 		gap: 8px;
 		align-items: center;
 		padding: 8px 14px;
-		border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+		border-bottom: 1px solid var(--tp-rule);
 	}
 	.ask input {
 		flex: 1 1 auto;
 		min-width: 0;
 		padding: 7px 11px;
-		border: 1px solid rgba(255, 255, 255, 0.12);
+		border: 1px solid var(--tp-rule-strong);
 		border-radius: 7px;
-		background: rgba(255, 255, 255, 0.03);
-		color: #dbe2ea;
+		background: var(--tp-surface);
+		color: var(--tp-text);
 		font-size: 13px;
 	}
 	.ask button,
 	.ask .clear {
 		padding: 7px 12px;
-		border: 1px solid rgba(255, 255, 255, 0.14);
+		border: 1px solid var(--tp-rule-strong);
 		border-radius: 7px;
 		background: none;
-		color: #c9d1d9;
+		color: var(--tp-text);
 		font-size: 12px;
 		text-decoration: none;
 		cursor: pointer;
@@ -415,8 +415,8 @@
 		grid-row: auto;
 		margin: 0;
 		padding: 6px 14px;
-		border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-		color: #9aa3b0;
+		border-bottom: 1px solid var(--tp-rule);
+		color: var(--tp-text-muted);
 		font-size: 12.5px;
 	}
 	/*
@@ -481,9 +481,9 @@
 		gap: 8px;
 		padding: 14px 0;
 		border: 0;
-		border-left: 1px solid rgba(255, 255, 255, 0.07);
-		background: rgba(255, 255, 255, 0.015);
-		color: #6f7886;
+		border-left: 1px solid var(--tp-rule);
+		background: var(--tp-surface);
+		color: var(--tp-text-subtle);
 		cursor: pointer;
 		writing-mode: vertical-rl;
 		font:
@@ -495,8 +495,8 @@
 	}
 	.readout-strip:hover,
 	.readout-strip:focus-visible {
-		color: #c3cbd6;
-		background: rgba(255, 255, 255, 0.045);
+		color: var(--tp-text);
+		background: var(--tp-accent-hover);
 	}
 	.stage {
 		position: relative;
@@ -518,7 +518,7 @@
 		top: 10px;
 		left: 12px;
 		z-index: 1;
-		background: rgba(20, 23, 29, 0.92);
+		background: var(--tp-surface-raised);
 		border-radius: 0 5px 5px 0;
 	}
 	.refusal {
@@ -528,13 +528,13 @@
 		gap: 8px;
 		padding: 40px 14px;
 		max-width: 34rem;
-		color: #9aa3b0;
+		color: var(--tp-text-muted);
 	}
 	.refusal h2 {
 		margin: 0;
 		font-family: Georgia, serif;
 		font-size: 19px;
-		color: #dbe2ea;
+		color: var(--tp-text);
 	}
 	.refusal p {
 		margin: 0;
