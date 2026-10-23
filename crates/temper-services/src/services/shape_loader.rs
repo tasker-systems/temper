@@ -210,24 +210,37 @@ fn remember(id: ShapeId, verdict: SchemaVerdict) {
 ///
 /// # 32 MiB
 ///
-/// A count cap would not bound this: one vocabulary is at most about 4 MiB of path text and
-/// declared values — the walk charges both against `MAX_WALK_VISITS` at `BYTES_PER_VISIT` — plus
-/// the structure around up to `MAX_WALK_PATHS` paths, so the largest shapes alone would fill a
-/// count cap many times over. Weighed instead, 32 MiB holds several of the largest and, since
-/// an ordinary shape's vocabulary is a few KiB, thousands of ordinary ones. Past the cap an
-/// arbitrary entry is forgotten, and that shape is enumerated again when it is next read.
+/// A count cap would not bound this: the walk bounds what one vocabulary copies by its visits
+/// (`MAX_WALK_VISITS`), not by a size, so in this weight one ranges from a few KiB for an ordinary
+/// shape to several MiB, and past the cap for values built of many small objects. Weighed
+/// instead, 32 MiB holds a few of the heaviest that fit and thousands of ordinary ones. Past the
+/// cap an arbitrary entry is forgotten, and that shape is enumerated again when it is next read; a
+/// vocabulary heavier than the whole cap is never remembered, and is enumerated on each read.
 ///
 /// # What the weight bounds
 ///
-/// An entry is weighed by what it holds, not by what it serializes to: each path its own size,
-/// its segments' `String`s and their bytes, and its operators; each declared value at least
-/// `NODE_BYTES` and never less than a `Value`, plus its text; and each node nested in a value at
-/// `NODE_BYTES`, the charge the walk makes for a copied member. A short code that serializes to
-/// two bytes is charged as the `Value` it occupies, and a container as the allocations it holds,
-/// so what the map holds in memory is its weight within a small factor — allocator rounding, the
-/// map's own slots, a `BTreeMap` node's spare room — and 32 MiB of weight is about that much
+/// An entry is weighed by what it holds, not by what it serializes to: its place in the map
+/// (`ENTRY_BYTES`); each path its own size, its segments' `String`s and their bytes, and its
+/// operators; each declared value at least `NODE_BYTES` and never less than a `Value`, plus its
+/// text; each node nested in a value at `NODE_BYTES`, the charge the walk makes for a copied
+/// member; and each object in a value the map nodes its members sit in (`MAP_NODE_BYTES`). A
+/// short code that serializes to two bytes is charged as the `Value` it occupies, and a container
+/// as the allocations it holds, so what the map holds in memory is its weight within a small
+/// factor — allocator rounding, the table's spare slots — and 32 MiB of weight is about that much
 /// memory.
 const MAX_REMEMBERED_VOCABULARY_BYTES: usize = 32 << 20;
+
+/// What one entry holds beside its vocabulary: its key and value in the map's table, a control
+/// byte, and the `Arc`'s two counts.
+const ENTRY_BYTES: usize =
+    size_of::<ShapeId>() + size_of::<(Arc<Vocabulary>, usize)>() + 1 + 2 * size_of::<usize>();
+
+/// One node of a JSON object's map, at most: eleven key and value slots and the node's own header.
+/// A non-empty object copied into a vocabulary holds at least one, however few members it has,
+/// and a node other than the first is at least half full, so an object of `n` members holds at
+/// most `n.div_ceil(5)` of them. Under serde_json's `preserve_order` the map is an `IndexMap`, and
+/// this over-states it.
+const MAP_NODE_BYTES: usize = 11 * (size_of::<String>() + size_of::<Value>()) + 16;
 
 /// The vocabularies remembered, by shape id, and what they weigh together. The running total
 /// lives beside the map, under one lock, so it cannot drift from what the map holds.
@@ -246,7 +259,8 @@ impl RememberedVocabularies {
     }
 
     /// Remember `vocabulary`, weighing `weight`, forgetting arbitrary entries in one pass over the
-    /// map until it fits `budget`. One heavier than the whole budget is not remembered.
+    /// map, stopping as soon as it fits `budget`. One heavier than the whole budget is not
+    /// remembered.
     ///
     /// Returns every vocabulary it let go of — the ones forgotten, the one `id` held before, or
     /// `vocabulary` itself when it is not remembered — so the caller frees them once the lock is
@@ -267,18 +281,14 @@ impl RememberedVocabularies {
             self.bytes -= replaced_weight;
             let_go.push(replaced);
         }
-        let mut excess = (self.bytes + weight).saturating_sub(budget);
-        if excess > 0 {
-            let forgotten = self.entries.extract_if(|_, (_, held)| {
-                if excess == 0 {
-                    return false;
-                }
-                excess = excess.saturating_sub(*held);
-                true
-            });
-            for (_, (evicted, held)) in forgotten {
+        if self.bytes + weight > budget {
+            // Dropping the pass part-way keeps every entry it has not reached.
+            for (_, (evicted, held)) in self.entries.extract_if(|_, _| true) {
                 self.bytes -= held;
                 let_go.push(evicted);
+                if self.bytes + weight <= budget {
+                    break;
+                }
             }
         }
         self.entries.insert(id, (vocabulary, weight));
@@ -298,10 +308,12 @@ fn remembered_vocabulary(id: ShapeId) -> Option<Arc<Vocabulary>> {
 }
 
 /// What a vocabulary weighs in the map: an estimate of the memory it holds, in the walk's model
-/// (see `MAX_REMEMBERED_VOCABULARY_BYTES`). Its own size, and each path's. `truncated` holds at
-/// most one of each bound, negligible beside the paths, and is left at the vocabulary's own size.
+/// (see `MAX_REMEMBERED_VOCABULARY_BYTES`). Its place in the map, its own size, and each path's.
+/// `truncated` holds at most one of each bound, negligible beside the paths, and is left at the
+/// vocabulary's own size. Paths are weighed by their count, so a vocabulary is remembered with
+/// `paths` shrunk to it.
 fn vocabulary_weight(vocabulary: &Vocabulary) -> usize {
-    size_of::<Vocabulary>() + vocabulary.paths.iter().map(path_weight).sum::<usize>()
+    ENTRY_BYTES + size_of::<Vocabulary>() + vocabulary.paths.iter().map(path_weight).sum::<usize>()
 }
 
 /// One path: its own size, each segment's `String` and bytes, its operators, and its facts.
@@ -334,12 +346,25 @@ fn facts_weight(facts: &PathFacts) -> usize {
 }
 
 /// One declared value, as the walk charges a copied member: at least `NODE_BYTES`, and never less
-/// than the `Value` it occupies; each node nested in it at `NODE_BYTES`; and its compact text,
-/// counted through a sink so that weighing a large value allocates nothing.
+/// than the `Value` it occupies; each node nested in it at `NODE_BYTES`; the map nodes of each
+/// object in it; and its compact text, counted through a sink so that weighing a large value
+/// allocates nothing.
 fn value_weight(value: &Value) -> usize {
     size_of::<Value>().max(NODE_BYTES)
         + NODE_BYTES * property_value_nodes(value)
+        + map_node_weight(value)
         + property_value_bytes(value)
+}
+
+/// The map nodes every non-empty object in `value` holds, at any depth (`MAP_NODE_BYTES`).
+fn map_node_weight(value: &Value) -> usize {
+    match value {
+        Value::Array(xs) => xs.iter().map(map_node_weight).sum(),
+        Value::Object(m) if !m.is_empty() => {
+            MAP_NODE_BYTES * m.len().div_ceil(5) + m.values().map(map_node_weight).sum::<usize>()
+        }
+        _ => 0,
+    }
 }
 
 /// Remember `vocabulary` for `id`, weighing `weight`. What the map lets go of is freed here, after
@@ -387,7 +412,8 @@ pub async fn askable(row: &RetrievedShape) -> ApiResult<(Vocabulary, Option<Plan
             #[cfg(feature = "test-db")]
             test_support::record(&row.schema);
             let (vocabulary, weight) = with_schema_off_the_executor(&row.schema, |schema| {
-                let vocabulary = enumerate(schema, &WalkBounds::BUILD);
+                let mut vocabulary = enumerate(schema, &WalkBounds::BUILD);
+                vocabulary.paths.shrink_to_fit();
                 let weight = vocabulary_weight(&vocabulary);
                 (vocabulary, weight)
             })
@@ -638,5 +664,30 @@ mod tests {
         let weight = vocabulary_weight(&vocabulary);
         assert!(weight >= 1_000 * size_of::<Value>(), "{weight}");
         assert!(weight >= 1_000 * NODE_BYTES, "{weight}");
+    }
+
+    /// An object in a value is weighed with the map node its members sit in, which a copy holds
+    /// however few members it has: one path carrying a thousand copies of `{"a": 0}`, seven bytes
+    /// each on the wire, weighs at least a `Value` and a map node a copy. Bite: drop
+    /// `map_node_weight` from `value_weight`; a copy then weighs about 135 bytes, and the
+    /// assertion goes red.
+    #[test]
+    fn an_object_in_a_value_weighs_its_map_node() {
+        let vocabulary = Vocabulary {
+            paths: vec![AskablePath {
+                path: vec!["point".to_owned()],
+                facts: PathFacts {
+                    values: Some(vec![serde_json::json!({ "a": 0 }); 1_000]),
+                    ..PathFacts::default()
+                },
+                operators: vec![],
+            }],
+            truncated: BTreeSet::new(),
+        };
+        let weight = vocabulary_weight(&vocabulary);
+        assert!(
+            weight >= 1_000 * (size_of::<Value>() + MAP_NODE_BYTES),
+            "{weight}"
+        );
     }
 }

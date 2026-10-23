@@ -546,9 +546,11 @@ async fn askable_is_on_the_by_id_read_and_absent_from_the_listing(pool: PgPool) 
 }
 
 /// A stored shape whose schema does not compile reads `askable` empty, with `unaskable` the very
-/// refusal an ask naming it meets — reason and fixed sentence — and nothing is fetched. Bites an
-/// `askable` derived without the compile (it would read empty with no reason), or a reason of its
-/// own beside the ask's.
+/// refusal an ask naming it meets — reason and fixed sentence — and nothing is fetched; read again,
+/// it answers the same. Bites an `askable` derived without the compile (it would read empty with no
+/// reason), a reason of its own beside the ask's, or a vocabulary remembered for a shape that does
+/// not compile (call `remember_vocabulary` for every verdict in `shape_loader::askable`: the second
+/// read answers with no refusal).
 #[sqlx::test(migrations = "../../migrations")]
 async fn an_uncompilable_shape_reads_askable_empty_with_the_reason(pool: PgPool) {
     let w = seed_world(&pool, "loader-askable-uncompilable").await;
@@ -577,6 +579,13 @@ async fn an_uncompilable_shape_reads_askable_empty_with_the_reason(pool: PgPool)
     let wire = serde_json::to_value(&shown).unwrap();
     assert_eq!(wire["askable"], serde_json::json!({ "paths": [] }));
     assert_eq!(wire["unaskable"]["reason"], "shape_schema_uncompilable");
+
+    let again = substrate_read::get_shape(&pool, w.owner, id)
+        .await
+        .unwrap()
+        .expect("the owner reads the shape again");
+    assert_eq!(again.askable, shown.askable);
+    assert_eq!(again.unaskable, shown.unaskable, "still refused");
     assert_eq!(probe.connections(), 0, "the read must not fetch");
 }
 
@@ -587,9 +596,10 @@ async fn an_uncompilable_shape_reads_askable_empty_with_the_reason(pool: PgPool)
 /// load is `SchemaTooLarge`, an ask is told `shape_schema_uncompilable` with
 /// `teaches.beyond_bound: schema_bytes`, the read's `askable` is empty and truncated at
 /// `schema_bytes` with that same refusal as `unaskable`, and `shape_schema::compile` — counted
-/// wherever it is called — never runs on it. Bites removing the measurement from
-/// `shape_loader::judge` (the `if !within_schema_bound(schema)` return of `TooLarge`): the schema
-/// compiles, the count moves, and it loads `Loaded`.
+/// wherever it is called — never runs on it; read again, it answers the same. Bites removing the
+/// measurement from `shape_loader::judge` (the `if !within_schema_bound(schema)` return of
+/// `TooLarge`): the schema compiles, the count moves, and it loads `Loaded`. Bites, too, a
+/// vocabulary remembered for a shape past the bound: the second read answers with no refusal.
 #[sqlx::test(migrations = "../../migrations")]
 async fn a_schema_past_the_byte_bound_is_refused_at_load_and_read_and_never_compiled(pool: PgPool) {
     let w = seed_world(&pool, "loader-past-the-bound").await;
@@ -627,6 +637,13 @@ async fn a_schema_past_the_byte_bound_is_refused_at_load_and_read_and_never_comp
     );
     assert_eq!(wire["unaskable"]["reason"], "shape_schema_uncompilable");
     assert_eq!(wire["unaskable"]["teaches"]["beyond_bound"], "schema_bytes");
+
+    let again = substrate_read::get_shape(&pool, w.owner, id)
+        .await
+        .unwrap()
+        .expect("the owner reads the shape again");
+    assert_eq!(again.askable, shown.askable);
+    assert_eq!(again.unaskable, shown.unaskable, "still refused");
 
     assert_eq!(
         compiles_tagged(&tag),

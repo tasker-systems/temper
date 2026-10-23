@@ -2066,7 +2066,8 @@ pub async fn list_shapes(
 /// this version's schema cannot be walked, `unaskable` — the refusal step 3 gives it: past the
 /// walk's byte bound (never compiled; `askable` says `truncated: [schema_bytes]`) or not compiling
 /// under the no-fetch compiler (`askable` empty). [`shape_loader::askable`] decides it as the
-/// loader does — the verdict remembered by id, a compile under a permit off the async executor. A
+/// loader does — the verdict remembered by id, a compile under a permit off the async executor —
+/// or, for a compiling shape it has walked before, answers the vocabulary remembered by id. A
 /// folded shape answers its own version's vocabulary; an ask naming it is refused
 /// `shape_superseded` first, which `is_folded` already says.
 pub async fn get_shape(
