@@ -12,7 +12,13 @@ export type ExactArm = { hits: Array<ExactHit>, reason: SearchReason,
 /**
  * One-liner explaining a non-`Ok` reason and suggesting a next step.
  */
-hint: string | null, };
+hint: string | null, 
+/**
+ * Are there matching hits beyond this page? The arm's own word, from the probe row it read
+ * past the page — never inferred from `hits.len()` reaching the limit, which a page that ends
+ * exactly on the last match would mistake for more.
+ */
+truncated: boolean, };
 
 /**
  * One hit from the **exact** arm: you could quote the words.
@@ -108,7 +114,13 @@ export type WideArm = { hits: Array<WideHit>, reason: SearchReason, hint: string
  * described a blend that no longer exists. An arm that could not run says so here rather than
  * returning an empty list that reads like an answer.
  */
-degraded: boolean, };
+degraded: boolean, 
+/**
+ * Are there hits beyond this page among what the arm draws? Read from the probe row past the
+ * page, as on the exact arm. Unscoped, the arm draws a bounded set of nearest chunks first,
+ * so `false` means nothing more within that draw, not nothing more similar anywhere.
+ */
+truncated: boolean, };
 
 /**
  * One hit from the **wide** arm: you had the idea, not the words.

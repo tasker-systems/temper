@@ -1412,6 +1412,11 @@ pub async fn search_select(
         },
     )?;
 
+    // The probe row is each arm's word that more follow. Read before it is dropped, and before
+    // enrichment, which can drop rows the reader may not see and so says nothing about "more".
+    let exact_truncated = exact_hits.len() > limit;
+    let wide_truncated = wide_hits.len() > limit;
+
     // Drop the probe row before anything else sees it, so enrichment pays for the page only.
     let exact_hits: Vec<_> = exact_hits.into_iter().take(limit).collect();
     let wide_hits: Vec<_> = wide_hits.into_iter().take(limit).collect();
@@ -1457,12 +1462,14 @@ pub async fn search_select(
             hint: search_hint(scope, exact_reason, scope_size, false, offset_i64),
             reason: exact_reason,
             hits: exact,
+            truncated: exact_truncated,
         },
         wide: WideArm {
             hint: search_hint(scope, wide_reason, scope_size, degraded, offset_i64),
             reason: wide_reason,
             hits: wide,
             degraded,
+            truncated: wide_truncated,
         },
         scope: SearchScopeInfo {
             kind: scope,

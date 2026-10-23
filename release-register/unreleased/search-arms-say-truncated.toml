@@ -1,0 +1,18 @@
+title    = "Each `/api/search` arm says whether more hits follow its page (`truncated`)"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["http", "mcp", "cli-stdout", "clients"]
+status   = "signal-only"
+body = '''
+`ExactArm` and `WideArm` gain `truncated: bool`, read from the probe row each arm already fetched
+past the page and then dropped, so it costs no extra statement. It is true when more hits follow
+this page. On the unscoped wide arm it is bounded by that arm's nearest-chunk draw: `false` means
+nothing more within the draw, not nothing more similar anywhere. The field is
+`#[serde(default)]`, so a client reading an older server sees `false`.
+
+Who observes it: every search caller over HTTP and MCP, the CLI's JSON output, and the three
+generated SDKs (one new field on each arm model). The web's palette uses it to say "All N" or
+"more not shown" in the arm's own word, instead of inferring either from a full page.
+
+User-visible: on the web's palette. Release relevance: additive (one response field).
+'''
