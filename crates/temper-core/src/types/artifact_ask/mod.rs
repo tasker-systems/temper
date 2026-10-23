@@ -89,7 +89,8 @@ pub struct ArtifactAsk {
     /// Narrow by selection intent: `current`, `member`, `pinned`. Empty: `current` and `member`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub intent: Vec<String>,
-    /// Admit folded (superseded) artifacts.
+    /// Admit folded (superseded) artifacts. Not served: `true` is declined by name
+    /// (`filter_not_applicable`), and an ask reads live artifacts only.
     #[serde(default)]
     pub include_folded: bool,
     /// Narrow by verdict state: `declared_satisfied`, `declared_not_satisfied`,

@@ -16,7 +16,7 @@ require 'time'
 module Temper::Generated
   # One ask: a governing shape, and what the asker holds about artifacts it governs (§2.1).  `intent` and `shape_states` are **strings**, validated by [`AskSession::validate`] into `unknown_artifact_intent` / `unknown_shape_state` with `teaches` naming the vocabulary — never serde enums, whose unknown-variant failure would land before validation, in the deserializer's words, and outside the every-refusal-at-once body. Empty means the default, applied by the validator: `current` and `member`, and every askable state.  **Strict**, like `ActInvocation`: an unknown field is a deserialization error, never a field that silently narrows nothing.
   class ArtifactAsk < ApiModelBase
-    # Admit folded (superseded) artifacts.
+    # Admit folded (superseded) artifacts. Not served: `true` is declined by name (`filter_not_applicable`), and an ask reads live artifacts only.
     attr_accessor :include_folded
 
     # Narrow by selection intent: `current`, `member`, `pinned`. Empty: `current` and `member`.

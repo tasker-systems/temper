@@ -30,7 +30,8 @@ predicates: Array<ArtifactPredicate>,
  */
 intent: Array<string>, 
 /**
- * Admit folded (superseded) artifacts.
+ * Admit folded (superseded) artifacts. Not served: `true` is declined by name
+ * (`filter_not_applicable`), and an ask reads live artifacts only.
  */
 include_folded: boolean, 
 /**

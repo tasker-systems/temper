@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 use crate::backend::substrate_read::{embed_query_texts, QueryEmbedBatch};
 use crate::error::{ApiError, ApiResult};
-use temper_core::types::artifact_ask::{AskSession, ShapeContext};
+use temper_core::types::artifact_ask::{AskSession, ShapeContext, ValidatedAsk};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::query::{
     applied_terms, declaration, text_to_embed, texts_to_embed, validate, ActName, ActRefusal,
@@ -433,7 +433,10 @@ fn assemble(
         .iter()
         .filter_map(|spec| {
             let node = by_name.get(spec.stage.as_str())?;
-            Some(stage_result(node, spec, rows, hydrated).map(|r| (spec.stage.clone(), r)))
+            Some(
+                stage_result(node, v.asks(&spec.stage), spec, rows, hydrated)
+                    .map(|r| (spec.stage.clone(), r)),
+            )
         })
         .collect::<ApiResult<Vec<_>>>()?
         .into_iter()
@@ -442,7 +445,7 @@ fn assemble(
     let stages = v
         .ordered()
         .iter()
-        .map(|node| stage_trace(node, rows))
+        .map(|node| stage_trace(node, v.asks(node.name()), rows))
         .collect::<ApiResult<Vec<_>>>()?;
 
     Ok(QueryResponse {
@@ -610,6 +613,7 @@ fn stage_numbers(node: &StageNode, rows: &StageIndex<'_>) -> ApiResult<StageNumb
 
 fn stage_result(
     node: &StageNode,
+    asks: &[ValidatedAsk],
     spec: &ReturnSpec,
     rows: &StageIndex<'_>,
     hydrated: &Hydrated,
@@ -696,7 +700,7 @@ fn stage_result(
         // fragments return a page, not a count. Absent rather than guessed from the page size.
         total: None,
         terms_applied: n.terms_applied,
-        narrowed_by: narrowed_by(node, rows)?,
+        narrowed_by: narrowed_by(node, asks, rows)?,
         input_ids: n.input_ids,
         input_unusable: n.input_unusable,
         disclosed_regions: disclosed_regions_for(node.name().as_str(), rows),
@@ -764,7 +768,11 @@ fn disclosed_regions_for(stage: &str, rows: &StageIndex<'_>) -> Vec<RegionDisclo
     out
 }
 
-fn stage_trace(node: &StageNode, rows: &StageIndex<'_>) -> ApiResult<StageTrace> {
+fn stage_trace(
+    node: &StageNode,
+    asks: &[ValidatedAsk],
+    rows: &StageIndex<'_>,
+) -> ApiResult<StageTrace> {
     let n = stage_numbers(node, rows)?;
     Ok(StageTrace {
         stage: node.name().clone(),
@@ -780,7 +788,7 @@ fn stage_trace(node: &StageNode, rows: &StageIndex<'_>) -> ApiResult<StageTrace>
         // of the page it ran and of whether that page was full.
         extent: n.extent,
         terms_applied: n.terms_applied,
-        narrowed_by: narrowed_by(node, rows)?,
+        narrowed_by: narrowed_by(node, asks, rows)?,
         disclosed_regions: disclosed_regions_for(node.name().as_str(), rows),
     })
 }
@@ -925,7 +933,11 @@ fn subtraction_disclosure(cn: &CombineNode, rows: &StageIndex<'_>) -> ApiResult<
     }])
 }
 
-fn narrowed_by(node: &StageNode, rows: &StageIndex<'_>) -> ApiResult<Vec<NarrowedBy>> {
+fn narrowed_by(
+    node: &StageNode,
+    asks: &[ValidatedAsk],
+    rows: &StageIndex<'_>,
+) -> ApiResult<Vec<NarrowedBy>> {
     let inv = match node {
         StageNode::Act(inv) => inv,
         // **A combinator discloses a narrowing only when it NARROWS, and only one of them does.**
@@ -1004,14 +1016,16 @@ fn narrowed_by(node: &StageNode, rows: &StageIndex<'_>) -> ApiResult<Vec<Narrowe
 
     // **The artifact filter is echoed, one entry per ask, naming the shape it asked.** It narrows
     // the selection's set as the resource filter does, so leaving it out would be the
-    // applied-but-not-echoed defect this function exists against. The value is the shape's id and
-    // nothing of the ask's predicates, for the reason the property echoes give: the caller holds
-    // its own ask, and its values are caller JSON of arbitrary size.
-    out.extend(
-        inv.artifact_filter
-            .iter()
-            .map(|ask| entry("artifact_shape".to_string(), ask.shape.to_string())),
-    );
+    // applied-but-not-echoed defect this function exists against. Read from the seal (`asks`, the
+    // stage's `ValidatedComposition::asks`), the one source the statement also binds from. The
+    // value is the shape's id and nothing of the ask's predicates, for the reason the property
+    // echoes give: the caller holds its own ask, and its values are caller JSON of arbitrary size.
+    out.extend(asks.iter().map(|ask| {
+        entry(
+            "artifact_shape".to_string(),
+            ask.shape().shape_id.to_string(),
+        )
+    }));
 
     let Some(f) = &inv.resource_filter else {
         return Ok(out);
@@ -1130,7 +1144,7 @@ mod tests {
             });
         }
 
-        let disclosed = narrowed_by(&node, &no_rows().index())
+        let disclosed = narrowed_by(&node, &[], &no_rows().index())
             .expect("an act stage's narrowing reads no tallies");
         let pairs: Vec<(&str, &str)> = disclosed
             .iter()
@@ -1168,7 +1182,7 @@ mod tests {
     #[test]
     fn a_stage_that_narrowed_by_nothing_discloses_an_empty_list() {
         let node = act_node("hits", ActName::FindExact, None);
-        assert!(narrowed_by(&node, &no_rows().index())
+        assert!(narrowed_by(&node, &[], &no_rows().index())
             .expect("an act stage's narrowing reads no tallies")
             .is_empty());
     }
@@ -2975,25 +2989,58 @@ mod tests {
         );
     }
 
-    /// **An applied artifact filter is echoed in the narrowing disclosure**, one entry per ask,
-    /// keyed `artifact_shape` and naming the shape — and nothing of the predicates. Bites the echo
-    /// removed: a selection narrowed by what its artifacts hold reports no narrowing at all.
+    /// **An applied artifact filter is echoed in the narrowing disclosure, read from the seal**: one
+    /// entry per sealed ask, keyed `artifact_shape` and naming the shape it was validated against —
+    /// and nothing of the predicates. The same sealed asks beside a node whose own filter was
+    /// cleared still echo, so the echo's source is the seal and never the caller's filter.
+    ///
+    /// Bites the echo removed (no entry), and the echo read from `inv.artifact_filter` (the cleared
+    /// node echoes nothing).
     #[test]
-    fn an_applied_artifact_filter_is_echoed_in_the_narrowing_disclosure() {
-        let node = selecting("sel", vec![has_keys(1, &["unit"]), has_keys(2, &["count"])]);
-        let disclosed = narrowed_by(&node, &no_rows().index())
-            .expect("an act stage's narrowing reads no tallies");
-        let pairs: Vec<(String, String)> = disclosed
-            .iter()
-            .map(|n| (n.key.clone(), n.value.clone()))
+    fn an_applied_artifact_filter_is_echoed_from_the_seal() {
+        let schema = serde_json::json!({ "properties": { "unit": {}, "count": {} } });
+        let shapes: ShapeContext = [1, 2]
+            .into_iter()
+            .map(|n| {
+                (
+                    shape_id(n),
+                    ShapeLoad::Loaded(loaded_shape(n, schema.clone())),
+                )
+            })
             .collect();
-        assert_eq!(
-            pairs,
-            vec![
-                ("artifact_shape".to_string(), shape_id(1).to_string()),
-                ("artifact_shape".to_string(), shape_id(2).to_string()),
-            ]
-        );
+        let c = Composition {
+            outcome: OutcomeDeclaration {
+                returns: vec![ReturnSpec {
+                    stage: name("hits"),
+                    with: vec![],
+                }],
+            },
+            stages: vec![
+                selecting("sel", vec![has_keys(1, &["unit"]), has_keys(2, &["count"])]),
+                act_node("hits", ActName::FindExact, bounded_by("sel")),
+            ],
+        };
+        let v = validate(&c, &mut shapes.session()).expect("both asks lie inside their shapes");
+        let sealed = v.asks(&name("sel"));
+        let expected = vec![
+            ("artifact_shape".to_string(), shape_id(1).to_string()),
+            ("artifact_shape".to_string(), shape_id(2).to_string()),
+        ];
+        let pairs = |node: &StageNode| -> Vec<(String, String)> {
+            narrowed_by(node, sealed, &no_rows().index())
+                .expect("an act stage's narrowing reads no tallies")
+                .iter()
+                .map(|n| (n.key.clone(), n.value.clone()))
+                .collect()
+        };
+        let node = &c.stages[0];
+        assert_eq!(pairs(node), expected);
+
+        let mut cleared = node.clone();
+        if let StageNode::Act(a) = &mut cleared {
+            a.artifact_filter.clear();
+        }
+        assert_eq!(pairs(&cleared), expected, "the echo reads the seal");
     }
 
     /// The `n`th (`1 <= n < 64`) of a run of asks naming both of the heavy shape's paths, each with
@@ -3015,20 +3062,23 @@ mod tests {
         }
     }
 
-    /// **Through `prepare`'s path, the gate and the seal share one ask session**, and a
+    /// **Through `gate_embed_seal`, the gate and the seal share one ask session**, and a
     /// many-stage composition over one heavy shape costs one walk: sixteen selections, each asking a
     /// different ask of a shape whose two paths each reference one `allOf` of 2,500 branches. After
     /// the gate, the embed and the seal, the session has walked the shape once, and answered every
     /// one of the sixteen asks a second time from what the gate validated — which is the seal
     /// re-validating them, spending nothing. What one walk costs in visits is pinned in temper-core
-    /// (`a_many_stage_composition_over_one_heavy_shape_costs_one_walk_across_gate_and_seal`); this
-    /// pins that `prepare` gives both passes the session that test measures.
+    /// (`a_many_stage_composition_over_one_heavy_shape_costs_one_walk_across_gate_and_seal`).
     ///
-    /// Bites the seal validating through a session other than the gate's — `gate_embed_seal`
-    /// handed the context and sealing through `shapes.session()`, or `prepare` beginning one session
-    /// per pass: the gate's session then answers nothing again, and `answered_again` reads 0.
+    /// That `prepare` hands both passes one session is structural rather than witnessed here:
+    /// `prepare` begins exactly one session and calls this function, which holds no
+    /// [`ShapeContext`] and so cannot begin another.
+    ///
+    /// Bites `gate_embed_seal` sealing through a session other than the one it is handed (given the
+    /// context and sealing through `shapes.session()`): the handed session then answers nothing
+    /// again, and `answered_again` reads 0.
     #[tokio::test]
-    async fn the_gate_and_the_seal_share_one_ask_session_through_prepare() {
+    async fn the_gate_and_the_seal_share_one_ask_session_through_gate_embed_seal() {
         const STAGES: usize = 16;
         let branches: Vec<serde_json::Value> = (0..2_500).map(|_| serde_json::json!({})).collect();
         let heavy = loaded_shape(

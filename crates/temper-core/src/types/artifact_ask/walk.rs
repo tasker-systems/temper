@@ -11,8 +11,8 @@
 //! **A `$ref` the walk does not follow is `true`, under every draft.** An anchor, a remote one, or
 //! any reference made inside a resource the schema embeds under its own `$id` (where `#` means that
 //! resource, not the root): the walk cannot see what it says, so the subschema it stands for is
-//! declared and unconstrained. That never refuses a declared path; a
-//! value admitted there may then match nothing, which is an honest empty.
+//! declared and unconstrained. That never refuses a declared path; a value admitted there may then
+//! match nothing, which is an honest empty.
 //!
 //! **The walk sees only schemas that compiled.** The loader (spec §2.4) compiled the schema with
 //! the no-fetch compiler before handing it here, so an unrecognised `$schema` or a remote `$ref` has
@@ -49,8 +49,8 @@
 //!   per walk and shared rather than copied; sets intersect and union by member id in linear time,
 //!   charged by their sizes each time; and copying them into an answer is charged by size again.
 //!   An ask's paths are never copied at all, and a refusal's teaching copies only the paths it
-//!   sends. So a wide `allOf` over a large enum stops at the work
-//!   budget instead of holding millions of values or comparing them pairwise.
+//!   sends. So a wide `allOf` over a large enum stops at the work budget instead of holding
+//!   millions of values or comparing them pairwise.
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::Arc;

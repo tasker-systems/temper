@@ -58,10 +58,12 @@ pub struct CompiledQuery {
     /// sentence here is "static refusals never reach the compiler, they are `validate`'s" — worth
     /// stating carefully, because getting it wrong is how the next refusal lands on the wrong side.
     ///
-    /// One case still returns `Err`: `UnsupportedSeedKind` from `StageNarrowing::bound_expr`, and
-    /// `AnchorTakesOneId` from the anchor arm. Both are compiler/validator **contradictions** rather
-    /// than anything a caller did — `validate` refuses each of them first — so they are unreachable
-    /// through any public path, and failing loud if the two crates ever drift is correct.
+    /// One case still returns `Err`: `UnsupportedSeedKind` from `StageNarrowing::bound_expr`,
+    /// `AnchorTakesOneId` from the anchor arm, and `ShapeNotAskable` from the selection arm when the
+    /// seal holds fewer asks than the stage's `artifact_filter`. All are compiler/validator
+    /// **contradictions** rather than anything a caller did — `validate` refuses each of them first
+    /// — so they are unreachable through any public path, and failing loud if the two crates ever
+    /// drift is correct.
     ///
     /// The anchor case used to be a genuine caller error reaching `Err` here, with exactly the
     /// defect this field exists to remove. `[moved to `validate` — 2026-08-09, Pete]`
@@ -521,6 +523,25 @@ fn emit_act_body(
             // Order matters and is not cosmetic: `binds` is positional, so the binds are pushed in
             // signature order — the narrowings, the asks, then the open-key one — and each slot's
             // `$n` follows the one before it.
+            // **A filter the seal does not hold fails the compile; it never narrows nothing.** A
+            // stage whose `artifact_filter` has asks the seal did not admit would otherwise bind
+            // `NULL::jsonb`, which selects as though no ask were made. `validate` seals a stage's
+            // asks only when it admitted all of them and refuses the composition otherwise, so this
+            // is a validator/compiler contradiction, unreachable through `validate`, answered the
+            // way `bound_for_find` and the anchor arm answer theirs: an `Err` naming the stage.
+            if asks.len() != inv.artifact_filter.len() {
+                return Err(PlanRefusal {
+                    stage: Some(inv.name.clone()),
+                    reason: RefusalReason::ShapeNotAskable,
+                    detail: format!(
+                        "this stage carries {} artifact asks and the seal holds {} validated; the \
+                         validator should have refused the stage before compilation",
+                        inv.artifact_filter.len(),
+                        asks.len()
+                    ),
+                    teaches: None,
+                });
+            }
             let narrowings = selection_narrowings_for(inv, binds);
             let (artifact_asks, _asks_bound_at) = artifact_asks_slot(asks, binds);
             let properties = resource_properties_for(inv, binds);
@@ -1113,8 +1134,8 @@ fn narrowing_one(
             );
             Ok(())
         }
-        StageInput::Caller { ids, .. } => match ids.kind {
-            IdKind::Resource => {
+        StageInput::Caller { ids, .. } => match (&ids.kind, ids.kind.anchor_table()) {
+            (IdKind::Resource, _) => {
                 let idx = binds.len() + 1;
                 binds.push(QueryBind::Uuids(ids.ids.clone()));
                 assign(narrowing, format!("${idx}::uuid[]"));
@@ -1125,11 +1146,10 @@ fn narrowing_one(
             // — "an IdSet holds N ids; an anchor slot holds one" — and the honest response to it is
             // a refusal, never silently anchoring on the first element, which would answer a
             // different question than the one asked and look like a successful narrowing.
-            IdKind::Context | IdKind::Cogmap => {
-                let table = match ids.kind {
-                    IdKind::Cogmap => "kb_cogmaps",
-                    _ => "kb_contexts",
-                };
+            //
+            // The table is the kind's own (`IdKind::anchor_table`), the one mapping the validator's
+            // scope check compares a shape's home against.
+            (_, Some(table)) => {
                 // **Unreachable through `validate`, and asserted anyway.** The cardinality is a
                 // static property of the plan and is refused there now
                 // (`RefusalReason::AnchorTakesOneId`), so a caller's mistake arrives in the 400

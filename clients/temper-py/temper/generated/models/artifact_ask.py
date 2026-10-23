@@ -29,7 +29,7 @@ class ArtifactAsk(BaseModel):
     """
     One ask: a governing shape, and what the asker holds about artifacts it governs (§2.1).  `intent` and `shape_states` are **strings**, validated by [`AskSession::validate`] into `unknown_artifact_intent` / `unknown_shape_state` with `teaches` naming the vocabulary — never serde enums, whose unknown-variant failure would land before validation, in the deserializer's words, and outside the every-refusal-at-once body. Empty means the default, applied by the validator: `current` and `member`, and every askable state.  **Strict**, like `ActInvocation`: an unknown field is a deserialization error, never a field that silently narrows nothing.
     """ # noqa: E501
-    include_folded: Optional[StrictBool] = Field(default=None, description="Admit folded (superseded) artifacts.")
+    include_folded: Optional[StrictBool] = Field(default=None, description="Admit folded (superseded) artifacts. Not served: `true` is declined by name (`filter_not_applicable`), and an ask reads live artifacts only.")
     intent: Optional[List[StrictStr]] = Field(default=None, description="Narrow by selection intent: `current`, `member`, `pinned`. Empty: `current` and `member`.")
     predicates: Optional[List[ArtifactPredicate]] = Field(default=None, description="What the asker holds, AND-composed. Empty is the whole governed population — a vacuous conjunction, said on purpose (§2.1).")
     shape: UUID = Field(description="The governing shape, by id. An id names one version (§2.2).")

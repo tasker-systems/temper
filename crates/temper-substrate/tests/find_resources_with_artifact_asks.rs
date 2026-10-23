@@ -22,7 +22,7 @@
 //! **What the statement reads, not how it is planned.** The counted set runs its query by
 //! `EXECUTE`, so an outer `EXPLAIN` sees only a function scan. The two plan tests count the rows the
 //! transaction read from `kb_data_artifacts` (`pg_stat_xact_user_tables`), which sees nested
-//! execution, around one call of the composed statement — in both directions: a small home in a
+//! execution, around one run of the compiled statement — in both directions: a small home in a
 //! large family, and a small family in a large home.
 //!
 //! Every resource is created through the real write path with its embedding deferred, so no model
@@ -34,15 +34,20 @@ mod common;
 use std::collections::BTreeSet;
 
 use serde_json::{json, Value};
-use sqlx::{PgConnection, PgPool};
+use sqlx::{PgConnection, PgPool, Row};
 use temper_core::types::artifact_ask::{
     ArtifactAsk, ArtifactPredicate, LoadedShape, ShapeContext, ShapeLoad,
 };
 use temper_core::types::ids::ShapeId;
 use temper_core::types::query::filter::{OrdOp, PropertyOp};
+use temper_core::types::query::{
+    validate, ActInvocation, ActName, Composition, Intention, OutcomeDeclaration, ReturnSpec,
+    StageInput, StageName, StageNode, StageRelation,
+};
 use temper_substrate::events::EventContext;
 use temper_substrate::ids::{ContextId, DataArtifactId, EntityId, ProfileId, ResourceId};
 use temper_substrate::payloads::{AnchorRef, ArtifactIntent, EnforcementMode, KindOwner};
+use temper_substrate::readback::query_plan::{compile, CompiledQuery, QueryBind};
 use temper_substrate::scenario::bootseed;
 use temper_substrate::writes::{
     self, CommitDataArtifactParams, CreateMode, CreateParams, DeclareShapeParams,
@@ -878,7 +883,7 @@ async fn a_resource_still_ingesting_is_not_counted(pool: PgPool) {
     );
 }
 
-// ── What the composed statement reads ───────────────────────────────────────────────────────────
+// ── What the compiled statement reads ───────────────────────────────────────────────────────────
 
 const BACKGROUND_HOMES: i32 = 150;
 const BACKGROUND_RESOURCES: i32 = 3_000;
@@ -897,30 +902,106 @@ async fn artifact_rows_read(conn: &mut PgConnection) -> i64 {
     .unwrap()
 }
 
-/// One call of the composed statement — the 14-argument core with only the visible set, the asks
-/// and the reader — and how many `kb_data_artifacts` rows it read, measured inside one transaction
-/// around that call alone. The count sees the counted set's `EXECUTE`, which an outer `EXPLAIN`
-/// cannot.
-async fn selected_and_rows_read(
-    pool: &PgPool,
-    visible: Vec<Uuid>,
-    stage: Value,
-    reader: ProfileId,
-) -> (BTreeSet<Uuid>, i64) {
+/// The compiled statement for one composition: a selection stage asking `ask` of the world's
+/// shape, piped into a returned `find-exact` over the bodies — validated against the shape as the
+/// handler loads it, and compiled by `compile` as `run_composition` compiles it.
+fn compiled_plan(w: &World, ask: ArtifactAsk) -> CompiledQuery {
+    let loaded = LoadedShape {
+        shape_id: ShapeId::from(w.shape),
+        shape_version: 1,
+        home_anchor_table: "kb_contexts".to_string(),
+        home_anchor_id: w.home.id,
+        kind_owner_table: "kb_profiles".to_string(),
+        kind_owner_id: w.owner.uuid(),
+        artifact_kind: w.family.1.to_string(),
+        schema: shape_schema(),
+    };
+    let shapes: ShapeContext = [(loaded.shape_id, ShapeLoad::Loaded(loaded))]
+        .into_iter()
+        .collect();
+    let sel = StageName::parse("sel").unwrap();
+    let hits = StageName::parse("hits").unwrap();
+    let c = Composition {
+        outcome: OutcomeDeclaration {
+            returns: vec![ReturnSpec {
+                stage: hits.clone(),
+                with: vec![],
+            }],
+        },
+        stages: vec![
+            StageNode::Act(ActInvocation {
+                name: sel.clone(),
+                act: ActName::FindResourcesWith,
+                intention: None,
+                inputs: vec![],
+                terms: Default::default(),
+                resource_filter: None,
+                edge_filter: None,
+                properties: vec![],
+                artifact_filter: vec![ask],
+            }),
+            StageNode::Act(ActInvocation {
+                name: hits,
+                act: ActName::FindExact,
+                intention: Some(Intention {
+                    query: "fixture".to_string(),
+                    embedding: None,
+                }),
+                inputs: vec![StageInput::Upstream {
+                    relation: StageRelation::Bound,
+                    stage: sel,
+                }],
+                terms: Default::default(),
+                resource_filter: None,
+                edge_filter: None,
+                properties: vec![],
+                artifact_filter: vec![],
+            }),
+        ],
+    };
+    let v = validate(&c, &mut shapes.session()).expect("the ask lies inside its shape");
+    compile(&v, w.owner).expect("the plan compiles")
+}
+
+/// One run of a compiled statement on `conn`, its binds bound as `query_exec::execute` binds them,
+/// answering the ids of the returned `hits` stage.
+async fn run_compiled(conn: &mut PgConnection, q: &CompiledQuery) -> BTreeSet<Uuid> {
+    let mut query = sqlx::query(&q.sql);
+    for bind in &q.binds {
+        query = match bind {
+            QueryBind::Profile(p) => query.bind(p.uuid()),
+            QueryBind::Uuids(ids) => query.bind(ids.clone()),
+            QueryBind::Text(t) => query.bind(t.clone()),
+            QueryBind::Int(i) => query.bind(*i),
+            QueryBind::Texts(t) => query.bind(t.clone()),
+            QueryBind::Id(u) => query.bind(*u),
+            QueryBind::Json(j) => query.bind(j.clone()),
+            QueryBind::Embedding(_) => panic!("the fixture plan binds no vector"),
+        };
+    }
+    query
+        .fetch_all(&mut *conn)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|row| {
+            row.get::<String, _>("row_class") == "hit" && row.get::<String, _>("stage") == "hits"
+        })
+        .map(|row| row.get::<Uuid, _>("id"))
+        .collect()
+}
+
+/// One run of the compiled statement for `ask`, and how many `kb_data_artifacts` rows it read,
+/// measured inside one transaction around that run alone. The count sees the counted set's
+/// `EXECUTE`, which an outer `EXPLAIN` cannot.
+async fn compiled_rows_read(pool: &PgPool, w: &World, ask: ArtifactAsk) -> (BTreeSet<Uuid>, i64) {
+    let q = compiled_plan(w, ask);
     let mut tx = pool.begin().await.unwrap();
     let before = artifact_rows_read(&mut tx).await;
-    let selected = select_through(
-        &mut tx,
-        CORE,
-        Some(visible),
-        Some(stage),
-        reader.uuid(),
-        None,
-    )
-    .await;
+    let answered = run_compiled(&mut tx, &q).await;
     let read = artifact_rows_read(&mut tx).await - before;
     tx.rollback().await.unwrap();
-    (selected, read)
+    (answered, read)
 }
 
 async fn analyze(pool: &PgPool) {
@@ -931,13 +1012,6 @@ async fn analyze(pool: &PgPool) {
     .execute(pool)
     .await
     .unwrap();
-}
-
-async fn every_resource(pool: &PgPool) -> Vec<Uuid> {
-    sqlx::query_scalar("SELECT id FROM kb_resources")
-        .fetch_all(pool)
-        .await
-        .unwrap()
 }
 
 async fn any_event(pool: &PgPool) -> Uuid {
@@ -954,13 +1028,15 @@ async fn any_event(pool: &PgPool) -> Uuid {
 /// artifacts of the family outside the home (asserted). As in `artifact_ask_parity.rs`, the other
 /// half has a fresh owner per row, so `n_distinct(kind_owner_id)` is large: read from the shape row
 /// inside a statement, the family is estimated at about one row, and a plan starting from it walks
-/// all of it once per home resource. The visible set is every resource.
+/// all of it once per home resource.
 ///
-/// Asserted on the rows the transaction read from `kb_data_artifacts` around one call of the
-/// composed statement (`pg_stat_xact_user_tables`, so the counted set's `EXECUTE` is seen), never
-/// timings:
+/// The statement is the one production runs: a composition whose selection stage asks the fixture
+/// shape, piped into a returned `find-exact`, compiled by `compile` and run with its binds — the
+/// hoisted visible set (every resource is the owner's) and the sealed asks included. Asserted on
+/// the rows the transaction read from `kb_data_artifacts` around that one run
+/// (`pg_stat_xact_user_tables`, so the counted set's `EXECUTE` is seen), never timings:
 ///
-/// 1. the call answers {R1};
+/// 1. the run answers {R1};
 /// 2. it read at least one row — the count sees the read at all, so the bound cannot pass by
 ///    measuring nothing;
 /// 3. it read at most 64 — the home's four artifacts and the lookups by id beside them, where a
@@ -1036,14 +1112,13 @@ async fn a_small_home_in_a_large_family_is_not_answered_by_walking_the_family(po
         "the family is large outside the home"
     );
 
-    let stage = asks(&[&ask_of(w.shape, vec![at("unit", contains(json!("ms")))])]);
-    let (selected, read) =
-        selected_and_rows_read(&pool, every_resource(&pool).await, stage, w.owner).await;
-    assert_eq!(selected, ids(&[r1]));
+    let ask = ask_of(w.shape, vec![at("unit", contains(json!("ms")))]);
+    let (answered, read) = compiled_rows_read(&pool, &w, ask).await;
+    assert_eq!(answered, ids(&[r1]));
     assert!(read > 0, "the count sees the call's reads");
     assert!(
         read <= 64,
-        "the composed statement read {read} rows of kb_data_artifacts for a home holding four, \
+        "the compiled statement read {read} rows of kb_data_artifacts for a home holding four, \
          beside a family of {family_outside}"
     );
 }
@@ -1054,8 +1129,8 @@ async fn a_small_home_in_a_large_family_is_not_answered_by_walking_the_family(po
 /// One large context home holds 3,000 resources with six artifacts each, every one of another
 /// family (a fresh team owner per row) — 18,000 artifacts in the home (asserted) — and three
 /// resources each owning one artifact of the asked family, `tiny`, whose shape is declared there.
-/// The visible set is every resource. Asserted as above, on the rows the transaction read from
-/// `kb_data_artifacts` around one call: it answers the three, read at least one row, and read at
+/// Run as above, through the compiled statement, and asserted on the rows the transaction read
+/// from `kb_data_artifacts` around that run: it answers the three, read at least one row, and read at
 /// most 64 — about the family, where reaching the artifacts through the home's resources reads
 /// thousands.
 ///
@@ -1134,14 +1209,13 @@ async fn a_small_family_in_a_large_home_is_not_answered_by_walking_the_home(pool
         "the home is large and the family is three of it"
     );
 
-    let stage = asks(&[&ask_of(w.shape, vec![at("unit", contains(json!("ms")))])]);
-    let (selected, read) =
-        selected_and_rows_read(&pool, every_resource(&pool).await, stage, w.owner).await;
-    assert_eq!(selected, ids(&tiny));
+    let ask = ask_of(w.shape, vec![at("unit", contains(json!("ms")))]);
+    let (answered, read) = compiled_rows_read(&pool, &w, ask).await;
+    assert_eq!(answered, ids(&tiny));
     assert!(read > 0, "the count sees the call's reads");
     assert!(
         read <= 64,
-        "the composed statement read {read} rows of kb_data_artifacts for a family of three, \
+        "the compiled statement read {read} rows of kb_data_artifacts for a family of three, \
          in a home holding {in_home}"
     );
 }

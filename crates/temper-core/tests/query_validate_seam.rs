@@ -289,6 +289,8 @@ fn the_ask_modules_emit_exactly_these_reasons() {
     let asks: BTreeMap<&str, usize> = [
         // SERVER: `check_scope` needs each admitted ask's shape home.
         ("AskScopeConflict", 1),
+        // SERVER: `repeats_an_ask` compares the validated binds, which need the loaded shape.
+        ("DuplicateSetMember", 1),
         // OFFLINE: the two request caps, `within_request_caps`.
         ("TooManyFilterValues", 2),
     ]

@@ -4034,7 +4034,10 @@ export interface components {
          *     that silently narrows nothing.
          */
         ArtifactAsk: {
-            /** @description Admit folded (superseded) artifacts. */
+            /**
+             * @description Admit folded (superseded) artifacts. Not served: `true` is declined by name
+             *     (`filter_not_applicable`), and an ask reads live artifacts only.
+             */
             include_folded?: boolean;
             /** @description Narrow by selection intent: `current`, `member`, `pinned`. Empty: `current` and `member`. */
             intent?: string[];

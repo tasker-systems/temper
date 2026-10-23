@@ -5,13 +5,11 @@
 //! renders what came back — including a refusal, which is an answer rather than a failure to
 //! produce one.
 
-use std::collections::BTreeSet;
-
 use temper_client::error::ClientError;
 use temper_client::TemperClient;
 use temper_core::types::ids::ShapeId;
 use temper_core::types::query::validate::PlanRefusal;
-use temper_core::types::query::{Composition, QueryResponse, StageNode};
+use temper_core::types::query::{asked_shape_ids, Composition, QueryResponse};
 
 use crate::error::{Result, TemperError};
 
@@ -108,18 +106,7 @@ pub fn check_plan(composition: &Composition) -> ShapeReport {
 /// Every distinct shape the plan's artifact asks name, in id order — counted whatever the request
 /// caps say, since the report names what was not checked rather than what the server would load.
 fn asked_shapes(composition: &Composition) -> Vec<ShapeId> {
-    composition
-        .stages
-        .iter()
-        .filter_map(|node| match node {
-            StageNode::Act(inv) => Some(&inv.artifact_filter),
-            StageNode::Combine(_) => None,
-        })
-        .flatten()
-        .map(|ask| ask.shape)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
+    asked_shape_ids(composition).into_iter().collect()
 }
 
 /// An answered plan, or the refusals that stopped it.

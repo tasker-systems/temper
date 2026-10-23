@@ -7,7 +7,8 @@
 //! request is refused for its size in the same words wherever it is measured. An ask's form is
 //! `validate_ask_form`'s, which the offline check runs alone and [`AskSession::validate`] runs
 //! first. Steps 1–4 of §3.5 are [`AskSession::validate`]'s alone; this module adds only what
-//! needs more than one ask to decide — whether a stage's asks can share one home.
+//! needs more than one ask to decide — whether a stage repeats an ask, and whether its asks can
+//! share one home.
 //!
 //! **Its refusals are both kinds, and say which.** The caps and the form need no shape and no
 //! declaration, so the offline check raises them. Whether an ask lies inside its shape, and
@@ -22,7 +23,6 @@ use crate::types::ids::ShapeId;
 use crate::types::query::composition::{Composition, StageNode};
 use crate::types::query::disposition::RefusalReason;
 use crate::types::query::envelope::ActInvocation;
-use crate::types::query::id_set::IdKind;
 use crate::types::query::stage::{StageInput, StageName};
 
 use super::{refusal, PlanRefusal};
@@ -30,17 +30,28 @@ use super::{refusal, PlanRefusal};
 /// The most artifact asks one request may carry, across every stage's `artifact_filter`. Refused
 /// as `too_many_filter_values` before any shape is loaded.
 ///
-/// # 32, sized against what a request's session keeps
+/// # 32, sized against what a request's session keeps and what its statement runs
 ///
 /// One request's asks are validated through one session, which keeps every distinct ask it has
 /// answered — keyed by the ask's JSON text, with its answer — so the gate's work answers the seal.
-/// Each kept ask costs about its text twice (the key, and the validated predicates or the refusal
+/// Each kept ask costs about its JSON twice (the key, and the validated predicates or the refusal
 /// details) and at most three teachings, one per shape reason, each at most `MAX_TEACHING_BYTES`
-/// (16 KiB). The asks' text is inside the composition's caller-text budget
-/// (`MAX_COMPOSITION_TEXT_BYTES`, 768 KiB), so the memo holds at most about
-/// 2 × 768 KiB + 32 × 3 × 16 KiB = 1.5 MiB + 1.5 MiB = 3 MiB, and a refusal list carrying every
-/// ask's teaching is at most 1.5 MiB of them. A real composition asks one or two shapes from a few
-/// stages; 32 is an order of magnitude above it.
+/// (16 KiB).
+///
+/// **The session is reached only once the shape pass has admitted the composition's budgets**
+/// ([`super::validate`] walks no ask over a `text_budget_exceeded` or a
+/// `property_value_budget_exceeded`). So the asks' caller text — paths, terms, values — is within
+/// `MAX_COMPOSITION_TEXT_BYTES` (768 KiB) whenever one is kept, and the JSON around it is bounded by
+/// the per-ask caps: at most `MAX_ASK_PREDICATES` predicates and `MAX_ASK_PROBES` values an ask,
+/// under 8 KiB of keys and punctuation. The memo therefore holds at most about
+/// 2 × (768 KiB + 32 × 8 KiB) + 32 × 3 × 16 KiB = 2 MiB + 1.5 MiB = 3.5 MiB, and a refusal list
+/// carrying every ask's teaching is at most 1.5 MiB of them.
+///
+/// **It is also the statement's multiplier**: each ask is one call of the counted set
+/// (`__temper_ungated_artifact_ask_population`, `20261104000000`), which reads its shape's family in
+/// its home. A stage may not repeat an ask (`duplicate_set_member`), so the 32 calls are 32
+/// different questions. A real composition asks one or two shapes from a few stages; 32 is an
+/// order of magnitude above it.
 pub const MAX_ASKS_PER_REQUEST: usize = 32;
 
 /// The most distinct shapes one request's asks may name. Refused as `too_many_filter_values`
@@ -72,6 +83,13 @@ pub fn shapes_to_load(c: &Composition) -> Result<BTreeSet<ShapeId>, Vec<PlanRefu
     }
 }
 
+/// Every distinct shape a composition's asks name, whatever the request caps say — what a caller
+/// that cannot load shapes reports as not checked (`temper query --check`). [`shapes_to_load`] is
+/// this set within the caps.
+pub fn asked_shape_ids(c: &Composition) -> BTreeSet<ShapeId> {
+    every_ask(c).map(|(_, ask)| ask.shape).collect()
+}
+
 /// Every ask on an act stage, with the stage it rides on.
 fn every_ask(c: &Composition) -> impl Iterator<Item = (&StageName, &ArtifactAsk)> {
     c.stages.iter().flat_map(|node| {
@@ -90,7 +108,7 @@ pub(super) fn within_request_caps(
     errs: &mut Vec<PlanRefusal>,
 ) -> Option<BTreeSet<ShapeId>> {
     let asks = every_ask(c).count();
-    let shapes: BTreeSet<ShapeId> = every_ask(c).map(|(_, ask)| ask.shape).collect();
+    let shapes = asked_shape_ids(c);
     if asks > MAX_ASKS_PER_REQUEST {
         errs.push(refusal(
             None,
@@ -133,18 +151,23 @@ pub(super) fn check_forms(c: &Composition, acyclic: bool, errs: &mut Vec<PlanRef
     }
 }
 
-/// The full half (`validate`): the request caps, then — within them, over a graph that sorts —
-/// every ask through the request's one session, and whether each stage's admitted asks can share
-/// a home. Returns each stage's validated asks in filter order, for the seal to hold; a stage
-/// with a refused ask seals nothing, and the composition is refused anyway.
+/// The full half (`validate`): the request caps, then — within them, and only when `walk` says the
+/// asks may be walked — every ask through the request's one session, whether a stage repeats an
+/// ask, and whether each stage's admitted asks can share a home. Returns each stage's validated
+/// asks in filter order, for the seal to hold; a stage with a refused ask seals nothing, and the
+/// composition is refused anyway.
+///
+/// `walk` is false over a graph that does not sort, and over a composition the shape pass refused
+/// for a composition-wide budget: that request is refused whatever its asks say, and an ask
+/// refusal is not actionable until the plan is shrunk, so no ask is read into the session.
 pub(super) fn validate_asks(
     c: &Composition,
-    acyclic: bool,
+    walk: bool,
     session: &mut AskSession<'_>,
     errs: &mut Vec<PlanRefusal>,
 ) -> BTreeMap<StageName, Vec<ValidatedAsk>> {
     let mut sealed = BTreeMap::new();
-    if within_request_caps(c, errs).is_none() || !acyclic {
+    if within_request_caps(c, errs).is_none() || !walk {
         return sealed;
     }
     for node in &c.stages {
@@ -166,12 +189,49 @@ pub(super) fn validate_asks(
                 }
             }
         }
+        refused |= repeats_an_ask(stage, &admitted, errs);
         check_scope(inv, stage, &admitted, errs);
         if !refused {
             sealed.insert(stage.clone(), admitted);
         }
     }
     sealed
+}
+
+/// `duplicate_set_member` when a stage's filter asks one question twice, over the asks it admitted.
+///
+/// **Equality is the validated bind** ([`ValidatedAsk::bind`]), not the caller's text: the bind is
+/// what the statement runs, so two asks with one bind are one counted-set call made twice. It also
+/// catches the spellings that differ only by a default — `intent: []` beside
+/// `intent: ["current", "member"]` — which the caller's text would call different. AND-ing an ask
+/// with itself narrows nothing, so the repeat is refused rather than collapsed: a caller who sent
+/// it has a plan that says something other than what they meant. Refused once per stage, naming
+/// the first repeat by position among the stage's admitted asks.
+fn repeats_an_ask(
+    stage: &StageName,
+    admitted: &[ValidatedAsk],
+    errs: &mut Vec<PlanRefusal>,
+) -> bool {
+    let binds: Vec<serde_json::Value> = admitted.iter().map(ValidatedAsk::bind).collect();
+    let repeat = (1..binds.len()).find_map(|later| {
+        binds[..later]
+            .iter()
+            .position(|earlier| *earlier == binds[later])
+            .map(|first| (first, later))
+    });
+    let Some((first, later)) = repeat else {
+        return false;
+    };
+    errs.push(refusal(
+        Some(stage),
+        RefusalReason::DuplicateSetMember,
+        format!(
+            "this stage's `artifact_filter` asks the same question twice (`[{first}]` and \
+             `[{later}]` once validated); asks AND together, so a repeat narrows nothing and runs \
+             the same read again — ask it once"
+        ),
+    ));
+    true
 }
 
 /// A refusal from the ask's own validation, attached to the stage carrying it.
@@ -236,11 +296,7 @@ fn anchor_of(inv: &ActInvocation) -> Option<ShapeHome> {
         let StageInput::Caller { ids, .. } = input else {
             return None;
         };
-        let anchor_table = match ids.kind {
-            IdKind::Context => "kb_contexts",
-            IdKind::Cogmap => "kb_cogmaps",
-            _ => return None,
-        };
+        let anchor_table = ids.kind.anchor_table()?;
         match ids.ids.as_slice() {
             [anchor_id] => Some(ShapeHome {
                 anchor_table: anchor_table.to_string(),

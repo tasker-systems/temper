@@ -4,27 +4,17 @@
 -- §6.1. Conforms to the widening precedent 20260815000040.
 --
 -- What a later edit must not break:
---   1. NO `DEFAULT` on the widened signatures (20260815000040, point 1): a default on the added
---      parameter makes the incumbent arity ambiguous and every existing call to it an error.
---   2. `p_artifact_asks` sits between `p_title_contains` and `p_anchor_table`, beside neither jsonb
---      narrowing (`p_facets`, `p_properties`): two adjacent jsonb arguments are the one transposition
---      a positional call could make without a type error (20260815000040, point 3).
---   3. ONE COUNTED SET. `__temper_ungated_artifact_ask_population` is the only place the conjuncts of
---      spec §6.1 meet governance; the composable arm's conjunct, its population counts and the batch
---      read all read it, so none restates a conjunct.
---   4. THE PLANNER SEES THE SHAPE'S HOME AND FAMILY AS VALUES. Read from the shape row inside one
---      statement, a family's size is estimated from n_distinct and can be wrong by orders of
---      magnitude, and a plan that starts from a "small" family walks a large one once per resource.
---      So the counted set is plpgsql: it reads the named row by id, then runs one constant query by
---      EXECUTE … USING, planned per call with those values, and the planner starts from whichever
---      of the home and the family is really smaller. Never interpolate the values into the text.
---   5. ONE BODY OF GOVERNANCE. The values-taking `_in` relations are 20261103000000's bodies; its
---      by-id forms read the row and delegate to them, so artifact_ask_parity.rs still holds the
---      one definition to `_data_artifact_shape_in_force` and `_data_artifact_shape_state`.
---   6. THE HOME IS RE-CHECKED ONCE PER ASK, before the query runs; an unreadable home answers
---      nothing. The core computes each ask's set once (an uncorrelated `IN`), never per resource.
---   7. Asks AND across the list (`HAVING count(DISTINCT k.n)`), and each ask's predicates are matched
---      against one artifact's content, so they hold of the same artifact.
+--   1. NO `DEFAULT` on the widened signatures, and `p_artifact_asks` beside neither jsonb narrowing
+--      (`p_facets`, `p_properties`) — 20260815000040, points 1 and 3.
+--   2. ONE COUNTED SET. `__temper_ungated_artifact_ask_population` is the only place spec §6.1's
+--      conjuncts meet governance; every arm that counts, pages or narrows by an ask reads it.
+--   3. ONE BODY OF GOVERNANCE. The `_in` relations are 20261103000000's bodies taking the home and
+--      family as values; its by-id forms read the row and delegate to them, so
+--      artifact_ask_parity.rs still holds the one definition.
+--   4. THE COUNTED SET IS PLPGSQL ON PURPOSE (its COMMENT says why). Its EXECUTE text is constant
+--      and every value rides USING; never interpolate one.
+--   5. The core computes each ask's set once (an uncorrelated `IN`), never per resource; asks AND
+--      (`HAVING count(DISTINCT k.n)`), and an ask's predicates hold of one artifact.
 --
 -- Additive: five CREATE FUNCTION, four CREATE OR REPLACE at byte-identical signatures and return
 -- columns. No DROP.
@@ -115,8 +105,6 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 -- ── The counted set ─────────────────────────────────────────────────────────────────────────────
--- plpgsql so that the query reading artifacts is planned per call with the shape's home and family
--- as values (point 4). The query text is constant; every value rides USING.
 CREATE FUNCTION __temper_ungated_artifact_ask_population(
     p_visible_ids uuid[],
     p_reader      uuid,

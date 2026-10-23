@@ -22,7 +22,7 @@ mod asks;
 mod capability;
 mod shape;
 
-pub use asks::{shapes_to_load, MAX_ASKED_SHAPES, MAX_ASKS_PER_REQUEST};
+pub use asks::{asked_shape_ids, shapes_to_load, MAX_ASKED_SHAPES, MAX_ASKS_PER_REQUEST};
 
 // The per-candidate caps, for the artifact ask's own caps to mirror (spec
 // 2026-10-19-asking-artifacts-by-what-they-are §3.4, *Caps*): one definition of each number.
@@ -441,12 +441,22 @@ impl ValidationOutcome {
 /// walk twice and halves what one request may spend.
 ///
 /// The request caps on asks and shapes ([`shapes_to_load`]) are decided before any ask is read; a
-/// composition over them has no ask validated at all.
+/// composition over them has no ask validated at all, and neither has one the shape pass refused
+/// for its text or value budget.
 pub fn validate(
     c: &Composition,
     session: &mut AskSession<'_>,
 ) -> Result<ValidatedComposition, Vec<PlanRefusal>> {
     let (mut errs, ordered) = shape::validate_shape_indexed(c);
+    // A composition over a composition-wide budget is refused whatever its asks say, and an ask's
+    // refusal is not actionable until the plan is shrunk — so no ask is read into the session, and
+    // what the session keeps stays inside those budgets (`MAX_ASKS_PER_REQUEST` sizes it).
+    let over_budget = errs.iter().any(|r| {
+        matches!(
+            r.reason,
+            RefusalReason::TextBudgetExceeded | RefusalReason::PropertyValueBudgetExceeded
+        )
+    });
 
     // The capability pass has two halves and only its per-stage half is gated on the topology.
     // This one reads no stage graph — it compares each `returns` entry's `with` against a
@@ -466,8 +476,8 @@ pub fn validate(
     // cannot be read.
     //
     // The asks follow the same rule: their request caps are composition-level and always counted,
-    // and the asks themselves are validated only over a graph that sorts.
-    let sealed = asks::validate_asks(c, ordered.is_some(), session, &mut errs);
+    // and the asks themselves are validated only over a graph that sorts, inside the budgets.
+    let sealed = asks::validate_asks(c, ordered.is_some() && !over_budget, session, &mut errs);
     if let Some(ordered) = ordered {
         let by_name = index_by_name(c);
         capability::validate_stages(c, &by_name, &mut errs);
@@ -5170,7 +5180,8 @@ mod tests {
         let on_one_stage =
             |asks: Vec<ArtifactAsk>| answered_by_find(vec![selecting("a", asks, None)]);
 
-        let within = on_one_stage(vec![asking(1, "unit"); MAX_ASKS_PER_REQUEST]);
+        // Distinct asks — a stage may not repeat one — at exactly the cap.
+        let within = on_one_stage((0..MAX_ASKS_PER_REQUEST).map(unit_is).collect());
         assert_eq!(shapes_to_load(&within), Ok(BTreeSet::from([sid(1)])));
         assert!(super::validate(&within, &mut shapes.session()).is_ok());
 
@@ -5192,6 +5203,96 @@ mod tests {
             assert_eq!(full.unwrap_err(), caps, "and nothing else is refused");
             assert_eq!(validate_shape(c), caps, "the offline check says the same");
         }
+    }
+
+    /// An ask of shape 1 that `unit` contains `u{n}`: the `n`th of a run of distinct asks.
+    fn unit_is(n: usize) -> ArtifactAsk {
+        ArtifactAsk {
+            predicates: vec![ArtifactPredicate {
+                path: vec!["unit".to_string()],
+                op: PropertyOp::Contains {
+                    values: vec![json!(format!("u{n}"))],
+                },
+            }],
+            ..asking(1, "unit")
+        }
+    }
+
+    /// A stage that asks one question twice is refused `duplicate_set_member` at the stage, and so
+    /// is one whose two asks differ only by spelling a default (`intent: []` beside the default
+    /// intents written out): equality is the validated bind, what the statement would run. Two
+    /// different asks on one stage, and one ask on each of two stages, are admitted. Bites the
+    /// repeat check removed: both repeating stages validate, and the statement runs one read twice.
+    #[test]
+    fn a_stage_that_repeats_an_ask_is_refused() {
+        let shapes = loaded(vec![measurement(1)]);
+        let spelled = ArtifactAsk {
+            intent: vec!["current".to_string(), "member".to_string()],
+            ..asking(1, "unit")
+        };
+        for (asks, what) in [
+            (
+                vec![asking(1, "unit"), asking(1, "unit")],
+                "the same ask twice",
+            ),
+            (vec![asking(1, "unit"), spelled], "a default spelled out"),
+        ] {
+            let c = answered_by_find(vec![selecting("a", asks, None)]);
+            let rs = super::validate(&c, &mut shapes.session()).expect_err(what);
+            assert_eq!(
+                reasons_of(&rs),
+                vec![RefusalReason::DuplicateSetMember],
+                "{what}"
+            );
+            assert_eq!(rs[0].stage, Some(stage("a")));
+        }
+        let different = answered_by_find(vec![selecting("a", vec![unit_is(1), unit_is(2)], None)]);
+        assert!(super::validate(&different, &mut shapes.session()).is_ok());
+        let two_stages = answered_by_find(vec![
+            selecting("a", vec![asking(1, "unit")], None),
+            selecting("b", vec![asking(1, "unit")], None),
+        ]);
+        assert!(super::validate(&two_stages, &mut shapes.session()).is_ok());
+    }
+
+    /// **A composition the shape pass refused for its text budget walks and keeps no ask.** One
+    /// ask carries an intent term longer than `MAX_COMPOSITION_TEXT_BYTES`: the composition is
+    /// refused `text_budget_exceeded`, and no ask is read into the session — no walk is built, no
+    /// ask's own refusal (here `unknown_artifact_intent`) is raised, and validating the same plan
+    /// again through the same session answers nothing from its memo, because nothing was kept. So
+    /// what a session keeps stays inside the budgets `MAX_ASKS_PER_REQUEST` is sized against.
+    ///
+    /// Bites `validate` validating asks regardless of the budget refusals: a walk is built, the
+    /// intent is refused beside the budget, and the second pass is answered from the memo.
+    #[test]
+    fn a_composition_over_its_text_budget_walks_and_keeps_no_ask() {
+        let shapes = loaded(vec![measurement(1)]);
+        let over = ArtifactAsk {
+            intent: vec!["x".repeat(MAX_COMPOSITION_TEXT_BYTES + 1)],
+            ..asking(1, "unit")
+        };
+        let c = answered_by_find(vec![selecting("a", vec![over], None)]);
+        let mut session = shapes.session();
+        let (built, rs) = counted(&WALKS_BUILT, || super::validate(&c, &mut session));
+        let rs = rs.expect_err("over the text budget");
+        assert!(
+            rs.iter()
+                .any(|r| r.reason == RefusalReason::TextBudgetExceeded),
+            "{rs:?}"
+        );
+        assert!(
+            rs.iter()
+                .all(|r| r.reason != RefusalReason::UnknownArtifactIntent),
+            "no ask was validated: {rs:?}"
+        );
+        assert_eq!(built, 0, "no walk was built");
+        assert_eq!(session.shapes_walked(), 0);
+        let _ = super::validate(&c, &mut session);
+        assert_eq!(
+            session.answered_again(),
+            0,
+            "nothing was kept to answer from"
+        );
     }
 
     /// A NUL in a value is refused at the stage by the full validator and the offline check alike,

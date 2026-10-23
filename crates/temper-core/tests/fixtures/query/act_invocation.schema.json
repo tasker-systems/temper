@@ -59,7 +59,7 @@
         "properties": {
           "include_folded": {
             "default": false,
-            "description": "Admit folded (superseded) artifacts.",
+            "description": "Admit folded (superseded) artifacts. Not served: `true` is declined by name\n(`filter_not_applicable`), and an ask reads live artifacts only.",
             "type": "boolean"
           },
           "intent": {
