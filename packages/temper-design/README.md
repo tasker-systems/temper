@@ -31,7 +31,7 @@ packages/temper-design/
 ├── brand/                   # the threaded-t mark and wordmark, in currentColor
 ├── preview/index.html       # every role and the foundational components, both themes
 ├── scripts/themes.sh        # build · check · contrast · --self-check
-├── src/                     # the shared modules: markdown, sanitize, highlight, region, omission
+├── src/                     # the shared modules: markdown, sanitize, highlight, region, omission, theme
 ├── dist/                    # their compiled output (committed; see "The shared modules")
 ├── toolchain/               # the toolchain majors every surface builds on, and their check
 └── tests/fixtures/broken/   # themes the check must refuse
@@ -75,6 +75,7 @@ What a consumer imports:
 | `@tasker-systems/temper-design/highlight` | the one highlight.js registration, for direct code viewers |
 | `@tasker-systems/temper-design/region` | the four region states' words, markers and ARIA roles |
 | `@tasker-systems/temper-design/omission` | the omission sentence a bounded view ends with |
+| `@tasker-systems/temper-design/theme` | the theme model: a reader's preference (follow the system within a family, or one theme) resolved against `themes.json` |
 
 The theme checker (`scripts/`, `tests/`, `pyproject.toml`) is not published: it runs in this
 repository's CI, and the package carries only what it proves. The toolchain check is

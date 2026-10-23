@@ -20,11 +20,13 @@ import { vi } from 'vitest';
 export interface TestPage {
 	url: URL;
 	params: Record<string, string>;
+	/** The merged load data, for a component that reads a layout's field. */
+	data: Record<string, unknown>;
 }
 
 export const ORIGIN = 'http://localhost';
 
-let current: TestPage = { url: new URL('/', ORIGIN), params: {} };
+let current: TestPage = { url: new URL('/', ORIGIN), params: {}, data: {} };
 const subscribers = new Set<(value: TestPage) => void>();
 
 /**
@@ -77,8 +79,12 @@ export const invalidateAll = vi.fn((): Promise<void> => Promise.resolve());
  * supplied explicitly because nothing here runs SvelteKit's router — a component reading
  * `$page.params.owner` is reading what the test set, and the test says so.
  */
-export function setPage(href: string, params: Record<string, string> = {}): void {
-	current = { url: new URL(href, ORIGIN), params };
+export function setPage(
+	href: string,
+	params: Record<string, string> = {},
+	data: Record<string, unknown> = {},
+): void {
+	current = { url: new URL(href, ORIGIN), params, data };
 	for (const notify of subscribers) notify(current);
 }
 

@@ -1,11 +1,15 @@
 import { fireEvent, render } from '@testing-library/svelte';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readCookie, themeStore } from '$lib/stores/theme.svelte';
+import { resetAppContext } from '../../test/app-context';
 import ThemeSwitch from './ThemeSwitch.svelte';
+
+vi.mock('$app/stores', () => import('../../test/app-context'));
 
 const root = () => document.documentElement;
 
 beforeEach(() => {
+	resetAppContext();
 	// biome-ignore lint/suspicious/noDocumentCookie: the store under test writes document.cookie
 	document.cookie = 'temper.theme=; Path=/; Max-Age=0';
 	root().setAttribute('data-theme', 'quiet-instrument');
@@ -49,5 +53,12 @@ describe('readCookie', () => {
 			'fixed:quiet-instrument',
 		);
 		expect(readCookie('a=1', 'temper.theme')).toBeNull();
+	});
+
+	/** The server's cookie parser tolerates a malformed escape; the client must too, or the
+	 *  store throws on mount and the reader's theme is never applied. */
+	it('reads a malformed escape as no cookie, rather than throwing', () => {
+		expect(readCookie('temper.theme=%', 'temper.theme')).toBeNull();
+		expect(readCookie('temper.theme=%E0%A4%A', 'temper.theme')).toBeNull();
 	});
 });

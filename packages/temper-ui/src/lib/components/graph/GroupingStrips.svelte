@@ -380,7 +380,7 @@
 		font-variant-numeric: tabular-nums;
 	}
 	.scale .is-median {
-		color: var(--tp-text-subtle);
+		color: var(--tp-text-muted);
 	}
 	.flat,
 	.nulls {

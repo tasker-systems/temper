@@ -370,7 +370,7 @@
 	.declaration {
 		margin: 0;
 		padding: 10px 14px;
-		border-left: 3px solid var(--tp-rule-strong);
+		border-left: 3px solid var(--tp-accent-line-soft);
 		background: var(--tp-surface);
 		color: var(--tp-text);
 		font-size: 13px;

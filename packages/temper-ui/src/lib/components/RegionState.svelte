@@ -48,6 +48,6 @@
 <p class="region-state" data-region={state} data-testid="region-{state}" role={said.role ?? undefined}>
 	<span class="region-marker" aria-hidden="true">{said.marker}</span>
 	<span>
-		{said.words}{#if said.qualifier}<span class="region-qualifier">{said.qualifier}</span>{/if}{#if detail}<span class="region-detail">{detail}</span>{/if}
+		{said.words}{#if said.qualifier}<span class="region-qualifier">{said.qualifier}</span>{/if}{#if detail}{' '}<span class="region-detail">{detail}</span>{/if}
 	</span>
 </p>

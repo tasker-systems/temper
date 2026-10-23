@@ -20,7 +20,14 @@ import { decodePreference, encodePreference, THEME_COOKIE, THEME_COOKIE_MAX_AGE 
 export function readCookie(cookies: string, name: string): string | null {
 	for (const part of cookies.split(';')) {
 		const [key, ...rest] = part.trim().split('=');
-		if (key === name) return decodeURIComponent(rest.join('='));
+		if (key !== name) continue;
+		// A malformed escape reads as no cookie — the default — as the server's parser reads it.
+		// Thrown here, it would stop the store on mount and leave the reader's theme unapplied.
+		try {
+			return decodeURIComponent(rest.join('='));
+		} catch {
+			return null;
+		}
 	}
 	return null;
 }
@@ -61,7 +68,7 @@ export const themeStore = {
 		pref = next;
 		if (!browser) return;
 		// biome-ignore lint/suspicious/noDocumentCookie: the Cookie Store API is not in every browser the web serves
-		document.cookie = `${THEME_COOKIE}=${encodeURIComponent(encodePreference(next))}; Path=/; Max-Age=${THEME_COOKIE_MAX_AGE}; SameSite=Lax`;
+		document.cookie = `${THEME_COOKIE}=${encodeURIComponent(encodePreference(next))}; Path=/; Max-Age=${THEME_COOKIE_MAX_AGE}; SameSite=Lax; Secure`;
 		apply();
 	},
 };

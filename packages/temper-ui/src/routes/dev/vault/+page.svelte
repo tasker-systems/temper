@@ -163,20 +163,20 @@
 		align-items: baseline;
 		gap: 14px;
 		padding: 6px 0 14px;
-		border-bottom: 1px solid var(--color-quiet-rule);
+		border-bottom: 1px solid var(--tp-rule);
 		margin-bottom: 18px;
 	}
 	.brand {
 		font-family: var(--font-mono);
 		font-size: 12px;
-		color: var(--color-quiet-mid);
+		color: var(--tp-text-muted);
 	}
 	.cap {
 		font-family: var(--font-mono);
 		font-size: 9px;
 		letter-spacing: var(--track-label);
 		text-transform: uppercase;
-		color: var(--color-quiet-dim);
+		color: var(--tp-text-subtle);
 	}
 	.panel {
 		margin-bottom: 28px;
@@ -185,12 +185,12 @@
 		font-family: var(--font-mono);
 		font-size: 12px;
 		font-weight: 500;
-		color: var(--color-quiet-mid);
+		color: var(--tp-text-muted);
 		margin: 0 0 6px;
 	}
 	.note {
 		font-size: 12px;
-		color: var(--color-quiet-dim);
+		color: var(--tp-text-subtle);
 		margin: 0 0 10px;
 		max-width: 72ch;
 	}
@@ -204,14 +204,14 @@
 		gap: 6px;
 		font-family: var(--font-mono);
 		font-size: 10px;
-		color: var(--color-quiet-mid);
+		color: var(--tp-text-muted);
 		margin-bottom: 12px;
 		cursor: pointer;
 	}
 	.frame {
-		border: 1px dashed color-mix(in srgb, var(--color-quiet-dim) 40%, transparent);
+		border: 1px dashed var(--tp-rule-strong);
 	}
 	.frame.inset {
-		background: var(--color-quiet-card);
+		background: var(--tp-surface);
 	}
 </style>

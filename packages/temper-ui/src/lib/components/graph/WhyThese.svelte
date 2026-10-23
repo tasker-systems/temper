@@ -216,7 +216,7 @@
 	   machine's own bookkeeping, never a fault the reader is being shown. */
 	.groupings li.absent {
 		border-left-color: var(--tp-rule-strong);
-		background: var(--tp-surface-raised);
+		background: var(--tp-surface);
 		color: var(--tp-text-subtle);
 		font-style: italic;
 	}
