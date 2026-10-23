@@ -37,7 +37,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: "24.22.1"   # == mise.toml. Exact: "24" can be satisfied by an older 24.x in the runner tool cache
 
       # npm, not bun: temper-ts is deliberately NOT a bun workspace member (the root list is exactly
       # temper-cloud + temper-ui), and a root install would inherit the root's overrides.
@@ -72,7 +72,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: "24.22.1"   # == mise.toml. Exact: "24" can be satisfied by an older 24.x in the runner tool cache
 
       # npm, not bun: like temper-ts, this package is deliberately NOT a bun workspace
       # member (the root list is exactly temper-cloud + temper-ui), and a root install
@@ -113,7 +113,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: "24.22.1"   # == mise.toml. Exact: "24" can be satisfied by an older 24.x in the runner tool cache
 
       # The steward takes temper-ts as a `file:` dependency, so npm symlinks it and its `pretest`
       # hook builds it. Run from INSIDE this directory — a root install fails on the root's bun
@@ -153,7 +153,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: "24.22.1"   # == mise.toml. Exact: "24" can be satisfied by an older 24.x in the runner tool cache
 
       # Like the steward, this agent takes temper-ts (and temper-telemetry-ts) as `file:`
       # dependencies, which its `pretypecheck`/`pretest`/`prebuild` hooks build (temper-ts's dist/ is

@@ -130,7 +130,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: "24.22.1"   # == mise.toml. Exact: "24" can be satisfied by an older 24.x in the runner tool cache
 
       # npm, not bun: like the TS clients, this package is not a bun workspace member. It ships
       # compiled `dist/`, consumed by temper-ui as a `file:` dependency, which bun copies rather
