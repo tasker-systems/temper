@@ -5,10 +5,13 @@
 //! renders what came back — including a refusal, which is an answer rather than a failure to
 //! produce one.
 
+use std::collections::BTreeSet;
+
 use temper_client::error::ClientError;
 use temper_client::TemperClient;
+use temper_core::types::ids::ShapeId;
 use temper_core::types::query::validate::PlanRefusal;
-use temper_core::types::query::{Composition, QueryResponse};
+use temper_core::types::query::{Composition, QueryResponse, StageNode};
 
 use crate::error::{Result, TemperError};
 
@@ -60,7 +63,9 @@ pub fn parse_composition(raw: &str) -> Result<Composition> {
 pub const SHAPE_DISCLOSURE: &str =
     "Expressibility only: the plan was checked against the published contract with no server \
      consulted. A clean result does not promise the server will run it — the server may be older \
-     or newer than this client, and only it knows what it has built.";
+     or newer than this client, and only it knows what it has built. Artifact asks were checked \
+     for form only: no shape was loaded, so none of them was checked against its shape \
+     (`shapes_not_checked`).";
 
 /// The verdict of a local `--check`.
 #[derive(Debug, serde::Serialize)]
@@ -69,6 +74,11 @@ pub struct ShapeReport {
     pub expressible: bool,
     /// Every shape refusal at once, never just the first.
     pub refusals: Vec<PlanRefusal>,
+    /// Every shape the plan's artifact asks name, none of which this check loaded: whether each
+    /// ask's paths, operators and values lie inside its shape is the server's to say (spec
+    /// `2026-10-19-asking-artifacts-by-what-they-are` §4.3 item 5). Empty when the plan asks
+    /// nothing. Always present, like the disclosure.
+    pub shapes_not_checked: Vec<ShapeId>,
     /// Always [`SHAPE_DISCLOSURE`]. Present in every report, including clean ones — a disclosure
     /// that appears only on failure is absent exactly when it is most likely to mislead.
     pub disclosure: &'static str,
@@ -90,8 +100,26 @@ pub fn check_plan(composition: &Composition) -> ShapeReport {
     ShapeReport {
         expressible: refusals.is_empty(),
         refusals,
+        shapes_not_checked: asked_shapes(composition),
         disclosure: SHAPE_DISCLOSURE,
     }
+}
+
+/// Every distinct shape the plan's artifact asks name, in id order — counted whatever the request
+/// caps say, since the report names what was not checked rather than what the server would load.
+fn asked_shapes(composition: &Composition) -> Vec<ShapeId> {
+    composition
+        .stages
+        .iter()
+        .filter_map(|node| match node {
+            StageNode::Act(inv) => Some(&inv.artifact_filter),
+            StageNode::Combine(_) => None,
+        })
+        .flatten()
+        .map(|ask| ask.shape)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 /// An answered plan, or the refusals that stopped it.
@@ -276,6 +304,56 @@ mod tests {
         let json = serde_json::to_value(&report).expect("serializes");
         assert!(json["disclosure"].is_string());
         assert_eq!(json["expressible"], true);
+    }
+
+    /// **A check over a plan that asks artifacts names the shapes it did not check**, and admits
+    /// what only the server can refuse. The ask is well-formed, names a shape no client can load,
+    /// and asks `include_folded` — whether that is served is the server's to say — so the plan is
+    /// expressible, and the report lists the shape under `shapes_not_checked` beside a disclosure
+    /// saying asks were checked for form only. Bites `include_folded` refused offline (the plan is
+    /// then not expressible) and a report that omits the unchecked shapes.
+    #[test]
+    fn a_check_names_the_shapes_it_did_not_check() {
+        let shape = "0194b1a0-0000-7000-8000-000000000001";
+        let plan: Composition = serde_json::from_str(&format!(
+            r#"{{"stages":[
+                  {{"name":"sel","act":"find-resources-with",
+                    "artifact_filter":[{{"shape":"{shape}","include_folded":true,
+                      "predicates":[{{"path":["unit"],"op":{{"op":"contains","values":["ms"]}}}}]}}]}},
+                  {{"name":"hits","act":"find-exact","intention":{{"query":"latency"}},
+                    "inputs":[{{"from":"upstream","as":"bound","stage":"sel"}}]}}],
+                "outcome":{{"returns":[{{"stage":"hits","with":[]}}]}}}}"#
+        ))
+        .expect("fixture parses");
+
+        let report = check_plan(&plan);
+        assert!(report.expressible, "refusals: {:?}", report.refusals);
+        assert_eq!(
+            report
+                .shapes_not_checked
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
+            vec![shape.to_string()]
+        );
+        assert!(report
+            .disclosure
+            .contains("Artifact asks were checked for form only"));
+        let json = serde_json::to_value(&report).expect("serializes");
+        assert_eq!(json["shapes_not_checked"], serde_json::json!([shape]));
+
+        let asks_nothing: Composition = serde_json::from_str(
+            r#"{"stages":[{"name":"about","act":"find-about-anywhere",
+                           "intention":{"query":"anything"}}],
+                "outcome":{"returns":[{"stage":"about","with":[]}]}}"#,
+        )
+        .expect("fixture parses");
+        let json = serde_json::to_value(check_plan(&asks_nothing)).expect("serializes");
+        assert_eq!(
+            json["shapes_not_checked"],
+            serde_json::json!([]),
+            "always present"
+        );
     }
 
     /// The headline property, at the last hop that can drop it: **every** refusal is rendered.

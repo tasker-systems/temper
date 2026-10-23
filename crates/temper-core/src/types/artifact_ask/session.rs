@@ -12,7 +12,9 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use super::validate::{not_askable, validate_ask_form, validate_loaded, ValidatedAsk};
+use super::validate::{
+    not_askable, refuse_unserved, validate_ask_form, validate_loaded, ValidatedAsk,
+};
 use super::walk::{Budget, ShapeWalk, MAX_WALK_VISITS};
 use super::{ArtifactAsk, ShapeContext, MAX_MEMBERSHIP_STEPS};
 use crate::types::ids::ShapeId;
@@ -61,6 +63,8 @@ pub struct AskSession<'c> {
     /// `ArtifactAsk` losslessly, so equal text is an equal ask; two equal asks written differently
     /// (object keys in another order) only miss, and are answered afresh.
     answered: HashMap<Vec<u8>, Result<ValidatedAsk, Vec<PlanRefusal>>>,
+    /// How many asks were answered from `answered` rather than validated afresh.
+    answered_again: usize,
 }
 
 /// What one request may still spend reading shapes: the walk's visits, with the members and value
@@ -87,6 +91,7 @@ impl<'c> AskSession<'c> {
             shapes: BTreeMap::new(),
             budget: RequestBudget::new(),
             answered: HashMap::new(),
+            answered_again: 0,
         }
     }
 
@@ -102,10 +107,9 @@ impl<'c> AskSession<'c> {
     /// An ask this session has validated before is answered as it was then, spending nothing.
     pub fn validate(&mut self, ask: &ArtifactAsk) -> Result<ValidatedAsk, Vec<PlanRefusal>> {
         let key = serde_json::to_vec(ask).ok();
-        if let Some(answer) = key.as_ref().and_then(|key| self.answered.get(key)) {
-            #[cfg(test)]
-            ASKS_ANSWERED_AGAIN.with(|again| again.set(again.get() + 1));
-            return answer.clone();
+        if let Some(answer) = key.as_ref().and_then(|key| self.answered.get(key)).cloned() {
+            self.answered_again += 1;
+            return answer;
         }
         let answer = self.answer(ask);
         if let Some(key) = key {
@@ -133,6 +137,20 @@ impl<'c> AskSession<'c> {
         validate_loaded(ask, shape, walk, &mut self.budget)
     }
 
+    /// How many asks this session answered from what it had already validated, spending nothing —
+    /// a composition's seal re-validating the asks its gate admitted. A caller reports it beside
+    /// [`AskSession::shapes_walked`], and a test reads it to see that the gate and the seal shared
+    /// this session: a seal through any other session leaves it at zero.
+    pub fn answered_again(&self) -> usize {
+        self.answered_again
+    }
+
+    /// How many shapes this session has built a walk of — at most one per distinct shape its asks
+    /// named, whatever number of asks named each.
+    pub fn shapes_walked(&self) -> usize {
+        self.shapes.len()
+    }
+
     /// The visits the request has left — what a test reads to see what its asks cost.
     #[cfg(test)]
     pub(crate) fn visits_left(&self) -> usize {
@@ -146,18 +164,12 @@ impl<'c> AskSession<'c> {
     }
 }
 
-#[cfg(test)]
-thread_local! {
-    /// Every ask a session has answered from its memo on this thread — what a test reads to see
-    /// that a seal re-validating its gate's asks was answered rather than re-walked.
-    pub(crate) static ASKS_ANSWERED_AGAIN: std::cell::Cell<usize> =
-        const { std::cell::Cell::new(0) };
-}
-
-/// A steps 1–3 refusal, followed by the ask's shape-free refusals.
+/// A steps 1–3 refusal, followed by the ask's shape-free refusals: its form, and what it asks that
+/// this server does not serve.
 fn beside_the_form(refusal: PlanRefusal, ask: &ArtifactAsk) -> Vec<PlanRefusal> {
     let mut errs = vec![refusal];
     errs.extend(validate_ask_form(ask));
+    refuse_unserved(ask, &mut errs);
     errs
 }
 

@@ -7,8 +7,10 @@
 //! the deployed function definitions `MIGRATOR` embeds (newest definition wins) — still no
 //! database.
 
-use temper_core::types::artifact_ask::ShapeContext;
-use temper_core::types::ids::ProfileId;
+use temper_core::types::artifact_ask::{
+    ArtifactAsk, ArtifactPredicate, LoadedShape, ShapeContext, ShapeLoad, ValidatedAsk,
+};
+use temper_core::types::ids::{ProfileId, ShapeId};
 use temper_core::types::query::{
     declaration, validate, ActInvocation, ActName, Composition, IdKind, IdSet, OutcomeDeclaration,
     ReturnSpec, StageInput, StageName, StageNode, StageRelation, ValidatedComposition,
@@ -83,6 +85,15 @@ fn find_from(name: &str, upstream: &str) -> StageNode {
 /// they threaded an intention, and the intention-free one existed for `follow-from` plans. There are
 /// none left, and two identical builders are two things that can drift.
 fn build(stages: Vec<StageNode>, returns: Vec<&str>) -> ValidatedComposition {
+    build_with(stages, returns, &ShapeContext::empty())
+}
+
+/// [`build`] against the shapes a plan's artifact asks name.
+fn build_with(
+    stages: Vec<StageNode>,
+    returns: Vec<&str>,
+    shapes: &ShapeContext,
+) -> ValidatedComposition {
     let c = Composition {
         outcome: OutcomeDeclaration {
             returns: returns
@@ -95,7 +106,7 @@ fn build(stages: Vec<StageNode>, returns: Vec<&str>) -> ValidatedComposition {
         },
         stages,
     };
-    validate(&c, &mut ShapeContext::empty().session()).expect("plan is valid")
+    validate(&c, &mut shapes.session()).expect("plan is valid")
 }
 
 fn plan_with_caller_ids() -> (ValidatedComposition, Vec<Uuid>) {
@@ -1522,7 +1533,7 @@ fn ungated_core_calls(sql: &str) -> Vec<String> {
 /// as the BOUND and never as the visible set.
 #[test]
 fn every_ungated_core_call_takes_its_ids_from_the_hoisted_relation_and_nothing_else() {
-    let v = build(
+    let v = build_with(
         vec![
             find_stage("hits", ActName::FindExact, None),
             find_stage_embedded(
@@ -1546,18 +1557,35 @@ fn every_ungated_core_call_takes_its_ids_from_the_hoisted_relation_and_nothing_e
             // which is exactly the thing to get wrong — the test asserts the first argument is
             // still the hoisted visible set.
             survey_stage("surveyed"),
+            // A selection carrying artifact asks: the `Selection` arm with its asks slot bound, so
+            // the guard covers the call shape the counted set is reached through. The asks are a
+            // narrowing argument and never an id source.
+            asking_selection("asked"),
         ],
         vec!["narrowed"],
+        &asked_shapes(),
     );
     let c = compile(&v, test_profile()).expect("compiles");
 
     let calls = ungated_core_calls(&c.sql);
     assert_eq!(
         calls.len(),
-        4,
-        "both find stages, the selection, AND the survey must reach an ungated core; got {calls:?} \
-         in:\n{}",
+        5,
+        "both find stages, both selections, AND the survey must reach an ungated core; got \
+         {calls:?} in:\n{}",
         c.sql
+    );
+    // The asks slot sits just before the anchor pair; bound, it is a `$n::jsonb` rather than the
+    // typed NULL a stage that asks nothing renders there. Each call is emitted on one line, so its
+    // own arguments are the first line of what `ungated_core_calls` returns — the rest is the
+    // statement after it.
+    let asks_bound = |c: &&String| {
+        let own = c.lines().next().unwrap_or_default();
+        own.contains("::jsonb, NULL, NULL, $1,") && !own.contains("NULL::jsonb, NULL, NULL, $1,")
+    };
+    assert!(
+        calls.iter().any(|c| asks_bound(&c)),
+        "the selection carrying asks must be among the calls this guard inspects: {calls:?}"
     );
     assert!(
         calls
@@ -1655,6 +1683,124 @@ fn selection(name: &str) -> StageNode {
     })
 }
 
+/// The shape [`asking_selection`]'s ask names.
+const ASKED_SHAPE: u128 = 0xa5;
+
+/// One loaded shape declaring `unit`, a string — what [`asking_selection`] asks of.
+fn asked_shapes() -> ShapeContext {
+    let shape = LoadedShape {
+        shape_id: ShapeId::from(Uuid::from_u128(ASKED_SHAPE)),
+        shape_version: 1,
+        home_anchor_table: "kb_contexts".to_string(),
+        home_anchor_id: Uuid::from_u128(0xc0),
+        kind_owner_table: "kb_profiles".to_string(),
+        kind_owner_id: Uuid::from_u128(0xd0),
+        artifact_kind: "measurement".to_string(),
+        schema: serde_json::json!({ "properties": { "unit": { "type": "string" } } }),
+    };
+    [(shape.shape_id, ShapeLoad::Loaded(shape))]
+        .into_iter()
+        .collect()
+}
+
+/// The caller's ask: `unit` present, and nothing else said — no intent, no states, so the
+/// validated form differs from it by the defaults it writes out.
+fn the_callers_ask() -> ArtifactAsk {
+    ArtifactAsk {
+        shape: ShapeId::from(Uuid::from_u128(ASKED_SHAPE)),
+        predicates: vec![ArtifactPredicate {
+            path: vec!["unit".to_string()],
+            op: temper_core::types::query::PropertyOp::HasKey,
+        }],
+        intent: vec![],
+        include_folded: false,
+        shape_states: vec![],
+    }
+}
+
+/// A `find-resources-with` stage asking one artifact ask of [`ASKED_SHAPE`], and narrowing nothing
+/// else.
+fn asking_selection(name: &str) -> StageNode {
+    StageNode::Act(ActInvocation {
+        name: StageName::parse(name).unwrap(),
+        act: ActName::FindResourcesWith,
+        intention: None,
+        inputs: vec![],
+        terms: Default::default(),
+        resource_filter: None,
+        edge_filter: None,
+        properties: vec![],
+        artifact_filter: vec![the_callers_ask()],
+    })
+}
+
+/// **A selection's asks bind once, as the sealed asks, between the narrowings and the anchor.**
+///
+/// - The slot renders `$n::jsonb` — the cast is never optional — after `title_contains` and before
+///   the anchor pair, beside neither jsonb narrowing.
+/// - What binds there is the seal's `ValidatedAsk::bind` for each ask, in filter order: every list
+///   written out, the defaults applied. The caller's own ask, serialized, carries no `intent` or
+///   `shape_states` at all — which the SQL reads as admitting nothing.
+/// - The statement still computes the visibility relation once, and the stage still produces
+///   resource ids.
+///
+/// Bites binding `inv.artifact_filter` instead of `v.asks(..)`: the bound value is the caller's
+/// serialization and the equality below fails. Bites dropping the asks slot: the call renders the
+/// 13-argument shape and the `$2::jsonb` before the anchor is gone.
+#[test]
+fn a_selection_binds_its_sealed_asks_once_between_the_narrowings_and_the_anchor() {
+    let v = build_with(
+        vec![asking_selection("sel"), find_from("hits", "sel")],
+        vec!["hits"],
+        &asked_shapes(),
+    );
+    let sealed: &[ValidatedAsk] = v.asks(&StageName::parse("sel").unwrap());
+    assert_eq!(sealed.len(), 1, "the seal holds the stage's one ask");
+    let q = compile(&v, test_profile()).expect("a selection with asks compiles");
+
+    let call = q
+        .sql
+        .lines()
+        .find(|l| l.contains("FROM __temper_ungated_find_resources_with("))
+        .expect("the selection stage emits the selection core");
+    let expected = "__temper_ungated_find_resources_with((SELECT ids FROM __temper_vis), \
+                    NULL::text[], NULL::text[], NULL::jsonb, NULL::text, NULL::text, NULL::uuid, \
+                    NULL::text, NULL::text, $2::jsonb, NULL, NULL, $1, NULL::jsonb)";
+    assert!(
+        call.contains(expected),
+        "the asks slot sits after the narrowings and before the anchor pair.\n  expected: \
+         {expected}\n  got: {call}"
+    );
+
+    let bound = match &q.binds[1] {
+        QueryBind::Json(value) => value.clone(),
+        other => panic!("the asks bind as jsonb, got {other:?}"),
+    };
+    assert_eq!(
+        bound,
+        serde_json::Value::Array(sealed.iter().map(ValidatedAsk::bind).collect()),
+        "the sealed asks bind, one per ask in filter order"
+    );
+    let raw = serde_json::to_value(the_callers_ask()).unwrap();
+    assert_ne!(bound[0], raw, "the caller's serialization never binds");
+    assert_eq!(bound[0]["intent"], serde_json::json!(["current", "member"]));
+    assert!(bound[0]["shape_states"].is_array() && bound[0]["predicates"].is_array());
+
+    assert_eq!(
+        q.sql.matches("resources_visible_to(").count(),
+        1,
+        "{}",
+        q.sql
+    );
+    assert!(
+        q.sql.contains(
+            "SELECT resource_id AS id, 'resource'::text AS kind, NULL::double precision AS quantity"
+        ),
+        "the selection produces resource ids: {}",
+        q.sql
+    );
+}
+
 /// A survey stage: an intention with an embedding, a cogmap anchor bound, and a `Regions` term.
 /// Survey is the only core that takes BOTH `VISIBLE_IDS` and `PRINCIPAL_BIND`, so the guard test
 /// must cover it to verify the first argument is still the hoisted visible set.
@@ -1710,10 +1856,11 @@ fn the_selection_narrowings_bind_in_signature_order() {
         .expect("the selection stage emits the selection core");
 
     // Signature order: doc_types, tags, facets, stage, status, owner_profile, owner_handle,
-    // title_contains — then the anchor pair, then the principal, then the OPEN-KEY slot last.
+    // title_contains — then the artifact asks (typed NULL, since this stage asks nothing), then the
+    // anchor pair, then the principal, then the OPEN-KEY slot last.
     let expected = "__temper_ungated_find_resources_with((SELECT ids FROM __temper_vis), \
                     $2::text[], $3::text[], $4::jsonb, $5::text, NULL::text, NULL::uuid, \
-                    $6::text, $7::text, NULL, NULL, $1, $8::jsonb)";
+                    $6::text, $7::text, NULL::jsonb, NULL, NULL, $1, $8::jsonb)";
     assert!(
         call.contains(expected),
         "narrowings must render in signature order.\n  expected: {expected}\n  got: {call}"

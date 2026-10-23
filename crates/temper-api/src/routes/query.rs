@@ -71,8 +71,12 @@ pub const QUERY_MAX_BODY_BYTES: usize = 25 * 1024 * 1024;
 mod tests {
     use super::QUERY_MAX_BODY_BYTES;
     use std::collections::BTreeMap;
-    use temper_core::types::artifact_ask::ShapeContext;
+    use temper_core::types::artifact_ask::{
+        ArtifactAsk, ArtifactPredicate, LoadedShape, ShapeContext, ShapeLoad, ARTIFACT_INTENTS,
+        ASKABLE_SHAPE_STATES, MAX_ASK_PREDICATES, MAX_ASK_PROBES,
+    };
     use temper_core::types::graph::EdgeKind;
+    use temper_core::types::ids::ShapeId;
     use temper_core::types::query::act::ActName;
     use temper_core::types::query::composition::{
         Composition, Intention, OutcomeDeclaration, ReturnSpec, StageNode,
@@ -89,6 +93,7 @@ mod tests {
     use temper_core::types::query::scalars::BoundTerm;
     use temper_core::types::query::stage::{StageInput, StageName, StageRelation};
     use temper_core::types::query::validate::validate;
+    use temper_core::types::query::MAX_ASKS_PER_REQUEST;
     use temper_core::types::resource_view::ResourceSection;
     use temper_services::transport::VERCEL_REQUEST_BODY_CAP_BYTES;
 
@@ -129,6 +134,14 @@ mod tests {
     ///   bounded field: the walk carries id sets and no `ResourceFilter`, the selection the reverse.
     ///   Both are measured and the larger reported, which is the walk shape `[measured —
     ///   2026-10-07]`.
+    /// - **The selection shape carries the artifact asks at their caps**: `MAX_ASKS_PER_REQUEST`
+    ///   asks, one per selection stage, each at `MAX_ASK_PREDICATES` predicates and
+    ///   `MAX_ASK_PROBES` values, every intent and shape state named. Their values count toward the
+    ///   value budget and their text toward the text budget, as the shape pass counts them, so they
+    ///   add structure rather than budget. Their path segments are one short key each and are not
+    ///   grown: the text budget is spent either way, and growing them would only move it. They are
+    ///   validated against one loaded shape declaring every path they name, since an ask is legal
+    ///   only inside its shape.
     #[test]
     fn the_largest_legal_composition_fits_inside_the_declared_body_limit() {
         // **Two shapes, both measured, because no single act admits every bounded field and the
@@ -147,17 +160,30 @@ mod tests {
             ActName::FindResourcesWith,
         )));
 
+        let shapes = asked_shape();
         for (what, c) in [("walk", &walk), ("selection", &select)] {
             // Legal FIRST. A byte count over a plan the validator refuses is a measurement of
             // nothing — and the first version of this test measured one carrying 128 refusals
             // while its own doc called it legal `[found in review — 2026-08-28]`.
             assert!(
-                validate(c, &mut ShapeContext::empty().session()).is_ok(),
+                validate(c, &mut shapes.session()).is_ok(),
                 "the {what} fixture must be a composition this server would RUN, or its size says \
                  nothing about what the door has to accept: {:?}",
-                validate(c, &mut ShapeContext::empty().session()).err()
+                validate(c, &mut shapes.session()).err()
             );
         }
+        let asks_carried: usize = select
+            .stages
+            .iter()
+            .map(|n| match n {
+                StageNode::Act(inv) => inv.artifact_filter.len(),
+                StageNode::Combine(_) => 0,
+            })
+            .sum();
+        assert_eq!(
+            asks_carried, MAX_ASKS_PER_REQUEST,
+            "the selection shape carries the asks at their cap"
+        );
 
         // Measured at the MOST EXPANSIVE per-character escaping encoder, not serde's: a client escaping every
         // non-ASCII character or `<>&` as `\uXXXX` sends the same legal plan in more bytes, and the
@@ -255,7 +281,11 @@ mod tests {
                     resource_filter: (!walk).then(full_resource_filter),
                     edge_filter: walk.then(full_edge_filter),
                     properties: vec![],
-                    artifact_filter: vec![],
+                    artifact_filter: if !walk && i < MAX_ASKS_PER_REQUEST {
+                        vec![full_ask()]
+                    } else {
+                        vec![]
+                    },
                 })
             })
             .collect();
@@ -350,8 +380,13 @@ mod tests {
                 .iter_mut()
                 .flat_map(|f| &mut f.properties);
             let edge = inv.edge_filter.iter_mut().flat_map(|f| &mut f.properties);
-            for p in resource.chain(edge) {
-                match &mut p.op {
+            let asks = inv
+                .artifact_filter
+                .iter_mut()
+                .flat_map(|a| &mut a.predicates)
+                .map(|p| &mut p.op);
+            for op in resource.chain(edge).map(|p| &mut p.op).chain(asks) {
+                match op {
                     PropertyOp::Contains { values: vs } => values.extend(vs.iter_mut()),
                     PropertyOp::Compare { value, .. } => values.push(value),
                     PropertyOp::HasKey => {}
@@ -427,6 +462,24 @@ mod tests {
                     strings.push((x, MAX_TITLE_CONTAINS_BYTES, String::new()));
                 }
             }
+            // An ask's text counts as the shape pass counts it — path segments, intent and state
+            // terms, values — and none of it is grown here (see the test's doc).
+            for ask in &inv.artifact_filter {
+                value_text += ask
+                    .predicates
+                    .iter()
+                    .flat_map(|p| &p.path)
+                    .chain(&ask.intent)
+                    .chain(&ask.shape_states)
+                    .map(|s| worst_case_string_bytes(s))
+                    .sum::<usize>();
+                value_text += ask
+                    .predicates
+                    .iter()
+                    .flat_map(|p| p.op.values())
+                    .map(worst_case_value_bytes)
+                    .sum::<usize>();
+            }
             if let Some(f) = inv.edge_filter.as_mut() {
                 for p in &f.properties {
                     value_text +=
@@ -494,6 +547,59 @@ mod tests {
                         .collect(),
                 },
             })
+            .collect()
+    }
+
+    /// The shape every fixture ask names.
+    fn asked_shape_id() -> ShapeId {
+        ShapeId::from(uuid::Uuid::from_u128(0xa5))
+    }
+
+    /// The `j`th path an ask names: one short key, declared by [`asked_shape`].
+    fn ask_path(j: usize) -> String {
+        format!("a{j}")
+    }
+
+    /// One ask at every per-ask cap: `MAX_ASK_PREDICATES` predicates whose `contains` lists sum to
+    /// `MAX_ASK_PROBES` values, and every intent and shape state named.
+    fn full_ask() -> ArtifactAsk {
+        let per_predicate = MAX_ASK_PROBES / MAX_ASK_PREDICATES;
+        ArtifactAsk {
+            shape: asked_shape_id(),
+            predicates: (0..MAX_ASK_PREDICATES)
+                .map(|j| ArtifactPredicate {
+                    path: vec![ask_path(j)],
+                    op: PropertyOp::Contains {
+                        values: (0..per_predicate)
+                            .map(|v| serde_json::json!(format!("v{v}")))
+                            .collect(),
+                    },
+                })
+                .collect(),
+            intent: ARTIFACT_INTENTS.iter().map(|t| t.to_string()).collect(),
+            include_folded: false,
+            shape_states: ASKABLE_SHAPE_STATES.iter().map(|t| t.to_string()).collect(),
+        }
+    }
+
+    /// The loaded shape the fixture's asks are validated against: every path they name declared,
+    /// untyped, so any value may be asked of it.
+    fn asked_shape() -> ShapeContext {
+        let properties: serde_json::Map<String, serde_json::Value> = (0..MAX_ASK_PREDICATES)
+            .map(|j| (ask_path(j), serde_json::json!({})))
+            .collect();
+        let shape = LoadedShape {
+            shape_id: asked_shape_id(),
+            shape_version: 1,
+            home_anchor_table: "kb_contexts".to_string(),
+            home_anchor_id: uuid::Uuid::from_u128(0xc0),
+            kind_owner_table: "kb_profiles".to_string(),
+            kind_owner_id: uuid::Uuid::from_u128(0xd0),
+            artifact_kind: "measurement".to_string(),
+            schema: serde_json::json!({ "properties": properties }),
+        };
+        [(shape.shape_id, ShapeLoad::Loaded(shape))]
+            .into_iter()
             .collect()
     }
 

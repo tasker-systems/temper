@@ -505,10 +505,11 @@ pub fn validate(
 /// reachable is shape-clean here and refused there.
 ///
 /// **Artifact asks are checked for form only** — the request caps, empty and over-long paths, the
-/// intent and state vocabularies, `include_folded`, the per-ask caps, values no stored content can
-/// hold. Whether a
+/// intent and state vocabularies, the per-ask caps, values no stored content can hold. Whether a
 /// path, operator or value lies inside its shape needs the shape, which only the server loads, so
-/// a `--check` that passes has not checked any ask against its shape and must say so.
+/// a `--check` that passes has not checked any ask against its shape and must say so. Nor does it
+/// refuse `include_folded: true`: whether that is served is the server's capability, which a client
+/// cannot know, so only [`validate`] declines it.
 pub fn validate_shape(c: &Composition) -> Vec<PlanRefusal> {
     let (mut errs, ordered) = shape::validate_shape_indexed(c);
     asks::check_forms(c, ordered.is_some(), &mut errs);
@@ -4711,7 +4712,6 @@ mod tests {
 
     // ---- Artifact asks on the composable arm ------------------------------------------------
 
-    use crate::types::artifact_ask::session::ASKS_ANSWERED_AGAIN;
     use crate::types::artifact_ask::walk::{VOCABULARIES_ENUMERATED, WALKS_BUILT};
     use crate::types::artifact_ask::{
         ArtifactAsk, ArtifactPredicate, LoadedShape, ShapeHome, ShapeLoad, ShapeSuccessor,
@@ -4935,6 +4935,31 @@ mod tests {
                     && r.stage.as_ref() == Some(&stage("walk"))
                     && r.detail.contains("`artifact_filter`")),
             "{rs:?}"
+        );
+    }
+
+    /// A selection carrying asks is still not returnable — `StageNotReturnable` refuses it by act
+    /// name, inherited rather than restated for asks — and what it produces for a downstream stage
+    /// is resource ids, never artifacts. Bites an artifact-specific exemption from the returns rule,
+    /// or a declaration whose output kind moved with the new slot.
+    #[test]
+    fn a_selection_that_asks_is_still_unreturnable_and_produces_resource_ids() {
+        let shapes = loaded(vec![measurement(1)]);
+        let c = plan(
+            vec![selecting("sel", vec![asking(1, "unit")], None)],
+            vec!["sel"],
+        );
+        let rs = super::validate(&c, &mut shapes.session())
+            .expect_err("a selection orders nothing, so returning its rows is refused");
+        assert!(
+            rs.iter()
+                .any(|r| r.reason == RefusalReason::StageNotReturnable
+                    && r.stage == Some(stage("sel"))),
+            "{rs:?}"
+        );
+        assert_eq!(
+            declaration(&ActName::FindResourcesWith).and_then(|d| d.produces),
+            Some(IdKind::Resource)
         );
     }
 
@@ -5169,10 +5194,13 @@ mod tests {
         }
     }
 
-    /// `include_folded: true` and a NUL in a value are refused at the stage, by the full validator
-    /// and the offline check alike, before anything is bound.
+    /// A NUL in a value is refused at the stage by the full validator and the offline check alike,
+    /// before anything is bound. `include_folded: true` is refused at the stage by the full
+    /// validator only: it is well-formed, and whether it is served is the server's to say, so the
+    /// offline check passes it. Bites `include_folded` moved back into the form check: the offline
+    /// check refuses it.
     #[test]
-    fn include_folded_and_a_nul_in_a_value_are_refused_at_their_stage() {
+    fn a_nul_is_refused_offline_and_include_folded_by_the_server_alone() {
         let shapes = loaded(vec![measurement(1)]);
         let folded = ArtifactAsk {
             include_folded: true,
@@ -5187,26 +5215,37 @@ mod tests {
             }],
             ..asking(1, "unit")
         };
-        for (ask, reason, says) in [
-            (folded, RefusalReason::FilterNotApplicable, "include_folded"),
-            (nul, RefusalReason::UnstorableValue, "U+0000"),
+        for (ask, reason, says, offline) in [
+            (
+                folded,
+                RefusalReason::FilterNotApplicable,
+                "include_folded",
+                false,
+            ),
+            (nul, RefusalReason::UnstorableValue, "U+0000", true),
         ] {
             let c = answered_by_find(vec![selecting("a", vec![ask], None)]);
-            for rs in [
-                super::validate(&c, &mut shapes.session()).unwrap_err(),
-                validate_shape(&c),
-            ] {
-                assert_eq!(reasons_of(&rs), vec![reason.clone()], "{rs:?}");
-                assert_eq!(rs[0].stage, Some(stage("a")));
-                assert!(rs[0].detail.contains(says), "{}", rs[0].detail);
+            let full = super::validate(&c, &mut shapes.session()).unwrap_err();
+            assert_eq!(reasons_of(&full), vec![reason.clone()], "{full:?}");
+            assert_eq!(full[0].stage, Some(stage("a")));
+            assert!(full[0].detail.contains(says), "{}", full[0].detail);
+            let shape_only = validate_shape(&c);
+            if offline {
+                assert_eq!(shape_only, full, "the offline check says the same");
+            } else {
+                assert!(
+                    shape_only.is_empty(),
+                    "a capability of the server is not refused offline: {shape_only:?}"
+                );
             }
         }
     }
 
-    /// The offline check refuses an ask's form and never its shape: a malformed ask's form
-    /// refusals at its stage, and nothing for a well-formed ask naming a shape it cannot load —
-    /// which the server, holding no such shape, refuses `shape_not_askable`. Every offline refusal
-    /// is one the server gives too.
+    /// The offline check refuses an ask's form and never its shape or what the server serves: a
+    /// malformed ask's form refusals at its stage, and nothing for a well-formed ask naming a shape
+    /// it cannot load and asking `include_folded` — which the server, holding no such shape and
+    /// serving no folded artifacts, refuses `shape_not_askable` and `filter_not_applicable`. Every
+    /// offline refusal is one the server gives too.
     #[test]
     fn the_offline_check_refuses_an_asks_form_and_never_its_shape() {
         let mut malformed = asking(1, "unit");
@@ -5215,11 +5254,11 @@ mod tests {
             op: PropertyOp::HasKey,
         });
         malformed.intent = vec!["favourite".to_string()];
-        let c = answered_by_find(vec![selecting(
-            "a",
-            vec![malformed, asking(2, "undeclared")],
-            None,
-        )]);
+        let unserved = ArtifactAsk {
+            include_folded: true,
+            ..asking(2, "undeclared")
+        };
+        let c = answered_by_find(vec![selecting("a", vec![malformed, unserved], None)]);
 
         let offline = validate_shape(&c);
         assert_eq!(
@@ -5235,6 +5274,13 @@ mod tests {
         assert!(full
             .iter()
             .any(|r| r.reason == RefusalReason::ShapeNotAskable));
+        assert!(
+            full.iter()
+                .any(|r| r.reason == RefusalReason::FilterNotApplicable
+                    && r.stage == Some(stage("a"))
+                    && r.detail.contains("include_folded")),
+            "the server declines what it does not serve: {full:?}"
+        );
         for r in &offline {
             assert!(full.contains(r), "{r:?} is the server's too: {full:?}");
         }
@@ -5332,9 +5378,13 @@ mod tests {
         );
 
         let after_gate = session.visits_left();
-        let (built, (answered, seal)) = counted(&WALKS_BUILT, || {
-            counted(&ASKS_ANSWERED_AGAIN, || super::validate(&c, &mut session))
-        });
+        assert_eq!(
+            session.answered_again(),
+            0,
+            "the gate answered every ask afresh"
+        );
+        let (built, seal) = counted(&WALKS_BUILT, || super::validate(&c, &mut session));
+        let answered = session.answered_again();
         let seal = seal.expect("the seal admits what the gate admitted");
         assert_eq!(built, 0, "the seal builds no walk");
         assert_eq!(

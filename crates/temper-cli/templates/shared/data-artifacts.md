@@ -110,11 +110,47 @@ coercive contract. Shapes are not "just schema validation" — the why-anchor is
 and the reader are different sessions separated in time, and a shape tells the reader whether the
 data they retrieved conforms to anything the writer declared.
 
+## Asking which resources hold matching data
+
+A declared shape makes its family **askable**. `find-resources-with`, the selection act of a query
+composition, takes `artifact_filter`: a list of asks, each naming a shape by id and predicates over
+the paths that shape declares, with the same closed operators a property predicate uses
+(`has_key`, `contains`, `compare`). A resource is selected when, for **every** ask, one of its
+artifacts satisfies **all** of that ask's predicates. So "an artifact with `unit = "ms"` and
+`count > 10`" is one ask with two predicates, and "one artifact with `unit = "ms"` and another with
+`count > 10`" is two asks.
+
+- **Read the vocabulary first.** A shape's by-id read carries `askable`: every path it declares and
+  the operators each admits. An ask naming a path, operator or value outside its shape is refused
+  before anything runs, and the refusal's `teaches` carries the vocabulary to correct it from.
+- **An ask ranges over its shape's home.** It reads the live artifacts of that shape's family on
+  resources homed there that you can see and that have finished ingesting. Anchor the stage to that
+  home or leave it unanchored; asks of shapes in two homes cannot share a stage (`ask_scope_conflict`)
+  — ask each home in its own stage and `union` them.
+- **You must be able to read the shape's home.** A shape you cannot read is refused exactly as one
+  that does not exist (`shape_not_askable`), even when you can read some of its resources directly
+  and so list their artifacts.
+- **Live artifacts only.** `include_folded: true` on an ask is refused by name.
+- **The answer is resource ids.** The stage pipes them into the next stage like any selection; read
+  the artifacts themselves through the resources it found.
+
+{%- if surface == "cli" %}
+
+Send the plan with `temper query`. `temper query --check` checks an ask's form offline but loads no
+shape, so it cannot say whether a path lies inside one; its report lists those shapes under
+`shapes_not_checked`. A refused plan, under the JSON output format, prints its refusals in the error
+payload's `details.refusals`, each with its `reason` and `teaches`.
+{%- else %}
+
+Send the plan with `run_query`. A refused plan returns `invalid_params`; the error's `data` carries
+`{"refusals": [...]}`, each refusal with its `reason` and `teaches`.
+{%- endif %}
+
 ## What data artifacts are NOT
 
 - **Not searchable.** Data artifacts are never found by resemblance or text match. They are
-  reached only through the resource that owns them — the graph is the index; the artifact is the
-  payload at the end of it.
+  reached through the resource that owns them, and asked by what they hold only through a declared
+  shape's paths (above) — the graph is the index; the artifact is the payload at the end of it.
 - **Not embedded.** Data artifact content never enters the search corpus. The corpus is built for
   prose, and structured data injected into it is semantic noise.
 - **Not a replacement for `open_meta`.** `open_meta` is for small, key-scoped metadata values

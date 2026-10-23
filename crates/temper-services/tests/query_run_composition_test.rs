@@ -954,7 +954,9 @@ mod server_side_embedding {
         // Deliberately shares NO word with the body: a lexical arm cannot produce this hit, so the
         // row can only have arrived through a vector the SERVER computed.
         let c = about(vec![find_about("birds", "raptor predation behaviour")]);
-        let v = prepare(c).await.expect("the plan is valid");
+        let v = prepare(c, &ShapeContext::empty())
+            .await
+            .expect("the plan is valid");
         let r = run_composition(&pool, owner, &v)
             .await
             .expect("the composition runs");
@@ -1008,7 +1010,9 @@ mod server_side_embedding {
             find_about("birds", "raptor predation behaviour"),
             find_about("baking", "fermented loaves and oven craft"),
         ]);
-        let v = prepare(c).await.expect("the plan is valid");
+        let v = prepare(c, &ShapeContext::empty())
+            .await
+            .expect("the plan is valid");
         let r = run_composition(&pool, owner, &v)
             .await
             .expect("the composition runs");

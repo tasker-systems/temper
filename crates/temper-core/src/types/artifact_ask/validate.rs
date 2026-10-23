@@ -257,6 +257,7 @@ pub(super) fn validate_loaded<'c>(
 ) -> Result<ValidatedAsk, Vec<PlanRefusal>> {
     let mut errs = Vec::new();
     let form = check_form(ask, &mut errs);
+    refuse_unserved(ask, &mut errs);
     let predicates = against_shape(&ask.predicates, &form.walkable, walk, budget, &mut errs);
     if !errs.is_empty() {
         return Err(errs);
@@ -276,10 +277,29 @@ pub(super) fn validate_loaded<'c>(
 /// One definition for both callers: [`AskSession::validate`](super::AskSession::validate) runs it
 /// before walking the shape (and beside a steps 1–3 refusal, which consulted no schema), and an
 /// offline check that cannot load shapes (`temper query --check`, spec §4.3 item 5) runs it alone.
+///
+/// **Form only, never what this server serves.** `include_folded: true` is well-formed and is
+/// refused by the server alone (`refuse_unserved`): serving it is a capability a later server may
+/// gain, and an offline check that refused it would refuse, on an older client, what a newer server
+/// answers.
 pub fn validate_ask_form(ask: &ArtifactAsk) -> Vec<PlanRefusal> {
     let mut errs = Vec::new();
     check_form(ask, &mut errs);
     errs
+}
+
+/// What an ask may say that this server does not serve: `include_folded: true`, declined by name
+/// ("declined, never ignored") rather than answered over live artifacts alone. Needs no shape, so
+/// it rides beside a steps 1–3 refusal as the form does; it is not part of
+/// [`validate_ask_form`], whose offline caller cannot know what the server it will reach serves.
+pub(super) fn refuse_unserved(ask: &ArtifactAsk, errs: &mut Vec<PlanRefusal>) {
+    if ask.include_folded {
+        errs.push(refusal(
+            RefusalReason::FilterNotApplicable,
+            INCLUDE_FOLDED.to_string(),
+            None,
+        ));
+    }
 }
 
 /// What the shape-free checks decided: the resolved terms, and which predicates may be walked.
@@ -292,13 +312,6 @@ struct Form {
 fn check_form(ask: &ArtifactAsk, errs: &mut Vec<PlanRefusal>) -> Form {
     let intent = resolve_terms(&ask.intent, &INTENTS, errs);
     let shape_states = resolve_terms(&ask.shape_states, &SHAPE_STATES, errs);
-    if ask.include_folded {
-        errs.push(refusal(
-            RefusalReason::FilterNotApplicable,
-            INCLUDE_FOLDED.to_string(),
-            None,
-        ));
-    }
     // Over a count cap nothing is walked: refused once, up front.
     let walkable = if within_caps(&ask.predicates, errs) {
         well_formed(&ask.predicates, errs)
@@ -1952,18 +1965,41 @@ mod tests {
 
     // ── The form checks `validate_ask_form` adds for the composable arm ───────────────────────
 
-    /// `include_folded: true` is refused by name, in the shape-free form check, so every caller
-    /// of it refuses alike. Bites the check removed: the ask validates, and the statement would
-    /// answer over live artifacts while the asker named folded ones too.
+    /// `include_folded: true` is refused by name by the server — through the session, whatever the
+    /// shape's load — and never by the form check an offline caller runs, because whether it is
+    /// served is a capability of the server and not a fact about the ask's form. Beside an
+    /// unaskable shape it accompanies `shape_not_askable`, as every shape-free refusal does, so an
+    /// absent shape and an unreadable one still answer alike.
+    ///
+    /// Bites the server's check removed (`refuse_unserved` in `validate_loaded`): the ask validates,
+    /// and the statement would answer over live artifacts while the asker named folded ones too.
+    /// Bites the check moved back into `check_form`: the form check refuses it.
     #[test]
-    fn include_folded_is_refused_by_name_in_the_form_check() {
+    fn include_folded_is_refused_by_the_server_and_never_by_the_form_check() {
         let mut a = ask(vec![at(&["p"], PropertyOp::HasKey)]);
         a.include_folded = true;
-        let rs = validate_ask_form(&a);
-        assert_eq!(reasons(&rs), vec![RefusalReason::FilterNotApplicable]);
-        assert_eq!(rs[0].detail, INCLUDE_FOLDED);
+        assert!(
+            validate_ask_form(&a).is_empty(),
+            "a well-formed ask the server may one day serve"
+        );
         let through_the_session = refusals(&a, &shape_of(json!({ "properties": { "p": {} } })));
-        assert_eq!(through_the_session, rs);
+        assert_eq!(
+            reasons(&through_the_session),
+            vec![RefusalReason::FilterNotApplicable]
+        );
+        assert_eq!(through_the_session[0].detail, INCLUDE_FOLDED);
+
+        let unaskable = ShapeContext::empty()
+            .session()
+            .validate(&a)
+            .expect_err("no shape is loaded");
+        assert_eq!(
+            reasons(&unaskable),
+            vec![
+                RefusalReason::ShapeNotAskable,
+                RefusalReason::FilterNotApplicable
+            ]
+        );
     }
 
     /// U+0000 anywhere in a `contains` or `compare` value — a string, a string nested in an object

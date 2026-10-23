@@ -297,8 +297,19 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // The door agents use does compose: an MCP `Absent` here would claim a shortfall that
             // does not exist. `every_act_reached_through_the_query_route_is_served_at_mcp` holds
             // that line for every act the route can emit.
+            //
+            // **Both filter slots, at every door.** `artifact_filter` is a wire field of the plan
+            // like `resource_filter`, so each door reaches it the way it reaches the plan: the
+            // route reads it, `run_query` relays it unread, `temper query` sends the JSON it is
+            // given. None of the three accepts it and applies nothing, so no cell lists it in
+            // `filters_unapplied`.
             door_coverage: BTreeMap::from([
                 (
+                    // One partial this cell cannot carry as data, named here: `temper query --check`
+                    // runs offline and validates an ask's form only, never against its shape, which
+                    // only the server loads. The report says so (`ShapeReport::shapes_not_checked`
+                    // and its disclosure). Running the plan is not partial — the server checks every
+                    // ask before anything runs.
                     Door::Cli,
                     DoorReach::Serves {
                         terms_unreachable: vec![],
