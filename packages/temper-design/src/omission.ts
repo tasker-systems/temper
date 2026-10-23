@@ -2,7 +2,8 @@
  * The omission sentence every bounded view ends with, composed from its numbers so no author words
  * it out of step with them. A view that is a page of something larger says which rows it shows and
  * what lies either side: `more` is the answer's own word that rows follow, never a guess from how
- * many rows arrived.
+ * many rows arrived. A view whose read counts nothing says what it can — whether this is the first
+ * page, whether more follow — and never a total it was not given.
  *
  * A graph view composes its omissions in the read's own terms: a walk says how deep it went and
  * that deeper was not reported — there is no denominator to count, and none is invented; an entry
@@ -10,6 +11,16 @@
  * connections; a cut to the drawing's bounds is counted, never silent.
  */
 export type Page = { offset: number; size: number; more: boolean };
+
+/**
+ * A page of a read that counts nothing: it knows only whether it is the first page and whether more
+ * follow, both in the answer's own words (a cursor, a next link) — never a guess from how many rows
+ * arrived.
+ */
+export type Cursor = { first: boolean; more: boolean };
+
+/** An unpaged read that counts nothing but says, in its own word, whether more exist. */
+export type More = { more: boolean };
 
 /** Where a graph view was read from, as its read answers it. */
 export type GraphArm =
@@ -43,12 +54,33 @@ export function omissionSentence(
 	}
 	const { offset, more } = page;
 	if (offset === 0 && !more && shown === total) return `All ${total} ${scope}.`;
+	// A page past the end (an offset beyond the total) has every row before it, not `offset` rows.
+	const before = Math.min(offset, total);
 	const after = more ? Math.max(0, total - offset - shown) : 0;
-	const either = [offset > 0 && `${offset} before this page`, more && `${after} after it`]
+	const either = [before > 0 && `${before} before this page`, more && `${after} after it`]
 		.filter(Boolean)
 		.join(', ');
 	const rows = shown === 0 ? `None of ${total}` : `${offset + 1}–${offset + shown} of ${total}`;
 	return either ? `${rows} ${scope}; ${either}.` : `${rows} ${scope}.`;
+}
+
+/**
+ * The omission sentence for a view whose read reports no total. An unpaged read that says whether
+ * more exist is told "all" or "more not shown"; a paged one says which side more lie on. A read that
+ * does not say at all is told exactly that, rather than "more" inferred from a full page.
+ */
+export function uncountedSentence(
+	shown: number,
+	scope: string,
+	cursor: Cursor | More | null,
+): string {
+	if (!cursor) return `${shown} ${scope}; more not reported.`;
+	if (!('first' in cursor))
+		return cursor.more ? `${shown} ${scope}; more not shown.` : `All ${shown} ${scope}.`;
+	const { first, more } = cursor;
+	if (first && !more) return `All ${shown} ${scope}.`;
+	if (first) return `${shown} ${scope}; more after this page.`;
+	return `${shown} ${scope}; more before this page${more ? ', more after it' : ''}.`;
 }
 
 const counted = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
