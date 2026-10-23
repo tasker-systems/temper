@@ -24,15 +24,22 @@
 	 * A `{:catch}` does not choose between `gave-up` and `failed` by hand — six call sites spelling
 	 * one predicate is the drift this component exists to prevent. `regionStateFor` in `$lib/region`
 	 * reads the discriminator; see `App.Error` for why it is a value rather than a class.
+	 *
+	 * `detail` is what one region adds to its state's sentence — a failure's reason, say. It sits
+	 * inside the element that carries the role, so it is announced with the sentence; beside it, a
+	 * screen reader would hear that the read failed and never why. The desktop's component takes
+	 * the same prop.
 	 */
 	import { type RegionStateName, regionWords } from '@tasker-systems/temper-design/region';
 
 	let {
 		state,
 		label,
+		detail,
 	}: {
 		state: RegionStateName;
 		label: string;
+		detail?: string | null;
 	} = $props();
 
 	const said = $derived(regionWords(state, label));
@@ -41,6 +48,6 @@
 <p class="region-state" data-region={state} data-testid="region-{state}" role={said.role ?? undefined}>
 	<span class="region-marker" aria-hidden="true">{said.marker}</span>
 	<span>
-		{said.words}{#if said.qualifier}<span class="region-qualifier">{said.qualifier}</span>{/if}
+		{said.words}{#if said.qualifier}<span class="region-qualifier">{said.qualifier}</span>{/if}{#if detail}<span class="region-detail">{detail}</span>{/if}
 	</span>
 </p>

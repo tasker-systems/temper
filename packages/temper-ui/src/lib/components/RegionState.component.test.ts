@@ -88,3 +88,24 @@ describe('the four-state vocabulary', () => {
 		expect(html('gave-up')).not.toBe(html('failed'));
 	});
 });
+
+describe('a detail', () => {
+	/**
+	 * A failure's reason is part of what is announced, so it sits inside the element that carries
+	 * the role. Beside it, a screen reader hears "History unavailable — nothing here was read." and
+	 * never why.
+	 */
+	it('is inside the live region, after the sentence', () => {
+		const { container } = render(RegionState, {
+			props: { state: 'failed', label: 'history', detail: 'The service answered 503.' },
+		});
+		const live = container.querySelector('[role="alert"]');
+		expect(live?.textContent).toContain('History unavailable');
+		expect(live?.textContent).toContain('The service answered 503.');
+	});
+
+	it('is absent when none is given', () => {
+		const { container } = render(RegionState, { props: { state: 'failed', label: 'history' } });
+		expect(container.querySelector('.region-detail')).toBeNull();
+	});
+});

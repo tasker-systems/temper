@@ -223,7 +223,9 @@ fails a surface's build when a component it guards paints anything but a role.
   (`style="--hue: {hue}"`, a colour from script) unbridges its name. Svelte's `style:--x=`
   directive is a declaration like any other. The guard sees only the paths: a name also declared
   elsewhere (a vendor stylesheet, a selector scope it is not bridged in) is not seen there, and a
-  declaration wrapped across lines is not read.
+  declaration wrapped across lines is not read. The rule cannot tell what a custom property
+  holds, so it over-reaches: a spacing alias (`--gap: var(--space-column)`) is refused as though
+  it were a colour. Read the variable where it is used (`gap: var(--space-column)`) instead.
 
 A surface commits a config naming what it guards, relative to the config's own directory,
 and runs the guard against it:
