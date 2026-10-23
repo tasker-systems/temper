@@ -1,3 +1,4 @@
+import { omissionSentence } from '@tasker-systems/temper-design/omission';
 import { render } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { describeFailure, GaveUp, GIVE_UP_AFTER_MS } from '$lib/server/bounded';
@@ -396,9 +397,9 @@ describe('the rail states its emptiness rather than rendering nothing', () => {
 		expect(sentenceOf(region()?.querySelector('[data-testid="region-empty"]'))).toBe(
 			'No connections.',
 		);
-		// Chrome at zero too: `0 of 0` is the same bound line, stating completeness rather
-		// than leaving it to be inferred from the absence of a truncation marker.
-		expect(region()?.querySelector('.label')?.textContent).toBe('Connections · 0 of 0');
+		// At zero the empty region is the statement: no omission sentence beside it.
+		expect(region()?.querySelector('.label')?.textContent).toBe('Connections · 0');
+		expect(region()?.querySelector('[data-testid="omission"]')).toBeNull();
 	});
 
 	it('EventHistory: a resource with no history says so, in the shared vocabulary', async () => {
@@ -546,13 +547,14 @@ describe('the history region states its render bound', () => {
 	it('a trail beyond the bound states the most recent 50 of the true full count', async () => {
 		const words = await historyWords({ trail: Promise.resolve(trailOf(60)) });
 
-		expect(words).toContain('most recent 50 of 60');
+		expect(words).toContain(omissionSentence(60, 50, 'events, most recent first'));
+		expect(words).toContain('50 of 60 events, most recent first; 10 not shown.');
 	});
 
 	it('the bound statement is present at or under the bound — chrome, not a warning', async () => {
 		const words = await historyWords({ trail: Promise.resolve(trailOf(2)) });
 
-		expect(words).toContain('most recent 2 of 2');
+		expect(words).toContain('All 2 events, most recent first.');
 	});
 
 	it('the slice still renders at most 50 events, and the heading keeps the true full count', async () => {
@@ -1255,11 +1257,33 @@ describe('the data artifacts region', () => {
 	});
 });
 
+/** `references-show-held-truth` — a connection links only once the read returned its title. */
+describe('a connection whose peer the read returned no title for', () => {
+	it('reads as unresolved and does not link', async () => {
+		const { container, unmount } = render(Page, {
+			data: data({
+				connections: Promise.resolve(connectionsOf([edge(1), { ...edge(2), peer_title: null }], 2)),
+			}),
+			form: null,
+		});
+		await vi.waitFor(() => {
+			expect(connectionsRegion(container)?.querySelector('.edge')).not.toBeNull();
+		});
+		const region = connectionsRegion(container);
+		expect(region?.querySelector('a[href="/vault/r/peer-1"]')?.textContent).toBe('A peer 1');
+		expect(region?.querySelector('a[href="/vault/r/peer-2"]')).toBeNull();
+		expect(region?.querySelector('[data-testid="unresolved-ref"]')?.textContent).toContain(
+			'Unresolved reference',
+		);
+		unmount();
+	});
+});
+
 /**
  * D-F4 — the connections bound line is chrome, not a warning.
  *
- * The heading reads `shown of total` off the one envelope the read returned: present when the
- * read was clipped (stating what was withheld) and present when it was not (so complete is
+ * The omission sentence reads `shown of total` off the one envelope the read returned: present
+ * when the read was clipped (stating what was withheld) and present when it was not (so complete is
  * something the reader is TOLD, never something they infer from silence — the `bound.ts`
  * SeedAxis form). A version that renders the bound only when it binds, or a count-only
  * heading, fails here: either one makes a clipped view distinguishable from a complete one
@@ -1278,8 +1302,11 @@ describe('the connections bound line is chrome, not a warning', () => {
 		});
 
 		expect(connectionsRegion(container)?.querySelector('.label')?.textContent).toBe(
-			'Connections · 3 of 12',
+			'Connections · 12',
 		);
+		expect(
+			connectionsRegion(container)?.querySelector('[data-testid="omission"]')?.textContent,
+		).toBe(omissionSentence(12, 3, 'connections'));
 		unmount();
 	});
 
@@ -1292,11 +1319,10 @@ describe('the connections bound line is chrome, not a warning', () => {
 			expect(connectionsRegion(container)?.querySelector('.edge')).not.toBeNull();
 		});
 
-		const heading = connectionsRegion(container)?.querySelector('.label')?.textContent;
-		expect(heading).toBe('Connections · 2 of 2');
-		// The `of total` half is the point — it is what makes completeness a stated fact
-		// rather than an absence.
-		expect(heading).toContain(' of 2');
+		// Completeness is a stated fact rather than an absence.
+		expect(
+			connectionsRegion(container)?.querySelector('[data-testid="omission"]')?.textContent,
+		).toBe('All 2 connections.');
 		unmount();
 	});
 });

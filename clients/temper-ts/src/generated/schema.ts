@@ -6415,6 +6415,12 @@ export interface components {
             hint?: string | null;
             hits: components["schemas"]["ExactHit"][];
             reason: components["schemas"]["SearchReason"];
+            /**
+             * @description Are there matching hits beyond this page? The arm's own word, from the probe row it read
+             *     past the page — never inferred from `hits.len()` reaching the limit, which a page that ends
+             *     exactly on the last match would mistake for more.
+             */
+            truncated?: boolean;
         };
         /**
          * @description One hit from the **exact** arm: you could quote the words.
@@ -11309,6 +11315,12 @@ export interface components {
             hint?: string | null;
             hits: components["schemas"]["WideHit"][];
             reason: components["schemas"]["SearchReason"];
+            /**
+             * @description Are there hits beyond this page among what the arm draws? Read from the probe row past the
+             *     page, as on the exact arm. Unscoped, the arm draws a bounded set of nearest chunks first,
+             *     so `false` means nothing more within that draw, not nothing more similar anywhere.
+             */
+            truncated?: boolean;
         };
         /** @description One hit from the **wide** arm: you had the idea, not the words. */
         WideHit: {

@@ -17,7 +17,7 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, Field, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional
 from temper.generated.models.exact_hit import ExactHit
 from temper.generated.models.search_reason import SearchReason
@@ -32,7 +32,8 @@ class ExactArm(BaseModel):
     hint: Optional[StrictStr] = Field(default=None, description="One-liner explaining a non-`Ok` reason and suggesting a next step.")
     hits: List[ExactHit]
     reason: SearchReason
-    __properties: ClassVar[List[str]] = ["hint", "hits", "reason"]
+    truncated: Optional[StrictBool] = Field(default=None, description="Are there matching hits beyond this page? The arm's own word, from the probe row it read past the page — never inferred from `hits.len()` reaching the limit, which a page that ends exactly on the last match would mistake for more.")
+    __properties: ClassVar[List[str]] = ["hint", "hits", "reason", "truncated"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -99,7 +100,8 @@ class ExactArm(BaseModel):
         _obj = cls.model_validate({
             "hint": obj.get("hint"),
             "hits": [ExactHit.from_dict(_item) for _item in obj["hits"]] if obj.get("hits") is not None else None,
-            "reason": obj.get("reason")
+            "reason": obj.get("reason"),
+            "truncated": obj.get("truncated")
         })
         return _obj
 

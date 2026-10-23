@@ -23,6 +23,9 @@ module Temper::Generated
 
     attr_accessor :reason
 
+    # Are there matching hits beyond this page? The arm's own word, from the probe row it read past the page — never inferred from `hits.len()` reaching the limit, which a page that ends exactly on the last match would mistake for more.
+    attr_accessor :truncated
+
     class EnumAttributeValidator
       attr_reader :datatype
       attr_reader :allowable_values
@@ -50,7 +53,8 @@ module Temper::Generated
       {
         :'hint' => :'hint',
         :'hits' => :'hits',
-        :'reason' => :'reason'
+        :'reason' => :'reason',
+        :'truncated' => :'truncated'
       }
     end
 
@@ -69,7 +73,8 @@ module Temper::Generated
       {
         :'hint' => :'String',
         :'hits' => :'Array<ExactHit>',
-        :'reason' => :'SearchReason'
+        :'reason' => :'SearchReason',
+        :'truncated' => :'Boolean'
       }
     end
 
@@ -112,6 +117,10 @@ module Temper::Generated
         self.reason = attributes[:'reason']
       else
         self.reason = nil
+      end
+
+      if attributes.key?(:'truncated')
+        self.truncated = attributes[:'truncated']
       end
     end
 
@@ -167,7 +176,8 @@ module Temper::Generated
       self.class == o.class &&
           hint == o.hint &&
           hits == o.hits &&
-          reason == o.reason
+          reason == o.reason &&
+          truncated == o.truncated
     end
 
     # @see the `==` method
@@ -179,7 +189,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [hint, hits, reason].hash
+      [hint, hits, reason, truncated].hash
     end
 
     # Builds the object from hash

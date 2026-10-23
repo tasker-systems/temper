@@ -1,0 +1,23 @@
+title    = "`@tasker-systems/temper-design/omission` states a read that counts nothing; the web's bounded lists and structured references follow the shared principles"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["clients"]
+status   = "signal-only"
+body = '''
+`./omission` gains `uncountedSentence`, with the `Cursor` and `More` types, for a view whose read
+reports no total: an unpaged read that says whether more exist, a cursor-paged read, or a read
+that says nothing ("more not reported"). `omissionSentence` now counts a page past the end as
+having every row before it, not its offset.
+
+The web's vault grid, Connections, History, artifact pages and search palette state their omission
+through the package. An over-offset vault page says "None of N" instead of "No resources found".
+A structured reference whose read returned no title (a connection's peer, a map's charter) reads
+"Unresolved reference" and does not link; before, it rendered an empty link or a placeholder.
+
+Who observes it:
+- A surface importing the package: new exports, plus the over-offset correction.
+- A reader of the web: wording of every bound line, and unresolved references.
+
+User-visible: yes, on the web. Release relevance: additive (exports) and behavioral (the
+over-offset count, the web's wording and references).
+'''

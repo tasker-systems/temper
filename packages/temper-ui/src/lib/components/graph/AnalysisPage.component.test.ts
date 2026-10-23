@@ -770,3 +770,32 @@ describe('the groupings are marks on their own axes, not only rows in a table', 
 		expect(container.querySelectorAll('tbody tr')).toHaveLength(501);
 	});
 });
+
+/** `references-show-held-truth` — the charter links only once its read answered for it. */
+describe('the charter reference', () => {
+	const telosId = fixture.cogmap.analytics.telos_resource_id;
+
+	it('links the charter under the title the read returned', async () => {
+		const { container } = await painted(cogmapView());
+		const link = container.querySelector(`.map-level a[href="/vault/r/${telosId}"]`);
+		expect(link?.textContent).toBe('Temper — telos charter');
+	});
+
+	it('reads as unresolved, and does not link, when the charter read returned no title', async () => {
+		const { container } = await painted(
+			cogmapView({
+				map: {
+					kind: 'cogmap',
+					telos: { id: telosId, title: null },
+					staleness: fixture.cogmap.analytics.staleness,
+					regulation: fixture.cogmap.analytics.regulation,
+				},
+			}),
+		);
+		await vi.waitFor(() => {
+			expect(container.querySelector('.map-level [data-testid="unresolved-ref"]')).not.toBeNull();
+		});
+		expect(container.querySelector(`a[href="/vault/r/${telosId}"]`)).toBeNull();
+		expect(container.textContent).not.toContain('the charter resource');
+	});
+});
