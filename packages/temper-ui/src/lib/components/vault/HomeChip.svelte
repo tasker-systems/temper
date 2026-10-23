@@ -34,11 +34,11 @@
 		padding: 2px 7px;
 		border-radius: 2px;
 		text-decoration: none;
-		border: 1px solid color-mix(in srgb, var(--hue) 40%, transparent);
-		color: color-mix(in srgb, var(--hue) 72%, var(--tp-text));
-		background: color-mix(in srgb, var(--hue) 8%, transparent);
+		border: 1px solid var(--tp-rule-strong);
+		color: var(--hue);
+		background: var(--tp-surface-raised);
 	}
 	a.chip:hover {
-		border-color: color-mix(in srgb, var(--hue) 70%, transparent);
+		border-color: var(--hue);
 	}
 </style>

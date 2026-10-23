@@ -45,7 +45,7 @@
 	 */
 	import type { GraphNode } from '$lib/graph/model';
 	import { describeNodeLinks, describeUnconnected } from '$lib/graph/presentation';
-	import { docTypeHue } from '$lib/graph/palette';
+	import { docTypeTint } from '$lib/graph/palette';
 
 	interface Props {
 		/** The members, in the order the answer returned them. Placing these must never rank them. */
@@ -86,7 +86,7 @@
 						onclick={() => onSelect(n.id)}
 					>
 						<span class="title">{n.title}</span>
-						<span class="kind" style="color: {docTypeHue(n.doc_type)}"
+						<span class="kind" style="color: var(--tp-{docTypeTint(n.doc_type)})"
 							>{n.doc_type ?? 'kind not reported'}</span
 						>
 						<span class="elsewhere">{describeNodeLinks(n)}</span>

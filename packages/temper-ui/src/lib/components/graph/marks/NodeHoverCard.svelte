@@ -8,7 +8,7 @@
 	 * Purely decorative: pointer-events are disabled so it never steals the
 	 * hover/click that `NodeChip`'s `<g>` handles.
 	 */
-	import { docTypeHue } from '$lib/graph/palette';
+	import { docTypeTint } from '$lib/graph/palette';
 
 	interface Props {
 		x: number;
@@ -34,7 +34,7 @@
 	// above its node instead of floating inside an over-generous box.
 	const CARD_HEIGHT = $derived(128 + meta.length * 14);
 
-	const hue = $derived(docTypeHue(docType));
+	const tint = $derived(docTypeTint(docType));
 	const left = $derived(x - CARD_WIDTH / 2);
 	const top = $derived(y - r - GAP - CARD_HEIGHT);
 </script>
@@ -50,7 +50,7 @@
 	     absent excerpt) still lands its bottom edge — and the arrow — at y - r - GAP,
 	     right above the node, instead of floating up against the reserved height. -->
 	<div class="hc-anchor">
-		<div class="hover-card" style={`--hue: ${hue};`}>
+		<div class="hover-card" style="--hue: var(--tp-{tint})">
 			<div class="row">
 				<span class="pill">{docType ?? '—'}</span>
 				<span class="chip">⌷ {edges} {edges === 1 ? 'edge' : 'edges'}</span>
@@ -83,7 +83,7 @@
 		width: 100%;
 		background: var(--tp-surface-raised);
 		backdrop-filter: blur(8px);
-		border: 1px solid color-mix(in srgb, var(--hue) 34%, transparent);
+		border: 1px solid var(--tp-rule-strong);
 		border-radius: 9px;
 		/* No shadow role: the card stands off the raised canvas by a rule-strong ring outside its
 		   doc-type border, not by a drop shadow. */
@@ -102,8 +102,8 @@
 		width: 10px;
 		height: 10px;
 		background: var(--tp-surface-raised);
-		border-right: 1px solid color-mix(in srgb, var(--hue) 34%, transparent);
-		border-bottom: 1px solid color-mix(in srgb, var(--hue) 34%, transparent);
+		border-right: 1px solid var(--tp-rule-strong);
+		border-bottom: 1px solid var(--tp-rule-strong);
 	}
 	.row {
 		display: flex;

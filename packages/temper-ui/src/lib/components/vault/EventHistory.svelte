@@ -121,7 +121,7 @@
 		cursor: pointer;
 		font-family: var(--font-mono);
 		font-size: 10.5px;
-		color: color-mix(in srgb, var(--hue) 70%, var(--tp-text));
+		color: var(--hue);
 	}
 	.chev {
 		color: var(--tp-text-subtle);
@@ -143,7 +143,7 @@
 	}
 	.payload {
 		margin: 4px 0 0;
-		border-left: 1px solid color-mix(in srgb, var(--hue) 25%, transparent);
+		border-left: 1px solid var(--tp-rule);
 		padding-left: 8px;
 	}
 	.payload div {

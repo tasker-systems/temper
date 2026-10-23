@@ -4,35 +4,36 @@ import type { AtlasEdge } from '$lib/types/generated/graph_atlas';
 import {
 	AUTHORED_DOC_TYPES,
 	CANVAS_BG,
-	DOC_TYPE_HUES,
-	docTypeHue,
+	docTypeTint,
 	EDGE_COLORS,
 	edgeStyle,
-	FALLBACK_HUE,
 	isAuthored,
-	paletteStyleVars,
 } from './palette';
 
 // `nodeMark`, `salienceOpacity`, `isDocTypeDimmed` and `TERRITORY_TINTS` were deleted in
 // Beat D with the tier model, and their tests with them — see palette.ts.
 
-describe('DOC_TYPE_HUES', () => {
-	it('defines all 14 doc-types with the locked Vivid Cartographer hexes', () => {
-		expect(DOC_TYPE_HUES.concept).toBe('#e8942e');
-		expect(DOC_TYPE_HUES.fact).toBe('#f7c62b');
-		expect(DOC_TYPE_HUES.domain).toBe('#d3d84e');
-		expect(DOC_TYPE_HUES.goal).toBe('#3a8ae8'); // goal is cool (legacy gold retired)
-		expect(Object.keys(DOC_TYPE_HUES)).toHaveLength(14);
+describe('docTypeTint', () => {
+	it("paints a doc type in the slot core's vocabulary binds it to", () => {
+		expect(docTypeTint('task')).toBe('cat-2');
+		expect(docTypeTint('question')).toBe('cat-7');
+		expect(docTypeTint('goal')).toBe('cat-5');
 	});
-});
-
-describe('docTypeHue', () => {
-	it('returns the hue for a known type', () => {
-		expect(docTypeHue('question')).toBe('#a95cf0');
+	it('paints a doc type bound nowhere, or none, in the neutral', () => {
+		expect(docTypeTint('nonsense')).toBe('cat-neutral');
+		expect(docTypeTint(null)).toBe('cat-neutral');
 	});
-	it('falls back for unknown or null', () => {
-		expect(docTypeHue('nonsense')).toBe(FALLBACK_HUE);
-		expect(docTypeHue(null)).toBe(FALLBACK_HUE);
+	it('binds every doc type the graph knows', () => {
+		const all = [
+			...AUTHORED_DOC_TYPES,
+			'research',
+			'task',
+			'session',
+			'goal',
+			'decision',
+			'memory',
+		];
+		for (const t of all) expect(docTypeTint(t)).not.toBe('cat-neutral');
 	});
 });
 
@@ -61,14 +62,6 @@ describe('chrome', () => {
 			contradicts: 'var(--tp-danger)',
 			derived: 'var(--tp-text-subtle)',
 		});
-	});
-});
-
-describe('paletteStyleVars', () => {
-	it('emits a CSS custom-property string for every doc-type', () => {
-		const s = paletteStyleVars();
-		expect(s).toContain('--dt-concept:#e8942e');
-		expect(s).toContain('--dt-goal:#3a8ae8');
 	});
 });
 

@@ -138,7 +138,7 @@
 		cursor: pointer;
 		font-family: var(--font-mono);
 		font-size: 11px;
-		color: color-mix(in srgb, var(--hue) 70%, var(--tp-text));
+		color: var(--hue);
 	}
 	.chev {
 		color: var(--tp-text-subtle);
@@ -174,7 +174,7 @@
 	}
 	.meta-table {
 		margin: 6px 0 0;
-		border-left: 1px solid color-mix(in srgb, var(--hue) 25%, transparent);
+		border-left: 1px solid var(--tp-rule);
 		padding-left: 8px;
 	}
 	.meta-table div {
@@ -204,7 +204,7 @@
 		font-size: 10px;
 	}
 	.pages a {
-		color: color-mix(in srgb, var(--hue) 70%, var(--tp-text));
+		color: var(--hue);
 	}
 	.pages .older {
 		margin-left: auto;
@@ -213,7 +213,7 @@
 		margin: 6px 0 0;
 		padding: 8px 10px;
 		background: var(--tp-surface);
-		border: 1px solid color-mix(in srgb, var(--hue) 18%, transparent);
+		border: 1px solid var(--tp-rule);
 		font-family: var(--font-mono);
 		font-size: 10px;
 		line-height: 1.5;
