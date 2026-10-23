@@ -82,18 +82,6 @@ describe('pageState', () => {
 	const page = (over: Partial<Parameters<typeof pageState>[0]> = {}) =>
 		pageState({ total: 100, returned: 50, truncated: true, limit: 50, offset: 0, ...over });
 
-	it('numbers the visible range from the applied offset', () => {
-		const s = page({ offset: 50, returned: 50, truncated: false });
-		expect(s.rangeStart).toBe(51);
-		expect(s.rangeEnd).toBe(100);
-	});
-
-	it('reports an empty page as a zero range rather than a phantom first row', () => {
-		const s = page({ returned: 0, truncated: false });
-		expect(s.rangeStart).toBe(0);
-		expect(s.rangeEnd).toBe(0);
-	});
-
 	it('counts pages from the applied limit', () => {
 		expect(page().currentPage).toBe(1);
 		expect(page().totalPages).toBe(2);

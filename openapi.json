@@ -20025,6 +20025,10 @@
           },
           "reason": {
             "$ref": "#/components/schemas/SearchReason"
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "Are there matching hits beyond this page? The arm's own word, from the probe row it read\npast the page — never inferred from `hits.len()` reaching the limit, which a page that ends\nexactly on the last match would mistake for more."
           }
         }
       },
@@ -28216,6 +28220,10 @@
           },
           "reason": {
             "$ref": "#/components/schemas/SearchReason"
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "Are there hits beyond this page among what the arm draws? Read from the probe row past the\npage, as on the exact arm. Unscoped, the arm draws a bounded set of nearest chunks first,\nso `false` means nothing more within that draw, not nothing more similar anywhere."
           }
         }
       },

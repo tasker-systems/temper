@@ -383,12 +383,14 @@ mod tests {
                 hits: vec![],
                 reason: SearchReason::Ok,
                 hint: None,
+                truncated: false,
             },
             wide: WideArm {
                 hits: vec![],
                 reason: SearchReason::Ok,
                 hint: None,
                 degraded: false,
+                truncated: false,
             },
             scope: SearchScopeInfo {
                 kind: SearchScope::Global,
@@ -414,12 +416,14 @@ mod tests {
                 hits: vec![],
                 reason: SearchReason::Ok,
                 hint: None,
+                truncated: false,
             },
             wide: WideArm {
                 hits: vec![],
                 reason: SearchReason::Ok,
                 hint: Some("try rephrasing".to_string()),
                 degraded: true,
+                truncated: false,
             },
             scope: SearchScopeInfo {
                 kind: SearchScope::Global,
@@ -445,12 +449,14 @@ mod tests {
                 hits: vec![],
                 reason: SearchReason::OutOfScope,
                 hint: None,
+                truncated: false,
             },
             wide: WideArm {
                 hits: vec![],
                 reason: SearchReason::Ok,
                 hint: None,
                 degraded: false,
+                truncated: false,
             },
             scope: SearchScopeInfo {
                 kind: SearchScope::Global,
@@ -475,12 +481,14 @@ mod tests {
                 hits: vec![],
                 reason: SearchReason::NoMatch,
                 hint: None,
+                truncated: false,
             },
             wide: WideArm {
                 hits: vec![],
                 reason: SearchReason::OutOfScope,
                 hint: None,
                 degraded: false,
+                truncated: false,
             },
             scope: SearchScopeInfo {
                 kind: SearchScope::Global,

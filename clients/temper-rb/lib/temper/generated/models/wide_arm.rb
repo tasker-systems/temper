@@ -25,6 +25,9 @@ module Temper::Generated
 
     attr_accessor :reason
 
+    # Are there hits beyond this page among what the arm draws? Read from the probe row past the page, as on the exact arm. Unscoped, the arm draws a bounded set of nearest chunks first, so `false` means nothing more within that draw, not nothing more similar anywhere.
+    attr_accessor :truncated
+
     class EnumAttributeValidator
       attr_reader :datatype
       attr_reader :allowable_values
@@ -53,7 +56,8 @@ module Temper::Generated
         :'degraded' => :'degraded',
         :'hint' => :'hint',
         :'hits' => :'hits',
-        :'reason' => :'reason'
+        :'reason' => :'reason',
+        :'truncated' => :'truncated'
       }
     end
 
@@ -73,7 +77,8 @@ module Temper::Generated
         :'degraded' => :'Boolean',
         :'hint' => :'String',
         :'hits' => :'Array<WideHit>',
-        :'reason' => :'SearchReason'
+        :'reason' => :'SearchReason',
+        :'truncated' => :'Boolean'
       }
     end
 
@@ -122,6 +127,10 @@ module Temper::Generated
         self.reason = attributes[:'reason']
       else
         self.reason = nil
+      end
+
+      if attributes.key?(:'truncated')
+        self.truncated = attributes[:'truncated']
       end
     end
 
@@ -193,7 +202,8 @@ module Temper::Generated
           degraded == o.degraded &&
           hint == o.hint &&
           hits == o.hits &&
-          reason == o.reason
+          reason == o.reason &&
+          truncated == o.truncated
     end
 
     # @see the `==` method
@@ -205,7 +215,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [degraded, hint, hits, reason].hash
+      [degraded, hint, hits, reason, truncated].hash
     end
 
     # Builds the object from hash

@@ -8,12 +8,34 @@ export function omissionSentence(total, shown, scope, page) {
     const { offset, more } = page;
     if (offset === 0 && !more && shown === total)
         return `All ${total} ${scope}.`;
-    const after = more ? Math.max(0, total - offset - shown) : 0;
-    const either = [offset > 0 && `${offset} before this page`, more && `${after} after it`]
+    // A page past the end (an offset beyond the total) has every row before it, not `offset` rows.
+    const before = Math.min(offset, total);
+    // What the count leaves after this page is stated whenever there is some, whatever `more`
+    // says; `more` with nothing left in the count says "more", never "0".
+    const after = Math.max(0, total - offset - shown);
+    const afterClause = after > 0 ? `${after} after it` : more ? 'more after it' : null;
+    const either = [before > 0 && `${before} before this page`, afterClause]
         .filter(Boolean)
         .join(', ');
     const rows = shown === 0 ? `None of ${total}` : `${offset + 1}–${offset + shown} of ${total}`;
     return either ? `${rows} ${scope}; ${either}.` : `${rows} ${scope}.`;
+}
+/**
+ * The omission sentence for a view whose read reports no total. An unpaged read that says whether
+ * more exist is told "all" or "more not shown"; a paged one says which side more lie on. A read that
+ * does not say at all is told exactly that, rather than "more" inferred from a full page.
+ */
+export function uncountedSentence(shown, scope, cursor) {
+    if (!cursor)
+        return `${shown} ${scope}; more not reported.`;
+    if (!('first' in cursor))
+        return cursor.more ? `${shown} ${scope}; more not shown.` : `All ${shown} ${scope}.`;
+    const { first, more } = cursor;
+    if (first && !more)
+        return `All ${shown} ${scope}.`;
+    if (first)
+        return `${shown} ${scope}; more after this page.`;
+    return `${shown} ${scope}; more before this page${more ? ', more after it' : ''}.`;
 }
 const counted = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 /** The clause naming where a graph figure was read from, for its description. */

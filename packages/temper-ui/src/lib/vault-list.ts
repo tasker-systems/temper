@@ -76,12 +76,11 @@ export function toVaultList(response: ResourceListResponse): VaultList {
 	};
 }
 
-/** What the grid's paging chrome renders, derived once from the envelope's own numbers. */
+/**
+ * What the grid's paging controls need, derived once from the envelope's own numbers. The rows a
+ * page shows are said by the omission sentence (`@tasker-systems/temper-design/omission`).
+ */
 export interface PageState {
-	/** 1-based index of the first row on this page; `0` when the page is empty. */
-	rangeStart: number;
-	/** 1-based index of the last row on this page; `0` when the page is empty. */
-	rangeEnd: number;
 	currentPage: number;
 	totalPages: number;
 	hasPrev: boolean;
@@ -111,20 +110,16 @@ export function pageState(list: {
 	limit: number | null;
 	offset: number;
 }): PageState {
-	const { total, returned, truncated, limit, offset } = list;
+	const { total, truncated, limit, offset } = list;
 	const capped = limit !== null && limit > 0;
 	const currentPage = capped ? Math.floor(offset / limit) + 1 : 1;
 	return {
-		rangeStart: returned === 0 ? 0 : offset + 1,
-		rangeEnd: returned === 0 ? 0 : offset + returned,
 		currentPage,
 		// `currentPage` is a floor, never a ceiling: an offset past the end of the filtered set
 		// is a real page the user can be sitting on, and "3/1" would be a counter that cannot
 		// be true. `hasPrev` is still true there, but nothing renders it: `VaultGrid` branches
-		// on `rows.length === 0` BEFORE the paging chrome, so an over-offset page shows the
-		// empty state and no Previous button. The way back is the "Clear filters" link (which
-		// deletes `offset` along with the filters) when a filter is active, and the browser's
-		// own Back otherwise.
+		// on `rows.length === 0` BEFORE the paging chrome, so an over-offset page shows its
+		// omission sentence ("None of N …") and a way back to the first page instead.
 		totalPages: capped ? Math.max(1, currentPage, Math.ceil(total / limit)) : 1,
 		hasPrev: offset > 0,
 		hasNext: truncated,

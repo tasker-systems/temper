@@ -1,7 +1,6 @@
 /**
- * The palette's page size — the ONE constant behind both the request the UI-server proxy
- * makes (`limit`, in `vault-search.ts`) and the bound the palette states under a full page
- * (D6, "Showing the first 10"). Client-safe on purpose: the component reads it too, so it
- * cannot live beside the token-carrying server modules.
+ * The palette's page size: the `limit` the UI-server proxy sends (`vault-search.ts`). The palette
+ * does not read it: whether more matched is each search arm's own `truncated` (D6), because a full
+ * page is not the answer's word that more matched.
  */
 export const SEARCH_PAGE_SIZE = 10;

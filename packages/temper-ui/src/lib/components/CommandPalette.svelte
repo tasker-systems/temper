@@ -2,7 +2,7 @@
 	import { goto } from '$app/navigation';
 	import type { ResourceView } from '$lib/types';
 	import type { SearchResponse } from '$lib/types/generated/search';
-	import { SEARCH_PAGE_SIZE } from '$lib/search-page-size';
+	import { uncountedSentence } from '@tasker-systems/temper-design/omission';
 	import { resourceHref } from '$lib/vault-url';
 
 	let open = $state(false);
@@ -30,6 +30,26 @@
 	const arm = $derived(answer && (exactMode ? answer.exact : answer.wide));
 	const hits = $derived(arm?.hits ?? []);
 	const declined = $derived(namesSeveralQuestions(query));
+	// D6 — the palette states its bound on every answer. The search read counts nothing but each
+	// arm says whether more matched (`truncated`, from the row it read past the page), never
+	// "more" inferred from a full page. The exact arm's `false` means nothing more matched. The
+	// wide arm's does not: unscoped, it ranks a bounded draw of nearest chunks before visibility,
+	// so `false` says nothing about what lies past the draw, and the sentence says "not reported"
+	// rather than "all". An answer from a server that does not send the field is not reported
+	// either.
+	const bound = $derived.by(() => {
+		const more = arm?.truncated;
+		if (more === undefined) return null;
+		if (more) return { more: true };
+		return exactMode ? { more: false } : null;
+	});
+	const omission = $derived(
+		uncountedSentence(
+			hits.length,
+			`${hits.length === 1 ? 'result' : 'results'} ${exactMode ? 'matching these words' : 'similar in meaning'}`,
+			bound
+		)
+	);
 	// Degraded belongs to the wide arm alone — the exact arm has no such case — so the face is
 	// decided here rather than by touching a field the union only sometimes carries.
 	const wideDegraded = $derived(!exactMode && (answer?.wide.degraded ?? false));
@@ -162,6 +182,13 @@
 						Exact matches words directly — use it
 					</button>
 				</div>
+			{:else if hits.length === 0 && arm.truncated}
+				<!-- Every row of this page fell away after the read (e.g. deleted meanwhile), but the
+				     arm says more follow: "nothing matched" would be false of it. Ahead of the
+				     `no_match` branch, whose reason is computed after those rows fell away. -->
+				<div class="px-4 py-6 text-sm text-tp-text-subtle text-center" data-testid="omission">
+					{omission}
+				</div>
 			{:else if arm.reason === 'no_match'}
 				<!-- Rephrasing can help here: the corpus was reachable, the words were not. -->
 				<div class="px-4 py-6 text-sm text-tp-text-subtle text-center">
@@ -200,14 +227,12 @@
 						</button>
 					{/each}
 				</div>
-				{#if hits.length >= SEARCH_PAGE_SIZE}
-					<!-- D6 — the palette states its bound instead of pretending the answer is whole. -->
-					<div
-						class="px-4 py-2 text-xs text-tp-text-subtle border-t border-tp-rule"
-					>
-						Showing the first {SEARCH_PAGE_SIZE}
-					</div>
-				{/if}
+				<div
+					class="px-4 py-2 text-xs text-tp-text-subtle border-t border-tp-rule"
+					data-testid="omission"
+				>
+					{omission}
+				</div>
 			{:else}
 				<div class="px-4 py-6 text-sm text-tp-text-subtle text-center">No results</div>
 			{/if}

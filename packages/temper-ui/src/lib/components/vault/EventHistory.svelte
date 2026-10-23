@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { omissionSentence } from '@tasker-systems/temper-design/omission';
 	import type { EventTrail } from '$lib/types/generated/element_trail';
 	import { trailModel } from '$lib/graph/trail';
 	import { summarizeEvent } from '$lib/graph/eventSummary';
@@ -24,6 +25,14 @@
 	 * statement and render cannot disagree about how much is shown.
 	 */
 	const RENDER_BOUND = 50;
+
+	let omission = $derived(
+		omissionSentence(
+			rows.length,
+			Math.min(rows.length, RENDER_BOUND),
+			`${rows.length === 1 ? 'event' : 'events'}, most recent first`
+		)
+	);
 </script>
 
 <section>
@@ -32,11 +41,11 @@
 		The bound is stated chrome, not a warning that appears when it binds: a statement that
 		only appears past the bound is a second predicate over `rows` that can drift away from
 		the slice it describes. Deriving it here, from the same `rows` the heading counts, keeps
-		heading and bound one truth.
+		heading and bound one truth. An empty trail says so through its region instead.
 	-->
-	<p class="bound">
-		The most recent {Math.min(rows.length, RENDER_BOUND)} of {rows.length} events.
-	</p>
+	{#if rows.length > 0}
+		<p class="bound" data-testid="omission">{omission}</p>
+	{/if}
 	<!--
 		The emptiness verdict stays HERE rather than in the page, because the count beside it comes
 		from the same `rows`: one derivation decides both what this heading says and whether the

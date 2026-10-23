@@ -249,6 +249,13 @@ pub struct ExactArm {
     /// One-liner explaining a non-`Ok` reason and suggesting a next step.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
+    /// Are there matching hits beyond this page? The arm's own word, from the probe row it read
+    /// past the page — never inferred from `hits.len()` reaching the limit, which a page that ends
+    /// exactly on the last match would mistake for more.
+    // Optional in the published contract on purpose: a required response field is a shape
+    // break for a generated client reading an older server. The server always writes it.
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 /// The **wide** arm, its disposition, and whether its signal was available at all.
@@ -269,6 +276,13 @@ pub struct WideArm {
     /// described a blend that no longer exists. An arm that could not run says so here rather than
     /// returning an empty list that reads like an answer.
     pub degraded: bool,
+    /// Are there hits beyond this page among what the arm draws? Read from the probe row past the
+    /// page, as on the exact arm. Unscoped, the arm draws a bounded set of nearest chunks first,
+    /// so `false` means nothing more within that draw, not nothing more similar anywhere.
+    // Optional in the published contract on purpose: a required response field is a shape
+    // break for a generated client reading an older server. The server always writes it.
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 /// What bounded the corpus — shared by both arms, because both were asked the same question of the

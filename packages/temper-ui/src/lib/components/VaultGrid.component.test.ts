@@ -1,3 +1,4 @@
+import { omissionSentence } from '@tasker-systems/temper-design/omission';
 import { render } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { columnsFor } from '$lib/vault-columns';
@@ -70,5 +71,44 @@ describe('VaultGrid — a sort no visible column can mark', () => {
 		// Same URL as above; only the revealed kind differs, so the stage column is present and
 		// marks the sort itself. A chip here would name a state the header already shows.
 		expect(queryByRole('link', { name: 'Clear sort' })).toBeNull();
+	});
+});
+
+/**
+ * `omission-is-stated` — the grid says what its page leaves out, in the package's words, whether
+ * or not the read was clipped, and never calls a page past the end of a non-empty set empty.
+ */
+describe('VaultGrid — the omission sentence', () => {
+	const sentence = (props: Record<string, unknown>) => {
+		setPage('/vault/all');
+		const { getByTestId } = render(VaultGrid, {
+			props: {
+				rows: [ROW],
+				columns: columnsFor(null),
+				total: 1,
+				returned: 1,
+				truncated: false,
+				limit: 50,
+				offset: 0,
+				...props,
+			},
+		});
+		return getByTestId('omission').textContent?.trim();
+	};
+
+	it('states a clipped first page and what follows it', () => {
+		expect(sentence({ total: 120, returned: 1, truncated: true })).toBe(
+			omissionSentence(120, 1, 'resources', { offset: 0, size: 50, more: true }),
+		);
+	});
+
+	it('states a whole read as all of it — complete is told, not inferred', () => {
+		expect(sentence({})).toBe('All 1 resource.');
+	});
+
+	it('states a page past the end as none of a non-empty set, not as no resources', () => {
+		expect(sentence({ rows: [], total: 12, returned: 0, offset: 50 })).toBe(
+			'None of 12 resources; 12 before this page.',
+		);
 	});
 });

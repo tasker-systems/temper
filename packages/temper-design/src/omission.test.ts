@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { type GraphOmissions, graphSentence, graphStanding, omissionSentence } from './omission.js';
+import {
+	type GraphOmissions,
+	graphSentence,
+	graphStanding,
+	omissionSentence,
+	uncountedSentence,
+} from './omission.js';
 
 describe('the omission sentence', () => {
 	it('says what an unpaged view leaves out', () => {
@@ -23,9 +29,61 @@ describe('the omission sentence', () => {
 		);
 	});
 
+	it('says a page past the end has every row before it, not its offset', () => {
+		expect(omissionSentence(12, 0, 'tasks', { offset: 50, size: 50, more: false })).toBe(
+			'None of 12 tasks; 12 before this page.',
+		);
+	});
+
+	it('states what the count leaves after a page even when the read says nothing follows', () => {
+		expect(omissionSentence(50, 48, 'resources', { offset: 0, size: 50, more: false })).toBe(
+			'1–48 of 50 resources; 2 after it.',
+		);
+	});
+
+	it('never says "0 after it" when the read says more follow a stale count', () => {
+		expect(omissionSentence(50, 50, 'resources', { offset: 0, size: 50, more: true })).toBe(
+			'1–50 of 50 resources; more after it.',
+		);
+	});
+
 	it('calls a single whole page all of them', () => {
 		expect(omissionSentence(7, 7, 'tasks', { offset: 0, size: 50, more: false })).toBe(
 			'All 7 tasks.',
+		);
+	});
+});
+
+describe('the omission sentence of a read that counts nothing', () => {
+	it('says a read that does not report whether more exist does not, however full the page', () => {
+		expect(uncountedSentence(10, 'exact matches', null)).toBe(
+			'10 exact matches; more not reported.',
+		);
+		expect(uncountedSentence(3, 'exact matches', null)).toBe('3 exact matches; more not reported.');
+	});
+
+	it('says an unpaged read with more not shown, and calls one without all of them', () => {
+		expect(uncountedSentence(10, 'exact matches', { more: true })).toBe(
+			'10 exact matches; more not shown.',
+		);
+		expect(uncountedSentence(10, 'exact matches', { more: false })).toBe('All 10 exact matches.');
+	});
+
+	it('calls a first page with nothing after it all of them', () => {
+		expect(uncountedSentence(4, 'artifacts', { first: true, more: false })).toBe(
+			'All 4 artifacts.',
+		);
+	});
+
+	it('says which side more lie on, in the cursor’s words and with no count', () => {
+		expect(uncountedSentence(50, 'artifacts', { first: true, more: true })).toBe(
+			'50 artifacts; more after this page.',
+		);
+		expect(uncountedSentence(50, 'artifacts', { first: false, more: true })).toBe(
+			'50 artifacts; more before this page, more after it.',
+		);
+		expect(uncountedSentence(7, 'artifacts', { first: false, more: false })).toBe(
+			'7 artifacts; more before this page.',
 		);
 	});
 });

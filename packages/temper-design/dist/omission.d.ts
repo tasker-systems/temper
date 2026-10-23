@@ -2,7 +2,8 @@
  * The omission sentence every bounded view ends with, composed from its numbers so no author words
  * it out of step with them. A view that is a page of something larger says which rows it shows and
  * what lies either side: `more` is the answer's own word that rows follow, never a guess from how
- * many rows arrived.
+ * many rows arrived. A view whose read counts nothing says what it can — whether this is the first
+ * page, whether more follow — and never a total it was not given.
  *
  * A graph view composes its omissions in the read's own terms: a walk says how deep it went and
  * that deeper was not reported — there is no denominator to count, and none is invented; an entry
@@ -12,6 +13,19 @@
 export type Page = {
     offset: number;
     size: number;
+    more: boolean;
+};
+/**
+ * A page of a read that counts nothing: it knows only whether it is the first page and whether more
+ * follow, both in the answer's own words (a cursor, a next link) — never a guess from how many rows
+ * arrived.
+ */
+export type Cursor = {
+    first: boolean;
+    more: boolean;
+};
+/** An unpaged read that counts nothing but says, in its own word, whether more exist. */
+export type More = {
     more: boolean;
 };
 /** Where a graph view was read from, as its read answers it. */
@@ -43,6 +57,12 @@ export type GraphOmissions = {
     cut: GraphCut | null;
 };
 export declare function omissionSentence(total: number, shown: number, scope: string, page?: Page | null): string;
+/**
+ * The omission sentence for a view whose read reports no total. An unpaged read that says whether
+ * more exist is told "all" or "more not shown"; a paged one says which side more lie on. A read that
+ * does not say at all is told exactly that, rather than "more" inferred from a full page.
+ */
+export declare function uncountedSentence(shown: number, scope: string, cursor: Cursor | More | null): string;
 /** The clause naming where a graph figure was read from, for its description. */
 export declare function graphStanding(arm: GraphArm, nameOf: (id: string) => string): string;
 /** The omission sentence for a graph view, composed from the read's own numbers. */
