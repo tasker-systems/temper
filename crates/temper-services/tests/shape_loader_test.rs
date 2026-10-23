@@ -690,8 +690,9 @@ async fn declaring_a_schema_past_the_byte_bound_is_refused_before_it_compiles(po
 /// Reads of one stored shape — five by-id reads and a load — compile its schema once: the verdict
 /// is remembered by shape id after the first. Counted at `shape_schema::compile` by the fixture's
 /// tag, so other suites' compiles cannot move it. Bites bypassing the remembered verdict (in
-/// `shape_loader::verdict_of`, delete the `if let Some(verdict) = remembered(id)` return): six
-/// compiles.
+/// `shape_loader::verdict_of`, delete the `if let Some(verdict) = remembered(id)` return): two
+/// compiles, the first read's and the load's — the later reads find the vocabulary remembered and
+/// ask no verdict.
 #[sqlx::test(migrations = "../../migrations")]
 async fn a_shape_read_many_times_is_compiled_once(pool: PgPool) {
     let w = seed_world(&pool, "loader-verdict-remembered").await;

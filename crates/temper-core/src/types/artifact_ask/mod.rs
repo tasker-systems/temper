@@ -41,7 +41,7 @@ pub use validate::{
 };
 pub use walk::{
     enumerate, resolve, within_schema_bound, AskOperator, AskablePath, BoundKind, JsonType,
-    PathFacts, PathResolution, Vocabulary, WalkBounds,
+    PathFacts, PathResolution, Vocabulary, WalkBounds, NODE_BYTES,
 };
 
 /// The selection intents an ask may narrow by — the closed vocabulary of

@@ -32,12 +32,14 @@
 //! pool, under one of a few process-wide permits (`compile_permits`), so a burst of reads queues
 //! rather than taking every core; and a stored shape's verdict is remembered by id, so a shape
 //! read many times is compiled about once per process. The vocabulary a compiling shape's by-id
-//! read advertises is remembered by id as well, bounded by the bytes it weighs rather than by how
-//! many there are, so the same shape is enumerated about once per process too. The constructor
-//! holds each `pattern` and `patternProperties` regex to `shape_schema::MAX_PATTERN_BYTES`. A
-//! shape row is immutable per id (amendment mints a new id), so a remembered verdict or vocabulary
-//! never goes stale, and each is consulted only for a row the gated read already returned, so
-//! neither answers anything about a shape the caller cannot read.
+//! read advertises is remembered by id as well, bounded by an estimate of the memory it holds
+//! rather than by how many there are, and the read looks it up before the verdict, so the same
+//! shape is enumerated, and judged, about once per process too. The constructor holds each
+//! `pattern` and `patternProperties` regex to `shape_schema::MAX_PATTERN_BYTES`. A shape row is
+//! immutable per id (amendment mints a new id), so a remembered verdict or vocabulary never goes
+//! stale. Each is consulted only with a row a gated read returned — the loader reads its own, and
+//! the by-id read is passed only such rows — so neither answers anything about a shape the caller
+//! cannot read.
 //!
 //! The successor lookup reads only the home and family of the row step 1 returned; no caller text
 //! reaches SQL here except the shape id, bound as a `uuid`.
@@ -52,10 +54,11 @@ use tokio::sync::Semaphore;
 use crate::error::{ApiError, ApiResult};
 use temper_core::error::TemperError;
 use temper_core::types::artifact_ask::{
-    enumerate, within_schema_bound, LoadedShape, ShapeContext, ShapeLoad, ShapeSuccessor,
-    Vocabulary, WalkBounds,
+    enumerate, within_schema_bound, AskOperator, AskablePath, JsonType, LoadedShape, PathFacts,
+    ShapeContext, ShapeLoad, ShapeSuccessor, Vocabulary, WalkBounds, NODE_BYTES,
 };
 use temper_core::types::ids::{ProfileId, ShapeId};
+use temper_core::types::query::filter::{property_value_bytes, property_value_nodes};
 use temper_core::types::query::PlanRefusal;
 use temper_substrate::readback::{self, RetrievedShape};
 use temper_substrate::shape_schema;
@@ -202,18 +205,28 @@ fn remember(id: ShapeId, verdict: SchemaVerdict) {
     verdicts.insert(id, verdict);
 }
 
-/// The most bytes of vocabulary the process remembers, each weighed as its compact serialized
-/// length.
+/// The most bytes of vocabulary the process remembers, each entry weighed as an estimate of the
+/// memory it holds, in the walk's own model (`vocabulary_weight`).
 ///
 /// # 32 MiB
 ///
 /// A count cap would not bound this: one vocabulary is at most about 4 MiB of path text and
 /// declared values — the walk charges both against `MAX_WALK_VISITS` at `BYTES_PER_VISIT` — plus
 /// the structure around up to `MAX_WALK_PATHS` paths, so the largest shapes alone would fill a
-/// count cap many times over. Weighed instead, 32 MiB holds about eight of the largest and, since
-/// an ordinary shape's vocabulary is a few KiB, thousands of ordinary ones. What the map holds in
-/// memory is a small multiple of its weight. Past the cap an arbitrary entry is forgotten, and
-/// that shape is enumerated again when it is next read.
+/// count cap many times over. Weighed instead, 32 MiB holds several of the largest and, since
+/// an ordinary shape's vocabulary is a few KiB, thousands of ordinary ones. Past the cap an
+/// arbitrary entry is forgotten, and that shape is enumerated again when it is next read.
+///
+/// # What the weight bounds
+///
+/// An entry is weighed by what it holds, not by what it serializes to: each path its own size,
+/// its segments' `String`s and their bytes, and its operators; each declared value at least
+/// `NODE_BYTES` and never less than a `Value`, plus its text; and each node nested in a value at
+/// `NODE_BYTES`, the charge the walk makes for a copied member. A short code that serializes to
+/// two bytes is charged as the `Value` it occupies, and a container as the allocations it holds,
+/// so what the map holds in memory is its weight within a small factor — allocator rounding, the
+/// map's own slots, a `BTreeMap` node's spare room — and 32 MiB of weight is about that much
+/// memory.
 const MAX_REMEMBERED_VOCABULARY_BYTES: usize = 32 << 20;
 
 /// The vocabularies remembered, by shape id, and what they weigh together. The running total
@@ -232,25 +245,45 @@ impl RememberedVocabularies {
             .map(|(vocabulary, _)| Arc::clone(vocabulary))
     }
 
-    /// Remember `vocabulary`, weighing `weight`, forgetting arbitrary entries until it fits
-    /// `budget`. One heavier than the whole budget is not remembered.
-    fn insert(&mut self, id: ShapeId, vocabulary: Arc<Vocabulary>, weight: usize, budget: usize) {
+    /// Remember `vocabulary`, weighing `weight`, forgetting arbitrary entries in one pass over the
+    /// map until it fits `budget`. One heavier than the whole budget is not remembered.
+    ///
+    /// Returns every vocabulary it let go of — the ones forgotten, the one `id` held before, or
+    /// `vocabulary` itself when it is not remembered — so the caller frees them once the lock is
+    /// released, not while other reads wait on it.
+    #[must_use]
+    fn insert(
+        &mut self,
+        id: ShapeId,
+        vocabulary: Arc<Vocabulary>,
+        weight: usize,
+        budget: usize,
+    ) -> Vec<Arc<Vocabulary>> {
         if weight > budget {
-            return;
+            return vec![vocabulary];
         }
-        if let Some((_, replaced)) = self.entries.remove(&id) {
-            self.bytes -= replaced;
+        let mut let_go = Vec::new();
+        if let Some((replaced, replaced_weight)) = self.entries.remove(&id) {
+            self.bytes -= replaced_weight;
+            let_go.push(replaced);
         }
-        while self.bytes + weight > budget {
-            let Some(evicted) = self.entries.keys().next().copied() else {
-                break;
-            };
-            if let Some((_, forgotten)) = self.entries.remove(&evicted) {
-                self.bytes -= forgotten;
+        let mut excess = (self.bytes + weight).saturating_sub(budget);
+        if excess > 0 {
+            let forgotten = self.entries.extract_if(|_, (_, held)| {
+                if excess == 0 {
+                    return false;
+                }
+                excess = excess.saturating_sub(*held);
+                true
+            });
+            for (_, (evicted, held)) in forgotten {
+                self.bytes -= held;
+                let_go.push(evicted);
             }
         }
         self.entries.insert(id, (vocabulary, weight));
         self.bytes += weight;
+        let_go
     }
 }
 
@@ -264,26 +297,62 @@ fn remembered_vocabulary(id: ShapeId) -> Option<Arc<Vocabulary>> {
         .get(id)
 }
 
-/// What a vocabulary weighs in the map: its compact serialized length, or `None` if it somehow
-/// does not serialize.
-fn vocabulary_weight(vocabulary: &Vocabulary) -> Option<usize> {
-    serde_json::to_vec(vocabulary).ok().map(|bytes| bytes.len())
+/// What a vocabulary weighs in the map: an estimate of the memory it holds, in the walk's model
+/// (see `MAX_REMEMBERED_VOCABULARY_BYTES`). Its own size, and each path's. `truncated` holds at
+/// most one of each bound, negligible beside the paths, and is left at the vocabulary's own size.
+fn vocabulary_weight(vocabulary: &Vocabulary) -> usize {
+    size_of::<Vocabulary>() + vocabulary.paths.iter().map(path_weight).sum::<usize>()
 }
 
-/// Remember `vocabulary` for `id`, weighed once here. One that does not serialize is not
-/// remembered: it is returned to its caller all the same, and enumerated again next time.
-fn remember_vocabulary(id: ShapeId, vocabulary: &Vocabulary) {
-    let Some(weight) = vocabulary_weight(vocabulary) else {
-        return;
-    };
+/// One path: its own size, each segment's `String` and bytes, its operators, and its facts.
+fn path_weight(path: &AskablePath) -> usize {
+    size_of::<AskablePath>()
+        + path
+            .path
+            .iter()
+            .map(|segment| size_of::<String>() + segment.len())
+            .sum::<usize>()
+        + path.operators.len() * size_of::<AskOperator>()
+        + facts_weight(&path.facts)
+}
+
+/// One path's facts: their own size, the declared types, each declared value, and an element's
+/// facts, as deep as they are reported.
+fn facts_weight(facts: &PathFacts) -> usize {
+    size_of::<PathFacts>()
+        + facts
+            .types
+            .as_ref()
+            .map_or(0, |types| types.len() * size_of::<JsonType>())
+        + facts
+            .values
+            .iter()
+            .flatten()
+            .map(value_weight)
+            .sum::<usize>()
+        + facts.items.as_deref().map_or(0, facts_weight)
+}
+
+/// One declared value, as the walk charges a copied member: at least `NODE_BYTES`, and never less
+/// than the `Value` it occupies; each node nested in it at `NODE_BYTES`; and its compact text,
+/// counted through a sink so that weighing a large value allocates nothing.
+fn value_weight(value: &Value) -> usize {
+    size_of::<Value>().max(NODE_BYTES)
+        + NODE_BYTES * property_value_nodes(value)
+        + property_value_bytes(value)
+}
+
+/// Remember `vocabulary` for `id`, weighing `weight`. What the map lets go of is freed here, after
+/// its lock is released.
+fn remember_vocabulary(id: ShapeId, vocabulary: Arc<Vocabulary>, weight: usize) {
     if weight > MAX_REMEMBERED_VOCABULARY_BYTES {
         return;
     }
-    let vocabulary = Arc::new(vocabulary.clone());
-    VOCABULARIES
+    let let_go = VOCABULARIES
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .insert(id, vocabulary, weight, MAX_REMEMBERED_VOCABULARY_BYTES);
+    drop(let_go);
 }
 
 /// What a caller may ask of a shape, for its by-id read (spec §2.5): the vocabulary the walk
@@ -293,33 +362,40 @@ fn remember_vocabulary(id: ShapeId, vocabulary: &Vocabulary) {
 /// loader judge a schema alike.
 ///
 /// A compiling shape's vocabulary is remembered by id too, bounded by bytes
-/// ([`MAX_REMEMBERED_VOCABULARY_BYTES`]): it is looked up before a permit is taken, and only a miss
-/// enumerates, under the permit. Two first reads that race both enumerate; after that, none. A
-/// schema past the bound or not compiling is not walked, so there is nothing to remember.
+/// (`MAX_REMEMBERED_VOCABULARY_BYTES`), and it is looked up first: only a compiling shape's is
+/// remembered, so a read that finds one answers it with no refusal, and neither asks the verdict
+/// nor takes a permit. A miss asks the verdict, and for a compiling shape enumerates and weighs
+/// the vocabulary under a permit, off the executor, then remembers it. Two first reads that race
+/// both enumerate; after that, none. A schema past the bound or not compiling is not walked, so
+/// there is nothing to remember.
 ///
 /// Takes the row the gated read returned, whole, so the id the verdict and the vocabulary are
-/// remembered by and the schema they were derived from are one value's. `RetrievedShape` is built
-/// only by `readback`'s gated reads, so its caller holds a row the gate admitted.
+/// remembered by and the schema they were derived from are one value's. `askable` is passed only
+/// rows `readback`'s gated reads returned: its one caller, `substrate_read::get_shape`, passes the
+/// row `readback::shape_by_id` gave it.
 ///
 /// # Errors
 /// Only if the permits are closed or a blocking task cannot be joined.
 pub async fn askable(row: &RetrievedShape) -> ApiResult<(Vocabulary, Option<PlanRefusal>)> {
+    if let Some(vocabulary) = remembered_vocabulary(row.shape_id) {
+        return Ok((Vocabulary::clone(&vocabulary), None));
+    }
     let verdict = verdict_of(row.shape_id, &row.schema).await?;
     let vocabulary = match verdict {
         // Within the bound: a walk of at most 256 KiB, bounded in work, off the executor.
-        SchemaVerdict::Compiles => match remembered_vocabulary(row.shape_id) {
-            Some(vocabulary) => Vocabulary::clone(&vocabulary),
-            None => {
-                #[cfg(feature = "test-db")]
-                test_support::record(&row.schema);
-                let vocabulary = with_schema_off_the_executor(&row.schema, |schema| {
-                    enumerate(schema, &WalkBounds::BUILD)
-                })
-                .await?;
-                remember_vocabulary(row.shape_id, &vocabulary);
-                vocabulary
-            }
-        },
+        SchemaVerdict::Compiles => {
+            #[cfg(feature = "test-db")]
+            test_support::record(&row.schema);
+            let (vocabulary, weight) = with_schema_off_the_executor(&row.schema, |schema| {
+                let vocabulary = enumerate(schema, &WalkBounds::BUILD);
+                let weight = vocabulary_weight(&vocabulary);
+                (vocabulary, weight)
+            })
+            .await?;
+            let vocabulary = Arc::new(vocabulary);
+            remember_vocabulary(row.shape_id, Arc::clone(&vocabulary), weight);
+            Arc::unwrap_or_clone(vocabulary)
+        }
         // Past it the walk reads nothing — the measurement stops at the bound — and says why:
         // `truncated: [schema_bytes]`.
         SchemaVerdict::TooLarge => enumerate(&row.schema, &WalkBounds::BUILD),
@@ -420,7 +496,6 @@ fn read_fault(e: anyhow::Error) -> ApiError {
 mod tests {
     use super::*;
     use std::time::Duration;
-    use temper_core::types::artifact_ask::{AskablePath, PathFacts};
 
     /// Every permit held, no shape work runs: the work waits for a permit rather than fanning out
     /// to the blocking pool. Deterministic in the green direction — the work cannot start without
@@ -478,25 +553,28 @@ mod tests {
     }
 
     /// The vocabulary map holds no more than its byte budget, however many entries are offered,
-    /// the entry offered last reads back, the running total is the sum of the weights held, and an
-    /// entry heavier than the whole budget is not remembered. That a remembered vocabulary spares
-    /// an enumeration is witnessed by the integration test
-    /// `a_shape_read_many_times_is_enumerated_once`. Bite: delete the `while` that forgets entries
-    /// from `RememberedVocabularies::insert`; the total passes the budget on the fifth entry.
+    /// the entry offered last reads back, the running total is the sum of the weights held, every
+    /// entry forgotten is handed back to be freed, and an entry heavier than the whole budget is
+    /// not remembered. That a remembered vocabulary spares an enumeration is witnessed by the
+    /// integration test `a_shape_read_many_times_is_enumerated_once`. Bite: delete the
+    /// `extract_if` pass that forgets entries from `RememberedVocabularies::insert`; the total
+    /// passes the budget on the fifth entry.
     #[test]
     fn the_vocabulary_map_is_capped_by_bytes() {
         let each = vocabulary_of(1_000);
-        let weight = vocabulary_weight(&each).expect("a vocabulary serializes");
+        let weight = vocabulary_weight(&each);
         let budget = 4 * weight + weight / 2;
         let mut map = RememberedVocabularies::default();
 
         let mut last = ShapeId::new();
+        let mut let_go = 0;
         for _ in 0..20 {
             last = ShapeId::new();
-            map.insert(last, Arc::clone(&each), weight, budget);
+            let_go += map.insert(last, Arc::clone(&each), weight, budget).len();
             assert!(map.bytes <= budget, "{} > {budget}", map.bytes);
         }
         assert_eq!(map.entries.len(), 4);
+        assert_eq!(let_go, 16, "each entry forgotten is handed back");
         assert_eq!(
             map.bytes,
             map.entries.values().map(|(_, held)| held).sum::<usize>()
@@ -504,9 +582,61 @@ mod tests {
         assert_eq!(map.get(last).as_deref(), Some(&*each));
 
         let too_heavy = ShapeId::new();
-        map.insert(too_heavy, Arc::clone(&each), budget + 1, budget);
+        let refused = map.insert(too_heavy, Arc::clone(&each), budget + 1, budget);
+        assert_eq!(refused.len(), 1, "handed back, not held");
         assert!(map.get(too_heavy).is_none());
         assert!(map.bytes <= budget);
         assert!(map.get(last).is_some(), "nothing was forgotten for it");
+    }
+
+    /// An id offered again — two first reads that race both remember — replaces its entry rather
+    /// than counting it twice: the entry count is unchanged, the running total is the sum of the
+    /// weights held, and the replaced vocabulary is handed back. The budget leaves room, so nothing
+    /// is forgotten for it either way. Bite: delete the block in `RememberedVocabularies::insert`
+    /// that removes `id`'s entry first; the total counts the weight twice and the sum check goes
+    /// red.
+    #[test]
+    fn a_vocabulary_remembered_again_is_weighed_once() {
+        let each = vocabulary_of(1_000);
+        let weight = vocabulary_weight(&each);
+        let budget = 10 * weight;
+        let mut map = RememberedVocabularies::default();
+
+        let mut last = ShapeId::new();
+        for _ in 0..3 {
+            last = ShapeId::new();
+            assert!(map
+                .insert(last, Arc::clone(&each), weight, budget)
+                .is_empty());
+        }
+        let replaced = map.insert(last, Arc::clone(&each), weight, budget);
+        assert_eq!(map.entries.len(), 3);
+        assert_eq!(
+            map.bytes,
+            map.entries.values().map(|(_, held)| held).sum::<usize>()
+        );
+        assert_eq!(replaced.len(), 1, "the replaced vocabulary is handed back");
+    }
+
+    /// A vocabulary is weighed by what it holds, not by what it serializes to: one path carrying a
+    /// thousand copies of `0`, two bytes each on the wire, weighs at least a `Value` and at least
+    /// `NODE_BYTES` a copy. Bite: return the compact serialized length from `vocabulary_weight`;
+    /// that is about 2 KiB, and both assertions go red.
+    #[test]
+    fn a_vocabulary_weighs_what_it_holds() {
+        let vocabulary = Vocabulary {
+            paths: vec![AskablePath {
+                path: vec!["code".to_owned()],
+                facts: PathFacts {
+                    values: Some(vec![Value::from(0); 1_000]),
+                    ..PathFacts::default()
+                },
+                operators: vec![],
+            }],
+            truncated: BTreeSet::new(),
+        };
+        let weight = vocabulary_weight(&vocabulary);
+        assert!(weight >= 1_000 * size_of::<Value>(), "{weight}");
+        assert!(weight >= 1_000 * NODE_BYTES, "{weight}");
     }
 }
