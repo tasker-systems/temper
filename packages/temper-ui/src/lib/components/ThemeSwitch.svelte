@@ -2,11 +2,15 @@
 	/**
 	 * The appearance control: text actions, worded as the desktop's `ThemeSwitch` words them —
 	 * "Follow system", then each theme the design package publishes, by title. The choice is kept
-	 * by `themeStore` (a cookie the server renders from), which the `(app)` layout initialises;
-	 * this only offers it.
+	 * by `themeStore` (a cookie the server renders from). The `(app)` layout initialises it for
+	 * every authed page; this initialises it too, so the pressed action is the reader's choice
+	 * wherever the switch is rendered. `init` is idempotent.
 	 */
 	import { THEMES } from '@tasker-systems/temper-design/theme';
+	import { onMount } from 'svelte';
 	import { themeStore } from '$lib/stores/theme.svelte';
+
+	onMount(() => themeStore.init());
 
 	const action =
 		'block w-full px-3 py-1 text-left text-xs text-tp-text-subtle hover:text-tp-text aria-pressed:text-tp-text';

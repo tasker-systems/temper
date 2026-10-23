@@ -65,8 +65,19 @@
 			].join('\n')
 		),
 		trail: Promise.resolve(trail),
-		edges: Promise.resolve(edges),
-		artifacts: showEmpty ? Promise.resolve(emptyArtifacts) : Promise.resolve(artifacts),
+		// The page reads the bounded connections read, not the bare edge list it once took.
+		connections: Promise.resolve({
+			rows: edges,
+			total: edges.length,
+			limit: edges.length,
+			returned: edges.length
+		}),
+		// One bounded page of artifacts, as the page reads it.
+		artifacts: Promise.resolve({
+			artifacts: showEmpty ? emptyArtifacts : artifacts,
+			olderHref: null,
+			newestHref: null
+		}),
 		mayChange: false,
 		stateVocabulary: null
 	} as unknown as ResourcePageData);
