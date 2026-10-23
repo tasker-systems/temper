@@ -44,8 +44,9 @@ const eventFor = (url: string) =>
 	({
 		url: new URL(url),
 		request: new Request(url),
-		cookies: {},
+		cookies: { get: () => undefined },
 		locals: {},
+		route: { id: null },
 	}) as never;
 
 const run = (url: string, rendered = new Response('page')) =>

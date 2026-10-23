@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import ContextNavGroup from './ContextNavGroup.svelte';
+	import ThemeSwitch from './ThemeSwitch.svelte';
 	import { navContextsState } from '$lib/nav-groups';
 	import { parseGraphAddress } from '$lib/vault-url';
 	import { sidebarGroups } from '$lib/stores/sidebar.svelte';
@@ -166,6 +167,7 @@
 		</nav>
 
 		<div class="border-t border-tp-rule py-2">
+			<ThemeSwitch />
 			<a
 				href="/auth/logout"
 				class="flex items-center gap-2 px-3 py-1.5 text-sm text-tp-text-muted hover:text-tp-text"

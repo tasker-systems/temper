@@ -370,34 +370,34 @@
 	.declaration {
 		margin: 0;
 		padding: 10px 14px;
-		border-left: 3px solid #6f7a90;
-		background: rgba(111, 122, 144, 0.1);
-		color: #c3ccd9;
+		border-left: 3px solid var(--tp-accent-line-soft);
+		background: var(--tp-surface);
+		color: var(--tp-text);
 		font-size: 13px;
 		line-height: 1.5;
 	}
 	h1 {
 		margin: 4px 0 0;
 		font-size: 20px;
-		color: #e6edf5;
+		color: var(--tp-text);
 	}
 	h2 {
 		margin: 0 0 8px;
 		font-size: 14px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
-		color: #8b94a5;
+		color: var(--tp-text-subtle);
 	}
 	.lead,
 	.also,
 	.declared-absent {
 		margin: 0;
-		color: #aab4c0;
+		color: var(--tp-text-muted);
 		font-size: 13px;
 		line-height: 1.55;
 	}
 	.declared-absent {
-		color: #8b94a5;
+		color: var(--tp-text-subtle);
 		font-style: italic;
 	}
 	/*
@@ -406,54 +406,54 @@
 		reader is trying to copy one.
 	*/
 	.empty-cause {
-		color: #8b94a5;
+		color: var(--tp-text-subtle);
 	}
 	.command {
 		display: inline-block;
 		margin-top: 8px;
 		padding: 6px 10px;
-		border: 1px solid #2b3140;
+		border: 1px solid var(--tp-rule-strong);
 		border-radius: 4px;
-		background: #11141c;
-		color: #cdd6e3;
+		background: var(--tp-ground);
+		color: var(--tp-text);
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 		font-size: 12.5px;
 		user-select: all;
 	}
 	.unavailable {
 		margin: 0;
-		color: #d9b26a;
+		color: var(--tp-notice);
 		font-size: 13px;
 	}
 	/* The one region marker this page has, given the section rule above it so an arrival sits where
 	   the sections it stands in for will sit. */
 	.region-slot {
 		padding-top: 12px;
-		border-top: 1px solid #2b3140;
+		border-top: 1px solid var(--tp-rule);
 	}
 	section {
 		display: flex;
 		flex-direction: column;
 		gap: 8px;
 		padding-top: 12px;
-		border-top: 1px solid #2b3140;
+		border-top: 1px solid var(--tp-rule);
 	}
 	.choices,
 	.regulation {
 		margin: 0;
 		padding-left: 18px;
-		color: #c3ccd9;
+		color: var(--tp-text);
 		font-size: 13px;
 		line-height: 1.8;
 	}
 	.figures > summary {
 		cursor: pointer;
 		padding: 8px 0;
-		color: #8b94a5;
+		color: var(--tp-text-subtle);
 		font-size: 12.5px;
 	}
 	.figures > summary:hover {
-		color: #c3ccd9;
+		color: var(--tp-text);
 	}
 	.legend {
 		display: grid;
@@ -463,19 +463,19 @@
 	}
 	.metric {
 		padding: 8px 10px;
-		border: 1px solid #2b3140;
+		border: 1px solid var(--tp-rule);
 		border-radius: 4px;
 	}
 	.metric.collapsed {
-		background: rgba(43, 49, 64, 0.35);
+		background: var(--tp-surface);
 	}
 	.metric dt {
-		color: #d6dde8;
+		color: var(--tp-text);
 		font-size: 12px;
 		font-weight: 600;
 	}
 	.metric dt code {
-		color: #7d8496;
+		color: var(--tp-text-subtle);
 		font-weight: 400;
 		font-size: 11px;
 	}
@@ -483,14 +483,14 @@
 		margin: 4px 0 0;
 		font-size: 11px;
 		line-height: 1.5;
-		color: #8b94a5;
+		color: var(--tp-text-subtle);
 	}
 	.metric .range {
-		color: #aab4c0;
+		color: var(--tp-text-muted);
 		font-variant-numeric: tabular-nums;
 	}
 	.metric .finding {
-		color: #d9b26a;
+		color: var(--tp-notice);
 	}
 	.table-scroll {
 		overflow-x: auto;
@@ -504,34 +504,34 @@
 	td {
 		padding: 5px 10px;
 		text-align: left;
-		border-bottom: 1px solid #232838;
+		border-bottom: 1px solid var(--tp-rule);
 	}
 	thead th {
 		position: sticky;
 		top: 0;
-		background: #1b1e26;
-		color: #8b94a5;
+		background: var(--tp-surface);
+		color: var(--tp-text-subtle);
 		font-weight: 600;
 		white-space: nowrap;
 	}
 	tbody th {
 		font-weight: 400;
-		color: #d6dde8;
+		color: var(--tp-text);
 		max-width: 460px;
 	}
 	tbody th.unnamed {
-		color: #7d8496;
+		color: var(--tp-text-subtle);
 		font-style: italic;
 	}
 	td {
-		color: #aab4c0;
+		color: var(--tp-text-muted);
 		font-variant-numeric: tabular-nums;
 		white-space: nowrap;
 	}
 	td.absent {
-		color: #5d6474;
+		color: var(--tp-text-subtle);
 	}
 	a {
-		color: #8fb6e8;
+		color: var(--tp-accent);
 	}
 </style>

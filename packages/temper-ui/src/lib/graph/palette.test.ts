@@ -52,8 +52,15 @@ describe('isAuthored', () => {
 describe('chrome', () => {
 	// The `TERRITORY_TINTS` half of this block went with the tints in Beat D; the canvas
 	// background outlived them and keeps its lock.
-	it('locks the canvas background', () => {
-		expect(CANVAS_BG).toBe('#1b1e26');
+	it('paints the canvas on the raised surface role', () => {
+		expect(CANVAS_BG).toBe('var(--tp-surface-raised)');
+	});
+	it('paints the edges on roles: structural, contradicts and derived stay distinct', () => {
+		expect(EDGE_COLORS).toEqual({
+			structural: 'var(--tp-text-muted)',
+			contradicts: 'var(--tp-danger)',
+			derived: 'var(--tp-text-subtle)',
+		});
 	});
 });
 
@@ -90,6 +97,20 @@ describe('edgeStyle', () => {
 	});
 	it('contradicts label → warning red', () => {
 		expect(edgeStyle(edge({ label: 'contradicts' })).color).toBe(EDGE_COLORS.contradicts);
+	});
+	/**
+	 * Contradicts must differ from structural on more than hue: at their luminances (about 1.2:1 in
+	 * dark, 1.4:1 in paper) a colour-blind reader cannot tell them apart. Dash already says the
+	 * edge's kind and width its weight, so contradicts carries a shape of its own — a cross at the
+	 * midpoint — and keeps both.
+	 */
+	it('contradicts carries a cross, and keeps the kind dash and the weight width', () => {
+		const contradicts = edgeStyle(edge({ label: 'contradicts', edge_kind: 'leads_to', weight: 3 }));
+		const structural = edgeStyle(edge({ edge_kind: 'leads_to', weight: 3 }));
+		expect(contradicts.cross).toBe(true);
+		expect(structural.cross).toBe(false);
+		expect(contradicts.dash).toBe(structural.dash);
+		expect(contradicts.width).toBe(structural.width);
 	});
 	it('default color is structural gray', () => {
 		expect(edgeStyle(edge({})).color).toBe(EDGE_COLORS.structural);

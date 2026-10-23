@@ -3,6 +3,7 @@
 	import { invalidateAll, goto } from '$app/navigation';
 	import { enhance } from '$app/forms';
 	import Wordmark from '$lib/components/Wordmark.svelte';
+	import '../../marketing.css';
 	import type { PageData, ActionData } from './$types';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
@@ -48,134 +49,137 @@
 	<title>Request access — temper</title>
 </svelte:head>
 
-<div class="page">
-	<div class="page-mark">
-		<Wordmark size="md" href="/" />
-	</div>
+<!-- A marketing surface: dark-only, painting from marketing.css's names. -->
+<div class="marketing" data-theme="quiet-instrument">
+	<div class="page">
+		<div class="page-mark">
+			<Wordmark size="md" href="/" />
+		</div>
 
-	<header class="ed-strip">
-		<span class="ed-strip-em">Account</span>
-		<span class="ed-strip-sep">·</span>
-		<span class="ed-strip-accent">{accountLabel}</span>
-		<span class="ed-strip-spacer"></span>
-		<span class="ed-strip-meta">
-			{instanceMeta}
-		</span>
-	</header>
+		<header class="ed-strip">
+			<span class="ed-strip-em">Account</span>
+			<span class="ed-strip-sep">·</span>
+			<span class="ed-strip-accent">{accountLabel}</span>
+			<span class="ed-strip-spacer"></span>
+			<span class="ed-strip-meta">
+				{instanceMeta}
+			</span>
+		</header>
 
-	<article class="ed-masthead">
-		{#if status === 'pending'}
-			<!-- ─── PENDING ─────────────────────────────────────────── -->
-			<header class="ed-hero">
-				<div class="ed-hero-eyebrow">Status</div>
-				<h1 class="ed-hero-name t-ed-hero-name">Pending review</h1>
-				<p class="ed-hero-deck t-ed-deck">
-					Your letter was filed on <em>{fullDate(data.ownRequest!.created)}</em> and is awaiting
-					a steward's decision. This page will refresh automatically when it's been reviewed.
-				</p>
-			</header>
+		<article class="ed-masthead">
+			{#if status === 'pending'}
+				<!-- ─── PENDING ─────────────────────────────────────────── -->
+				<header class="ed-hero">
+					<div class="ed-hero-eyebrow">Status</div>
+					<h1 class="ed-hero-name t-ed-hero-name">Pending review</h1>
+					<p class="ed-hero-deck t-ed-deck">
+						Your letter was filed on <em>{fullDate(data.ownRequest!.created)}</em> and is awaiting
+						a steward's decision. This page will refresh automatically when it's been reviewed.
+					</p>
+				</header>
 
-			{#if data.ownRequest!.message}
-				<section class="ed-rail">
-					<div class="ed-rail-marker">
-						<div class="ed-rail-label">Your note</div>
-						<div class="ed-rail-sub">As submitted</div>
-					</div>
-					<blockquote class="letter-quote">{data.ownRequest!.message}</blockquote>
-				</section>
-			{/if}
-
-			<form method="POST" action="?/withdraw" use:enhance class="withdraw-form">
-				<button type="submit" class="ed-action ed-action--ghost">
-					Withdraw this request
-				</button>
-			</form>
-		{:else if status === 'approved'}
-			<!-- ─── APPROVED ────────────────────────────────────────── -->
-			<header class="ed-hero">
-				<div class="ed-hero-eyebrow">Status</div>
-				<h1 class="ed-hero-name t-ed-hero-name">Approved</h1>
-				<p class="ed-hero-deck t-ed-deck">
-					Welcome to temper. You're being routed to the dashboard now.
-				</p>
-			</header>
-		{:else}
-			<!-- ─── FORM (no request, withdrawn, or rejected) ───────── -->
-			<header class="ed-hero">
-				<div class="ed-hero-eyebrow">A letter of introduction</div>
-				<h1 class="ed-hero-name t-ed-hero-name">Request access</h1>
-				<p class="ed-hero-deck t-ed-deck">
-					This instance is in invitation-only beta. Tell a steward what you're working on,
-					accept the terms, and you'll be added once your request is reviewed.
-				</p>
-			</header>
-
-			{#if status === 'rejected'}
-				<aside class="ed-notice">
-					<div class="ed-notice-label">Previous request declined</div>
-					{#if data.ownRequest!.decision_note}
-						<p>"{data.ownRequest!.decision_note}"</p>
-					{/if}
-					<p>You may submit a new request below.</p>
-				</aside>
-			{/if}
-
-			<form method="POST" action="?/submit" use:enhance class="letter">
-				<div class="letter-field">
-					<label for="message" class="letter-label">
-						Your note
-						<span class="letter-label-aside">optional</span>
-					</label>
-					<textarea
-						id="message"
-						name="message"
-						rows="6"
-						class="letter-body"
-						placeholder="What you're working on, what brought you here, anything else useful for the reviewer."
-						value={form?.message ?? ''}
-					></textarea>
-				</div>
-
-				<div class="letter-terms">
-					<input
-						id="accepted_terms"
-						name="accepted_terms"
-						type="checkbox"
-						class="letter-checkbox"
-						required
-					/>
-					<label for="accepted_terms" class="letter-terms-label">
-						I accept the
-						{#if data.settings?.terms_resource_uri}
-							<a href={data.settings.terms_resource_uri}>terms of service</a>.
-						{:else}
-							terms of service.
-						{/if}
-					</label>
-				</div>
-
-				{#if data.settings?.terms_version}
-					<input type="hidden" name="terms_version" value={data.settings.terms_version} />
+				{#if data.ownRequest!.message}
+					<section class="ed-rail">
+						<div class="ed-rail-marker">
+							<div class="ed-rail-label">Your note</div>
+							<div class="ed-rail-sub">As submitted</div>
+						</div>
+						<blockquote class="letter-quote">{data.ownRequest!.message}</blockquote>
+					</section>
 				{/if}
 
-				{#if form?.error}
+				<form method="POST" action="?/withdraw" use:enhance class="withdraw-form">
+					<button type="submit" class="ed-action ed-action--ghost">
+						Withdraw this request
+					</button>
+				</form>
+			{:else if status === 'approved'}
+				<!-- ─── APPROVED ────────────────────────────────────────── -->
+				<header class="ed-hero">
+					<div class="ed-hero-eyebrow">Status</div>
+					<h1 class="ed-hero-name t-ed-hero-name">Approved</h1>
+					<p class="ed-hero-deck t-ed-deck">
+						Welcome to temper. You're being routed to the dashboard now.
+					</p>
+				</header>
+			{:else}
+				<!-- ─── FORM (no request, withdrawn, or rejected) ───────── -->
+				<header class="ed-hero">
+					<div class="ed-hero-eyebrow">A letter of introduction</div>
+					<h1 class="ed-hero-name t-ed-hero-name">Request access</h1>
+					<p class="ed-hero-deck t-ed-deck">
+						This instance is in invitation-only beta. Tell a steward what you're working on,
+						accept the terms, and you'll be added once your request is reviewed.
+					</p>
+				</header>
+
+				{#if status === 'rejected'}
 					<aside class="ed-notice">
-						<div class="ed-notice-label">Notice</div>
-						<p>{form.error}</p>
+						<div class="ed-notice-label">Previous request declined</div>
+						{#if data.ownRequest!.decision_note}
+							<p>"{data.ownRequest!.decision_note}"</p>
+						{/if}
+						<p>You may submit a new request below.</p>
 					</aside>
 				{/if}
 
-				<button type="submit" class="letter-submit">
-					Submit request <span aria-hidden="true">→</span>
-				</button>
-			</form>
-		{/if}
+				<form method="POST" action="?/submit" use:enhance class="letter">
+					<div class="letter-field">
+						<label for="message" class="letter-label">
+							Your note
+							<span class="letter-label-aside">optional</span>
+						</label>
+						<textarea
+							id="message"
+							name="message"
+							rows="6"
+							class="letter-body"
+							placeholder="What you're working on, what brought you here, anything else useful for the reviewer."
+							value={form?.message ?? ''}
+						></textarea>
+					</div>
 
-		<footer class="ed-footnote">
-			Signed in as {accountLabel}
-			<a href="/auth/logout">Sign out</a>
-		</footer>
-	</article>
+					<div class="letter-terms">
+						<input
+							id="accepted_terms"
+							name="accepted_terms"
+							type="checkbox"
+							class="letter-checkbox"
+							required
+						/>
+						<label for="accepted_terms" class="letter-terms-label">
+							I accept the
+							{#if data.settings?.terms_resource_uri}
+								<a href={data.settings.terms_resource_uri}>terms of service</a>.
+							{:else}
+								terms of service.
+							{/if}
+						</label>
+					</div>
+
+					{#if data.settings?.terms_version}
+						<input type="hidden" name="terms_version" value={data.settings.terms_version} />
+					{/if}
+
+					{#if form?.error}
+						<aside class="ed-notice">
+							<div class="ed-notice-label">Notice</div>
+							<p>{form.error}</p>
+						</aside>
+					{/if}
+
+					<button type="submit" class="letter-submit">
+						Submit request <span aria-hidden="true">→</span>
+					</button>
+				</form>
+			{/if}
+
+			<footer class="ed-footnote">
+				Signed in as {accountLabel}
+				<a href="/auth/logout">Sign out</a>
+			</footer>
+		</article>
+	</div>
 </div>
 
 <style>

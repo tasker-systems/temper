@@ -20,6 +20,9 @@
 //
 // Every rule reads one line at a time: a declaration whose value wraps onto the next line is not
 // seen. A colour set from script (`el.style.setProperty`, a JS style object) is out of reach.
+// (f) cannot tell what a custom property holds, so it over-reaches: a spacing or tracking alias
+// (`--gap: var(--space-column)`) is refused as though it were a colour. Read the variable in the
+// property that uses it instead (`gap: var(--space-column)`), which no rule refuses.
 //
 // A surface commits a config naming what it guards, relative to the config's own directory:
 //

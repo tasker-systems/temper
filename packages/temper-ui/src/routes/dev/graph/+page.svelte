@@ -90,8 +90,8 @@
 		display: flex;
 		flex-direction: column;
 		min-height: 100vh;
-		background: #0b0d11;
-		color: #c9ced9;
+		background: var(--tp-ground);
+		color: var(--tp-text-muted);
 		font: 12px/1.4 system-ui, sans-serif;
 	}
 	.controls {
@@ -100,12 +100,12 @@
 		align-items: center;
 		gap: 8px 16px;
 		padding: 8px 14px;
-		border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-		background: #12151b;
+		border-bottom: 1px solid var(--tp-rule);
+		background: var(--tp-surface);
 	}
 	.brand {
 		font-weight: 600;
-		color: #e6e9ef;
+		color: var(--tp-text);
 	}
 	.group {
 		display: flex;
@@ -117,27 +117,27 @@
 		text-transform: uppercase;
 		letter-spacing: 0.08em;
 		font-size: 10px;
-		color: #6f7886;
+		color: var(--tp-text-subtle);
 		margin-right: 4px;
 	}
 	button {
-		background: #1b2028;
-		border: 1px solid rgba(255, 255, 255, 0.1);
-		color: #c9ced9;
+		background: var(--tp-surface-raised);
+		border: 1px solid var(--tp-rule-strong);
+		color: var(--tp-text-muted);
 		border-radius: 4px;
 		padding: 3px 8px;
 		font: inherit;
 		cursor: pointer;
 	}
 	button.active {
-		background: #2d3947;
-		border-color: #4a6480;
-		color: #e6e9ef;
+		background: var(--tp-accent-wash);
+		border-color: var(--tp-accent-line);
+		color: var(--tp-text);
 	}
 	.num input {
 		width: 62px;
-		background: #1b2028;
-		border: 1px solid rgba(255, 255, 255, 0.1);
+		background: var(--tp-surface-raised);
+		border: 1px solid var(--tp-rule-strong);
 		color: inherit;
 		border-radius: 4px;
 		padding: 2px 4px;
@@ -145,21 +145,21 @@
 	}
 	.meta {
 		margin-left: auto;
-		color: #6f7886;
+		color: var(--tp-text-subtle);
 		font-variant-numeric: tabular-nums;
 	}
 	.why {
 		margin: 0;
 		padding: 8px 14px;
-		color: #9aa3b0;
-		border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+		color: var(--tp-text-muted);
+		border-bottom: 1px solid var(--tp-rule);
 	}
 	.cannot {
 		margin: 0;
 		padding: 8px 14px;
-		color: #e6c07b;
-		background: rgba(230, 192, 123, 0.07);
-		border-bottom: 1px solid rgba(230, 192, 123, 0.2);
+		color: var(--tp-notice);
+		background: var(--tp-notice-wash);
+		border-bottom: 1px solid var(--tp-notice);
 	}
 	.stage {
 		padding: 16px;
@@ -168,7 +168,7 @@
 	.frame {
 		overflow: hidden;
 		resize: both;
-		border: 1px solid rgba(255, 255, 255, 0.14);
-		background: #0f1116;
+		border: 1px solid var(--tp-rule-strong);
+		background: var(--tp-ground);
 	}
 </style>

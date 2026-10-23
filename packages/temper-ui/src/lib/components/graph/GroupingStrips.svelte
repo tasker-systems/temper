@@ -256,26 +256,26 @@
 		gap: 6px;
 		min-height: 54px;
 		padding: 8px 12px;
-		border: 1px solid #2b3140;
+		border: 1px solid var(--tp-rule);
 		border-radius: 4px;
-		background: #12161d;
+		background: var(--tp-surface);
 	}
 	.readout.lit {
-		border-color: #4a5568;
+		border-color: var(--tp-rule-strong);
 	}
 	.prompt {
-		color: #6f7886;
+		color: var(--tp-text-subtle);
 		font-size: 13px;
 		font-style: italic;
 	}
 	.name {
-		color: #e6edf5;
+		color: var(--tp-text);
 		font-size: 13px;
 		font-weight: 600;
 		line-height: 1.4;
 	}
 	.name.unnamed {
-		color: #8b94a5;
+		color: var(--tp-text-subtle);
 		font-weight: 400;
 		font-style: italic;
 	}
@@ -290,14 +290,14 @@
 		font-size: 11.5px;
 	}
 	.fig-label {
-		color: #6f7886;
+		color: var(--tp-text-subtle);
 	}
 	.fig-value {
-		color: #c3ccd9;
+		color: var(--tp-text);
 		font-variant-numeric: tabular-nums;
 	}
 	.fig.absent .fig-value {
-		color: #4a5568;
+		color: var(--tp-text-subtle);
 	}
 	.strip {
 		display: flex;
@@ -315,16 +315,16 @@
 		margin: 0;
 		font-size: 13px;
 		font-weight: 600;
-		color: #c3ccd9;
+		color: var(--tp-text);
 	}
 	h3 code {
-		color: #6f7886;
+		color: var(--tp-text-subtle);
 		font-size: 11px;
 		font-weight: 400;
 	}
 	.reading {
 		margin: 0;
-		color: #8b94a5;
+		color: var(--tp-text-subtle);
 		font-size: 12px;
 		line-height: 1.5;
 		max-width: 76ch;
@@ -340,7 +340,7 @@
 		margin-top: 4px;
 	}
 	.median-tick {
-		stroke: #545c6b;
+		stroke: var(--tp-text-subtle);
 		stroke-width: 1;
 		stroke-dasharray: 2 2;
 		vector-effect: non-scaling-stroke;
@@ -350,25 +350,24 @@
 		top: 0;
 		transform: translateX(-50%);
 		padding: 0 4px;
-		color: #6f7886;
+		color: var(--tp-text-subtle);
 		font-size: 11px;
 		font-variant-numeric: tabular-nums;
 		white-space: nowrap;
 		pointer-events: none;
 	}
 	.axis {
-		stroke: #2b3140;
+		stroke: var(--tp-rule);
 		stroke-width: 1;
 		vector-effect: non-scaling-stroke;
 	}
 	.mark {
-		fill: #7aa2c4;
-		fill-opacity: 0.38;
+		fill: var(--tp-accent-muted);
 	}
 	.mark.lit {
-		fill: #ffd479;
+		fill: var(--tp-notice);
 		fill-opacity: 1;
-		stroke: #12161d;
+		stroke: var(--tp-ground);
 		stroke-width: 2;
 		vector-effect: non-scaling-stroke;
 	}
@@ -376,21 +375,21 @@
 		position: relative;
 		display: flex;
 		justify-content: space-between;
-		color: #6f7886;
+		color: var(--tp-text-subtle);
 		font-size: 11px;
 		font-variant-numeric: tabular-nums;
 	}
 	.scale .is-median {
-		color: #8b94a5;
+		color: var(--tp-text-muted);
 	}
 	.flat,
 	.nulls {
 		margin: 0;
-		color: #8b94a5;
+		color: var(--tp-text-subtle);
 		font-size: 12px;
 	}
 	.flat {
 		padding: 6px 0;
-		color: #aab4c0;
+		color: var(--tp-text-muted);
 	}
 </style>

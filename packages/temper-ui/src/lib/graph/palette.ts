@@ -67,15 +67,23 @@ export const DOC_TYPE_HUES: Record<AtlasDocType, string> = {
 /** Neutral for unknown/absent doc-types. */
 export const FALLBACK_HUE = '#9aa5b5';
 
-/** Structural edge gray, contradicts-red, derived_from bridge. */
+/**
+ * Structural edge, contradicts, derived_from bridge — as contract roles, so every theme restyles
+ * them. `var()` strings: apply through `style`/CSS, never an SVG presentation attribute. The rule
+ * roles are hairlines too faint for a 1.4px mark, so the edges take text roles: structural
+ * brighter than derived (which is also dashed), contradicts on `danger`.
+ */
 export const EDGE_COLORS = {
-	structural: '#8b93a5',
-	contradicts: '#d98a8a',
-	derived: '#5f6b86',
+	structural: 'var(--tp-text-muted)',
+	contradicts: 'var(--tp-danger)',
+	derived: 'var(--tp-text-subtle)',
 } as const;
 
-/** Atlas canvas slate background. */
-export const CANVAS_BG = '#1b1e26';
+/**
+ * Atlas canvas ground — `surface-raised`, so the drawing reads as a region lifted from the page
+ * (as the old slate did); a `var()` string, applied through `style`.
+ */
+export const CANVAS_BG = 'var(--tp-surface-raised)';
 
 export function docTypeHue(docType: string | null): string {
 	if (docType && docType in DOC_TYPE_HUES) return DOC_TYPE_HUES[docType as AtlasDocType];
@@ -99,6 +107,12 @@ export interface EdgeStyle {
 	dash: string | null;
 	markerStart: boolean;
 	markerEnd: boolean;
+	/**
+	 * A cross at the midpoint: contradicts' channel beyond hue. Its colour sits too close to
+	 * structural's in luminance for a colour-blind reader, and dash (kind) and width (weight) are
+	 * taken, so it carries a shape of its own.
+	 */
+	cross: boolean;
 }
 
 const KIND_DASH: Record<EdgeKind, string | null> = {
@@ -157,5 +171,6 @@ export function edgeStyle(edge: EdgeMark): EdgeStyle {
 		dash,
 		markerStart: !symmetric && edge.polarity === 'inverse',
 		markerEnd: !symmetric && edge.polarity === 'forward',
+		cross: edge.label === 'contradicts',
 	};
 }

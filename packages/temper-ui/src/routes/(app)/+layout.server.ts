@@ -13,10 +13,11 @@
 import { redirect } from '@sveltejs/kit';
 import { apiGet } from '$lib/server/api';
 import { listTeams } from '$lib/server/graph-reads';
+import { decodePreference, THEME_COOKIE } from '$lib/theme';
 import type { ContextRowWithCounts, PublicSystemSettings, TeamRow } from '$lib/types';
 import type { LayoutServerLoad } from './$types';
 
-export const load: LayoutServerLoad = async ({ locals, url }) => {
+export const load: LayoutServerLoad = async ({ cookies, locals, url }) => {
 	if (!locals.user || !locals.accessToken) {
 		const returnTo = encodeURIComponent(url.pathname + url.search);
 		throw redirect(303, `/auth/login?returnTo=${returnTo}`);
@@ -62,5 +63,7 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
 		contexts,
 		teams,
 		instanceName: settings?.instance_name ?? null,
+		// The switch renders its pressed action on the server from this; the store takes over on mount.
+		themePreference: decodePreference(cookies.get(THEME_COOKIE)),
 	};
 };

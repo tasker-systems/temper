@@ -91,13 +91,13 @@
 			offset={list.offset}
 		/>
 	{:else}
-		<!-- The state is the shared failed region (its words, marker, alert role and paint); what
-			follows is only what this read adds — the reason, what it does not claim, and the way out. -->
+		<!-- The state is the shared failed region (its words, marker, alert role and paint). The
+			reason rides inside it as its detail, so it is announced with the failure; what follows
+			is only what this read adds — what it does not claim, and the way out. Only the search
+			route sends a failed read here (the others take the error boundary), so the region is
+			named for what was not read: a search the vault rejected is not a vault unavailable. -->
 		<div class="flex flex-col items-start gap-2">
-			<RegionState state="failed" label="vault" />
-			<p class="text-sm text-tp-text">
-				{loadError ?? 'The vault could not be read.'}
-			</p>
+			<RegionState state="failed" label="search results" detail={loadError} />
 			<p class="text-xs text-tp-text-muted">
 				Nothing here says whether a matching resource exists. This is a failed read, not
 				an empty result.

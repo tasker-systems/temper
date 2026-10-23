@@ -189,9 +189,9 @@
 		gap: 12px;
 		padding: 12px 14px 20px;
 		overflow: auto;
-		background: rgba(20, 23, 29, 0.97);
-		border-left: 1px solid rgba(255, 255, 255, 0.1);
-		color: #c9d1d9;
+		background: var(--tp-surface);
+		border-left: 1px solid var(--tp-rule-strong);
+		color: var(--tp-text);
 		font-size: 13px;
 	}
 	header {
@@ -217,7 +217,7 @@
 	.close {
 		background: none;
 		border: 0;
-		color: #6f7886;
+		color: var(--tp-text-subtle);
 		cursor: pointer;
 		padding: 0;
 	}
@@ -234,7 +234,7 @@
 	}
 	.label,
 	.k {
-		color: #6f7886;
+		color: var(--tp-text-subtle);
 	}
 	.actions {
 		display: flex;
@@ -244,17 +244,17 @@
 	.walk,
 	.view {
 		padding: 5px 9px;
-		border: 1px solid rgba(255, 255, 255, 0.14);
+		border: 1px solid var(--tp-rule-strong);
 		border-radius: 6px;
 		background: none;
-		color: #c9d1d9;
+		color: var(--tp-text);
 		font-size: 12px;
 		text-decoration: none;
 		cursor: pointer;
 	}
 	.excerpt {
 		margin: 0;
-		color: #9aa3b0;
+		color: var(--tp-text-muted);
 		font-size: 12.5px;
 		line-height: 1.55;
 	}
@@ -265,14 +265,14 @@
 		align-items: baseline;
 	}
 	.meta span:last-child {
-		color: #9aa3b0;
+		color: var(--tp-text-muted);
 		font-size: 12px;
 		text-align: right;
 	}
 	.reached {
 		margin: 0;
 		padding-left: 16px;
-		color: #9aa3b0;
+		color: var(--tp-text-muted);
 		font-size: 12px;
 	}
 	.nb {
@@ -284,7 +284,7 @@
 		text-decoration: none;
 	}
 	.dir {
-		color: #6f7886;
+		color: var(--tp-text-subtle);
 	}
 	.rel {
 		font:
@@ -292,7 +292,7 @@
 			Menlo,
 			monospace;
 		letter-spacing: 0.1em;
-		color: #79828f;
+		color: var(--tp-text-subtle);
 	}
 	.name {
 		font-size: 12.5px;
@@ -304,20 +304,20 @@
 		grid-template-columns: auto 1fr;
 		gap: 2px 8px;
 		padding: 5px 0;
-		border-top: 1px solid rgba(255, 255, 255, 0.05);
+		border-top: 1px solid var(--tp-rule);
 		font-size: 11.5px;
-		color: #9aa3b0;
+		color: var(--tp-text-muted);
 	}
 	.when {
-		color: #6f7886;
+		color: var(--tp-text-subtle);
 		font-variant-numeric: tabular-nums;
 	}
 	.what {
-		color: #c9d1d9;
+		color: var(--tp-text);
 	}
 	.who,
 	.sum {
 		grid-column: 1 / -1;
-		color: #79828f;
+		color: var(--tp-text-subtle);
 	}
 </style>

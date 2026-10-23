@@ -91,7 +91,7 @@
 	});
 </script>
 
-<div class="flex h-screen bg-zinc-950 text-zinc-100">
+<div class="flex h-screen bg-tp-ground text-tp-text">
 	<Sidebar
 		contexts={current.contexts}
 		teams={current.teams}
@@ -102,22 +102,22 @@
 		onToggle={() => sidebarCollapsed.toggle()}
 	/>
 	<main class="flex-1 overflow-y-auto p-6">
-		<h1 class="font-mono text-sm tracking-widest text-zinc-400 uppercase">Nav render harness</h1>
+		<h1 class="font-mono text-sm tracking-widest text-tp-text-muted uppercase">Nav render harness</h1>
 		<div class="mt-4 flex flex-wrap gap-2">
 			{#each Object.keys(SCENARIOS) as key (key)}
 				<button
 					type="button"
 					onclick={() => (scenario = key as Scenario)}
 					class="rounded border px-2.5 py-1 text-xs {scenario === key
-						? 'border-quiet-accent text-zinc-100'
-						: 'border-zinc-700 text-zinc-400 hover:text-zinc-200'}"
+						? 'border-tp-accent-line text-tp-text'
+						: 'border-tp-rule-strong text-tp-text-muted hover:text-tp-text'}"
 				>
 					{key}
 				</button>
 			{/each}
 		</div>
-		<p class="mt-4 max-w-xl text-sm text-zinc-400">{current.note}</p>
-		<p class="mt-6 max-w-xl text-xs text-zinc-600">
+		<p class="mt-4 max-w-xl text-sm text-tp-text-muted">{current.note}</p>
+		<p class="mt-6 max-w-xl text-xs text-tp-text-subtle">
 			Group collapse persists to <code>temper.sidebar.groups.collapsed</code>, the same store the
 			rail's own collapse uses. Active-place marking is NOT exercised here — it reads the real
 			route params, which this harness route does not carry.

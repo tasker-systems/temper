@@ -265,8 +265,15 @@
 	 * Precedence: the vendor rules are unlayered `.wx-willow-dark-theme` (one class); these are
 	 * unlayered and scoped under `.grid-container`, so they win. Moved into `layer(base)`, they
 	 * would lose without a sound.
+	 *
+	 * Three mappings are stand-ins: no role says what they mean, so each takes the nearest role
+	 * whose floor still holds, and no grid state renders any of them today. They are marked
+	 * "stand-in" where they sit.
 	 */
 	.grid-container :global(.wx-willow-dark-theme) {
+		/* WillowDark fixes `color-scheme: dark`; the grid's scrollbars and native controls follow
+		   the theme in force instead. */
+		color-scheme: inherit;
 		--wx-color-primary: var(--tp-accent);
 		--wx-color-primary-selected: var(--tp-accent-wash);
 		--wx-color-primary-font: var(--tp-on-accent);
@@ -275,6 +282,7 @@
 		--wx-color-success: var(--tp-success);
 		--wx-color-warning: var(--tp-notice);
 		--wx-color-danger: var(--tp-danger);
+		/* stand-in: no disabled-fill role; a raised fill reads as unavailable on ground */
 		--wx-color-disabled: var(--tp-surface-raised);
 		--wx-color-disabled-alt: var(--tp-surface-raised);
 		--wx-color-font: var(--tp-text);
@@ -297,6 +305,7 @@
 		--wx-input-background: var(--tp-surface);
 		--wx-input-border: 1px solid var(--tp-rule-strong);
 		--wx-input-border-focus: 1px solid var(--tp-accent-line);
+		/* stand-in: no text-on-danger role; on-accent's floor is measured on accent, not danger */
 		--wx-button-danger-font-color: var(--tp-on-accent);
 		--wx-button-pressed: var(--tp-accent-hover);
 		--wx-button-danger-pressed: var(--tp-danger);
@@ -306,6 +315,7 @@
 		--wx-tabs-hover-border: var(--tp-rule-strong);
 		--wx-switch-background: var(--tp-surface-raised);
 		--wx-switch-thumb-border-disabled: 1px solid var(--tp-rule);
+		/* stand-in: no control-thumb role; text holds 7:1 on the raised track */
 		--wx-switch-thumb-background: var(--tp-text);
 		--wx-popup-background: var(--tp-surface-raised);
 		--wx-popup-border: 1px solid var(--tp-rule-strong);

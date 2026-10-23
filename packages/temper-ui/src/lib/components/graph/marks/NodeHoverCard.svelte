@@ -81,12 +81,14 @@
 		position: relative;
 		box-sizing: border-box;
 		width: 100%;
-		background: rgba(20, 23, 29, 0.97);
+		background: var(--tp-surface-raised);
 		backdrop-filter: blur(8px);
 		border: 1px solid color-mix(in srgb, var(--hue) 34%, transparent);
 		border-radius: 9px;
-		box-shadow: 0 8px 30px rgba(0, 0, 0, 0.55);
-		color: #c9d1d9;
+		/* No shadow role: the card stands off the raised canvas by a rule-strong ring outside its
+		   doc-type border, not by a drop shadow. */
+		box-shadow: 0 0 0 1px var(--tp-rule-strong);
+		color: var(--tp-text);
 		text-align: left;
 		padding: 10px 12px;
 		font: 12px/1.45 system-ui, sans-serif;
@@ -99,7 +101,7 @@
 		transform: translateX(-50%) rotate(45deg);
 		width: 10px;
 		height: 10px;
-		background: rgba(20, 23, 29, 0.97);
+		background: var(--tp-surface-raised);
 		border-right: 1px solid color-mix(in srgb, var(--hue) 34%, transparent);
 		border-bottom: 1px solid color-mix(in srgb, var(--hue) 34%, transparent);
 	}
@@ -127,7 +129,7 @@
 	.chip {
 		font: 8.5px monospace;
 		letter-spacing: 0.1em;
-		color: #8a929e;
+		color: var(--tp-text-subtle);
 	}
 	.ctitle {
 		font-family: Georgia, serif;
@@ -138,7 +140,7 @@
 	}
 	.snip {
 		margin: 0;
-		color: #9aa3b0;
+		color: var(--tp-text-muted);
 		font-size: 11.5px;
 		display: -webkit-box;
 		-webkit-line-clamp: 2;
@@ -160,12 +162,12 @@
 		font: 8.5px monospace;
 		letter-spacing: 0.12em;
 		text-transform: uppercase;
-		color: #6f7886;
+		color: var(--tp-text-subtle);
 	}
 	.meta dd {
 		margin: 0;
 		font-size: 10.5px;
-		color: #9aa3b0;
+		color: var(--tp-text-muted);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -174,7 +176,7 @@
 		margin-top: 7px;
 		font: 8px monospace;
 		letter-spacing: 0.16em;
-		color: #5a6270;
+		color: var(--tp-text-subtle);
 		text-transform: uppercase;
 	}
 </style>

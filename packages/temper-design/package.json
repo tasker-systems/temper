@@ -46,6 +46,10 @@
       "types": "./dist/omission.d.ts",
       "default": "./dist/omission.js"
     },
+    "./theme": {
+      "types": "./dist/theme.d.ts",
+      "default": "./dist/theme.js"
+    },
     "./themes.json": "./themes.json",
     "./contract/*": "./contract/*",
     "./brand/*": "./brand/*",

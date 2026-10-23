@@ -72,10 +72,10 @@
 		overflow: auto;
 		clip: auto;
 		white-space: normal;
-		background: rgba(20, 23, 29, 0.97);
-		border: 1px solid rgba(255, 255, 255, 0.12);
+		background: var(--tp-surface-raised);
+		border: 1px solid var(--tp-rule-strong);
 		border-radius: 10px;
-		color: #c9ced9;
+		color: var(--tp-text);
 		font-size: 13px;
 	}
 	.graph-a11y h2 {
@@ -84,6 +84,6 @@
 		margin: 6px 0 4px;
 	}
 	.graph-a11y a {
-		color: #9fc4d6;
+		color: var(--tp-accent);
 	}
 </style>
