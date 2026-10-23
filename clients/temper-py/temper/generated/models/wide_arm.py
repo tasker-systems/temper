@@ -33,7 +33,7 @@ class WideArm(BaseModel):
     hint: Optional[StrictStr] = None
     hits: List[WideHit]
     reason: SearchReason
-    truncated: StrictBool = Field(description="Are there hits beyond this page among what the arm draws? Read from the probe row past the page, as on the exact arm. Unscoped, the arm draws a bounded set of nearest chunks first, so `false` means nothing more within that draw, not nothing more similar anywhere.")
+    truncated: Optional[StrictBool] = Field(default=None, description="Are there hits beyond this page among what the arm draws? Read from the probe row past the page, as on the exact arm. Unscoped, the arm draws a bounded set of nearest chunks first, so `false` means nothing more within that draw, not nothing more similar anywhere.")
     __properties: ClassVar[List[str]] = ["degraded", "hint", "hits", "reason", "truncated"]
 
     model_config = ConfigDict(

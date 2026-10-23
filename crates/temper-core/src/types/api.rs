@@ -252,8 +252,9 @@ pub struct ExactArm {
     /// Are there matching hits beyond this page? The arm's own word, from the probe row it read
     /// past the page — never inferred from `hits.len()` reaching the limit, which a page that ends
     /// exactly on the last match would mistake for more.
+    // Optional in the published contract on purpose: a required response field is a shape
+    // break for a generated client reading an older server. The server always writes it.
     #[serde(default)]
-    #[cfg_attr(feature = "web-api", schema(required = true))]
     pub truncated: bool,
 }
 
@@ -278,8 +279,9 @@ pub struct WideArm {
     /// Are there hits beyond this page among what the arm draws? Read from the probe row past the
     /// page, as on the exact arm. Unscoped, the arm draws a bounded set of nearest chunks first,
     /// so `false` means nothing more within that draw, not nothing more similar anywhere.
+    // Optional in the published contract on purpose: a required response field is a shape
+    // break for a generated client reading an older server. The server always writes it.
     #[serde(default)]
-    #[cfg_attr(feature = "web-api", schema(required = true))]
     pub truncated: bool,
 }
 

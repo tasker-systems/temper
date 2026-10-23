@@ -6420,7 +6420,7 @@ export interface components {
              *     past the page — never inferred from `hits.len()` reaching the limit, which a page that ends
              *     exactly on the last match would mistake for more.
              */
-            truncated: boolean;
+            truncated?: boolean;
         };
         /**
          * @description One hit from the **exact** arm: you could quote the words.
@@ -11320,7 +11320,7 @@ export interface components {
              *     page, as on the exact arm. Unscoped, the arm draws a bounded set of nearest chunks first,
              *     so `false` means nothing more within that draw, not nothing more similar anywhere.
              */
-            truncated: boolean;
+            truncated?: boolean;
         };
         /** @description One hit from the **wide** arm: you had the idea, not the words. */
         WideHit: {

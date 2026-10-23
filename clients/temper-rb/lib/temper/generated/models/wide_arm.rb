@@ -131,8 +131,6 @@ module Temper::Generated
 
       if attributes.key?(:'truncated')
         self.truncated = attributes[:'truncated']
-      else
-        self.truncated = nil
       end
     end
 
@@ -153,10 +151,6 @@ module Temper::Generated
         invalid_properties.push('invalid value for "reason", reason cannot be nil.')
       end
 
-      if @truncated.nil?
-        invalid_properties.push('invalid value for "truncated", truncated cannot be nil.')
-      end
-
       invalid_properties
     end
 
@@ -167,7 +161,6 @@ module Temper::Generated
       return false if @degraded.nil?
       return false if @hits.nil?
       return false if @reason.nil?
-      return false if @truncated.nil?
       true
     end
 
@@ -199,16 +192,6 @@ module Temper::Generated
       end
 
       @reason = reason
-    end
-
-    # Custom attribute writer method with validation
-    # @param [Object] truncated Value to be assigned
-    def truncated=(truncated)
-      if truncated.nil?
-        fail ArgumentError, 'truncated cannot be nil'
-      end
-
-      @truncated = truncated
     end
 
     # Checks equality by comparing each attribute.

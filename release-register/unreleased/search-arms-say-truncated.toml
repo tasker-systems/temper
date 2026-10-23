@@ -7,13 +7,13 @@ body = '''
 `ExactArm` and `WideArm` gain `truncated: bool`, read from the probe row each arm already fetched
 past the page and then dropped, so it costs no extra statement. It is true when more hits follow
 this page. On the unscoped wide arm it is bounded by that arm's nearest-chunk draw: `false` means
-nothing more within the draw, not nothing more similar anywhere. The published contract marks
-the field required, because the server always writes it, so the generated Ruby and Python models
-refuse a response without it. Rust deserialises an absent field as `false`, and the web palette
-reads an absent field as "more not reported".
+nothing more within the draw, not nothing more similar anywhere. The server always writes the
+field, but the published contract leaves it optional (`#[serde(default)]`), so a generated client
+reading an older server does not refuse the response. Rust reads an absent field as `false`; the
+web palette reads it as "more not reported".
 
 Who observes it: every search caller over HTTP and MCP, the CLI's JSON output, and the three
-generated SDKs (one new required field on each arm model). The web's palette says "All N" from
+generated SDKs (one new optional field on each arm model). The web's palette says "All N" from
 the exact arm's `false` and "more not shown" from either arm's `true`. It never says "All N" from
 the wide arm, whose `false` is bounded by its draw.
 
