@@ -46,7 +46,7 @@ fn declarations(source: &str) -> Vec<String> {
             syn::visit::visit_attribute(self, attr);
         }
         fn visit_item_impl(&mut self, item: &'a syn::ItemImpl) {
-            if let Some((_, path, _)) = &item.trait_ {
+            if let Some((path, _)) = &item.trait_ {
                 if path
                     .segments
                     .last()
