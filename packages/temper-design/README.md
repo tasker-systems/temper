@@ -214,8 +214,7 @@ fails a surface's build when a component it guards paints anything but a role.
 - **A colour read from a variable that is not a role**, in a declaration
   (`color: var(--parchment)`), an SVG attribute or Svelte style directive
   (`fill="var(--obsidian)"`, `style:color=…`), or an arbitrary utility (`bg-[var(--obsidian)]`).
-  A bridged name (below) may be read: `--hue: var(--tp-cat-2)` on a view's root lets its marks
-  paint `color: var(--hue)`.
+  A declared carrier may be read (below).
 - **A role mixed down** (`color-mix(in srgb, var(--tp-accent) 15%, transparent)`): the opacity
   modifier spelled in CSS, and the same strength no theme chose. A bridged name mixed down is a
   role mixed down one hop removed, and is refused the same way.
@@ -231,6 +230,13 @@ fails a surface's build when a component it guards paints anything but a role.
   declaration wrapped across lines is not read. The rule cannot tell what a custom property
   holds, so it over-reaches: a spacing alias (`--gap: var(--space-column)`) is refused as though
   it were a colour. Read the variable where it is used (`gap: var(--space-column)`) instead.
+- **A colour read from a bridge that is not a declared carrier.** A bridge may be declared from,
+  but painting with it needs the surface to vouch for it in `"carriers"`: a bridge proves only
+  the declarations inside the paths, and a vendor stylesheet may set the same name to a literal
+  (SVAR's `--wx-color-danger: #fe6158`). A carrier (`--hue` on a view's root, carrying a doc
+  type's slot) must be declared by writing one role out — `var(--tp-cat-2)` or
+  `var(--tp-{tint})`, no fallback, no other expression — must resolve to roles, and must be
+  read. A declaration inside `<script>` declares nothing.
 
 A surface commits a config naming what it guards, relative to the config's own directory,
 and runs the guard against it:
@@ -252,7 +258,7 @@ A variable that is not a role yet, but that a named task will make one, is decla
 exempted:
 
 ```json
-"pending": [{ "var": "--hue", "until": "T10", "why": "doc-type tint; core binds doc types to slots" }]
+"pending": [{ "var": "--tint", "until": "T12", "why": "plugin tint; the plugin binds its doc types to slots" }]
 ```
 
 Its reads pass, and so does any `color-mix()` reading it, a role inside that mix included,
@@ -284,7 +290,8 @@ Core's default binding is `./vocabulary`'s `CORE_BINDINGS`, grouped by what the 
 for: `task` cat-2; `goal`, `commitment` cat-5; `session`, `memory` cat-3; `research`, `question`
 cat-7; `decision`, `principle` cat-4; `concept`, `domain`, `theme` cat-6; `fact` cat-8; `concern`
 cat-1. A surface paints the slot as written role text (`var(--tp-{tint})`), so the colour guard
-reads it.
+reads it. `bindingsFrom` checks a plugin's binding and resolves it alone; a surface honouring
+several vocabularies merges them before resolving.
 
 ## Adding a theme
 

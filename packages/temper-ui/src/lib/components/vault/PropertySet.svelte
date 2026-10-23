@@ -144,7 +144,7 @@
 		margin: 0;
 		min-width: 0;
 	}
-	/* Managed keys tint toward the doc-type hue; open keys stay neutral (spec D2). */
+	/* Managed keys take the doc type's slot; open keys stay neutral (spec D2). */
 	.row.is-managed dt {
 		color: var(--hue);
 	}

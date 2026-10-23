@@ -54,6 +54,12 @@ FLOORS.append(("cat-neutral", TEXT_GROUNDS, 4.5))
 for _c in ["key", "string", "number", "comment"]:
     FLOORS.append((f"code-{_c}", ["surface"], 4.5))
 
+
+def shown(ratio: float, floor: float) -> str:
+    """A ratio as printed. Two places hide a miss of under 0.005 ("4.50 < 4.5"); three show it."""
+    two = f"{ratio:.2f}"
+    return f"{ratio:.3f}" if two == f"{floor:.2f}" and ratio + 1e-9 < floor else two
+
 # ─── Distinctness ─────────────────────────────────────────────────────────────
 # Sets whose members must never read alike. Colour is one channel of several for
 # the region states (marker, words, border style carry the rest), but a theme that
@@ -160,9 +166,7 @@ def legibility_errors(theme):
             fg = over(parse_color(colors[role]), paint[bg_role])
             ratio = contrast(fg, paint[bg_role])
             if ratio + 1e-9 < floor:
-                # Two places hide a miss of under 0.005 ("4.50:1 < 4.5:1"); three show it.
-                shown = f"{ratio:.2f}" if f"{ratio:.2f}" != f"{floor:.2f}" else f"{ratio:.3f}"
-                errors.append(f"contrast {role} on {bg_role}: {shown}:1 < {floor}:1")
+                errors.append(f"contrast {role} on {bg_role}: {shown(ratio, floor)}:1 < {floor}:1")
     for label, roles, threshold in DISTINCT:
         for i, a in enumerate(roles):
             for b in roles[i + 1 :]:
@@ -344,7 +348,7 @@ def cmd_contrast(path):
         for bg_role in grounds:
             ratio = contrast(over(parse_color(colors[role]), paint[bg_role]), paint[bg_role])
             flag = "  " if ratio + 1e-9 >= floor else "!!"
-            print(f"{flag} {role:<22} on {bg_role:<22} {ratio:6.2f}  (floor {floor})")
+            print(f"{flag} {role:<22} on {bg_role:<22} {shown(ratio, floor):>6}  (floor {floor})")
     return 0
 
 

@@ -19,7 +19,11 @@ export interface DocTypeBinding {
 export type Bindings = ReadonlyMap<string, Slot>;
 /** Core's default binding, grouped by what the doc types are for. */
 export declare const CORE_BINDINGS: readonly DocTypeBinding[];
-/** A vocabulary's bindings, checked: each tint a slot, each doc type bound once. */
+/**
+ * A vocabulary's bindings, checked: each doc type named and bound once, each tint a slot. The
+ * result stands alone — `tintFor` under it does not fall back to core's binding, so a surface
+ * that honours several vocabularies merges them before resolving.
+ */
 export declare function bindingsFrom(entries: readonly {
     doctype: string;
     tint: unknown;

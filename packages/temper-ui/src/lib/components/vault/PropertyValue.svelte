@@ -49,7 +49,7 @@
 		color: var(--hue);
 	}
 	.toggle:hover {
-		color: var(--hue);
+		color: var(--tp-text);
 	}
 	.sub {
 		border-left: 1px solid var(--tp-rule);

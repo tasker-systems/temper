@@ -8,8 +8,7 @@
 //       surface declares for itself (`--color-<name>` in the theme files it lists);
 //   (c) an opacity modifier on a role utility: a role at 15% is a value no theme chose;
 //   (d) a colour declaration, SVG attribute, style directive or arbitrary colour utility reading
-//       a variable that is not a role or a bridged name (below) — `--hue: var(--tp-cat-2)` on a
-//       view's root lets its marks read `var(--hue)`;
+//       a variable that is not a role or a declared carrier (below);
 //   (e) a role mixed down: a `color-mix()` reading a role, or a bridged name (below), is (c)
 //       spelled in CSS;
 //   (f) a custom property declared from a variable that is not a role: `--wx-color-font:
@@ -30,7 +29,17 @@
 //
 //   { "paths": ["src/lib/components/Sidebar.svelte", "src/routes/(app)"],
 //     "themes": ["src/app.css"],
-//     "pending": [{ "var": "--hue", "until": "T10", "why": "doc-type tint, not yet bound" }] }
+//     "carriers": ["--hue"],
+//     "pending": [{ "var": "--tint", "until": "T12", "why": "plugin tint, not yet bound" }] }
+//
+// A carrier is a name the surface vouches for as carrying a role to its marks: `--hue` set on a
+// view's root as `style="--hue: var(--tp-{tint})"`, read as `color: var(--hue)`. (d) admits a
+// carrier only; a bridge alone is not enough to paint with, because it proves only the
+// declarations inside the paths, and a vendor stylesheet outside them may set the same name to a
+// literal. Every declaration of a carrier must write one role out — `var(--tp-cat-2)`, or with
+// its suffix interpolated, `var(--tp-{tint})` — with no fallback and no other expression; it must
+// resolve to roles; and something must read it. Declarations inside a `<script>` block declare
+// nothing.
 //
 // A `pending` entry is a declared hole: a variable that is not a role yet, the task that makes it
 // one, and why it waits. Its reads — and any `color-mix()` reading it — are counted and reported
@@ -79,6 +88,26 @@ for (const entry of pendingEntries) {
 	if (name.startsWith('--tp-')) fail(`pending "var" ${name} is a role: a role needs no excuse`);
 	pending.set(name, { until, reads: 0 });
 }
+const carrierNames = config.carriers ?? [];
+if (!Array.isArray(carrierNames)) fail('"carriers" must be a list');
+const carriers = new Map();
+for (const name of carrierNames) {
+	if (typeof name !== 'string' || !/^--[a-zA-Z0-9-]+$/.test(name))
+		fail(`carrier ${JSON.stringify(name)} is not a custom property`);
+	if (name.startsWith('--tp-')) fail(`carrier ${name} is a role: a role needs no carrier`);
+	if (pending.has(name)) fail(`carrier ${name} is also pending: a name is a hole or a carrier`);
+	carriers.set(name, { reads: 0 });
+}
+// A carrier's declaration names one role, written out: `var(--tp-cat-2)`, or with its suffix
+// interpolated, `var(--tp-{tint})`. No fallback, no other expression.
+// The value a declaration rule captures stops at `}`, so an interpolated suffix is matched
+// against the line it sits on.
+const STRICT_CARRIER = /^\s*var\(--tp-[a-z0-9-]+\)\s*$/;
+const strictCarrier = (name, value, line) =>
+	STRICT_CARRIER.test(value) ||
+	new RegExp(
+		`(?<![\\w-])${name}\\s*:\\s*var\\(--tp-[a-z0-9-]*\\{[\\w.]+\\}[a-z0-9-]*\\)\\s*(?:[;"'}]|$)`,
+	).test(line);
 
 // The desktop's literal rule: hex, the colour functions, and named colours where a value ends.
 // An id or anchor like `#r0` is not a colour; only hex-shaped runs of 3/4/6/8 count. Nor is an
@@ -202,7 +231,8 @@ for (const listed of paths) {
 const UNRESOLVED = '(no variable)';
 const declared = new Map();
 for (const path of files) {
-	for (const [name, value] of customProperties(stripComments(readFileSync(path, 'utf8')))) {
+	const markup = blank(stripComments(readFileSync(path, 'utf8')), '<script', '</script>');
+	for (const [name, value] of customProperties(markup)) {
 		const reads = [...value.matchAll(PRIVATE_VAR)].map((v) => v[1]);
 		if (!/var\(/.test(value)) reads.push(UNRESOLVED);
 		declared.set(name, [...(declared.get(name) ?? []), ...reads]);
@@ -219,6 +249,8 @@ for (let grew = true; grew; ) {
 	}
 }
 
+// A carrier may be painted with only while every declaration of it the guard sees is a role.
+const carries = (name) => carriers.has(name) && bridged.has(name);
 const readsPending = (text) => [...text.matchAll(PENDING_VAR)].some((m) => pending.has(m[1]));
 // A bridged name resolves to roles, so mixing it is mixing a role one hop removed.
 const readsRole = (text) =>
@@ -234,6 +266,7 @@ function refusals(line) {
 	}
 	for (const m of line.matchAll(PENDING_VAR)) {
 		if (pending.has(m[1])) pending.get(m[1]).reads++;
+		if (carriers.has(m[1])) carriers.get(m[1]).reads++;
 	}
 	for (const m of line.matchAll(LITERAL)) {
 		if (m[0].startsWith('#') && ![4, 5, 7, 9].includes(m[0].length)) continue;
@@ -251,17 +284,21 @@ function refusals(line) {
 	}
 	for (const m of line.matchAll(ARBITRARY)) {
 		for (const [name] of (m[1] ?? m[2]).matchAll(NON_ROLE_NAME)) {
-			if (!pending.has(name) && !bridged.has(name))
+			if (!pending.has(name) && !carries(name))
 				out.push(`${m[0]} reads ${name}, which is not a role`);
 		}
 	}
 	for (const m of [...line.matchAll(DECLARATION), ...line.matchAll(ATTRIBUTE)]) {
 		for (const v of m[2].matchAll(PRIVATE_VAR)) {
-			if (pending.has(v[1]) || bridged.has(v[1])) continue;
+			if (pending.has(v[1]) || carries(v[1])) continue;
 			out.push(`${m[1]} reads var(${v[1]}), which is not a role`);
 		}
 	}
 	for (const [name, value] of customProperties(line)) {
+		if (carriers.has(name) && !strictCarrier(name, value, line))
+			out.push(
+				`carrier ${name} is declared from ${value.trim()} — write the role out: var(--tp-…)`,
+			);
 		for (const v of value.matchAll(PRIVATE_VAR)) {
 			if (pending.has(v[1]) || bridged.has(v[1])) continue;
 			out.push(`${name} is declared from var(${v[1]}), which is not a role`);
@@ -279,6 +316,17 @@ for (const path of files) {
 			failures++;
 		}
 	});
+}
+for (const [name, { reads }] of carriers) {
+	if (!bridged.has(name)) {
+		console.error(
+			`carrier ${name} does not resolve to roles within the paths — declare it from a role`,
+		);
+		failures++;
+	} else if (reads === 0) {
+		console.error(`carrier: nothing reads ${name} — remove the entry`);
+		failures++;
+	} else console.log(`carrier: ${name} read ${reads} time(s)`);
 }
 let pendingReads = 0;
 for (const [name, { until, reads }] of pending) {

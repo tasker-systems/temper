@@ -322,17 +322,70 @@ test('a name declared once from a role and once from a private variable is not b
 	assertRefused(guard(surface(planted)), 4, 'var(--background)');
 });
 
-test('a colour declaration reading a bridged name passes', () => {
-	const bridge =
-		'<div class="rv" style="--hue: var(--tp-{tint})">\n<style>\n.t { color: var(--hue); }\n.m { background: var(--hue); }\n</style>\n';
-	const run = guard(surface(bridge));
+// Carriers: a name a surface declares as carrying a role to its marks (`--hue` on a view's root).
+const CARRIES_HUE = { carriers: ['--hue'] };
+const CARRIER_VIEW =
+	'<div class="rv" style="--hue: var(--tp-{tint})">\n<style>\n.t { color: var(--hue); }\n.m { background: var(--hue); }\n</style>\n';
+
+test('a colour declaration reading a declared carrier passes', () => {
+	const run = guard(surface(CARRIER_VIEW, CARRIES_HUE));
 	assert.equal(run.status, 0, run.stderr);
+	assert.ok(run.stdout.includes('carrier: --hue read 2 time(s)'), run.stdout);
 });
 
-test('a colour declaration reading a name set from script is refused', () => {
+test('an arbitrary utility reading a declared carrier passes, and one reading an undeclared bridge is refused', () => {
 	const planted =
-		'<div class="rv" style="--hue: {hue}">\n<style>\n.t { color: var(--hue); }\n</style>\n';
-	assertRefused(guard(surface(planted)), 3, 'var(--hue)');
+		'<div style="--hue: var(--tp-cat-2)">\n<p class="text-[var(--hue)]">x</p>\n</div>\n';
+	assert.equal(guard(surface(planted, CARRIES_HUE)).status, 0);
+	assertRefused(guard(surface(planted)), 2, '--hue');
+});
+
+test('a bridged name that is not a declared carrier is not admitted to paint', () => {
+	// A bridge proves only the declarations the guard can see. A vendor stylesheet outside the
+	// paths may set the same name to a literal, so an undeclared bridge may be declared from but
+	// not painted with.
+	assertRefused(guard(surface(CARRIER_VIEW)), 3, 'var(--hue)');
+	const vendorBridge =
+		'<style>\n.grid :global(.vendor) { --wx-color-danger: var(--tp-danger); }\n.o { color: var(--wx-color-danger); }\n</style>\n';
+	assertRefused(guard(surface(vendorBridge)), 3, 'var(--wx-color-danger)');
+});
+
+for (const [what, setter] of [
+	['set from script', 'style="--hue: {hue}"'],
+	[
+		'chosen by a script expression in a style attribute',
+		'style="--hue: {c ? `var(--tp-cat-1)` : hex}"',
+	],
+	['chosen by a script expression in a directive', "style:--hue={c ? 'var(--tp-cat-1)' : hex}"],
+	['passed through a call', 'style:--hue={pick("var(--tp-cat-1)", userColour)}'],
+	['a role with a fallback', 'style="--hue: var(--tp-nope, {hex})"'],
+]) {
+	test(`a carrier ${what} is refused`, () => {
+		const planted = `<div ${setter}>\n<style>\n.t { color: var(--hue); }\n</style>\n`;
+		const run = guard(surface(planted, CARRIES_HUE));
+		assert.equal(run.status, 1, `expected a refusal:\n${run.stdout}${run.stderr}`);
+		assert.ok(run.stderr.includes('src/Planted.svelte:1: '), run.stderr);
+	});
+}
+
+test('a declaration inside a script block does not bridge a name', () => {
+	const planted =
+		"<script>\nconst s = '--hue: var(--tp-cat-2)';\n</script>\n<style>\n.t { color: var(--hue); }\n</style>\n";
+	const run = guard(surface(planted, CARRIES_HUE));
+	assertRefused(run, 5, 'var(--hue)');
+	assert.ok(run.stderr.includes('carrier --hue'), run.stderr);
+});
+
+test('a carrier nothing reads is refused', () => {
+	const run = guard(surface('<div style="--hue: var(--tp-cat-2)">x</div>\n', CARRIES_HUE));
+	assert.equal(run.status, 1);
+	assert.ok(run.stderr.includes('nothing reads --hue'), run.stderr);
+});
+
+test('a carriers entry that is not a custom property, or is a role, or is pending, is a config error', () => {
+	for (const carriers of [['hue'], ['--tp-accent'], '--hue', [7]])
+		assert.equal(guard(surface(undefined, { carriers })).status, 2, JSON.stringify(carriers));
+	assert.equal(guard(surface(undefined, { carriers: ['--hue'], pending: [HUE] })).status, 2);
 });
 
 test('a bridged name mixed down is refused', () => {
@@ -340,7 +393,7 @@ test('a bridged name mixed down is refused', () => {
 	// theme chose, however it was reached. The bridge itself passes.
 	const planted =
 		'<style>\n.x { --hue: var(--tp-cat-2); }\n.y { color: var(--hue); }\n.z { border: 1px solid color-mix(in srgb, var(--hue) 30%, transparent); }\n</style>\n';
-	const run = guard(surface(planted));
+	const run = guard(surface(planted, CARRIES_HUE));
 	assertRefused(run, 4, 'color-mix(');
 	assert.equal(
 		run.stderr.split('\n').filter((l) => l.includes('Planted.svelte:')).length,

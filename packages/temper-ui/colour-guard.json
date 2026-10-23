@@ -29,5 +29,8 @@
 	"themes": [
 		"src/app.css",
 		"src/marketing.css"
+	],
+	"carriers": [
+		"--hue"
 	]
 }

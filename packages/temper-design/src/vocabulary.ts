@@ -59,10 +59,17 @@ function isSlot(value: unknown): value is Slot {
 	return (SLOTS as readonly unknown[]).includes(value);
 }
 
-/** A vocabulary's bindings, checked: each tint a slot, each doc type bound once. */
+/**
+ * A vocabulary's bindings, checked: each doc type named and bound once, each tint a slot. The
+ * result stands alone — `tintFor` under it does not fall back to core's binding, so a surface
+ * that honours several vocabularies merges them before resolving.
+ */
 export function bindingsFrom(entries: readonly { doctype: string; tint: unknown }[]): Bindings {
 	const out = new Map<string, Slot>();
 	for (const { doctype, tint } of entries) {
+		if (typeof doctype !== 'string' || !doctype.trim()) {
+			throw new Error(`a binding names no doc type: ${JSON.stringify(doctype)}`);
+		}
 		if (!isSlot(tint)) {
 			throw new Error(`${doctype} is bound to ${String(tint)}, which is not a categorical slot`);
 		}

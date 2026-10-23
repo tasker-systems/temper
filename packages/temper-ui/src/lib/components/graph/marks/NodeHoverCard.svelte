@@ -83,11 +83,10 @@
 		width: 100%;
 		background: var(--tp-surface-raised);
 		backdrop-filter: blur(8px);
+		/* No shadow role: the card stands off the raised canvas by its rule-strong border, not by
+		   a drop shadow. */
 		border: 1px solid var(--tp-rule-strong);
 		border-radius: 9px;
-		/* No shadow role: the card stands off the raised canvas by a rule-strong ring outside its
-		   doc-type border, not by a drop shadow. */
-		box-shadow: 0 0 0 1px var(--tp-rule-strong);
 		color: var(--tp-text);
 		text-align: left;
 		padding: 10px 12px;

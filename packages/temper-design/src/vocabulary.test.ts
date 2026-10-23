@@ -55,6 +55,11 @@ describe('a vocabulary binding', () => {
 		expect(() => bindingsFrom([{ doctype: 'story', tint }])).toThrow(/slot/);
 	});
 
+	it('refuses a binding that names no doc type', () => {
+		expect(() => bindingsFrom([{ doctype: '', tint: 'cat-1' }])).toThrow(/names no doc type/);
+		expect(() => bindingsFrom([{ doctype: '  ', tint: 'cat-1' }])).toThrow(/names no doc type/);
+	});
+
 	it('refuses a doc type bound twice', () => {
 		expect(() =>
 			bindingsFrom([
