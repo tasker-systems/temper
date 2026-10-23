@@ -30,11 +30,7 @@
 		"src/app.css",
 		"src/marketing.css"
 	],
-	"pending": [
-		{
-			"var": "--hue",
-			"until": "T10",
-			"why": "the resource view's doc-type tint, from lib/graph/palette.ts; T10 binds core's doc types to categorical slots"
-		}
+	"carriers": [
+		"--hue"
 	]
 }

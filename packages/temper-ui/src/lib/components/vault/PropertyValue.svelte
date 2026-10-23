@@ -46,13 +46,13 @@
 		border: 0;
 		padding: 0;
 		cursor: pointer;
-		color: color-mix(in srgb, var(--hue) 70%, var(--tp-text));
+		color: var(--hue);
 	}
 	.toggle:hover {
-		color: color-mix(in srgb, var(--hue) 90%, var(--tp-text));
+		color: var(--tp-text);
 	}
 	.sub {
-		border-left: 1px solid color-mix(in srgb, var(--hue) 25%, transparent);
+		border-left: 1px solid var(--tp-rule);
 		margin: 5px 0 5px 3px;
 		padding-left: 11px;
 	}

@@ -90,10 +90,10 @@
 		letter-spacing: var(--track-label);
 		text-transform: uppercase;
 		background: none;
-		border: 1px solid color-mix(in srgb, var(--hue) 30%, transparent);
+		border: 1px solid var(--tp-rule-strong);
 		border-radius: 3px;
 		padding: 2px 7px;
-		color: color-mix(in srgb, var(--hue) 70%, var(--tp-text));
+		color: var(--hue);
 		cursor: pointer;
 	}
 	button:disabled {
@@ -102,8 +102,8 @@
 		cursor: default;
 	}
 	button:not(:disabled):hover {
-		border-color: color-mix(in srgb, var(--hue) 55%, transparent);
-		color: color-mix(in srgb, var(--hue) 90%, var(--tp-text));
+		border-color: var(--hue);
+		color: var(--hue);
 	}
 	.err {
 		font-family: var(--font-mono);

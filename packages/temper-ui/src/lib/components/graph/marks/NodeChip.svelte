@@ -9,7 +9,7 @@
 	 * for years as a z-index problem and why setting one never helped. The canvas draws the card
 	 * once, after every mark; this component only reports that the pointer is over it.
 	 */
-	import { docTypeHue, CANVAS_BG } from '$lib/graph/palette';
+	import { docTypeTint, CANVAS_BG } from '$lib/graph/palette';
 	import { truncateLabel } from '$lib/graph/labels';
 	import { nodeMarkShape } from '$lib/graph/marks';
 
@@ -59,7 +59,7 @@
 		onEnter
 	}: Props = $props();
 
-	const color = $derived(docTypeHue(docType));
+	const tint = $derived(docTypeTint(docType));
 	const shape = $derived(nodeMarkShape(home));
 	const style = $derived(`${onEnter ? 'cursor:pointer;' : ''}opacity:${dim ? 0.15 : 1};`);
 	// The small anchored label is a lightweight always-on cue; the hover card
@@ -88,7 +88,7 @@
 	{/if}
 	{#if shape === 'circle'}
 		<!-- cogmap facet = an idea in the map -->
-		<circle cx={x} cy={y} {r} fill={color} />
+		<circle cx={x} cy={y} {r} style="fill: var(--tp-{tint})" />
 	{:else}
 		<!-- context resource = the work it was derived_from — a document-square.
 		     Shape carries the axis; color still carries doc-type. -->
@@ -98,7 +98,7 @@
 			width={2 * r}
 			height={2 * r}
 			rx={Math.max(2, r * 0.32)}
-			fill={color}
+			style="fill: var(--tp-{tint})"
 			style:stroke={CANVAS_BG}
 			stroke-width="1.5"
 		/>

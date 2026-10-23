@@ -31,7 +31,7 @@ packages/temper-design/
 ├── brand/                   # the threaded-t mark and wordmark, in currentColor
 ├── preview/index.html       # every role and the foundational components, both themes
 ├── scripts/themes.sh        # build · check · contrast · --self-check
-├── src/                     # the shared modules: markdown, sanitize, highlight, region, omission, theme
+├── src/                     # the shared modules: markdown, sanitize, highlight, region, omission, theme, vocabulary
 ├── dist/                    # their compiled output (committed; see "The shared modules")
 ├── toolchain/               # the toolchain majors every surface builds on, and their check
 └── tests/fixtures/broken/   # themes the check must refuse
@@ -76,6 +76,7 @@ What a consumer imports:
 | `@tasker-systems/temper-design/region` | the four region states' words, markers and ARIA roles |
 | `@tasker-systems/temper-design/omission` | the omission sentence a bounded view ends with |
 | `@tasker-systems/temper-design/theme` | the theme model: a reader's preference (follow the system within a family, or one theme) resolved against `themes.json` |
+| `@tasker-systems/temper-design/vocabulary` | bound vocabularies: core's doc type → slot binding, `tintFor` (a doc type's slot, or the neutral), and `bindingsFrom`, which refuses a binding to anything but a slot |
 
 The theme checker (`scripts/`, `tests/`, `pyproject.toml`) is not published: it runs in this
 repository's CI, and the package carries only what it proves. The toolchain check is
@@ -158,9 +159,9 @@ temper's roles apart from shadcn's names, where `accent` and `muted` mean other 
 - **Legibility floors.** Contrast is measured on the colours as they paint — alpha
   composited over `ground`, washes composited before the text on them is measured.
   `text` 7:1; secondary and label text, the accent, the categorical slots, conditions,
-  region states and code 4.5:1; slots 3:1 on surface; focus rings, authorship marks
-  3:1; `text-faint` 2.5:1, which is why it is reserved for disabled and decorative
-  marks and never carries information. `themes.sh contrast <theme.json>` prints every pair.
+  region states and code 4.5:1, the slots on every ground text sits on (`ground`, `surface`,
+  `surface-raised`); focus rings, authorship marks 3:1; `text-faint` 2.5:1, which is why it
+  is reserved for disabled and decorative marks and never carries information. `themes.sh contrast <theme.json>` prints every pair.
 - **Distinctness.** The four region states, the nine categorical marks (eight slots and
   the neutral), the two authorship marks and the conditions must stay apart; and no
   slot may read as a chrome or state role (`accent`, `author-*`, `notice`, `region-*`)
@@ -213,8 +214,10 @@ fails a surface's build when a component it guards paints anything but a role.
 - **A colour read from a variable that is not a role**, in a declaration
   (`color: var(--parchment)`), an SVG attribute or Svelte style directive
   (`fill="var(--obsidian)"`, `style:color=…`), or an arbitrary utility (`bg-[var(--obsidian)]`).
+  A declared carrier may be read (below).
 - **A role mixed down** (`color-mix(in srgb, var(--tp-accent) 15%, transparent)`): the opacity
-  modifier spelled in CSS, and the same strength no theme chose.
+  modifier spelled in CSS, and the same strength no theme chose. A bridged name mixed down is a
+  role mixed down one hop removed, and is refused the same way.
 - **A custom property declared from a variable that is not a role**
   (`--wx-color-font: var(--color-quiet-fg)`): a private name laundered through a property the
   colour-declaration rule does not read by name. Fonts are held too: `var(--tp-font-ui)`, not
@@ -227,6 +230,13 @@ fails a surface's build when a component it guards paints anything but a role.
   declaration wrapped across lines is not read. The rule cannot tell what a custom property
   holds, so it over-reaches: a spacing alias (`--gap: var(--space-column)`) is refused as though
   it were a colour. Read the variable where it is used (`gap: var(--space-column)`) instead.
+- **A colour read from a bridge that is not a declared carrier.** A bridge may be declared from,
+  but painting with it needs the surface to vouch for it in `"carriers"`: a bridge proves only
+  the declarations inside the paths, and a vendor stylesheet may set the same name to a literal
+  (SVAR's `--wx-color-danger: #fe6158`). A carrier (`--hue` on a view's root, carrying a doc
+  type's slot) must be declared by writing one role out — `var(--tp-cat-2)` or
+  `var(--tp-{tint})`, no fallback, no other expression — must resolve to roles, and must be
+  read. A declaration inside `<script>` declares nothing.
 
 A surface commits a config naming what it guards, relative to the config's own directory,
 and runs the guard against it:
@@ -248,7 +258,7 @@ A variable that is not a role yet, but that a named task will make one, is decla
 exempted:
 
 ```json
-"pending": [{ "var": "--hue", "until": "T10", "why": "doc-type tint; core binds doc types to slots" }]
+"pending": [{ "var": "--tint", "until": "T12", "why": "plugin tint; the plugin binds its doc types to slots" }]
 ```
 
 Its reads pass, and so does any `color-mix()` reading it, a role inside that mix included,
@@ -275,6 +285,13 @@ in every theme and on every surface that honours it. Nothing in any app names a
 `doctype-*` role, because no such role exists: a view tints by **one vocabulary per
 colour channel**, so one slot never means two words in the same view. Where a hue marks
 a doc type, the doc type's word is shown beside it — hue never carries identity alone.
+
+Core's default binding is `./vocabulary`'s `CORE_BINDINGS`, grouped by what the doc types are
+for: `task` cat-2; `goal`, `commitment` cat-5; `session`, `memory` cat-3; `research`, `question`
+cat-7; `decision`, `principle` cat-4; `concept`, `domain`, `theme` cat-6; `fact` cat-8; `concern`
+cat-1. A surface paints the slot as written role text (`var(--tp-{tint})`), so the colour guard
+reads it. `bindingsFrom` checks a plugin's binding and resolves it alone; a surface honouring
+several vocabularies merges them before resolving.
 
 ## Adding a theme
 

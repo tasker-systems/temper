@@ -1,19 +1,18 @@
 // palette.ts
 /**
- * Vivid Cartographer — the single source of truth for the graph surface's palette.
- *
- * Warm semicircle = authored/knowledge doc-types (cogmap-homed); cool semicircle =
- * workflow doc-types (context-homed). Home is carried by mark SHAPE (see `marks.ts`),
- * so hue is free to mean doc-type.
+ * The graph surface's palette, on contract roles. Authored doc-types are cogmap-homed and
+ * workflow doc-types context-homed; home is carried by mark SHAPE (see `marks.ts`), so colour is
+ * free to mean doc-type — through core's slot binding, never a hue of the web's own.
  *
  * `[Beat D — 2026-08-20]` The territory tints, the Home door tokens, the salience
  * opacity ramp, the doc-type dimming predicate and `EDGE_KINDS` were deleted with the
  * tier model — the surface has no territories, no Home tier and no ScopeBar, and the
  * only reader of `EDGE_KINDS` was the retired legend. **Nothing here is enumerated for
  * a legend any more**: every channel is decoded in place, in the reader's own words
- * (hue → the hover card names the doc-type; shape → the node's `in` row; dash and
+ * (colour → the hover card names the doc-type; shape → the node's `in` row; dash and
  * color → hovering the edge renders its label). See spec §4.2.
  */
+import { type Tint, tintFor } from '@tasker-systems/temper-design/vocabulary';
 import type { EdgeKind, Polarity } from '$lib/types/generated/graph';
 
 export type AtlasDocType =
@@ -44,28 +43,15 @@ export const AUTHORED_DOC_TYPES: ReadonlySet<AtlasDocType> = new Set([
 	'question',
 ]);
 
-/** Locked dark-canvas hues (light mode adds a contrast ring, not a hue fork). */
-export const DOC_TYPE_HUES: Record<AtlasDocType, string> = {
-	// warm · authored
-	concept: '#e8942e',
-	fact: '#f7c62b',
-	domain: '#d3d84e',
-	principle: '#f2743a',
-	commitment: '#f0533f',
-	concern: '#ef5090',
-	theme: '#e24fc0',
-	question: '#a95cf0',
-	// cool · workflow
-	research: '#33b0e2',
-	task: '#34cf7e',
-	session: '#7ed24a',
-	goal: '#3a8ae8',
-	decision: '#6a6ee8',
-	memory: '#2ec9b0',
-};
-
-/** Neutral for unknown/absent doc-types. */
-export const FALLBACK_HUE = '#9aa5b5';
+/**
+ * A doc type's colour: the categorical slot core's vocabulary binds it to, or the neutral for a
+ * doc type bound nowhere (`@tasker-systems/temper-design/vocabulary`). Doc types sharing a slot are
+ * told apart by their word (the hover card, the rail) and, across homes, by mark shape. Paint it
+ * as `var(--tp-{tint})` written in the markup, so the colour guard reads the role.
+ */
+export function docTypeTint(docType: string | null): Tint {
+	return tintFor(docType);
+}
 
 /**
  * Structural edge, contradicts, derived_from bridge — as contract roles, so every theme restyles
@@ -85,20 +71,8 @@ export const EDGE_COLORS = {
  */
 export const CANVAS_BG = 'var(--tp-surface-raised)';
 
-export function docTypeHue(docType: string | null): string {
-	if (docType && docType in DOC_TYPE_HUES) return DOC_TYPE_HUES[docType as AtlasDocType];
-	return FALLBACK_HUE;
-}
-
 export function isAuthored(docType: string | null): boolean {
 	return docType !== null && AUTHORED_DOC_TYPES.has(docType as AtlasDocType);
-}
-
-/** CSS custom-property string (`--dt-<type>:<hex>;…`) for scoping onto the canvas root. */
-export function paletteStyleVars(): string {
-	return (Object.entries(DOC_TYPE_HUES) as [AtlasDocType, string][])
-		.map(([type, hex]) => `--dt-${type}:${hex};`)
-		.join('');
 }
 
 export interface EdgeStyle {

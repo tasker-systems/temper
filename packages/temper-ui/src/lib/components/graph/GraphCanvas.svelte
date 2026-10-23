@@ -30,7 +30,7 @@
 	import { type Camera, attachCamera } from '$lib/graph/camera';
 	import { type LabelCandidate, placeLabels } from '$lib/graph/labels';
 	import { forceNeighborhood } from '$lib/graph/layout/forceNeighborhood';
-	import { CANVAS_BG, paletteStyleVars } from '$lib/graph/palette';
+	import { CANVAS_BG } from '$lib/graph/palette';
 	import type { GraphModel } from '$lib/graph/model';
 	import {
 		armsDistinguish,
@@ -160,7 +160,7 @@
 	onDestroy(() => camera?.destroy());
 </script>
 
-<div class="graph-canvas" style={paletteStyleVars()}>
+<div class="graph-canvas">
 	<svg bind:this={svgEl} viewBox={`0 0 ${W} ${H}`} role="img" aria-label={ariaLabel}>
 		<rect x="0" y="0" width={W} height={H} style:fill={CANVAS_BG} />
 		<defs>

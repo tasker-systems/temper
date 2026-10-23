@@ -50,6 +50,10 @@
       "types": "./dist/theme.d.ts",
       "default": "./dist/theme.js"
     },
+    "./vocabulary": {
+      "types": "./dist/vocabulary.d.ts",
+      "default": "./dist/vocabulary.js"
+    },
     "./themes.json": "./themes.json",
     "./contract/*": "./contract/*",
     "./brand/*": "./brand/*",

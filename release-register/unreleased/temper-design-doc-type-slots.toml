@@ -1,0 +1,23 @@
+title    = "`@tasker-systems/temper-design` binds core's doc types to the categorical slots; the web paints doc types only through that binding"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["clients"]
+status   = "signal-only"
+body = '''
+The package gains `./vocabulary`: core's default doc type → slot binding (`CORE_BINDINGS`,
+fourteen doc types on eight slots, grouped by what they are for), `tintFor` (a doc type's slot,
+or `cat-neutral` for one bound nowhere) and `bindingsFrom`, which refuses a binding to anything
+but a slot. The colour guard changes in two ways: a config may declare `"carriers"` — names
+that carry a role to a view's marks, each declared by writing one role out
+(`var(--tp-{tint})`) — and a colour declaration may read a carrier; and a `color-mix()` over a
+bridged name is refused as a role mixed down. The web drops its own doc-type
+hues: the resource view, the vault components and the graph tint through the binding, with
+`--hue` holding a slot role, and the tinted hairlines and washes are flattened to rule and
+surface roles. Who observes: a surface importing the package (one new export; a guarded surface
+may now declare carriers, and one mixing a bridged name now fails); a theme author, whose slots the self-check now holds to 4.5:1 on `surface` and
+`surface-raised` as well as `ground` (Paper's `cat-4` and `cat-6` are deepened to clear it, so
+the desktop's Paper shifts slightly when it takes this release); a reader of the web, whose doc-type colours change in both appearances and read
+legibly on Paper. User-visible: yes, on the web. Release relevance: additive (an export) and
+behavioral (the guard's two rule changes, the stricter slot floor and Paper's two deepened
+slots, the web's doc-type colours).
+'''

@@ -44,16 +44,21 @@ for _role in [
     "region-failed",
 ]:
     FLOORS.append((_role, [f"{_role}-wash"], 4.5))
-# Slots carry doc-type marks: the old doctype guarantee (4.5 on ground) rides the
-# binding, plus the categorical mark's own 3:1 on surface. cat-neutral is the family's
-# ninth member and clears the same floors.
+# Slots carry doc-type marks, and surfaces set a doc type's word and its labels in its slot on
+# every ground text sits on — a panel or rail on surface, a chip on surface-raised — so a slot is
+# held to the text floor on all three, not only on ground. cat-neutral is the family's ninth
+# member and clears the same floors.
 for _i in range(1, 9):
-    FLOORS.append((f"cat-{_i}", ["ground"], 4.5))
-    FLOORS.append((f"cat-{_i}", ["surface"], 3.0))
-FLOORS.append(("cat-neutral", ["ground"], 4.5))
-FLOORS.append(("cat-neutral", ["surface"], 3.0))
+    FLOORS.append((f"cat-{_i}", TEXT_GROUNDS, 4.5))
+FLOORS.append(("cat-neutral", TEXT_GROUNDS, 4.5))
 for _c in ["key", "string", "number", "comment"]:
     FLOORS.append((f"code-{_c}", ["surface"], 4.5))
+
+
+def shown(ratio: float, floor: float) -> str:
+    """A ratio as printed. Two places hide a miss of under 0.005 ("4.50 < 4.5"); three show it."""
+    two = f"{ratio:.2f}"
+    return f"{ratio:.3f}" if two == f"{floor:.2f}" and ratio + 1e-9 < floor else two
 
 # ─── Distinctness ─────────────────────────────────────────────────────────────
 # Sets whose members must never read alike. Colour is one channel of several for
@@ -161,7 +166,7 @@ def legibility_errors(theme):
             fg = over(parse_color(colors[role]), paint[bg_role])
             ratio = contrast(fg, paint[bg_role])
             if ratio + 1e-9 < floor:
-                errors.append(f"contrast {role} on {bg_role}: {ratio:.2f}:1 < {floor}:1")
+                errors.append(f"contrast {role} on {bg_role}: {shown(ratio, floor)}:1 < {floor}:1")
     for label, roles, threshold in DISTINCT:
         for i, a in enumerate(roles):
             for b in roles[i + 1 :]:
@@ -343,7 +348,7 @@ def cmd_contrast(path):
         for bg_role in grounds:
             ratio = contrast(over(parse_color(colors[role]), paint[bg_role]), paint[bg_role])
             flag = "  " if ratio + 1e-9 >= floor else "!!"
-            print(f"{flag} {role:<22} on {bg_role:<22} {ratio:6.2f}  (floor {floor})")
+            print(f"{flag} {role:<22} on {bg_role:<22} {shown(ratio, floor):>6}  (floor {floor})")
     return 0
 
 
