@@ -12,7 +12,7 @@
     "@biomejs/biome": 2
   },
   "adapters": {
-    "@sveltejs/adapter-vercel": 5,
+    "@sveltejs/adapter-vercel": 6,
     "@sveltejs/adapter-static": 3
   }
 }
