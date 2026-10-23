@@ -17,7 +17,7 @@ use super::validate::{
     ValidatedAsk,
 };
 use super::walk::{Budget, ShapeWalk, MAX_WALK_VISITS};
-use super::{ArtifactAsk, LoadedShape, ShapeContext, MAX_MEMBERSHIP_STEPS};
+use super::{ArtifactAsk, LoadedShape, PathTeaching, ShapeContext, MAX_MEMBERSHIP_STEPS};
 use crate::types::ids::ShapeId;
 use crate::types::query::PlanRefusal;
 
@@ -31,11 +31,18 @@ use crate::types::query::PlanRefusal;
 ///
 /// **What it keeps, per shape:** the walk — the schema measured, its draft selected and its
 /// `$ref`s resolved — built on the first ask that needs it; every path any ask has resolved; and
-/// the vocabulary, enumerated on the first path refusal and kept for every later teaching. Paths
-/// and vocabulary both hold the walk's facts borrowed from the schema, so what a session keeps per
-/// shape is bounded by the walk's charges, not by the values the schema declares; a teaching
-/// copies only the paths it sends. A shape row is immutable per id (an amendment mints a new id,
-/// §2.2), so none of it can go stale within a request.
+/// the shape's [`PathTeaching`], what every path refusal on it teaches beside its own bound. Paths
+/// hold the walk's facts borrowed from the schema, so what a session keeps of them is bounded by
+/// the walk's charges, not by the values the schema declares; the teaching holds only the paths it
+/// sends, at most `MAX_TEACHING_BYTES` of them. A shape row is immutable per id (an amendment
+/// mints a new id, §2.2), so none of it can go stale within a request — nor, for the teaching,
+/// across requests.
+///
+/// **Where the teaching comes from.** If the context holds one for the shape
+/// ([`ShapeContext::with_path_teaching`]), from there, and the shape's vocabulary is never
+/// enumerated. Otherwise the first path refusal enumerates the vocabulary, makes the teaching from
+/// it and keeps it, and [`AskSession::taught`] reports it, so the caller can remember it by shape id
+/// and hand it to a later request's context: enumerated once per shape while it stays remembered.
 ///
 /// **What it answers again:** an ask equal to one the session has already validated gets that
 /// answer back, byte for byte, and spends nothing. So a composition's seal, re-validating the asks
@@ -44,12 +51,14 @@ use crate::types::query::PlanRefusal;
 /// **What it spends, in all:** one shared budget for path resolution and membership —
 /// [`MAX_WALK_VISITS`] subschema visits and [`MAX_MEMBERSHIP_STEPS`] membership steps, drawn on by
 /// every ask — **plus one enumeration budget of [`MAX_WALK_VISITS`] per distinct shape** whose
-/// vocabulary a refusal teaches, spent once for that shape. Past the shared budget a predicate is
-/// refused `path_outside_shape` with `teaches.beyond_bound: work`, never admitted unchecked. A
+/// vocabulary a refusal teaches and whose teaching the context did not hold, spent once for that
+/// shape; a shape whose teaching the context held spends none. Past the shared budget a predicate
+/// is refused `path_outside_shape` with `teaches.beyond_bound: work`, never admitted unchecked. A
 /// path already resolved costs nothing to name again. The vocabulary has a budget of its own so a
 /// request that has spent its shared budget still teaches what may be asked; that makes the
-/// request's total grow with the number of distinct shapes it names, which the caller bounds —
-/// a composition by `MAX_ASKED_SHAPES`, decided before any shape is loaded.
+/// request's total grow with the number of distinct shapes it names whose teaching is not yet
+/// remembered, which the caller bounds — a composition by `MAX_ASKED_SHAPES`, decided before any
+/// shape is loaded.
 ///
 /// **Why it borrows the context rather than living in it.** A walk borrows the schema it reads, so
 /// a cache of walks inside the struct that owns the schemas would be self-referential. The context
@@ -154,10 +163,11 @@ impl<'c> AskSession<'c> {
             Ok(shape) => shape,
             Err(refusal) => return Err(beside_the_form(refusal, ask)),
         };
-        let walk = self
-            .shapes
-            .entry(shape.shape_id)
-            .or_insert_with(|| ShapeWalk::new(shape.shape_id, &shape.schema));
+        let context: &'c ShapeContext = self.context;
+        let walk = self.shapes.entry(shape.shape_id).or_insert_with(|| {
+            let remembered = context.path_teaching(&shape.shape_id).cloned();
+            ShapeWalk::new(shape.shape_id, &shape.schema, remembered)
+        });
         validate_loaded(ask, shape, walk, &mut self.budget)
     }
 
@@ -173,6 +183,28 @@ impl<'c> AskSession<'c> {
     /// named, whatever number of asks named each.
     pub fn shapes_walked(&self) -> usize {
         self.shapes.len()
+    }
+
+    /// How many shapes' vocabularies this session enumerated to teach a path refusal — at most one
+    /// per distinct shape, and none for a shape whose teaching its context held. A caller reports
+    /// it beside [`AskSession::shapes_walked`], and a test reads it to see a remembered teaching
+    /// spare the enumeration.
+    pub fn vocabularies_enumerated(&self) -> usize {
+        self.shapes
+            .values()
+            .filter(|walk| walk.enumerated())
+            .count()
+    }
+
+    /// Each [`PathTeaching`] this session made — one per shape a path refusal named whose teaching
+    /// its context did not hold — for its caller to remember by shape id and hand back in a later
+    /// request's context ([`ShapeContext::with_path_teaching`]). A teaching the context held is
+    /// not reported: it is already remembered. Read once the request's asks are validated, since a
+    /// later refusal may make another.
+    pub fn taught(&self) -> impl Iterator<Item = &PathTeaching> + '_ {
+        self.shapes
+            .values()
+            .filter_map(ShapeWalk::made_path_teaching)
     }
 
     /// The visits the request has left — what a test reads to see what its asks cost.
@@ -207,7 +239,9 @@ impl ShapeContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::artifact_ask::walk::{BoundKind, VOCABULARIES_ENUMERATED, WALKS_BUILT};
+    use crate::types::artifact_ask::walk::{
+        BoundKind, MAX_WALK_DEPTH, VOCABULARIES_ENUMERATED, WALKS_BUILT,
+    };
     use crate::types::artifact_ask::{
         ArtifactPredicate, LoadedShape, ShapeLoad, ShapeSuccessor, ARTIFACT_INTENTS,
         ASKABLE_SHAPE_STATES, MAX_ASK_PREDICATES,
@@ -603,6 +637,146 @@ mod tests {
             (session.visits_left(), session.steps_left()),
             (visits, steps),
             "the second pass spends nothing"
+        );
+    }
+
+    // ── What a path refusal teaches: made once, or held by the context ────────────────────────
+
+    /// A shape of two declared paths, one over an enum: an ordinary vocabulary to teach.
+    fn taught_shape() -> LoadedShape {
+        shape_of(json!({ "properties": {
+            "unit": { "type": "string", "enum": ["ms", "s"] },
+            "count": { "type": "integer" }
+        } }))
+    }
+
+    /// An ask naming a path one segment deeper than the walk descends: refused
+    /// `path_outside_shape`, its refusal carrying `beyond_bound: depth`.
+    fn too_deep() -> ArtifactAsk {
+        let mut a = ask_of(&["unit"], PropertyOp::HasKey);
+        a.predicates[0].path = (0..=MAX_WALK_DEPTH).map(|i| format!("k{i}")).collect();
+        a
+    }
+
+    /// **A path teaching the context holds is taught verbatim, and enumerates nothing.** One
+    /// session makes the shape's teaching from its vocabulary; a second, over a context holding
+    /// that teaching, refuses the same asks byte for byte as the first did and enumerates no
+    /// vocabulary. `beyond_bound` is still each refusal's own: the undeclared path met no bound and
+    /// the deep one met `depth`, while the teaching held carries none.
+    ///
+    /// Bites the held teaching ignored (in `AskSession::answer`, `ShapeWalk::new` handed `None`):
+    /// the second session enumerates the vocabulary once.
+    #[test]
+    fn a_held_path_teaching_is_taught_verbatim_and_enumerates_nothing() {
+        let asks = [ask_of(&["undeclared"], PropertyOp::HasKey), too_deep()];
+        let making = context_of(taught_shape());
+        let mut first = making.session();
+        let made: Vec<Vec<PlanRefusal>> = asks
+            .iter()
+            .map(|a| first.validate(a).expect_err("the path is refused"))
+            .collect();
+        assert_eq!(first.vocabularies_enumerated(), 1);
+        let held = first
+            .taught()
+            .next()
+            .cloned()
+            .expect("the first session made the shape's teaching");
+        assert_eq!(
+            held.teaching().beyond_bound,
+            None,
+            "the teaching holds no refusal's bound"
+        );
+
+        let holding = context_of(taught_shape()).with_path_teaching(held);
+        let mut second = holding.session();
+        let (enumerated, again) = counted(&VOCABULARIES_ENUMERATED, || {
+            asks.iter()
+                .map(|a| second.validate(a).expect_err("the path is refused"))
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(
+            (enumerated, second.vocabularies_enumerated()),
+            (0, 0),
+            "no vocabulary is enumerated for a shape whose teaching the context holds"
+        );
+        let wire = |rs: &[PlanRefusal]| serde_json::to_vec(rs).unwrap();
+        for (k, (again, made)) in again.iter().zip(&made).enumerate() {
+            assert_eq!(
+                reasons(again),
+                vec![RefusalReason::PathOutsideShape],
+                "ask {k}"
+            );
+            assert_eq!(wire(again), wire(made), "ask {k}");
+        }
+        assert_eq!(beyond(&again[0]), None);
+        assert_eq!(beyond(&again[1]), Some(BoundKind::Depth));
+    }
+
+    /// **A session reports the path teachings it made, and only those.** An admitted ask makes
+    /// none; path refusals on one shape make its teaching once, reported once, and it is the
+    /// refusal's teaching less the refusal's own bound. A session whose context held the teaching
+    /// reports none. And a context holds a teaching only beside its shape loaded under that id:
+    /// offered for a shape it did not load, loaded as refused, or loaded under another id, the
+    /// teaching is not held.
+    ///
+    /// Bites `taught` reporting a held teaching (`ShapeWalk::made_path_teaching` answering for a
+    /// remembered one too): the holding session reports one.
+    #[test]
+    fn a_session_reports_the_path_teachings_it_made_and_never_one_it_was_given() {
+        let making = context_of(taught_shape());
+        let mut session = making.session();
+        session
+            .validate(&ask_of(&["unit"], PropertyOp::HasKey))
+            .expect("a declared path is admitted");
+        assert_eq!(
+            session.taught().count(),
+            0,
+            "an admitted ask teaches nothing"
+        );
+        let refused = session
+            .validate(&ask_of(&["undeclared"], PropertyOp::HasKey))
+            .expect_err("the path is refused");
+        session
+            .validate(&too_deep())
+            .expect_err("the path is refused");
+        let made: Vec<PathTeaching> = session.taught().cloned().collect();
+        assert_eq!(
+            made.len(),
+            1,
+            "one teaching for the shape, however many refusals"
+        );
+        assert_eq!(made[0].shape(), ShapeId::from(Uuid::from_u128(SHAPE)));
+        assert_eq!(refused[0].teaches.as_deref(), Some(made[0].teaching()));
+
+        let holding = context_of(taught_shape()).with_path_teaching(made[0].clone());
+        let mut given = holding.session();
+        given
+            .validate(&ask_of(&["undeclared"], PropertyOp::HasKey))
+            .expect_err("the path is refused");
+        assert_eq!(
+            given.taught().count(),
+            0,
+            "a teaching the context held is not reported"
+        );
+
+        let mut elsewhere = taught_shape();
+        elsewhere.shape_id = ShapeId::from(Uuid::from_u128(SHAPE + 1));
+        for load in [
+            ShapeLoad::NotAskable,
+            ShapeLoad::Uncompilable,
+            ShapeLoad::Superseded { successor: None },
+            ShapeLoad::Loaded(elsewhere),
+        ] {
+            let refusing: ShapeContext = [(made[0].shape(), load)].into_iter().collect();
+            assert_eq!(
+                refusing.clone().with_path_teaching(made[0].clone()),
+                refusing,
+                "held only beside the shape loaded under its id"
+            );
+        }
+        assert_eq!(
+            ShapeContext::empty().with_path_teaching(made[0].clone()),
+            ShapeContext::empty()
         );
     }
 

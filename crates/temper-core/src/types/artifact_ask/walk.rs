@@ -59,7 +59,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::reference::canonical;
-use super::validate::MAX_ARTIFACT_PATH_SEGMENT_BYTES;
+use super::validate::{PathTeaching, MAX_ARTIFACT_PATH_SEGMENT_BYTES};
 use crate::types::ids::ShapeId;
 use crate::types::query::filter::{json_string_bytes, property_value_nodes};
 
@@ -814,10 +814,10 @@ impl<'s> Walk<'s> {
 }
 
 /// One shape's walk as a request reads it: built once, on the first ask that needs it, and kept
-/// with what it has said — each path it has resolved, and its vocabulary once enumerated — so
-/// every later ask in the request reuses them (spec §2.4: a shape row is immutable per id, so what
-/// is derived from it is cached by id safely). Both are kept as the walk found them, borrowed from
-/// the schema: no value is copied until a refusal's teaching sends it.
+/// with what it has said — each path it has resolved, and what a path refusal teaches of the shape
+/// once made — so every later ask in the request reuses them (spec §2.4: a shape row is immutable
+/// per id, so what is derived from it is cached by id safely). Resolved paths are kept as the walk
+/// found them, borrowed from the schema: no value is copied until a refusal's teaching sends it.
 ///
 /// **Owned by an [`AskSession`](super::AskSession), never by the schema's owner.** A [`Walk`]
 /// borrows the schema it reads, so the cache cannot live beside the schema in one struct; it lives
@@ -832,17 +832,36 @@ pub(super) struct ShapeWalk<'s> {
     /// Built on first use, so an ask refused before the shape is consulted builds nothing.
     walk: Option<Result<Walk<'s>, BoundKind>>,
     resolved: HashMap<Vec<String>, Resolved<'s>>,
-    vocabulary: Option<Enumerated<Facts<'s>>>,
+    /// What a path refusal teaches of the shape: the one its context remembered, or the one made
+    /// here on the first path refusal.
+    taught: Option<Taught>,
+    /// Whether this walk enumerated the shape's vocabulary — at most once, to make its teaching.
+    enumerated: bool,
+}
+
+/// Where a shape's path teaching came from: its context, which remembered it from an earlier
+/// request, or this walk, which made it.
+#[derive(Debug)]
+enum Taught {
+    Remembered(PathTeaching),
+    Made(PathTeaching),
 }
 
 impl<'s> ShapeWalk<'s> {
-    pub(super) fn new(shape: ShapeId, schema: &'s Value) -> ShapeWalk<'s> {
+    /// A walk of `schema`, the shape `shape`'s, holding `remembered` — what a path refusal teaches
+    /// of that shape, if its context carried one — so that no refusal enumerates it again.
+    pub(super) fn new(
+        shape: ShapeId,
+        schema: &'s Value,
+        remembered: Option<PathTeaching>,
+    ) -> ShapeWalk<'s> {
         ShapeWalk {
             shape,
             schema,
             walk: None,
             resolved: HashMap::new(),
-            vocabulary: None,
+            taught: remembered.map(Taught::Remembered),
+            enumerated: false,
         }
     }
 
@@ -870,18 +889,52 @@ impl<'s> ShapeWalk<'s> {
         reached
     }
 
-    /// The shape's askable vocabulary over borrowed facts ([`Walk::enumerate_borrowed`]),
-    /// enumerated once — under a budget of its own, so a request that has spent its budget still
-    /// teaches what may be asked.
-    pub(super) fn vocabulary(&mut self) -> &Enumerated<Facts<'s>> {
-        let schema = self.schema;
-        let walk = self
-            .walk
-            .get_or_insert_with(|| Walk::new(schema, &WalkBounds::BUILD));
-        self.vocabulary.get_or_insert_with(|| match walk {
-            Ok(walk) => walk.enumerate_borrowed(),
-            Err(at) => Enumerated::unwalked(*at),
-        })
+    /// What a path refusal teaches of this shape: the teaching its context remembered, or — the
+    /// first time one is needed, when there is none — the one `teach` makes from the shape's
+    /// askable vocabulary over borrowed facts ([`Walk::enumerate_borrowed`]), enumerated here once
+    /// under a budget of its own, so a request that has spent its budget still teaches what may be
+    /// asked. Either is kept for every later refusal; the vocabulary is not.
+    pub(super) fn path_teaching(
+        &mut self,
+        teach: impl FnOnce(&Enumerated<Facts<'s>>, ShapeId) -> PathTeaching,
+    ) -> &PathTeaching {
+        let ShapeWalk {
+            shape,
+            schema,
+            walk,
+            taught,
+            enumerated,
+            ..
+        } = self;
+        let schema: &'s Value = schema;
+        let shape = *shape;
+        let taught = taught.get_or_insert_with(|| {
+            let vocabulary = match walk.get_or_insert_with(|| Walk::new(schema, &WalkBounds::BUILD))
+            {
+                Ok(walk) => {
+                    *enumerated = true;
+                    walk.enumerate_borrowed()
+                }
+                Err(at) => Enumerated::unwalked(*at),
+            };
+            Taught::Made(teach(&vocabulary, shape))
+        });
+        match taught {
+            Taught::Remembered(teaching) | Taught::Made(teaching) => teaching,
+        }
+    }
+
+    /// The path teaching this walk made, if it made one — never one its context remembered.
+    pub(super) fn made_path_teaching(&self) -> Option<&PathTeaching> {
+        match &self.taught {
+            Some(Taught::Made(teaching)) => Some(teaching),
+            Some(Taught::Remembered(_)) | None => None,
+        }
+    }
+
+    /// Whether this walk enumerated the shape's vocabulary.
+    pub(super) fn enumerated(&self) -> bool {
+        self.enumerated
     }
 }
 

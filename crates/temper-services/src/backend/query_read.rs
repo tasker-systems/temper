@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 use crate::backend::substrate_read::{embed_query_texts, QueryEmbedBatch};
 use crate::error::{ApiError, ApiResult};
+use crate::services::shape_loader;
 use temper_core::types::artifact_ask::{AskSession, ShapeContext, ValidatedAsk};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::query::{
@@ -154,6 +155,12 @@ fn required_tally<'a>(stage: &str, rows: &'a StageIndex<'_>) -> ApiResult<&'a Ta
 /// request caps, which [`validate()`] refuses again in the same body — passes
 /// [`ShapeContext::empty`]. One [`AskSession`] is begun from them here and held for the gate, the
 /// embed and the seal, so the seal re-validates the asks the gate admitted from the gate's memo.
+///
+/// **After the seal, what the session taught is remembered.** Each path teaching it made — one
+/// enumeration of a shape's vocabulary, for a path refusal on a shape whose teaching the context
+/// did not carry — is handed to `shape_loader::remember_path_teachings`, whether the plan was
+/// admitted or refused, so a later request refusing a path on that shape is taught from memory and
+/// enumerates nothing.
 pub async fn prepare(
     c: Composition,
     shapes: &ShapeContext,
@@ -163,8 +170,12 @@ pub async fn prepare(
     tracing::debug!(
         shapes_walked = session.shapes_walked(),
         asks_answered_again = session.answered_again(),
+        vocabularies_enumerated = session.vocabularies_enumerated(),
         "query ask session"
     );
+    #[cfg(feature = "test-db")]
+    shape_loader::test_support::record_path_teachings(shapes, session.taught().cloned());
+    shape_loader::remember_path_teachings(shapes, session.taught().cloned());
     prepared
 }
 

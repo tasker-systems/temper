@@ -11,7 +11,8 @@
 //! - [`validate`] — refusal step 4 of §3.5, with its shape-free half [`validate_ask_form`]; the
 //!   steps 1–3 refusals a [`ShapeLoad`] carries; the [`RefusalTeaching`] a refusal carries;
 //! - [`session`] — [`AskSession`], the one way an ask is validated: one request's asks against one
-//!   [`ShapeContext`], each shape's walk built once and one work budget for them all;
+//!   [`ShapeContext`], each shape's walk built once and one work budget for them all, and each
+//!   shape's [`PathTeaching`] made once — or taken from the context, where a caller remembered it;
 //! - [`mod@reference`] — the Rust reference evaluator the SQL is differential-tested against.
 //!
 //! **Two halves, one seam** (§2.4). The loader in `temper-services` holds the pool, the principal
@@ -36,9 +37,9 @@ use crate::types::query::PropertyOp;
 pub use reference::matches;
 pub use session::AskSession;
 pub use validate::{
-    validate_ask_form, RefusalTeaching, TeachingElision, ValidatedAsk, MAX_ARTIFACT_PATH_DEPTH,
-    MAX_ARTIFACT_PATH_SEGMENT_BYTES, MAX_ASK_PREDICATES, MAX_ASK_PROBES, MAX_MEMBERSHIP_STEPS,
-    MAX_TEACHING_BYTES,
+    validate_ask_form, PathTeaching, RefusalTeaching, TeachingElision, ValidatedAsk,
+    MAX_ARTIFACT_PATH_DEPTH, MAX_ARTIFACT_PATH_SEGMENT_BYTES, MAX_ASK_PREDICATES, MAX_ASK_PROBES,
+    MAX_MEMBERSHIP_STEPS, MAX_TEACHING_BYTES,
 };
 pub use walk::{
     enumerate, resolve, within_schema_bound, AskOperator, AskablePath, BoundKind, JsonType,
@@ -249,12 +250,18 @@ pub enum ShapeLoad {
 /// Every shape an ask in one request names, loaded before the gate (§4.3): plain data, fixed
 /// before validation runs and untouched by anything after it.
 ///
-/// What a request derives from these shapes — each one's walk, the paths it has resolved, its
-/// vocabulary, each ask's answer — and the work budget its asks share live in the [`AskSession`]
-/// begun from it with [`ShapeContext::session`], which borrows the shapes held here.
+/// What a request derives from these shapes — each one's walk, the paths it has resolved, what a
+/// path refusal teaches of it, each ask's answer — and the work budget its asks share live in the
+/// [`AskSession`] begun from it with [`ShapeContext::session`], which borrows the shapes held here.
+///
+/// **Beside a loaded shape it may hold that shape's [`PathTeaching`]**, remembered by its caller
+/// from an earlier request ([`ShapeContext::with_path_teaching`]), so that a path refusal on the
+/// shape teaches from it and enumerates nothing. Only a loaded shape's is held: a shape whose load
+/// refused is never walked, so nothing it would teach is consulted.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ShapeContext {
     loads: BTreeMap<ShapeId, ShapeLoad>,
+    path_teachings: BTreeMap<ShapeId, PathTeaching>,
 }
 
 impl ShapeContext {
@@ -264,6 +271,7 @@ impl ShapeContext {
     pub const fn empty() -> ShapeContext {
         ShapeContext {
             loads: BTreeMap::new(),
+            path_teachings: BTreeMap::new(),
         }
     }
 
@@ -271,12 +279,36 @@ impl ShapeContext {
     pub fn get(&self, shape: &ShapeId) -> Option<&ShapeLoad> {
         self.loads.get(shape)
     }
+
+    /// This context, holding `teaching` for the shape it teaches — when that shape is loaded here,
+    /// under its own id. For any other shape the teaching is not held, and the context is
+    /// returned as it was.
+    ///
+    /// A session begun from the context then teaches a path refusal on that shape from
+    /// `teaching`, byte for byte what it would have made, and enumerates nothing for it.
+    pub fn with_path_teaching(mut self, teaching: PathTeaching) -> ShapeContext {
+        let shape = teaching.shape();
+        let loaded_here = matches!(
+            self.loads.get(&shape),
+            Some(ShapeLoad::Loaded(loaded)) if loaded.shape_id == shape
+        );
+        if loaded_here {
+            self.path_teachings.insert(shape, teaching);
+        }
+        self
+    }
+
+    /// The path teaching held for a loaded shape, if one was remembered for it.
+    fn path_teaching(&self, shape: &ShapeId) -> Option<&PathTeaching> {
+        self.path_teachings.get(shape)
+    }
 }
 
 impl FromIterator<(ShapeId, ShapeLoad)> for ShapeContext {
     fn from_iter<I: IntoIterator<Item = (ShapeId, ShapeLoad)>>(iter: I) -> ShapeContext {
         ShapeContext {
             loads: iter.into_iter().collect(),
+            path_teachings: BTreeMap::new(),
         }
     }
 }

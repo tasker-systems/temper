@@ -15,6 +15,7 @@
 //! (spec §8).
 
 use std::collections::{BTreeSet, HashMap};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -22,8 +23,9 @@ use serde_json::Value;
 use super::reference::{is_integral, jsonb_contains_within, nested_contains_within};
 use super::session::RequestBudget;
 use super::walk::{
-    json_bytes_up_to, AskablePath, AskableView, BoundKind, Facts, JsonType, Member, Resolved,
-    ShapeWalk, Vocabulary, MAX_SCHEMA_BYTES, MAX_WALK_DEPTH, MAX_WALK_PATHS, MAX_WALK_VISITS,
+    json_bytes_up_to, AskablePath, AskableView, BoundKind, Enumerated, Facts, JsonType, Member,
+    Resolved, ShapeWalk, Vocabulary, MAX_SCHEMA_BYTES, MAX_WALK_DEPTH, MAX_WALK_PATHS,
+    MAX_WALK_VISITS,
 };
 use super::{
     ArtifactAsk, ArtifactPredicate, LoadedShape, ShapeHome, ShapeIdentity, ShapeLoad,
@@ -149,6 +151,48 @@ pub struct RefusalTeaching {
     /// discloses nothing a by-id read of the shape would not.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub homes: Vec<ShapeHome>,
+}
+
+/// What a `path_outside_shape` refusal teaches of one shape — its askable vocabulary held to
+/// [`MAX_TEACHING_BYTES`], and how many paths were cut — without the bound the refused path met,
+/// which each refusal sets beside it (`beyond_bound`). That is a function of the shape alone: the
+/// vocabulary is enumerated under a budget of its own, whatever the request has spent. A shape row
+/// is immutable per id (§2.2), so a caller may remember a teaching by shape id across requests and
+/// hand it back in a later request's [`ShapeContext`](super::ShapeContext)
+/// ([`ShapeContext::with_path_teaching`](super::ShapeContext::with_path_teaching)), whose session
+/// then teaches from it byte for byte as it would have taught from an enumeration, and enumerates
+/// nothing.
+///
+/// Made only by a session ([`AskSession::taught`](super::AskSession::taught) reports the ones it
+/// made), never from a caller's data. Cheap to clone: the teaching is shared.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathTeaching {
+    shape: ShapeId,
+    teaching: Arc<RefusalTeaching>,
+}
+
+impl PathTeaching {
+    /// `teaching`, what `teaching` made of `shape`'s vocabulary, held with its paths' spare
+    /// capacity released, so what it holds is what it sends.
+    fn new(shape: ShapeId, mut teaching: RefusalTeaching) -> PathTeaching {
+        if let Some(vocabulary) = teaching.vocabulary.as_mut() {
+            vocabulary.paths.shrink_to_fit();
+        }
+        PathTeaching {
+            shape,
+            teaching: Arc::new(teaching),
+        }
+    }
+
+    /// The shape this teaches.
+    pub fn shape(&self) -> ShapeId {
+        self.shape
+    }
+
+    /// The teaching itself, with no `beyond_bound`: what a holder weighs to remember it.
+    pub fn teaching(&self) -> &RefusalTeaching {
+        &self.teaching
+    }
 }
 
 /// How much of a teaching was cut, and where the whole of it is read: the shape's by-id read —
@@ -797,9 +841,10 @@ struct Sorted<'p, 's> {
 /// spend one per distinct path. Sharing the budget holds what every path of every ask in the
 /// request costs to [`MAX_WALK_VISITS`] however many they name, and the walk's memo makes a path
 /// any ask of the request already named free. A predicate past the spent budget is refused
-/// `path_outside_shape` naming `work` — visibly, as every bound is. The vocabulary a path refusal
-/// teaches is walked once per shape under a budget of its own, so a spent request still teaches
-/// what it may ask.
+/// `path_outside_shape` naming `work` — visibly, as every bound is. What a path refusal teaches is
+/// the shape's [`PathTeaching`]: taken from the request's context when its caller remembered one,
+/// and otherwise made once per shape for the request from a vocabulary enumerated under a budget of
+/// its own, so a spent request still teaches what it may ask.
 ///
 /// No path's values are copied to sort it: the facts stay the walk's, borrowed from the schema, so
 /// a value set several paths share is read once and costs nothing per path after. A refused path's
@@ -868,31 +913,20 @@ fn sort<'p, 'c>(
 
 /// `path_outside_shape`, teaching the askable vocabulary and the bound an asked path met.
 ///
-/// The vocabulary is the walk's, enumerated once for the request over borrowed facts and kept;
-/// each path is offered to the teaching as an [`AskableView`], so a teaching copies only the paths
-/// it has first measured to fit ([`teaching`]) and `omitted_paths` still counts the rest.
+/// The vocabulary half is the shape's [`PathTeaching`], the same for every refusal on that shape:
+/// the one the request's context remembered, or else made once for the request by
+/// [`teach_paths`] and kept on the walk. Only `beyond_bound` is this refusal's own.
 fn refuse_paths(sorted: &Sorted<'_, '_>, walk: &mut ShapeWalk<'_>, errs: &mut Vec<PlanRefusal>) {
     if sorted.outside_path.is_empty() {
         return;
     }
-    let shape = walk.shape();
-    let vocabulary = walk.vocabulary();
     let mut rule = "a path is not one the shape declares — only `properties` chains, local \
                     `$ref`s, `allOf`, `anyOf` and `oneOf` are walked"
         .to_string();
     if let Some(at) = sorted.beyond {
         rule.push_str(&format!(", and {}", bound_said(at)));
     }
-    let mut teaches = teaching(
-        vocabulary
-            .paths
-            .iter()
-            .map(|(path, facts)| AskableView::new(path, facts))
-            .collect(),
-        AskableView::into_askable,
-        vocabulary.truncated.clone(),
-        shape,
-    );
+    let mut teaches = RefusalTeaching::clone(walk.path_teaching(teach_paths).teaching());
     teaches.beyond_bound = sorted.beyond;
     refuse_at(
         errs,
@@ -901,6 +935,25 @@ fn refuse_paths(sorted: &Sorted<'_, '_>, walk: &mut ShapeWalk<'_>, errs: &mut Ve
         &rule,
         Some(teaches),
     );
+}
+
+/// A shape's [`PathTeaching`], made from its vocabulary — enumerated over borrowed facts, each path
+/// offered to [`teaching`] as an [`AskableView`], so the teaching copies only the paths it has
+/// first measured to fit, and `omitted_paths` still counts the rest.
+fn teach_paths(vocabulary: &Enumerated<Facts<'_>>, shape: ShapeId) -> PathTeaching {
+    PathTeaching::new(
+        shape,
+        teaching(
+            vocabulary
+                .paths
+                .iter()
+                .map(|(path, facts)| AskableView::new(path, facts))
+                .collect(),
+            AskableView::into_askable,
+            vocabulary.truncated.clone(),
+            shape,
+        ),
+    )
 }
 
 /// The offending predicates' indices, and a teaching that describes each offending path once:
@@ -957,7 +1010,8 @@ fn bound_said(at: BoundKind) -> String {
 ///
 /// **No copy it has not first bounded.** Both callers offer each candidate as an [`AskableView`]
 /// over the walk's borrowed facts — the offending paths an ask resolved, and the shape's
-/// vocabulary, enumerated without copying a value. Each is measured as it serializes, and only as
+/// vocabulary, enumerated without copying a value ([`teach_paths`], whose teaching is then kept for
+/// the shape rather than made again). Each is measured as it serializes, and only as
 /// far as the room left, then turned into an owned path by `own` only when it fits. So the values
 /// a teaching copies are the values it sends, at most [`MAX_TEACHING_BYTES`] on the wire; a path
 /// that does not fit is never copied, and measuring it stops at the first write past the room
