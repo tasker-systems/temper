@@ -1,0 +1,21 @@
+title    = "`@tasker-systems/temper-design` exports the theme model; the web presents a light appearance and its graph paints from the contract"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["clients"]
+status   = "signal-only"
+body = '''
+The package gains `./theme`: `ThemePreference` (follow the system within a family, or hold one
+theme), `resolveTheme`, `coercePreference` and `THEMES` read from `themes.json`, moved unchanged
+from the desktop, which reads it after this release. The web now serves both Quiet Instrument
+and its counterpart, Paper: the reader's choice is kept in a cookie, applied as the page renders,
+and offered in the sidebar ("Follow system", then each theme by title); with no cookie it follows
+the system without a dark first paint. Marketing stays dark-only. The web's graph, analysis page
+and their components paint only contract roles, under the guard, which now lists every app route.
+The web's pre-contract colour names are no longer declared for the authed app, and the stock
+Tailwind palette is reset, so a stock colour utility paints nothing. A failed region can carry its
+reason inside the announced alert (`RegionState`'s `detail`), and the vault search's failure names
+search results rather than the vault. Who observes: a surface importing the package (one new
+export); a reader of the web, who can choose a light appearance and whose graph canvas, edges and
+panels take the contract's roles. User-visible: yes, on the web. Release relevance: additive (an
+export, an appearance) and behavioral (the palette reset, the graph's colours).
+'''
