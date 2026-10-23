@@ -9,7 +9,17 @@
 //   (c) an opacity modifier on a role utility: a role at 15% is a value no theme chose;
 //   (d) a colour declaration, SVG attribute, style directive or arbitrary colour utility reading
 //       a variable that is not a role;
-//   (e) a role mixed down: a `color-mix()` reading a role is (c) spelled in CSS.
+//   (e) a role mixed down: a `color-mix()` reading a role is (c) spelled in CSS;
+//   (f) a custom property declared from a variable that is not a role: `--wx-color-font:
+//       var(--color-quiet-fg)` launders a private name past (d), which reads only colour
+//       properties by name. A custom property may read roles (fonts included), a pending hole,
+//       or a bridged name: one declared within the guarded paths whose every declaration there
+//       reads a variable and resolves to roles (`--color-background: var(--background)`, where
+//       `--background: var(--tp-ground)`). A declaration outside the paths — a vendor stylesheet,
+//       a selector scope the name is not bridged in — is not seen.
+//
+// Every rule reads one line at a time: a declaration whose value wraps onto the next line is not
+// seen. A colour set from script (`el.style.setProperty`, a JS style object) is out of reach.
 //
 // A surface commits a config naming what it guards, relative to the config's own directory:
 //
@@ -96,6 +106,16 @@ const DECLARATION =
 // Svelte style directive (`style:color="var(--x)"`).
 const ATTRIBUTE =
 	/(?<![\w-])(?:style:)?(fill|stroke|stop-color|flood-color|lighting-color|color|background(?:-color)?|border(?:-[a-z]+)*-color|outline-color|caret-color|accent-color|text-decoration-color)\s*=\s*["'{]([^"'}\n]*)/g;
+// A custom property's declaration and its value: `--wx-color-font: var(--x)`, or Svelte's
+// directive for one, `style:--wx-color-font="var(--x)"` / `style:--wx-color-font={'var(--x)'}`.
+const CUSTOM_PROPERTY = /(?<![\w-])(--[a-zA-Z0-9-]+)\s*:\s*([^;}"'\n]*)/g;
+const CUSTOM_DIRECTIVE =
+	/(?<![\w-])style:(--[a-zA-Z0-9-]+)\s*=\s*(?:"([^"\n]*)"|'([^'\n]*)'|\{([^}\n]*)\})/g;
+// Each custom-property declaration in `text`, as [name, value].
+function* customProperties(text) {
+	for (const m of text.matchAll(CUSTOM_PROPERTY)) yield [m[1], m[2]];
+	for (const m of text.matchAll(CUSTOM_DIRECTIVE)) yield [m[1], m[2] ?? m[3] ?? m[4]];
+}
 const PRIVATE_VAR = /var\(\s*(--(?!tp-)[a-zA-Z0-9-]+)/g;
 const ROLE_VAR = /var\(\s*--tp-/;
 const PENDING_VAR = /var\(\s*(--[a-zA-Z0-9-]+)/g;
@@ -170,6 +190,30 @@ for (const listed of paths) {
 	} else files.push(path);
 }
 
+// Bridged names: custom properties declared within the paths whose every declaration reads only
+// roles or other bridged names, to a fixed point. A name with any other read is not bridged, and
+// nor is one with a declaration reading no variable at all: `style="--hue: {hue}"` is a colour
+// supplied from script, which no theme chose, not a value that resolves to roles.
+const UNRESOLVED = '(no variable)';
+const declared = new Map();
+for (const path of files) {
+	for (const [name, value] of customProperties(stripComments(readFileSync(path, 'utf8')))) {
+		const reads = [...value.matchAll(PRIVATE_VAR)].map((v) => v[1]);
+		if (!/var\(/.test(value)) reads.push(UNRESOLVED);
+		declared.set(name, [...(declared.get(name) ?? []), ...reads]);
+	}
+}
+const bridged = new Set();
+for (let grew = true; grew; ) {
+	grew = false;
+	for (const [name, reads] of declared) {
+		if (!bridged.has(name) && reads.every((r) => bridged.has(r))) {
+			bridged.add(name);
+			grew = true;
+		}
+	}
+}
+
 const readsPending = (text) => [...text.matchAll(PENDING_VAR)].some((m) => pending.has(m[1]));
 
 function refusals(line) {
@@ -206,6 +250,12 @@ function refusals(line) {
 		for (const v of m[2].matchAll(PRIVATE_VAR)) {
 			if (pending.has(v[1])) continue;
 			out.push(`${m[1]} reads var(${v[1]}), which is not a role`);
+		}
+	}
+	for (const [name, value] of customProperties(line)) {
+		for (const v of value.matchAll(PRIVATE_VAR)) {
+			if (pending.has(v[1]) || bridged.has(v[1])) continue;
+			out.push(`${name} is declared from var(${v[1]}), which is not a role`);
 		}
 	}
 	return out;

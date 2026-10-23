@@ -1,0 +1,19 @@
+title    = "`@tasker-systems/temper-design`'s colour guard refuses a custom property declared from a variable that is not a role; the web's vault paints from the contract"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["clients"]
+status   = "signal-only"
+body = '''
+`guard/colours.mjs` gains a refusal: a custom property declared from a variable that is not a role
+(`--wx-color-font: var(--color-quiet-fg)`), which until now passed because the colour-declaration
+rule reads colour properties by name. A bridge stays legal: a name declared within the guarded
+paths whose every declaration there resolves to roles may be read, so `contract/shadcn-bridge.css`
+still passes. The web's vault (the list routes, the grid, facet chips, the context page's governed
+families, the access queue and the error page) now paints only contract roles, under the guard; the
+grid's vendor theme is answered from roles in full. Who observes: a surface running the guard,
+which can now refuse a custom property it previously passed (fonts included: `var(--font-sans)`
+must become `var(--tp-font-ui)`); a reader of the web, whose vault grid takes the contract's hover
+and selection fills, whose failed vault read is the shared failed region, and whose governed-family
+names take the text role. User-visible: yes, on the web's vault. Release relevance: additive (a
+bridge-aware rule) and behavioral (one new refusal in the guard).
+'''

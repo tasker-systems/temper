@@ -145,7 +145,7 @@
 
 <div class="vault-grid-wrapper">
 	{#if rows.length === 0}
-		<div class="flex flex-col items-center justify-center gap-3 py-16 text-zinc-500">
+		<div class="flex flex-col items-center justify-center gap-3 py-16 text-tp-text-subtle">
 			{#if filterCount > 0}
 				<p class="text-sm">
 					No resources match the current filter{filterCount > 1 ? 's' : ''}.
@@ -158,17 +158,17 @@
 	{:else}
 		<div class="grid-chrome">
 			<div class="flex items-center gap-3">
-				<span class="text-xs text-zinc-500 font-mono tracking-wide">
+				<span class="text-xs text-tp-text-subtle font-mono tracking-wide">
 					{paging.rangeStart}–{paging.rangeEnd} of {total}
 				</span>
 				{#if orphaned}
 					<span
-						class="inline-flex items-center gap-1.5 rounded border border-zinc-700/50 bg-zinc-800/50 px-2 py-0.5 text-[11px] font-mono text-zinc-400"
+						class="inline-flex items-center gap-1.5 rounded border border-tp-rule bg-tp-surface-raised px-2 py-0.5 text-[11px] font-mono text-tp-text-muted"
 					>
 						sorted by {orphaned.field} {orphaned.order}
 						<a
 							href={clearSortHref}
-							class="text-zinc-500 hover:text-zinc-200"
+							class="text-tp-text-subtle hover:text-tp-text"
 							aria-label="Clear sort">×</a
 						>
 					</span>
@@ -182,7 +182,7 @@
 						onclick={() => goToPage(paging.prevOffset)}
 						aria-label="Previous page">&larr;</button
 					>
-					<span class="text-xs text-zinc-500 font-mono tabular-nums"
+					<span class="text-xs text-tp-text-subtle font-mono tabular-nums"
 						>{paging.currentPage}/{paging.totalPages}</span
 					>
 					<button
@@ -231,17 +231,17 @@
 	.page-btn {
 		font-family: var(--font-mono);
 		font-size: 0.75rem;
-		color: var(--color-quiet-mid);
+		color: var(--tp-text-muted);
 		background: none;
-		border: 1px solid var(--color-quiet-rule);
+		border: 1px solid var(--tp-rule-strong);
 		border-radius: 3px;
 		padding: 0.2rem 0.5rem;
 		cursor: pointer;
 		transition: color 0.15s, border-color 0.15s;
 	}
 	.page-btn:hover:not(:disabled) {
-		color: var(--color-quiet-fg);
-		border-color: var(--color-quiet-border);
+		color: var(--tp-text);
+		border-color: var(--tp-accent-line);
 	}
 	.page-btn:disabled {
 		opacity: 0.3;
@@ -253,51 +253,114 @@
 		height: calc(100vh - 12rem);
 	}
 
-	/* ── Theme overrides: blend SVAR WillowDark into Quiet Instrument ── */
-
+	/*
+	 * The SVAR bridge: WillowDark's variable names, answered from contract roles, so any theme
+	 * restyles the grid with no per-theme work (as contract/shadcn-bridge.css does for shadcn).
+	 * Every colour-valued variable the two WillowDark files declare with a value of their own is
+	 * answered here — the ones they derive (`var(--wx-color-primary)` and the like) follow — and
+	 * the two component rules wx-svelte-grid@2.7.0 paints with a literal are answered below, so
+	 * no vendor colour is reachable in any grid state, used today or not. Shadows have no role
+	 * and are off. Web-local: the desktop does not use SVAR.
+	 *
+	 * Precedence: the vendor rules are unlayered `.wx-willow-dark-theme` (one class); these are
+	 * unlayered and scoped under `.grid-container`, so they win. Moved into `layer(base)`, they
+	 * would lose without a sound.
+	 */
 	.grid-container :global(.wx-willow-dark-theme) {
+		--wx-color-primary: var(--tp-accent);
+		--wx-color-primary-selected: var(--tp-accent-wash);
+		--wx-color-primary-font: var(--tp-on-accent);
+		--wx-color-secondary-hover: var(--tp-accent-hover);
+		--wx-color-secondary-border-disabled: var(--tp-rule);
+		--wx-color-success: var(--tp-success);
+		--wx-color-warning: var(--tp-notice);
+		--wx-color-danger: var(--tp-danger);
+		--wx-color-disabled: var(--tp-surface-raised);
+		--wx-color-disabled-alt: var(--tp-surface-raised);
+		--wx-color-font: var(--tp-text);
+		--wx-color-font-alt: var(--tp-text-subtle);
+		--wx-color-font-disabled: var(--tp-text-faint);
 		--wx-background: transparent;
-		--wx-background-alt: rgba(255, 255, 255, 0.03);
-		--wx-background-hover: rgba(255, 255, 255, 0.05);
-		--wx-color-font: var(--color-quiet-fg);
-		--wx-color-font-alt: var(--color-quiet-dim);
-		--wx-color-primary: var(--color-quiet-accent);
-		--wx-color-primary-selected: rgba(126, 184, 218, 0.12);
-		--wx-border: 1px solid var(--color-quiet-rule);
-		--wx-font-family: var(--font-sans);
+		--wx-background-alt: var(--tp-surface);
+		--wx-background-hover: var(--tp-accent-hover);
+		--wx-icon-color: var(--tp-text-subtle);
+		--wx-border-color: var(--tp-rule);
+		--wx-border: 1px solid var(--tp-rule);
+		--wx-border-light: 1px solid var(--tp-rule);
+		--wx-border-medium: 1px solid var(--tp-rule);
+		--wx-shadow-light: none;
+		--wx-box-shadow: none;
+		--wx-box-shadow-strong: none;
+		--wx-font-family: var(--tp-font-ui);
 		--wx-font-size: 13px;
 		--wx-line-height: 20px;
-		--wx-table-header-background: #0c0c11;
-		--wx-table-select-background: rgba(126, 184, 218, 0.08);
-		--wx-table-select-border: inset 3px 0 var(--color-quiet-accent);
-		--wx-table-border: 1px solid var(--color-quiet-rule);
-		--wx-table-header-border: 1px solid rgba(255, 255, 255, 0.08);
+		--wx-input-background: var(--tp-surface);
+		--wx-input-border: 1px solid var(--tp-rule-strong);
+		--wx-input-border-focus: 1px solid var(--tp-accent-line);
+		--wx-button-danger-font-color: var(--tp-on-accent);
+		--wx-button-pressed: var(--tp-accent-hover);
+		--wx-button-danger-pressed: var(--tp-danger);
+		--wx-button-primary-pressed: var(--tp-accent);
+		--wx-button-box-shadow: none;
+		--wx-button-primary-box-shadow: none;
+		--wx-tabs-hover-border: var(--tp-rule-strong);
+		--wx-switch-background: var(--tp-surface-raised);
+		--wx-switch-thumb-border-disabled: 1px solid var(--tp-rule);
+		--wx-switch-thumb-background: var(--tp-text);
+		--wx-popup-background: var(--tp-surface-raised);
+		--wx-popup-border: 1px solid var(--tp-rule-strong);
+		--wx-modal-background: var(--tp-surface-raised);
+		--wx-modal-border: 1px solid var(--tp-rule-strong);
+		--wx-modal-backdrop: var(--tp-overlay);
+		--wx-modal-header-font-color: var(--tp-text);
+		--wx-notice-type-icon-color: var(--tp-text-muted);
+		--wx-tooltip-font-color: var(--tp-text);
+		--wx-tooltip-background: var(--tp-surface-raised);
+
+		/* wx-svelte-grid's own WillowDark */
+		--wx-table-header-background: var(--tp-surface);
+		--wx-table-select-background: var(--tp-accent-wash);
+		--wx-table-select-border: inset 3px 0 var(--tp-accent);
+		--wx-table-border: 1px solid var(--tp-rule);
+		--wx-table-header-border: 1px solid var(--tp-rule-strong);
 		--wx-table-header-cell-border: none;
-		--wx-table-cell-border: 1px solid var(--color-quiet-rule);
+		--wx-table-cell-border: 1px solid var(--tp-rule);
+		--wx-table-editor-dropdown-shadow: none;
 		--wx-header-font-weight: 500;
-		--wx-icon-color: var(--color-quiet-dim);
+	}
+	/* The vendor colours not spelled through a variable: the table menu's shadow (WillowDark),
+	   the multi-sort index badge (HeaderCell, reachable by ctrl/cmd-clicking a header) and the
+	   search-match fill (Cell, unused here). */
+	.grid-container :global(.wx-willow-dark-theme .wx-table-menu) {
+		box-shadow: none;
+	}
+	.grid-container :global(.wx-order) {
+		color: var(--tp-on-accent);
+		background-color: var(--tp-accent);
+	}
+	.grid-container :global(.wx-search) {
+		background-color: var(--tp-notice-wash);
 	}
 
-	/* Row hover — pointer cursor and subtle highlight */
+	/* Row hover — pointer cursor and the hover fill */
 	.grid-container :global(.wx-row) {
 		cursor: pointer;
 		transition: background-color 0.12s ease;
 	}
 	.grid-container :global(.wx-row:hover) {
-		background-color: rgba(255, 255, 255, 0.04);
+		background-color: var(--tp-accent-hover);
 	}
 
-	/* Header sort indicator — slightly brighter when active */
+	/* The active sort mark */
 	.grid-container :global(.wx-sort i) {
-		color: var(--color-quiet-accent);
-		opacity: 0.85;
+		color: var(--tp-accent);
 	}
 
-	/* Sortable headers get a subtle hover cue */
+	/* Sortable headers get a hover cue */
 	.grid-container :global(.wx-h-row .wx-cell:has(.wx-sort)) {
 		cursor: pointer;
 	}
 	.grid-container :global(.wx-h-row .wx-cell:has(.wx-sort):hover) {
-		color: var(--color-quiet-fg);
+		color: var(--tp-text);
 	}
 </style>

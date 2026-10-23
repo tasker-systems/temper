@@ -43,7 +43,8 @@ describe('VaultBrowser — a failed read renders the error state instead of the 
 
 		const { container, getByRole } = mount(null, 'The vault could not be read.');
 
-		expect(getByRole('alert')).toBeDefined();
+		// The alert is the shared failed region, not a panel spelling its own failed state.
+		expect(getByRole('alert').closest('[data-region="failed"]')).not.toBeNull();
 		// `.vault-grid-wrapper` is `VaultGrid`'s own root, present whether the grid has rows or
 		// renders its empty state — so this fails on either way of rendering it alongside.
 		expect(container.querySelector('.vault-grid-wrapper')).toBeNull();
