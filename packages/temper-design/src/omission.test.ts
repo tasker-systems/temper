@@ -58,7 +58,9 @@ describe('the omission sentence of a read that counts nothing', () => {
 	});
 
 	it('calls a first page with nothing after it all of them', () => {
-		expect(uncountedSentence(4, 'artifacts', { first: true, more: false })).toBe('All 4 artifacts.');
+		expect(uncountedSentence(4, 'artifacts', { first: true, more: false })).toBe(
+			'All 4 artifacts.',
+		);
 	});
 
 	it('says which side more lie on, in the cursor’s words and with no count', () => {
