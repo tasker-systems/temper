@@ -1,0 +1,33 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT s.id            AS \"shape_id!\",\n                  s.shape_version AS \"shape_version!\"\n             FROM kb_data_artifact_shapes s\n            WHERE s.home_anchor_table = $2\n              AND s.home_anchor_id = $3\n              AND s.kind_owner_table = $4\n              AND s.kind_owner_id = $5\n              AND s.artifact_kind = $6\n              AND NOT s.is_folded\n              AND anchor_readable_by_profile($1, s.home_anchor_table, s.home_anchor_id)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "shape_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "shape_version!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "7965fb97a5775bdc87d108498ada3264e928be2a40b2d7590cadfbab4875d5a3"
+}

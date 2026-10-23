@@ -31,7 +31,8 @@
 //!
 //! - **Four named bounds** ([`BoundKind`]): path depth, advertised paths, schema bytes, and a
 //!   **work budget** of subschema visits shared by everything one [`resolve`] or one [`enumerate`]
-//!   does. Meeting any of them is reported, never a stall.
+//!   does, and by every ask one [`AskSession`](super::AskSession) validates. Meeting any of them is
+//!   reported, never a stall.
 //! - **Every size an author controls is charged before work proportional to it is done.** The
 //!   schema is measured only up to its bound; each `$ref` is decoded once, when the walk is built;
 //!   each list a visit reads — branches, `type` names, `enum` members, a frame's property keys —
@@ -51,13 +52,14 @@
 //!   budget instead of holding millions of values or comparing them pairwise.
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
-use std::rc::Rc;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::reference::canonical;
 use super::validate::MAX_ARTIFACT_PATH_SEGMENT_BYTES;
+use crate::types::ids::ShapeId;
 use crate::types::query::filter::{json_string_bytes, property_value_nodes};
 
 /// The deepest path, in object-key segments, the walk descends to. A deeper ask is
@@ -103,7 +105,8 @@ pub const MAX_WALK_PATHS: usize = 1024;
 /// branches.
 pub const MAX_SCHEMA_BYTES: usize = 256 * 1024;
 
-/// The most subschema visits one [`resolve`] or one [`enumerate`] makes, counted as each subschema
+/// The most subschema visits one [`resolve`] or one [`enumerate`] makes, and the most every ask
+/// one [`AskSession`](super::AskSession) validates makes between them, counted as each subschema
 /// is scheduled for evaluation or expansion. Past it the walk stops at [`BoundKind::Work`].
 ///
 /// # 65,536
@@ -332,10 +335,24 @@ pub fn resolve(schema: &Value, path: &[String], bounds: &WalkBounds) -> PathReso
 pub fn enumerate(schema: &Value, bounds: &WalkBounds) -> Vocabulary {
     match Walk::new(schema, bounds) {
         Ok(walk) => walk.enumerate(),
-        Err(bound) => Vocabulary {
-            paths: Vec::new(),
-            truncated: BTreeSet::from([bound]),
-        },
+        Err(bound) => unwalked(bound),
+    }
+}
+
+/// Whether a schema is within the size the walk reads ([`MAX_SCHEMA_BYTES`], compact JSON bytes),
+/// measured only as far as the bound — so a schema far over it costs no more to judge than one
+/// just over it. Asking checks this before it compiles a schema — the shape loader, the by-id
+/// read's `askable` and declare — so none of them compiles a schema the walk will not read (spec
+/// §3.3, the walk "never stalls or exhausts the server"). Commit and reconcile do not ask it.
+pub fn within_schema_bound(schema: &Value) -> bool {
+    json_bytes_up_to(schema, MAX_SCHEMA_BYTES) <= MAX_SCHEMA_BYTES
+}
+
+/// The vocabulary of a schema the walk would not read: no paths, and the bound that stopped it.
+fn unwalked(bound: BoundKind) -> Vocabulary {
+    Vocabulary {
+        paths: Vec::new(),
+        truncated: BTreeSet::from([bound]),
     }
 }
 
@@ -420,12 +437,14 @@ impl Draft {
 ///
 /// - **An ask** reads its paths without copying their values, so every path an ask names over one
 ///   shared 9,000-code enum costs 18,000 visits for the enum and a few visits for each path —
-///   [`MAX_ASK_PREDICATES`](super::validate::MAX_ASK_PREDICATES) such paths fit, in visits. Their
-///   `contains` values are checked against the enum under a budget of their own,
-///   `MAX_MEMBERSHIP_STEPS`, which they can still spend: 32 predicates of four admissible values
-///   each, matched late against 9,000 members, need about 1.15M steps, past 1,048,576, and the
-///   later predicates are refused `path_outside_shape` with `beyond_bound: work`. A value the enum
-///   does not hold refuses its predicate `value_outside_shape` at that value, before the rest scan.
+///   [`MAX_ASK_PREDICATES`](super::validate::MAX_ASK_PREDICATES) such paths fit, in visits — and
+///   the enum and the paths are read once for the whole request, however many of its asks name
+///   them. Their `contains` values are checked against the enum under a budget of their own,
+///   `MAX_MEMBERSHIP_STEPS`, shared by the request's asks, which one ask can still spend: 32
+///   predicates of four admissible values each, matched late against 9,000 members, need about
+///   1.15M steps, past 1,048,576, and the later predicates are refused `path_outside_shape` with
+///   `beyond_bound: work`. A value the enum does not hold refuses its predicate
+///   `value_outside_shape` at that value, before the rest scan.
 /// - **A vocabulary** copies each advertised path's values into the answer, `n` visits a copy, so a
 ///   shape whose `k` paths all carry the same `n`-code enum costs about `(2 + k) · n`: eleven paths
 ///   over one 5,000-code enum fit (2 · 5,000 + 11 · 5,000 = 65,000 of 65,536), and the twelfth
@@ -442,9 +461,14 @@ pub const BYTES_PER_VISIT: usize = 64;
 pub const NODE_BYTES: usize = 64;
 
 /// What one walk may still spend, and the members and value sets it has already read. Shared by
-/// everything one `resolve`, one `enumerate`, or one ask's `resolve_all` does.
+/// everything one `resolve` or one `enumerate` does, and by every ask one
+/// [`AskSession`](super::AskSession) validates — so a request's asks spend one budget between
+/// them, and a value set any of them reads is read once.
+///
+/// Its memo is keyed by a schema node's address, so one budget may span several schemas only while
+/// they are all borrowed for its whole life, as a session's are from its context.
 #[derive(Debug)]
-struct Budget<'s> {
+pub(super) struct Budget<'s> {
     left: usize,
     /// Canonical text → member id: jsonb-equal members share an id.
     ids: HashMap<String, usize>,
@@ -456,13 +480,19 @@ struct Budget<'s> {
 }
 
 impl<'s> Budget<'s> {
-    fn new(visits: usize) -> Budget<'s> {
+    pub(super) fn new(visits: usize) -> Budget<'s> {
         Budget {
             left: visits,
             ids: HashMap::new(),
             read: HashMap::new(),
             sets: HashMap::new(),
         }
+    }
+
+    /// The visits not yet spent — what a test reads to see what a run of asks cost.
+    #[cfg(test)]
+    pub(super) fn left(&self) -> usize {
+        self.left
     }
 
     fn spend(&mut self, visits: usize) -> Result<(), BoundKind> {
@@ -499,15 +529,15 @@ impl<'s> Budget<'s> {
     ) -> Result<Values<'s>, BoundKind> {
         let key = identity(keyword);
         if let Some(set) = self.sets.get(&key) {
-            return Ok(Rc::clone(set));
+            return Ok(Arc::clone(set));
         }
         self.spend(values.len())?;
         let members = values
             .iter()
             .map(|v| self.member(v))
             .collect::<Result<Vec<_>, _>>()?;
-        let set = Rc::new(members);
-        self.sets.insert(key, Rc::clone(&set));
+        let set = Arc::new(members);
+        self.sets.insert(key, Arc::clone(&set));
         Ok(set)
     }
 }
@@ -531,6 +561,8 @@ impl<'s> Walk<'s> {
         if json_bytes_up_to(schema, bounds.max_schema_bytes) > bounds.max_schema_bytes {
             return Err(BoundKind::SchemaBytes);
         }
+        #[cfg(test)]
+        WALKS_BUILT.with(|built| built.set(built.get() + 1));
         let draft = Draft::of(schema);
         let embedded = embedded_resources(schema, draft);
         Ok(Walk {
@@ -546,12 +578,16 @@ impl<'s> Walk<'s> {
         self.resolve_within(path, &mut Budget::new(self.bounds.max_visits))
     }
 
-    /// Several paths under **one** budget, so what reading them costs does not grow with how many
-    /// an ask names (§3.3: the walk "never stalls or exhausts the server"). Once the budget is
-    /// spent every later path is [`Resolved::BeyondBound`]`(`[`BoundKind::Work`]`)`.
+    /// Several paths under **one** budget of the walk's own, so what reading them costs does not
+    /// grow with how many are named (§3.3: the walk "never stalls or exhausts the server"). Once
+    /// the budget is spent every later path is [`Resolved::BeyondBound`]`(`[`BoundKind::Work`]`)`.
     ///
     /// The facts are the walk's own, borrowed from the schema: no value is copied, so a value set
     /// many paths share is read once (by [`Budget::members`]) and costs nothing per path after.
+    ///
+    /// What [`ShapeWalk::resolve`] does path by path for a request's asks, under the request's
+    /// budget; the walk's own tests measure the walk through this form.
+    #[cfg(test)]
     pub(super) fn resolve_all(&self, paths: &[&[String]]) -> Vec<Resolved<'s>> {
         let mut budget = Budget::new(self.bounds.max_visits);
         paths
@@ -596,6 +632,8 @@ impl<'s> Walk<'s> {
     /// level, so a truncated vocabulary is the shallow part of the full one. One budget covers
     /// every frame and every path.
     pub(super) fn enumerate(&self) -> Vocabulary {
+        #[cfg(test)]
+        VOCABULARIES_ENUMERATED.with(|enumerated| enumerated.set(enumerated.get() + 1));
         let mut budget = Budget::new(self.bounds.max_visits);
         let mut vocabulary = Vocabulary::default();
         if let Err(bound) = self.enumerate_into(&mut vocabulary, &mut budget) {
@@ -707,6 +745,76 @@ impl<'s> Walk<'s> {
     /// [`local_references`] resolved when the walk was built, never from the reference's text.
     fn target(&self, from: &Value) -> Option<&'s Value> {
         self.refs.get(&identity(from)).copied()
+    }
+}
+
+/// One shape's walk as a request reads it: built once, on the first ask that needs it, and kept
+/// with what it has said — each path it has resolved, and its vocabulary once enumerated — so
+/// every later ask in the request reuses them (spec §2.4: a shape row is immutable per id, so what
+/// is derived from it is cached by id safely).
+///
+/// **Owned by an [`AskSession`](super::AskSession), never by the schema's owner.** A [`Walk`]
+/// borrows the schema it reads, so the cache cannot live beside the schema in one struct; it lives
+/// in a session that borrows the context holding the schemas, for as long as the request runs.
+///
+/// A resolved path is kept whatever it said, `work` included: a request's budget never refills,
+/// so a path the budget could not afford stays unaffordable for the rest of the request.
+#[derive(Debug)]
+pub(super) struct ShapeWalk<'s> {
+    shape: ShapeId,
+    schema: &'s Value,
+    /// Built on first use, so an ask refused before the shape is consulted builds nothing.
+    walk: Option<Result<Walk<'s>, BoundKind>>,
+    resolved: HashMap<Vec<String>, Resolved<'s>>,
+    vocabulary: Option<Vocabulary>,
+}
+
+impl<'s> ShapeWalk<'s> {
+    pub(super) fn new(shape: ShapeId, schema: &'s Value) -> ShapeWalk<'s> {
+        ShapeWalk {
+            shape,
+            schema,
+            walk: None,
+            resolved: HashMap::new(),
+            vocabulary: None,
+        }
+    }
+
+    /// The shape this walk reads.
+    pub(super) fn shape(&self) -> ShapeId {
+        self.shape
+    }
+
+    /// One path, as this walk last said it, or reached now under `budget` — the request's, shared
+    /// by every path of every ask, so a path is paid for once per request however many asks name
+    /// it, and a request's paths together cost what one budget allows.
+    pub(super) fn resolve(&mut self, path: &[String], budget: &mut Budget<'s>) -> Resolved<'s> {
+        if let Some(known) = self.resolved.get(path) {
+            return known.clone();
+        }
+        let schema = self.schema;
+        let reached = match self
+            .walk
+            .get_or_insert_with(|| Walk::new(schema, &WalkBounds::BUILD))
+        {
+            Ok(walk) => walk.reach(path, budget),
+            Err(at) => Resolved::BeyondBound(*at),
+        };
+        self.resolved.insert(path.to_vec(), reached.clone());
+        reached
+    }
+
+    /// The shape's askable vocabulary, enumerated once — under a budget of its own, so a request
+    /// that has spent its budget still teaches what may be asked.
+    pub(super) fn vocabulary(&mut self) -> &Vocabulary {
+        let schema = self.schema;
+        let walk = self
+            .walk
+            .get_or_insert_with(|| Walk::new(schema, &WalkBounds::BUILD));
+        self.vocabulary.get_or_insert_with(|| match walk {
+            Ok(walk) => walk.enumerate(),
+            Err(at) => unwalked(*at),
+        })
     }
 }
 
@@ -843,7 +951,7 @@ fn percent_decode(fragment: &str) -> Option<String> {
 /// is charged one visit before it is collected.
 ///
 /// A key longer than an asked segment may be (`MAX_ARTIFACT_PATH_SEGMENT_BYTES`, the form cap
-/// `validate_ask` refuses a longer segment by) is skipped: no ask can name it, so it is never
+/// `validate_ask_form` refuses a longer segment by) is skipped: no ask can name it, so it is never
 /// advertised and nothing below it is walked. Its length is read first, which is all a long key
 /// costs — escaping only lengthens a key, so one longer than the cap is past it.
 fn child_keys<'s>(
@@ -868,7 +976,7 @@ fn child_keys<'s>(
 }
 
 /// Whether a key could be one segment of an asked path: within `MAX_ARTIFACT_PATH_SEGMENT_BYTES`,
-/// JSON-escaped, as `validate_ask`'s form check measures it.
+/// JSON-escaped, as `validate_ask_form` measures it.
 fn askable_segment(key: &str) -> bool {
     key.len() <= MAX_ARTIFACT_PATH_SEGMENT_BYTES
         && json_string_bytes(key) <= MAX_ARTIFACT_PATH_SEGMENT_BYTES
@@ -897,16 +1005,16 @@ pub(super) struct Member<'s> {
 }
 
 /// A value set, shared rather than copied when a result is memoised or reused.
-pub(super) type Values<'s> = Rc<Vec<Member<'s>>>;
+pub(super) type Values<'s> = Arc<Vec<Member<'s>>>;
 
 /// What the walk has found at a path: [`PathFacts`], with its values as members of the schema and
-/// every part shared, so carrying it costs nothing per value. `validate_ask` reads an ask's paths
+/// every part shared, so carrying it costs nothing per value. An ask's validation reads its paths
 /// in this form and never copies them; only the wire copies, charged by [`into_wire`].
 #[derive(Debug, Clone, Default)]
 pub(super) struct Facts<'s> {
     pub(super) types: Option<BTreeSet<JsonType>>,
     pub(super) values: Option<Values<'s>>,
-    pub(super) items: Option<Rc<Facts<'s>>>,
+    pub(super) items: Option<Arc<Facts<'s>>>,
 }
 
 impl Facts<'_> {
@@ -939,6 +1047,11 @@ thread_local! {
     /// Every value [`Facts::to_wire`] has copied on this thread — what a test reads to see that a
     /// copy was, or was not, made.
     pub(super) static VALUES_COPIED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Every [`Walk`] built on this thread — measured, its draft selected, its `$ref`s resolved.
+    pub(super) static WALKS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Every vocabulary [`Walk::enumerate`] has walked on this thread.
+    pub(super) static VOCABULARIES_ENUMERATED: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
 }
 
 /// The wire form of [`PathFacts`], written from the borrowed facts without copying a value, so a
@@ -1085,7 +1198,7 @@ fn conjoin_facts<'s>(
         (x, None) | (None, x) => x.clone(),
     };
     let items = match (&a.items, &b.items) {
-        (Some(x), Some(y)) => Some(Rc::new(conjoin_facts(x, y, budget)?)),
+        (Some(x), Some(y)) => Some(Arc::new(conjoin_facts(x, y, budget)?)),
         (x, None) | (None, x) => x.clone(),
     };
     Ok(Facts {
@@ -1107,7 +1220,7 @@ fn disjoin_facts<'s>(
         _ => None,
     };
     let items = match (&a.items, &b.items) {
-        (Some(x), Some(y)) => Some(Rc::new(disjoin_facts(x, y, budget)?)),
+        (Some(x), Some(y)) => Some(Arc::new(disjoin_facts(x, y, budget)?)),
         _ => None,
     };
     Ok(Facts {
@@ -1128,7 +1241,7 @@ fn intersect<'s>(
 ) -> Result<Values<'s>, BoundKind> {
     budget.spend(x.len() + y.len())?;
     let keep: HashSet<usize> = y.iter().map(|m| m.id).collect();
-    Ok(Rc::new(
+    Ok(Arc::new(
         x.iter().filter(|m| keep.contains(&m.id)).copied().collect(),
     ))
 }
@@ -1143,7 +1256,7 @@ fn union<'s>(
     let mut seen: HashSet<usize> = x.iter().map(|m| m.id).collect();
     let mut out: Vec<Member<'s>> = x.to_vec();
     out.extend(y.iter().filter(|m| seen.insert(m.id)).copied());
-    Ok(Rc::new(out))
+    Ok(Arc::new(out))
 }
 
 /// Both constraints apply: an absent one leaves the other.
@@ -1423,12 +1536,12 @@ impl<'s> Resolver<'_, 's> {
         let items = match items {
             None | Some(Reach::Silent) => None,
             // `items: false` admits no element at all.
-            Some(Reach::Forbidden) => Some(Rc::new(Facts {
+            Some(Reach::Forbidden) => Some(Arc::new(Facts {
                 types: Some(BTreeSet::new()),
                 ..Facts::default()
             })),
             Some(Reach::Declared(facts)) if facts.is_unconstrained() => None,
-            Some(Reach::Declared(facts)) => Some(Rc::new(facts)),
+            Some(Reach::Declared(facts)) => Some(Arc::new(facts)),
         };
         Ok(Facts {
             types,

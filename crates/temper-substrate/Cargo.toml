@@ -17,6 +17,10 @@ artifact-tests = []
 # Integration & E2E CI job (`--features test-db,test-embed`); run locally: `cargo make test-db` or
 # `cargo nextest run -p temper-substrate --features test-db`.
 test-db = []
+# Test-only: `shape_schema::test_support`, a count of every `shape_schema::compile` call by the
+# fixture's root `$comment`, so a suite can see that a schema was — or was never — compiled,
+# whoever compiled it. Enabled by temper-services' `test-db`.
+test-support = []
 # Emit + snapshot-test the scenario JSON Schema from the loader structs (schemars derives).
 scenario-schema = ["schemars", "temperkb-core/scenario-schema"]
 # The payload types a documented HTTP route answers with verbatim (the operator erasure doors'

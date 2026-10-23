@@ -3173,9 +3173,12 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get a single shape by ID.
-         * @description Visibility-gated: returns 404 if the shape does not exist or its owning home
+         * Get a single shape by ID, with what an ask may name
+         * @description `askable` lists every path an artifact ask may name against the shape.
+         *
+         *     Visibility-gated: returns 404 if the shape does not exist or its owning home
          *     anchor is not readable to the caller. Includes folded shapes (audit/history).
+         *     The listing routes leave `askable` absent.
          */
         get: operations["get_shape"];
         put?: never;
@@ -8732,6 +8735,7 @@ export interface components {
          *     | `value_outside_shape` | `vocabulary` (each offending path's declared types and values), `non_closure` |
          *     | `unknown_artifact_intent`, `unknown_shape_state` | `terms` |
          *     | `shape_superseded` | `successor` |
+         *     | `shape_schema_uncompilable` | `beyond_bound: schema_bytes` for a schema past the byte bound |
          */
         RefusalTeaching: {
             beyond_bound?: components["schemas"]["BoundKind"] | null;
@@ -10277,6 +10281,7 @@ export interface components {
          */
         ShapeView: {
             artifact_kind: string;
+            askable?: components["schemas"]["Vocabulary"] | null;
             /** Format: date-time */
             created: string;
             /** @description `"advisory"` or `"enforcing"`. */
@@ -10298,6 +10303,7 @@ export interface components {
              * @description The chain depth of the assert/fold lineage — 1 for the first declaration, N for the Nth.
              */
             shape_version: number;
+            unaskable?: components["schemas"]["PlanRefusal"] | null;
         };
         /**
          * @description Result of sharing a context into a team. `shared` is `false` when the share already
@@ -20190,7 +20196,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The shape with its schema and enforcement mode */
+            /** @description The shape with its schema, enforcement mode and askable vocabulary */
             200: {
                 headers: {
                     [name: string]: unknown;

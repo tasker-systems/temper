@@ -22,6 +22,8 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, Strict
 from typing import Any, ClassVar, Dict, List, Optional
 from uuid import UUID
 from temper.generated.models.enforcement_mode import EnforcementMode
+from temper.generated.models.plan_refusal import PlanRefusal
+from temper.generated.models.vocabulary import Vocabulary
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
@@ -31,6 +33,7 @@ class ShapeView(BaseModel):
     One declared shape, as returned by the API and MCP surfaces.  This is the readback `RetrievedShape` projected onto a wire shape: `HomeAnchor` and `KindOwner` are rendered as their `(table, id)` scalar pairs (the same split `ArtifactView` uses for `kind_owner_table`/`kind_owner_id`) so a consumer that does not share the Rust types still gets a self-describing response.
     """ # noqa: E501
     artifact_kind: StrictStr
+    askable: Optional[Vocabulary] = Field(default=None, description="What an artifact ask may name against this version of the shape: each askable path with its declared types, its `enum`/`const` values, and the operators feasible at it — the vocabulary a refusal's `teaches` narrows, derived by the same walk that validates an ask. Bounded, and a truncated vocabulary names the bound in `truncated`.  **Present only on the by-id read** (`GET /api/shapes/{id}`, `get_data_artifact_shape`, `temper data-artifact schema show`). Listings leave it **absent, which is not empty**: a listing never pays one enumeration per shape, and an absent field never says that nothing is askable. Empty when this version's schema cannot be walked — `unaskable` then says why — and `truncated: [schema_bytes]` when the schema is past the byte bound the walk reads.")
     created: datetime
     enforcement: EnforcementMode = Field(description="`\"advisory\"` or `\"enforcing\"`.")
     home_anchor_id: UUID
@@ -41,7 +44,8 @@ class ShapeView(BaseModel):
     var_schema: Optional[Any] = Field(alias="schema")
     shape_id: UUID = Field(description="A `kb_data_artifact_shapes.id` value — one declared JSON Schema governing a data-artifact family within a single home (spec: data-artifact shape registry, 2026-08-21).")
     shape_version: StrictInt = Field(description="The chain depth of the assert/fold lineage — 1 for the first declaration, N for the Nth.")
-    __properties: ClassVar[List[str]] = ["artifact_kind", "created", "enforcement", "home_anchor_id", "home_anchor_table", "is_folded", "kind_owner_id", "kind_owner_table", "schema", "shape_id", "shape_version"]
+    unaskable: Optional[PlanRefusal] = Field(default=None, description="Why this version's schema cannot be walked: the refusal step 3 of asking gives it — `shape_schema_uncompilable`, with its fixed sentence for a schema that does not compile under the no-fetch compiler, or with a sentence naming the byte bound and `teaches.beyond_bound: schema_bytes` for one too large to read, which is never compiled. What an ask naming this shape is told can differ: an ask naming a folded version is refused `shape_superseded` first (`is_folded`). Absent whenever the schema can be walked, and on listings.")
+    __properties: ClassVar[List[str]] = ["artifact_kind", "askable", "created", "enforcement", "home_anchor_id", "home_anchor_table", "is_folded", "kind_owner_id", "kind_owner_table", "schema", "shape_id", "shape_version", "unaskable"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -82,10 +86,26 @@ class ShapeView(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # override the default output from pydantic by calling `to_dict()` of askable
+        if self.askable:
+            _dict['askable'] = self.askable.to_dict()
+        # override the default output from pydantic by calling `to_dict()` of unaskable
+        if self.unaskable:
+            _dict['unaskable'] = self.unaskable.to_dict()
+        # set to None if askable (nullable) is None
+        # and model_fields_set contains the field
+        if self.askable is None and "askable" in self.model_fields_set:
+            _dict['askable'] = None
+
         # set to None if var_schema (nullable) is None
         # and model_fields_set contains the field
         if self.var_schema is None and "var_schema" in self.model_fields_set:
             _dict['schema'] = None
+
+        # set to None if unaskable (nullable) is None
+        # and model_fields_set contains the field
+        if self.unaskable is None and "unaskable" in self.model_fields_set:
+            _dict['unaskable'] = None
 
         return _dict
 
@@ -100,6 +120,7 @@ class ShapeView(BaseModel):
 
         _obj = cls.model_validate({
             "artifact_kind": obj.get("artifact_kind"),
+            "askable": Vocabulary.from_dict(obj["askable"]) if obj.get("askable") is not None else None,
             "created": obj.get("created"),
             "enforcement": obj.get("enforcement"),
             "home_anchor_id": obj.get("home_anchor_id"),
@@ -109,7 +130,8 @@ class ShapeView(BaseModel):
             "kind_owner_table": obj.get("kind_owner_table"),
             "schema": obj.get("schema"),
             "shape_id": obj.get("shape_id"),
-            "shape_version": obj.get("shape_version")
+            "shape_version": obj.get("shape_version"),
+            "unaskable": PlanRefusal.from_dict(obj["unaskable"]) if obj.get("unaskable") is not None else None
         })
         return _obj
 

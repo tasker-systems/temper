@@ -18,6 +18,9 @@ module Temper::Generated
   class ShapeView < ApiModelBase
     attr_accessor :artifact_kind
 
+    # What an artifact ask may name against this version of the shape: each askable path with its declared types, its `enum`/`const` values, and the operators feasible at it — the vocabulary a refusal's `teaches` narrows, derived by the same walk that validates an ask. Bounded, and a truncated vocabulary names the bound in `truncated`.  **Present only on the by-id read** (`GET /api/shapes/{id}`, `get_data_artifact_shape`, `temper data-artifact schema show`). Listings leave it **absent, which is not empty**: a listing never pays one enumeration per shape, and an absent field never says that nothing is askable. Empty when this version's schema cannot be walked — `unaskable` then says why — and `truncated: [schema_bytes]` when the schema is past the byte bound the walk reads.
+    attr_accessor :askable
+
     attr_accessor :created
 
     # `\"advisory\"` or `\"enforcing\"`.
@@ -42,6 +45,9 @@ module Temper::Generated
 
     # The chain depth of the assert/fold lineage — 1 for the first declaration, N for the Nth.
     attr_accessor :shape_version
+
+    # Why this version's schema cannot be walked: the refusal step 3 of asking gives it — `shape_schema_uncompilable`, with its fixed sentence for a schema that does not compile under the no-fetch compiler, or with a sentence naming the byte bound and `teaches.beyond_bound: schema_bytes` for one too large to read, which is never compiled. What an ask naming this shape is told can differ: an ask naming a folded version is refused `shape_superseded` first (`is_folded`). Absent whenever the schema can be walked, and on listings.
+    attr_accessor :unaskable
 
     class EnumAttributeValidator
       attr_reader :datatype
@@ -69,6 +75,7 @@ module Temper::Generated
     def self.attribute_map
       {
         :'artifact_kind' => :'artifact_kind',
+        :'askable' => :'askable',
         :'created' => :'created',
         :'enforcement' => :'enforcement',
         :'home_anchor_id' => :'home_anchor_id',
@@ -78,7 +85,8 @@ module Temper::Generated
         :'kind_owner_table' => :'kind_owner_table',
         :'schema' => :'schema',
         :'shape_id' => :'shape_id',
-        :'shape_version' => :'shape_version'
+        :'shape_version' => :'shape_version',
+        :'unaskable' => :'unaskable'
       }
     end
 
@@ -96,6 +104,7 @@ module Temper::Generated
     def self.openapi_types
       {
         :'artifact_kind' => :'String',
+        :'askable' => :'Vocabulary',
         :'created' => :'Time',
         :'enforcement' => :'EnforcementMode',
         :'home_anchor_id' => :'String',
@@ -105,14 +114,17 @@ module Temper::Generated
         :'kind_owner_table' => :'String',
         :'schema' => :'Object',
         :'shape_id' => :'String',
-        :'shape_version' => :'Integer'
+        :'shape_version' => :'Integer',
+        :'unaskable' => :'PlanRefusal'
       }
     end
 
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
+        :'askable',
         :'schema',
+        :'unaskable'
       ])
     end
 
@@ -136,6 +148,10 @@ module Temper::Generated
         self.artifact_kind = attributes[:'artifact_kind']
       else
         self.artifact_kind = nil
+      end
+
+      if attributes.key?(:'askable')
+        self.askable = attributes[:'askable']
       end
 
       if attributes.key?(:'created')
@@ -196,6 +212,10 @@ module Temper::Generated
         self.shape_version = attributes[:'shape_version']
       else
         self.shape_version = nil
+      end
+
+      if attributes.key?(:'unaskable')
+        self.unaskable = attributes[:'unaskable']
       end
     end
 
@@ -370,6 +390,7 @@ module Temper::Generated
       return true if self.equal?(o)
       self.class == o.class &&
           artifact_kind == o.artifact_kind &&
+          askable == o.askable &&
           created == o.created &&
           enforcement == o.enforcement &&
           home_anchor_id == o.home_anchor_id &&
@@ -379,7 +400,8 @@ module Temper::Generated
           kind_owner_table == o.kind_owner_table &&
           schema == o.schema &&
           shape_id == o.shape_id &&
-          shape_version == o.shape_version
+          shape_version == o.shape_version &&
+          unaskable == o.unaskable
     end
 
     # @see the `==` method
@@ -391,7 +413,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [artifact_kind, created, enforcement, home_anchor_id, home_anchor_table, is_folded, kind_owner_id, kind_owner_table, schema, shape_id, shape_version].hash
+      [artifact_kind, askable, created, enforcement, home_anchor_id, home_anchor_table, is_folded, kind_owner_id, kind_owner_table, schema, shape_id, shape_version, unaskable].hash
     end
 
     # Builds the object from hash

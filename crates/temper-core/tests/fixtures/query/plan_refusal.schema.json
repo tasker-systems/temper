@@ -308,7 +308,7 @@
         },
         {
           "const": "shape_schema_uncompilable",
-          "description": "The shape's schema does not compile under the no-fetch compiler. The detail is a fixed\nsentence; the compiler's text is never echoed.",
+          "description": "The shape's schema does not compile under the no-fetch compiler, or is larger than the\nwalk reads and so is never compiled (then `teaches.beyond_bound` is `schema_bytes`). The\ndetail is a fixed sentence; the compiler's text is never echoed.",
           "type": "string"
         },
         {
@@ -354,7 +354,7 @@
       "description": "Why an act refused. A typed variant so every door renders the same value; how a door\nTRANSPORTS it (HTTP status, MCP error code) stays a door concern.\n\nOPEN vocabulary, deliberately — design §6.1 settled openness for the `act` discriminator and\nfor `disposition` but never ruled on refusals, and v0 first shipped this closed by default.\nCorrected by decision `019fcd13-4e65-7213-ac6f-20c3c8ccfce1`: the growth this contract wants\nincludes new ways to decline, so a closed enum would make every future reason a breaking\nchange. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,\nmatched exhaustively."
     },
     "RefusalTeaching": {
-      "description": "What a refusal teaches, as data an agent reads without parsing English (spec §3.5).\n\n**Open, by being a struct of optional fields** rather than a tagged enum: a later refusal that\nteaches something new adds a field older clients skip, where a new variant would fail their\nparse of the whole refusal list. Each refusal fills what is relevant to it:\n\n| reason | teaches |\n|---|---|\n| `path_outside_shape` | `vocabulary` (the askable paths), `beyond_bound` when a walk bound stopped it |\n| `operator_outside_shape` | `vocabulary` (each offending path's facts and feasible operators) |\n| `value_outside_shape` | `vocabulary` (each offending path's declared types and values), `non_closure` |\n| `unknown_artifact_intent`, `unknown_shape_state` | `terms` |\n| `shape_superseded` | `successor` |",
+      "description": "What a refusal teaches, as data an agent reads without parsing English (spec §3.5).\n\n**Open, by being a struct of optional fields** rather than a tagged enum: a later refusal that\nteaches something new adds a field older clients skip, where a new variant would fail their\nparse of the whole refusal list. Each refusal fills what is relevant to it:\n\n| reason | teaches |\n|---|---|\n| `path_outside_shape` | `vocabulary` (the askable paths), `beyond_bound` when a walk bound stopped it |\n| `operator_outside_shape` | `vocabulary` (each offending path's facts and feasible operators) |\n| `value_outside_shape` | `vocabulary` (each offending path's declared types and values), `non_closure` |\n| `unknown_artifact_intent`, `unknown_shape_state` | `terms` |\n| `shape_superseded` | `successor` |\n| `shape_schema_uncompilable` | `beyond_bound: schema_bytes` for a schema past the byte bound |",
       "properties": {
         "beyond_bound": {
           "anyOf": [
@@ -365,7 +365,7 @@
               "type": "null"
             }
           ],
-          "description": "The walk bound an asked path lies beyond."
+          "description": "The walk bound an asked path lies beyond, or — on `shape_schema_uncompilable` —\n`schema_bytes`, for a whole schema too large for the walk to read."
         },
         "elided": {
           "anyOf": [

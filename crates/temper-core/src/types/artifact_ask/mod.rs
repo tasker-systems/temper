@@ -8,9 +8,10 @@
 //!
 //! - [`walk`] — the bounded schema walk: what a schema declares at one path ([`walk::resolve`]),
 //!   and every askable path up to the bounds ([`walk::enumerate`]);
-//! - [`validate`] — [`validate_ask`], refusal step 4 of §3.5, with its shape-free half
-//!   [`validate_ask_form`]; the steps 1–3 refusals a [`ShapeLoad`] carries; the
-//!   [`RefusalTeaching`] a refusal carries;
+//! - [`validate`] — refusal step 4 of §3.5, with its shape-free half [`validate_ask_form`]; the
+//!   steps 1–3 refusals a [`ShapeLoad`] carries; the [`RefusalTeaching`] a refusal carries;
+//! - [`session`] — [`AskSession`], the one way an ask is validated: one request's asks against one
+//!   [`ShapeContext`], each shape's walk built once and one work budget for them all;
 //! - [`mod@reference`] — the Rust reference evaluator the SQL is differential-tested against.
 //!
 //! **Two halves, one seam** (§2.4). The loader in `temper-services` holds the pool, the principal
@@ -19,6 +20,7 @@
 //! definition of what can be asked.
 
 pub mod reference;
+pub mod session;
 pub mod validate;
 pub mod walk;
 
@@ -31,14 +33,15 @@ use crate::types::ids::ShapeId;
 use crate::types::query::PropertyOp;
 
 pub use reference::matches;
+pub use session::AskSession;
 pub use validate::{
-    validate_ask, validate_ask_form, RefusalTeaching, TeachingElision, ValidatedAsk,
-    MAX_ARTIFACT_PATH_DEPTH, MAX_ARTIFACT_PATH_SEGMENT_BYTES, MAX_ASK_PREDICATES, MAX_ASK_PROBES,
-    MAX_MEMBERSHIP_STEPS, MAX_TEACHING_BYTES,
+    validate_ask_form, RefusalTeaching, TeachingElision, ValidatedAsk, MAX_ARTIFACT_PATH_DEPTH,
+    MAX_ARTIFACT_PATH_SEGMENT_BYTES, MAX_ASK_PREDICATES, MAX_ASK_PROBES, MAX_MEMBERSHIP_STEPS,
+    MAX_TEACHING_BYTES,
 };
 pub use walk::{
-    enumerate, resolve, AskOperator, AskablePath, BoundKind, JsonType, PathFacts, PathResolution,
-    Vocabulary, WalkBounds,
+    enumerate, resolve, within_schema_bound, AskOperator, AskablePath, BoundKind, JsonType,
+    PathFacts, PathResolution, Vocabulary, WalkBounds, NODE_BYTES,
 };
 
 /// The selection intents an ask may narrow by — the closed vocabulary of
@@ -60,7 +63,7 @@ pub const ASKABLE_SHAPE_STATES: [&str; 3] = [
 
 /// One ask: a governing shape, and what the asker holds about artifacts it governs (§2.1).
 ///
-/// `intent` and `shape_states` are **strings**, validated by `validate_ask` into
+/// `intent` and `shape_states` are **strings**, validated by [`AskSession::validate`] into
 /// `unknown_artifact_intent` / `unknown_shape_state` with `teaches` naming the vocabulary — never
 /// serde enums, whose unknown-variant failure would land before validation, in the deserializer's
 /// words, and outside the every-refusal-at-once body. Empty means the default, applied by the
@@ -183,7 +186,7 @@ pub struct ShapeSuccessor {
 }
 
 /// What the loader found for one named shape — refusal steps 1–3 of §3.5, in that order. Steps
-/// 1–3 become refusals through [`ShapeLoad::loaded`]; step 4 is [`validate_ask`].
+/// 1–3 become refusals through [`ShapeLoad::loaded`]; [`AskSession::validate`] runs all four.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ShapeLoad {
     Loaded(LoadedShape),
@@ -196,10 +199,20 @@ pub enum ShapeLoad {
     },
     /// The schema did not compile under the no-fetch compiler.
     Uncompilable,
+    /// The schema is larger than the walk reads ([`walk::MAX_SCHEMA_BYTES`]), so it was never
+    /// compiled. Step 3 still: the loader decides compilability (§2.4), and a schema this server
+    /// will not read is one it does not compile. Refused `shape_schema_uncompilable` like
+    /// [`ShapeLoad::Uncompilable`], with its own sentence and `teaches.beyond_bound: schema_bytes`,
+    /// so the bound is said as data, the way a path refusal says it (§3.3).
+    SchemaTooLarge,
 }
 
 /// Every shape an ask in one request names, loaded before the gate (§4.3): plain data, fixed
 /// before validation runs and untouched by anything after it.
+///
+/// What a request derives from these shapes — each one's walk, the paths it has resolved, its
+/// vocabulary, each ask's answer — and the work budget its asks share live in the [`AskSession`]
+/// begun from it with [`ShapeContext::session`], which borrows the shapes held here.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ShapeContext {
     loads: BTreeMap<ShapeId, ShapeLoad>,

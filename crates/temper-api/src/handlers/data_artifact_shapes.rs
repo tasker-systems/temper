@@ -45,10 +45,13 @@ pub async fn list_shapes(
     Ok(Json(shapes))
 }
 
-/// Get a single shape by ID.
+/// Get a single shape by ID, with what an ask may name
+///
+/// `askable` lists every path an artifact ask may name against the shape.
 ///
 /// Visibility-gated: returns 404 if the shape does not exist or its owning home
 /// anchor is not readable to the caller. Includes folded shapes (audit/history).
+/// The listing routes leave `askable` absent.
 #[utoipa::path(
     get,
     operation_id = "get_shape",
@@ -59,7 +62,7 @@ pub async fn list_shapes(
     ),
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "The shape with its schema and enforcement mode", body = ShapeView),
+        (status = 200, description = "The shape with its schema, enforcement mode and askable vocabulary", body = ShapeView),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 404, description = "Not found or not visible", body = ErrorBody),
     )

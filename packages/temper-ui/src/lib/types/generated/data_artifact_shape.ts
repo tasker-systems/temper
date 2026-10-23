@@ -4,7 +4,9 @@ import type { CorrelationId } from "./CorrelationId";
 import type { InvocationId } from "./InvocationId";
 import type { JsonValue } from "./serde_json/JsonValue";
 import type { KindOwnerInput } from "./data_artifact";
+import type { PlanRefusal } from "./query";
 import type { ShapeId } from "./ShapeId";
+import type { Vocabulary } from "./artifact_ask";
 
 /**
  * Whether a non-conforming commit is refused or merely recorded.
@@ -102,4 +104,27 @@ enforcement: EnforcementMode,
 /**
  * The chain depth of the assert/fold lineage — 1 for the first declaration, N for the Nth.
  */
-shape_version: number, is_folded: boolean, created: string, };
+shape_version: number, is_folded: boolean, created: string, 
+/**
+ * What an artifact ask may name against this version of the shape: each askable path with
+ * its declared types, its `enum`/`const` values, and the operators feasible at it — the
+ * vocabulary a refusal's `teaches` narrows, derived by the same walk that validates an ask.
+ * Bounded, and a truncated vocabulary names the bound in `truncated`.
+ *
+ * **Present only on the by-id read** (`GET /api/shapes/{id}`, `get_data_artifact_shape`,
+ * `temper data-artifact schema show`). Listings leave it **absent, which is not empty**: a
+ * listing never pays one enumeration per shape, and an absent field never says that nothing
+ * is askable. Empty when this version's schema cannot be walked — `unaskable` then says why —
+ * and `truncated: [schema_bytes]` when the schema is past the byte bound the walk reads.
+ */
+askable?: Vocabulary, 
+/**
+ * Why this version's schema cannot be walked: the refusal step 3 of asking gives it —
+ * `shape_schema_uncompilable`, with its fixed sentence for a schema that does not compile
+ * under the no-fetch compiler, or with a sentence naming the byte bound and
+ * `teaches.beyond_bound: schema_bytes` for one too large to read, which is never compiled.
+ * What an ask naming this shape is told can differ: an ask naming a folded version is refused
+ * `shape_superseded` first (`is_folded`). Absent whenever the schema can be walked, and on
+ * listings.
+ */
+unaskable?: PlanRefusal, };

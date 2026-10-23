@@ -13809,8 +13809,8 @@
         "tags": [
           "Data Artifact Shapes"
         ],
-        "summary": "Get a single shape by ID.",
-        "description": "Visibility-gated: returns 404 if the shape does not exist or its owning home\nanchor is not readable to the caller. Includes folded shapes (audit/history).",
+        "summary": "Get a single shape by ID, with what an ask may name",
+        "description": "`askable` lists every path an artifact ask may name against the shape.\n\nVisibility-gated: returns 404 if the shape does not exist or its owning home\nanchor is not readable to the caller. Includes folded shapes (audit/history).\nThe listing routes leave `askable` absent.",
         "operationId": "get_shape",
         "parameters": [
           {
@@ -13826,7 +13826,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The shape with its schema and enforcement mode",
+            "description": "The shape with its schema, enforcement mode and askable vocabulary",
             "content": {
               "application/json": {
                 "schema": {
@@ -24278,7 +24278,7 @@
           },
           {
             "type": "string",
-            "description": "The shape's schema does not compile under the no-fetch compiler. The detail is a fixed\nsentence; the compiler's text is never echoed.",
+            "description": "The shape's schema does not compile under the no-fetch compiler, or is larger than the\nwalk reads and so is never compiled (then `teaches.beyond_bound` is `schema_bytes`). The\ndetail is a fixed sentence; the compiler's text is never echoed.",
             "enum": [
               "shape_schema_uncompilable"
             ]
@@ -24341,13 +24341,13 @@
       },
       "RefusalTeaching": {
         "type": "object",
-        "description": "What a refusal teaches, as data an agent reads without parsing English (spec §3.5).\n\n**Open, by being a struct of optional fields** rather than a tagged enum: a later refusal that\nteaches something new adds a field older clients skip, where a new variant would fail their\nparse of the whole refusal list. Each refusal fills what is relevant to it:\n\n| reason | teaches |\n|---|---|\n| `path_outside_shape` | `vocabulary` (the askable paths), `beyond_bound` when a walk bound stopped it |\n| `operator_outside_shape` | `vocabulary` (each offending path's facts and feasible operators) |\n| `value_outside_shape` | `vocabulary` (each offending path's declared types and values), `non_closure` |\n| `unknown_artifact_intent`, `unknown_shape_state` | `terms` |\n| `shape_superseded` | `successor` |",
+        "description": "What a refusal teaches, as data an agent reads without parsing English (spec §3.5).\n\n**Open, by being a struct of optional fields** rather than a tagged enum: a later refusal that\nteaches something new adds a field older clients skip, where a new variant would fail their\nparse of the whole refusal list. Each refusal fills what is relevant to it:\n\n| reason | teaches |\n|---|---|\n| `path_outside_shape` | `vocabulary` (the askable paths), `beyond_bound` when a walk bound stopped it |\n| `operator_outside_shape` | `vocabulary` (each offending path's facts and feasible operators) |\n| `value_outside_shape` | `vocabulary` (each offending path's declared types and values), `non_closure` |\n| `unknown_artifact_intent`, `unknown_shape_state` | `terms` |\n| `shape_superseded` | `successor` |\n| `shape_schema_uncompilable` | `beyond_bound: schema_bytes` for a schema past the byte bound |",
         "properties": {
           "beyond_bound": {
             "oneOf": [
               {
                 "$ref": "#/components/schemas/BoundKind",
-                "description": "The walk bound an asked path lies beyond."
+                "description": "The walk bound an asked path lies beyond, or — on `shape_schema_uncompilable` —\n`schema_bytes`, for a whole schema too large for the walk to read."
               },
               {
                 "type": "null"
@@ -26628,6 +26628,17 @@
           "artifact_kind": {
             "type": "string"
           },
+          "askable": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Vocabulary",
+                "description": "What an artifact ask may name against this version of the shape: each askable path with\nits declared types, its `enum`/`const` values, and the operators feasible at it — the\nvocabulary a refusal's `teaches` narrows, derived by the same walk that validates an ask.\nBounded, and a truncated vocabulary names the bound in `truncated`.\n\n**Present only on the by-id read** (`GET /api/shapes/{id}`, `get_data_artifact_shape`,\n`temper data-artifact schema show`). Listings leave it **absent, which is not empty**: a\nlisting never pays one enumeration per shape, and an absent field never says that nothing\nis askable. Empty when this version's schema cannot be walked — `unaskable` then says why —\nand `truncated: [schema_bytes]` when the schema is past the byte bound the walk reads."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "created": {
             "type": "string",
             "format": "date-time"
@@ -26665,6 +26676,17 @@
             "type": "integer",
             "format": "int32",
             "description": "The chain depth of the assert/fold lineage — 1 for the first declaration, N for the Nth."
+          },
+          "unaskable": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlanRefusal",
+                "description": "Why this version's schema cannot be walked: the refusal step 3 of asking gives it —\n`shape_schema_uncompilable`, with its fixed sentence for a schema that does not compile\nunder the no-fetch compiler, or with a sentence naming the byte bound and\n`teaches.beyond_bound: schema_bytes` for one too large to read, which is never compiled.\nWhat an ask naming this shape is told can differ: an ask naming a folded version is refused\n`shape_superseded` first (`is_folded`). Absent whenever the schema can be walked, and on\nlistings."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },

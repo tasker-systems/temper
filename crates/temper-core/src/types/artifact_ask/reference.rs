@@ -10,7 +10,8 @@
 //! - **`contains` is jsonb's `@>`**, including its one top-level exception: an array contains a
 //!   primitive without wrapping (`'["x"]' @> '"x"'` is true, the reverse false — the measured note
 //!   on `PropertyOp::Contains`). Nested, an array never contains a primitive. The values it reads
-//!   are the ones `validate_ask` bound, so an array path's elements arrive already wrapped (§3.4).
+//!   are the ones validation bound (`AskSession::validate`), so an array path's elements arrive
+//!   already wrapped (§3.4).
 //! - **`compare` is type-guarded** (`jsonb_typeof(value) = jsonb_typeof(bound)`, as
 //!   `_temper_property_op_match` in `20260816000010`) and then jsonb's ordering.
 //!

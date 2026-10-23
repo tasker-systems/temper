@@ -912,7 +912,7 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "Get a single data-artifact shape by its ID. Returns the full shape with its JSON Schema, enforcement mode, and lineage version. Visibility-gated: returns 'not found' if the owning home anchor is not readable to you. Includes folded (superseded) shapes for audit history.",
+        description = "Get a single data-artifact shape by its ID. Returns the full shape with its JSON Schema, enforcement mode, and lineage version, and `askable`: every path an artifact ask may name against this shape, with its declared types, its enum/const values, and the operators feasible there (empty, with `unaskable` giving the reason, when the schema cannot be compiled). Visibility-gated: returns 'not found' if the owning home anchor is not readable to you. Includes folded (superseded) shapes for audit history.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_data_artifact_shape(

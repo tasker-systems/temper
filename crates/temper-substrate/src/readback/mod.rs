@@ -2945,11 +2945,12 @@ pub async fn artifact_by_id(
 
 // ── Data artifact shape reads (Beat C, Task 5) ────────────────────────────────────────────────
 //
-// Two read surfaces over `kb_data_artifact_shapes`, gated through `anchor_readable_by_profile` in
-// the SQL (migration `20260822000030`). A shape is homed polymorphically over
-// (kb_contexts, kb_cogmaps); a principal who cannot read the home anchor sees zero shapes —
-// fail closed, never an error. The gate is the same container visibility spine
-// edges_visible_to / anchor_shape / cogmap_analytics use.
+// Three read surfaces over `kb_data_artifact_shapes`, each gated through
+// `anchor_readable_by_profile`: `shapes_for_home` and `shape_by_id` in the SQL functions of
+// migration `20260822000030`, and `live_shape_at` with the same scalar gate inline in its query.
+// A shape is homed polymorphically over (kb_contexts, kb_cogmaps); a principal who cannot read the
+// home anchor sees zero shapes — fail closed, never an error. The gate is the same container
+// visibility spine edges_visible_to / anchor_shape / cogmap_analytics use.
 
 /// One declared shape, as returned by [`shapes_for_home`] and [`shape_by_id`].
 #[derive(Debug, Clone, PartialEq)]
@@ -3025,6 +3026,55 @@ pub async fn shapes_for_home(
             })
         })
         .collect()
+}
+
+/// The version of a shape in force at one home and family: its id and chain depth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LiveShapeVersion {
+    pub shape_id: ShapeId,
+    pub shape_version: i32,
+}
+
+/// The live shape at one home and family — the one row `uq_kb_data_artifact_shapes_live` admits
+/// there (`20260822000010`), so at most one — or `None` when no version is in force. What a folded
+/// shape's successor is: amendment folds a row and inserts its successor at the same home and
+/// family, and no column records the lineage otherwise.
+///
+/// Gated like [`shape_by_id`]: a principal who cannot read the home sees no row, so this never
+/// answers about a home the caller could not read through `shape_by_id`. Every argument is meant
+/// to come from a row that read already returned, never from caller text.
+pub async fn live_shape_at(
+    pool: &PgPool,
+    principal: ProfileId,
+    home: HomeAnchor,
+    kind_owner: crate::payloads::KindOwner,
+    artifact_kind: &str,
+) -> Result<Option<LiveShapeVersion>> {
+    let row = sqlx::query!(
+        r#"SELECT s.id            AS "shape_id!",
+                  s.shape_version AS "shape_version!"
+             FROM kb_data_artifact_shapes s
+            WHERE s.home_anchor_table = $2
+              AND s.home_anchor_id = $3
+              AND s.kind_owner_table = $4
+              AND s.kind_owner_id = $5
+              AND s.artifact_kind = $6
+              AND NOT s.is_folded
+              AND anchor_readable_by_profile($1, s.home_anchor_table, s.home_anchor_id)"#,
+        principal.uuid(),
+        home.table(),
+        home.uuid(),
+        kind_owner.owner_table(),
+        kind_owner.owner_id(),
+        artifact_kind,
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| LiveShapeVersion {
+        shape_id: ShapeId::from(r.shape_id),
+        shape_version: r.shape_version,
+    }))
 }
 
 /// A single shape by id. Never trusts the caller — even if the caller knows the shape id, the

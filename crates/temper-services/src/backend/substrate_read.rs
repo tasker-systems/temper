@@ -26,6 +26,7 @@ use crate::backend::db_backend::map_readback_err;
 use crate::error::{ApiError, ApiResult};
 use crate::services::context_service::resolve_context_ref;
 use crate::services::resource_service::{ResourceListParams, ResourceListResponse};
+use crate::services::shape_loader;
 use temper_core::context_ref::parse_context_ref;
 use temper_core::error::TemperError;
 use temper_core::types::api::{
@@ -2009,7 +2010,8 @@ pub async fn get_artifact(
 
 // ── Data-artifact shape reads ─────────────────────────────────────────────────────────────────
 
-/// Map a substrate readback `RetrievedShape` to the wire `ShapeView`.
+/// Map a substrate readback `RetrievedShape` to the wire `ShapeView`, with `askable` absent — what
+/// every listing answers (spec §2.5). The by-id read fills it ([`get_shape`]).
 fn shape_to_view(
     s: readback::RetrievedShape,
 ) -> temper_core::types::data_artifact_shape::ShapeView {
@@ -2036,6 +2038,8 @@ fn shape_to_view(
         shape_version: s.shape_version,
         is_folded: s.is_folded,
         created: s.created,
+        askable: None,
+        unaskable: None,
     }
 }
 
@@ -2057,16 +2061,35 @@ pub async fn list_shapes(
 /// Retrieve a single shape by ID. Returns `None` (→ 404) if the shape does not exist
 /// or the owning home anchor is not readable to the caller. Includes folded shapes
 /// (audit/history).
+///
+/// The one read that carries `askable` (spec §2.5): the shape's vocabulary, and beside it, when
+/// this version's schema cannot be walked, `unaskable` — the refusal step 3 gives it: past the
+/// walk's byte bound (never compiled; `askable` says `truncated: [schema_bytes]`) or not compiling
+/// under the no-fetch compiler (`askable` empty). [`shape_loader::askable`] decides it as the
+/// loader does — the verdict remembered by id, a compile under a permit off the async executor —
+/// or, for a compiling shape it has walked before, answers the vocabulary remembered by id. A
+/// folded shape answers its own version's vocabulary; an ask naming it is refused
+/// `shape_superseded` first, which `is_folded` already says.
 pub async fn get_shape(
     pool: &PgPool,
     profile_id: ProfileId,
     shape_id: ShapeId,
 ) -> ApiResult<Option<temper_core::types::data_artifact_shape::ShapeView>> {
-    let shape = readback::shape_by_id(pool, profile_id, shape_id)
-        .await
-        .map_err(|e| ApiError::from(TemperError::Api(e.to_string())))?;
+    use temper_core::types::data_artifact_shape::ShapeView;
 
-    Ok(shape.map(shape_to_view))
+    let Some(shape) = readback::shape_by_id(pool, profile_id, shape_id)
+        .await
+        .map_err(|e| ApiError::from(TemperError::Api(e.to_string())))?
+    else {
+        return Ok(None);
+    };
+
+    let (askable, unaskable) = shape_loader::askable(&shape).await?;
+    Ok(Some(ShapeView {
+        askable: Some(askable),
+        unaskable,
+        ..shape_to_view(shape)
+    }))
 }
 
 pub fn parse_intent_str(s: &str) -> ApiResult<temper_substrate::payloads::ArtifactIntent> {

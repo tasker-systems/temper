@@ -1,4 +1,4 @@
-//! `validate_ask` — whether an ask lies inside its shape, decided before any SQL exists (spec §3.4,
+//! Validating an ask — whether it lies inside its shape, decided before any SQL exists (spec §3.4,
 //! §3.5 step 4), and the refusals that teach the shape's vocabulary when it does not.
 //!
 //! **Every refusal at once, one per reason.** A caller repairing an ask sees all of it in one round
@@ -20,10 +20,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::reference::{is_integral, jsonb_contains_within, nested_contains_within};
+use super::session::RequestBudget;
 use super::walk::{
     json_bytes_up_to, AskablePath, AskableView, BoundKind, Facts, JsonType, Member, Resolved,
-    Vocabulary, Walk, WalkBounds, MAX_SCHEMA_BYTES, MAX_WALK_DEPTH, MAX_WALK_PATHS,
-    MAX_WALK_VISITS,
+    ShapeWalk, Vocabulary, MAX_SCHEMA_BYTES, MAX_WALK_DEPTH, MAX_WALK_PATHS, MAX_WALK_VISITS,
 };
 use super::{
     ArtifactAsk, ArtifactPredicate, LoadedShape, ShapeIdentity, ShapeLoad, ShapeSuccessor,
@@ -83,11 +83,14 @@ pub const MAX_ARTIFACT_PATH_SEGMENT_BYTES: usize = MAX_FILTER_STRING_BYTES;
 /// the shape of a real vocabulary; a pathological one is cut, visibly.
 pub const MAX_TEACHING_BYTES: usize = 16 * 1024;
 
-/// The most containment steps one ask may spend checking its `contains` values against the enums
-/// the shape declares — one step per node compared, and one more per 64 bytes of each object key
-/// looked up and of each string compared (`reference::BYTES_PER_STEP`), so a long key or string
-/// costs what it carries. Past it the predicate is refused `path_outside_shape` with
-/// `teaches.beyond_bound: work`, never admitted unchecked.
+/// The most containment steps one request's asks may spend between them checking their `contains`
+/// values against the enums their shapes declare — one step per node compared, and one more per 64
+/// bytes of each object key looked up and of each string compared (`reference::BYTES_PER_STEP`), so
+/// a long key or string costs what it carries. Past it the predicate is refused
+/// `path_outside_shape` with `teaches.beyond_bound: work`, never admitted unchecked.
+///
+/// One budget for the request, not one per ask ([`AskSession`](super::AskSession)): a request that
+/// carries many asks — a composition's stages, or a batch read's — would otherwise multiply it.
 ///
 /// # 1,048,576
 ///
@@ -111,6 +114,7 @@ pub const MAX_MEMBERSHIP_STEPS: usize = 1 << 20;
 /// | `value_outside_shape` | `vocabulary` (each offending path's declared types and values), `non_closure` |
 /// | `unknown_artifact_intent`, `unknown_shape_state` | `terms` |
 /// | `shape_superseded` | `successor` |
+/// | `shape_schema_uncompilable` | `beyond_bound: schema_bytes` for a schema past the byte bound |
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -121,7 +125,8 @@ pub struct RefusalTeaching {
     /// refusal is about, and held to a bounded size.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vocabulary: Option<Vocabulary>,
-    /// The walk bound an asked path lies beyond.
+    /// The walk bound an asked path lies beyond, or — on `shape_schema_uncompilable` —
+    /// `schema_bytes`, for a whole schema too large for the walk to read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub beyond_bound: Option<BoundKind>,
     /// A closed vocabulary of terms: the intents, or the askable shape states.
@@ -153,7 +158,8 @@ pub struct TeachingElision {
 
 /// An ask that lies inside its shape, in the form the SQL binds.
 ///
-/// Parse-don't-validate: the fields are private and [`validate_ask`] is the only constructor. It is
+/// Parse-don't-validate: the fields are private and
+/// [`AskSession::validate`](super::AskSession::validate) is the only constructor. It is
 /// a validated **output**, not the ask rewritten in place: an array path's `contains` values arrive
 /// wrapped (§3.4, *Why the array row wraps*), and the defaults of §2.1 are applied.
 ///
@@ -194,29 +200,21 @@ impl ValidatedAsk {
     }
 }
 
-/// Refusal step 4 of §3.5: path, operator and value, against the shape the loader admitted. The
-/// shape-free checks are [`validate_ask_form`]'s, run first; steps 1–3 are [`ShapeLoad::loaded`].
+/// Refusal step 4 of §3.5 — path, operator and value — for one ask against the shape the loader
+/// admitted, read through the request's walk of that shape and charged to the request's budget.
+/// The shape-free checks are [`validate_ask_form`]'s, run first; steps 1–3 are
+/// [`ShapeLoad::loaded`]; [`AskSession::validate`](super::AskSession::validate) runs all four.
 ///
-/// `shape` must be the load of `ask.shape`. A different shape is a caller defect, and it is
-/// refused rather than validated: an ask is never checked against a schema it did not name, in any
-/// build. The refusal is [`ShapeLoad::NotAskable`]'s exactly — reason, sentence, and nothing taught
-/// — so a loader defect never tells a present shape from an absent one (§3.5: *unreadable and
-/// absent look identical*).
-///
-/// **Bounded per call, not per request.** Each call builds its own walk of the schema and its own
-/// budgets — the walk's, the vocabulary's and the membership steps — so a caller that validates
-/// several asks in one request (several stages, or the gate and then the seal) must cache the walk
-/// and the vocabulary per shape and bound the request as a whole.
-pub fn validate_ask(
+/// `walk` must be the walk of `shape`, which the session keys by the same id.
+pub(super) fn validate_loaded<'c>(
     ask: &ArtifactAsk,
     shape: &LoadedShape,
+    walk: &mut ShapeWalk<'c>,
+    budget: &mut RequestBudget<'c>,
 ) -> Result<ValidatedAsk, Vec<PlanRefusal>> {
-    if ask.shape != shape.shape_id {
-        return Err(vec![not_askable()]);
-    }
     let mut errs = Vec::new();
     let form = check_form(ask, &mut errs);
-    let predicates = against_shape(&ask.predicates, &form.walkable, shape, &mut errs);
+    let predicates = against_shape(&ask.predicates, &form.walkable, walk, budget, &mut errs);
     if !errs.is_empty() {
         return Err(errs);
     }
@@ -232,7 +230,8 @@ pub fn validate_ask(
 /// The checks that need no shape: the term vocabularies, the per-ask caps, and each predicate's
 /// path and value form. Every refusal they raise, at once.
 ///
-/// One definition for both callers: [`validate_ask`] runs it before walking the shape, and an
+/// One definition for both callers: [`AskSession::validate`](super::AskSession::validate) runs it
+/// before walking the shape (and beside a steps 1–3 refusal, which consulted no schema), and an
 /// offline check that cannot load shapes (`temper query --check`, spec §4.3 item 5) runs it alone.
 pub fn validate_ask_form(ask: &ArtifactAsk) -> Vec<PlanRefusal> {
     let mut errs = Vec::new();
@@ -268,7 +267,9 @@ impl ShapeLoad {
     ///
     /// **Fixed sentences.** `shape_not_askable` reads the same for a shape that does not exist and
     /// one the asker cannot read, because they are one arm. `shape_schema_uncompilable` never
-    /// echoes the compiler: its text is the author's material, not the asker's.
+    /// echoes the compiler: its text is the author's material, not the asker's. A schema past the
+    /// walk's byte bound is refused with the same reason, its own sentence naming the bound, and
+    /// `teaches.beyond_bound: schema_bytes` — the bound as data, never a compiler's words.
     pub fn loaded(&self) -> Result<&LoadedShape, PlanRefusal> {
         let (reason, detail, teaches) = match self {
             ShapeLoad::Loaded(shape) => return Ok(shape),
@@ -289,6 +290,16 @@ impl ShapeLoad {
                 None,
             ),
             ShapeLoad::Uncompilable => (RefusalReason::ShapeSchemaUncompilable, UNCOMPILABLE, None),
+            ShapeLoad::SchemaTooLarge => {
+                return Err(refusal(
+                    RefusalReason::ShapeSchemaUncompilable,
+                    schema_too_large(),
+                    Some(RefusalTeaching {
+                        beyond_bound: Some(BoundKind::SchemaBytes),
+                        ..RefusalTeaching::default()
+                    }),
+                ))
+            }
         };
         Err(refusal(reason, detail.to_string(), teaches))
     }
@@ -299,7 +310,7 @@ const NOT_ASKABLE: &str =
 
 /// The one `shape_not_askable` refusal: for a shape absent, unreadable, or not the one the ask
 /// names.
-fn not_askable() -> PlanRefusal {
+pub(super) fn not_askable() -> PlanRefusal {
     refusal(
         RefusalReason::ShapeNotAskable,
         NOT_ASKABLE.to_string(),
@@ -316,6 +327,16 @@ const SUPERSEDED_NO_SUCCESSOR: &str = "the named shape has been amended, and no 
 
 const UNCOMPILABLE: &str =
     "the shape's schema does not compile, so nothing can be asked of it until the shape is amended";
+
+/// The sentence for a schema past the walk's byte bound: never compiled, so never "does not
+/// compile" — the reason is the size, and the sentence says which.
+fn schema_too_large() -> String {
+    format!(
+        "the shape's schema is larger than the {MAX_SCHEMA_BYTES} bytes this server reads, so it \
+         is not compiled and nothing can be asked of it until the shape is amended to a smaller \
+         schema"
+    )
+}
 
 /// The second half of every `value_outside_shape` (spec §3.4, ruled 2026-10-19): what the refusal
 /// does not claim, and the route to the values it does not declare.
@@ -556,20 +577,21 @@ enum Fault {
 }
 
 /// The well-formed predicates checked against the shape, one walk per path: bound, or refused.
-fn against_shape(
+fn against_shape<'c>(
     predicates: &[ArtifactPredicate],
     formed: &[bool],
-    shape: &LoadedShape,
+    walk: &mut ShapeWalk<'c>,
+    budget: &mut RequestBudget<'c>,
     errs: &mut Vec<PlanRefusal>,
 ) -> Vec<ArtifactPredicate> {
     if !formed.contains(&true) {
         return Vec::new();
     }
-    let walk = Walk::new(&shape.schema, &WalkBounds::BUILD);
-    let sorted = sort(predicates, formed, &walk);
-    refuse_paths(&sorted, &walk, shape.shape_id, errs);
+    let shape = walk.shape();
+    let sorted = sort(predicates, formed, walk, budget);
+    refuse_paths(&sorted, walk, errs);
 
-    let (at, teaches) = offending(&sorted.outside_operator, &sorted.resolved, shape.shape_id);
+    let (at, teaches) = offending(&sorted.outside_operator, &sorted.resolved, shape);
     refuse_at(
         errs,
         RefusalReason::OperatorOutsideShape,
@@ -578,7 +600,7 @@ fn against_shape(
          `integer` or `string`, or no type, and a bound of a type declared there",
         Some(teaches),
     );
-    let (at, mut teaches) = offending(&sorted.outside_value, &sorted.resolved, shape.shape_id);
+    let (at, mut teaches) = offending(&sorted.outside_value, &sorted.resolved, shape);
     teaches.non_closure = Some(NON_CLOSURE.to_string());
     refuse_at(
         errs,
@@ -609,23 +631,26 @@ struct Sorted<'p, 's> {
 
 /// Every well-formed predicate against the shape.
 ///
-/// **One walk per distinct path, all under one budget** (§3.3: the walk "never stalls or exhausts
-/// the server"). A per-predicate budget let one ask spend [`MAX_ASK_PREDICATES`] budgets; memoising
-/// by path alone would still let it spend one per distinct path. Sharing the budget holds what the
-/// ask's paths cost to [`MAX_WALK_VISITS`] however many it names, and the memo makes a repeated
-/// path free. A predicate past the spent budget is refused `path_outside_shape` naming `work` —
-/// visibly, as every bound is. The vocabulary a path refusal teaches is walked under a budget of
-/// its own, so a spent ask still teaches what it may ask.
+/// **One walk per distinct path, all under the request's budget** (§3.3: the walk "never stalls or
+/// exhausts the server"). A per-predicate budget let one ask spend [`MAX_ASK_PREDICATES`] budgets;
+/// a per-ask budget let one request spend one per ask; memoising by path alone would still let it
+/// spend one per distinct path. Sharing the budget holds what every path of every ask in the
+/// request costs to [`MAX_WALK_VISITS`] however many they name, and the walk's memo makes a path
+/// any ask of the request already named free. A predicate past the spent budget is refused
+/// `path_outside_shape` naming `work` — visibly, as every bound is. The vocabulary a path refusal
+/// teaches is walked once per shape under a budget of its own, so a spent request still teaches
+/// what it may ask.
 ///
 /// No path's values are copied to sort it: the facts stay the walk's, borrowed from the schema, so
 /// a value set several paths share is read once and costs nothing per path after. A refused path's
 /// facts are copied only into a teaching, once per distinct path and only as far as the teaching
 /// keeps them ([`offending`], [`teaching`]).
-fn sort<'p, 's>(
+fn sort<'p, 'c>(
     predicates: &'p [ArtifactPredicate],
     formed: &[bool],
-    walk: &Result<Walk<'s>, BoundKind>,
-) -> Sorted<'p, 's> {
+    walk: &mut ShapeWalk<'c>,
+    budget: &mut RequestBudget<'c>,
+) -> Sorted<'p, 'c> {
     let mut slots: HashMap<&'p [String], usize> = HashMap::new();
     let mut distinct: Vec<&'p [String]> = Vec::new();
     let slot_of: Vec<Option<usize>> = predicates
@@ -640,15 +665,15 @@ fn sort<'p, 's>(
             })
         })
         .collect();
-    let resolutions = match walk {
-        Ok(walk) => walk.resolve_all(&distinct),
-        Err(at) => vec![Resolved::BeyondBound(*at); distinct.len()],
-    };
+    let resolutions: Vec<Resolved<'c>> = distinct
+        .iter()
+        .map(|path| walk.resolve(path, &mut budget.walk))
+        .collect();
     let mut sorted = Sorted {
         resolved: distinct.into_iter().zip(resolutions).collect(),
         ..Sorted::default()
     };
-    let mut steps = MAX_MEMBERSHIP_STEPS;
+    let steps = &mut budget.membership_steps;
     for (i, (predicate, slot)) in predicates.iter().zip(slot_of).enumerate() {
         let Some(slot) = slot else {
             continue;
@@ -665,7 +690,7 @@ fn sort<'p, 's>(
                 continue;
             }
         };
-        match bind(&predicate.op, facts, &mut steps) {
+        match bind(&predicate.op, facts, steps) {
             Ok(op) => sorted.bound.push(ArtifactPredicate {
                 path: predicate.path.clone(),
                 op,
@@ -682,30 +707,27 @@ fn sort<'p, 's>(
 }
 
 /// `path_outside_shape`, teaching the askable vocabulary and the bound an asked path met.
-fn refuse_paths(
-    sorted: &Sorted<'_, '_>,
-    walk: &Result<Walk<'_>, BoundKind>,
-    shape: ShapeId,
-    errs: &mut Vec<PlanRefusal>,
-) {
+///
+/// The vocabulary is the walk's, enumerated once for the request and kept; a teaching copies from
+/// it only the paths it has first measured to fit ([`teaching`]).
+fn refuse_paths(sorted: &Sorted<'_, '_>, walk: &mut ShapeWalk<'_>, errs: &mut Vec<PlanRefusal>) {
     if sorted.outside_path.is_empty() {
         return;
     }
-    let vocabulary = match walk {
-        Ok(walk) => walk.enumerate(),
-        Err(at) => Vocabulary {
-            paths: Vec::new(),
-            truncated: BTreeSet::from([*at]),
-        },
-    };
+    let shape = walk.shape();
+    let vocabulary = walk.vocabulary();
     let mut rule = "a path is not one the shape declares — only `properties` chains, local \
                     `$ref`s, `allOf`, `anyOf` and `oneOf` are walked"
         .to_string();
     if let Some(at) = sorted.beyond {
         rule.push_str(&format!(", and {}", bound_said(at)));
     }
-    let Vocabulary { paths, truncated } = vocabulary;
-    let mut teaches = teaching(paths, std::convert::identity, truncated, shape);
+    let mut teaches = teaching(
+        vocabulary.paths.iter().collect(),
+        AskablePath::clone,
+        vocabulary.truncated.clone(),
+        shape,
+    );
     teaches.beyond_bound = sorted.beyond;
     refuse_at(
         errs,
@@ -757,8 +779,9 @@ fn bound_said(at: BoundKind) -> String {
             format!("the walk reads a schema of at most {MAX_SCHEMA_BYTES} bytes")
         }
         BoundKind::Work => format!(
-            "the shape is read within a bounded amount of work — at most {MAX_WALK_VISITS} \
-             visits and {MAX_MEMBERSHIP_STEPS} membership steps"
+            "the shapes a request names are read within a bounded amount of work — at most \
+             {MAX_WALK_VISITS} visits and {MAX_MEMBERSHIP_STEPS} membership steps across every \
+             ask in the request"
         ),
     }
 }
@@ -920,7 +943,7 @@ fn compare_admits(facts: &Facts<'_>, bound: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::artifact_ask::{AskOperator, PathFacts};
+    use crate::types::artifact_ask::{AskOperator, PathFacts, ShapeContext};
     use crate::types::query::filter::json_bytes;
     use crate::types::query::filter::OrdOp;
     use serde_json::json;
@@ -965,6 +988,18 @@ mod tests {
             direction: OrdOp::Gte,
             value,
         }
+    }
+
+    /// One ask, validated in a request of its own: a one-shape context and a fresh session, so the
+    /// walk it reads and the budget it spends are its alone — what every test below measures.
+    fn validate_ask(
+        ask: &ArtifactAsk,
+        shape: &LoadedShape,
+    ) -> Result<ValidatedAsk, Vec<PlanRefusal>> {
+        let context: ShapeContext = [(shape.shape_id, ShapeLoad::Loaded(shape.clone()))]
+            .into_iter()
+            .collect();
+        context.session().validate(ask)
     }
 
     fn refusals(a: &ArtifactAsk, shape: &LoadedShape) -> Vec<PlanRefusal> {
@@ -1234,9 +1269,10 @@ mod tests {
         );
     }
 
-    /// A path named by many predicates is resolved once. Bites the per-path memo in
-    /// `sort`: resolving the same path once per predicate under the shared budget spends it, and
-    /// the ask is refused.
+    /// A path named by many predicates is resolved once. Two memos give it — `sort`'s slots within
+    /// the ask and `ShapeWalk::resolve`'s cache across the request — so the bite removes both:
+    /// resolving the same path once per predicate under the shared budget spends it, and the ask is
+    /// refused.
     #[test]
     fn a_path_named_by_many_predicates_is_walked_once() {
         let shape = heavy_properties();
@@ -1251,7 +1287,7 @@ mod tests {
     /// one ask's budget — the enum is read once, about 18,000 visits, and no path's values are
     /// copied. Before, each path paid for the set again and for a wire copy, about 18,000 visits a
     /// path, so the fourth met `work`. Bites the per-budget set memo in `Budget::members`, and
-    /// `Walk::resolve_all` copying facts onto the wire.
+    /// `ShapeWalk::resolve` copying facts onto the wire.
     #[test]
     fn an_ask_may_name_every_path_over_one_large_shared_enum() {
         let members: Vec<Value> = (0..9_000).map(|i| json!(i)).collect();
@@ -1762,6 +1798,26 @@ mod tests {
         let uncompilable = ShapeLoad::Uncompilable.loaded().unwrap_err();
         assert_eq!(uncompilable.reason, RefusalReason::ShapeSchemaUncompilable);
         assert_eq!(uncompilable.detail, UNCOMPILABLE);
+    }
+
+    /// A schema past the walk's byte bound is refused at the load with the compile step's reason,
+    /// a sentence of its own naming the bound, and `teaches.beyond_bound: schema_bytes`. Bites a
+    /// `SchemaTooLarge` arm that answers `Uncompilable`'s refusal, which would say the schema does
+    /// not compile when it was never compiled.
+    #[test]
+    fn a_schema_past_the_byte_bound_is_refused_at_the_load_naming_the_bound() {
+        let r = ShapeLoad::SchemaTooLarge.loaded().unwrap_err();
+        assert_eq!(r.reason, RefusalReason::ShapeSchemaUncompilable);
+        assert_ne!(r.detail, UNCOMPILABLE);
+        assert!(
+            r.detail.contains(&MAX_SCHEMA_BYTES.to_string()),
+            "{}",
+            r.detail
+        );
+        assert_eq!(
+            r.teaches.and_then(|t| t.beyond_bound),
+            Some(BoundKind::SchemaBytes)
+        );
     }
 
     #[test]

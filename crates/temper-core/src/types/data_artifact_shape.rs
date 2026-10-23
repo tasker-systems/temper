@@ -9,9 +9,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::types::artifact_ask::Vocabulary;
 use crate::types::authorship::ActInput;
 use crate::types::data_artifact::KindOwnerInput;
 use crate::types::ids::ShapeId;
+use crate::types::query::PlanRefusal;
 
 /// Whether a non-conforming commit is refused or merely recorded.
 ///
@@ -68,6 +70,29 @@ pub struct ShapeView {
     pub shape_version: i32,
     pub is_folded: bool,
     pub created: DateTime<Utc>,
+    /// What an artifact ask may name against this version of the shape: each askable path with
+    /// its declared types, its `enum`/`const` values, and the operators feasible at it — the
+    /// vocabulary a refusal's `teaches` narrows, derived by the same walk that validates an ask.
+    /// Bounded, and a truncated vocabulary names the bound in `truncated`.
+    ///
+    /// **Present only on the by-id read** (`GET /api/shapes/{id}`, `get_data_artifact_shape`,
+    /// `temper data-artifact schema show`). Listings leave it **absent, which is not empty**: a
+    /// listing never pays one enumeration per shape, and an absent field never says that nothing
+    /// is askable. Empty when this version's schema cannot be walked — `unaskable` then says why —
+    /// and `truncated: [schema_bytes]` when the schema is past the byte bound the walk reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional))]
+    pub askable: Option<Vocabulary>,
+    /// Why this version's schema cannot be walked: the refusal step 3 of asking gives it —
+    /// `shape_schema_uncompilable`, with its fixed sentence for a schema that does not compile
+    /// under the no-fetch compiler, or with a sentence naming the byte bound and
+    /// `teaches.beyond_bound: schema_bytes` for one too large to read, which is never compiled.
+    /// What an ask naming this shape is told can differ: an ask naming a folded version is refused
+    /// `shape_superseded` first (`is_folded`). Absent whenever the schema can be walked, and on
+    /// listings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional))]
+    pub unaskable: Option<PlanRefusal>,
 }
 
 /// Request body for declaring a shape — the write surface.
