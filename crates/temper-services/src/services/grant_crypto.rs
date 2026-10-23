@@ -155,7 +155,7 @@ impl VaultKey {
     }
 
     fn cipher(&self) -> XChaCha20Poly1305 {
-        XChaCha20Poly1305::new(Key::from_slice(&self.0))
+        XChaCha20Poly1305::new(&Key::from(self.0))
     }
 
     /// Seal `plaintext`, binding `aad` (associated data) into the authentication tag. Returns
@@ -164,14 +164,14 @@ impl VaultKey {
     pub fn encrypt(&self, plaintext: &[u8], aad: &[u8]) -> ([u8; NONCE_LEN], Vec<u8>) {
         let mut nonce_bytes = [0u8; NONCE_LEN];
         UnwrapErr(SysRng).fill_bytes(&mut nonce_bytes);
-        let nonce = XNonce::from_slice(&nonce_bytes);
+        let nonce = XNonce::from(nonce_bytes);
         // In-memory AEAD over a small buffer does not fail in practice; the only documented error
         // is a length overflow that a token-sized plaintext cannot reach. Treat it as unreachable
         // rather than threading a can't-happen error through every caller.
         let ciphertext = self
             .cipher()
             .encrypt(
-                nonce,
+                &nonce,
                 Payload {
                     msg: plaintext,
                     aad,
@@ -193,7 +193,7 @@ impl VaultKey {
         let nonce: [u8; NONCE_LEN] = nonce.try_into().map_err(|_| CryptoError::BadNonce)?;
         self.cipher()
             .decrypt(
-                XNonce::from_slice(&nonce),
+                &XNonce::from(nonce),
                 Payload {
                     msg: ciphertext,
                     aad,
