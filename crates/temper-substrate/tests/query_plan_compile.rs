@@ -7,6 +7,7 @@
 //! the deployed function definitions `MIGRATOR` embeds (newest definition wins) — still no
 //! database.
 
+use temper_core::types::artifact_ask::ShapeContext;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::query::{
     declaration, validate, ActInvocation, ActName, Composition, IdKind, IdSet, OutcomeDeclaration,
@@ -46,6 +47,7 @@ fn find_root(name: &str, ids: Vec<Uuid>) -> StageNode {
         resource_filter: None,
         edge_filter: None,
         properties: vec![],
+        artifact_filter: vec![],
     })
 }
 
@@ -70,6 +72,7 @@ fn find_from(name: &str, upstream: &str) -> StageNode {
         resource_filter: None,
         edge_filter: None,
         properties: vec![],
+        artifact_filter: vec![],
     })
 }
 
@@ -92,7 +95,7 @@ fn build(stages: Vec<StageNode>, returns: Vec<&str>) -> ValidatedComposition {
         },
         stages,
     };
-    validate(&c).expect("plan is valid")
+    validate(&c, &mut ShapeContext::empty().session()).expect("plan is valid")
 }
 
 fn plan_with_caller_ids() -> (ValidatedComposition, Vec<Uuid>) {
@@ -461,6 +464,7 @@ fn find_stage(name: &str, act: ActName, input: Option<StageInput>) -> StageNode 
         resource_filter: None,
         edge_filter: None,
         properties: vec![],
+        artifact_filter: vec![],
     })
 }
 
@@ -752,7 +756,8 @@ fn a_stage_with_no_threaded_question_still_refuses_as_the_callers_omission() {
             None,
         )],
     };
-    let refusals = validate(&c).expect_err("no intention is refused statically");
+    let refusals = validate(&c, &mut ShapeContext::empty().session())
+        .expect_err("no intention is refused statically");
     assert!(refusals
         .iter()
         .any(|r| r.reason == RefusalReason::MissingIntention));
@@ -807,7 +812,8 @@ fn the_unmodelled_acts_are_refused_before_the_compiler_ever_sees_them() {
         },
         stages: vec![find_stage("s", act.clone(), None)],
     };
-    let errs = validate(&c).expect_err("the act has no fragment this surface can emit");
+    let errs = validate(&c, &mut ShapeContext::empty().session())
+        .expect_err("the act has no fragment this surface can emit");
     assert!(
         errs.iter()
             .any(|e| e.reason == RefusalReason::NotSeparablyReachable),
@@ -863,6 +869,7 @@ fn a_walk_compiles_to_the_provenance_core_and_carries_its_via_column() {
             labels: vec!["cites".to_string()],
         }),
         properties: vec![],
+        artifact_filter: vec![],
     });
     let c = Composition {
         outcome: OutcomeDeclaration {
@@ -873,7 +880,8 @@ fn a_walk_compiles_to_the_provenance_core_and_carries_its_via_column() {
         },
         stages: vec![walk],
     };
-    let v = validate(&c).expect("a seeded, bounded walk with an edge filter is well-formed");
+    let v = validate(&c, &mut ShapeContext::empty().session())
+        .expect("a seeded, bounded walk with an edge filter is well-formed");
     let compiled = compile(&v, ProfileId::new()).expect("it compiles");
     let sql = &compiled.sql;
 
@@ -976,6 +984,7 @@ fn a_walk_without_an_edge_filter_narrows_on_neither_axis() {
         resource_filter: None,
         edge_filter: None,
         properties: vec![],
+        artifact_filter: vec![],
     });
     let c = Composition {
         outcome: OutcomeDeclaration {
@@ -986,7 +995,8 @@ fn a_walk_without_an_edge_filter_narrows_on_neither_axis() {
         },
         stages: vec![walk],
     };
-    let v = validate(&c).expect("an unfiltered walk is well-formed");
+    let v = validate(&c, &mut ShapeContext::empty().session())
+        .expect("an unfiltered walk is well-formed");
     let compiled = compile(&v, ProfileId::new()).expect("it compiles");
     let call = core_call_args(&compiled.sql, "__temper_ungated_follow_from");
     assert!(
@@ -1040,6 +1050,7 @@ fn an_edge_property_predicate_is_bound_as_the_serialized_typed_value() {
             }],
         }),
         properties: vec![],
+        artifact_filter: vec![],
     });
     let c = Composition {
         outcome: OutcomeDeclaration {
@@ -1050,7 +1061,8 @@ fn an_edge_property_predicate_is_bound_as_the_serialized_typed_value() {
         },
         stages: vec![walk],
     };
-    let v = validate(&c).expect("a walk with an edge property predicate is well-formed");
+    let v = validate(&c, &mut ShapeContext::empty().session())
+        .expect("a walk with an edge property predicate is well-formed");
     let compiled = compile(&v, ProfileId::new()).expect("it compiles");
 
     let call = core_call_args(&compiled.sql, "__temper_ungated_follow_from");
@@ -1115,6 +1127,7 @@ fn a_declared_offset_reaches_the_walks_tenth_slot_and_an_absent_one_still_fills_
             resource_filter: None,
             edge_filter: None,
             properties: vec![],
+            artifact_filter: vec![],
         });
         let c = Composition {
             outcome: OutcomeDeclaration {
@@ -1125,7 +1138,8 @@ fn a_declared_offset_reaches_the_walks_tenth_slot_and_an_absent_one_still_fills_
             },
             stages: vec![walk],
         };
-        let v = validate(&c).expect("a seeded walk is well-formed");
+        let v = validate(&c, &mut ShapeContext::empty().session())
+            .expect("a seeded walk is well-formed");
         compile(&v, ProfileId::new()).expect("it compiles")
     };
 
@@ -1326,7 +1340,8 @@ fn a_multi_id_anchor_bound_is_refused_before_the_compiler_ever_sees_it() {
         )],
     };
 
-    let errs = validate(&c).expect_err("two anchor ids must refuse");
+    let errs =
+        validate(&c, &mut ShapeContext::empty().session()).expect_err("two anchor ids must refuse");
     assert!(
         errs.iter()
             .any(|e| e.reason == RefusalReason::AnchorTakesOneId
@@ -1636,6 +1651,7 @@ fn selection(name: &str) -> StageNode {
         }),
         edge_filter: None,
         properties: vec![],
+        artifact_filter: vec![],
     })
 }
 
@@ -1662,6 +1678,7 @@ fn survey_stage(name: &str) -> StageNode {
         resource_filter: None,
         edge_filter: None,
         properties: vec![],
+        artifact_filter: vec![],
     })
 }
 

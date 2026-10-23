@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::types::ids::ShapeId;
+use crate::types::query::filter::property_value_bytes;
 use crate::types::query::PropertyOp;
 
 pub use reference::matches;
@@ -114,6 +115,20 @@ pub struct ArtifactPredicate {
     pub op: PropertyOp,
 }
 
+impl ArtifactAsk {
+    /// The bytes of every value this ask's predicates bind — each `contains` value and `compare`
+    /// bound in compact JSON — in the measure `property_value_bytes` gives a property predicate's,
+    /// so an ask's values and a filter's count toward one budget in one unit. The composable arm
+    /// counts them into a composition's `MAX_COMPOSITION_PROPERTY_VALUE_BYTES`.
+    pub fn value_bytes(&self) -> usize {
+        self.predicates
+            .iter()
+            .flat_map(|p| p.op.values())
+            .map(property_value_bytes)
+            .sum()
+    }
+}
+
 /// A shape the loader read, found live, and compiled with the no-fetch compiler — so the walk sees
 /// a schema that compiled (decision P4: *the loader decided compilability*). Nothing here
 /// compiles it.
@@ -174,6 +189,29 @@ pub struct ShapeIdentity {
     pub artifact_kind: String,
 }
 
+impl ShapeIdentity {
+    /// The home this version is declared in — the scope of every ask against it (§2.1).
+    pub fn home(&self) -> ShapeHome {
+        ShapeHome {
+            anchor_table: self.home_anchor_table.clone(),
+            anchor_id: self.home_anchor_id,
+        }
+    }
+}
+
+/// A shape's home: the context or cogmap whose resources an ask against it ranges over. A resource
+/// has exactly one home, so asks AND-ed on one resource must share one (§4.1, *Scope*).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "artifact_ask.ts"))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct ShapeHome {
+    /// `"kb_contexts"` or `"kb_cogmaps"`.
+    pub anchor_table: String,
+    pub anchor_id: Uuid,
+}
+
 /// The version in force after a fold: the live row at the same home and family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
@@ -219,6 +257,15 @@ pub struct ShapeContext {
 }
 
 impl ShapeContext {
+    /// No shapes: the context of a request that names none. An ask validated against it is
+    /// refused `shape_not_askable`, as an absent shape's is — never checked against nothing and
+    /// admitted.
+    pub const fn empty() -> ShapeContext {
+        ShapeContext {
+            loads: BTreeMap::new(),
+        }
+    }
+
     /// What the loader found for a shape, or `None` for a shape it was not asked to load.
     pub fn get(&self, shape: &ShapeId) -> Option<&ShapeLoad> {
         self.loads.get(shape)
@@ -321,5 +368,26 @@ mod tests {
         let context: ShapeContext = [(shape_id(), ShapeLoad::NotAskable)].into_iter().collect();
         assert_eq!(context.get(&shape_id()), Some(&ShapeLoad::NotAskable));
         assert_eq!(context.get(&other), None);
+    }
+
+    #[test]
+    fn an_asks_value_bytes_are_its_bound_values_in_compact_json() {
+        let ask: ArtifactAsk = serde_json::from_value(json!({
+            "shape": Uuid::nil(),
+            "predicates": [
+                { "path": ["a"], "op": { "op": "has_key" } },
+                { "path": ["b"], "op": { "op": "contains", "values": ["ms", { "k": [1, 2] }] } },
+                { "path": ["c"], "op": { "op": "compare", "direction": "gte", "value": 10 } }
+            ]
+        }))
+        .unwrap();
+        // `"ms"` 4, `{"k":[1,2]}` 11, `10` 2; `has_key` binds nothing.
+        assert_eq!(ask.value_bytes(), 17);
+    }
+
+    #[test]
+    fn the_empty_context_holds_no_shape() {
+        assert_eq!(ShapeContext::empty(), ShapeContext::default());
+        assert_eq!(ShapeContext::empty().get(&shape_id()), None);
     }
 }

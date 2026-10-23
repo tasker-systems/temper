@@ -18,8 +18,11 @@
 //! thing, which moves with every beat. [`validate`] is both; [`validate_shape`] is the first
 //! alone, which is what a client may run locally against a server whose binary it does not share.
 
+mod asks;
 mod capability;
 mod shape;
+
+pub use asks::{shapes_to_load, MAX_ASKED_SHAPES, MAX_ASKS_PER_REQUEST};
 
 // The per-candidate caps, for the artifact ask's own caps to mirror (spec
 // 2026-10-19-asking-artifacts-by-what-they-are §3.4, *Caps*): one definition of each number.
@@ -28,7 +31,7 @@ pub(crate) use capability::{MAX_PER_CANDIDATE_PREDICATES, MAX_PER_CANDIDATE_PROB
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::types::artifact_ask::RefusalTeaching;
+use crate::types::artifact_ask::{AskSession, RefusalTeaching, ValidatedAsk};
 
 use super::act::{ActName, ActQuantity, Disclosure};
 use super::composition::{Composition, ReturnSpec, StageNode};
@@ -154,10 +157,17 @@ pub struct PlanRefusal {
 ///
 /// Parse-don't-validate: the fields are private and [`validate`] is the only constructor, so a
 /// compiler that accepts this type cannot be handed an unvalidated plan.
+///
+/// **It seals the asks it admitted** (spec `2026-10-19-asking-artifacts-by-what-they-are` §4.3
+/// item 3): each stage's `artifact_filter`, validated — the defaults applied, an array path's
+/// values wrapped, and the identity of the shape version each was validated against. What runs is
+/// read from here, never from the caller's asks, so the statement and the trace see what the seal
+/// checked and nothing else: one source for each fact.
 #[derive(Debug, Clone)]
 pub struct ValidatedComposition {
     composition: Composition,
     ordered: Vec<StageNode>,
+    asks: BTreeMap<StageName, Vec<ValidatedAsk>>,
 }
 
 impl ValidatedComposition {
@@ -172,6 +182,12 @@ impl ValidatedComposition {
 
     pub fn returns(&self) -> &[ReturnSpec] {
         &self.composition.outcome.returns
+    }
+
+    /// A stage's asks as the seal validated them, in its `artifact_filter`'s order — the `i`th is
+    /// the filter's `i`th. Empty for a stage that asks nothing, or for a name no stage carries.
+    pub fn asks(&self, stage: &StageName) -> &[ValidatedAsk] {
+        self.asks.get(stage).map_or(&[], Vec::as_slice)
     }
 }
 
@@ -408,9 +424,28 @@ impl ValidationOutcome {
     }
 }
 
-/// Validate a composition against `search_family()` and the plan's own topology. Returns ALL
-/// refusals, never just the first.
-pub fn validate(c: &Composition) -> Result<ValidatedComposition, Vec<PlanRefusal>> {
+/// Validate a composition against `search_family()`, the plan's own topology, and the shapes its
+/// artifact asks name. Returns ALL refusals, never just the first.
+///
+/// **The asks are validated through `session`, the request's one [`AskSession`]**, begun from the
+/// shapes the caller loaded before the gate (`ShapeContext::session`). A composition carrying no
+/// asks reads nothing from it, so every ask-free caller passes the session of
+/// `ShapeContext::empty()` and validates exactly as it would without one; an ask validated against
+/// a context that does not hold its shape is refused `shape_not_askable`, never admitted.
+///
+/// **A gate and a seal pass the same session.** The session keeps each ask's answer, keyed by the
+/// ask's JSON text, and the walk of each shape it has read — so the seal, re-validating the asks
+/// the gate admitted, is answered from that memo, spends nothing and cannot refuse them for work
+/// the gate already paid. Nothing may rewrite an ask between the two: an ask the seal sees
+/// differently is an ask it validates afresh. A session begun twice — once per pass — builds every
+/// walk twice and halves what one request may spend.
+///
+/// The request caps on asks and shapes ([`shapes_to_load`]) are decided before any ask is read; a
+/// composition over them has no ask validated at all.
+pub fn validate(
+    c: &Composition,
+    session: &mut AskSession<'_>,
+) -> Result<ValidatedComposition, Vec<PlanRefusal>> {
     let (mut errs, ordered) = shape::validate_shape_indexed(c);
 
     // The capability pass has two halves and only its per-stage half is gated on the topology.
@@ -429,6 +464,10 @@ pub fn validate(c: &Composition) -> Result<ValidatedComposition, Vec<PlanRefusal
     // exactly what the pinned rule is about — `reachable ACTS keep the cycle the sole finding`.
     // Per-stage findings over a graph that is not a graph would be findings about a plan that
     // cannot be read.
+    //
+    // The asks follow the same rule: their request caps are composition-level and always counted,
+    // and the asks themselves are validated only over a graph that sorts.
+    let sealed = asks::validate_asks(c, ordered.is_some(), session, &mut errs);
     if let Some(ordered) = ordered {
         let by_name = index_by_name(c);
         capability::validate_stages(c, &by_name, &mut errs);
@@ -436,6 +475,7 @@ pub fn validate(c: &Composition) -> Result<ValidatedComposition, Vec<PlanRefusal
             return Ok(ValidatedComposition {
                 composition: c.clone(),
                 ordered,
+                asks: sealed,
             });
         }
     }
@@ -463,8 +503,16 @@ pub fn validate(c: &Composition) -> Result<ValidatedComposition, Vec<PlanRefusal
 /// it cannot speak to what the server has implemented and does not try."* That is why `--check`
 /// ships a disclosure rather than a verdict: a plan naming an act this deployment has not made
 /// reachable is shape-clean here and refused there.
+///
+/// **Artifact asks are checked for form only** — the request caps, empty and over-long paths, the
+/// intent and state vocabularies, `include_folded`, the per-ask caps, values no stored content can
+/// hold. Whether a
+/// path, operator or value lies inside its shape needs the shape, which only the server loads, so
+/// a `--check` that passes has not checked any ask against its shape and must say so.
 pub fn validate_shape(c: &Composition) -> Vec<PlanRefusal> {
-    shape::validate_shape_indexed(c).0
+    let (mut errs, ordered) = shape::validate_shape_indexed(c);
+    asks::check_forms(c, ordered.is_some(), &mut errs);
+    errs
 }
 
 #[cfg(test)]
@@ -492,6 +540,15 @@ mod tests {
     use crate::types::query::stage::{StageInput, StageRelation};
     use crate::types::resource_view::ResourceSection;
     use std::collections::BTreeMap;
+
+    use crate::types::artifact_ask::ShapeContext;
+
+    /// [`super::validate`] with no shapes loaded — the context of every composition here that asks
+    /// nothing. The one validator, through the same path an ask-free request takes; the tests that
+    /// carry asks call [`super::validate`] with a session of their own.
+    fn validate(c: &Composition) -> Result<ValidatedComposition, Vec<PlanRefusal>> {
+        super::validate(c, &mut ShapeContext::empty().session())
+    }
 
     /// The relation that makes a plan legal for this act: `follow-from` seeds, everything else
     /// bounds. Chosen so the input-kind check reads the right acceptance list — a test about
@@ -527,6 +584,7 @@ mod tests {
             resource_filter: None,
             edge_filter: None,
             properties: vec![],
+            artifact_filter: vec![],
         })
     }
 
@@ -634,6 +692,7 @@ mod tests {
             resource_filter: None,
             edge_filter: None,
             properties: vec![],
+            artifact_filter: vec![],
         })
     }
 
@@ -801,6 +860,7 @@ mod tests {
             resource_filter: None,
             edge_filter: None,
             properties: vec![],
+            artifact_filter: vec![],
         })
     }
 
@@ -1974,20 +2034,34 @@ mod tests {
             other => other,
         };
         // A plan carrying a real fault, so the comparison is over a refusal LIST and not over two
-        // empty ones — which is the case that would pass while proving nothing.
+        // empty ones — which is the case that would pass while proving nothing. It carries an
+        // admitted ask too, validated at the gate and again at the seal through ONE session, as
+        // `prepare` holds it across the embed — so the seal re-reads the ask the gate admitted.
+        let shapes = loaded(vec![measurement(1)]);
         let faulty = |stage: StageNode| {
             plan_with_intention(
-                vec![stage, act("s", ActName::FindExact, None)],
+                vec![
+                    stage,
+                    act("s", ActName::FindExact, None),
+                    selecting("asks", vec![asking(1, "unit")], None),
+                ],
                 vec!["nope"],
             )
         };
-        let before = validate(&faulty(bare)).unwrap_err();
-        let after = validate(&faulty(embedded)).unwrap_err();
+        let mut session = shapes.session();
+        let before = super::validate(&faulty(bare), &mut session).unwrap_err();
+        let after = super::validate(&faulty(embedded), &mut session).unwrap_err();
         assert_eq!(
             before, after,
             "the embed writes only `intention.embedding`, which no validation reads; if that stops \
              being true, `prepare`'s gate and seal can disagree and a plan can be admitted by one \
              and refused by the other"
+        );
+        assert!(
+            before
+                .iter()
+                .all(|e| e.stage.as_ref().map(StageName::as_str) != Some("asks")),
+            "the ask is admitted at the gate and at the seal: {before:?}"
         );
     }
 
@@ -4368,6 +4442,7 @@ mod tests {
                 resource_filter: Some(filter),
                 edge_filter: None,
                 properties: vec![],
+                artifact_filter: vec![],
             })
         };
         let has_key = |key: &str| ResourceFilter {
@@ -4414,6 +4489,7 @@ mod tests {
                         ..Default::default()
                     }),
                     properties: vec![],
+                    artifact_filter: vec![],
                 }),
                 selection(
                     "tasks",
@@ -4631,5 +4707,645 @@ mod tests {
                 .any(|e| e.reason == RefusalReason::NoReturns),
             "a composition that answers nothing is malformed regardless of what is built; got {shape:?}"
         );
+    }
+
+    // ---- Artifact asks on the composable arm ------------------------------------------------
+
+    use crate::types::artifact_ask::session::ASKS_ANSWERED_AGAIN;
+    use crate::types::artifact_ask::walk::{VOCABULARIES_ENUMERATED, WALKS_BUILT};
+    use crate::types::artifact_ask::{
+        ArtifactAsk, ArtifactPredicate, LoadedShape, ShapeHome, ShapeLoad, ShapeSuccessor,
+        ARTIFACT_INTENTS, ASKABLE_SHAPE_STATES,
+    };
+    use crate::types::ids::ShapeId;
+    use serde_json::{json, Value};
+    use std::cell::Cell;
+    use std::collections::BTreeSet;
+    use std::thread::LocalKey;
+
+    fn sid(id: u128) -> ShapeId {
+        ShapeId::from(Uuid::from_u128(id))
+    }
+
+    /// The home every shape below lives in unless a test says otherwise.
+    fn home() -> ShapeHome {
+        ShapeHome {
+            anchor_table: "kb_contexts".to_string(),
+            anchor_id: Uuid::from_u128(100),
+        }
+    }
+
+    fn shape_at(id: u128, home: &ShapeHome, schema: Value) -> LoadedShape {
+        LoadedShape {
+            shape_id: sid(id),
+            shape_version: 1,
+            home_anchor_table: home.anchor_table.clone(),
+            home_anchor_id: home.anchor_id,
+            kind_owner_table: "kb_teams".to_string(),
+            kind_owner_id: Uuid::from_u128(200),
+            artifact_kind: "measurement".to_string(),
+            schema,
+        }
+    }
+
+    /// A shape in [`home`] declaring `unit`, a string, and `count`, an integer.
+    fn measurement(id: u128) -> LoadedShape {
+        shape_at(
+            id,
+            &home(),
+            json!({ "properties": {
+                "unit": { "type": "string" },
+                "count": { "type": "integer" }
+            } }),
+        )
+    }
+
+    fn loaded(shapes: Vec<LoadedShape>) -> ShapeContext {
+        shapes
+            .into_iter()
+            .map(|s| (s.shape_id, ShapeLoad::Loaded(s)))
+            .collect()
+    }
+
+    /// An ask of shape `id` that `path` is present.
+    fn asking(id: u128, path: &str) -> ArtifactAsk {
+        ArtifactAsk {
+            shape: sid(id),
+            predicates: vec![ArtifactPredicate {
+                path: vec![path.to_string()],
+                op: PropertyOp::HasKey,
+            }],
+            intent: vec![],
+            include_folded: false,
+            shape_states: vec![],
+        }
+    }
+
+    /// A `find-resources-with` stage carrying `asks`, bounded by `input` when there is one.
+    fn selecting(name: &str, asks: Vec<ArtifactAsk>, input: Option<StageInput>) -> StageNode {
+        match act(name, ActName::FindResourcesWith, input) {
+            StageNode::Act(mut inv) => {
+                inv.artifact_filter = asks;
+                StageNode::Act(inv)
+            }
+            other => other,
+        }
+    }
+
+    /// A caller-supplied anchor naming `home`.
+    fn anchored_to(home: &ShapeHome) -> Option<StageInput> {
+        let kind = if home.anchor_table == "kb_cogmaps" {
+            IdKind::Cogmap
+        } else {
+            IdKind::Context
+        };
+        Some(StageInput::Caller {
+            relation: StageRelation::Bound,
+            ids: IdSet {
+                kind,
+                provenance: None,
+                ids: vec![home.anchor_id],
+            },
+        })
+    }
+
+    /// `stages`, then a `find-exact` stage bounded by the first of them and returned — a selection
+    /// orders nothing and is not returnable itself.
+    fn answered_by_find(stages: Vec<StageNode>) -> Composition {
+        let first = stages[0].name().as_str().to_string();
+        let mut all = stages;
+        all.push(act("hits", ActName::FindExact, upstream(&first)));
+        plan(all, vec!["hits"])
+    }
+
+    fn stage(name: &str) -> StageName {
+        StageName::parse(name).unwrap()
+    }
+
+    fn reasons_of(rs: &[PlanRefusal]) -> Vec<RefusalReason> {
+        rs.iter().map(|r| r.reason.clone()).collect()
+    }
+
+    /// How far a thread-local counter moved while `run` ran.
+    fn counted<T>(counter: &'static LocalKey<Cell<usize>>, run: impl FnOnce() -> T) -> (usize, T) {
+        let before = counter.with(Cell::get);
+        let out = run();
+        (counter.with(Cell::get) - before, out)
+    }
+
+    // ── The slot, and which acts admit it ───────────────────────────────────────────────────
+
+    /// Every act but `find-resources-with` refuses a non-empty `artifact_filter` with
+    /// `filter_not_applicable` and the redirect a resource narrowing gets on those acts. Bites the
+    /// capability check: without it, nothing on these plans names the slot.
+    #[test]
+    fn every_act_but_find_resources_with_refuses_an_artifact_filter() {
+        let shapes = loaded(vec![measurement(1)]);
+        for a in [
+            ActName::FindExact,
+            ActName::FindAboutAnywhere,
+            ActName::FindAboutWithin,
+            ActName::Survey,
+            ActName::FollowFrom,
+        ] {
+            let names_the_slot = |rs: &[PlanRefusal]| {
+                rs.iter()
+                    .filter(|r| {
+                        r.reason == RefusalReason::FilterNotApplicable
+                            && r.stage.as_ref() == Some(&stage("s"))
+                            && r.detail.contains("`artifact_filter`")
+                            && r.detail.contains("find-resources-with")
+                    })
+                    .count()
+            };
+            let bare = a_legal_single_stage_plan_over(a.clone());
+            let without =
+                super::validate(&bare, &mut shapes.session()).map_or_else(|rs| rs, |_| vec![]);
+            assert_eq!(names_the_slot(&without), 0, "{a:?} without the slot");
+
+            let mut asked = bare.clone();
+            if let StageNode::Act(inv) = &mut asked.stages[0] {
+                inv.artifact_filter = vec![asking(1, "unit"), asking(1, "count")];
+            }
+            let rs = super::validate(&asked, &mut shapes.session())
+                .expect_err("only find-resources-with admits the slot");
+            assert_eq!(
+                names_the_slot(&rs),
+                1,
+                "{a:?}: one refusal for the slot, however many asks it carries: {rs:?}"
+            );
+        }
+    }
+
+    /// The first act admitting two slots: a resource filter and an artifact filter on one
+    /// selection are admitted together, and the ask is sealed.
+    #[test]
+    fn find_resources_with_admits_a_resource_filter_and_an_artifact_filter_together() {
+        let shapes = loaded(vec![measurement(1)]);
+        let mut sel = selecting("sel", vec![asking(1, "unit")], None);
+        if let StageNode::Act(inv) = &mut sel {
+            inv.resource_filter = Some(ResourceFilter {
+                doc_type: vec!["task".to_string()],
+                ..Default::default()
+            });
+        }
+        let v = super::validate(&answered_by_find(vec![sel]), &mut shapes.session())
+            .expect("both slots narrow one selection's resources");
+        assert_eq!(v.asks(&stage("sel")).len(), 1);
+    }
+
+    /// An edge filter beside either resource slot is still refused: on the selection because it
+    /// walks no edge, and the walk refuses the artifact slot.
+    #[test]
+    fn an_edge_filter_beside_either_resource_slot_is_still_refused() {
+        let shapes = loaded(vec![measurement(1)]);
+        let edges = EdgeFilter {
+            labels: vec!["cites".to_string()],
+            ..Default::default()
+        };
+
+        let mut sel = selecting("sel", vec![asking(1, "unit")], None);
+        if let StageNode::Act(inv) = &mut sel {
+            inv.edge_filter = Some(edges.clone());
+        }
+        let rs = super::validate(&answered_by_find(vec![sel]), &mut shapes.session())
+            .expect_err("a selection walks no edge");
+        assert!(
+            rs.iter()
+                .any(|r| r.reason == RefusalReason::FilterNotApplicable
+                    && r.stage.as_ref() == Some(&stage("sel"))
+                    && r.detail.contains("traverse edges")),
+            "{rs:?}"
+        );
+
+        let mut walk = act(
+            "walk",
+            ActName::FollowFrom,
+            caller_ids(IdKind::Resource).into(),
+        );
+        if let StageNode::Act(inv) = &mut walk {
+            inv.edge_filter = Some(edges);
+            inv.artifact_filter = vec![asking(1, "unit")];
+        }
+        let rs = super::validate(&plan(vec![walk], vec!["walk"]), &mut shapes.session())
+            .expect_err("a walk admits no artifact filter");
+        assert!(
+            rs.iter()
+                .any(|r| r.reason == RefusalReason::FilterNotApplicable
+                    && r.stage.as_ref() == Some(&stage("walk"))
+                    && r.detail.contains("`artifact_filter`")),
+            "{rs:?}"
+        );
+    }
+
+    // ── Validated through the session, sealed by stage and position ─────────────────────────
+
+    /// A composition with no asks reads nothing from the session: it validates as it does against
+    /// an empty context, and no shape is walked however heavy the context holds.
+    #[test]
+    fn a_composition_with_no_asks_validates_alike_whatever_the_context() {
+        let c = plan_with_intention(vec![act("s", ActName::FindExact, None)], vec!["s"]);
+        let shapes = loaded(vec![heavy(1)]);
+        let (built, with) = counted(&WALKS_BUILT, || {
+            super::validate(&c, &mut shapes.session()).map(|v| ValidationOutcome::of(&v))
+        });
+        assert_eq!(built, 0);
+        assert_eq!(with, validate(&c).map(|v| ValidationOutcome::of(&v)));
+    }
+
+    /// Each stage's asks are sealed in filter order, in their validated form, and readable by
+    /// stage and position. Bites a seal that drops them: every stage then reads empty.
+    #[test]
+    fn the_seal_holds_each_stages_validated_asks_by_position() {
+        let shapes = loaded(vec![measurement(1), measurement(2)]);
+        let c = answered_by_find(vec![
+            selecting("a", vec![asking(1, "unit"), asking(2, "count")], None),
+            selecting("b", vec![asking(2, "unit")], None),
+        ]);
+        let v =
+            super::validate(&c, &mut shapes.session()).expect("every ask lies inside its shape");
+        let shapes_of = |s: &str| {
+            v.asks(&stage(s))
+                .iter()
+                .map(|a| a.shape().shape_id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(shapes_of("a"), vec![sid(1), sid(2)]);
+        assert_eq!(shapes_of("b"), vec![sid(2)]);
+        assert!(shapes_of("hits").is_empty(), "a stage that asks nothing");
+        assert!(shapes_of("absent").is_empty(), "a name no stage carries");
+        let first = &v.asks(&stage("a"))[0];
+        assert_eq!(
+            first.intent(),
+            &["current", "member"],
+            "the defaults applied"
+        );
+        assert_eq!(first.predicates()[0].path, vec!["unit".to_string()]);
+    }
+
+    /// An ask refused against its shape is refused at the stage carrying it, teaching as it does
+    /// alone.
+    #[test]
+    fn an_ask_refused_by_its_shape_is_refused_at_its_stage() {
+        let shapes = loaded(vec![measurement(1)]);
+        let c = answered_by_find(vec![selecting("a", vec![asking(1, "units")], None)]);
+        let rs = super::validate(&c, &mut shapes.session()).expect_err("`units` is not declared");
+        assert_eq!(reasons_of(&rs), vec![RefusalReason::PathOutsideShape]);
+        assert_eq!(rs[0].stage, Some(stage("a")));
+        assert!(rs[0].teaches.is_some(), "the vocabulary rides the refusal");
+    }
+
+    /// The loader's five outcomes, through a composition: a loaded shape is admitted, and each of
+    /// the other four is that arm's own refusal, at the stage, and the only one — so a composition
+    /// whose one fault is an unaskable shape is refused by `validate`, before anything runs. A
+    /// shape the context was not given answers what `NotAskable` does.
+    #[test]
+    fn each_loader_outcome_is_admitted_or_refused_as_its_arm_says() {
+        let c = answered_by_find(vec![selecting("a", vec![asking(1, "unit")], None)]);
+        for load in [
+            ShapeLoad::Loaded(measurement(1)),
+            ShapeLoad::NotAskable,
+            ShapeLoad::Superseded {
+                successor: Some(ShapeSuccessor {
+                    shape_id: sid(9),
+                    shape_version: 2,
+                }),
+            },
+            ShapeLoad::Uncompilable,
+            ShapeLoad::SchemaTooLarge,
+        ] {
+            let expected = load.loaded().err();
+            let shapes: ShapeContext = [(sid(1), load)].into_iter().collect();
+            let got = super::validate(&c, &mut shapes.session());
+            match expected {
+                None => assert!(got.is_ok(), "{:?}", got.err()),
+                Some(mut refusal) => {
+                    refusal.stage = Some(stage("a"));
+                    assert_eq!(got.err(), Some(vec![refusal]));
+                }
+            }
+        }
+        let absent = super::validate(&c, &mut ShapeContext::empty().session()).unwrap_err();
+        let mut not_askable = ShapeLoad::NotAskable.loaded().unwrap_err();
+        not_askable.stage = Some(stage("a"));
+        assert_eq!(absent, vec![not_askable]);
+    }
+
+    // ── One home per stage ───────────────────────────────────────────────────────────────────
+
+    /// A stage anchored to a home that is not its shape's is refused `ask_scope_conflict`,
+    /// teaching the shape's home — a cogmap with the context's id is another home. Anchored to the
+    /// shape's home, or not anchored at all, it is admitted. Bites the anchor arm.
+    #[test]
+    fn a_stage_anchored_away_from_its_shapes_home_is_a_scope_conflict() {
+        let shapes = loaded(vec![measurement(1)]);
+        let at = |anchor: Option<StageInput>| {
+            super::validate(
+                &answered_by_find(vec![selecting("a", vec![asking(1, "unit")], anchor)]),
+                &mut shapes.session(),
+            )
+        };
+        let elsewhere = ShapeHome {
+            anchor_table: "kb_contexts".to_string(),
+            anchor_id: Uuid::from_u128(101),
+        };
+        let a_cogmap_with_the_same_id = ShapeHome {
+            anchor_table: "kb_cogmaps".to_string(),
+            anchor_id: home().anchor_id,
+        };
+        for anchor in [elsewhere, a_cogmap_with_the_same_id] {
+            let rs = at(anchored_to(&anchor)).expect_err("no resource can satisfy it");
+            assert_eq!(reasons_of(&rs), vec![RefusalReason::AskScopeConflict]);
+            assert_eq!(rs[0].stage, Some(stage("a")));
+            assert_eq!(
+                rs[0].teaches.as_ref().map(|t| t.homes.clone()),
+                Some(vec![home()]),
+                "it teaches the shape's home, never the caller's anchor"
+            );
+        }
+        assert!(at(anchored_to(&home())).is_ok());
+        assert!(
+            at(None).is_ok(),
+            "an unanchored stage takes its shape's home"
+        );
+    }
+
+    /// Two asks in one filter whose shapes are homed apart are refused `ask_scope_conflict`,
+    /// teaching both homes; the same asks on two stages are two questions, and admitted. Bites the
+    /// homes arm.
+    #[test]
+    fn asks_in_one_filter_homed_apart_are_a_scope_conflict() {
+        let there = ShapeHome {
+            anchor_table: "kb_cogmaps".to_string(),
+            anchor_id: Uuid::from_u128(102),
+        };
+        let shapes = loaded(vec![
+            measurement(1),
+            shape_at(2, &there, json!({ "properties": { "unit": {} } })),
+        ]);
+        let one_stage = answered_by_find(vec![selecting(
+            "a",
+            vec![asking(1, "unit"), asking(2, "unit")],
+            None,
+        )]);
+        let rs = super::validate(&one_stage, &mut shapes.session())
+            .expect_err("one resource has one home");
+        assert_eq!(reasons_of(&rs), vec![RefusalReason::AskScopeConflict]);
+        assert_eq!(
+            rs[0].teaches.as_ref().map(|t| t.homes.clone()),
+            Some(vec![home(), there])
+        );
+
+        let two_stages = answered_by_find(vec![
+            selecting("a", vec![asking(1, "unit")], None),
+            selecting("b", vec![asking(2, "unit")], None),
+        ]);
+        assert!(super::validate(&two_stages, &mut shapes.session()).is_ok());
+    }
+
+    // ── Budgets and caps ─────────────────────────────────────────────────────────────────────
+
+    /// An ask's values count toward the composition's predicate-value budget: 32 values of 16,000
+    /// bytes (512,000) fit 524,288, and a 33rd tips it. Bites `ArtifactAsk::value_bytes` left out
+    /// of the shape pass's sum: the 33rd is then admitted.
+    #[test]
+    fn an_asks_values_count_toward_the_composition_value_budget() {
+        let value = |i: usize| json!(format!("{i:04}{}", "x".repeat(15_994)));
+        let ask_of = |n: usize| ArtifactAsk {
+            predicates: vec![ArtifactPredicate {
+                path: vec!["unit".to_string()],
+                op: PropertyOp::Contains {
+                    values: (0..n).map(value).collect(),
+                },
+            }],
+            ..asking(1, "unit")
+        };
+        assert_eq!(ask_of(32).value_bytes(), 512_000);
+        assert_eq!(ask_of(33).value_bytes(), 528_000);
+        let budget_refusals = |n: usize| {
+            validate_shape(&answered_by_find(vec![selecting(
+                "a",
+                vec![ask_of(n)],
+                None,
+            )]))
+            .iter()
+            .filter(|r| r.reason == RefusalReason::PropertyValueBudgetExceeded)
+            .count()
+        };
+        assert_eq!(budget_refusals(32), 0);
+        assert_eq!(budget_refusals(33), 1);
+    }
+
+    /// The request caps are decided before any shape is read: the shapes to load, or the refusal
+    /// — the same one `validate` and the offline check give — and over a cap nothing is walked.
+    /// Bites either cap removed: the over-cap composition then names its shapes to load.
+    #[test]
+    fn the_request_caps_refuse_before_any_shape_is_read() {
+        let shapes = loaded(vec![measurement(1)]);
+        let on_one_stage =
+            |asks: Vec<ArtifactAsk>| answered_by_find(vec![selecting("a", asks, None)]);
+
+        let within = on_one_stage(vec![asking(1, "unit"); MAX_ASKS_PER_REQUEST]);
+        assert_eq!(shapes_to_load(&within), Ok(BTreeSet::from([sid(1)])));
+        assert!(super::validate(&within, &mut shapes.session()).is_ok());
+
+        let too_many_asks = on_one_stage(vec![asking(1, "unit"); MAX_ASKS_PER_REQUEST + 1]);
+        let too_many_shapes = on_one_stage(
+            (1..=MAX_ASKED_SHAPES as u128 + 1)
+                .map(|i| asking(i, "unit"))
+                .collect(),
+        );
+        for (c, says) in [
+            (&too_many_asks, "asks between them"),
+            (&too_many_shapes, "distinct shapes"),
+        ] {
+            let caps = shapes_to_load(c).expect_err("over a cap");
+            assert_eq!(reasons_of(&caps), vec![RefusalReason::TooManyFilterValues]);
+            assert!(caps[0].detail.contains(says), "{}", caps[0].detail);
+            let (built, full) = counted(&WALKS_BUILT, || super::validate(c, &mut shapes.session()));
+            assert_eq!(built, 0, "nothing is walked past a cap");
+            assert_eq!(full.unwrap_err(), caps, "and nothing else is refused");
+            assert_eq!(validate_shape(c), caps, "the offline check says the same");
+        }
+    }
+
+    /// `include_folded: true` and a NUL in a value are refused at the stage, by the full validator
+    /// and the offline check alike, before anything is bound.
+    #[test]
+    fn include_folded_and_a_nul_in_a_value_are_refused_at_their_stage() {
+        let shapes = loaded(vec![measurement(1)]);
+        let folded = ArtifactAsk {
+            include_folded: true,
+            ..asking(1, "unit")
+        };
+        let nul = ArtifactAsk {
+            predicates: vec![ArtifactPredicate {
+                path: vec!["unit".to_string()],
+                op: PropertyOp::Contains {
+                    values: vec![json!({ "nested": ["ms\u{0}"] })],
+                },
+            }],
+            ..asking(1, "unit")
+        };
+        for (ask, reason, says) in [
+            (folded, RefusalReason::FilterNotApplicable, "include_folded"),
+            (nul, RefusalReason::UnstorableValue, "U+0000"),
+        ] {
+            let c = answered_by_find(vec![selecting("a", vec![ask], None)]);
+            for rs in [
+                super::validate(&c, &mut shapes.session()).unwrap_err(),
+                validate_shape(&c),
+            ] {
+                assert_eq!(reasons_of(&rs), vec![reason.clone()], "{rs:?}");
+                assert_eq!(rs[0].stage, Some(stage("a")));
+                assert!(rs[0].detail.contains(says), "{}", rs[0].detail);
+            }
+        }
+    }
+
+    /// The offline check refuses an ask's form and never its shape: a malformed ask's form
+    /// refusals at its stage, and nothing for a well-formed ask naming a shape it cannot load —
+    /// which the server, holding no such shape, refuses `shape_not_askable`. Every offline refusal
+    /// is one the server gives too.
+    #[test]
+    fn the_offline_check_refuses_an_asks_form_and_never_its_shape() {
+        let mut malformed = asking(1, "unit");
+        malformed.predicates.push(ArtifactPredicate {
+            path: vec![],
+            op: PropertyOp::HasKey,
+        });
+        malformed.intent = vec!["favourite".to_string()];
+        let c = answered_by_find(vec![selecting(
+            "a",
+            vec![malformed, asking(2, "undeclared")],
+            None,
+        )]);
+
+        let offline = validate_shape(&c);
+        assert_eq!(
+            reasons_of(&offline),
+            vec![
+                RefusalReason::UnknownArtifactIntent,
+                RefusalReason::EmptyArtifactPath
+            ]
+        );
+        assert!(offline.iter().all(|r| r.stage == Some(stage("a"))));
+
+        let full = super::validate(&c, &mut ShapeContext::empty().session()).unwrap_err();
+        assert!(full
+            .iter()
+            .any(|r| r.reason == RefusalReason::ShapeNotAskable));
+        for r in &offline {
+            assert!(full.contains(r), "{r:?} is the server's too: {full:?}");
+        }
+    }
+
+    // ── The gate and the seal, through one session ───────────────────────────────────────────
+
+    /// A shape whose two properties each reference one `allOf` of 2,500 branches: resolving both
+    /// costs about 5,000 visits.
+    fn heavy(id: u128) -> LoadedShape {
+        let branches: Vec<Value> = (0..2_500).map(|_| json!({})).collect();
+        shape_at(
+            id,
+            &home(),
+            json!({
+                "$defs": { "w": { "allOf": branches } },
+                "properties": {
+                    "p0": { "$ref": "#/$defs/w" },
+                    "p1": { "$ref": "#/$defs/w" }
+                }
+            }),
+        )
+    }
+
+    /// The `n`th (`1 <= n < 64`) of a run of asks naming both of [`heavy`]'s paths, each with its
+    /// own subset of the intents and shape states: different asks, walking the same paths.
+    fn heavy_ask(id: u128, n: usize) -> ArtifactAsk {
+        let pick = |terms: &[&str], bits: usize| -> Vec<String> {
+            terms
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| ((bits >> i) & 1) == 1)
+                .map(|(_, t)| t.to_string())
+                .collect()
+        };
+        ArtifactAsk {
+            shape: sid(id),
+            predicates: ["p0", "p1"]
+                .iter()
+                .map(|p| ArtifactPredicate {
+                    path: vec![p.to_string()],
+                    op: PropertyOp::HasKey,
+                })
+                .collect(),
+            intent: pick(&ARTIFACT_INTENTS, n & 7),
+            include_folded: false,
+            shape_states: pick(&ASKABLE_SHAPE_STATES, (n >> 3) & 7),
+        }
+    }
+
+    /// **A many-stage composition over one heavy shape costs about one walk, across the gate and
+    /// the seal** — when both validate through one session, as `prepare` must. The gate builds the
+    /// shape's walk once and spends what one ask alone spends, however many stages ask; the seal
+    /// re-validates the identical asks, is answered from the gate's memo for every one of them,
+    /// builds nothing and spends nothing, and seals what the gate sealed.
+    ///
+    /// Bites a fresh session for the seal: it builds the walk again and its memo answers nothing.
+    /// Bites a session per stage inside `validate`: the gate builds the walk once per stage.
+    #[test]
+    fn a_many_stage_composition_over_one_heavy_shape_costs_one_walk_across_gate_and_seal() {
+        const STAGES: usize = 16;
+        let shapes = loaded(vec![heavy(1)]);
+        let c = answered_by_find(
+            (0..STAGES)
+                .map(|i| selecting(&format!("sel{i}"), vec![heavy_ask(1, i + 1)], None))
+                .collect(),
+        );
+        let one_ask = {
+            let mut alone = shapes.session();
+            let before = alone.visits_left();
+            alone
+                .validate(&heavy_ask(1, 1))
+                .expect("fits a request alone");
+            before - alone.visits_left()
+        };
+        assert!(one_ask > 4_000, "the fixture is heavy: {one_ask}");
+
+        let mut session = shapes.session();
+        let start = session.visits_left();
+        let (built, (enumerated, gate)) = counted(&WALKS_BUILT, || {
+            counted(&VOCABULARIES_ENUMERATED, || {
+                super::validate(&c, &mut session)
+            })
+        });
+        let gate = gate.expect("the gate admits every stage");
+        assert_eq!(
+            (built, enumerated),
+            (1, 0),
+            "one walk built, no vocabulary read"
+        );
+        assert_eq!(
+            start - session.visits_left(),
+            one_ask,
+            "{STAGES} stages cost what one ask costs"
+        );
+
+        let after_gate = session.visits_left();
+        let (built, (answered, seal)) = counted(&WALKS_BUILT, || {
+            counted(&ASKS_ANSWERED_AGAIN, || super::validate(&c, &mut session))
+        });
+        let seal = seal.expect("the seal admits what the gate admitted");
+        assert_eq!(built, 0, "the seal builds no walk");
+        assert_eq!(
+            answered, STAGES,
+            "every ask the seal re-validated was answered from the gate's memo"
+        );
+        assert_eq!(session.visits_left(), after_gate, "and spent nothing");
+        for i in 0..STAGES {
+            let s = stage(&format!("sel{i}"));
+            assert_eq!(seal.asks(&s).len(), 1);
+            assert_eq!(gate.asks(&s), seal.asks(&s), "sealed alike at {s:?}");
+        }
     }
 }

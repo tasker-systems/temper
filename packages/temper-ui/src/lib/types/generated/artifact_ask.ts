@@ -109,6 +109,7 @@ items: PathFacts | null, };
  * | `unknown_artifact_intent`, `unknown_shape_state` | `terms` |
  * | `shape_superseded` | `successor` |
  * | `shape_schema_uncompilable` | `beyond_bound: schema_bytes` for a schema past the byte bound |
+ * | `ask_scope_conflict` | `homes` |
  */
 export type RefusalTeaching = { 
 /**
@@ -137,7 +138,23 @@ non_closure: string | null,
 /**
  * Paths cut from `vocabulary` to keep the teaching bounded.
  */
-elided: TeachingElision | null, };
+elided: TeachingElision | null, 
+/**
+ * The homes of the shapes a stage's asks name, when no one home can hold them all. Each is
+ * the home of a shape the asker can read — refusal step 1 admitted it — so naming it
+ * discloses nothing a by-id read of the shape would not.
+ */
+homes: Array<ShapeHome>, };
+
+/**
+ * A shape's home: the context or cogmap whose resources an ask against it ranges over. A resource
+ * has exactly one home, so asks AND-ed on one resource must share one (§4.1, *Scope*).
+ */
+export type ShapeHome = { 
+/**
+ * `"kb_contexts"` or `"kb_cogmaps"`.
+ */
+anchor_table: string, anchor_id: string, };
 
 /**
  * The version in force after a fold: the live row at the same home and family.

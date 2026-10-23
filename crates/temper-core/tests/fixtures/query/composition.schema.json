@@ -114,6 +114,128 @@
                 ],
                 "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive."
               },
+              "artifact_filter": {
+                "description": "Narrowing by what a resource's data artifacts hold: each ask names a shape and predicates\nover the paths it declares, and the resource must own an artifact satisfying it.\n\nPredicates within one ask hold of one artifact; different asks may be satisfied by\ndifferent artifacts of the resource. Every ask in one filter must name a shape homed where\nthe stage is — a resource has one home — or the stage is refused `ask_scope_conflict`.",
+                "items": {
+                  "additionalProperties": false,
+                  "description": "One ask: a governing shape, and what the asker holds about artifacts it governs (§2.1).\n\n`intent` and `shape_states` are **strings**, validated by [`AskSession::validate`] into\n`unknown_artifact_intent` / `unknown_shape_state` with `teaches` naming the vocabulary — never\nserde enums, whose unknown-variant failure would land before validation, in the deserializer's\nwords, and outside the every-refusal-at-once body. Empty means the default, applied by the\nvalidator: `current` and `member`, and every askable state.\n\n**Strict**, like `ActInvocation`: an unknown field is a deserialization error, never a field\nthat silently narrows nothing.",
+                  "properties": {
+                    "include_folded": {
+                      "default": false,
+                      "description": "Admit folded (superseded) artifacts.",
+                      "type": "boolean"
+                    },
+                    "intent": {
+                      "description": "Narrow by selection intent: `current`, `member`, `pinned`. Empty: `current` and `member`.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "predicates": {
+                      "description": "What the asker holds, AND-composed. Empty is the whole governed population — a vacuous\nconjunction, said on purpose (§2.1).",
+                      "items": {
+                        "additionalProperties": false,
+                        "description": "One predicate: a path of object-key segments into the content, and an operator from the closed\n`PropertyOp` set — reused, not copied (§3.2). There is no `eq`, regex, prefix or text-search\noperator, so a resemblance-shaped question has no way to be written down.",
+                        "properties": {
+                          "op": {
+                            "description": "A property narrowing operator. CLOSED — the key space is open, the operator set is not. No\noperator takes a fragment of a query language; all bind their values.",
+                            "oneOf": [
+                              {
+                                "description": "The key is present at all. A row-existence check on the `property_key` btree — NOT a jsonb\noperator, because `jsonb_path_ops` does not index key-existence and the btree already\nanswers it.",
+                                "properties": {
+                                  "op": {
+                                    "const": "has_key",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "op"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "description": "`property_value @> $v` for any listed value. OR within the predicate, matching the\nestablished within-field OR of `doc_type` and `EdgeFilter.labels`.\n\n**Containment is ASYMMETRIC, and the asymmetry runs the useful way.**\n`[corrected — 2026-08-14]` This said *\"containment does not coerce:\n`'[\"x\"]'::jsonb @> '\"x\"'::jsonb` is FALSE, so a type-unstable key needs both shapes\nlisted.\"* Measured against Postgres 18, that expression is **TRUE** — it is the documented\nspecial exception whereby a top-level array contains a primitive. The reverse is the false\none:\n\n```text\n '[\"x\"]'::jsonb @> '\"x\"'::jsonb   -> t     (array contains scalar)\n '\"x\"'::jsonb   @> '[\"x\"]'::jsonb -> f     (scalar does not contain array)\n```\n\nThe row's value is on the LEFT, so a **scalar** probe matches both the array-shaped rows\nand the scalar-shaped ones, while an **array** probe matches only the array-shaped rows.\nThe conclusion therefore survives inverted and weaker than it was stated: a type-unstable\nkey needs the scalar shape, not both. Listing both is harmless — the values OR — but it is\nnot what makes the predicate span the population, and a caller who lists only the array\nshape silently answers for one half of it.\n\n**Size.** Each value is at most 16384 bytes of compact JSON and at most 256 nested array\nelements or object members, and every predicate value in one composition totals at most\n524288 bytes (`property_value_too_large`, `property_value_budget_exceeded`).",
+                                "properties": {
+                                  "op": {
+                                    "const": "contains",
+                                    "type": "string"
+                                  },
+                                  "values": {
+                                    "items": true,
+                                    "type": "array"
+                                  }
+                                },
+                                "required": [
+                                  "op",
+                                  "values"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "description": "`property_value <direction> $value` over jsonb's native ordering, type-guarded.\n\n**The type is inferred from the caller's bound, never declared on the operator.**\n`jsonb_typeof(property_value) = jsonb_typeof($value)` segments by JSON type before the\ncomparison, so a row whose JSON type differs from the bound's is an **honest empty** rather\nthan a type-confusion match. jsonb defines a total type ordering\n(`null < boolean < number < string < array < object`), so without the guard a numeric\nbound against a string-valued key would match **every** string row (`string > number` is\ntrue in jsonb's ordering) — a type-confusion artifact, not an answer. The guard makes each\ncomparison run only within a homogeneous sub-population.\n\n**Per-VALUE inference, not per-key — and the distinction is the trap.** `temper-pr` is\n68 string / 7 numeric on ONE key, so no per-key answer exists; each caller sends one bound\nwith one JSON type, and the guard makes the other-type rows honest empties. A numeric bound\ncompares the 7 numeric rows; a string bound compares the 68 string rows; neither is wrong.\n\n**Numbers stored as JSON STRINGS** that need numeric comparison are out of scope: that is a\nconvention the key should fix (store numbers as JSON numbers), and `temper-seq` (132 numeric\nrows) already does. A comparison operator is not a type-coercion mechanism.\n\n`probe_count` for `Compare` is **1** — one bound, one comparison per row that carries the\nkey — like `HasKey`, not like `Contains { values }` whose cost is `Σ|values|`. `Between` is\nNOT added: a closed range composes from `gte` AND `lte` via the existing AND-across-the-list,\nand adding it saves one probe at the cost of a second value slot and a second SQL branch.\n\n**Size.** The bound is at most 16384 bytes of compact JSON and at most 256 nested array\nelements or object members, and counts toward the same 524288-byte composition total as\n`contains` values.",
+                                "properties": {
+                                  "direction": {
+                                    "description": "The ordering direction for [`PropertyOp::Compare`]. A closed sub-enum, the same shape as\n`Contains`'s `Vec` — a nested closed set inside one `PropertyOp` discriminant.\n\nAll four directions are needed: inclusivity matters for dates (*\"on or after 2026-07-01\"* is\n`gte`, not `gt*). `Gt`/`Lt` are the half-open bounds; `Gte`/`Lte` are the closed ones; a\n`Between` is `gte` AND `lte` composed through the existing AND-across-the-list.",
+                                    "enum": [
+                                      "gt",
+                                      "gte",
+                                      "lt",
+                                      "lte"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "op": {
+                                    "const": "compare",
+                                    "type": "string"
+                                  },
+                                  "value": true
+                                },
+                                "required": [
+                                  "op",
+                                  "direction",
+                                  "value"
+                                ],
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          "path": {
+                            "description": "Object keys, outermost first: `[\"measurements\", \"unit\"]`. Not a string syntax; bound as a\n`text[]`, so no caller text becomes an identifier or a JSON-path fragment (§3.1).",
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "path",
+                          "op"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "shape": {
+                      "description": "The governing shape, by id. An id names one version (§2.2).",
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "shape_states": {
+                      "description": "Narrow by verdict state: `declared_satisfied`, `declared_not_satisfied`,\n`declared_not_yet_checked`. Empty: all three.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "shape"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "edge_filter": {
                 "description": "Narrowing over edges. `edge_kinds` and `labels` are DIFFERENT AXES and are never merged: the\nkind is a closed DDL enum, the label is free text the caller actually sees on every edge.\n\n# Every field here constrains a HOP, and that is why they live in a container\n\n`[decided — 2026-08-14, Pete]` *A narrowing that can be expressed as a set must be an act. A\nnarrowing that cannot be a set belongs to the act whose semantics it constrains.* An edge\npredicate has no set-shaped substitute: binding a walk by *\"nodes that participate in an edge\nmatching P\"* admits a node because it has a matching edge **somewhere** and then walks it through\na different, non-matching one — a different question, returning plausible rows and looking like\nit narrowed. So these constrain the traversal from inside it, and the only act that traverses an\nedge is `follow-from`.",
                 "properties": {
@@ -501,7 +623,7 @@
                 "type": "array"
               },
               "resource_filter": {
-                "description": "Narrowing by what a thing IS. At most one slot applies per act; supplying the other is\n`RefusalReason::FilterNotApplicable`.",
+                "description": "Narrowing by what a thing IS. At most one slot applies per candidate population; a slot the\nact does not admit is `RefusalReason::FilterNotApplicable`. `resource_filter` and\n`artifact_filter` both narrow the resources a selection considers, and AND together;\n`edge_filter` narrows the edges a walk follows.",
                 "properties": {
                   "doc_type": {
                     "description": "`kb_properties` where `property_key = 'doc_type'`. Each value is at most 256 bytes.",

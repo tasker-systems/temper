@@ -9,6 +9,7 @@
 //! about that chain.
 
 use sqlx::PgPool;
+use temper_core::types::artifact_ask::ShapeContext;
 use temper_core::types::query::{
     validate, ActInvocation, ActName, BoundTerm, Composition, Extent, IdKind, IdSet, Intention,
     OutcomeDeclaration, ResourceFilter, ReturnSpec, StageDisposition, StageInput, StageName,
@@ -148,9 +149,10 @@ fn one_find(
             }),
             edge_filter: None,
             properties: vec![],
+            artifact_filter: vec![],
         })],
     };
-    validate(&c).expect("plan is valid")
+    validate(&c, &mut ShapeContext::empty().session()).expect("plan is valid")
 }
 
 /// A `find-resources-with` selection piped into a `find-exact` as a bound.
@@ -182,6 +184,7 @@ fn selection_then_find(doc_type: &str, query: &str) -> ValidatedComposition {
                 }),
                 edge_filter: None,
                 properties: vec![],
+                artifact_filter: vec![],
             }),
             StageNode::Act(ActInvocation {
                 name: find,
@@ -198,10 +201,11 @@ fn selection_then_find(doc_type: &str, query: &str) -> ValidatedComposition {
                 resource_filter: None,
                 edge_filter: None,
                 properties: vec![],
+                artifact_filter: vec![],
             }),
         ],
     };
-    validate(&c).expect("plan is valid")
+    validate(&c, &mut ShapeContext::empty().session()).expect("plan is valid")
 }
 
 /// A selection narrowed by `owner`, piped into a find act so the plan has something returnable.
@@ -228,6 +232,7 @@ fn selection_owned_by(owner: &str) -> ValidatedComposition {
                 }),
                 edge_filter: None,
                 properties: vec![],
+                artifact_filter: vec![],
             }),
             StageNode::Act(ActInvocation {
                 name: find,
@@ -244,10 +249,11 @@ fn selection_owned_by(owner: &str) -> ValidatedComposition {
                 resource_filter: None,
                 edge_filter: None,
                 properties: vec![],
+                artifact_filter: vec![],
             }),
         ],
     };
-    validate(&c).expect("plan is valid")
+    validate(&c, &mut ShapeContext::empty().session()).expect("plan is valid")
 }
 
 fn hits(
@@ -610,9 +616,11 @@ fn a_narrowing_this_door_cannot_apply_is_refused_rather_than_dropped() {
             }),
             edge_filter: None,
             properties: vec![],
+            artifact_filter: vec![],
         })],
     };
-    let errs = validate(&c).expect_err("an unapplied narrowing must refuse");
+    let errs = validate(&c, &mut ShapeContext::empty().session())
+        .expect_err("an unapplied narrowing must refuse");
     assert!(
         errs.iter()
             .any(|e| e.reason == temper_core::types::query::RefusalReason::FilterNotApplicable),
@@ -678,9 +686,11 @@ fn walk_paged(seeds: Vec<Uuid>, terms: Vec<(BoundTerm, i64)>) -> ValidatedCompos
             resource_filter: None,
             edge_filter: None,
             properties: vec![],
+            artifact_filter: vec![],
         })],
     };
-    validate(&c).expect("a seeded walk with declared terms is well-formed")
+    validate(&c, &mut ShapeContext::empty().session())
+        .expect("a seeded walk with declared terms is well-formed")
 }
 
 /// **A caller told its walk may have been cut has a move that settles it, and taking that move
@@ -809,6 +819,7 @@ async fn open_meta_reaches_only_the_arm_that_asked_for_it(pool: PgPool) {
             resource_filter: None,
             edge_filter: None,
             properties: vec![],
+            artifact_filter: vec![],
         })
     };
     let c = Composition {
@@ -826,7 +837,7 @@ async fn open_meta_reaches_only_the_arm_that_asked_for_it(pool: PgPool) {
         },
         stages: vec![stage(&asked), stage(&silent)],
     };
-    let v = validate(&c).expect("plan is valid");
+    let v = validate(&c, &mut ShapeContext::empty().session()).expect("plan is valid");
 
     let r = run_composition(&pool, owner, &v).await.expect("runs");
 
@@ -881,6 +892,7 @@ mod server_side_embedding {
             resource_filter: None,
             edge_filter: None,
             properties: vec![],
+            artifact_filter: vec![],
         })
     }
 
@@ -1188,45 +1200,50 @@ async fn an_intermediate_survey_stage_discloses_the_regions_it_matched(pool: PgP
     // `mid` = survey (NOT returned), piped as the Bound the returned find-exact narrows to —
     // the same wiring the selection tests use, and it makes `mid` intermediate without a
     // combinator (combinator stages are not returnable, and something must consume `mid`).
-    let v = validate(&Composition {
-        outcome: OutcomeDeclaration {
-            returns: vec![ReturnSpec {
-                stage: StageName::parse("hits").unwrap(),
-                with: vec![],
-            }],
-        },
-        stages: vec![
-            StageNode::Act(ActInvocation {
-                name: StageName::parse("mid").unwrap(),
-                act: ActName::Survey,
-                intention: Some(Intention {
-                    query: "about regions".to_string(),
-                    embedding: Some(vec![0.1; 768]),
-                }),
-                inputs: vec![],
-                terms: Default::default(),
-                resource_filter: None,
-                edge_filter: None,
-                properties: vec![],
-            }),
-            StageNode::Act(ActInvocation {
-                name: StageName::parse("hits").unwrap(),
-                act: ActName::FindExact,
-                intention: Some(Intention {
-                    query: "regions".to_string(),
-                    embedding: None,
-                }),
-                inputs: vec![StageInput::Upstream {
-                    relation: StageRelation::Bound,
-                    stage: StageName::parse("mid").unwrap(),
+    let v = validate(
+        &Composition {
+            outcome: OutcomeDeclaration {
+                returns: vec![ReturnSpec {
+                    stage: StageName::parse("hits").unwrap(),
+                    with: vec![],
                 }],
-                terms: Default::default(),
-                resource_filter: None,
-                edge_filter: None,
-                properties: vec![],
-            }),
-        ],
-    })
+            },
+            stages: vec![
+                StageNode::Act(ActInvocation {
+                    name: StageName::parse("mid").unwrap(),
+                    act: ActName::Survey,
+                    intention: Some(Intention {
+                        query: "about regions".to_string(),
+                        embedding: Some(vec![0.1; 768]),
+                    }),
+                    inputs: vec![],
+                    terms: Default::default(),
+                    resource_filter: None,
+                    edge_filter: None,
+                    properties: vec![],
+                    artifact_filter: vec![],
+                }),
+                StageNode::Act(ActInvocation {
+                    name: StageName::parse("hits").unwrap(),
+                    act: ActName::FindExact,
+                    intention: Some(Intention {
+                        query: "regions".to_string(),
+                        embedding: None,
+                    }),
+                    inputs: vec![StageInput::Upstream {
+                        relation: StageRelation::Bound,
+                        stage: StageName::parse("mid").unwrap(),
+                    }],
+                    terms: Default::default(),
+                    resource_filter: None,
+                    edge_filter: None,
+                    properties: vec![],
+                    artifact_filter: vec![],
+                }),
+            ],
+        },
+        &mut ShapeContext::empty().session(),
+    )
     .expect("the plan is valid");
     let r = run_composition(&pool, owner, &v)
         .await

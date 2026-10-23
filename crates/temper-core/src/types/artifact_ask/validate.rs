@@ -26,8 +26,8 @@ use super::walk::{
     ShapeWalk, Vocabulary, MAX_SCHEMA_BYTES, MAX_WALK_DEPTH, MAX_WALK_PATHS, MAX_WALK_VISITS,
 };
 use super::{
-    ArtifactAsk, ArtifactPredicate, LoadedShape, ShapeIdentity, ShapeLoad, ShapeSuccessor,
-    ARTIFACT_INTENTS, ASKABLE_SHAPE_STATES, DEFAULT_ARTIFACT_INTENTS,
+    ArtifactAsk, ArtifactPredicate, LoadedShape, ShapeHome, ShapeIdentity, ShapeLoad,
+    ShapeSuccessor, ARTIFACT_INTENTS, ASKABLE_SHAPE_STATES, DEFAULT_ARTIFACT_INTENTS,
 };
 use crate::types::ids::ShapeId;
 use crate::types::query::filter::{
@@ -115,6 +115,7 @@ pub const MAX_MEMBERSHIP_STEPS: usize = 1 << 20;
 /// | `unknown_artifact_intent`, `unknown_shape_state` | `terms` |
 /// | `shape_superseded` | `successor` |
 /// | `shape_schema_uncompilable` | `beyond_bound: schema_bytes` for a schema past the byte bound |
+/// | `ask_scope_conflict` | `homes` |
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -142,6 +143,11 @@ pub struct RefusalTeaching {
     /// Paths cut from `vocabulary` to keep the teaching bounded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elided: Option<TeachingElision>,
+    /// The homes of the shapes a stage's asks name, when no one home can hold them all. Each is
+    /// the home of a shape the asker can read — refusal step 1 admitted it — so naming it
+    /// discloses nothing a by-id read of the shape would not.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub homes: Vec<ShapeHome>,
 }
 
 /// How much of a teaching was cut, and where the whole of it is read: the shape's by-id read —
@@ -198,6 +204,43 @@ impl ValidatedAsk {
     pub fn shape_states(&self) -> &[&'static str] {
         &self.shape_states
     }
+
+    /// The ask as the SQL binds it: one `jsonb` value carrying the shape's id and every list —
+    /// `predicates`, `intent`, `shape_states` — written out, empty ones included.
+    ///
+    /// **Bound from this, never from the caller's [`ArtifactAsk`].** That type skips an empty list
+    /// on the wire, so an ask with no predicates would bind no `predicates` key at all, and
+    /// `_temper_artifact_ask_match` (`20261103000000`) reads a missing list as a match for nothing:
+    /// the whole governed population asked for, and an empty answer given. Here the lists are the
+    /// validated ones — the defaults applied, an array path's `contains` values wrapped — so the
+    /// statement runs what was validated and nothing the caller wrote around it.
+    pub fn bind(&self) -> Value {
+        let ValidatedAsk {
+            shape,
+            predicates,
+            intent,
+            include_folded,
+            shape_states,
+        } = self;
+        serde_json::to_value(AskBind {
+            shape: shape.shape_id,
+            predicates,
+            intent,
+            include_folded: *include_folded,
+            shape_states,
+        })
+        .expect("an ask's bind is JSON with string keys, so it always serializes")
+    }
+}
+
+/// [`ValidatedAsk::bind`]'s wire form. No field is skipped when empty: the SQL reads each one.
+#[derive(Serialize)]
+struct AskBind<'a> {
+    shape: ShapeId,
+    predicates: &'a [ArtifactPredicate],
+    intent: &'a [&'static str],
+    include_folded: bool,
+    shape_states: &'a [&'static str],
 }
 
 /// Refusal step 4 of §3.5 — path, operator and value — for one ask against the shape the loader
@@ -249,6 +292,13 @@ struct Form {
 fn check_form(ask: &ArtifactAsk, errs: &mut Vec<PlanRefusal>) -> Form {
     let intent = resolve_terms(&ask.intent, &INTENTS, errs);
     let shape_states = resolve_terms(&ask.shape_states, &SHAPE_STATES, errs);
+    if ask.include_folded {
+        errs.push(refusal(
+            RefusalReason::FilterNotApplicable,
+            INCLUDE_FOLDED.to_string(),
+            None,
+        ));
+    }
     // Over a count cap nothing is walked: refused once, up front.
     let walkable = if within_caps(&ask.predicates, errs) {
         well_formed(&ask.predicates, errs)
@@ -337,6 +387,18 @@ fn schema_too_large() -> String {
          schema"
     )
 }
+
+/// `include_folded: true`, declined by name: an ask reads live artifacts and nothing else, and
+/// admitting the flag while answering over the live ones would drop the folded ones without a
+/// word.
+const INCLUDE_FOLDED: &str = "`include_folded: true` is not served: an ask reads live artifacts \
+     only, so the folded ones it names would be left out without a word. Ask without it — every \
+     live artifact the shape governs is still in the population";
+
+/// `unstorable_value`: a value no stored content can hold.
+const UNSTORABLE: &str = "a predicate value carries the character U+0000, in a string or an \
+     object key, which no stored content can hold — the database cannot represent it — so the \
+     value could match nothing";
 
 /// The second half of every `value_outside_shape` (spec §3.4, ruled 2026-10-19): what the refusal
 /// does not claim, and the route to the values it does not declare.
@@ -521,6 +583,7 @@ fn well_formed(predicates: &[ArtifactPredicate], errs: &mut Vec<PlanRefusal>) ->
                 || property_value_nodes(v) > MAX_PROPERTY_VALUE_NODES
         })
     });
+    let unstorable = indices(&|p: &ArtifactPredicate| p.op.values().iter().any(holds_nul));
 
     refuse_at(
         errs,
@@ -561,11 +624,32 @@ fn well_formed(predicates: &[ArtifactPredicate], errs: &mut Vec<PlanRefusal>) ->
         ),
         None,
     );
+    refuse_at(
+        errs,
+        RefusalReason::UnstorableValue,
+        &unstorable,
+        UNSTORABLE,
+        None,
+    );
 
-    let faulted = [empty, deep, long, no_values, large];
+    let faulted = [empty, deep, long, no_values, large, unstorable];
     (0..predicates.len())
         .map(|i| !faulted.iter().any(|f| f.contains(&i)))
         .collect()
+}
+
+/// Whether a value carries U+0000 anywhere — in a string, or in an object key, at any depth. jsonb
+/// cannot store it, so no artifact holds such a value, and binding one is a database error rather
+/// than a refusal. Depth is the parsed value's, which the JSON parser has already bounded.
+fn holds_nul(value: &Value) -> bool {
+    match value {
+        Value::String(s) => s.contains('\0'),
+        Value::Array(elements) => elements.iter().any(holds_nul),
+        Value::Object(members) => members
+            .iter()
+            .any(|(key, member)| key.contains('\0') || holds_nul(member)),
+        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+    }
 }
 
 /// Why a declared path refuses a predicate (§3.4, the "Refused as" column), or that checking it
@@ -708,8 +792,9 @@ fn sort<'p, 'c>(
 
 /// `path_outside_shape`, teaching the askable vocabulary and the bound an asked path met.
 ///
-/// The vocabulary is the walk's, enumerated once for the request and kept; a teaching copies from
-/// it only the paths it has first measured to fit ([`teaching`]).
+/// The vocabulary is the walk's, enumerated once for the request over borrowed facts and kept;
+/// each path is offered to the teaching as an [`AskableView`], so a teaching copies only the paths
+/// it has first measured to fit ([`teaching`]) and `omitted_paths` still counts the rest.
 fn refuse_paths(sorted: &Sorted<'_, '_>, walk: &mut ShapeWalk<'_>, errs: &mut Vec<PlanRefusal>) {
     if sorted.outside_path.is_empty() {
         return;
@@ -723,8 +808,12 @@ fn refuse_paths(sorted: &Sorted<'_, '_>, walk: &mut ShapeWalk<'_>, errs: &mut Ve
         rule.push_str(&format!(", and {}", bound_said(at)));
     }
     let mut teaches = teaching(
-        vocabulary.paths.iter().collect(),
-        AskablePath::clone,
+        vocabulary
+            .paths
+            .iter()
+            .map(|(path, facts)| AskableView::new(path, facts))
+            .collect(),
+        AskableView::into_askable,
         vocabulary.truncated.clone(),
         shape,
     );
@@ -787,14 +876,17 @@ fn bound_said(at: BoundKind) -> String {
 }
 
 /// A vocabulary held to [`MAX_TEACHING_BYTES`]: its paths in order until the next would not fit,
-/// and an elision saying how many were cut.
+/// and an elision saying how many were cut — counted over every candidate, so `omitted_paths`
+/// says how much of the whole vocabulary the teaching left out.
 ///
-/// **No copy it has not first bounded.** Each candidate is measured as it serializes — for an
-/// offending path, through an [`AskableView`] over borrowed facts — and only as far as the room
-/// left, then turned into an owned path by `own` only when it fits. So the copies a teaching makes
-/// are at most [`MAX_TEACHING_BYTES`] on the wire, a path that does not fit is never copied, and
-/// measuring it stops at the first write past the room left. That write may be one long string,
-/// which serde_json scans whole before writing: at most one string per teaching, allocating nothing.
+/// **No copy it has not first bounded.** Both callers offer each candidate as an [`AskableView`]
+/// over the walk's borrowed facts — the offending paths an ask resolved, and the shape's
+/// vocabulary, enumerated without copying a value. Each is measured as it serializes, and only as
+/// far as the room left, then turned into an owned path by `own` only when it fits. So the values
+/// a teaching copies are the values it sends, at most [`MAX_TEACHING_BYTES`] on the wire; a path
+/// that does not fit is never copied, and measuring it stops at the first write past the room
+/// left. That write may be one long string, which serde_json scans whole before writing: at most
+/// one string per teaching, allocating nothing.
 fn teaching<T: Serialize>(
     candidates: Vec<T>,
     own: impl Fn(T) -> AskablePath,
@@ -943,7 +1035,7 @@ fn compare_admits(facts: &Facts<'_>, bound: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::artifact_ask::{AskOperator, PathFacts, ShapeContext};
+    use crate::types::artifact_ask::{enumerate, AskOperator, PathFacts, ShapeContext, WalkBounds};
     use crate::types::query::filter::json_bytes;
     use crate::types::query::filter::OrdOp;
     use serde_json::json;
@@ -1856,5 +1948,249 @@ mod tests {
         }))
         .expect("an older producer's refusal, with no teaches, still parses");
         assert_eq!(back, r);
+    }
+
+    // ── The form checks `validate_ask_form` adds for the composable arm ───────────────────────
+
+    /// `include_folded: true` is refused by name, in the shape-free form check, so every caller
+    /// of it refuses alike. Bites the check removed: the ask validates, and the statement would
+    /// answer over live artifacts while the asker named folded ones too.
+    #[test]
+    fn include_folded_is_refused_by_name_in_the_form_check() {
+        let mut a = ask(vec![at(&["p"], PropertyOp::HasKey)]);
+        a.include_folded = true;
+        let rs = validate_ask_form(&a);
+        assert_eq!(reasons(&rs), vec![RefusalReason::FilterNotApplicable]);
+        assert_eq!(rs[0].detail, INCLUDE_FOLDED);
+        let through_the_session = refusals(&a, &shape_of(json!({ "properties": { "p": {} } })));
+        assert_eq!(through_the_session, rs);
+    }
+
+    /// U+0000 anywhere in a `contains` or `compare` value — a string, a string nested in an object
+    /// or an array, an object key — is refused `unstorable_value` before the predicate is walked;
+    /// the same value without it is not. Bites the NUL check removed: each validates, and the
+    /// database refuses the bound value instead.
+    #[test]
+    fn a_nul_anywhere_in_a_value_is_refused_before_the_predicate_is_walked() {
+        let shape = shape_of(json!({ "properties": { "p": {} } }));
+        for value in [
+            json!("ms\u{0}"),
+            json!({ "unit": "m\u{0}s" }),
+            json!([["a", "b\u{0}"]]),
+            json!({ "k\u{0}": 1 }),
+        ] {
+            for op in [
+                contains(vec![json!("fine"), value.clone()]),
+                compare(value.clone()),
+            ] {
+                let a = ask(vec![at(&["p"], op)]);
+                assert_eq!(
+                    reasons(&validate_ask_form(&a)),
+                    vec![RefusalReason::UnstorableValue],
+                    "{value}"
+                );
+                assert_eq!(
+                    reasons(&refusals(&a, &shape)),
+                    vec![RefusalReason::UnstorableValue],
+                    "{value}: refused, not walked"
+                );
+            }
+        }
+        let fine = ask(vec![at(&["p"], contains(vec![json!({ "unit": "ms" })]))]);
+        assert!(validate_ask_form(&fine).is_empty());
+        assert!(validate_ask(&fine, &shape).is_ok());
+    }
+
+    // ── What the SQL binds ───────────────────────────────────────────────────────────────────
+
+    /// An ask with no predicates binds `"predicates": []` — every list written out, the defaults
+    /// applied — where the caller's ask, serialized, carries no `predicates` key at all, which the
+    /// SQL matcher reads as a match for nothing. Bites a bind serialized from the raw ask.
+    #[test]
+    fn an_ask_binds_every_list_explicitly_even_when_empty() {
+        let raw = ask(vec![]);
+        assert!(
+            serde_json::to_value(&raw)
+                .unwrap()
+                .get("predicates")
+                .is_none(),
+            "the raw ask skips the empty list, which is why it is never what binds"
+        );
+        let bound = validate_ask(&raw, &shape_of(json!({}))).unwrap().bind();
+        assert_eq!(
+            bound,
+            json!({
+                "shape": Uuid::from_u128(7),
+                "predicates": [],
+                "intent": ["current", "member"],
+                "include_folded": false,
+                "shape_states": [
+                    "declared_satisfied",
+                    "declared_not_satisfied",
+                    "declared_not_yet_checked"
+                ]
+            })
+        );
+    }
+
+    /// What binds is the validated predicate: an array path's `contains` value arrives wrapped.
+    #[test]
+    fn an_ask_binds_its_validated_predicates_not_the_callers() {
+        let shape = shape_of(json!({ "properties": {
+            "rows": { "type": "array", "items": { "type": "object" } }
+        } }));
+        let a = ask(vec![at(&["rows"], contains(vec![json!({ "a": 1 })]))]);
+        let bound = validate_ask(&a, &shape).unwrap().bind();
+        assert_eq!(
+            bound["predicates"],
+            json!([{ "path": ["rows"], "op": { "op": "contains", "values": [[{ "a": 1 }]] } }])
+        );
+    }
+
+    // ── A teaching enumerates borrowed, and copies only what it sends ────────────────────────
+
+    /// The values a list of paths carries, at every items level.
+    fn values_in(paths: &[AskablePath]) -> usize {
+        fn of(facts: &PathFacts) -> usize {
+            facts.values.as_ref().map_or(0, Vec::len) + facts.items.as_deref().map_or(0, of)
+        }
+        paths.iter().map(|p| of(&p.facts)).sum()
+    }
+
+    /// 200 paths, each over one shared `enum` of 40 small nested objects — the shape whose owned
+    /// vocabulary copies every member into every path (8,000 values) to teach the few that fit.
+    fn nested_object_enum() -> LoadedShape {
+        let members: Vec<Value> = (0..40).map(|i| json!({ "k": { "v": i } })).collect();
+        let props: serde_json::Map<String, Value> = (0..200)
+            .map(|i| (format!("p{i:03}"), json!({ "$ref": "#/$defs/e" })))
+            .collect();
+        shape_of(json!({ "$defs": { "e": { "enum": members } }, "properties": props }))
+    }
+
+    /// A `path_outside_shape` refusal copies no more values than its teaching sends, however many
+    /// the whole vocabulary declares; `omitted_paths` still counts the whole vocabulary. Bites the
+    /// session's vocabulary taken from the owned enumeration: every path's values are then copied
+    /// — the whole vocabulary, ten times what fits — and only the first few sent.
+    #[test]
+    fn a_path_refusal_copies_only_the_values_its_teaching_sends() {
+        let shape = nested_object_enum();
+        let whole = values_in(&enumerate(&shape.schema, &WalkBounds::BUILD).paths);
+        assert_eq!(whole, 200 * 40);
+
+        let (copied, rs) =
+            values_copied_validating(&ask(vec![at(&["absent"], PropertyOp::HasKey)]), &shape);
+        assert_eq!(reasons(&rs), vec![RefusalReason::PathOutsideShape]);
+        let teaches = rs[0].teaches.clone().expect("a path refusal teaches");
+        let kept = teaches.vocabulary.expect("the vocabulary").paths;
+        let sent = values_in(&kept);
+        assert!(sent > 0, "some paths fit 16 KiB");
+        assert!(copied <= sent, "{copied} values copied, {sent} sent");
+        assert!(
+            copied < whole,
+            "{copied} copied of the {whole} the shape declares"
+        );
+        assert_eq!(
+            teaches.elided.map(|e| e.omitted_paths + kept.len()),
+            Some(200),
+            "the elision counts the whole vocabulary"
+        );
+    }
+
+    /// On ordinary schemas — wherever the owned enumeration is not cut by what its copies cost — a
+    /// path refusal teaches byte for byte what teaching from the owned vocabulary taught, which
+    /// stays reachable here as the oracle. Bites any drift between the borrowed enumeration and the
+    /// owned one: a path, a fact, an order or a cut that differs.
+    #[test]
+    fn a_path_refusal_teaches_byte_for_byte_what_the_owned_vocabulary_teaches() {
+        let mut wide = serde_json::Map::new();
+        for i in 0..200 {
+            wide.insert(
+                format!("{i:03}{}", "k".repeat(200)),
+                json!({ "type": "string" }),
+            );
+        }
+        let schemas = [
+            json!({ "properties": {
+                "unit": { "type": "string", "enum": ["ms", "s"] },
+                "count": { "type": "integer" }
+            } }),
+            json!({ "properties": {
+                "rows": { "type": "array", "items": {
+                    "type": "object", "properties": { "x": { "type": "number" } }
+                } },
+                "meta": { "type": "object", "properties": {
+                    "source": { "const": "sensor" },
+                    "tags": { "type": "array", "items": { "enum": ["a", "b"] } }
+                } }
+            } }),
+            json!({
+                "$defs": { "code": { "enum": ["ms", 7, null, { "k": [1, 2.5] }] } },
+                "allOf": [
+                    { "properties": { "a": { "$ref": "#/$defs/code" } } },
+                    { "properties": { "b": { "anyOf": [{ "type": "string" }, { "type": "null" }] } } }
+                ]
+            }),
+            json!({ "properties": wide }),
+            json!({
+                "$defs": { "n": { "type": "object", "properties": {
+                    "child": { "$ref": "#/$defs/n" },
+                    "name": { "type": "string" }
+                } } },
+                "$ref": "#/$defs/n"
+            }),
+            nested_object_enum().schema,
+            json!({ "properties": { "p": { "description": "x".repeat(MAX_SCHEMA_BYTES) } } }),
+        ];
+        for (i, schema) in schemas.into_iter().enumerate() {
+            let shape = shape_of(schema);
+            let rs = refusals(&ask(vec![at(&["absent"], PropertyOp::HasKey)]), &shape);
+            assert_eq!(reasons(&rs), vec![RefusalReason::PathOutsideShape]);
+            let taught = rs[0].teaches.as_deref().expect("a path refusal teaches");
+
+            let owned = enumerate(&shape.schema, &WalkBounds::BUILD);
+            let mut oracle = teaching(
+                owned.paths.iter().collect(),
+                AskablePath::clone,
+                owned.truncated.clone(),
+                shape.shape_id,
+            );
+            oracle.beyond_bound = taught.beyond_bound;
+            assert_eq!(
+                serde_json::to_vec(taught).unwrap(),
+                serde_json::to_vec(&oracle).unwrap(),
+                "schema {i}"
+            );
+        }
+    }
+
+    /// The one place the two differ, as ruled: where the owned vocabulary's copy charge is what
+    /// cuts it at `work` — twenty paths over one 5,000-member enum, of which it affords about
+    /// eleven — the borrowed one charges no copy, enumerates all twenty, and is not cut. Neither
+    /// sends a path (one carries 5,000 values, past 16 KiB), so the teaching differs only in what
+    /// it counts: `omitted_paths` is 20, and `truncated` is empty where the owned one said `work`.
+    #[test]
+    fn where_its_copies_cut_the_owned_vocabulary_a_teaching_counts_every_path() {
+        let members: Vec<Value> = (0..5_000).map(|i| json!(i)).collect();
+        let props: serde_json::Map<String, Value> = (0..20)
+            .map(|i| (format!("p{i:02}"), json!({ "$ref": "#/$defs/e" })))
+            .collect();
+        let shape = shape_of(json!({ "$defs": { "e": { "enum": members } }, "properties": props }));
+
+        let owned = enumerate(&shape.schema, &WalkBounds::BUILD);
+        assert!(owned.paths.len() < 20, "{}", owned.paths.len());
+        assert_eq!(owned.truncated, BTreeSet::from([BoundKind::Work]));
+
+        let (copied, rs) =
+            values_copied_validating(&ask(vec![at(&["absent"], PropertyOp::HasKey)]), &shape);
+        let taught = rs[0].teaches.clone().expect("a path refusal teaches");
+        assert_eq!(
+            taught.vocabulary,
+            Some(Vocabulary {
+                paths: vec![],
+                truncated: BTreeSet::new()
+            })
+        );
+        assert_eq!(taught.elided.map(|e| e.omitted_paths), Some(20));
+        assert_eq!(copied, 0, "no path fits, so none is copied");
     }
 }

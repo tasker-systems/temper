@@ -86,8 +86,10 @@ __all__ = [
     "AnchorShape",
     "AnchorVerdict",
     "AppendBlockPayload",
+    "ArtifactAsk",
     "ArtifactCommitRequest",
     "ArtifactCommitResponse",
+    "ArtifactPredicate",
     "ArtifactView",
     "AskOperator",
     "AskablePath",
@@ -455,6 +457,7 @@ __all__ = [
     "SetWebhookEventsRequest",
     "ShapeDeclareRequest",
     "ShapeEmptiness",
+    "ShapeHome",
     "ShapeSuccessor",
     "ShapeView",
     "ShareContextOutcome",
@@ -585,8 +588,10 @@ from temper.generated.models.anchor_address_resolution_one_of2 import AnchorAddr
 from temper.generated.models.anchor_shape import AnchorShape as AnchorShape
 from temper.generated.models.anchor_verdict import AnchorVerdict as AnchorVerdict
 from temper.generated.models.append_block_payload import AppendBlockPayload as AppendBlockPayload
+from temper.generated.models.artifact_ask import ArtifactAsk as ArtifactAsk
 from temper.generated.models.artifact_commit_request import ArtifactCommitRequest as ArtifactCommitRequest
 from temper.generated.models.artifact_commit_response import ArtifactCommitResponse as ArtifactCommitResponse
+from temper.generated.models.artifact_predicate import ArtifactPredicate as ArtifactPredicate
 from temper.generated.models.artifact_view import ArtifactView as ArtifactView
 from temper.generated.models.ask_operator import AskOperator as AskOperator
 from temper.generated.models.askable_path import AskablePath as AskablePath
@@ -954,6 +959,7 @@ from temper.generated.models.set_tool_manifest_request import SetToolManifestReq
 from temper.generated.models.set_webhook_events_request import SetWebhookEventsRequest as SetWebhookEventsRequest
 from temper.generated.models.shape_declare_request import ShapeDeclareRequest as ShapeDeclareRequest
 from temper.generated.models.shape_emptiness import ShapeEmptiness as ShapeEmptiness
+from temper.generated.models.shape_home import ShapeHome as ShapeHome
 from temper.generated.models.shape_successor import ShapeSuccessor as ShapeSuccessor
 from temper.generated.models.shape_view import ShapeView as ShapeView
 from temper.generated.models.share_context_outcome import ShareContextOutcome as ShareContextOutcome

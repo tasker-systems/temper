@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 use crate::backend::substrate_read::{embed_query_texts, QueryEmbedBatch};
 use crate::error::{ApiError, ApiResult};
+use temper_core::types::artifact_ask::ShapeContext;
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::query::{
     applied_terms, declaration, text_to_embed, texts_to_embed, validate, ActName, ActRefusal,
@@ -167,7 +168,14 @@ pub async fn prepare(mut c: Composition) -> Result<ValidatedComposition, Vec<Pla
     // `the_gate_and_the_seal_agree_across_the_embed` holds it, over a composition near the cap —
     // its first fixture asked one ten-byte question, so the budget check could not fire and the
     // test certified the invariant its own commit had broken.
-    if validate(&c).is_ok() {
+    //
+    // **One ask session for both passes**, held across the embed: the seal re-reads the asks the
+    // gate validated and is answered from the gate's work (see `validate`). This entry point loads
+    // no shapes, so the session is the empty context's, and every ask it is handed is refused
+    // `shape_not_askable` — never admitted unchecked.
+    let shapes = ShapeContext::empty();
+    let mut session = shapes.session();
+    if validate(&c, &mut session).is_ok() {
         let phase = embed_missing_intentions(&mut c).await;
         tracing::debug!(
             asked = phase.asked,
@@ -176,7 +184,7 @@ pub async fn prepare(mut c: Composition) -> Result<ValidatedComposition, Vec<Pla
             "query embed phase"
         );
     }
-    validate(&c)
+    validate(&c, &mut session)
 }
 
 /// Fill in the vectors the caller could not compute, in place, before the plan is sealed.
@@ -1130,6 +1138,7 @@ mod tests {
             resource_filter: None,
             edge_filter: None,
             properties: vec![],
+            artifact_filter: vec![],
         })
     }
 
@@ -1146,7 +1155,7 @@ mod tests {
             },
             stages,
         };
-        validate(&c).expect("plan is valid")
+        validate(&c, &mut ShapeContext::empty().session()).expect("plan is valid")
     }
 
     /// A find-about stage asking a specific question — the act the server embeds for.
@@ -2662,6 +2671,7 @@ mod tests {
                     resource_filter: None,
                     edge_filter: None,
                     properties: vec![],
+                    artifact_filter: vec![],
                 })
             })
             .collect();
@@ -2715,6 +2725,7 @@ mod tests {
                     resource_filter: None,
                     edge_filter: None,
                     properties: vec![],
+                    artifact_filter: vec![],
                 })
             })
             .collect();

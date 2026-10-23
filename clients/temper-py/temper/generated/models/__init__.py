@@ -42,8 +42,10 @@ from temper.generated.models.anchor_address_resolution_one_of2 import AnchorAddr
 from temper.generated.models.anchor_shape import AnchorShape
 from temper.generated.models.anchor_verdict import AnchorVerdict
 from temper.generated.models.append_block_payload import AppendBlockPayload
+from temper.generated.models.artifact_ask import ArtifactAsk
 from temper.generated.models.artifact_commit_request import ArtifactCommitRequest
 from temper.generated.models.artifact_commit_response import ArtifactCommitResponse
+from temper.generated.models.artifact_predicate import ArtifactPredicate
 from temper.generated.models.artifact_view import ArtifactView
 from temper.generated.models.ask_operator import AskOperator
 from temper.generated.models.askable_path import AskablePath
@@ -411,6 +413,7 @@ from temper.generated.models.set_tool_manifest_request import SetToolManifestReq
 from temper.generated.models.set_webhook_events_request import SetWebhookEventsRequest
 from temper.generated.models.shape_declare_request import ShapeDeclareRequest
 from temper.generated.models.shape_emptiness import ShapeEmptiness
+from temper.generated.models.shape_home import ShapeHome
 from temper.generated.models.shape_successor import ShapeSuccessor
 from temper.generated.models.shape_view import ShapeView
 from temper.generated.models.share_context_outcome import ShareContextOutcome

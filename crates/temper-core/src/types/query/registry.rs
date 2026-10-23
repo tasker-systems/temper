@@ -270,7 +270,9 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // looking like a narrowing. Whatever ceiling applies belongs on the act that RETURNS
             // rows, where the caller can see it disclosed.
             accepts_bound_terms: vec![],
-            accepts_filters: vec![FilterField::Resource],
+            // The one act admitting two slots: both narrow the resources it selects, and they AND
+            // together. What a resource's artifacts hold is one more thing known about what it IS.
+            accepts_filters: vec![FilterField::Resource, FilterField::Artifact],
             bound_ceilings: BTreeMap::new(),
             produces: Some(IdKind::Resource),
             // Selects without scoring. `discloses` describes what a stage says about its own

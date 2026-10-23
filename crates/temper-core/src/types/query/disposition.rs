@@ -297,6 +297,10 @@ pub enum RefusalReason {
     /// nothing had capped them. What they cost is BODY: ten thousand one-character labels per stage
     /// serialized to 4.7 MB and validated `Ok`, so the door answered a plan its own contract admits
     /// with a bare 413. See `MAX_FILTER_VALUES`.
+    ///
+    /// Also an artifact predicate path past `MAX_ARTIFACT_PATH_DEPTH` segments, and a composition
+    /// whose artifact filters together carry more asks than `MAX_ASKS_PER_REQUEST` or name more
+    /// distinct shapes than `MAX_ASKED_SHAPES` — refused before any shape is loaded.
     TooManyFilterValues,
     /// A list that means a SET names the same member twice.
     ///
@@ -407,7 +411,8 @@ pub enum RefusalReason {
     // Spec `2026-10-19-asking-artifacts-by-what-they-are` §3.5. Every one is decided before
     // execution, against a shape loaded before the gate (§4.3), so none of them is runtime. The
     // first three are refusal steps 1–3 and come from the load; the rest are step 4 and carry
-    // `PlanRefusal::teaches`. `artifact_ask::AskSession::validate` raises all of them.
+    // `PlanRefusal::teaches`. `artifact_ask::AskSession::validate` raises all of them but
+    // `ask_scope_conflict`, which the composition validator raises over the asks a stage admitted.
     /// The ask names a shape that does not exist or that the asker cannot read. One reason and one
     /// fixed detail for both, so a refusal is never an existence oracle.
     ShapeNotAskable,
@@ -440,8 +445,12 @@ pub enum RefusalReason {
     UnknownShapeState,
     /// An ask's scope cannot be one home: a stage anchored to a home that is not the shape's, or
     /// two asks in one filter whose shapes live in different homes. Either is empty by
-    /// construction, since a resource has exactly one home.
+    /// construction, since a resource has exactly one home. `teaches` names the shapes' homes.
     AskScopeConflict,
+    /// An artifact predicate value carries U+0000, in a string or an object key. No stored content
+    /// can hold it — jsonb cannot represent the character — so the value could match nothing, and
+    /// binding it would be a database error where a refusal belongs.
+    UnstorableValue,
 
     /// A reason outside the declared vocabulary.
     ///
@@ -646,6 +655,7 @@ mod tests {
             RefusalReason::UnknownArtifactIntent,
             RefusalReason::UnknownShapeState,
             RefusalReason::AskScopeConflict,
+            RefusalReason::UnstorableValue,
         ] {
             assert!(
                 reason.is_known(),
@@ -678,6 +688,7 @@ mod tests {
             ),
             (RefusalReason::UnknownShapeState, "unknown_shape_state"),
             (RefusalReason::AskScopeConflict, "ask_scope_conflict"),
+            (RefusalReason::UnstorableValue, "unstorable_value"),
         ] {
             let json = serde_json::to_string(&reason).unwrap();
             assert_eq!(json, format!("\"{wire}\""));

@@ -198,7 +198,7 @@
         },
         {
           "const": "too_many_filter_values",
-          "description": "A narrowing list carries more values than the contract admits.\n\n`[added — 2026-08-28, found in review]` `ResourceFilter::doc_type`, `ResourceFilter::tags`\nand `EdgeFilter::labels` are the three narrowings that cost nothing per candidate — array\ncontainment and `= ANY` are single operations whatever their length — which is precisely why\nnothing had capped them. What they cost is BODY: ten thousand one-character labels per stage\nserialized to 4.7 MB and validated `Ok`, so the door answered a plan its own contract admits\nwith a bare 413. See `MAX_FILTER_VALUES`.",
+          "description": "A narrowing list carries more values than the contract admits.\n\n`[added — 2026-08-28, found in review]` `ResourceFilter::doc_type`, `ResourceFilter::tags`\nand `EdgeFilter::labels` are the three narrowings that cost nothing per candidate — array\ncontainment and `= ANY` are single operations whatever their length — which is precisely why\nnothing had capped them. What they cost is BODY: ten thousand one-character labels per stage\nserialized to 4.7 MB and validated `Ok`, so the door answered a plan its own contract admits\nwith a bare 413. See `MAX_FILTER_VALUES`.\n\nAlso an artifact predicate path past `MAX_ARTIFACT_PATH_DEPTH` segments, and a composition\nwhose artifact filters together carry more asks than `MAX_ASKS_PER_REQUEST` or name more\ndistinct shapes than `MAX_ASKED_SHAPES` — refused before any shape is loaded.",
           "type": "string"
         },
         {
@@ -343,7 +343,12 @@
         },
         {
           "const": "ask_scope_conflict",
-          "description": "An ask's scope cannot be one home: a stage anchored to a home that is not the shape's, or\ntwo asks in one filter whose shapes live in different homes. Either is empty by\nconstruction, since a resource has exactly one home.",
+          "description": "An ask's scope cannot be one home: a stage anchored to a home that is not the shape's, or\ntwo asks in one filter whose shapes live in different homes. Either is empty by\nconstruction, since a resource has exactly one home. `teaches` names the shapes' homes.",
+          "type": "string"
+        },
+        {
+          "const": "unstorable_value",
+          "description": "An artifact predicate value carries U+0000, in a string or an object key. No stored content\ncan hold it — jsonb cannot represent the character — so the value could match nothing, and\nbinding it would be a database error where a refusal belongs.",
           "type": "string"
         },
         {
@@ -354,7 +359,7 @@
       "description": "Why an act refused. A typed variant so every door renders the same value; how a door\nTRANSPORTS it (HTTP status, MCP error code) stays a door concern.\n\nOPEN vocabulary, deliberately — design §6.1 settled openness for the `act` discriminator and\nfor `disposition` but never ruled on refusals, and v0 first shipped this closed by default.\nCorrected by decision `019fcd13-4e65-7213-ac6f-20c3c8ccfce1`: the growth this contract wants\nincludes new ways to decline, so a closed enum would make every future reason a breaking\nchange. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,\nmatched exhaustively."
     },
     "RefusalTeaching": {
-      "description": "What a refusal teaches, as data an agent reads without parsing English (spec §3.5).\n\n**Open, by being a struct of optional fields** rather than a tagged enum: a later refusal that\nteaches something new adds a field older clients skip, where a new variant would fail their\nparse of the whole refusal list. Each refusal fills what is relevant to it:\n\n| reason | teaches |\n|---|---|\n| `path_outside_shape` | `vocabulary` (the askable paths), `beyond_bound` when a walk bound stopped it |\n| `operator_outside_shape` | `vocabulary` (each offending path's facts and feasible operators) |\n| `value_outside_shape` | `vocabulary` (each offending path's declared types and values), `non_closure` |\n| `unknown_artifact_intent`, `unknown_shape_state` | `terms` |\n| `shape_superseded` | `successor` |\n| `shape_schema_uncompilable` | `beyond_bound: schema_bytes` for a schema past the byte bound |",
+      "description": "What a refusal teaches, as data an agent reads without parsing English (spec §3.5).\n\n**Open, by being a struct of optional fields** rather than a tagged enum: a later refusal that\nteaches something new adds a field older clients skip, where a new variant would fail their\nparse of the whole refusal list. Each refusal fills what is relevant to it:\n\n| reason | teaches |\n|---|---|\n| `path_outside_shape` | `vocabulary` (the askable paths), `beyond_bound` when a walk bound stopped it |\n| `operator_outside_shape` | `vocabulary` (each offending path's facts and feasible operators) |\n| `value_outside_shape` | `vocabulary` (each offending path's declared types and values), `non_closure` |\n| `unknown_artifact_intent`, `unknown_shape_state` | `terms` |\n| `shape_superseded` | `successor` |\n| `shape_schema_uncompilable` | `beyond_bound: schema_bytes` for a schema past the byte bound |\n| `ask_scope_conflict` | `homes` |",
       "properties": {
         "beyond_bound": {
           "anyOf": [
@@ -377,6 +382,13 @@
             }
           ],
           "description": "Paths cut from `vocabulary` to keep the teaching bounded."
+        },
+        "homes": {
+          "description": "The homes of the shapes a stage's asks name, when no one home can hold them all. Each is\nthe home of a shape the asker can read — refusal step 1 admitted it — so naming it\ndiscloses nothing a by-id read of the shape would not.",
+          "items": {
+            "$ref": "#/$defs/ShapeHome"
+          },
+          "type": "array"
         },
         "non_closure": {
           "description": "That stored content is not closed by its shape, and the route to values it does not\ndeclare (spec §3.4).",
@@ -415,6 +427,24 @@
           "description": "The shape's askable paths — the same structure as a shape's `askable` — narrowed to what the\nrefusal is about, and held to a bounded size."
         }
       },
+      "type": "object"
+    },
+    "ShapeHome": {
+      "description": "A shape's home: the context or cogmap whose resources an ask against it ranges over. A resource\nhas exactly one home, so asks AND-ed on one resource must share one (§4.1, *Scope*).",
+      "properties": {
+        "anchor_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "anchor_table": {
+          "description": "`\"kb_contexts\"` or `\"kb_cogmaps\"`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "anchor_table",
+        "anchor_id"
+      ],
       "type": "object"
     },
     "ShapeSuccessor": {

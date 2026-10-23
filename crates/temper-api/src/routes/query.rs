@@ -71,6 +71,7 @@ pub const QUERY_MAX_BODY_BYTES: usize = 25 * 1024 * 1024;
 mod tests {
     use super::QUERY_MAX_BODY_BYTES;
     use std::collections::BTreeMap;
+    use temper_core::types::artifact_ask::ShapeContext;
     use temper_core::types::graph::EdgeKind;
     use temper_core::types::query::act::ActName;
     use temper_core::types::query::composition::{
@@ -151,10 +152,10 @@ mod tests {
             // nothing — and the first version of this test measured one carrying 128 refusals
             // while its own doc called it legal `[found in review — 2026-08-28]`.
             assert!(
-                validate(c).is_ok(),
+                validate(c, &mut ShapeContext::empty().session()).is_ok(),
                 "the {what} fixture must be a composition this server would RUN, or its size says \
                  nothing about what the door has to accept: {:?}",
-                validate(c).err()
+                validate(c, &mut ShapeContext::empty().session()).err()
             );
         }
 
@@ -254,6 +255,7 @@ mod tests {
                     resource_filter: (!walk).then(full_resource_filter),
                     edge_filter: walk.then(full_edge_filter),
                     properties: vec![],
+                    artifact_filter: vec![],
                 })
             })
             .collect();

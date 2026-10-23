@@ -28,9 +28,11 @@ use crate::types::query::PlanRefusal;
 ///
 /// **What it keeps, per shape:** the walk — the schema measured, its draft selected and its
 /// `$ref`s resolved — built on the first ask that needs it; every path any ask has resolved; and
-/// the vocabulary, enumerated on the first path refusal and kept for every later teaching. A shape
-/// row is immutable per id (an amendment mints a new id, §2.2), so none of it can go stale within
-/// a request.
+/// the vocabulary, enumerated on the first path refusal and kept for every later teaching. Paths
+/// and vocabulary both hold the walk's facts borrowed from the schema, so what a session keeps per
+/// shape is bounded by the walk's charges, not by the values the schema declares; a teaching
+/// copies only the paths it sends. A shape row is immutable per id (an amendment mints a new id,
+/// §2.2), so none of it can go stale within a request.
 ///
 /// **What it answers again:** an ask equal to one the session has already validated gets that
 /// answer back, byte for byte, and spends nothing. So a composition's seal, re-validating the asks
@@ -43,7 +45,8 @@ use crate::types::query::PlanRefusal;
 /// refused `path_outside_shape` with `teaches.beyond_bound: work`, never admitted unchecked. A
 /// path already resolved costs nothing to name again. The vocabulary has a budget of its own so a
 /// request that has spent its shared budget still teaches what may be asked; that makes the
-/// request's total grow with the number of distinct shapes it names, which the caller bounds.
+/// request's total grow with the number of distinct shapes it names, which the caller bounds —
+/// a composition by `MAX_ASKED_SHAPES`, decided before any shape is loaded.
 ///
 /// **Why it borrows the context rather than living in it.** A walk borrows the schema it reads, so
 /// a cache of walks inside the struct that owns the schemas would be self-referential. The context
@@ -100,6 +103,8 @@ impl<'c> AskSession<'c> {
     pub fn validate(&mut self, ask: &ArtifactAsk) -> Result<ValidatedAsk, Vec<PlanRefusal>> {
         let key = serde_json::to_vec(ask).ok();
         if let Some(answer) = key.as_ref().and_then(|key| self.answered.get(key)) {
+            #[cfg(test)]
+            ASKS_ANSWERED_AGAIN.with(|again| again.set(again.get() + 1));
             return answer.clone();
         }
         let answer = self.answer(ask);
@@ -130,7 +135,7 @@ impl<'c> AskSession<'c> {
 
     /// The visits the request has left — what a test reads to see what its asks cost.
     #[cfg(test)]
-    fn visits_left(&self) -> usize {
+    pub(crate) fn visits_left(&self) -> usize {
         self.budget.walk.left()
     }
 
@@ -139,6 +144,14 @@ impl<'c> AskSession<'c> {
     fn steps_left(&self) -> usize {
         self.budget.membership_steps
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Every ask a session has answered from its memo on this thread — what a test reads to see
+    /// that a seal re-validating its gate's asks was answered rather than re-walked.
+    pub(crate) static ASKS_ANSWERED_AGAIN: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
 }
 
 /// A steps 1–3 refusal, followed by the ask's shape-free refusals.
