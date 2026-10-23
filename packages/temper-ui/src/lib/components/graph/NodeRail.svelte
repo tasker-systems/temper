@@ -15,7 +15,7 @@
 	import RegionState from '$lib/components/RegionState.svelte';
 	import { summarizeEvent } from '$lib/graph/eventSummary';
 	import { atlasNeighbors } from '$lib/graph/neighbors';
-	import { docTypeHue } from '$lib/graph/palette';
+	import { docTypeTint } from '$lib/graph/palette';
 	import { regionStateFor } from '$lib/region';
 	import { relativeTime } from '$lib/graph/relativeTime';
 	import { trailModel } from '$lib/graph/trail';
@@ -38,7 +38,7 @@
 	}
 	let { node, model, excerpt, trail }: Props = $props();
 
-	const hue = $derived(docTypeHue(node.doc_type));
+	const tint = $derived(docTypeTint(node.doc_type));
 	// The read's own word for this node's arm. Looked up in the legend the model carries rather
 	// than translated here — no panel may name an arm a read did not declare — and the row is
 	// omitted outright when the key does not resolve.
@@ -66,7 +66,7 @@
 	const walkFromHere = () => goto(withGraphSeed($page.url, node.id));
 </script>
 
-<aside class="node-rail" style="--hue: {hue};" data-testid="node-rail">
+<aside class="node-rail" style="--hue: var(--tp-{tint})" data-testid="node-rail">
 	<header>
 		<span class="marker">{node.doc_type}</span>
 		<button class="close" onclick={close}>CLOSE ✕</button>
@@ -136,7 +136,7 @@
 				<a class="nb" href={withGraphSelection($page.url, n.other.id)}>
 					<span class="dir">{n.dir}</span>
 					<span class="rel">{n.label}</span>
-					<span class="name" style="color: {docTypeHue(n.other.doc_type)}">{n.other.title}</span>
+					<span class="name" style="color: var(--tp-{docTypeTint(n.other.doc_type)})">{n.other.title}</span>
 				</a>
 			{/each}
 		</section>

@@ -264,39 +264,39 @@
             },
             "cat-1": {
               "$ref": "#/$defs/color",
-              "description": "Categorical slot 1 of 8. Vocabularies — core's doc types and plugins' — bind their terms to slots; they never name colours. Floor: 4.5:1 on ground, 3:1 on surface."
+              "description": "Categorical slot 1 of 8. Vocabularies — core's doc types and plugins' — bind their terms to slots; they never name colours. Floor: 4.5:1 on ground, surface and surface-raised."
             },
             "cat-2": {
               "$ref": "#/$defs/color",
-              "description": "Categorical slot 2 of 8. Vocabularies — core's doc types and plugins' — bind their terms to slots; they never name colours. Floor: 4.5:1 on ground, 3:1 on surface."
+              "description": "Categorical slot 2 of 8. Vocabularies — core's doc types and plugins' — bind their terms to slots; they never name colours. Floor: 4.5:1 on ground, surface and surface-raised."
             },
             "cat-3": {
               "$ref": "#/$defs/color",
-              "description": "Categorical slot 3 of 8. Vocabularies — core's doc types and plugins' — bind their terms to slots; they never name colours. Floor: 4.5:1 on ground, 3:1 on surface."
+              "description": "Categorical slot 3 of 8. Vocabularies — core's doc types and plugins' — bind their terms to slots; they never name colours. Floor: 4.5:1 on ground, surface and surface-raised."
             },
             "cat-4": {
               "$ref": "#/$defs/color",
-              "description": "Categorical slot 4 of 8. Vocabularies — core's doc types and plugins' — bind their terms to slots; they never name colours. Floor: 4.5:1 on ground, 3:1 on surface."
+              "description": "Categorical slot 4 of 8. Vocabularies — core's doc types and plugins' — bind their terms to slots; they never name colours. Floor: 4.5:1 on ground, surface and surface-raised."
             },
             "cat-5": {
               "$ref": "#/$defs/color",
-              "description": "Categorical slot 5 of 8. Vocabularies — core's doc types and plugins' — bind their terms to slots; they never name colours. Floor: 4.5:1 on ground, 3:1 on surface."
+              "description": "Categorical slot 5 of 8. Vocabularies — core's doc types and plugins' — bind their terms to slots; they never name colours. Floor: 4.5:1 on ground, surface and surface-raised."
             },
             "cat-6": {
               "$ref": "#/$defs/color",
-              "description": "Categorical slot 6 of 8. Vocabularies — core's doc types and plugins' — bind their terms to slots; they never name colours. Floor: 4.5:1 on ground, 3:1 on surface."
+              "description": "Categorical slot 6 of 8. Vocabularies — core's doc types and plugins' — bind their terms to slots; they never name colours. Floor: 4.5:1 on ground, surface and surface-raised."
             },
             "cat-7": {
               "$ref": "#/$defs/color",
-              "description": "Categorical slot 7 of 8. Vocabularies — core's doc types and plugins' — bind their terms to slots; they never name colours. Floor: 4.5:1 on ground, 3:1 on surface."
+              "description": "Categorical slot 7 of 8. Vocabularies — core's doc types and plugins' — bind their terms to slots; they never name colours. Floor: 4.5:1 on ground, surface and surface-raised."
             },
             "cat-8": {
               "$ref": "#/$defs/color",
-              "description": "Categorical slot 8 of 8. Vocabularies — core's doc types and plugins' — bind their terms to slots; they never name colours. Floor: 4.5:1 on ground, 3:1 on surface."
+              "description": "Categorical slot 8 of 8. Vocabularies — core's doc types and plugins' — bind their terms to slots; they never name colours. Floor: 4.5:1 on ground, surface and surface-raised."
             },
             "cat-neutral": {
               "$ref": "#/$defs/color",
-              "description": "The categorical mark bound to no slot: a doc type no vocabulary binds, or a tint deliberately unnamed. Floor: 4.5:1 on ground, 3:1 on surface."
+              "description": "The categorical mark bound to no slot: a doc type no vocabulary binds, or a tint deliberately unnamed. Floor: 4.5:1 on ground, surface and surface-raised."
             },
             "code-key": {
               "$ref": "#/$defs/color",

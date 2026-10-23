@@ -9,14 +9,14 @@
 	import RegionState from '$lib/components/RegionState.svelte';
 	import { mergeProperties } from '$lib/properties';
 	import { graphHref } from '$lib/vault-url';
-	import { docTypeHue } from '$lib/graph/palette';
+	import { docTypeTint } from '$lib/graph/palette';
 	import { regionStateFor } from '$lib/region';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
-	// One --hue on the root tints masthead, rules, chips, toggles and rail.
-	// An unknown doc type falls back to FALLBACK_HUE — no branching needed.
-	let hue = $derived(docTypeHue(data.resource.doc_type_name));
+	// One --hue on the root carries the doc type's slot to the masthead, chips, toggles and rail.
+	// A doc type bound nowhere paints in the neutral — no branching needed.
+	let tint = $derived(docTypeTint(data.resource.doc_type_name));
 
 	// `stateVocabulary` is `null` both when the reader may not change this resource and when
 	// the read that says which states its kind carries did not answer — `mergeProperties` offers
@@ -64,7 +64,7 @@
 	<title>{data.resource.title} — temper</title>
 </svelte:head>
 
-<div class="rv" style="--hue: {hue}">
+<div class="rv" style="--hue: var(--tp-{tint})">
 	<div class="main">
 		<div class="masthead">
 			<div class="eyebrow">{data.resource.doc_type_name}</div>
@@ -234,7 +234,7 @@
 		font-size: 9px;
 		letter-spacing: var(--track-label);
 		text-transform: uppercase;
-		color: color-mix(in srgb, var(--hue) 80%, var(--tp-text));
+		color: var(--hue);
 	}
 	.title {
 		font-family: var(--font-serif);
@@ -253,7 +253,7 @@
 	}
 	.rail {
 		background: var(--tp-surface);
-		border-left: 1px solid color-mix(in srgb, var(--hue) 22%, transparent);
+		border-left: 1px solid var(--tp-rule);
 	}
 	/* The rail's sections carry their own padding; a bare region needs the same gutter. */
 	.rail-region {
@@ -264,7 +264,7 @@
 		justify-content: space-between;
 		align-items: center;
 		padding: 8px 10px;
-		border-bottom: 1px solid color-mix(in srgb, var(--hue) 12%, transparent);
+		border-bottom: 1px solid var(--tp-rule);
 	}
 	.rail-toggle,
 	.walk {
@@ -306,7 +306,7 @@
 		}
 		.rail {
 			border-left: 0;
-			border-top: 1px solid color-mix(in srgb, var(--hue) 22%, transparent);
+			border-top: 1px solid var(--tp-rule);
 		}
 	}
 </style>
