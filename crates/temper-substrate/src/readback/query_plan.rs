@@ -520,9 +520,7 @@ fn emit_act_body(
             // No `bound_for_find` and no paging: the fragment has neither slot, because narrowing a
             // selection by an upstream set is `CombineOp::Intersect` and a selection that truncates
             // is a sample. An anchor IS honoured, which is why `narrowing.anchor()` is read.
-            // Order matters and is not cosmetic: `binds` is positional, so the binds are pushed in
-            // signature order — the narrowings, the asks, then the open-key one — and each slot's
-            // `$n` follows the one before it.
+            //
             // **A filter the seal does not hold fails the compile; it never narrows nothing.** A
             // stage whose `artifact_filter` has asks the seal did not admit would otherwise bind
             // `NULL::jsonb`, which selects as though no ask were made. `validate` seals a stage's
@@ -542,6 +540,10 @@ fn emit_act_body(
                     teaches: None,
                 });
             }
+
+            // Order matters and is not cosmetic: `binds` is positional, so the binds are pushed in
+            // signature order — the narrowings, the asks, then the open-key one — and each slot's
+            // `$n` follows the one before it.
             let narrowings = selection_narrowings_for(inv, binds);
             let (artifact_asks, _asks_bound_at) = artifact_asks_slot(asks, binds);
             let properties = resource_properties_for(inv, binds);

@@ -13,10 +13,11 @@
 use std::collections::{BTreeMap, HashMap};
 
 use super::validate::{
-    not_askable, refuse_unserved, validate_ask_form, validate_loaded, ValidatedAsk,
+    exceeds_form_caps, not_askable, refuse_unserved, validate_ask_form, validate_loaded,
+    ValidatedAsk,
 };
 use super::walk::{Budget, ShapeWalk, MAX_WALK_VISITS};
-use super::{ArtifactAsk, ShapeContext, MAX_MEMBERSHIP_STEPS};
+use super::{ArtifactAsk, LoadedShape, ShapeContext, MAX_MEMBERSHIP_STEPS};
 use crate::types::ids::ShapeId;
 use crate::types::query::PlanRefusal;
 
@@ -105,7 +106,23 @@ impl<'c> AskSession<'c> {
     /// shape does: an ask is never checked against a schema it did not name.
     ///
     /// An ask this session has validated before is answered as it was then, spending nothing.
+    ///
+    /// **An ask past its form's count or size caps is neither kept nor walked.** It is refused by
+    /// its form — beside its load's refusal, if the load refuses — before it is keyed, so what the
+    /// session keeps is an ask within the caps, and a caller cannot make the memo hold a list of any
+    /// length by sending one. It is answered afresh each time it is asked, at the cost of comparing
+    /// its lists' lengths.
     pub fn validate(&mut self, ask: &ArtifactAsk) -> Result<ValidatedAsk, Vec<PlanRefusal>> {
+        if exceeds_form_caps(ask) {
+            return Err(match self.load(ask) {
+                Ok(_) => {
+                    let mut errs = validate_ask_form(ask);
+                    refuse_unserved(ask, &mut errs);
+                    errs
+                }
+                Err(refusal) => beside_the_form(refusal, ask),
+            });
+        }
         let key = serde_json::to_vec(ask).ok();
         if let Some(answer) = key.as_ref().and_then(|key| self.answered.get(key)).cloned() {
             self.answered_again += 1;
@@ -118,16 +135,22 @@ impl<'c> AskSession<'c> {
         answer
     }
 
+    /// Steps 1–3 for an ask: the shape it names as the context loaded it, or the refusal its load
+    /// decided. A shape the context was not given, or a load filed under another shape's id,
+    /// answers what an absent shape does.
+    fn load(&self, ask: &ArtifactAsk) -> Result<&'c LoadedShape, PlanRefusal> {
+        let context: &'c ShapeContext = self.context;
+        match context.get(&ask.shape).map(|load| load.loaded()) {
+            Some(Ok(shape)) if shape.shape_id == ask.shape => Ok(shape),
+            Some(Ok(_)) | None => Err(not_askable()),
+            Some(Err(refusal)) => Err(refusal),
+        }
+    }
+
     /// Steps 1–4 for an ask the session has not answered before.
     fn answer(&mut self, ask: &ArtifactAsk) -> Result<ValidatedAsk, Vec<PlanRefusal>> {
-        let context: &'c ShapeContext = self.context;
-        let load = match context.get(&ask.shape) {
-            Some(load) => load.loaded(),
-            None => Err(not_askable()),
-        };
-        let shape = match load {
-            Ok(shape) if shape.shape_id == ask.shape => shape,
-            Ok(_) => return Err(beside_the_form(not_askable(), ask)),
+        let shape = match self.load(ask) {
+            Ok(shape) => shape,
             Err(refusal) => return Err(beside_the_form(refusal, ask)),
         };
         let walk = self
@@ -246,6 +269,86 @@ mod tests {
         let before = counter.with(Cell::get);
         let out = run();
         (counter.with(Cell::get) - before, out)
+    }
+
+    /// **An ask past its form's caps is refused by them, and neither walked nor kept.** Three asks
+    /// whose lists carry no text — a long `intent` of empty terms, a long `shape_states` of empty
+    /// terms, and one predicate whose path is a long run of empty segments — are each refused by the
+    /// cap their list breaks (`too_many_filter_values`), build no walk, and are not answered from the
+    /// memo when asked again: nothing was kept. A within-caps ask through the same session is kept,
+    /// the control that the memo is reachable at all.
+    ///
+    /// Bites the cap check moved after the key (or removed from `validate`): each ask is keyed,
+    /// and asked again is answered from the memo (`answered_again` above 0), and the shape enters
+    /// the session's walks (`shapes_walked` 1).
+    #[test]
+    fn an_ask_past_its_form_caps_is_refused_without_being_walked_or_kept() {
+        let context = context_of(shape_of(json!({ "properties": { "unit": {} } })));
+        let mut session = context.session();
+        const LONG: usize = 10_000;
+        let empty_intents = ArtifactAsk {
+            intent: vec![String::new(); LONG],
+            ..ask_of(&["unit"], PropertyOp::HasKey)
+        };
+        let empty_states = ArtifactAsk {
+            shape_states: vec![String::new(); LONG],
+            ..ask_of(&["unit"], PropertyOp::HasKey)
+        };
+        let mut empty_segments = ask_of(&["unit"], PropertyOp::HasKey);
+        empty_segments.predicates[0].path = vec![String::new(); LONG];
+        for over in [empty_intents, empty_states, empty_segments] {
+            for pass in 0..2 {
+                let (built, rs) = counted(&WALKS_BUILT, || session.validate(&over));
+                let rs = rs.expect_err("past a cap");
+                assert!(
+                    reasons(&rs).contains(&RefusalReason::TooManyFilterValues),
+                    "pass {pass}: {rs:?}"
+                );
+                assert_eq!(built, 0, "pass {pass}: no walk");
+            }
+        }
+        assert_eq!(session.answered_again(), 0, "nothing over a cap was kept");
+        assert_eq!(session.shapes_walked(), 0);
+
+        let within = ask_of(&["unit"], PropertyOp::HasKey);
+        session.validate(&within).expect("within the caps");
+        session.validate(&within).expect("answered again");
+        assert_eq!(
+            session.answered_again(),
+            1,
+            "the control: a within-caps ask is kept"
+        );
+    }
+
+    /// Terms are bound in vocabulary order, whatever order the caller named them in, so two asks
+    /// differing only in that order validate to one bind. Bites the caller's order kept.
+    #[test]
+    fn terms_bind_in_vocabulary_order() {
+        let context = context_of(shape_of(json!({ "properties": { "unit": {} } })));
+        let mut session = context.session();
+        let named = |intent: [&str; 2], states: [&str; 2]| ArtifactAsk {
+            intent: intent.iter().map(|t| t.to_string()).collect(),
+            shape_states: states.iter().map(|t| t.to_string()).collect(),
+            ..ask_of(&["unit"], PropertyOp::HasKey)
+        };
+        let forward = session
+            .validate(&named(
+                ["current", "pinned"],
+                ["declared_satisfied", "declared_not_yet_checked"],
+            ))
+            .expect("known terms");
+        let backward = session
+            .validate(&named(
+                ["pinned", "current"],
+                ["declared_not_yet_checked", "declared_satisfied"],
+            ))
+            .expect("known terms");
+        assert_eq!(forward.intent(), &["current", "pinned"]);
+        assert_eq!(
+            backward.shape_states(),
+            &["declared_satisfied", "declared_not_yet_checked"]
+        );
+        assert_eq!(forward.bind(), backward.bind());
     }
 
     /// A shape each of whose `MAX_ASK_PREDICATES` properties references one `allOf` of 2,500

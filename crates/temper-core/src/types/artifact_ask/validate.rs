@@ -302,6 +302,38 @@ pub(super) fn refuse_unserved(ask: &ArtifactAsk, errs: &mut Vec<PlanRefusal>) {
     }
 }
 
+/// Whether an ask is past a count or size cap of its form: more terms than a vocabulary holds, more
+/// predicates or probes than an ask may make, a path deeper than `MAX_ARTIFACT_PATH_DEPTH` or a
+/// segment longer than `MAX_ARTIFACT_PATH_SEGMENT_BYTES`, a value past `MAX_PROPERTY_VALUE_BYTES` or
+/// `MAX_PROPERTY_VALUE_NODES`. Every one is a refusal [`validate_ask_form`] raises, so an ask this
+/// answers `true` for is refused by its form.
+///
+/// **Checked before a session keys an ask** ([`AskSession::validate`](super::AskSession::validate)),
+/// so what a session keeps is within these caps. Each list's length is compared before the list is
+/// read, and a list is read only once its length is within its cap, so the check costs at most
+/// what an ask within the caps carries.
+pub(super) fn exceeds_form_caps(ask: &ArtifactAsk) -> bool {
+    if ask.intent.len() > INTENTS.known.len()
+        || ask.shape_states.len() > SHAPE_STATES.known.len()
+        || ask.predicates.len() > MAX_ASK_PREDICATES
+    {
+        return true;
+    }
+    if ask.predicates.iter().map(|p| p.op.probes()).sum::<usize>() > MAX_ASK_PROBES {
+        return true;
+    }
+    ask.predicates.iter().any(|p| {
+        p.path.len() > MAX_ARTIFACT_PATH_DEPTH
+            || p.path
+                .iter()
+                .any(|s| json_string_bytes(s) > MAX_ARTIFACT_PATH_SEGMENT_BYTES)
+            || p.op.values().iter().any(|v| {
+                property_value_bytes(v) > MAX_PROPERTY_VALUE_BYTES
+                    || property_value_nodes(v) > MAX_PROPERTY_VALUE_NODES
+            })
+    })
+}
+
 /// What the shape-free checks decided: the resolved terms, and which predicates may be walked.
 struct Form {
     intent: Vec<&'static str>,
@@ -485,15 +517,39 @@ const SHAPE_STATES: Terms = Terms {
     )],
 };
 
-/// The terms asked, or the defaults when none are. An unknown term and a repeated one are refused,
-/// once each; a repeat because it changes nothing and is the only way to make an unbounded list
-/// out of a bounded vocabulary (`DuplicateSetMember`'s incumbent rule).
+/// The terms asked, in vocabulary order, or the defaults when none are. An unknown term and a
+/// repeated one are refused, once each; a repeat because it changes nothing and is the only way to
+/// make an unbounded list out of a bounded vocabulary (`DuplicateSetMember`'s incumbent rule).
+///
+/// **A list longer than the vocabulary is refused by its length**, `too_many_filter_values`, before
+/// any term is read: it must repeat a term or name one outside the set, and its length — not its
+/// terms — is what a caller controls, so it costs one comparison to refuse whatever it holds.
+///
+/// **Vocabulary order, never the caller's**, so a validated ask is canonical: two asks naming the
+/// same terms in different orders bind the same JSON, and the SQL reads the list order-free.
 fn resolve_terms(
     given: &[String],
     terms: &Terms,
     errs: &mut Vec<PlanRefusal>,
 ) -> Vec<&'static str> {
     if given.is_empty() {
+        return terms.defaults.to_vec();
+    }
+    let field = terms.field;
+    if given.len() > terms.known.len() {
+        errs.push(refusal(
+            RefusalReason::TooManyFilterValues,
+            format!(
+                "`{field}` names {} terms and its vocabulary has {}, so the list repeats a term or \
+                 names one outside it; a set names each member once",
+                given.len(),
+                terms.known.len()
+            ),
+            Some(RefusalTeaching {
+                terms: terms.known.iter().map(|t| t.to_string()).collect(),
+                ..RefusalTeaching::default()
+            }),
+        ));
         return terms.defaults.to_vec();
     }
     let mut out: Vec<&'static str> = Vec::new();
@@ -514,7 +570,7 @@ fn resolve_terms(
             }
         }
     }
-    let field = terms.field;
+    out.sort_by_key(|term| terms.known.iter().position(|known| known == term));
     if let Some(first) = unknown.first() {
         let why = unreachable
             .map(|(term, why)| format!(" — `{term}`: {why}"))
@@ -546,7 +602,6 @@ fn resolve_terms(
 /// The two per-ask cost caps (spec §3.4, *Caps*), each refused by name and never clamped.
 fn within_caps(predicates: &[ArtifactPredicate], errs: &mut Vec<PlanRefusal>) -> bool {
     let count = predicates.len();
-    let probes: usize = predicates.iter().map(|p| p.op.probes()).sum();
     if count > MAX_ASK_PREDICATES {
         errs.push(refusal(
             RefusalReason::FilterNotApplicable,
@@ -557,7 +612,11 @@ fn within_caps(predicates: &[ArtifactPredicate], errs: &mut Vec<PlanRefusal>) ->
             ),
             None,
         ));
+        // Past the count, the probes are not summed: the list is refused for its length, and
+        // reading it whole would cost what that length costs.
+        return false;
     }
+    let probes: usize = predicates.iter().map(|p| p.op.probes()).sum();
     if probes > MAX_ASK_PROBES {
         errs.push(refusal(
             RefusalReason::FilterNotApplicable,
@@ -570,7 +629,7 @@ fn within_caps(predicates: &[ArtifactPredicate], errs: &mut Vec<PlanRefusal>) ->
             None,
         ));
     }
-    count <= MAX_ASK_PREDICATES && probes <= MAX_ASK_PROBES
+    probes <= MAX_ASK_PROBES
 }
 
 /// The form of each predicate, which needs no shape: whether each may be walked.
@@ -582,10 +641,12 @@ fn well_formed(predicates: &[ArtifactPredicate], errs: &mut Vec<PlanRefusal>) ->
     };
     let empty = indices(&|p: &ArtifactPredicate| p.path.is_empty());
     let deep = indices(&|p: &ArtifactPredicate| p.path.len() > MAX_ARTIFACT_PATH_DEPTH);
+    // A path past the depth cap is refused for its depth, and its segments are not read.
     let long = indices(&|p: &ArtifactPredicate| {
-        p.path
-            .iter()
-            .any(|s| json_string_bytes(s) > MAX_ARTIFACT_PATH_SEGMENT_BYTES)
+        p.path.len() <= MAX_ARTIFACT_PATH_DEPTH
+            && p.path
+                .iter()
+                .any(|s| json_string_bytes(s) > MAX_ARTIFACT_PATH_SEGMENT_BYTES)
     });
     let no_values = indices(
         &|p: &ArtifactPredicate| matches!(&p.op, PropertyOp::Contains { values } if values.is_empty()),

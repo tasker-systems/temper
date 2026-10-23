@@ -15,6 +15,8 @@
 --      and every value rides USING; never interpolate one.
 --   5. The core computes each ask's set once (an uncorrelated `IN`), never per resource; asks AND
 --      (`HAVING count(DISTINCT k.n)`), and an ask's predicates hold of one artifact.
+--   6. THE SHAPE'S HOME IS RE-CHECKED READABLE once per ask, before anything is read; an unreadable
+--      home answers nothing.
 --
 -- Additive: five CREATE FUNCTION, four CREATE OR REPLACE at byte-identical signatures and return
 -- columns. No DROP.

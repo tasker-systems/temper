@@ -448,15 +448,7 @@ pub fn validate(
     session: &mut AskSession<'_>,
 ) -> Result<ValidatedComposition, Vec<PlanRefusal>> {
     let (mut errs, ordered) = shape::validate_shape_indexed(c);
-    // A composition over a composition-wide budget is refused whatever its asks say, and an ask's
-    // refusal is not actionable until the plan is shrunk — so no ask is read into the session, and
-    // what the session keeps stays inside those budgets (`MAX_ASKS_PER_REQUEST` sizes it).
-    let over_budget = errs.iter().any(|r| {
-        matches!(
-            r.reason,
-            RefusalReason::TextBudgetExceeded | RefusalReason::PropertyValueBudgetExceeded
-        )
-    });
+    let over_budget = over_a_composition_budget(&errs);
 
     // The capability pass has two halves and only its per-stage half is gated on the topology.
     // This one reads no stage graph — it compares each `returns` entry's `with` against a
@@ -519,11 +511,28 @@ pub fn validate(
 /// path, operator or value lies inside its shape needs the shape, which only the server loads, so
 /// a `--check` that passes has not checked any ask against its shape and must say so. Nor does it
 /// refuse `include_folded: true`: whether that is served is the server's capability, which a client
-/// cannot know, so only [`validate`] declines it.
+/// cannot know, so only [`validate`] declines it. Over a composition-wide budget no ask's form is
+/// checked, as the server reads none.
 pub fn validate_shape(c: &Composition) -> Vec<PlanRefusal> {
     let (mut errs, ordered) = shape::validate_shape_indexed(c);
-    asks::check_forms(c, ordered.is_some(), &mut errs);
+    let over_budget = over_a_composition_budget(&errs);
+    asks::check_forms(c, ordered.is_some() && !over_budget, &mut errs);
     errs
+}
+
+/// Whether the shape pass refused a composition-wide budget — text or predicate values. Such a
+/// composition is refused whatever its asks say, and an ask's refusal is not actionable until the
+/// plan is shrunk, so neither [`validate`] nor [`validate_shape`] reads its asks: the server reads
+/// none into its session, which keeps what a session holds inside those budgets
+/// (`MAX_ASKS_PER_REQUEST` sizes it), and the offline check refuses the same plan with the same
+/// ask refusals — the request caps, and nothing per ask.
+fn over_a_composition_budget(errs: &[PlanRefusal]) -> bool {
+    errs.iter().any(|r| {
+        matches!(
+            r.reason,
+            RefusalReason::TextBudgetExceeded | RefusalReason::PropertyValueBudgetExceeded
+        )
+    })
 }
 
 #[cfg(test)]
@@ -5220,14 +5229,23 @@ mod tests {
 
     /// A stage that asks one question twice is refused `duplicate_set_member` at the stage, and so
     /// is one whose two asks differ only by spelling a default (`intent: []` beside the default
-    /// intents written out): equality is the validated bind, what the statement would run. Two
-    /// different asks on one stage, and one ask on each of two stages, are admitted. Bites the
-    /// repeat check removed: both repeating stages validate, and the statement runs one read twice.
+    /// intents written out) or by naming the default intents in the other order: equality is the
+    /// validated bind, which is canonical — what the statement would run. Two different asks on one
+    /// stage, and one ask on each of two stages, are admitted. The refusal names positions in
+    /// `artifact_filter`, not among the admitted asks.
+    ///
+    /// Bites the repeat check removed (every repeating stage validates), the caller's term order
+    /// kept (the reordered case validates), and positions counted among the admitted asks (`[0]`
+    /// and `[1]` where the filter's are `[1]` and `[2]`).
     #[test]
     fn a_stage_that_repeats_an_ask_is_refused() {
         let shapes = loaded(vec![measurement(1)]);
         let spelled = ArtifactAsk {
             intent: vec!["current".to_string(), "member".to_string()],
+            ..asking(1, "unit")
+        };
+        let reordered = ArtifactAsk {
+            intent: vec!["member".to_string(), "current".to_string()],
             ..asking(1, "unit")
         };
         for (asks, what) in [
@@ -5236,6 +5254,10 @@ mod tests {
                 "the same ask twice",
             ),
             (vec![asking(1, "unit"), spelled], "a default spelled out"),
+            (
+                vec![asking(1, "unit"), reordered],
+                "the default intents in another order",
+            ),
         ] {
             let c = answered_by_find(vec![selecting("a", asks, None)]);
             let rs = super::validate(&c, &mut shapes.session()).expect_err(what);
@@ -5246,6 +5268,26 @@ mod tests {
             );
             assert_eq!(rs[0].stage, Some(stage("a")));
         }
+
+        // A refused ask ahead of the repeat does not shift the positions the refusal names.
+        let shifted = answered_by_find(vec![selecting(
+            "a",
+            vec![asking(1, "units"), asking(1, "unit"), asking(1, "unit")],
+            None,
+        )]);
+        let rs = super::validate(&shifted, &mut shapes.session())
+            .expect_err("a refused ask and a repeat");
+        let repeat = rs
+            .iter()
+            .find(|r| r.reason == RefusalReason::DuplicateSetMember)
+            .expect("the repeat is refused beside the refused ask");
+        assert!(
+            repeat.detail.contains("`artifact_filter[1]`")
+                && repeat.detail.contains("`artifact_filter[2]`"),
+            "{}",
+            repeat.detail
+        );
+
         let different = answered_by_find(vec![selecting("a", vec![unit_is(1), unit_is(2)], None)]);
         assert!(super::validate(&different, &mut shapes.session()).is_ok());
         let two_stages = answered_by_find(vec![
@@ -5262,8 +5304,12 @@ mod tests {
     /// again through the same session answers nothing from its memo, because nothing was kept. So
     /// what a session keeps stays inside the budgets `MAX_ASKS_PER_REQUEST` is sized against.
     ///
-    /// Bites `validate` validating asks regardless of the budget refusals: a walk is built, the
-    /// intent is refused beside the budget, and the second pass is answered from the memo.
+    /// The offline check refuses the same plan with the same refusals: over the budget it reads no
+    /// ask's form either.
+    ///
+    /// Bites `validate` validating asks regardless of the budget refusals (a walk is built, the
+    /// intent is refused beside the budget, and the second pass is answered from the memo), and
+    /// `check_forms` reading forms regardless (the offline list gains `unknown_artifact_intent`).
     #[test]
     fn a_composition_over_its_text_budget_walks_and_keeps_no_ask() {
         let shapes = loaded(vec![measurement(1)]);
@@ -5287,6 +5333,11 @@ mod tests {
         );
         assert_eq!(built, 0, "no walk was built");
         assert_eq!(session.shapes_walked(), 0);
+        assert_eq!(
+            validate_shape(&c),
+            rs,
+            "the offline check refuses the same over-budget plan with the same refusals"
+        );
         let _ = super::validate(&c, &mut session);
         assert_eq!(
             session.answered_again(),

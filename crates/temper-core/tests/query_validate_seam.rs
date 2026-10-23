@@ -323,8 +323,9 @@ fn the_ask_modules_emit_exactly_these_reasons() {
         ("ShapeNotAskable", 1),
         ("ShapeSchemaUncompilable", 2),
         ("ShapeSuperseded", 2),
-        // OFFLINE: path depth (`well_formed`).
-        ("TooManyFilterValues", 1),
+        // OFFLINE ×2: path depth (`well_formed`), and a term list longer than its vocabulary
+        // (`resolve_terms`).
+        ("TooManyFilterValues", 2),
         // OFFLINE: the term vocabularies (`INTENTS`, `SHAPE_STATES`).
         ("UnknownArtifactIntent", 1),
         ("UnknownShapeState", 1),

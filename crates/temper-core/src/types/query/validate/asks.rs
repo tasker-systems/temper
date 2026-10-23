@@ -38,20 +38,29 @@ use super::{refusal, PlanRefusal};
 /// details) and at most three teachings, one per shape reason, each at most `MAX_TEACHING_BYTES`
 /// (16 KiB).
 ///
-/// **The session is reached only once the shape pass has admitted the composition's budgets**
-/// ([`super::validate`] walks no ask over a `text_budget_exceeded` or a
-/// `property_value_budget_exceeded`). So the asks' caller text — paths, terms, values — is within
-/// `MAX_COMPOSITION_TEXT_BYTES` (768 KiB) whenever one is kept, and the JSON around it is bounded by
-/// the per-ask caps: at most `MAX_ASK_PREDICATES` predicates and `MAX_ASK_PROBES` values an ask,
-/// under 8 KiB of keys and punctuation. The memo therefore holds at most about
-/// 2 × (768 KiB + 32 × 8 KiB) + 32 × 3 × 16 KiB = 2 MiB + 1.5 MiB = 3.5 MiB, and a refusal list
-/// carrying every ask's teaching is at most 1.5 MiB of them.
+/// **Two checks run before an ask is kept, and the bound is theirs.**
+/// - The composition's budgets: [`super::validate`] reads no ask into the session over a
+///   `text_budget_exceeded` or a `property_value_budget_exceeded`. So the caller text of every ask
+///   kept — path segments, terms, values — is within `MAX_COMPOSITION_TEXT_BYTES` (768 KiB) between
+///   them.
+/// - The ask's own count and size caps: `AskSession::validate` keys no ask past them, answering it
+///   from its form instead. So a kept ask has at most `MAX_ASK_PREDICATES` (32) predicates, each
+///   path at most `MAX_ARTIFACT_PATH_DEPTH` (32) segments, at most `MAX_ASK_PROBES` (256) values,
+///   and at most three intent and three state terms. Text that counts nothing — an empty segment or
+///   term — is bounded by those counts, not by the budget, and the keys and punctuation around it
+///   are under 8 KiB an ask.
 ///
-/// **It is also the statement's multiplier**: each ask is one call of the counted set
+/// The memo therefore holds at most about 2 × (768 KiB + 32 × 8 KiB) + 32 × 3 × 16 KiB =
+/// 2 MiB + 1.5 MiB = 3.5 MiB, and a refusal list carrying every ask's teaching is at most 1.5 MiB
+/// of them.
+///
+/// **The cap is also the statement's multiplier**: each ask is one call of the counted set
 /// (`__temper_ungated_artifact_ask_population`, `20261104000000`), which reads its shape's family in
-/// its home. A stage may not repeat an ask (`duplicate_set_member`), so the 32 calls are 32
-/// different questions. A real composition asks one or two shapes from a few stages; 32 is an
-/// order of magnitude above it.
+/// its home, so a request runs at most 32 such reads. Within one filter a repeated ask is refused
+/// (`duplicate_set_member`), including one that differs only in term order or in a default spelled
+/// out, since the validated bind is canonical; the same ask on two stages is two reads, inside the
+/// cap. A real composition asks one or two shapes from a few stages; 32 is an order of magnitude
+/// above it.
 pub const MAX_ASKS_PER_REQUEST: usize = 32;
 
 /// The most distinct shapes one request's asks may name. Refused as `too_many_filter_values`
@@ -135,11 +144,16 @@ pub(super) fn within_request_caps(
     (asks <= MAX_ASKS_PER_REQUEST && shapes.len() <= MAX_ASKED_SHAPES).then_some(shapes)
 }
 
-/// The offline half (`validate_shape`): the request caps, and — within them, over a graph that
-/// sorts — each ask's form at its stage. No shape is consulted, so a well-formed ask naming a shape
-/// nobody loaded is not refused here: the offline check cannot say, and says so where it renders.
-pub(super) fn check_forms(c: &Composition, acyclic: bool, errs: &mut Vec<PlanRefusal>) {
-    if within_request_caps(c, errs).is_none() || !acyclic {
+/// The offline half (`validate_shape`): the request caps, and — within them, when `walk` says the
+/// asks may be read — each ask's form at its stage. No shape is consulted, so a well-formed ask
+/// naming a shape nobody loaded is not refused here: the offline check cannot say, and says so
+/// where it renders.
+///
+/// `walk` is the condition [`validate_asks`] takes — a graph that sorts, inside the composition's
+/// budgets — so over a budget the offline check and the server refuse the same plan with the same
+/// ask refusals: the caps, and nothing per ask.
+pub(super) fn check_forms(c: &Composition, walk: bool, errs: &mut Vec<PlanRefusal>) {
+    if within_request_caps(c, errs).is_none() || !walk {
         return;
     }
     for (stage, ask) in every_ask(c) {
@@ -179,17 +193,22 @@ pub(super) fn validate_asks(
         }
         let stage = node.name();
         let mut admitted = Vec::with_capacity(inv.artifact_filter.len());
+        // Each admitted ask's position in the stage's `artifact_filter`, for a refusal to name.
+        let mut positions = Vec::with_capacity(inv.artifact_filter.len());
         let mut refused = false;
-        for ask in &inv.artifact_filter {
+        for (position, ask) in inv.artifact_filter.iter().enumerate() {
             match session.validate(ask) {
-                Ok(validated) => admitted.push(validated),
+                Ok(validated) => {
+                    admitted.push(validated);
+                    positions.push(position);
+                }
                 Err(rs) => {
                     refused = true;
                     errs.extend(rs.into_iter().map(|r| at_stage(r, stage)));
                 }
             }
         }
-        refused |= repeats_an_ask(stage, &admitted, errs);
+        refused |= repeats_an_ask(stage, &admitted, &positions, errs);
         check_scope(inv, stage, &admitted, errs);
         if !refused {
             sealed.insert(stage.clone(), admitted);
@@ -201,23 +220,30 @@ pub(super) fn validate_asks(
 /// `duplicate_set_member` when a stage's filter asks one question twice, over the asks it admitted.
 ///
 /// **Equality is the validated bind** ([`ValidatedAsk::bind`]), not the caller's text: the bind is
-/// what the statement runs, so two asks with one bind are one counted-set call made twice. It also
-/// catches the spellings that differ only by a default — `intent: []` beside
-/// `intent: ["current", "member"]` — which the caller's text would call different. AND-ing an ask
-/// with itself narrows nothing, so the repeat is refused rather than collapsed: a caller who sent
-/// it has a plan that says something other than what they meant. Refused once per stage, naming
-/// the first repeat by position among the stage's admitted asks.
+/// what the statement runs, so two asks with one bind are one counted-set call made twice. The
+/// bind is canonical — terms in vocabulary order, defaults applied — so it also catches asks that
+/// differ only in term order or in a default spelled out, which the caller's text would call
+/// different. AND-ing an ask with itself narrows nothing, so the repeat is refused rather than
+/// collapsed: a caller who sent it has a plan that says something other than what they meant.
+/// Refused once per stage, naming the first repeat by its positions in `artifact_filter`
+/// (`positions[i]` is admitted ask `i`'s).
 fn repeats_an_ask(
     stage: &StageName,
     admitted: &[ValidatedAsk],
+    positions: &[usize],
     errs: &mut Vec<PlanRefusal>,
 ) -> bool {
-    let binds: Vec<serde_json::Value> = admitted.iter().map(ValidatedAsk::bind).collect();
+    let binds: Vec<(usize, serde_json::Value)> = positions
+        .iter()
+        .copied()
+        .zip(admitted.iter().map(ValidatedAsk::bind))
+        .collect();
     let repeat = (1..binds.len()).find_map(|later| {
+        let (at, bind) = &binds[later];
         binds[..later]
             .iter()
-            .position(|earlier| *earlier == binds[later])
-            .map(|first| (first, later))
+            .find(|(_, earlier)| earlier == bind)
+            .map(|(first, _)| (*first, *at))
     });
     let Some((first, later)) = repeat else {
         return false;
@@ -226,9 +252,9 @@ fn repeats_an_ask(
         Some(stage),
         RefusalReason::DuplicateSetMember,
         format!(
-            "this stage's `artifact_filter` asks the same question twice (`[{first}]` and \
-             `[{later}]` once validated); asks AND together, so a repeat narrows nothing and runs \
-             the same read again — ask it once"
+            "this stage's `artifact_filter` asks the same question twice (`artifact_filter[{first}]` \
+             and `artifact_filter[{later}]` once validated); asks AND together, so a repeat narrows \
+             nothing and runs the same read again — ask it once"
         ),
     ));
     true
