@@ -4,6 +4,7 @@
 		"src/routes/+layout.svelte",
 		"src/routes/(app)",
 		"src/lib/components/Sidebar.svelte",
+		"src/lib/components/ThemeSwitch.svelte",
 		"src/lib/components/CommandPalette.svelte",
 		"src/lib/components/vault/FilterBar.svelte",
 		"src/lib/components/ContextNavGroup.svelte",
@@ -26,7 +27,8 @@
 		"src/lib/components/graph"
 	],
 	"themes": [
-		"src/app.css"
+		"src/app.css",
+		"src/marketing.css"
 	],
 	"pending": [
 		{

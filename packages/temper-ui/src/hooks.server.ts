@@ -38,6 +38,13 @@ import { isProxiedPath, proxyRequest } from '$lib/server/proxy';
 import { applySecurityHeaders } from '$lib/server/security-headers';
 import { clearSession, readSession, writeSession } from '$lib/server/session';
 import { traceRequest } from '$lib/server/telemetry/request-span';
+import {
+	decodePreference,
+	isMarketingRoute,
+	pageTheme,
+	THEME_COOKIE,
+	withPageTheme,
+} from '$lib/theme';
 import type { ProfileWithEntitlements } from '$lib/types';
 
 /**
@@ -96,10 +103,33 @@ const handleRequest = async (input: Parameters<Handle>[0]): Promise<Response> =>
 	// Everything below is a response this app renders, so this app sets its baseline headers on it.
 	// A proxied response is not one of them: it carries the upstream's own, which the upstream sets
 	// for itself. One owner per response.
-	const response = await renderRequest(input);
+	//
+	// Every page it renders is served in the reader's theme ($lib/theme), whichever of
+	// `renderRequest`'s exits resolves it — so the theme is bound to `resolve` here, once, rather
+	// than at each exit.
+	const response = await renderRequest({ ...input, resolve: themedResolve(input.resolve) });
 	applySecurityHeaders(response.headers);
 	return response;
 };
+
+type Resolve = Parameters<Handle>[0]['resolve'];
+
+/** `resolve`, with `app.html`'s root attribute rewritten to the theme this page is served in. */
+const themedResolve =
+	(resolve: Resolve): Resolve =>
+	(e, opts) => {
+		const served = pageTheme(
+			decodePreference(e.cookies.get(THEME_COOKIE)),
+			isMarketingRoute(e.route.id),
+		);
+		return resolve(e, {
+			...opts,
+			transformPageChunk: async (chunk) => {
+				const html = opts?.transformPageChunk ? await opts.transformPageChunk(chunk) : chunk.html;
+				return html === undefined ? undefined : withPageTheme(html, served);
+			},
+		});
+	};
 
 const renderRequest = async ({ event, resolve }: Parameters<Handle>[0]): Promise<Response> => {
 	// SvelteKit's built-in `checkOrigin` is disabled (svelte.config.js) so the

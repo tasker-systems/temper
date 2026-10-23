@@ -6,10 +6,17 @@
 	import CommandPalette from '$lib/components/CommandPalette.svelte';
 	import NavProgress from '$lib/components/NavProgress.svelte';
 	import { sidebarCollapsed, sidebarGroups } from '$lib/stores/sidebar.svelte';
+	import { themeStore } from '$lib/stores/theme.svelte';
+	import { onMount } from 'svelte';
 
 	let { data, children }: { data: LayoutData; children: Snippet } = $props();
 
 	let palette: CommandPalette;
+
+	// The root is in the reader's theme from the server; this keeps it there when they arrive from
+	// a marketing page (served dark) or the system's appearance changes. Here rather than in the
+	// Sidebar's switch, which a collapsed rail does not render.
+	onMount(() => themeStore.init());
 
 	// Seed collapse from stored preference or the route default on each navigation
 	// (explicit user toggles persist and win). $effect re-runs when the path changes.

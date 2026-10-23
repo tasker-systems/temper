@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import Nav from '$lib/components/landing/Nav.svelte';
+	import '../../marketing.css';
 
 	let { children }: { children: Snippet } = $props();
 </script>
@@ -13,7 +14,11 @@
 	/>
 </svelte:head>
 
-<Nav />
-<main>
-	{@render children()}
-</main>
+<!-- Marketing is dark-only and paints from its own names (marketing.css): the wrapper holds both,
+	whatever theme the reader's <html> is in. -->
+<div class="marketing" data-theme="quiet-instrument">
+	<Nav />
+	<main>
+		{@render children()}
+	</main>
+</div>
