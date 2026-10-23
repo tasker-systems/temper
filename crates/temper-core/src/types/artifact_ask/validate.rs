@@ -8,8 +8,8 @@
 //! several times its size. A detail never echoes a caller's value or path: an index names it.
 //!
 //! **Order** (§3.5). The term vocabularies and each predicate's form need no shape. A predicate
-//! whose form is refused is not walked, and an ask over the count caps walks nothing — refused once,
-//! up front, so no check runs once per entry of an over-long list.
+//! whose form is refused is not walked, and an ask over the count or size caps walks nothing — refused
+//! once, up front, so no check runs once per entry of an over-long list.
 //!
 //! The refusals carry `stage: None`. The composable arm attaches its stage; the batch read has none
 //! (spec §8).
@@ -113,6 +113,7 @@ pub const MAX_MEMBERSHIP_STEPS: usize = 1 << 20;
 /// | `operator_outside_shape` | `vocabulary` (each offending path's facts and feasible operators) |
 /// | `value_outside_shape` | `vocabulary` (each offending path's declared types and values), `non_closure` |
 /// | `unknown_artifact_intent`, `unknown_shape_state` | `terms` |
+/// | `too_many_filter_values` (a term list longer than its vocabulary) | `terms` |
 /// | `shape_superseded` | `successor` |
 /// | `shape_schema_uncompilable` | `beyond_bound: schema_bytes` for a schema past the byte bound |
 /// | `ask_scope_conflict` | `homes` |
@@ -310,8 +311,9 @@ pub(super) fn refuse_unserved(ask: &ArtifactAsk, errs: &mut Vec<PlanRefusal>) {
 ///
 /// **Checked before a session keys an ask** ([`AskSession::validate`](super::AskSession::validate)),
 /// so what a session keeps is within these caps. Each list's length is compared before the list is
-/// read, and a list is read only once its length is within its cap, so the check costs at most
-/// what an ask within the caps carries.
+/// read, and a list is read only once its length is within its cap, so the check itself costs at
+/// most what an ask within the caps carries; the form refusal that follows allocates in proportion
+/// to the predicate count, transiently, never kept.
 pub(super) fn exceeds_form_caps(ask: &ArtifactAsk) -> bool {
     if ask.intent.len() > INTENTS.known.len()
         || ask.shape_states.len() > SHAPE_STATES.known.len()
@@ -525,8 +527,8 @@ const SHAPE_STATES: Terms = Terms {
 /// any term is read: it must repeat a term or name one outside the set, and its length — not its
 /// terms — is what a caller controls, so it costs one comparison to refuse whatever it holds.
 ///
-/// **Vocabulary order, never the caller's**, so a validated ask is canonical: two asks naming the
-/// same terms in different orders bind the same JSON, and the SQL reads the list order-free.
+/// **Vocabulary order, never the caller's**, so a validated ask's terms are canonical: two asks naming
+/// the same terms in different orders bind the same JSON, and the SQL reads the list order-free.
 fn resolve_terms(
     given: &[String],
     terms: &Terms,

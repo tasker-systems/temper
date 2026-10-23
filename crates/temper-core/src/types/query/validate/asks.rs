@@ -58,7 +58,8 @@ use super::{refusal, PlanRefusal};
 /// (`__temper_ungated_artifact_ask_population`, `20261104000000`), which reads its shape's family in
 /// its home, so a request runs at most 32 such reads. Within one filter a repeated ask is refused
 /// (`duplicate_set_member`), including one that differs only in term order or in a default spelled
-/// out, since the validated bind is canonical; the same ask on two stages is two reads, inside the
+/// out, since the validated bind is canonical in its terms and defaults (not in predicate or value
+/// order, which the SQL also reads order-free); the same ask on two stages is two reads, inside the
 /// cap. A real composition asks one or two shapes from a few stages; 32 is an order of magnitude
 /// above it.
 pub const MAX_ASKS_PER_REQUEST: usize = 32;
@@ -221,9 +222,10 @@ pub(super) fn validate_asks(
 ///
 /// **Equality is the validated bind** ([`ValidatedAsk::bind`]), not the caller's text: the bind is
 /// what the statement runs, so two asks with one bind are one counted-set call made twice. The
-/// bind is canonical — terms in vocabulary order, defaults applied — so it also catches asks that
-/// differ only in term order or in a default spelled out, which the caller's text would call
-/// different. AND-ing an ask with itself narrows nothing, so the repeat is refused rather than
+/// bind is canonical in its terms and defaults — terms in vocabulary order, defaults applied — so it
+/// also catches asks that differ only in term order or in a default spelled out, which the caller's
+/// text would call different. Predicates and `contains` values keep the caller's order, so asks
+/// differing only there are not caught; the request cap bounds them. AND-ing an ask with itself narrows nothing, so the repeat is refused rather than
 /// collapsed: a caller who sent it has a plan that says something other than what they meant.
 /// Refused once per stage, naming the first repeat by its positions in `artifact_filter`
 /// (`positions[i]` is admitted ask `i`'s).

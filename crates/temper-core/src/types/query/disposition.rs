@@ -298,7 +298,8 @@ pub enum RefusalReason {
     /// serialized to 4.7 MB and validated `Ok`, so the door answered a plan its own contract admits
     /// with a bare 413. See `MAX_FILTER_VALUES`.
     ///
-    /// Also an artifact predicate path past `MAX_ARTIFACT_PATH_DEPTH` segments, and a composition
+    /// Also an artifact predicate path past `MAX_ARTIFACT_PATH_DEPTH` segments, or an artifact ask's
+    /// `intent` or `shape_states` longer than its vocabulary (with `teaches.terms`). And a composition
     /// whose artifact filters together carry more asks than `MAX_ASKS_PER_REQUEST` or name more
     /// distinct shapes than `MAX_ASKED_SHAPES` — refused before any shape is loaded.
     TooManyFilterValues,

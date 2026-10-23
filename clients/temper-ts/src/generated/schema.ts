@@ -8789,6 +8789,7 @@ export interface components {
          *     | `operator_outside_shape` | `vocabulary` (each offending path's facts and feasible operators) |
          *     | `value_outside_shape` | `vocabulary` (each offending path's declared types and values), `non_closure` |
          *     | `unknown_artifact_intent`, `unknown_shape_state` | `terms` |
+         *     | `too_many_filter_values` (a term list longer than its vocabulary) | `terms` |
          *     | `shape_superseded` | `successor` |
          *     | `shape_schema_uncompilable` | `beyond_bound: schema_bytes` for a schema past the byte bound |
          *     | `ask_scope_conflict` | `homes` |
