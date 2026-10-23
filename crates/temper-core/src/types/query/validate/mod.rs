@@ -5230,7 +5230,7 @@ mod tests {
     /// A stage that asks one question twice is refused `duplicate_set_member` at the stage, and so
     /// is one whose two asks differ only by spelling a default (`intent: []` beside the default
     /// intents written out) or by naming the default intents in the other order: equality is the
-    /// validated bind, which is canonical — what the statement would run. Two different asks on one
+    /// validated bind, canonical in its terms and defaults — what the statement would run. Two different asks on one
     /// stage, and one ask on each of two stages, are admitted. The refusal names positions in
     /// `artifact_filter`, not among the admitted asks.
     ///

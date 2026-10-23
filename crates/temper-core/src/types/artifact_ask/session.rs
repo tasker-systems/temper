@@ -110,8 +110,9 @@ impl<'c> AskSession<'c> {
     /// **An ask past its form's count or size caps is neither kept nor walked.** It is refused by
     /// its form — beside its load's refusal, if the load refuses — before it is keyed, so what the
     /// session keeps is an ask within the caps, and a caller cannot make the memo hold a list of any
-    /// length by sending one. It is answered afresh each time it is asked, from its form alone: its
-    /// lists' lengths are compared before any is read, and nothing it builds is kept.
+    /// length by sending one. It is answered afresh each time it is asked, by its form (and its load's
+    /// refusal, if the load refuses): its lists' lengths are compared before any is read, and nothing
+    /// it builds is kept.
     pub fn validate(&mut self, ask: &ArtifactAsk) -> Result<ValidatedAsk, Vec<PlanRefusal>> {
         if exceeds_form_caps(ask) {
             return Err(match self.load(ask) {
