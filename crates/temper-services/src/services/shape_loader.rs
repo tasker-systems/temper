@@ -34,7 +34,8 @@
 //! read many times is compiled about once per process. The vocabulary a compiling shape's by-id
 //! read advertises is remembered by id as well, bounded by an estimate of the memory it holds
 //! rather than by how many there are, and the read looks it up before the verdict, so the same
-//! shape is enumerated, and judged, about once per process too. The constructor holds each
+//! shape is enumerated, and judged, about once per process too — while its vocabulary stays
+//! remembered; one heavier than the whole cap is enumerated on each read. The constructor holds each
 //! `pattern` and `patternProperties` regex to `shape_schema::MAX_PATTERN_BYTES`. A shape row is
 //! immutable per id (amendment mints a new id), so a remembered verdict or vocabulary never goes
 //! stale. Each is consulted only with a row a gated read returned — the loader reads its own, and
@@ -213,7 +214,7 @@ fn remember(id: ShapeId, verdict: SchemaVerdict) {
 /// A count cap would not bound this: the walk bounds what one vocabulary copies by its visits
 /// (`MAX_WALK_VISITS`), not by a size, so in this weight one ranges from a few KiB for an ordinary
 /// shape to several MiB, and past the cap for values built of many small objects. Weighed
-/// instead, 32 MiB holds a few of the heaviest that fit and thousands of ordinary ones. Past the
+/// instead, 32 MiB holds thousands of ordinary ones, or one of the heaviest that fit. Past the
 /// cap an arbitrary entry is forgotten, and that shape is enumerated again when it is next read; a
 /// vocabulary heavier than the whole cap is never remembered, and is enumerated on each read.
 ///
@@ -235,11 +236,12 @@ const MAX_REMEMBERED_VOCABULARY_BYTES: usize = 32 << 20;
 const ENTRY_BYTES: usize =
     size_of::<ShapeId>() + size_of::<(Arc<Vocabulary>, usize)>() + 1 + 2 * size_of::<usize>();
 
-/// One node of a JSON object's map, at most: eleven key and value slots and the node's own header.
-/// A non-empty object copied into a vocabulary holds at least one, however few members it has,
-/// and a node other than the first is at least half full, so an object of `n` members holds at
-/// most `n.div_ceil(5)` of them. Under serde_json's `preserve_order` the map is an `IndexMap`, and
-/// this over-states it.
+/// One leaf node of a JSON object's map: eleven key and value slots and the node's own header. A
+/// non-empty object copied into a vocabulary holds at least one, however few members it has, and
+/// a node other than the root holds at least five members, so an object of `n` members holds at
+/// most `n.div_ceil(5)` nodes. An internal node holds its children's pointers besides, a few dozen
+/// bytes more, which each member's `NODE_BYTES` more than covers. Under serde_json's
+/// `preserve_order` the map is an `IndexMap`, which this estimates about as closely.
 const MAP_NODE_BYTES: usize = 11 * (size_of::<String>() + size_of::<Value>()) + 16;
 
 /// The vocabularies remembered, by shape id, and what they weigh together. The running total
@@ -391,8 +393,9 @@ fn remember_vocabulary(id: ShapeId, vocabulary: Arc<Vocabulary>, weight: usize) 
 /// remembered, so a read that finds one answers it with no refusal, and neither asks the verdict
 /// nor takes a permit. A miss asks the verdict, and for a compiling shape enumerates and weighs
 /// the vocabulary under a permit, off the executor, then remembers it. Two first reads that race
-/// both enumerate; after that, none. A schema past the bound or not compiling is not walked, so
-/// there is nothing to remember.
+/// both enumerate; after that, none while it stays remembered. One heavier than the whole cap is
+/// never remembered, and is enumerated on each read. A schema past the bound or not compiling is
+/// not walked, so there is nothing to remember.
 ///
 /// Takes the row the gated read returned, whole, so the id the verdict and the vocabulary are
 /// remembered by and the schema they were derived from are one value's. `askable` is passed only
@@ -689,5 +692,17 @@ mod tests {
             weight >= 1_000 * (size_of::<Value>() + MAP_NODE_BYTES),
             "{weight}"
         );
+    }
+
+    /// A wide object is weighed with every map node its members fill, not just one: sixty members
+    /// sit in at least twelve nodes' worth of the estimate. Bite: charge one node per object
+    /// (replace `m.len().div_ceil(5)` with `1` in `map_node_weight`); the object then weighs one
+    /// node, and the assertion goes red.
+    #[test]
+    fn a_wide_object_weighs_every_node() {
+        let wide: serde_json::Map<String, Value> =
+            (0..60).map(|i| (format!("k{i}"), Value::from(0))).collect();
+        let weight = map_node_weight(&Value::Object(wide));
+        assert!(weight >= 12 * MAP_NODE_BYTES, "{weight}");
     }
 }
