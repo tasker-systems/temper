@@ -14,7 +14,10 @@ hues: the resource view, the vault components and the graph tint through the bin
 `--hue` holding a slot role, and the tinted hairlines and washes are flattened to rule and
 surface roles. Who observes: a surface importing the package (one new export; a guarded surface
 whose bridged names were refused in colour declarations now passes, and one mixing a bridged
-name now fails); a reader of the web, whose doc-type colours change in both appearances and read
+name now fails); a theme author, whose slots the self-check now holds to 4.5:1 on `surface` and
+`surface-raised` as well as `ground` (Paper's `cat-4` and `cat-6` are deepened to clear it, so
+the desktop's Paper shifts slightly when it takes this release); a reader of the web, whose doc-type colours change in both appearances and read
 legibly on Paper. User-visible: yes, on the web. Release relevance: additive (an export) and
-behavioral (the guard's two rule changes, the web's doc-type colours).
+behavioral (the guard's two rule changes, the stricter slot floor and Paper's two deepened
+slots, the web's doc-type colours).
 '''

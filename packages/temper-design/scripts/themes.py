@@ -44,14 +44,13 @@ for _role in [
     "region-failed",
 ]:
     FLOORS.append((_role, [f"{_role}-wash"], 4.5))
-# Slots carry doc-type marks: the old doctype guarantee (4.5 on ground) rides the
-# binding, plus the categorical mark's own 3:1 on surface. cat-neutral is the family's
-# ninth member and clears the same floors.
+# Slots carry doc-type marks, and surfaces set a doc type's word and its labels in its slot on
+# every ground text sits on — a panel or rail on surface, a chip on surface-raised — so a slot is
+# held to the text floor on all three, not only on ground. cat-neutral is the family's ninth
+# member and clears the same floors.
 for _i in range(1, 9):
-    FLOORS.append((f"cat-{_i}", ["ground"], 4.5))
-    FLOORS.append((f"cat-{_i}", ["surface"], 3.0))
-FLOORS.append(("cat-neutral", ["ground"], 4.5))
-FLOORS.append(("cat-neutral", ["surface"], 3.0))
+    FLOORS.append((f"cat-{_i}", TEXT_GROUNDS, 4.5))
+FLOORS.append(("cat-neutral", TEXT_GROUNDS, 4.5))
 for _c in ["key", "string", "number", "comment"]:
     FLOORS.append((f"code-{_c}", ["surface"], 4.5))
 
@@ -161,7 +160,9 @@ def legibility_errors(theme):
             fg = over(parse_color(colors[role]), paint[bg_role])
             ratio = contrast(fg, paint[bg_role])
             if ratio + 1e-9 < floor:
-                errors.append(f"contrast {role} on {bg_role}: {ratio:.2f}:1 < {floor}:1")
+                # Two places hide a miss of under 0.005 ("4.50:1 < 4.5:1"); three show it.
+                shown = f"{ratio:.2f}" if f"{ratio:.2f}" != f"{floor:.2f}" else f"{ratio:.3f}"
+                errors.append(f"contrast {role} on {bg_role}: {shown}:1 < {floor}:1")
     for label, roles, threshold in DISTINCT:
         for i, a in enumerate(roles):
             for b in roles[i + 1 :]:

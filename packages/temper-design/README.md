@@ -159,9 +159,9 @@ temper's roles apart from shadcn's names, where `accent` and `muted` mean other 
 - **Legibility floors.** Contrast is measured on the colours as they paint — alpha
   composited over `ground`, washes composited before the text on them is measured.
   `text` 7:1; secondary and label text, the accent, the categorical slots, conditions,
-  region states and code 4.5:1; slots 3:1 on surface; focus rings, authorship marks
-  3:1; `text-faint` 2.5:1, which is why it is reserved for disabled and decorative
-  marks and never carries information. `themes.sh contrast <theme.json>` prints every pair.
+  region states and code 4.5:1, the slots on every ground text sits on (`ground`, `surface`,
+  `surface-raised`); focus rings, authorship marks 3:1; `text-faint` 2.5:1, which is why it
+  is reserved for disabled and decorative marks and never carries information. `themes.sh contrast <theme.json>` prints every pair.
 - **Distinctness.** The four region states, the nine categorical marks (eight slots and
   the neutral), the two authorship marks and the conditions must stay apart; and no
   slot may read as a chrome or state role (`accent`, `author-*`, `notice`, `region-*`)
