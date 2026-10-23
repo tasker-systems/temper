@@ -1,0 +1,20 @@
+title    = "`@tasker-systems/temper-design` binds core's doc types to the categorical slots; the web paints doc types only through that binding"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["clients"]
+status   = "signal-only"
+body = '''
+The package gains `./vocabulary`: core's default doc type → slot binding (`CORE_BINDINGS`,
+fourteen doc types on eight slots, grouped by what they are for), `tintFor` (a doc type's slot,
+or `cat-neutral` for one bound nowhere) and `bindingsFrom`, which refuses a binding to anything
+but a slot. The colour guard changes in two ways: a colour declaration may now read a bridged
+name (a custom property whose every declaration in the guarded paths resolves to roles), and a
+`color-mix()` over a bridged name is refused as a role mixed down. The web drops its own doc-type
+hues: the resource view, the vault components and the graph tint through the binding, with
+`--hue` holding a slot role, and the tinted hairlines and washes are flattened to rule and
+surface roles. Who observes: a surface importing the package (one new export; a guarded surface
+whose bridged names were refused in colour declarations now passes, and one mixing a bridged
+name now fails); a reader of the web, whose doc-type colours change in both appearances and read
+legibly on Paper. User-visible: yes, on the web. Release relevance: additive (an export) and
+behavioral (the guard's two rule changes, the web's doc-type colours).
+'''

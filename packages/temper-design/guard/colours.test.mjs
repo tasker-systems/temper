@@ -322,6 +322,33 @@ test('a name declared once from a role and once from a private variable is not b
 	assertRefused(guard(surface(planted)), 4, 'var(--background)');
 });
 
+test('a colour declaration reading a bridged name passes', () => {
+	const bridge =
+		'<div class="rv" style="--hue: var(--tp-{tint})">\n<style>\n.t { color: var(--hue); }\n.m { background: var(--hue); }\n</style>\n';
+	const run = guard(surface(bridge));
+	assert.equal(run.status, 0, run.stderr);
+});
+
+test('a colour declaration reading a name set from script is refused', () => {
+	const planted =
+		'<div class="rv" style="--hue: {hue}">\n<style>\n.t { color: var(--hue); }\n</style>\n';
+	assertRefused(guard(surface(planted)), 3, 'var(--hue)');
+});
+
+test('a bridged name mixed down is refused', () => {
+	// The name resolves to a role, so the mix is (e) one hop removed: a slot at 30% is a value no
+	// theme chose, however it was reached. The bridge itself passes.
+	const planted =
+		'<style>\n.x { --hue: var(--tp-cat-2); }\n.y { color: var(--hue); }\n.z { border: 1px solid color-mix(in srgb, var(--hue) 30%, transparent); }\n</style>\n';
+	const run = guard(surface(planted));
+	assertRefused(run, 4, 'color-mix(');
+	assert.equal(
+		run.stderr.split('\n').filter((l) => l.includes('Planted.svelte:')).length,
+		1,
+		run.stderr,
+	);
+});
+
 test('a nested mix of a role is refused once', () => {
 	const planted =
 		'<style>\n.x { color: color-mix(in srgb, color-mix(in srgb, var(--tp-accent) 20%, transparent) 50%, var(--tp-ground)); }\n</style>\n';

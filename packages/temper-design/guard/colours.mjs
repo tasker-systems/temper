@@ -8,8 +8,10 @@
 //       surface declares for itself (`--color-<name>` in the theme files it lists);
 //   (c) an opacity modifier on a role utility: a role at 15% is a value no theme chose;
 //   (d) a colour declaration, SVG attribute, style directive or arbitrary colour utility reading
-//       a variable that is not a role;
-//   (e) a role mixed down: a `color-mix()` reading a role is (c) spelled in CSS;
+//       a variable that is not a role or a bridged name (below) — `--hue: var(--tp-cat-2)` on a
+//       view's root lets its marks read `var(--hue)`;
+//   (e) a role mixed down: a `color-mix()` reading a role, or a bridged name (below), is (c)
+//       spelled in CSS;
 //   (f) a custom property declared from a variable that is not a role: `--wx-color-font:
 //       var(--color-quiet-fg)` launders a private name past (d), which reads only colour
 //       properties by name. A custom property may read roles (fonts included), a pending hole,
@@ -218,11 +220,14 @@ for (let grew = true; grew; ) {
 }
 
 const readsPending = (text) => [...text.matchAll(PENDING_VAR)].some((m) => pending.has(m[1]));
+// A bridged name resolves to roles, so mixing it is mixing a role one hop removed.
+const readsRole = (text) =>
+	ROLE_VAR.test(text) || [...text.matchAll(PENDING_VAR)].some((m) => bridged.has(m[1]));
 
 function refusals(line) {
 	const out = [];
 	for (const mix of mixes(line)) {
-		if (ROLE_VAR.test(mix) && !readsPending(mix))
+		if (readsRole(mix) && !readsPending(mix))
 			out.push(
 				`${mix} mixes a role to a strength no theme chose — use a role (*-wash, accent-hover, …)`,
 			);
@@ -246,12 +251,13 @@ function refusals(line) {
 	}
 	for (const m of line.matchAll(ARBITRARY)) {
 		for (const [name] of (m[1] ?? m[2]).matchAll(NON_ROLE_NAME)) {
-			if (!pending.has(name)) out.push(`${m[0]} reads ${name}, which is not a role`);
+			if (!pending.has(name) && !bridged.has(name))
+				out.push(`${m[0]} reads ${name}, which is not a role`);
 		}
 	}
 	for (const m of [...line.matchAll(DECLARATION), ...line.matchAll(ATTRIBUTE)]) {
 		for (const v of m[2].matchAll(PRIVATE_VAR)) {
-			if (pending.has(v[1])) continue;
+			if (pending.has(v[1]) || bridged.has(v[1])) continue;
 			out.push(`${m[1]} reads var(${v[1]}), which is not a role`);
 		}
 	}

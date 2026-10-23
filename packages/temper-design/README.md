@@ -31,7 +31,7 @@ packages/temper-design/
 ├── brand/                   # the threaded-t mark and wordmark, in currentColor
 ├── preview/index.html       # every role and the foundational components, both themes
 ├── scripts/themes.sh        # build · check · contrast · --self-check
-├── src/                     # the shared modules: markdown, sanitize, highlight, region, omission, theme
+├── src/                     # the shared modules: markdown, sanitize, highlight, region, omission, theme, vocabulary
 ├── dist/                    # their compiled output (committed; see "The shared modules")
 ├── toolchain/               # the toolchain majors every surface builds on, and their check
 └── tests/fixtures/broken/   # themes the check must refuse
@@ -76,6 +76,7 @@ What a consumer imports:
 | `@tasker-systems/temper-design/region` | the four region states' words, markers and ARIA roles |
 | `@tasker-systems/temper-design/omission` | the omission sentence a bounded view ends with |
 | `@tasker-systems/temper-design/theme` | the theme model: a reader's preference (follow the system within a family, or one theme) resolved against `themes.json` |
+| `@tasker-systems/temper-design/vocabulary` | bound vocabularies: core's doc type → slot binding, `tintFor` (a doc type's slot, or the neutral), and `bindingsFrom`, which refuses a binding to anything but a slot |
 
 The theme checker (`scripts/`, `tests/`, `pyproject.toml`) is not published: it runs in this
 repository's CI, and the package carries only what it proves. The toolchain check is
@@ -213,8 +214,11 @@ fails a surface's build when a component it guards paints anything but a role.
 - **A colour read from a variable that is not a role**, in a declaration
   (`color: var(--parchment)`), an SVG attribute or Svelte style directive
   (`fill="var(--obsidian)"`, `style:color=…`), or an arbitrary utility (`bg-[var(--obsidian)]`).
+  A bridged name (below) may be read: `--hue: var(--tp-cat-2)` on a view's root lets its marks
+  paint `color: var(--hue)`.
 - **A role mixed down** (`color-mix(in srgb, var(--tp-accent) 15%, transparent)`): the opacity
-  modifier spelled in CSS, and the same strength no theme chose.
+  modifier spelled in CSS, and the same strength no theme chose. A bridged name mixed down is a
+  role mixed down one hop removed, and is refused the same way.
 - **A custom property declared from a variable that is not a role**
   (`--wx-color-font: var(--color-quiet-fg)`): a private name laundered through a property the
   colour-declaration rule does not read by name. Fonts are held too: `var(--tp-font-ui)`, not
@@ -275,6 +279,12 @@ in every theme and on every surface that honours it. Nothing in any app names a
 `doctype-*` role, because no such role exists: a view tints by **one vocabulary per
 colour channel**, so one slot never means two words in the same view. Where a hue marks
 a doc type, the doc type's word is shown beside it — hue never carries identity alone.
+
+Core's default binding is `./vocabulary`'s `CORE_BINDINGS`, grouped by what the doc types are
+for: `task` cat-2; `goal`, `commitment` cat-5; `session`, `memory` cat-3; `research`, `question`
+cat-7; `decision`, `principle` cat-4; `concept`, `domain`, `theme` cat-6; `fact` cat-8; `concern`
+cat-1. A surface paints the slot as written role text (`var(--tp-{tint})`), so the colour guard
+reads it.
 
 ## Adding a theme
 
