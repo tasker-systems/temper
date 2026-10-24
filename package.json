@@ -4,5 +4,9 @@
   "devDependencies": {
     "@vercel/blob": "^2",
     "typescript": "^5.8"
+  },
+  "overrides": {
+    "cookie@<0.7.0": "^0.7.2",
+    "zod@<4.6.6": "^4.6.6"
   }
 }
