@@ -15,12 +15,12 @@ authors = [{ name = "Pete Taylor", email = "pete.jc.taylor@hey.com" }]
 keywords = ["temper", "knowledge-base", "openapi", "sdk"]
 
 # ABOVE the generated package's own >= 3.9, deliberately. 3.9 reached end of life in
-# October 2025, so promising it would be promising a version that receives no security
-# fixes — and the dev toolchain has already moved: mypy 2.x requires >= 3.10, so a 3.9
-# floor makes the type-check ungettable rather than merely generous. The dev pin in
+# October 2025 and 3.10 in October 2026, so promising either would be promising a version
+# that receives no security fixes. 3.11 is the tasker-systems baseline's floor (PY-VER-1),
+# and this floor, ruff's target-version and mypy's python_version are one value. The dev pin in
 # .python-version is newer again, exactly as the gem's >= 3.1 floor sits under a 3.4.10
 # pin: a floor is a promise to callers, a pin is a statement about this checkout.
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 
 # Every one of these is imported by the GENERATED tree, not by the skin — the
 # floors are the generator's own (see the pyproject it emits and we ignore).
@@ -78,19 +78,13 @@ include = ["temper", "README.md", "LICENSE", "pyproject.toml"]
 # ruff
 # ---------------------------------------------------------------------------
 [tool.ruff]
-target-version = "py310"
-line-length = 100
+# The repository's root ruff.toml, which is the tasker-systems canonical configuration
+# (target-version, line length, rule selection). This file only adds to it.
+extend = "../../ruff.toml"
 # `generate-temper-py.sh` is the only writer of the generated tree. Linting it
 # would mean hand-editing it — the same exclusion, for the same reason, that
 # .rubocop.yml carves out for lib/temper/generated/**.
 extend-exclude = ["temper/generated"]
-
-[tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
-
-[tool.ruff.lint.per-file-ignores]
-# Asserting on a private module attribute is the point of some of these tests.
-"tests/*" = ["SLF001"]
 
 # ---------------------------------------------------------------------------
 # mypy
@@ -98,7 +92,7 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 [tool.mypy]
 # The package's own floor, so the checker sees what the oldest supported interpreter
 # sees.
-python_version = "3.10"
+python_version = "3.11"
 files = ["temper", "tests"]
 strict = true
 # The generated tree is excluded for the ruff reason above, and re-admitted as an

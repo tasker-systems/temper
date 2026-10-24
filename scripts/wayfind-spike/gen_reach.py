@@ -23,6 +23,7 @@ Read-only: `wayfind_region_scores` is STABLE and nothing here writes.
 
     python3 gen_reach.py vectors-24.tsv 'Temper — self-cognition' > reach.sql
 """
+
 import sys
 
 MAXN = 20
@@ -108,7 +109,7 @@ headline AS (
 ),
 by_size AS (
   SELECT '2 by-size' AS section,
-         {BUCKET.format(c='l.member_count')} AS k1,
+         {BUCKET.format(c="l.member_count")} AS k1,
          count(*)::text AS k2,
          count(*) FILTER (WHERE l.id IN (SELECT region_id FROM ever_scoped))::text AS k3,
          coalesce(round(max(b.best)::numeric, 4)::text, '-') AS k4,
@@ -120,7 +121,7 @@ by_size AS (
 ),
 ladder AS (
   SELECT '3 ladder' AS section,
-         {BUCKET.format(c='l.member_count')} AS k1,
+         {BUCKET.format(c="l.member_count")} AS k1,
          round(avg(s.sal_norm)::numeric, 4)::text AS k2,
          round(avg(s.query_cos)::numeric, 4)::text AS k3,
          round(max(s.query_cos)::numeric, 4)::text AS k4,

@@ -214,7 +214,10 @@ fi
 #   scripts/wayfind-spike/  — the read-only measurement harness. Its `.sql` is
 #     fed to `psql` by hand, its `.py` generates that SQL, its `.tsv` are probe
 #     vectors, and its `.sh` shell out to `neonctl`/`psql`. Nothing in the repo
-#     imports, compiles, lints or executes any of it. Verified: the only
+#     imports, compiles or executes any of it. Its `.py` is linted by the
+#     repository-wide ruff job (quality-gate.yml#python-lint), which needs no
+#     scope: quality-gate runs on every change, a skip-all one included, so a
+#     spike-only change is still linted. Verified: the only
 #     reference from outside the directory is a provenance COMMENT in migration
 #     20260804000030 naming `queries.txt`.
 #

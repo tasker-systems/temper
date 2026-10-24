@@ -67,7 +67,7 @@ fn one_shot_http_sink() -> (u16, mpsc::Receiver<Captured>) {
         .local_addr()
         .expect("listener has an address")
         .port();
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(1);
 
     std::thread::spawn(move || {
         if let Ok((mut stream, _)) = listener.accept() {

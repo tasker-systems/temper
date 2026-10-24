@@ -20,13 +20,15 @@ is computed in Python from that, so the prod read happens once per arm.
     python3 gen_recall.py vectors-20.tsv hnsw  > recall_hnsw.sql
     python3 gen_recall.py vectors-20.tsv exact > recall_exact.sql
 """
+
 import sys
 
 PRINCIPAL = "019d4add-f49d-7c43-a87d-dda470e5dd9c"
 K = 100
 
 vectors_path, arm = sys.argv[1], sys.argv[2]
-assert arm in ("hnsw", "exact"), arm
+if arm not in ("hnsw", "exact"):
+    sys.exit(f"arm must be hnsw or exact, not {arm!r}")
 
 rows = []
 with open(vectors_path) as fh:
@@ -40,8 +42,11 @@ with open(vectors_path) as fh:
 values = ",\n    ".join(f"({i}, '{v}'::vector)" for i, v in rows)
 
 # The exact arm must defeat the index; the hnsw arm must use it.
-prelude = ("SET enable_indexscan = off;\nSET enable_bitmapscan = off;"
-           if arm == "exact" else "-- hnsw arm: index left enabled, ef_search at its default")
+prelude = (
+    "SET enable_indexscan = off;\nSET enable_bitmapscan = off;"
+    if arm == "exact"
+    else "-- hnsw arm: index left enabled, ef_search at its default"
+)
 
 print(f"""\\set ON_ERROR_STOP on
 SELECT '[1,2]'::vector <=> '[1,3]'::vector AS warmup \\gset ignore

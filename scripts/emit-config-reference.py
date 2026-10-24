@@ -83,9 +83,8 @@ def is_optional(node: dict) -> bool:
 def struct_target(node: dict, defs: dict) -> dict | None:
     """The object definition this property ultimately names, if any."""
     resolved = resolve(node, defs)
-    if resolved is not node or "$ref" in node or "anyOf" in node:
-        if resolved.get("properties"):
-            return resolved
+    if (resolved is not node or "$ref" in node or "anyOf" in node) and resolved.get("properties"):
+        return resolved
     if resolved.get("type") == "object" and resolved.get("properties"):
         return resolved
     return None
@@ -142,7 +141,7 @@ def format_default(value) -> str:
     if isinstance(value, (int, float)):
         return f"`{value}`"
     if isinstance(value, str):
-        return "`\"\"` (empty)" if value == "" else f"`{value}`"
+        return '`""` (empty)' if value == "" else f"`{value}`"
     if isinstance(value, list):
         return "`[]`" if not value else f"`{json.dumps(value)}`"
     if isinstance(value, dict):
@@ -315,7 +314,12 @@ def render(document: dict) -> tuple[str, int, list[str]]:
         lines.append("")
     else:
         lines.extend(
-            ["## Undocumented fields", "", f"None — all {renderer.field_count} fields are documented.", ""]
+            [
+                "## Undocumented fields",
+                "",
+                f"None — all {renderer.field_count} fields are documented.",
+                "",
+            ]
         )
 
     return "\n".join(lines), renderer.field_count, renderer.undocumented

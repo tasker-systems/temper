@@ -35,7 +35,12 @@ Four things a flat grep gets wrong, each found by getting them wrong first:
    reads as coverage over a corpus it cannot see, which is the defect the gate exists to
    prevent. Angle brackets nest: count depth, don't character-class.
 """
-import os, re, subprocess, sys, json
+
+import json
+import os
+import re
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -51,7 +56,9 @@ def _repo_root():
     try:
         top = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout.strip()
         return Path(top)
     except (subprocess.CalledProcessError, FileNotFoundError):
@@ -61,6 +68,7 @@ def _repo_root():
 
 ROOT = _repo_root()
 
+
 # Production source only. `tests/` dirs anywhere and the standalone e2e crate are excluded
 # by the spec: "the wire contract that can break a deploy is the running binary's".
 def production_files():
@@ -68,10 +76,11 @@ def production_files():
         src = crate / "src"
         if not src.is_dir():
             continue
-        for f in sorted(src.rglob("*.rs")):
-            yield f
+        yield from sorted(src.rglob("*.rs"))
 
-CFG_TEST = re.compile(r'#\[cfg\((?:[^)]*\b)?test\b[^\]]*\]\s*(?:pub\s+)?mod\s+\w+\s*\{')
+
+CFG_TEST = re.compile(r"#\[cfg\((?:[^)]*\b)?test\b[^\]]*\]\s*(?:pub\s+)?mod\s+\w+\s*\{")
+
 
 def test_spans(text):
     """Byte spans of #[cfg(...test...)] mod blocks, via brace matching."""
@@ -91,6 +100,7 @@ def test_spans(text):
         spans.append((m.start(), j))
     return spans
 
+
 # Two distinct spellings, and conflating them is a precision bug:
 #
 #   NON-MACRO must carry the `sqlx::` path. `.query(...)` alone is overwhelmingly
@@ -101,12 +111,12 @@ def test_spans(text):
 #
 #   MACRO may be bare — `query_as!` is unambiguous, since no other macro of that name is
 #   in scope.
-QFN = r'query(?:_as|_scalar|_file|_as_with|_with|_file_as|_file_scalar)?'
+QFN = r"query(?:_as|_scalar|_file|_as_with|_with|_file_as|_file_scalar)?"
 # The runtime scan is two-stage — see note 4 in the module docstring. Stage 1 finds the
 # path + function name; stage 2 walks forward over an OPTIONAL turbofish with angle-bracket
 # depth counting, then requires the open paren. A regex cannot do stage 2.
-CALL_RUNTIME_HEAD = re.compile(r'\bsqlx::(' + QFN + r')\b')
-CALL_MACRO = re.compile(r'\b(?:sqlx::)?(' + QFN + r')!\s*[({\[]')
+CALL_RUNTIME_HEAD = re.compile(r"\bsqlx::(" + QFN + r")\b")
+CALL_MACRO = re.compile(r"\b(?:sqlx::)?(" + QFN + r")!\s*[({\[]")
 
 
 def _skip_ws(text, i):
@@ -147,6 +157,7 @@ def runtime_calls(text):
         if j < len(text) and text[j] == "(":
             yield m.start(), m.group(1)
 
+
 def main():
     rows = []
     for f in production_files():
@@ -155,13 +166,15 @@ def main():
         found = [(pos, fn, False) for pos, fn in runtime_calls(text)]
         found += [(m.start(), m.group(1), True) for m in CALL_MACRO.finditer(text)]
         for pos, fn, is_macro in found:
-            rows.append({
-                "file": str(f.relative_to(ROOT)),
-                "line": text.count("\n", 0, pos) + 1,
-                "fn": fn,
-                "macro": is_macro,
-                "in_test": any(a <= pos <= b for a, b in spans),
-            })
+            rows.append(
+                {
+                    "file": str(f.relative_to(ROOT)),
+                    "line": text.count("\n", 0, pos) + 1,
+                    "fn": fn,
+                    "macro": is_macro,
+                    "in_test": any(a <= pos <= b for a, b in spans),
+                }
+            )
     prod = [r for r in rows if not r["in_test"]]
     macro = [r for r in prod if r["macro"]]
     runtime = [r for r in prod if not r["macro"]]
@@ -174,12 +187,15 @@ def main():
     print(f"TOTAL call sites                      : {len(rows)}")
     print()
     from collections import Counter
+
     by_file = Counter(r["file"] for r in runtime)
     print("NON-MACRO by file:")
     for fpath, n in by_file.most_common():
         print(f"  {n:3}  {fpath}")
 
     if len(sys.argv) > 1:
-        json.dump(runtime, open(sys.argv[1], "w"), indent=1)
+        with open(sys.argv[1], "w") as out:
+            json.dump(runtime, out, indent=1)
+
 
 main()

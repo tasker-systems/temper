@@ -1,0 +1,230 @@
+# This repository's status for each baseline rule, in the register's vocabulary:
+# gated: <path>[#job], partial: …, practiced, convention: …, uncovered, unexamined, n/a.
+#
+# Read from temper's own gates and tree (.github/workflows, .github/scripts, the configs), never
+# from the register: the register's temper column is generated from this file. `gated` names the
+# job whose step fails on a violation; the comment above each line is the evidence. Jobs in a
+# reusable workflow are named in that file (quality-gate.yml, code-quality.yml, test-*.yml), all of
+# which fan into `CI Success` in ci.yml.
+#
+# Adoption is in steps (audit-before-enforce): this step adopts deny.toml, .cargo/audit.toml,
+# clippy.toml and ruff.toml. The Rust workspace lint table and the TypeScript configs are the next
+# two; their rules read `uncovered` here until they land.
+#
+# `reviewed_at` is the baseline revision these statuses were reviewed against (check F).
+reviewed_at = "730e9d31a18de40955380d15e84a81861042cea0"
+[rules]
+
+# --- Rust ----------------------------------------------------------------------------------------
+# No [workspace.lints] table and no member sets `[lints] workspace = true` (the next adoption step).
+RUST-LINT-1 = "uncovered: no workspace lint table yet; adopting the canonical one is the next step"
+# code-quality.yml clippy --workspace --all-targets --all-features -D warnings; cargo doc with RUSTDOCFLAGS=-D warnings.
+RUST-LINT-2 = "gated: .github/workflows/code-quality.yml#rust-quality"
+# 43 #[allow] (none with a reason) and 3 reasonless #[expect]; allow_attributes(_without_reason) arrive with the lint table.
+RUST-LINT-3 = "uncovered: 43 #[allow] without a reason; the lints that refuse them arrive with the lint table"
+RUST-LINT-4 = "convention: a review practice; the lint table's adoption is measured first (266 findings) and lands as its own change"
+# No lint table: clippy runs its default groups, so there is no held-off group to open yet.
+RUST-LINT-5 = "n/a: no lint table yet; clippy runs its default groups"
+RUST-API-1 = "convention: whether a crate is a library or an application is judged in review"
+# quality-gate.yml cargo fmt --all -- --check.
+RUST-FMT-1 = "gated: .github/workflows/quality-gate.yml#rust-gate"
+# wildcard_imports is held off in the canonical table; ~7 non-test glob imports.
+RUST-ORG-1 = "uncovered: about 7 non-test glob imports; wildcard_imports is not enabled"
+RUST-ORG-2 = "convention: file naming and module layout are judged in review"
+# grep 'forbid(unsafe_code)' over the crate roots: 0 of 20.
+RUST-UNSAFE-1 = "uncovered: no crate root declares #![forbid(unsafe_code)]"
+# Production unsafe in temper-ingest (cpu.rs) and temper-cli (body_source.rs, commands/update.rs); no register or tripwire.
+RUST-UNSAFE-2 = "uncovered: unsafe in temper-ingest and temper-cli is not a registered exception"
+RUST-UNSAFE-3 = "n/a: no FFI bindings; the SDKs are generated HTTP clients"
+# thiserror in the published library crates; anyhow only in the unpublished edges.
+RUST-ERR-1 = "practiced"
+RUST-ERR-2 = "convention: whether a default stands in for a required value is judged in review"
+RUST-ERR-3 = "convention: panic-or-Result and # Panics docs are judged in review"
+# unwrap_used is held off in the canonical table; ~10 non-test unwrap() sites.
+RUST-ERR-4 = "uncovered: about 10 non-test unwrap() sites; unwrap_used is not enabled"
+# No `panic =` in any profile; the one production catch_unwind observes and resumes.
+RUST-PANIC-1 = "practiced"
+# missing_debug_implementations arrives with the lint table (70 findings measured).
+RUST-TYPE-1 = "uncovered: missing_debug_implementations is not enabled (70 types)"
+RUST-TYPE-2 = "convention: newtype and enum-over-bool choices are judged in review"
+RUST-API-2 = "convention: open versus closed sets are judged in review"
+# should_implement_trait, new_without_default, len_without_is_empty, derivable_impls: default clippy groups, under -D warnings.
+RUST-API-3 = "gated: .github/workflows/code-quality.yml#rust-quality"
+# ptr_arg and borrowed_box: default clippy groups, under -D warnings.
+RUST-API-4 = "gated: .github/workflows/code-quality.yml#rust-quality"
+RUST-API-5 = "partial: wrong_self_convention fails under default clippy -D warnings; constructor and getter naming is review"
+RUST-API-6 = "convention: where ignoring a value is a bug is judged in review"
+# CI floats on stable (dtolnay/rust-toolchain@stable); no rust-version anywhere.
+RUST-TC-1 = "uncovered: floats on stable but declares no rust-version"
+# [workspace.package] edition, inherited by every member.
+RUST-TC-2 = "practiced"
+# CI builds on stable, which refuses #![feature].
+RUST-TC-3 = "gated: .github/workflows/code-quality.yml#rust-quality"
+RUST-DOC-1 = "uncovered: the published library crates do not warn on missing docs"
+RUST-READ-1 = "convention: readability is judged in review"
+RUST-MACRO-1 = "convention: macro or function is judged in review"
+# Cargo.lock has no ctor, inventory, linkme or static_init.
+RUST-INIT-1 = "practiced"
+# audit-sqlx-macro-exceptions.sh in rust-gate; clippy compiles every query! offline against .sqlx.
+RUST-SQL-1 = "gated: .github/workflows/quality-gate.yml#rust-gate, .github/workflows/code-quality.yml#rust-quality"
+
+# --- Supply chain --------------------------------------------------------------------------------
+# `cargo audit`, blocking.
+SC-ADV-1 = "gated: .github/workflows/quality-gate.yml#rust-gate"
+# .cargo/audit.toml is adopted (superset; only advisories.ignore is local). Each entry's reason is review.
+SC-ADV-2 = "convention: each ignore is reviewed by hand; five FIX-PENDING entries state no reachability"
+# deny.toml adopted (superset, conventions job); `cargo deny check sources licenses bans`.
+SC-DENY-1 = "gated: .github/workflows/quality-gate.yml#rust-gate"
+SC-DENY-2 = "gated: .github/workflows/quality-gate.yml#rust-gate"
+SC-DENY-3 = "gated: .github/workflows/quality-gate.yml#rust-gate"
+# audit-privileged-action-pins.sh requires SHA pins in privileged jobs only; 48 of 88 refs elsewhere are tags.
+SC-GHA-1 = "partial: SHA pins are required only in privileged jobs (quality-gate.yml#guard-tests); most other uses: are tag refs"
+SC-GHA-2 = "uncovered: build-cli-binaries.yml has no top-level permissions; release.yml and release-tag.yml grant write at top level"
+# check-release-chain-triggers.sh and its bite test.
+SC-GHA-3 = "gated: .github/workflows/quality-gate.yml#guard-tests"
+SC-IN-1 = "uncovered: mise pins and cools, but CI installs several tools unversioned (taiki-e tool lists, setup-bun)"
+SC-IN-2 = "uncovered: Dependabot misses temper-design (npm, uv), temper-py, temper-rb and the bench Dockerfile"
+SC-IN-3 = "partial: Cargo.lock, bun.lock and the client npm locks are enforced; the agent workflows run npm install and temper-py commits no lock"
+# gitleaks, unconditional; CodeQL on every PR. CodeQL findings block through the code_scanning ruleset (a repository setting).
+SC-SEC-1 = "gated: .github/workflows/secret-scan.yml#secret-scan, .github/workflows/codeql.yml#analyze"
+
+# --- Security ------------------------------------------------------------------------------------
+SEC-CRED-1 = "uncovered: several credential fields outside temper-client are bare String"
+# audit-credential-debug.sh, with its bite test.
+SEC-CRED-2 = "gated: .github/workflows/quality-gate.yml#rust-gate"
+SEC-CRED-3 = "practiced"
+# audit-signature-secrets.sh, with its bite test.
+SEC-CRED-4 = "gated: .github/workflows/quality-gate.yml#rust-gate"
+# fn redact lives in temper-core/src/redact.rs only.
+SEC-RED-1 = "practiced"
+SEC-RED-2 = "convention: redaction by origin is a design judgement made in review"
+SEC-SQL-1 = "partial: values are bound by the query! macros and the runtime-query tripwire (quality-gate.yml#rust-gate); identifier validation is unchecked"
+SEC-SQL-2 = "partial: the visibility-ungated fragments are pinned (audit-ungated-fragments, quality-gate.yml#rust-gate); other scoping is review"
+SEC-AUTH-1 = "n/a: temper has no disabled-auth mode"
+SEC-AUTH-2 = "partial: route auth tiers are pinned (audit-route-auth, audit-mcp-route-auth, quality-gate.yml#rust-gate); authorising before a write inside a handler is review"
+SEC-AUTH-3 = "convention: refusal versus not-found parity is reviewed per handler"
+# check-production-features.sh.
+SEC-TEST-1 = "gated: .github/workflows/code-quality.yml#rust-quality"
+SEC-RPT-1 = "practiced"
+
+# --- Concurrency ---------------------------------------------------------------------------------
+# clippy.toml adopted (exact, conventions job): disallowed-methods refuses the unbounded constructors under -D warnings, test targets included.
+CONC-BOUND-1 = "gated: .github/workflows/code-quality.yml#rust-quality"
+CONC-BOUND-2 = "uncovered: pool and channel capacities are literals in production code"
+CONC-BOUND-3 = "convention: the at-bound strategy is a design decision judged in review"
+CONC-BOUND-4 = "uncovered: no depth or saturation metrics for in-process bounds"
+CONC-FAIL-1 = "practiced"
+CONC-FAIL-3 = "uncovered: shape_loader.rs recovers poisoned locks at six production sites with no comment"
+CONC-FAIL-2 = "convention: span-per-act is a code-quality.md review rule; spawns are not named"
+CONC-DB-1 = "convention: atomic transitions in the database are reviewed per change"
+CONC-DB-2 = "convention: retry idempotency is designed and reviewed per operation"
+CONC-DB-3 = "convention: transaction scope is judged in review"
+
+# --- Tripwires and tests -------------------------------------------------------------------------
+TW-1 = "uncovered: about 7 of 19 tripwires state no NOT CHECKED section"
+TW-2 = "uncovered: 5 of 19 tripwires lack --list or UPDATE_BASELINE"
+TW-3 = "practiced"
+TW-4 = "uncovered: audit-handler-authz-drift.sh cannot be pointed at a fixture"
+TW-5 = "partial: 18 of 19 tripwires' bite tests run in quality-gate.yml#guard-tests; audit-handler-authz-drift has none, and nothing requires one"
+TW-6 = "partial: the glob-and-coverage check is local (cargo make tripwires); CI runs a hand-kept list"
+TW-7 = "convention: what a tripwire keys on is judged when it is written"
+# audit-ignored-tests.sh refuses a bare #[ignore] and pins the set.
+TEST-1 = "gated: .github/workflows/quality-gate.yml#rust-gate"
+TEST-2 = "convention: weakening a test is caught in review; the ignore set is pinned by TEST-1's tripwire"
+TEST-3 = "partial: every tier but temper-client's integration-tests feature runs in test-rust.yml; nothing checks the mapping"
+# nextest ci profile retries once; collect-junit/junit-summary names each flaky test and fails on a missing report.
+TEST-4 = "gated: .github/workflows/test-rust.yml#unit-tests, .github/workflows/test-rust.yml#integration-tests"
+TEST-5 = "partial: coverage floors are enforced nightly (coverage.yml#coverage), not on pull requests"
+
+# --- CI ------------------------------------------------------------------------------------------
+CI-1 = "partial: quality-gate runs on every change, but its Rust half is scope-gated and only code-quality and test-rust wait on it"
+# ci-success validates each job against scope; that it is the required check is a repository setting.
+CI-2 = "gated: .github/workflows/ci.yml#ci-success"
+# openapi, ts-rs, skills, cli and config reference drift; the three SDKs' drift.
+CI-3 = "gated: .github/workflows/code-quality.yml#rust-quality, .github/workflows/test-agents-ts.yml#temper-ts, .github/workflows/test-python.yml#test-python, .github/workflows/test-ruby.yml#test-ruby"
+CI-4 = "practiced"
+# ci.yml triggers on merge_group; nothing pins the trigger.
+CI-5 = "practiced"
+CI-6 = "practiced"
+
+# --- Agent guidance ------------------------------------------------------------------------------
+# CLAUDE.md and AGENTS.md are quick-reference tables routing to internal/agents/*.md.
+AG-1 = "practiced"
+AG-2 = "convention: whether each rule states its reason is judged in review"
+AG-3 = "uncovered: most internal/agents rules do not say whether a gate enforces them"
+AG-4 = "partial: README and docs CLI claims and counts are drift-checked (quality-gate.yml#guard-tests, code-quality.yml#rust-quality); internal/agents is not"
+# The projected skill is current and CLAUDE.md and AGENTS.md link it (check E).
+AG-5 = "gated: .github/workflows/quality-gate.yml#conventions"
+AG-6 = "practiced"
+
+# --- Python --------------------------------------------------------------------------------------
+# Root ruff.toml covers every .py; ruff check and ruff format --check.
+PY-LINT-1 = "gated: .github/workflows/quality-gate.yml#python-lint"
+# The root ruff.toml extends the projection (check A); temper-py's [tool.ruff] extends the root, and an override there is review.
+PY-LINT-2 = "partial: the root ruff.toml is pinned to the projection (quality-gate.yml#conventions); an override in clients/temper-py's [tool.ruff] is caught only in review"
+# PGH004 (a noqa names its code) and RUF100 (an unused one fails); the reason beside it is review.
+PY-LINT-3 = "partial: a suppression without a code, or an unused one, fails (quality-gate.yml#python-lint); its reason is review"
+# uv run mypy, strict.
+PY-TYPE-1 = "gated: .github/workflows/test-python.yml#test-python"
+PY-TYPE-2 = "n/a: no native module"
+# E722 and BLE001 over every .py.
+PY-ERR-1 = "gated: .github/workflows/quality-gate.yml#python-lint"
+# S101 outside tests.
+PY-ERR-2 = "gated: .github/workflows/quality-gate.yml#python-lint"
+# B006, B008, B023, RUF012, PLW0603.
+PY-DEF-1 = "gated: .github/workflows/quality-gate.yml#python-lint"
+# G and LOG.
+PY-LOG-1 = "gated: .github/workflows/quality-gate.yml#python-lint"
+# temper/generated is excluded from ruff and mypy, follow_imports = silent, drift-gated.
+PY-GEN-1 = "gated: .github/workflows/test-python.yml#test-python"
+PY-VER-1 = "partial: target-version is the projection's (quality-gate.yml#conventions); requires-python in clients/temper-py and packages/temper-design, and mypy's python_version, match it by hand"
+
+# --- TypeScript (the next adoption step) ---------------------------------------------------------
+TS-TOOL-1 = "partial: temper-cloud, temper-ui and temper-design are linted and typechecked; temper-ts, temper-telemetry-ts and the agent workflows are typechecked only"
+TS-TOOL-2 = "uncovered: no shared Biome base, and warn-level rules never fail CI"
+TS-TOOL-3 = "uncovered: four TypeScript version ranges, one a release candidate; Biome is a range"
+TS-CFG-1 = "uncovered: packages set strict only, with no shared base (about 155 errors measured under the canonical one)"
+TS-CFG-2 = "uncovered: erasableSyntaxOnly is unset; one namespace in hand-written TS"
+TS-TYPE-1 = "uncovered: noExplicitAny is warn-only"
+TS-TYPE-2 = "uncovered: noNonNullAssertion is warn-only"
+TS-SUP-1 = "practiced"
+TS-MOD-1 = "uncovered: noDefaultExport is not enabled; 29 default exports"
+TS-ERR-1 = "practiced"
+TS-NAME-1 = "convention: casing is reviewed"
+# schema.ts and ts-rs drift; generated trees excluded from Biome.
+TS-GEN-1 = "gated: .github/workflows/test-agents-ts.yml#temper-ts, .github/workflows/code-quality.yml#rust-quality"
+TS-DOC-1 = "convention: Biome has no rule for exported doc comments"
+
+# --- Shell ---------------------------------------------------------------------------------------
+SH-1 = "uncovered: 4 zsh and 7 sh executables"
+SH-2 = "uncovered: about 29 scripts lack strict mode"
+SH-3 = "uncovered: ShellCheck runs only in the pre-commit hook"
+SH-4 = "uncovered: backticks remain; SC2006 is not run"
+SH-5 = "uncovered: the drift gates eval command strings"
+SH-6 = "uncovered: non-portable constructs present, unchecked"
+SH-7 = "convention: the shell-or-program split is judged in review"
+
+# --- Docs ----------------------------------------------------------------------------------------
+DOC-1 = "uncovered: no markdownlint in CI"
+DOC-2 = "uncovered: no markdownlint in CI"
+DOC-3 = "uncovered: no markdownlint in CI"
+DOC-4 = "partial: relative links under docs/ are checked offline (quality-gate.yml#guard-tests); README, internal/ and agent guidance are not"
+
+# --- JSON APIs -----------------------------------------------------------------------------------
+API-JSON-1 = "uncovered: no casing check; 12 non-snake properties and one non-snake enum value in openapi.json"
+API-JSON-2 = "uncovered: one error schema, but no per-variant validation against the spec"
+API-JSON-3 = "uncovered: 2 of 26 *_at fields lack format date-time"
+API-JSON-4 = "practiced"
+API-JSON-5 = "uncovered: 26 list responses are bare arrays that cannot signal truncation"
+
+# --- Consuming the baseline (conventions.py check and witness) -----------------------------------
+CONS-1 = "gated: .github/workflows/quality-gate.yml#conventions"
+CONS-2 = "gated: .github/workflows/quality-gate.yml#conventions"
+CONS-3 = "gated: .github/workflows/quality-gate.yml#conventions"
+CONS-4 = "gated: .github/workflows/quality-gate.yml#conventions"
+CONS-5 = "gated: .github/workflows/quality-gate.yml#conventions"
+CONS-6 = "gated: .github/workflows/quality-gate.yml#conventions"
+# Reported on every run (check C); never fails, by design.
+CONS-7 = "gated: .github/workflows/quality-gate.yml#conventions"
+# The witness's control run passes with no credential; the job references no secret.
+CONS-8 = "gated: .github/workflows/quality-gate.yml#conventions"

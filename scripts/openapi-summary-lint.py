@@ -50,9 +50,10 @@ import argparse
 import json
 import re
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 # --------------------------------------------------------------------------
 # Thresholds
@@ -71,7 +72,14 @@ NAV_LABEL_MAX = 60
 TRUNCATION_RISK = 200
 
 HTTP_METHODS = (
-    "get", "put", "post", "delete", "options", "head", "patch", "trace",
+    "get",
+    "put",
+    "post",
+    "delete",
+    "options",
+    "head",
+    "patch",
+    "trace",
 )
 
 DEFAULT_BASELINE = Path(".github/baselines/openapi-summaries.json")
@@ -90,9 +98,7 @@ RUST_PATH = re.compile(r"\b[a-z_][a-z0-9_]*::[a-z_][a-z0-9_]*", re.IGNORECASE)
 # All-caps directives addressed to an implementer. Deliberately a closed list:
 # "MUST" and "SHALL" are excluded because they are legitimate RFC-2119 contract
 # language in an API description.
-DIRECTIVE = re.compile(
-    r"\b(CONFORM|TODO|FIXME|XXX|HACK|NOTE|WARNING|SAFETY|INVARIANT)\b"
-)
+DIRECTIVE = re.compile(r"\b(CONFORM|TODO|FIXME|XXX|HACK|NOTE|WARNING|SAFETY|INVARIANT)\b")
 
 # Rust attribute syntax leaking through.
 ATTRIBUTE = re.compile(r"#\[")
@@ -106,9 +112,7 @@ MARKDOWN = re.compile(r"`|\*\*|\[[^\]]+\]\([^)]*\)")
 # comparing normalised strings flags "List teams" as an echo of `list_teams`,
 # which is a false positive on a perfectly good title. An identifier has no
 # whitespace and carries a case or underscore boundary; a title has words.
-BARE_IDENTIFIER = re.compile(
-    r"^(?:[a-z0-9]+(?:_[a-z0-9]+)+|[a-z]+(?:[A-Z][a-z0-9]*)+)$"
-)
+BARE_IDENTIFIER = re.compile(r"^(?:[a-z0-9]+(?:_[a-z0-9]+)+|[a-z]+(?:[A-Z][a-z0-9]*)+)$")
 
 # A summary that opens by restating the method and path Apidog already displays.
 METHOD_PATH_PREFIX = re.compile(
@@ -142,7 +146,7 @@ REPORTS = {
 
 @dataclass
 class Finding:
-    key: str          # "POST /api/resources/{id}/audits"
+    key: str  # "POST /api/resources/{id}/audits"
     operation_id: str | None
     rule: str
     detail: str
@@ -180,6 +184,7 @@ class Refusal(Exception):
 # --------------------------------------------------------------------------
 # Reading
 # --------------------------------------------------------------------------
+
 
 def load_spec(path: Path) -> dict[str, Any]:
     if not path.exists():
@@ -225,6 +230,7 @@ def iter_operations(spec: dict[str, Any], source: str) -> Iterator[tuple[str, di
 # --------------------------------------------------------------------------
 # Rules
 # --------------------------------------------------------------------------
+
 
 def check(key: str, op: dict[str, Any]) -> list[Finding]:
     op_id = op.get("operationId")
@@ -293,13 +299,16 @@ def scan(paths: list[Path]) -> Scan:
 # Baseline
 # --------------------------------------------------------------------------
 
+
 def load_baseline(path: Path) -> set[str]:
     if not path.exists():
         return set()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise Refusal(f"{path}: baseline unreadable ({exc}) -- refusing to treat it as empty")
+        raise Refusal(
+            f"{path}: baseline unreadable ({exc}) -- refusing to treat it as empty"
+        ) from exc
     keys = data.get("known_defects") if isinstance(data, dict) else data
     if not isinstance(keys, list):
         raise Refusal(f"{path}: baseline has no `known_defects` list")
@@ -324,13 +333,16 @@ def write_baseline(path: Path, result: Scan) -> None:
 # Reporting
 # --------------------------------------------------------------------------
 
+
 def truncate(text: str, width: int = 96) -> str:
     return text if len(text) <= width else text[: width - 1] + "\u2026"
 
 
 def render(result: Scan, new: set[str], stale: set[str], strict: bool) -> None:
-    print(f"openapi summary lint \u2014 {result.operations} operations "
-          f"across {', '.join(result.sources)}")
+    print(
+        f"openapi summary lint \u2014 {result.operations} operations "
+        f"across {', '.join(result.sources)}"
+    )
     print()
 
     for label, findings in (("DEFECTS", result.defects), ("REPORTS", result.reports)):
@@ -358,8 +370,10 @@ def render(result: Scan, new: set[str], stale: set[str], strict: bool) -> None:
         print()
 
     if stale:
-        print(f"BASELINE STALE ({len(stale)}) \u2014 fixed, still listed. "
-              f"Re-baseline with --update-baseline.")
+        print(
+            f"BASELINE STALE ({len(stale)}) \u2014 fixed, still listed. "
+            f"Re-baseline with --update-baseline."
+        )
         for k in sorted(stale):
             print(f"    {k}")
         print()
@@ -374,29 +388,38 @@ def render(result: Scan, new: set[str], stale: set[str], strict: bool) -> None:
 
 # --------------------------------------------------------------------------
 
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="Lint operation summaries in an emitted OpenAPI document.",
     )
-    ap.add_argument("spec", nargs="+", type=Path,
-                    help="one or more emitted OpenAPI JSON documents")
-    ap.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE,
-                    help=f"baseline file (default: {DEFAULT_BASELINE})")
-    ap.add_argument("--update-baseline", action="store_true",
-                    help="rewrite the baseline from the current scan and exit 0")
-    ap.add_argument("--strict", action="store_true",
-                    help="fail on any defect, not only on growth")
-    ap.add_argument("--json", action="store_true",
-                    help="emit machine-readable findings instead of a report")
+    ap.add_argument("spec", nargs="+", type=Path, help="one or more emitted OpenAPI JSON documents")
+    ap.add_argument(
+        "--baseline",
+        type=Path,
+        default=DEFAULT_BASELINE,
+        help=f"baseline file (default: {DEFAULT_BASELINE})",
+    )
+    ap.add_argument(
+        "--update-baseline",
+        action="store_true",
+        help="rewrite the baseline from the current scan and exit 0",
+    )
+    ap.add_argument("--strict", action="store_true", help="fail on any defect, not only on growth")
+    ap.add_argument(
+        "--json", action="store_true", help="emit machine-readable findings instead of a report"
+    )
     args = ap.parse_args(argv)
 
     try:
         result = scan(args.spec)
         if args.update_baseline:
             write_baseline(args.baseline, result)
-            print(f"baseline written: {args.baseline} "
-                  f"({len(result.defect_keys)} known defects, "
-                  f"{result.operations} operations scanned)")
+            print(
+                f"baseline written: {args.baseline} "
+                f"({len(result.defect_keys)} known defects, "
+                f"{result.operations} operations scanned)"
+            )
             return 0
         baseline = load_baseline(args.baseline)
     except Refusal as exc:
@@ -407,24 +430,29 @@ def main(argv: list[str] | None = None) -> int:
     stale = baseline - result.defect_keys
 
     if args.json:
-        print(json.dumps({
-            "operations": result.operations,
-            "sources": result.sources,
-            "unknown": result.unknown,
-            "new_defects": sorted(new),
-            "stale_baseline": sorted(stale),
-            "findings": [
+        print(
+            json.dumps(
                 {
-                    "key": f.key,
-                    "operation_id": f.operation_id,
-                    "rule": f.rule,
-                    "severity": "defect" if f.is_defect else "report",
-                    "detail": f.detail,
-                    "summary": f.summary,
-                }
-                for f in sorted(result.findings, key=lambda x: (x.key, x.rule))
-            ],
-        }, indent=2))
+                    "operations": result.operations,
+                    "sources": result.sources,
+                    "unknown": result.unknown,
+                    "new_defects": sorted(new),
+                    "stale_baseline": sorted(stale),
+                    "findings": [
+                        {
+                            "key": f.key,
+                            "operation_id": f.operation_id,
+                            "rule": f.rule,
+                            "severity": "defect" if f.is_defect else "report",
+                            "detail": f.detail,
+                            "summary": f.summary,
+                        }
+                        for f in sorted(result.findings, key=lambda x: (x.key, x.rule))
+                    ],
+                },
+                indent=2,
+            )
+        )
     else:
         render(result, new, stale, args.strict)
 

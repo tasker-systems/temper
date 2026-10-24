@@ -58,13 +58,14 @@ loaded candidate set, as in gen_salnorm_reach.py. Read-only.
     python3 gen_peranchor_width.py vectors-24.tsv > peranchor_width.sql
     ./prod-readonly.sh peranchor_width.sql
 """
+
 import sys
 
 WIDTHS = [1, 3, 5, 10, 20]
 DEFAULT_WIDTH = 3
 
 # Real principals, from h1-orient.sql section F / h2-reach-shapes.sql section A.
-PETE = "019d4add-f49d-7c43-a87d-dda470e5dd9c"   # 3 region-bearing cogmaps + 2 contexts
+PETE = "019d4add-f49d-7c43-a87d-dda470e5dd9c"  # 3 region-bearing cogmaps + 2 contexts
 AGENT = "019f25a6-230e-7e03-b38e-499e8f29fd81"  # 1 cogmap + 1 context
 
 # Deployed constants, read from pg_get_functiondef (h3-body.sql).

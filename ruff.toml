@@ -1,0 +1,8 @@
+# Every .py file in the repository is linted and formatted from here (PY-LINT-1): the tasker-systems
+# canonical configuration, adopted in `extends` mode (.conventions/consumer.toml), so
+# `conventions.py check` fails if this file overrides one of its keys. A package that needs more
+# extends this file; it does not loosen it.
+extend = ".conventions/baseline/python/ruff.toml"
+
+# Generated code is drift-gated, not linted (PY-GEN-1): generate-temper-py.sh is the only writer.
+extend-exclude = ["clients/temper-py/temper/generated"]

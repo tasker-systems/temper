@@ -42,13 +42,14 @@ Read-only.
     python3 gen_salnorm_reach.py vectors-24.tsv > salnorm_reach.sql
     ./prod-readonly.sh salnorm_reach.sql
 """
+
 import sys
 
 WIDTHS = [1, 3, 5, 10, 20]
 DEFAULT_WIDTH = 3
 
 # Real principals, from h1-orient.sql §F / h2-reach-shapes.sql §A.
-PETE = "019d4add-f49d-7c43-a87d-dda470e5dd9c"   # 3 region-bearing cogmaps + 2 contexts -> 444 / 472
+PETE = "019d4add-f49d-7c43-a87d-dda470e5dd9c"  # 3 region-bearing cogmaps + 2 contexts -> 444 / 472
 AGENT = "019f25a6-230e-7e03-b38e-499e8f29fd81"  # 1 cogmap + 1 context                  -> 400 / 438
 
 # Deployed constants, read from pg_get_functiondef (h3-body.sql).

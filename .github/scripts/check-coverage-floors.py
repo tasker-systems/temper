@@ -121,16 +121,20 @@ def main():
         pct = 100.0 * covered / total
         floor = floor_for(thresholds, crate)
         if floor is None:
-            print(f"[?] {crate:<24} {pct:>6.2f}%  no floor recorded — add one to "
-                  f"coverage-thresholds.json")
+            print(
+                f"[?] {crate:<24} {pct:>6.2f}%  no floor recorded — add one to "
+                f"coverage-thresholds.json"
+            )
             all_pass = False
             continue
         status = "PASS" if pct >= floor else "FAIL"
         if status == "FAIL":
             all_pass = False
             failures.append((crate, pct, floor))
-        print(f"[{'+' if status == 'PASS' else 'x'}] {crate:<24} {pct:>6.2f}% >= {floor:>3d}%  "
-              f"[{status}]")
+        print(
+            f"[{'+' if status == 'PASS' else 'x'}] {crate:<24} {pct:>6.2f}% >= {floor:>3d}%  "
+            f"[{status}]"
+        )
 
     floored_but_unmeasured = sorted(floored - measured)
     for crate in floored_but_unmeasured:

@@ -24,6 +24,7 @@ Read-only. `p_k` mirrors `unified_search`'s `vector_k` = 100.
     python3 gen_denominator.py vectors-24.tsv > denominator.sql
     ./prod-readonly.sh denominator.sql
 """
+
 import sys
 
 VECTOR_K = 100

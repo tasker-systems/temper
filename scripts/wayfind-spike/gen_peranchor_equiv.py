@@ -17,6 +17,7 @@ A nonzero `differs` on any row invalidates every selection figure in the sibling
     python3 gen_peranchor_equiv.py vectors-24.tsv > peranchor_equiv.sql
     ./prod-readonly.sh peranchor_equiv.sql
 """
+
 import sys
 
 WIDTHS = [1, 3, 5]
@@ -101,8 +102,11 @@ FROM pos p
 JOIN deployed d ON d.qi = p.qi AND d.region_id = p.id;
 """)
 
-print(r"""\set ON_ERROR_STOP on
+print(
+    r"""\set ON_ERROR_STOP on
 \timing on
 \echo '=== EQUIVALENCE GUARD: modelled cut vs deployed wayfind_region_scores.in_top_n ==='
 \echo '=== shape 1 (real principal), p_lens NULL, queries-24.txt. `differs` must be 0. ==='
-""" + "".join(stmts))
+"""
+    + "".join(stmts)
+)
