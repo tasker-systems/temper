@@ -16255,6 +16255,73 @@
         },
         "additionalProperties": false
       },
+      "ArtifactAskPopulation": {
+        "type": "object",
+        "description": "The population one artifact ask counted, by shape state, and how many of it matched.\n\n**What is counted.** Every count ranges over the ask's counted set (spec\n`2026-10-19-asking-artifacts-by-what-they-are` §2.3): the live artifacts its shape's lineage\ngoverns — the shape's home and family — on resources you can see that have finished ingesting,\nwhile you can read the shape's home. Nothing outside that set moves a count.\n\n- **The three by-state counts apply the ask's `intent` but not its `shape_states`.** An ask\n  narrowed to `declared_satisfied` while reconciliation is behind still counts its\n  `declared_not_yet_checked` rows here, so a small answer reads as lag rather than absence.\n  An artifact is in the population by governance, never by having a verdict.\n- **`matched` applies the whole ask**: its intent, its `shape_states` and every predicate, each\n  holding of one artifact.\n- **Both ignore the stage's `resource_filter`.** The counted set is the shape's, not the stage's,\n  so `matched > 0` beside an empty stage is possible and meaningful: matching artifacts exist on\n  resources the stage's other narrowings excluded.\n- **Counts of different asks do not combine.** A stage's asks AND together on one resource, and\n  each ask counts its own population, so neither the sum nor the minimum of two asks' `matched`\n  is the number of resources the stage selected.\n\nCounts are of artifacts, not resources.",
+        "required": [
+          "declared_satisfied",
+          "declared_not_satisfied",
+          "declared_not_yet_checked",
+          "matched"
+        ],
+        "properties": {
+          "declared_not_satisfied": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "declared_not_yet_checked": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "declared_satisfied": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "matched": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ArtifactAskTrace": {
+        "type": "object",
+        "description": "One artifact ask as a stage ran it: which ask, which shape version it was validated against,\nwhich version is in force now, and the population it counted.",
+        "required": [
+          "position",
+          "shape_id",
+          "shape_version",
+          "population"
+        ],
+        "properties": {
+          "in_force": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ShapeInForce",
+                "description": "The live version of the shape's lineage — its home and family — when the statement ran.\nIt differs from `shape_id`/`shape_version` when the shape was amended after validation; the\npopulation still ranges over the lineage, so it does not empty when that happens.\n\n`None` when the shape's home is not readable to you at execution, or the shape no longer\nexists. The population is then all zeros: nothing was counted under a shape you cannot read."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "population": {
+            "$ref": "#/components/schemas/ArtifactAskPopulation"
+          },
+          "position": {
+            "type": "integer",
+            "description": "The ask's position in the stage's `artifact_filter`, from 0.",
+            "minimum": 0
+          },
+          "shape_id": {
+            "$ref": "#/components/schemas/ShapeId",
+            "description": "The shape the ask named, and the version of it the plan was validated against."
+          },
+          "shape_version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
       "ArtifactCommitRequest": {
         "allOf": [
           {
@@ -26694,6 +26761,23 @@
         "format": "uuid",
         "description": "A `kb_data_artifact_shapes.id` value — one declared JSON Schema governing a data-artifact\nfamily within a single home (spec: data-artifact shape registry, 2026-08-21)."
       },
+      "ShapeInForce": {
+        "type": "object",
+        "description": "A shape version by id: the live row of a lineage at the moment a statement read it.",
+        "required": [
+          "shape_id",
+          "shape_version"
+        ],
+        "properties": {
+          "shape_id": {
+            "$ref": "#/components/schemas/ShapeId"
+          },
+          "shape_version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
       "ShapeSuccessor": {
         "type": "object",
         "description": "The version in force after a fold: the live row at the same home and family.",
@@ -27236,6 +27320,13 @@
         "properties": {
           "act": {
             "$ref": "#/components/schemas/ActName"
+          },
+          "artifact_asks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactAskTrace"
+            },
+            "description": "What each artifact ask of this stage counted, one entry per ask in `artifact_filter` order.\nEmpty, and absent on the wire, for a stage that asks nothing.\n\n**This is where an empty `find-resources-with` stage says why.** An empty selection that\nasked artifacts is one of three things — nothing in what you can see is governed by the\nshape; some is and none matched; or the ask narrowed by verdict state and reconciliation has\nnot reached the rows — and the per-ask population tells them apart (spec\n`2026-10-19-asking-artifacts-by-what-they-are` §4.5). See [`ArtifactAskPopulation`] for what\nis counted.\n\nIt describes the stage's INPUT, not its output: no entry is a quantity, and none orders\nanything. A stage that refused, or that runs downstream of one, carries no entries."
           },
           "disclosed_regions": {
             "type": "array",

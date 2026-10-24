@@ -124,6 +124,8 @@ searches inside them:
   not check under `shapes_not_checked`; the server checks every ask before anything runs.
 - **A refused ask teaches as data.** Under the JSON output format, `temper query` prints the
   refusals in the error payload's `details.refusals`, each with its `reason` and `teaches`.
+- **An empty selection explains itself in the trace.** Its `trace.stages` entry carries
+  `artifact_asks`, one per ask in filter order (below).
 
 ## Read the trace, not just the hits
 
@@ -145,6 +147,24 @@ counted here.
 
 `input_unusable` counts ids the act could not use, for any reason — invisible, nonexistent and
 malformed are deliberately one number.
+
+**A `find-resources-with` stage that asked artifacts carries `artifact_asks`**, one entry per ask
+in `artifact_filter` order: its `position`, the `shape_id` and `shape_version` it was validated
+against, the version `in_force` when the statement ran (`null` if you cannot read the shape's home
+now), and the `population` it counted. That is where an empty selection says why:
+
+- **all zeros** — nothing governed by the shape is in what you can see;
+- **counts above zero, `matched: 0`** — governed artifacts exist and none satisfied the ask;
+- **`matched` above zero on an empty stage** — matches exist, and something else excluded their
+  resources: another ask (asks AND on one resource), or the stage's `resource_filter`, which the
+  population does not apply;
+- **`declared_not_yet_checked` large beside a narrow answer** — you narrowed by `shape_states` and
+  the validation sweep has not reached those artifacts. The by-state counts never apply your
+  `shape_states`; `matched` applies the whole ask.
+
+The counts are of artifacts, not resources, and each ask's are its own — two asks' counts do not
+add up or intersect into the stage's `produced_ids`. They describe the stage's input, so they order
+nothing.
 
 **`extent` and `terms_applied` are on every stage's trace too, and they are the ones that catch a
 silent truncation.** `terms_applied` is the page the stage actually ran — your `limit` clamped to the

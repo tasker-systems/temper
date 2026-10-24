@@ -17,6 +17,75 @@
       ],
       "type": "object"
     },
+    "ArtifactAskPopulation": {
+      "description": "The population one artifact ask counted, by shape state, and how many of it matched.\n\n**What is counted.** Every count ranges over the ask's counted set (spec\n`2026-10-19-asking-artifacts-by-what-they-are` §2.3): the live artifacts its shape's lineage\ngoverns — the shape's home and family — on resources you can see that have finished ingesting,\nwhile you can read the shape's home. Nothing outside that set moves a count.\n\n- **The three by-state counts apply the ask's `intent` but not its `shape_states`.** An ask\n  narrowed to `declared_satisfied` while reconciliation is behind still counts its\n  `declared_not_yet_checked` rows here, so a small answer reads as lag rather than absence.\n  An artifact is in the population by governance, never by having a verdict.\n- **`matched` applies the whole ask**: its intent, its `shape_states` and every predicate, each\n  holding of one artifact.\n- **Both ignore the stage's `resource_filter`.** The counted set is the shape's, not the stage's,\n  so `matched > 0` beside an empty stage is possible and meaningful: matching artifacts exist on\n  resources the stage's other narrowings excluded.\n- **Counts of different asks do not combine.** A stage's asks AND together on one resource, and\n  each ask counts its own population, so neither the sum nor the minimum of two asks' `matched`\n  is the number of resources the stage selected.\n\nCounts are of artifacts, not resources.",
+      "properties": {
+        "declared_not_satisfied": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "declared_not_yet_checked": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "declared_satisfied": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "matched": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "declared_satisfied",
+        "declared_not_satisfied",
+        "declared_not_yet_checked",
+        "matched"
+      ],
+      "type": "object"
+    },
+    "ArtifactAskTrace": {
+      "description": "One artifact ask as a stage ran it: which ask, which shape version it was validated against,\nwhich version is in force now, and the population it counted.",
+      "properties": {
+        "in_force": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ShapeInForce"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The live version of the shape's lineage — its home and family — when the statement ran.\nIt differs from `shape_id`/`shape_version` when the shape was amended after validation; the\npopulation still ranges over the lineage, so it does not empty when that happens.\n\n`None` when the shape's home is not readable to you at execution, or the shape no longer\nexists. The population is then all zeros: nothing was counted under a shape you cannot read."
+        },
+        "population": {
+          "$ref": "#/$defs/ArtifactAskPopulation"
+        },
+        "position": {
+          "description": "The ask's position in the stage's `artifact_filter`, from 0.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "shape_id": {
+          "description": "The shape the ask named, and the version of it the plan was validated against.",
+          "format": "uuid",
+          "type": "string"
+        },
+        "shape_version": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "position",
+        "shape_id",
+        "shape_version",
+        "population"
+      ],
+      "type": "object"
+    },
     "Extent": {
       "description": "Whether anything remains BEYOND what the caller received.\n\nNOT a total. A total costs a second query — the standing tax of pagination — and across a chain\nthat tax is paid per stage; for a whole composition it is not even well-defined, because each\nstage's output is the next stage's domain. `Partial` is answerable with one more page.\n\nThis is what `every-bound-a-read-applies-is-visible-in-its-answer` actually asks for: the\nability to distinguish \"this is everything\" from \"this is some of it\".\n\n# It answers about the FAR edge of the page, never the near one\n\n`[clarified — 2026-08-17, Pete]` The opening line read *\"Whether the caller received everything\nthat matched\"*, and `Complete` read *\"Everything that matched is here\"*. Under an `offset` those\nare false, and were already false for the find acts before `follow-from` joined them: a stage\nasking `{limit: 50, offset: 60}` of a 60-row set produces nothing, so `produced < limit` and the\nextent is `Complete` — while sixty rows matched and none came back.\n\nThat is not a miscomputation, it is the question being narrower than the old sentence claimed.\nThe bound this reports against is the LIMIT, so it says *\"the page was not cut off at its far\nedge\"*. What an `offset` skipped is disclosed by the offset itself, in `terms_applied`, and is\nnot folded in here, because folding it in would require the total this type exists to avoid.\n\n**So `Complete` means \"ask no further\", not \"you hold the whole set\".** The two coincide exactly\nwhen no offset was applied, which is the common case and the reason the loose reading survived\nthis long.",
       "oneOf": [
@@ -414,6 +483,25 @@
       ],
       "type": "object"
     },
+    "ShapeInForce": {
+      "description": "A shape version by id: the live row of a lineage at the moment a statement read it.",
+      "properties": {
+        "shape_id": {
+          "description": "A `kb_data_artifact_shapes.id` value — one declared JSON Schema governing a data-artifact\nfamily within a single home (spec: data-artifact shape registry, 2026-08-21).",
+          "format": "uuid",
+          "type": "string"
+        },
+        "shape_version": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "shape_id",
+        "shape_version"
+      ],
+      "type": "object"
+    },
     "StageDisposition": {
       "description": "How a single stage resolved. CLOSED — adding a variant is a breaking change (design §6.1).",
       "oneOf": [
@@ -524,6 +612,13 @@
         }
       ],
       "description": "The act vocabulary. Asker-shaped, not mechanism-shaped: an act names what the asker holds, and\nthe mechanic currently serving it is evidence rather than identity.\n\nOPEN discriminator — adding an act is additive."
+    },
+    "artifact_asks": {
+      "description": "What each artifact ask of this stage counted, one entry per ask in `artifact_filter` order.\nEmpty, and absent on the wire, for a stage that asks nothing.\n\n**This is where an empty `find-resources-with` stage says why.** An empty selection that\nasked artifacts is one of three things — nothing in what you can see is governed by the\nshape; some is and none matched; or the ask narrowed by verdict state and reconciliation has\nnot reached the rows — and the per-ask population tells them apart (spec\n`2026-10-19-asking-artifacts-by-what-they-are` §4.5). See [`ArtifactAskPopulation`] for what\nis counted.\n\nIt describes the stage's INPUT, not its output: no entry is a quantity, and none orders\nanything. A stage that refused, or that runs downstream of one, carries no entries.",
+      "items": {
+        "$ref": "#/$defs/ArtifactAskTrace"
+      },
+      "type": "array"
     },
     "disclosed_regions": {
       "default": [],

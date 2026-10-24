@@ -6,8 +6,9 @@
 //!
 //! The SQL's own witnesses, conjunct by conjunct, are `temper-substrate`'s
 //! `find_resources_with_artifact_asks.rs`; this file holds what only the pipeline can show: that
-//! the compiled statement answers with the resources owning matching data, and that a shape
-//! amended between `prepare` and `run_composition` changes nothing about the answer.
+//! the compiled statement answers with the resources owning matching data, that a shape amended
+//! between `prepare` and `run_composition` changes nothing about the answer, and that the selection's
+//! trace entry carries what each of its asks counted, assembled from the seal and the statement.
 
 use std::collections::BTreeSet;
 
@@ -17,9 +18,9 @@ use temper_core::types::artifact_ask::{ArtifactAsk, ArtifactPredicate};
 use temper_core::types::ids::ShapeId;
 use temper_core::types::query::filter::PropertyOp;
 use temper_core::types::query::{
-    shapes_to_load, ActInvocation, ActName, Composition, Intention, OutcomeDeclaration,
-    QueryResponse, RefusalReason, ReturnSpec, StageInput, StageName, StageNode, StageOutput,
-    StageRelation,
+    shapes_to_load, ActInvocation, ActName, ArtifactAskPopulation, Composition, Intention,
+    OutcomeDeclaration, QueryResponse, RefusalReason, ReturnSpec, ShapeInForce, StageInput,
+    StageName, StageNode, StageOutput, StageRelation, StageTrace,
 };
 use temper_services::backend::query_read::{prepare, run_composition};
 use temper_services::services::shape_loader;
@@ -162,9 +163,30 @@ async fn world(pool: &PgPool) -> World {
     w
 }
 
+/// An ask of `shape` that `unit` contains `value`.
+fn unit_is(shape: Uuid, value: &str) -> ArtifactAsk {
+    ArtifactAsk {
+        shape: ShapeId::from(shape),
+        predicates: vec![ArtifactPredicate {
+            path: vec!["unit".to_string()],
+            op: PropertyOp::Contains {
+                values: vec![json!(value)],
+            },
+        }],
+        intent: vec![],
+        include_folded: false,
+        shape_states: vec![],
+    }
+}
+
 /// A selection asking `unit` contains `"ms"` of `shape`, piped into a `find-exact` over the
 /// bodies, which is returned — a selection orders nothing and is not returnable itself.
 fn asking_plan(shape: Uuid) -> Composition {
+    plan_asking(vec![unit_is(shape, "ms")])
+}
+
+/// A selection asking `asks`, piped into a returned `find-exact` over the bodies.
+fn plan_asking(asks: Vec<ArtifactAsk>) -> Composition {
     let sel = StageName::parse("sel").unwrap();
     let hits = StageName::parse("hits").unwrap();
     Composition {
@@ -184,18 +206,7 @@ fn asking_plan(shape: Uuid) -> Composition {
                 resource_filter: None,
                 edge_filter: None,
                 properties: vec![],
-                artifact_filter: vec![ArtifactAsk {
-                    shape: ShapeId::from(shape),
-                    predicates: vec![ArtifactPredicate {
-                        path: vec!["unit".to_string()],
-                        op: PropertyOp::Contains {
-                            values: vec![json!("ms")],
-                        },
-                    }],
-                    intent: vec![],
-                    include_folded: false,
-                    shape_states: vec![],
-                }],
+                artifact_filter: asks,
             }),
             StageNode::Act(ActInvocation {
                 name: hits,
@@ -229,6 +240,15 @@ async fn shapes_for(
     shape_loader::load(pool, principal, &ids)
         .await
         .expect("the loader reads")
+}
+
+/// The selection stage's trace entry.
+fn sel_trace(r: &QueryResponse) -> &StageTrace {
+    r.trace
+        .stages
+        .iter()
+        .find(|t| t.stage == StageName::parse("sel").unwrap())
+        .expect("the selection is traced")
 }
 
 fn returned(r: &QueryResponse) -> BTreeSet<Uuid> {
@@ -265,6 +285,14 @@ async fn a_composition_asking_artifacts_answers_with_the_resources_owning_matchi
 /// The control shows the amendment took: preparing the same plan afresh now refuses
 /// `shape_superseded`. Bites a population keyed on "resolves to this id" rather than the row's
 /// home and family: the run after the amendment answers nothing.
+///
+/// **The trace says both versions.** The selection's one entry names the version the plan was
+/// validated against (the first) and the version in force when it ran (the amendment, version 2),
+/// and its population is not emptied by the amendment: both artifacts are still counted, now
+/// unchecked against the new version, and R1's still matches. Bites the entry's validated version
+/// read from the population row instead of the seal (in `query_read::artifact_ask_traces`,
+/// `shape_version: ask.shape().shape_version` → `shape_version:
+/// row.in_force_shape_version.unwrap_or_default()`): it reports 2 as validated.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_shape_amended_after_prepare_answers_over_the_validated_population(pool: PgPool) {
     let w = world(&pool).await;
@@ -293,6 +321,32 @@ async fn a_shape_amended_after_prepare_answers_over_the_validated_population(poo
         "no stage refused: {:?}",
         r.trace.stages
     );
+    let entries = &sel_trace(&r).artifact_asks;
+    assert_eq!(entries.len(), 1, "one entry for the one ask: {entries:?}");
+    let e = &entries[0];
+    assert_eq!(
+        (e.position, e.shape_id, e.shape_version),
+        (0, ShapeId::from(w.shape), 1),
+        "the version the plan was validated against"
+    );
+    assert_eq!(
+        e.in_force,
+        Some(ShapeInForce {
+            shape_id: ShapeId::from(amended),
+            shape_version: 2,
+        }),
+        "the version in force when it ran"
+    );
+    assert_eq!(
+        e.population,
+        ArtifactAskPopulation {
+            declared_satisfied: 0,
+            declared_not_satisfied: 0,
+            declared_not_yet_checked: 2,
+            matched: 1,
+        },
+        "the lineage is still counted after the amendment"
+    );
 
     let fresh = shapes_for(&pool, w.owner, &c).await;
     let refusals = prepare(c, &fresh)
@@ -303,5 +357,102 @@ async fn a_shape_amended_after_prepare_answers_over_the_validated_population(poo
             .iter()
             .any(|r| r.reason == RefusalReason::ShapeSuperseded),
         "{refusals:?}"
+    );
+}
+
+/// A world whose R3 also owns an artifact in seconds: one in milliseconds (R1), two in seconds
+/// (R2, R3).
+async fn world_with_two_in_seconds(pool: &PgPool) -> World {
+    let w = world(pool).await;
+    writes::commit_data_artifact(
+        pool,
+        CommitDataArtifactParams {
+            resource: ResourceId::from(w.r3),
+            kind: MEASUREMENT,
+            kind_owner: Some(KindOwner::Profile(w.owner.uuid())),
+            intent: ArtifactIntent::Member,
+            precedence: 0.0,
+            content: &json!({ "unit": "s" }),
+            supersedes: &[],
+            emitter: w.emitter,
+        },
+    )
+    .await
+    .unwrap();
+    w
+}
+
+/// **The trace carries one entry per sealed ask, in filter order, end to end.** The selection
+/// asks `unit` contains `"ms"` and then `unit` contains `"s"`; through the real load, `prepare`
+/// and `run_composition`, its trace entry carries two entries at positions 0 and 1, each naming the
+/// shape and version it was validated against and in force, and each counting its own match — one
+/// artifact in milliseconds, two in seconds — over the same three-artifact population.
+///
+/// Bites the entries read in another order (`asks.iter().rev().enumerate()` in
+/// `query_read::artifact_ask_traces`): position 0 then carries the second ask's count.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn each_sealed_ask_is_traced_in_filter_order_through_the_whole_read_path(pool: PgPool) {
+    let w = world_with_two_in_seconds(&pool).await;
+    let c = plan_asking(vec![unit_is(w.shape, "ms"), unit_is(w.shape, "s")]);
+    let shapes = shapes_for(&pool, w.owner, &c).await;
+    let v = prepare(c, &shapes)
+        .await
+        .expect("both asks lie inside their shape");
+    let r = run_composition(&pool, w.owner, &v).await.expect("runs");
+
+    let entries = &sel_trace(&r).artifact_asks;
+    let got: Vec<(usize, i64)> = entries
+        .iter()
+        .map(|e| (e.position, e.population.matched))
+        .collect();
+    assert_eq!(got, vec![(0, 1), (1, 2)], "{entries:?}");
+    for e in entries {
+        assert_eq!((e.shape_id, e.shape_version), (ShapeId::from(w.shape), 1));
+        assert_eq!(
+            e.in_force,
+            Some(ShapeInForce {
+                shape_id: ShapeId::from(w.shape),
+                shape_version: 1,
+            })
+        );
+        assert_eq!(
+            e.population.declared_satisfied, 3,
+            "each ask counts the whole governed population: {e:?}"
+        );
+    }
+}
+
+/// **Per-ask counts do not combine.** The same two asks AND together on one resource, and no
+/// resource owns both an artifact in milliseconds and one in seconds, so the stage selects
+/// nothing — while the first ask matched one artifact and the second two. Neither their sum nor
+/// their minimum is what the stage produced; each ask reports its own population, and the empty
+/// stage is explained by the two counts side by side rather than by either one.
+///
+/// Bites a population arm whose `matched` is the stage's own output (in `query_plan.rs`'s
+/// `population_arms`, `c.matched FROM {call} AS c` written `(SELECT count(*) FROM "{s}")::bigint
+/// FROM {call} AS c`): both entries then report 0.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_stage_with_two_asks_reports_per_ask_counts_that_do_not_combine(pool: PgPool) {
+    let w = world_with_two_in_seconds(&pool).await;
+    let c = plan_asking(vec![unit_is(w.shape, "ms"), unit_is(w.shape, "s")]);
+    let shapes = shapes_for(&pool, w.owner, &c).await;
+    let v = prepare(c, &shapes)
+        .await
+        .expect("both asks lie inside their shape");
+    let r = run_composition(&pool, w.owner, &v).await.expect("runs");
+
+    let sel = sel_trace(&r);
+    assert_eq!(sel.produced_ids, 0, "no resource satisfies both asks");
+    let matched: Vec<i64> = sel
+        .artifact_asks
+        .iter()
+        .map(|e| e.population.matched)
+        .collect();
+    assert_eq!(matched, vec![1, 2], "each ask's own match");
+    assert_ne!(matched.iter().sum::<i64>(), sel.produced_ids);
+    assert_ne!(matched.iter().min().copied(), Some(sel.produced_ids));
+    assert!(
+        returned(&r).is_empty(),
+        "the empty stage bounds the next to nothing"
     );
 }

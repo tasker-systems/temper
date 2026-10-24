@@ -10,6 +10,7 @@ import type { Polarity } from "./graph";
 import type { RefusalTeaching } from "./artifact_ask";
 import type { ResourceSection } from "./ResourceSection";
 import type { ResourceView } from "./resource_view";
+import type { ShapeId } from "./ShapeId";
 
 /**
  * One act, declared.
@@ -237,6 +238,54 @@ export type ActRefusal = { reason: RefusalReason,
  * Human-readable, disclosed at the depth the asker's standing allows.
  */
 detail: string, };
+
+/**
+ * The population one artifact ask counted, by shape state, and how many of it matched.
+ *
+ * **What is counted.** Every count ranges over the ask's counted set (spec
+ * `2026-10-19-asking-artifacts-by-what-they-are` §2.3): the live artifacts its shape's lineage
+ * governs — the shape's home and family — on resources you can see that have finished ingesting,
+ * while you can read the shape's home. Nothing outside that set moves a count.
+ *
+ * - **The three by-state counts apply the ask's `intent` but not its `shape_states`.** An ask
+ *   narrowed to `declared_satisfied` while reconciliation is behind still counts its
+ *   `declared_not_yet_checked` rows here, so a small answer reads as lag rather than absence.
+ *   An artifact is in the population by governance, never by having a verdict.
+ * - **`matched` applies the whole ask**: its intent, its `shape_states` and every predicate, each
+ *   holding of one artifact.
+ * - **Both ignore the stage's `resource_filter`.** The counted set is the shape's, not the stage's,
+ *   so `matched > 0` beside an empty stage is possible and meaningful: matching artifacts exist on
+ *   resources the stage's other narrowings excluded.
+ * - **Counts of different asks do not combine.** A stage's asks AND together on one resource, and
+ *   each ask counts its own population, so neither the sum nor the minimum of two asks' `matched`
+ *   is the number of resources the stage selected.
+ *
+ * Counts are of artifacts, not resources.
+ */
+export type ArtifactAskPopulation = { declared_satisfied: bigint, declared_not_satisfied: bigint, declared_not_yet_checked: bigint, matched: bigint, };
+
+/**
+ * One artifact ask as a stage ran it: which ask, which shape version it was validated against,
+ * which version is in force now, and the population it counted.
+ */
+export type ArtifactAskTrace = { 
+/**
+ * The ask's position in the stage's `artifact_filter`, from 0.
+ */
+position: number, 
+/**
+ * The shape the ask named, and the version of it the plan was validated against.
+ */
+shape_id: ShapeId, shape_version: number, 
+/**
+ * The live version of the shape's lineage — its home and family — when the statement ran.
+ * It differs from `shape_id`/`shape_version` when the shape was amended after validation; the
+ * population still ranges over the lineage, so it does not empty when that happens.
+ *
+ * `None` when the shape's home is not readable to you at execution, or the shape no longer
+ * exists. The population is then all zeros: nothing was counted under a shape you cannot read.
+ */
+in_force: ShapeInForce | null, population: ArtifactAskPopulation, };
 
 /**
  * A bound term. CLOSED, and each term has exactly one meaning on every read: `limit` is rows,
@@ -1054,6 +1103,11 @@ score: number,
 score_present: boolean | null, };
 
 /**
+ * A shape version by id: the live row of a lineage at the moment a statement read it.
+ */
+export type ShapeInForce = { shape_id: ShapeId, shape_version: number, };
+
+/**
  * How a single stage resolved. CLOSED — adding a variant is a breaking change (design §6.1).
  */
 export type StageDisposition = "answered" | "empty" | "withheld" | "refused";
@@ -1396,7 +1450,22 @@ terms_applied: { [key in BoundTerm]?: bigint }, narrowed_by: Array<NarrowedBy>,
  * disagreeing copies would leave a reader unable to tell which was right. One definition
  * (`disclosed_regions_for`), read twice.
  */
-disclosed_regions: Array<RegionDisclosure>, };
+disclosed_regions: Array<RegionDisclosure>, 
+/**
+ * What each artifact ask of this stage counted, one entry per ask in `artifact_filter` order.
+ * Empty, and absent on the wire, for a stage that asks nothing.
+ *
+ * **This is where an empty `find-resources-with` stage says why.** An empty selection that
+ * asked artifacts is one of three things — nothing in what you can see is governed by the
+ * shape; some is and none matched; or the ask narrowed by verdict state and reconciliation has
+ * not reached the rows — and the per-ask population tells them apart (spec
+ * `2026-10-19-asking-artifacts-by-what-they-are` §4.5). See [`ArtifactAskPopulation`] for what
+ * is counted.
+ *
+ * It describes the stage's INPUT, not its output: no entry is a quantity, and none orders
+ * anything. A stage that refused, or that runs downstream of one, carries no entries.
+ */
+artifact_asks: Array<ArtifactAskTrace>, };
 
 /**
  * What a composition WOULD return, derived from the act declarations without running anything.

@@ -18,6 +18,9 @@ module Temper::Generated
   class StageTrace < ApiModelBase
     attr_accessor :act
 
+    # What each artifact ask of this stage counted, one entry per ask in `artifact_filter` order. Empty, and absent on the wire, for a stage that asks nothing.  **This is where an empty `find-resources-with` stage says why.** An empty selection that asked artifacts is one of three things — nothing in what you can see is governed by the shape; some is and none matched; or the ask narrowed by verdict state and reconciliation has not reached the rows — and the per-ask population tells them apart (spec `2026-10-19-asking-artifacts-by-what-they-are` §4.5). See [`ArtifactAskPopulation`] for what is counted.  It describes the stage's INPUT, not its output: no entry is a quantity, and none orders anything. A stage that refused, or that runs downstream of one, carries no entries.
+    attr_accessor :artifact_asks
+
     # Which regions a `survey` stage matched, and at what score. Empty for every other act.  **This is what `discloses: [Disclosure::Region]` MEANS**, and until 2026-08-20 it meant nothing: the declaration existed in the registry with no consumer anywhere, no `region_id` in the assembler, and no field here — so a caller was told which regions matched by nothing at all. A declaration describes the DEPLOYED system; this field is what makes that true for `survey`.  **The pair rule**: [`super::envelope::StageResult::disclosed_regions`] carries the same value, for the same reason as [`Self::extent`], [`Self::terms_applied`] and the input numbers — the trace covers every stage and the results only the returned ones, so disagreeing copies would leave a reader unable to tell which was right. One definition (`disclosed_regions_for`), read twice.
     attr_accessor :disclosed_regions
 
@@ -75,6 +78,7 @@ module Temper::Generated
     def self.attribute_map
       {
         :'act' => :'act',
+        :'artifact_asks' => :'artifact_asks',
         :'disclosed_regions' => :'disclosed_regions',
         :'disposition' => :'disposition',
         :'extent' => :'extent',
@@ -103,6 +107,7 @@ module Temper::Generated
     def self.openapi_types
       {
         :'act' => :'ActName',
+        :'artifact_asks' => :'Array<ArtifactAskTrace>',
         :'disclosed_regions' => :'Array<RegionDisclosure>',
         :'disposition' => :'StageDisposition',
         :'extent' => :'Extent',
@@ -144,6 +149,12 @@ module Temper::Generated
         self.act = attributes[:'act']
       else
         self.act = nil
+      end
+
+      if attributes.key?(:'artifact_asks')
+        if (value = attributes[:'artifact_asks']).is_a?(Array)
+          self.artifact_asks = value
+        end
       end
 
       if attributes.key?(:'disclosed_regions')
@@ -382,6 +393,7 @@ module Temper::Generated
       return true if self.equal?(o)
       self.class == o.class &&
           act == o.act &&
+          artifact_asks == o.artifact_asks &&
           disclosed_regions == o.disclosed_regions &&
           disposition == o.disposition &&
           extent == o.extent &&
@@ -404,7 +416,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [act, disclosed_regions, disposition, extent, input_ids, input_unusable, inputs, narrowed_by, produced_ids, refusal, stage, terms_applied].hash
+      [act, artifact_asks, disclosed_regions, disposition, extent, input_ids, input_unusable, inputs, narrowed_by, produced_ids, refusal, stage, terms_applied].hash
     end
 
     # Builds the object from hash

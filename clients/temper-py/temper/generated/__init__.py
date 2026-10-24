@@ -87,6 +87,8 @@ __all__ = [
     "AnchorVerdict",
     "AppendBlockPayload",
     "ArtifactAsk",
+    "ArtifactAskPopulation",
+    "ArtifactAskTrace",
     "ArtifactCommitRequest",
     "ArtifactCommitResponse",
     "ArtifactPredicate",
@@ -458,6 +460,7 @@ __all__ = [
     "ShapeDeclareRequest",
     "ShapeEmptiness",
     "ShapeHome",
+    "ShapeInForce",
     "ShapeSuccessor",
     "ShapeView",
     "ShareContextOutcome",
@@ -589,6 +592,8 @@ from temper.generated.models.anchor_shape import AnchorShape as AnchorShape
 from temper.generated.models.anchor_verdict import AnchorVerdict as AnchorVerdict
 from temper.generated.models.append_block_payload import AppendBlockPayload as AppendBlockPayload
 from temper.generated.models.artifact_ask import ArtifactAsk as ArtifactAsk
+from temper.generated.models.artifact_ask_population import ArtifactAskPopulation as ArtifactAskPopulation
+from temper.generated.models.artifact_ask_trace import ArtifactAskTrace as ArtifactAskTrace
 from temper.generated.models.artifact_commit_request import ArtifactCommitRequest as ArtifactCommitRequest
 from temper.generated.models.artifact_commit_response import ArtifactCommitResponse as ArtifactCommitResponse
 from temper.generated.models.artifact_predicate import ArtifactPredicate as ArtifactPredicate
@@ -960,6 +965,7 @@ from temper.generated.models.set_webhook_events_request import SetWebhookEventsR
 from temper.generated.models.shape_declare_request import ShapeDeclareRequest as ShapeDeclareRequest
 from temper.generated.models.shape_emptiness import ShapeEmptiness as ShapeEmptiness
 from temper.generated.models.shape_home import ShapeHome as ShapeHome
+from temper.generated.models.shape_in_force import ShapeInForce as ShapeInForce
 from temper.generated.models.shape_successor import ShapeSuccessor as ShapeSuccessor
 from temper.generated.models.shape_view import ShapeView as ShapeView
 from temper.generated.models.share_context_outcome import ShareContextOutcome as ShareContextOutcome

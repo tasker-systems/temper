@@ -4054,6 +4054,53 @@ export interface components {
              */
             shape_states?: string[];
         };
+        /**
+         * @description The population one artifact ask counted, by shape state, and how many of it matched.
+         *
+         *     **What is counted.** Every count ranges over the ask's counted set (spec
+         *     `2026-10-19-asking-artifacts-by-what-they-are` §2.3): the live artifacts its shape's lineage
+         *     governs — the shape's home and family — on resources you can see that have finished ingesting,
+         *     while you can read the shape's home. Nothing outside that set moves a count.
+         *
+         *     - **The three by-state counts apply the ask's `intent` but not its `shape_states`.** An ask
+         *       narrowed to `declared_satisfied` while reconciliation is behind still counts its
+         *       `declared_not_yet_checked` rows here, so a small answer reads as lag rather than absence.
+         *       An artifact is in the population by governance, never by having a verdict.
+         *     - **`matched` applies the whole ask**: its intent, its `shape_states` and every predicate, each
+         *       holding of one artifact.
+         *     - **Both ignore the stage's `resource_filter`.** The counted set is the shape's, not the stage's,
+         *       so `matched > 0` beside an empty stage is possible and meaningful: matching artifacts exist on
+         *       resources the stage's other narrowings excluded.
+         *     - **Counts of different asks do not combine.** A stage's asks AND together on one resource, and
+         *       each ask counts its own population, so neither the sum nor the minimum of two asks' `matched`
+         *       is the number of resources the stage selected.
+         *
+         *     Counts are of artifacts, not resources.
+         */
+        ArtifactAskPopulation: {
+            /** Format: int64 */
+            declared_not_satisfied: number;
+            /** Format: int64 */
+            declared_not_yet_checked: number;
+            /** Format: int64 */
+            declared_satisfied: number;
+            /** Format: int64 */
+            matched: number;
+        };
+        /**
+         * @description One artifact ask as a stage ran it: which ask, which shape version it was validated against,
+         *     which version is in force now, and the population it counted.
+         */
+        ArtifactAskTrace: {
+            in_force?: components["schemas"]["ShapeInForce"] | null;
+            population: components["schemas"]["ArtifactAskPopulation"];
+            /** @description The ask's position in the stage's `artifact_filter`, from 0. */
+            position: number;
+            /** @description The shape the ask named, and the version of it the plan was validated against. */
+            shape_id: components["schemas"]["ShapeId"];
+            /** Format: int32 */
+            shape_version: number;
+        };
         /** @description Request body for `POST /api/resources/{id}/artifacts` — commit one data artifact. */
         ArtifactCommitRequest: components["schemas"]["ActInput"] & {
             /** @description The structured payload as JSON. Hashed and stored verbatim — the hash is the proof. */
@@ -10344,6 +10391,12 @@ export interface components {
          *     family within a single home (spec: data-artifact shape registry, 2026-08-21).
          */
         ShapeId: string;
+        /** @description A shape version by id: the live row of a lineage at the moment a statement read it. */
+        ShapeInForce: {
+            shape_id: components["schemas"]["ShapeId"];
+            /** Format: int32 */
+            shape_version: number;
+        };
         /** @description The version in force after a fold: the live row at the same home and family. */
         ShapeSuccessor: {
             shape_id: components["schemas"]["ShapeId"];
@@ -10724,6 +10777,21 @@ export interface components {
          */
         StageTrace: {
             act: components["schemas"]["ActName"];
+            /**
+             * @description What each artifact ask of this stage counted, one entry per ask in `artifact_filter` order.
+             *     Empty, and absent on the wire, for a stage that asks nothing.
+             *
+             *     **This is where an empty `find-resources-with` stage says why.** An empty selection that
+             *     asked artifacts is one of three things — nothing in what you can see is governed by the
+             *     shape; some is and none matched; or the ask narrowed by verdict state and reconciliation has
+             *     not reached the rows — and the per-ask population tells them apart (spec
+             *     `2026-10-19-asking-artifacts-by-what-they-are` §4.5). See [`ArtifactAskPopulation`] for what
+             *     is counted.
+             *
+             *     It describes the stage's INPUT, not its output: no entry is a quantity, and none orders
+             *     anything. A stage that refused, or that runs downstream of one, carries no entries.
+             */
+            artifact_asks?: components["schemas"]["ArtifactAskTrace"][];
             /**
              * @description Which regions a `survey` stage matched, and at what score. Empty for every other act.
              *

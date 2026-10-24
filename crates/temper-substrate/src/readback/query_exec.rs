@@ -1,4 +1,4 @@
-//! Run a [`CompiledQuery`] and hand back its two row classes, typed.
+//! Run a [`CompiledQuery`] and hand back its three row classes, typed.
 //!
 //! This is the third runtime-`sqlx` class in this module, and it inherits the second's reason: the
 //! statement text is assembled at runtime because the DAG shape is not known at compile time, so
@@ -21,8 +21,38 @@ use temper_core::types::query::PlanRefusal;
 
 use super::query_plan::{CompiledQuery, QueryBind};
 
-/// The literal every hit row carries in `row_class`.
+/// The literals the compiler writes into `row_class`, one per class. Any other value is an error,
+/// never a default class: see [`RowClass::parse`].
 const HIT: &str = "hit";
+const TALLY: &str = "tally";
+const POPULATION: &str = "population";
+
+/// Which of the three row classes one result row is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RowClass {
+    Hit,
+    Tally,
+    Population,
+}
+
+impl RowClass {
+    /// The class `row_class` names — or an error, for a value the compiler does not write.
+    ///
+    /// **An unknown class is not a tally.** Reading it as one would turn a row the executor does not
+    /// understand into a stage's disclosure numbers, and a tally's numbers are exactly the ones a
+    /// reader trusts to say a stage was `empty`. A compiler that grows a class the executor has not
+    /// been taught fails here, loudly, rather than answering with that row misread.
+    fn parse(row_class: &str) -> Result<Self> {
+        match row_class {
+            HIT => Ok(Self::Hit),
+            TALLY => Ok(Self::Tally),
+            POPULATION => Ok(Self::Population),
+            other => Err(anyhow::anyhow!(
+                "compiler/executor contradiction: unknown row class `{other}`"
+            )),
+        }
+    }
+}
 
 /// One row of a returned stage: membership plus the quantity its act ordered by.
 ///
@@ -73,12 +103,34 @@ pub struct TallyRow {
     pub unusable: i64,
 }
 
+/// What one artifact ask of one stage counted: one row per (stage, ask) the compiler emitted an arm
+/// for (`query_plan`'s `final_select`), read from the counts function's one row.
+///
+/// **Raw columns, typed at the assembler**, for the reason [`HitRow::via`] gives: this crate does not
+/// carry `temper-core`'s wire types through a column.
+#[derive(Debug, Clone)]
+pub struct PopulationRow {
+    pub stage: String,
+    /// The ask's position in the stage's `artifact_filter`, from 0 — the element of the stage's
+    /// asks bind the arm read.
+    pub position: i64,
+    /// The live row of the asked shape's lineage, id and version. Both `None` when the shape's home
+    /// is not readable to the principal at execution, or the asked id names no row.
+    pub in_force_shape_id: Option<Uuid>,
+    pub in_force_shape_version: Option<i32>,
+    pub declared_satisfied: i64,
+    pub declared_not_satisfied: i64,
+    pub declared_not_yet_checked: i64,
+    pub matched: i64,
+}
+
 /// Everything one compiled statement returned, split by row class — **plus the refusals the
 /// compiler recorded**, which the rows themselves cannot express.
 #[derive(Debug, Clone, Default)]
 pub struct QueryRows {
     pub hits: Vec<HitRow>,
     pub tallies: Vec<TallyRow>,
+    pub populations: Vec<PopulationRow>,
     /// Carried through from [`CompiledQuery::refusals`], and **carried rather than left behind on
     /// purpose**.
     ///
@@ -110,9 +162,17 @@ pub struct StageIndex<'a> {
     rows: &'a QueryRows,
     tallies: HashMap<&'a str, &'a TallyRow>,
     refusals: HashMap<&'a str, &'a PlanRefusal>,
+    populations: HashMap<(&'a str, i64), &'a PopulationRow>,
 }
 
 impl<'a> StageIndex<'a> {
+    /// What one artifact ask of `stage` counted, by its position in the stage's `artifact_filter`.
+    /// `None` means no population row came back for it — which, for a stage whose asks ran, the
+    /// assembler treats as the contradiction [`Self::tally`]'s `None` is, and never as zeros.
+    pub fn population(&self, stage: &str, position: i64) -> Option<&'a PopulationRow> {
+        self.populations.get(&(stage, position)).copied()
+    }
+
     /// One stage's disclosure numbers. `None` means no tally row was found for the stage. The
     /// planner emits one tally arm per planned stage and each arm yields a row even over an
     /// empty CTE, so a producer-built index never carries `None` for a planned stage — the
@@ -160,10 +220,18 @@ impl QueryRows {
                 refusals.entry(stage.as_str()).or_insert(r);
             }
         }
+        let mut populations: HashMap<(&str, i64), &PopulationRow> =
+            HashMap::with_capacity(self.populations.len());
+        for p in &self.populations {
+            populations
+                .entry((p.stage.as_str(), p.position))
+                .or_insert(p);
+        }
         StageIndex {
             rows: self,
             tallies,
             refusals,
+            populations,
         }
     }
 
@@ -237,22 +305,32 @@ pub async fn execute(pool: &PgPool, compiled: &CompiledQuery) -> Result<QueryRow
         let row_class: String = row.try_get("row_class")?;
         // Switched on the literal the compiler emitted, never inferred from a NULL id. "This row
         // has no id" and "this row is a tally" are different claims, and deriving one from the
-        // other would make an act that legitimately produced a NULL id unreadable.
-        if row_class == HIT {
-            out.hits.push(HitRow {
+        // other would make an act that legitimately produced a NULL id unreadable. Every class is
+        // named, and a value naming none fails the statement's read (`RowClass::parse`).
+        match RowClass::parse(&row_class)? {
+            RowClass::Hit => out.hits.push(HitRow {
                 stage,
                 id: row.try_get("id")?,
                 kind: row.try_get("kind")?,
                 quantity: row.try_get("quantity")?,
                 via: row.try_get("via")?,
                 region: row.try_get("region")?,
-            });
-        } else {
-            out.tallies.push(TallyRow {
+            }),
+            RowClass::Tally => out.tallies.push(TallyRow {
                 stage,
                 produced: row.try_get("produced")?,
                 unusable: row.try_get("unusable")?,
-            });
+            }),
+            RowClass::Population => out.populations.push(PopulationRow {
+                stage,
+                position: row.try_get("ask_position")?,
+                in_force_shape_id: row.try_get("in_force_shape_id")?,
+                in_force_shape_version: row.try_get("in_force_shape_version")?,
+                declared_satisfied: row.try_get("declared_satisfied")?,
+                declared_not_satisfied: row.try_get("declared_not_satisfied")?,
+                declared_not_yet_checked: row.try_get("declared_not_yet_checked")?,
+                matched: row.try_get("matched")?,
+            }),
         }
     }
     Ok(out)
@@ -279,6 +357,7 @@ mod tests {
     fn the_index_answers_exactly_as_the_scans_it_replaces() {
         let stages = ["a", "b", "c", "d"];
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![],
             tallies: stages
                 .iter()

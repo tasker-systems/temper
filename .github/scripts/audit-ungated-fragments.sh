@@ -236,7 +236,29 @@ PREFIX='__temper_ungated_'
 #   governance relation's visibility join. A later arm that counts or pages artifacts composes this
 #   function rather than the relations beneath it, or it owes this file the answer to which of
 #   those conjuncts it re-applies.
+#
+# REVIEWED 2026-10-23 (`__temper_ungated_artifact_ask_counts`, migration 20261105000000, what each
+# artifact ask counted, beside the stage on the trace). The function-NAME set grows by one, the
+# SQL-file set by one, and the Rust half by one line in `query_plan.rs` (the
+# `EMIT_ARTIFACT_ASK_COUNTS` constant). The relation watch does not move: the body reads
+# `kb_data_artifact_shapes`, already watched.
+#   VERDICT: it takes `p_visible_ids` and hands it, unchanged, to the counted set
+#     (`__temper_ungated_artifact_ask_population`), which applies it; it reads no artifact itself.
+#     Its one caller is the compiled `/api/query` statement, which fills it from the hoisted
+#     `__temper_vis`, so a NULL set admits nothing there too.
+#   EMITTER: `emit_ungated_core_call`'s `CoreCall::Population` arm, which writes `VISIBLE_IDS` and
+#     `PRINCIPAL_BIND` itself. The variant's one field is the ask, `($n::jsonb -> k)`: element `k`
+#     of the stage's own asks bind, never an id set and never a second bind of the asks.
+#   RESIDUE: unchanged and accepted.
+#
+#   IT READS THE SHAPE REGISTRY BESIDE THE COUNTED SET, and that is the thing to check: the version
+#   in force is a lookup of the live row at the asked row's home and family, gated by
+#   `anchor_readable_by_profile(p_reader, home)` through COALESCE(..., false), so an unreadable home
+#   names no version. It never restates the counted set's conjuncts; every count is a FILTER over
+#   that function's rows. A later edit that counted artifacts here directly, or dropped the home
+#   check from the lookup, is the shape to refuse.
 read -r -d '' SQL_BASELINE <<'EOF' || true
+__temper_ungated_artifact_ask_counts
 __temper_ungated_artifact_ask_population
 __temper_ungated_find_exact
 __temper_ungated_find_resources_with
@@ -294,9 +316,16 @@ EOF
 #     takes BOTH — the others take only `VISIBLE_IDS` — because `wayfind_region_scores` applies
 #     its own region visibility by principal. The `PRINCIPAL_BIND` is the compiler's `$1`, not a
 #     second id set, so the one-emitter security property holds.
+#
+# REVIEWED 2026-10-23 (what each artifact ask counted, migration 20261105000000) — query_plan.rs
+# 5 -> 6: the `EMIT_ARTIFACT_ASK_COUNTS` constant, and nothing else. The population arms emit
+# through it and through `emit_ungated_core_call`'s `CoreCall::Population` arm, which fixes
+# `VISIBLE_IDS` and `PRINCIPAL_BIND` as every other arm does, so the count is still constants rather
+# than call sites. `validate/mod.rs` does not move: the counts function is no act's fragment, so
+# `CALLABLE_FRAGMENTS` does not name it.
 read -r -d '' RUST_BASELINE <<'EOF' || true
 6 crates/temper-core/src/types/query/validate/mod.rs
-5 crates/temper-substrate/src/readback/query_plan.rs
+6 crates/temper-substrate/src/readback/query_plan.rs
 EOF
 
 # The SQL half: ungated functions DEFINED in migrations. A definition is what creates the hazard; a
@@ -586,6 +615,8 @@ sql_relations_current() {
 #   SQL_BASELINE entry of the same date. The widened core's verdict is unchanged: `p_visible_ids` is
 #   still its first argument and its only authorization input, and the new `p_artifact_asks` is a
 #   narrowing whose NULL narrows nothing, the opposite polarity from the verdict.
+# Reviewed 2026-10-23, migration 20261105000000: it DEFINES the counts function. The review is the
+#   SQL_BASELINE entry of the same date; this list moves for the same reason.
 read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260808000030_composable_find_family.sql
 20260810000010_anchor_readability_both_kinds.sql
@@ -604,6 +635,7 @@ read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260828000050_follow_from_depth_clamp.sql
 20261103000000_artifact_ask_relations.sql
 20261104000000_find_resources_with_artifact_asks.sql
+20261105000000_artifact_ask_population_counts.sql
 EOF
 
 # ── THE RELATION WATCH — derived from what the cores READ, not what names them ──
