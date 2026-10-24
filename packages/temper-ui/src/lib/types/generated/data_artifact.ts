@@ -3,8 +3,8 @@ import type { ConfidenceBand } from "./ConfidenceBand";
 import type { CorrelationId } from "./CorrelationId";
 import type { DataArtifactId } from "./DataArtifactId";
 import type { InvocationId } from "./InvocationId";
-import type { JsonValue } from "./serde_json/JsonValue";
 import type { ResourceId } from "./ResourceId";
+import type { JsonValue } from "./serde_json/JsonValue";
 
 /**
  * Request body for `POST /api/resources/{id}/artifacts` — commit one data artifact.
@@ -17,7 +17,7 @@ kind: string,
 /**
  * Override the namespace half of the family name. Omit to let the server default it.
  */
-kind_owner: KindOwnerInput | null, 
+kind_owner?: KindOwnerInput | null, 
 /**
  * Selection intent: `"current"`, `"member"`, or `"pinned"`.
  */
@@ -33,39 +33,39 @@ content: JsonValue,
 /**
  * Artifacts this one replaces, named explicitly by the writer. Empty = replaces nothing.
  */
-supersedes: Array<DataArtifactId>, 
+supersedes?: Array<DataArtifactId>, 
 /**
  * The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a
  * correlation aid, never a substitute for authn/authz.
  */
-invocation_id: InvocationId | null, 
+invocation_id?: InvocationId | null, 
 /**
  * The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-
  * minted, provenance-only. Rides independently of `invocation_id` and of authorship.
  */
-correlation_id: CorrelationId | null, 
+correlation_id?: CorrelationId | null, 
 /**
  * Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.
  */
-reasoning: string | null, 
+reasoning?: string | null, 
 /**
  * Graded self-assessed confidence band. Required whenever any other authorship field is set.
  */
-confidence: ConfidenceBand | null, 
+confidence?: ConfidenceBand | null, 
 /**
  * Structured rationale for the act. Authorship field — requires `confidence`. At most 16384
  * bytes.
  */
-rationale: string | null, 
+rationale?: string | null, 
 /**
  * The persona/role the author acted as. Authorship field — requires `confidence`. At most 256
  * bytes.
  */
-persona: string | null, 
+persona?: string | null, 
 /**
  * The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.
  */
-model: string | null, };
+model?: string | null, };
 
 /**
  * Response body for `POST /api/resources/{id}/artifacts` — the committed artifact's ID
@@ -119,7 +119,7 @@ shape_state: string, is_folded: boolean, created: string,
 /**
  * The content payload. `null` when the artifact was committed with no bytes.
  */
-content: JsonValue | null, };
+content?: JsonValue | null, };
 
 /**
  * The namespace half of the family name — mirrors `temper_substrate::payloads::KindOwner`

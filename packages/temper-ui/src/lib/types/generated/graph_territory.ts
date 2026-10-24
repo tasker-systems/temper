@@ -9,27 +9,27 @@ export type Bridge = { source_territory: string, target_territory: string, edge_
  * A high-degree standalone node surfaced where its cogmap home has no region
  * (sparsity rule). `doc_type` is optional/free-form.
  */
-export type OrphanNode = { id: string, title: string, doc_type: string | null, degree: number, anchor_id: string, 
+export type OrphanNode = { id: string, title: string, doc_type?: string | null, degree: number, anchor_id: string, 
 /**
  * Human name of the home cogmap (`kb_cogmaps.name`), for the sparse territory label.
  */
-anchor_label: string | null, };
+anchor_label?: string | null, };
 
 /**
  * A tinted, sized territory (Tier-0 aggregate). `salience` sizes regions;
  * `member_count` sizes contexts/cogmaps.
  */
-export type Territory = { id: string, kind: TerritoryKind, label: string | null, 
+export type Territory = { id: string, kind: TerritoryKind, label?: string | null, 
 /**
  * Always over the members **this caller can read** (spec §D5) — for every territory kind. The
  * container/context producers derived it that way already; since D5 the region producer does too.
  */
-member_count: number, salience: number | null, 
+member_count: number, salience?: number | null, 
 /**
  * Region content cohesion (`content_cohesion`: mean member-to-centroid cosine).
  * Sizes nothing — surfaced in the region hover card. None for contexts/cogmaps.
  */
-coherence: number | null, 
+coherence?: number | null, 
 /**
  * Cogmap/context this territory belongs to (for drill-in addressing).
  */

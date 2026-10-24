@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { AtlasEdge, AtlasNode } from '$lib/types/generated/graph_atlas';
 import { atlasNeighbors } from './neighbors';
 
-const node = (o: Partial<AtlasNode>): AtlasNode => ({
+const node = (o: Partial<Required<AtlasNode>>): Required<AtlasNode> => ({
 	id: 'x',
 	title: 'X',
 	doc_type: null,
@@ -16,7 +16,7 @@ const node = (o: Partial<AtlasNode>): AtlasNode => ({
 	updated: null,
 	...o,
 });
-const edge = (o: Partial<AtlasEdge>): AtlasEdge => ({
+const edge = (o: Partial<Required<AtlasEdge>>): Required<AtlasEdge> => ({
 	id: 'e',
 	source: 's',
 	target: 't',

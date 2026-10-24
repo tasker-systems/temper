@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 import { forceNeighborhood } from './forceNeighborhood';
 
 // Beat D: the radial force pulls context-resources (builder axis) to an outer ring
@@ -23,7 +22,7 @@ function edge(id: string, source: string, target: string) {
 
 describe('forceNeighborhood radial-by-home', () => {
 	it('settles context-resources farther from center than facets', () => {
-		const subgraph: AtlasSubgraph = {
+		const subgraph = {
 			nodes: [
 				node('f1', 'cogmap'),
 				node('f2', 'cogmap'),
@@ -32,7 +31,7 @@ describe('forceNeighborhood radial-by-home', () => {
 			],
 			// each facet derived_from a context doc; facets linked to each other
 			edges: [edge('e1', 'f1', 'f2'), edge('e2', 'f1', 'c1'), edge('e3', 'f2', 'c2')],
-		} as AtlasSubgraph;
+		};
 
 		const size = { width: 800, height: 800 };
 		const { nodes } = forceNeighborhood(subgraph, ['f1', 'f2'], size);
@@ -49,7 +48,7 @@ describe('forceNeighborhood radial-by-home', () => {
 
 	// A deterministic subgraph with BOTH homes present, so the coreHome tests can
 	// compare the mean radius of each home. No randomness — the ring init is fixed.
-	const mixedSubgraph: AtlasSubgraph = {
+	const mixedSubgraph = {
 		nodes: [
 			node('f1', 'cogmap'),
 			node('f2', 'cogmap'),
@@ -57,7 +56,7 @@ describe('forceNeighborhood radial-by-home', () => {
 			node('c2', 'context'),
 		],
 		edges: [edge('e1', 'f1', 'f2'), edge('e2', 'f1', 'c1'), edge('e3', 'f2', 'c2')],
-	} as AtlasSubgraph;
+	};
 
 	it('inverts the radial when coreHome is context', () => {
 		const laid = forceNeighborhood(mixedSubgraph, [], {

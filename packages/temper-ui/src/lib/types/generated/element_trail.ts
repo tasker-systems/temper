@@ -24,14 +24,14 @@ occurred_at: string,
 /**
  * ConfidenceBand from event metadata, when present.
  */
-confidence: string | null, 
+confidence?: string | null, 
 /**
  * The batch/act correlation id the event ran under (`kb_events.correlation_id`) — the
  * key that pairs a receipt with the trail events it named. A batch act carries the
  * batch's id; an act that threaded no correlation self-roots and carries its OWN event
  * id. NULL only on rows predating correlation threading.
  */
-correlation_id: string | null, 
+correlation_id?: string | null, 
 /**
  * The event's replay-sufficient payload (kb_events.payload). Schemaless per
  * event-type; the UI renders it as an expandable key/value block. `resource_created`

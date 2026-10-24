@@ -51,34 +51,34 @@ reason: string | null,
  * The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a
  * correlation aid, never a substitute for authn/authz.
  */
-invocation_id: InvocationId | null, 
+invocation_id?: InvocationId | null, 
 /**
  * The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-
  * minted, provenance-only. Rides independently of `invocation_id` and of authorship.
  */
-correlation_id: CorrelationId | null, 
+correlation_id?: CorrelationId | null, 
 /**
  * Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.
  */
-reasoning: string | null, 
+reasoning?: string | null, 
 /**
  * Graded self-assessed confidence band. Required whenever any other authorship field is set.
  */
-confidence: ConfidenceBand | null, 
+confidence?: ConfidenceBand | null, 
 /**
  * Structured rationale for the act. Authorship field — requires `confidence`. At most 16384
  * bytes.
  */
-rationale: string | null, 
+rationale?: string | null, 
 /**
  * The persona/role the author acted as. Authorship field — requires `confidence`. At most 256
  * bytes.
  */
-persona: string | null, 
+persona?: string | null, 
 /**
  * The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.
  */
-model: string | null, };
+model?: string | null, };
 
 /**
  * Request body for `POST /api/resources/{id}/citation-audits`.

@@ -50,7 +50,7 @@ tracing = "0.1"
 # `sluggify` (crate::refs) NFKD-normalizes a title and drops combining marks before
 # folding to ASCII — the transliteration in issue #320.
 unicode-normalization = "0.1"
-ts-rs = { version = "10", features = [
+ts-rs = { version = "12", features = [
   "chrono-impl",
   "serde-json-impl",
   "uuid-impl"

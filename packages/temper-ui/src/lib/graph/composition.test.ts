@@ -38,7 +38,9 @@ const referentialIntegrity = (stages: StageNode[]) => {
 	expect(new Set(names).size, 'duplicate stage name').toBe(names.length);
 	for (const s of stages) {
 		const upstream =
-			'op' in s ? s.inputs : s.inputs.flatMap((i) => (i.from === 'upstream' ? [i.stage] : []));
+			'op' in s
+				? s.inputs
+				: (s.inputs ?? []).flatMap((i) => (i.from === 'upstream' ? [i.stage] : []));
 		for (const u of upstream) expect(names, `dangling reference to ${u}`).toContain(u);
 	}
 };
@@ -138,7 +140,7 @@ describe('the question entry', () => {
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) return;
 		for (const s of actsNamed(outcome.plan.composition.stages, 'survey')) {
-			expect(s.terms.regions).toBe(BigInt(REGIONS_PER_ANCHOR));
+			expect(s.terms?.regions).toBe(BigInt(REGIONS_PER_ANCHOR));
 		}
 	});
 
@@ -152,8 +154,8 @@ describe('the question entry', () => {
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) return;
 		const kinds = actsNamed(outcome.plan.composition.stages, 'survey').map((s) => {
-			const input = s.inputs[0];
-			if (input.from !== 'caller') throw new Error('a survey binds a caller-supplied anchor');
+			const input = s.inputs?.[0];
+			if (input?.from !== 'caller') throw new Error('a survey binds a caller-supplied anchor');
 			expect(input.as).toBe('bound');
 			expect(input.ids.ids).toHaveLength(1);
 			return input.ids.kind;
@@ -182,7 +184,7 @@ describe('the question entry', () => {
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) return;
 		const walk = actsNamed(outcome.plan.composition.stages, 'follow-from')[0];
-		expect(walk.terms.limit).toBe(BigInt(WALK_LIMIT));
+		expect(walk.terms?.limit).toBe(BigInt(WALK_LIMIT));
 	});
 });
 
@@ -202,7 +204,7 @@ describe('cross-kind reach', () => {
 
 		const boundKindOf = (stageName: string) => {
 			const stage = acts(stages).find((s) => s.name === stageName);
-			const input = stage?.inputs[0];
+			const input = stage?.inputs?.[0];
 			if (input?.from !== 'caller') throw new Error('expected a caller-bound anchor');
 			return input.ids.kind;
 		};

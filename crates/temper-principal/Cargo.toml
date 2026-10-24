@@ -29,7 +29,7 @@ name = "temper_principal"
 # instead would buy purity with drift between two hand-synced copies of the same contract.
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-ts-rs = { version = "10", optional = true }
+ts-rs = { version = "12", optional = true }
 utoipa = { version = "6", optional = true }
 
 [features]
