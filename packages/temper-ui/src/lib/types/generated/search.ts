@@ -12,7 +12,7 @@ export type ExactArm = { hits: Array<ExactHit>, reason: SearchReason,
 /**
  * One-liner explaining a non-`Ok` reason and suggesting a next step.
  */
-hint: string | null, 
+hint?: string | null, 
 /**
  * Are there matching hits beyond this page? The arm's own word, from the probe row it read
  * past the page — never inferred from `hits.len()` reaching the limit, which a page that ends
@@ -100,12 +100,12 @@ kind: SearchScope,
  * Candidate resources the scope admitted, when cheaply knowable. `None` for `global` and
  * `context`, whose corpus is not a bounded id-set at scope-resolution time.
  */
-size: bigint | null, };
+size?: bigint | null, };
 
 /**
  * The **wide** arm, its disposition, and whether its signal was available at all.
  */
-export type WideArm = { hits: Array<WideHit>, reason: SearchReason, hint: string | null, 
+export type WideArm = { hits: Array<WideHit>, reason: SearchReason, hint?: string | null, 
 /**
  * True when the server had to embed the query and could not — error, panic, or budget timeout.
  *
@@ -126,7 +126,7 @@ truncated: boolean,
  * `degraded` embed, or neither a query nor an embedding) or the server predates the field —
  * a reader must not take absence for [`WideDraw::Exhaustive`].
  */
-draw: WideDraw | null, };
+draw?: WideDraw | null, };
 
 /**
  * What the wide arm ranked its answer from.

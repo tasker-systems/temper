@@ -3,9 +3,8 @@ import type { BlobId } from "./BlobId";
 import type { BlobRelationEdgeDirection } from "./BlobRelationEdgeDirection";
 import type { ConfidenceBand } from "./ConfidenceBand";
 import type { CorrelationId } from "./CorrelationId";
-import type { EdgeKind } from "./graph";
 import type { InvocationId } from "./InvocationId";
-import type { Polarity } from "./graph";
+import type { EdgeKind, Polarity } from "./graph";
 
 /**
  * The response of `POST /api/blobs` — get-or-create on the content hash, PER-HOME (D2 as
@@ -72,34 +71,34 @@ peer_table: string, peer_id: string, edge_kind: EdgeKind, polarity: Polarity, la
  * The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a
  * correlation aid, never a substitute for authn/authz.
  */
-invocation_id: InvocationId | null, 
+invocation_id?: InvocationId | null, 
 /**
  * The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-
  * minted, provenance-only. Rides independently of `invocation_id` and of authorship.
  */
-correlation_id: CorrelationId | null, 
+correlation_id?: CorrelationId | null, 
 /**
  * Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.
  */
-reasoning: string | null, 
+reasoning?: string | null, 
 /**
  * Graded self-assessed confidence band. Required whenever any other authorship field is set.
  */
-confidence: ConfidenceBand | null, 
+confidence?: ConfidenceBand | null, 
 /**
  * Structured rationale for the act. Authorship field — requires `confidence`. At most 16384
  * bytes.
  */
-rationale: string | null, 
+rationale?: string | null, 
 /**
  * The persona/role the author acted as. Authorship field — requires `confidence`. At most 256
  * bytes.
  */
-persona: string | null, 
+persona?: string | null, 
 /**
  * The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.
  */
-model: string | null, };
+model?: string | null, };
 
 /**
  * Which end of the asserted edge the blob occupies. `blob_as_source` is the natural
@@ -178,7 +177,7 @@ export type BlobUploadFinalizeRequest = { expected_segments: number, expected_to
  * the ingest precedent's honest exemption). A mismatch refuses with the staging
  * kept, resumable — never silently committed.
  */
-expected_content_hash: string | null, };
+expected_content_hash?: string | null, };
 
 /**
  * The currently-landed segment set — the response of append and of the progress read

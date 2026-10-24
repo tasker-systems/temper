@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { AtlasEdge, AtlasNode, AtlasSubgraph } from '$lib/types/generated/graph_atlas';
+import type { AtlasEdge, AtlasNode } from '$lib/types/generated/graph_atlas';
 import { forceNeighborhood } from './forceNeighborhood';
 
-const node = (id: string, degree = 1): AtlasNode => ({
+const node = (id: string, degree = 1): Required<AtlasNode> => ({
 	id,
 	title: id,
 	doc_type: 'concept',
@@ -14,7 +14,7 @@ const node = (id: string, degree = 1): AtlasNode => ({
 	updated: null,
 	stage: null,
 });
-const edge = (source: string, target: string): AtlasEdge => ({
+const edge = (source: string, target: string): Required<AtlasEdge> => ({
 	id: `${source}-${target}`,
 	source,
 	target,
@@ -23,7 +23,7 @@ const edge = (source: string, target: string): AtlasEdge => ({
 	label: null,
 	weight: 1,
 });
-const graph = (nodes: AtlasNode[], edges: AtlasEdge[]): AtlasSubgraph => ({ nodes, edges });
+const graph = (nodes: Required<AtlasNode>[], edges: Required<AtlasEdge>[]) => ({ nodes, edges });
 
 describe('forceNeighborhood', () => {
 	it('positions every node and flags the seed(s)', () => {

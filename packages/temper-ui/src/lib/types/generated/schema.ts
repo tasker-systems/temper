@@ -26,7 +26,7 @@ required_fields: Array<string>,
  * Every field of this doc-type that carries a closed vocabulary, field name → values.
  * This is the answer to *"which states does this kind of work have?"*.
  */
-enum_fields: { [key in string]?: Array<string> }, example_managed_meta: JsonValue, };
+enum_fields: { [key in string]: Array<string> }, example_managed_meta: JsonValue, };
 
 /**
  * Summary of a document type — the row shape of the doc-type list.

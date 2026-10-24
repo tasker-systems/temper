@@ -19,12 +19,12 @@ cogmap_id: string,
  * The watermark now stored. `None` when the cogmap has never had one — which a boundary-only
  * advance (no `event_id`) does not change.
  */
-watermark: string | null, 
+watermark?: string | null, 
 /**
  * The boundary fingerprint now stored. Never `None` after a successful advance: the fallback
  * computes one when the caller supplies none, precisely so the boundary cannot stay unsnapshotted.
  */
-boundary_fingerprint: string | null, };
+boundary_fingerprint?: string | null, };
 
 /**
  * A resource-keyed job claimed for dispatch — the resource twin of [`ClaimedJob`]. The `Embed`
@@ -73,7 +73,7 @@ export type DispatchTickResponse = { claimed: Array<ClaimedJob>,
  * claimed job — echoed so the caller can assert its tick id survived, rather than assume it.
  * `None` when the header was absent or not a UUID (both self-root; neither is an error).
  */
-correlation_id: string | null, };
+correlation_id?: string | null, };
 
 /**
  * One drifted cogmap in a sweep result — the map plus its ingest delta since its own watermark.
@@ -87,7 +87,7 @@ cogmap_id: string,
 /**
  * The watermark the delta was computed against; `None` when the steward has never run for it.
  */
-watermark: string | null, 
+watermark?: string | null, 
 /**
  * Newly-created resources in the team's contexts since the watermark (the counted ingest signal).
  */
@@ -175,7 +175,7 @@ cogmap_id: string,
  * The watermark the delta was computed against (`kb_cogmaps.steward_watermark_event_id`);
  * `None` when the steward has never run for this cogmap (delta counts from the beginning).
  */
-watermark: string | null, 
+watermark?: string | null, 
 /**
  * Newly-created resources in the team's contexts since the watermark (the gated ingest signal).
  */
@@ -191,7 +191,7 @@ new_events: bigint,
  * the advance. Because `kb_events.id` is uuidv7 (its byte order is time order), the greatest
  * id in the window is the newest event.
  */
-max_event_id: string | null, 
+max_event_id?: string | null, 
 /**
  * The threshold `new_resources` was compared against (the caller's, or the default).
  */
@@ -211,7 +211,7 @@ exceeds_threshold: boolean,
  * record the boundary it actually processed. Carry this one; do not recompute or substitute
  * another read's, or a boundary move that happened in between is silently swallowed.
  */
-boundary_fingerprint: string | null, 
+boundary_fingerprint?: string | null, 
 /**
  * Whether the boundary changed since the fingerprint the cogmap has stored — i.e. contexts
  * entered or left the steward's scope without emitting a countable event. `true` when nothing

@@ -65,7 +65,7 @@ describe('chrome', () => {
 	});
 });
 
-const edge = (o: Partial<AtlasEdge>): AtlasEdge => ({
+const edge = (o: Partial<Required<AtlasEdge>>): Required<AtlasEdge> => ({
 	id: 'e',
 	source: 's',
 	target: 't',
