@@ -204,3 +204,142 @@ fn the_shape_pass_emits_exactly_these_reasons() {
          migrated into shape under a reason shape already raises."
     );
 }
+
+// ── The artifact asks the offline check reaches ────────────────────────────────────────────────
+//
+// `validate_shape` reaches two more modules than `shape.rs`: `validate/asks.rs` (the request caps,
+// through `check_forms`) and `artifact_ask/validate.rs` (each ask's form, through
+// `validate_ask_form`). Both modules ALSO hold refusals only the server raises — the scope conflict
+// in `asks.rs`, the shape steps and `include_folded` in `validate.rs` — because each module is one
+// definition shared by both passes. So guard two's per-file count cannot say which pass a site
+// belongs to, and the two guards below say what they can: guard one, that neither module can reach a
+// declaration; and a pinned count per module, each reason classed by the pass that raises it, so a
+// new refusal site in either module is a reviewed change. A site moving between an offline and a
+// server-only function inside one module, at the same count, is the remainder these cannot see;
+// `the_offline_check_refuses_an_asks_form_and_never_its_shape` (temper-core, `validate/mod.rs`)
+// pins that direction by behaviour for the cases that exist.
+
+const ASKS_SRC: &str = include_str!("../src/types/query/validate/asks.rs");
+const ASK_VALIDATE_SRC: &str = include_str!("../src/types/artifact_ask/validate.rs");
+
+/// A module's code before its test module, with `//` comment lines removed — the same crude
+/// stripping as [`shape_code`], and held to the same no-block-comments rule.
+fn production_code(src: &str) -> String {
+    src.lines()
+        .take_while(|l| !l.starts_with("#[cfg(test)]"))
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn reason_sites(code: &str) -> BTreeMap<&str, usize> {
+    let mut found: BTreeMap<&str, usize> = BTreeMap::new();
+    for (i, _) in code.match_indices("RefusalReason::") {
+        let tail = &code[i + "RefusalReason::".len()..];
+        let end = tail
+            .find(|c: char| !c.is_alphanumeric() && c != '_')
+            .unwrap_or(tail.len());
+        *found.entry(&tail[..end]).or_insert(0) += 1;
+    }
+    found
+}
+
+#[test]
+fn no_block_comments_in_the_ask_modules_the_offline_check_reaches() {
+    for (module, src) in [
+        ("validate/asks.rs", ASKS_SRC),
+        ("artifact_ask/validate.rs", ASK_VALIDATE_SRC),
+    ] {
+        assert!(
+            !production_code(src).contains("/*"),
+            "`{module}` gained a block comment; `production_code()` strips only `//` lines"
+        );
+    }
+}
+
+/// Guard one, for the ask modules: the form checks `validate_shape` runs consult no declaration.
+#[test]
+fn the_ask_modules_the_offline_check_reaches_reach_no_declaration() {
+    for (module, src) in [
+        ("validate/asks.rs", ASKS_SRC),
+        ("artifact_ask/validate.rs", ASK_VALIDATE_SRC),
+    ] {
+        let code = production_code(src);
+        for forbidden in [
+            "registry",
+            "declaration(",
+            "search_family",
+            "CALLABLE_FRAGMENTS",
+        ] {
+            assert!(
+                !code.contains(forbidden),
+                "`{module}` calls `{forbidden}` in code, and `validate_shape` reaches it. A refusal \
+                 that consults what this server has built cannot be raised by a client that does \
+                 not share its binary."
+            );
+        }
+    }
+}
+
+/// Guard two, for the ask modules: the reasons each emits and how many sites each, classed by the
+/// pass that raises it. OFFLINE sites are reached by `validate_shape` and the server alike; SERVER
+/// sites only through `AskSession::validate` or `validate_asks`, after shapes are loaded.
+#[test]
+fn the_ask_modules_emit_exactly_these_reasons() {
+    let asks: BTreeMap<&str, usize> = [
+        // SERVER: `check_scope` needs each admitted ask's shape home.
+        ("AskScopeConflict", 1),
+        // SERVER: `repeats_an_ask` compares the validated binds, which need the loaded shape.
+        ("DuplicateSetMember", 1),
+        // OFFLINE: the two request caps, `within_request_caps`.
+        ("TooManyFilterValues", 2),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(
+        reason_sites(&production_code(ASKS_SRC)),
+        asks,
+        "`validate/asks.rs`'s refusal sites moved. Class each new one as OFFLINE (reached by \
+         `check_forms`) or SERVER, and keep every capability fact out of the offline half."
+    );
+
+    let ask_validate: BTreeMap<&str, usize> = [
+        // OFFLINE: a repeated intent or state term (`resolve_terms`).
+        ("DuplicateSetMember", 1),
+        // OFFLINE: the path and value form (`well_formed`).
+        ("EmptyArtifactPath", 1),
+        ("EmptyContains", 1),
+        // OFFLINE ×2: the predicate and probe caps (`within_caps`). SERVER ×1: `include_folded`
+        // (`refuse_unserved`) — whether it is served is the server's capability, so it is never
+        // in the form check.
+        ("FilterNotApplicable", 3),
+        ("FilterStringTooLong", 1),
+        // SERVER: step 4, against the loaded shape.
+        ("OperatorOutsideShape", 1),
+        ("PathOutsideShape", 1),
+        // OFFLINE.
+        ("PropertyValueTooLarge", 1),
+        // SERVER: steps 1–3, the loader's outcomes (`ShapeLoad::loaded`, `not_askable`).
+        ("ShapeNotAskable", 1),
+        ("ShapeSchemaUncompilable", 2),
+        ("ShapeSuperseded", 2),
+        // OFFLINE ×2: path depth (`well_formed`), and a term list longer than its vocabulary
+        // (`resolve_terms`).
+        ("TooManyFilterValues", 2),
+        // OFFLINE: the term vocabularies (`INTENTS`, `SHAPE_STATES`).
+        ("UnknownArtifactIntent", 1),
+        ("UnknownShapeState", 1),
+        // OFFLINE: a NUL no stored content can hold.
+        ("UnstorableValue", 1),
+        // SERVER: step 4.
+        ("ValueOutsideShape", 1),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(
+        reason_sites(&production_code(ASK_VALIDATE_SRC)),
+        ask_validate,
+        "`artifact_ask/validate.rs`'s refusal sites moved. Class each new one as OFFLINE (reached \
+         by `validate_ask_form`) or SERVER, and keep every capability fact out of the form check."
+    );
+}

@@ -15378,6 +15378,13 @@
           "act": {
             "$ref": "#/components/schemas/ActName"
           },
+          "artifact_filter": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactAsk"
+            },
+            "description": "Narrowing by what a resource's data artifacts hold: each ask names a shape and predicates\nover the paths it declares, and the resource must own an artifact satisfying it.\n\nPredicates within one ask hold of one artifact; different asks may be satisfied by\ndifferent artifacts of the resource. Every ask in one filter must name a shape homed where\nthe stage is — a resource has one home — or the stage is refused `ask_scope_conflict`."
+          },
           "edge_filter": {
             "oneOf": [
               {
@@ -15422,7 +15429,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/ResourceFilter",
-                "description": "Narrowing by what a thing IS. At most one slot applies per act; supplying the other is\n`RefusalReason::FilterNotApplicable`."
+                "description": "Narrowing by what a thing IS. At most one slot applies per candidate population; a slot the\nact does not admit is `RefusalReason::FilterNotApplicable`. `resource_filter` and\n`artifact_filter` both narrow the resources a selection considers, and AND together;\n`edge_filter` narrows the edges a walk follows."
               },
               {
                 "type": "null"
@@ -16209,6 +16216,45 @@
           }
         }
       },
+      "ArtifactAsk": {
+        "type": "object",
+        "description": "One ask: a governing shape, and what the asker holds about artifacts it governs (§2.1).\n\n`intent` and `shape_states` are **strings**, validated by [`AskSession::validate`] into\n`unknown_artifact_intent` / `unknown_shape_state` with `teaches` naming the vocabulary — never\nserde enums, whose unknown-variant failure would land before validation, in the deserializer's\nwords, and outside the every-refusal-at-once body. Empty means the default, applied by the\nvalidator: `current` and `member`, and every askable state.\n\n**Strict**, like `ActInvocation`: an unknown field is a deserialization error, never a field\nthat silently narrows nothing.",
+        "required": [
+          "shape"
+        ],
+        "properties": {
+          "include_folded": {
+            "type": "boolean",
+            "description": "Admit folded (superseded) artifacts. Not served: `true` is declined by name\n(`filter_not_applicable`), and an ask reads live artifacts only."
+          },
+          "intent": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Narrow by selection intent: `current`, `member`, `pinned`. Empty: `current` and `member`."
+          },
+          "predicates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactPredicate"
+            },
+            "description": "What the asker holds, AND-composed. Empty is the whole governed population — a vacuous\nconjunction, said on purpose (§2.1)."
+          },
+          "shape": {
+            "$ref": "#/components/schemas/ShapeId",
+            "description": "The governing shape, by id. An id names one version (§2.2)."
+          },
+          "shape_states": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Narrow by verdict state: `declared_satisfied`, `declared_not_satisfied`,\n`declared_not_yet_checked`. Empty: all three."
+          }
+        },
+        "additionalProperties": false
+      },
       "ArtifactCommitRequest": {
         "allOf": [
           {
@@ -16277,6 +16323,27 @@
             "$ref": "#/components/schemas/DataArtifactId"
           }
         }
+      },
+      "ArtifactPredicate": {
+        "type": "object",
+        "description": "One predicate: a path of object-key segments into the content, and an operator from the closed\n`PropertyOp` set — reused, not copied (§3.2). There is no `eq`, regex, prefix or text-search\noperator, so a resemblance-shaped question has no way to be written down.",
+        "required": [
+          "path",
+          "op"
+        ],
+        "properties": {
+          "op": {
+            "$ref": "#/components/schemas/PropertyOp"
+          },
+          "path": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Object keys, outermost first: `[\"measurements\", \"unit\"]`. Not a string syntax; bound as a\n`text[]`, so no caller text becomes an identifier or a JSON-path fragment (§3.1)."
+          }
+        },
+        "additionalProperties": false
       },
       "ArtifactView": {
         "type": "object",
@@ -24128,7 +24195,7 @@
           },
           {
             "type": "string",
-            "description": "A narrowing list carries more values than the contract admits.\n\n`[added — 2026-08-28, found in review]` `ResourceFilter::doc_type`, `ResourceFilter::tags`\nand `EdgeFilter::labels` are the three narrowings that cost nothing per candidate — array\ncontainment and `= ANY` are single operations whatever their length — which is precisely why\nnothing had capped them. What they cost is BODY: ten thousand one-character labels per stage\nserialized to 4.7 MB and validated `Ok`, so the door answered a plan its own contract admits\nwith a bare 413. See `MAX_FILTER_VALUES`.",
+            "description": "A narrowing list carries more values than the contract admits.\n\n`[added — 2026-08-28, found in review]` `ResourceFilter::doc_type`, `ResourceFilter::tags`\nand `EdgeFilter::labels` are the three narrowings that cost nothing per candidate — array\ncontainment and `= ANY` are single operations whatever their length — which is precisely why\nnothing had capped them. What they cost is BODY: ten thousand one-character labels per stage\nserialized to 4.7 MB and validated `Ok`, so the door answered a plan its own contract admits\nwith a bare 413. See `MAX_FILTER_VALUES`.\n\nAlso an artifact predicate path past `MAX_ARTIFACT_PATH_DEPTH` segments, or an artifact ask's\n`intent` or `shape_states` longer than its vocabulary (with `teaches.terms`). And a composition\nwhose artifact filters together carry more asks than `MAX_ASKS_PER_REQUEST` or name more\ndistinct shapes than `MAX_ASKED_SHAPES` — refused before any shape is loaded.",
             "enum": [
               "too_many_filter_values"
             ]
@@ -24331,9 +24398,16 @@
           },
           {
             "type": "string",
-            "description": "An ask's scope cannot be one home: a stage anchored to a home that is not the shape's, or\ntwo asks in one filter whose shapes live in different homes. Either is empty by\nconstruction, since a resource has exactly one home.",
+            "description": "An ask's scope cannot be one home: a stage anchored to a home that is not the shape's, or\ntwo asks in one filter whose shapes live in different homes. Either is empty by\nconstruction, since a resource has exactly one home. `teaches` names the shapes' homes.",
             "enum": [
               "ask_scope_conflict"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "An artifact predicate value carries U+0000, in a string or an object key. No stored content\ncan hold it — jsonb cannot represent the character — so the value could match nothing, and\nbinding it would be a database error where a refusal belongs.",
+            "enum": [
+              "unstorable_value"
             ]
           },
           {
@@ -24345,7 +24419,7 @@
       },
       "RefusalTeaching": {
         "type": "object",
-        "description": "What a refusal teaches, as data an agent reads without parsing English (spec §3.5).\n\n**Open, by being a struct of optional fields** rather than a tagged enum: a later refusal that\nteaches something new adds a field older clients skip, where a new variant would fail their\nparse of the whole refusal list. Each refusal fills what is relevant to it:\n\n| reason | teaches |\n|---|---|\n| `path_outside_shape` | `vocabulary` (the askable paths), `beyond_bound` when a walk bound stopped it |\n| `operator_outside_shape` | `vocabulary` (each offending path's facts and feasible operators) |\n| `value_outside_shape` | `vocabulary` (each offending path's declared types and values), `non_closure` |\n| `unknown_artifact_intent`, `unknown_shape_state` | `terms` |\n| `shape_superseded` | `successor` |\n| `shape_schema_uncompilable` | `beyond_bound: schema_bytes` for a schema past the byte bound |",
+        "description": "What a refusal teaches, as data an agent reads without parsing English (spec §3.5).\n\n**Open, by being a struct of optional fields** rather than a tagged enum: a later refusal that\nteaches something new adds a field older clients skip, where a new variant would fail their\nparse of the whole refusal list. Each refusal fills what is relevant to it:\n\n| reason | teaches |\n|---|---|\n| `path_outside_shape` | `vocabulary` (the askable paths), `beyond_bound` when a walk bound stopped it |\n| `operator_outside_shape` | `vocabulary` (each offending path's facts and feasible operators) |\n| `value_outside_shape` | `vocabulary` (each offending path's declared types and values), `non_closure` |\n| `unknown_artifact_intent`, `unknown_shape_state` | `terms` |\n| `too_many_filter_values` (a term list longer than its vocabulary) | `terms` |\n| `shape_superseded` | `successor` |\n| `shape_schema_uncompilable` | `beyond_bound: schema_bytes` for a schema past the byte bound |\n| `ask_scope_conflict` | `homes` |",
         "properties": {
           "beyond_bound": {
             "oneOf": [
@@ -24368,6 +24442,13 @@
                 "type": "null"
               }
             ]
+          },
+          "homes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShapeHome"
+            },
+            "description": "The homes of the shapes a stage's asks name, when no one home can hold them all. Each is\nthe home of a shape the asker can read — refusal step 1 admitted it — so naming it\ndiscloses nothing a by-id read of the shape would not."
           },
           "non_closure": {
             "type": [
@@ -26589,6 +26670,24 @@
           "never_clustered",
           "unreadable_or_absent"
         ]
+      },
+      "ShapeHome": {
+        "type": "object",
+        "description": "A shape's home: the context or cogmap whose resources an ask against it ranges over. A resource\nhas exactly one home, so asks AND-ed on one resource must share one (§4.1, *Scope*).",
+        "required": [
+          "anchor_table",
+          "anchor_id"
+        ],
+        "properties": {
+          "anchor_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "anchor_table": {
+            "type": "string",
+            "description": "`\"kb_contexts\"` or `\"kb_cogmaps\"`."
+          }
+        }
       },
       "ShapeId": {
         "type": "string",

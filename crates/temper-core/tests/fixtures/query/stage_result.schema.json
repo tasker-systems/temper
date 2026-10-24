@@ -395,7 +395,7 @@
         },
         {
           "const": "too_many_filter_values",
-          "description": "A narrowing list carries more values than the contract admits.\n\n`[added — 2026-08-28, found in review]` `ResourceFilter::doc_type`, `ResourceFilter::tags`\nand `EdgeFilter::labels` are the three narrowings that cost nothing per candidate — array\ncontainment and `= ANY` are single operations whatever their length — which is precisely why\nnothing had capped them. What they cost is BODY: ten thousand one-character labels per stage\nserialized to 4.7 MB and validated `Ok`, so the door answered a plan its own contract admits\nwith a bare 413. See `MAX_FILTER_VALUES`.",
+          "description": "A narrowing list carries more values than the contract admits.\n\n`[added — 2026-08-28, found in review]` `ResourceFilter::doc_type`, `ResourceFilter::tags`\nand `EdgeFilter::labels` are the three narrowings that cost nothing per candidate — array\ncontainment and `= ANY` are single operations whatever their length — which is precisely why\nnothing had capped them. What they cost is BODY: ten thousand one-character labels per stage\nserialized to 4.7 MB and validated `Ok`, so the door answered a plan its own contract admits\nwith a bare 413. See `MAX_FILTER_VALUES`.\n\nAlso an artifact predicate path past `MAX_ARTIFACT_PATH_DEPTH` segments, or an artifact ask's\n`intent` or `shape_states` longer than its vocabulary (with `teaches.terms`). And a composition\nwhose artifact filters together carry more asks than `MAX_ASKS_PER_REQUEST` or name more\ndistinct shapes than `MAX_ASKED_SHAPES` — refused before any shape is loaded.",
           "type": "string"
         },
         {
@@ -540,7 +540,12 @@
         },
         {
           "const": "ask_scope_conflict",
-          "description": "An ask's scope cannot be one home: a stage anchored to a home that is not the shape's, or\ntwo asks in one filter whose shapes live in different homes. Either is empty by\nconstruction, since a resource has exactly one home.",
+          "description": "An ask's scope cannot be one home: a stage anchored to a home that is not the shape's, or\ntwo asks in one filter whose shapes live in different homes. Either is empty by\nconstruction, since a resource has exactly one home. `teaches` names the shapes' homes.",
+          "type": "string"
+        },
+        {
+          "const": "unstorable_value",
+          "description": "An artifact predicate value carries U+0000, in a string or an object key. No stored content\ncan hold it — jsonb cannot represent the character — so the value could match nothing, and\nbinding it would be a database error where a refusal belongs.",
           "type": "string"
         },
         {

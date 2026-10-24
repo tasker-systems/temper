@@ -24,6 +24,7 @@
 
 use std::collections::BTreeSet;
 
+use temper_core::types::artifact_ask::ValidatedAsk;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::query::{
     search_family, ActName, BoundTerm, IdKind, PlanRefusal, RefusalReason, StageInput, StageNode,
@@ -57,10 +58,12 @@ pub struct CompiledQuery {
     /// sentence here is "static refusals never reach the compiler, they are `validate`'s" — worth
     /// stating carefully, because getting it wrong is how the next refusal lands on the wrong side.
     ///
-    /// One case still returns `Err`: `UnsupportedSeedKind` from `StageNarrowing::bound_expr`, and
-    /// `AnchorTakesOneId` from the anchor arm. Both are compiler/validator **contradictions** rather
-    /// than anything a caller did — `validate` refuses each of them first — so they are unreachable
-    /// through any public path, and failing loud if the two crates ever drift is correct.
+    /// One case still returns `Err`: `UnsupportedSeedKind` from `StageNarrowing::bound_expr`,
+    /// `AnchorTakesOneId` from the anchor arm, and `ShapeNotAskable` from the selection arm when the
+    /// seal holds fewer asks than the stage's `artifact_filter`. All are compiler/validator
+    /// **contradictions** rather than anything a caller did — `validate` refuses each of them first
+    /// — so they are unreachable through any public path, and failing loud if the two crates ever
+    /// drift is correct.
     ///
     /// The anchor case used to be a genuine caller error reaching `Err` here, with exactly the
     /// defect this field exists to remove. `[moved to `validate` — 2026-08-09, Pete]`
@@ -279,7 +282,7 @@ pub fn compile(
     for node in v.ordered() {
         let (name, body, unusable) = match node {
             StageNode::Act(inv) => {
-                let emitted = emit_act_body(inv, &mut binds, &mut refusals)?;
+                let emitted = emit_act_body(inv, v.asks(&inv.name), &mut binds, &mut refusals)?;
                 (inv.name.as_str(), emitted.body, emitted.unusable)
             }
             // A combinator's inputs are upstream stages, so nothing it was handed can be unusable.
@@ -429,8 +432,13 @@ fn subtrahend_refusal(
 /// `NULL::jsonb AS via`** `[2026-08-14]`. Uniform rather than per-act, because [`final_select`]
 /// shares one column list across hit arms, tally arms and the empty fallback — a stage missing a
 /// column would fail at UNION time with an error naming the arity rather than the act.
+///
+/// `asks` are the stage's artifact asks **as the seal validated them**
+/// ([`ValidatedComposition::asks`]), never `inv.artifact_filter`: the statement runs what was
+/// checked, in the form the SQL binds.
 fn emit_act_body(
     inv: &temper_core::types::query::ActInvocation,
+    asks: &[ValidatedAsk],
     binds: &mut Vec<QueryBind>,
     refusals: &mut Vec<PlanRefusal>,
 ) -> Result<EmittedAct, PlanRefusal> {
@@ -512,13 +520,37 @@ fn emit_act_body(
             // No `bound_for_find` and no paging: the fragment has neither slot, because narrowing a
             // selection by an upstream set is `CombineOp::Intersect` and a selection that truncates
             // is a sample. An anchor IS honoured, which is why `narrowing.anchor()` is read.
-            // Order matters and is not cosmetic: `binds` is positional, so the narrowing binds must
-            // be pushed before the open-key one to match the `$n` indices each renders.
+            //
+            // **A filter the seal does not hold fails the compile; it never narrows nothing.** A
+            // stage whose `artifact_filter` has asks the seal did not admit would otherwise bind
+            // `NULL::jsonb`, which selects as though no ask were made. `validate` seals a stage's
+            // asks only when it admitted all of them and refuses the composition otherwise, so this
+            // is a validator/compiler contradiction, unreachable through `validate`, answered the
+            // way `bound_for_find` and the anchor arm answer theirs: an `Err` naming the stage.
+            if asks.len() != inv.artifact_filter.len() {
+                return Err(PlanRefusal {
+                    stage: Some(inv.name.clone()),
+                    reason: RefusalReason::ShapeNotAskable,
+                    detail: format!(
+                        "this stage carries {} artifact asks and the seal holds {} validated; the \
+                         validator should have refused the stage before compilation",
+                        inv.artifact_filter.len(),
+                        asks.len()
+                    ),
+                    teaches: None,
+                });
+            }
+
+            // Order matters and is not cosmetic: `binds` is positional, so the binds are pushed in
+            // signature order — the narrowings, the asks, then the open-key one — and each slot's
+            // `$n` follows the one before it.
             let narrowings = selection_narrowings_for(inv, binds);
+            let (artifact_asks, _asks_bound_at) = artifact_asks_slot(asks, binds);
             let properties = resource_properties_for(inv, binds);
             let call = emit_ungated_core_call(&CoreCall::Selection {
                 core: EMIT_FIND_RESOURCES_WITH,
                 narrowings,
+                artifact_asks,
                 anchor_table: &anchor_table,
                 anchor_id: &anchor_id,
                 properties,
@@ -772,7 +804,8 @@ enum CoreCall<'a> {
         /// an argument's type to choose between.
         offset: &'a str,
     },
-    /// The selection core: eight narrowing slots, an anchor pair, and nothing else.
+    /// The selection core: eight narrowing slots, the artifact asks, an anchor pair, and the open-key
+    /// slot — fields in their positional order.
     ///
     /// No `bound` and no paging, matching the fragment: narrowing a selection by an upstream set is
     /// `CombineOp::Intersect`, and a selection that truncates is a sample. Both absences are the
@@ -785,6 +818,18 @@ enum CoreCall<'a> {
         /// uniform — eight `&'a str` fields would invite a caller to mis-order them silently, which
         /// is the failure this whole module is shaped against.
         narrowings: String,
+        /// The stage's sealed artifact asks (`20261104000000`) — a bound `$n::jsonb` holding each
+        /// [`ValidatedAsk::bind`] in filter order, or `NULL::jsonb`. Built by
+        /// [`artifact_asks_slot`] alone.
+        ///
+        /// **Between the narrowings and the anchor pair, beside neither `jsonb` narrowing**, for the
+        /// reason `properties` records: next to `p_facets` or `p_properties`, a transposition would
+        /// type-check. Its neighbours are `text` and `varchar`.
+        ///
+        /// **The cast is never optional**, as for every slot of this call (`slot` records why):
+        /// the 14-argument core is reached by arity and type, and a typed NULL leaves Postgres
+        /// nothing to infer.
+        artifact_asks: String,
         anchor_table: &'a str,
         anchor_id: &'a str,
         /// `ResourceFilter`'s open-key slot (`20260815000040`) — a bound `$n::jsonb` carrying the
@@ -881,12 +926,13 @@ fn emit_ungated_core_call(c: &CoreCall) -> String {
         CoreCall::Selection {
             core,
             narrowings,
+            artifact_asks,
             anchor_table,
             anchor_id,
             properties,
         } => format!(
-            "{core}({VISIBLE_IDS}, {narrowings}, {anchor_table}, {anchor_id}, {PRINCIPAL_BIND}, \
-             {properties})"
+            "{core}({VISIBLE_IDS}, {narrowings}, {artifact_asks}, {anchor_table}, {anchor_id}, \
+             {PRINCIPAL_BIND}, {properties})"
         ),
         // No `PRINCIPAL_BIND`: the walk reads no anchor, so it needs no `p_anchor_reader`. The
         // visible set is still the first argument, and is still written only here.
@@ -1090,8 +1136,8 @@ fn narrowing_one(
             );
             Ok(())
         }
-        StageInput::Caller { ids, .. } => match ids.kind {
-            IdKind::Resource => {
+        StageInput::Caller { ids, .. } => match (&ids.kind, ids.kind.anchor_table()) {
+            (IdKind::Resource, _) => {
                 let idx = binds.len() + 1;
                 binds.push(QueryBind::Uuids(ids.ids.clone()));
                 assign(narrowing, format!("${idx}::uuid[]"));
@@ -1102,11 +1148,10 @@ fn narrowing_one(
             // — "an IdSet holds N ids; an anchor slot holds one" — and the honest response to it is
             // a refusal, never silently anchoring on the first element, which would answer a
             // different question than the one asked and look like a successful narrowing.
-            IdKind::Context | IdKind::Cogmap => {
-                let table = match ids.kind {
-                    IdKind::Cogmap => "kb_cogmaps",
-                    _ => "kb_contexts",
-                };
+            //
+            // The table is the kind's own (`IdKind::anchor_table`), the one mapping the validator's
+            // scope check compares a shape's home against.
+            (_, Some(table)) => {
                 // **Unreachable through `validate`, and asserted anyway.** The cardinality is a
                 // static property of the plan and is refused there now
                 // (`RefusalReason::AnchorTakesOneId`), so a caller's mistake arrives in the 400
@@ -1416,6 +1461,33 @@ fn properties_slot(
     format!("${idx}::jsonb")
 }
 
+/// A stage's sealed artifact asks, bound to one `$n::jsonb` slot: the expression the selection
+/// call renders, and the `$n` it bound — `None` when the stage asks nothing and binds `NULL`.
+///
+/// **What binds is [`ValidatedAsk::bind`], one per ask in filter order, and never the caller's
+/// `ArtifactAsk`.** The caller's type skips an empty list on the wire, and the SQL reads a missing
+/// `predicates` as a match for nothing; the validated form writes every list out, with the defaults
+/// applied and an array path's values wrapped as they were validated.
+///
+/// **The placeholder is returned so a second reader of the same asks reuses it** rather than binding
+/// the list again: one bind is one source for what the statement asked.
+///
+/// Called at the position its bind occupies, as [`properties_slot`] is: `binds.len() + 1` is
+/// positional.
+fn artifact_asks_slot(
+    asks: &[ValidatedAsk],
+    binds: &mut Vec<QueryBind>,
+) -> (String, Option<usize>) {
+    if asks.is_empty() {
+        return ("NULL::jsonb".to_string(), None);
+    }
+    let idx = binds.len() + 1;
+    binds.push(QueryBind::Json(serde_json::Value::Array(
+        asks.iter().map(ValidatedAsk::bind).collect(),
+    )));
+    (format!("${idx}::jsonb"), Some(idx))
+}
+
 /// `ResourceFilter`'s open-key slot — the absent-container case, then [`properties_slot`].
 ///
 /// The container is optional here and mandatory in [`edge_filter_for`], which is the whole of what
@@ -1603,6 +1675,7 @@ mod tests {
             resource_filter: None,
             edge_filter: None,
             properties: vec![],
+            artifact_filter: vec![],
         }
     }
 

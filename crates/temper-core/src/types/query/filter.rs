@@ -161,6 +161,9 @@ pub struct ResourceFilter {
 pub enum FilterField {
     Resource,
     Edge,
+    // `ActInvocation::artifact_filter`: resources narrowed by what their data artifacts hold. A
+    // line comment rather than a doc comment, so the published schema stays a plain string enum.
+    Artifact,
 }
 
 /// A property narrowing operator. CLOSED — the key space is open, the operator set is not. No
@@ -688,7 +691,7 @@ mod tests {
     }
 
     #[test]
-    fn filter_fields_name_the_two_slots_an_act_may_admit() {
+    fn filter_fields_name_the_three_slots_an_act_may_admit() {
         assert_eq!(
             serde_json::to_string(&FilterField::Resource).unwrap(),
             "\"resource\""
@@ -696,6 +699,10 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&FilterField::Edge).unwrap(),
             "\"edge\""
+        );
+        assert_eq!(
+            serde_json::to_string(&FilterField::Artifact).unwrap(),
+            "\"artifact\""
         );
     }
 

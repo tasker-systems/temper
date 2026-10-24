@@ -37,6 +37,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::types::artifact_ask::ArtifactAsk;
 use crate::types::query::act::ActName;
 use crate::types::query::composition::{
     Composition, StageNode, MAX_EMBEDDING_DIM, MAX_EMBEDDING_NORM, MAX_INTENTION_QUERY_BYTES,
@@ -200,7 +201,8 @@ pub(super) fn validate_shape_indexed(
     // raised before the graph is read, like the stage ceiling above, so it holds beside a cycle
     // too. The per-value cap bounds one value; this bounds what the count caps multiply it by, and
     // keeps the largest legal composition inside the query door's body limit.
-    // `MAX_COMPOSITION_PROPERTY_VALUE_BYTES` carries the arithmetic.
+    // `MAX_COMPOSITION_PROPERTY_VALUE_BYTES` carries the arithmetic. An artifact ask's values bind
+    // into SQL the same way and count in the same measure, `ArtifactAsk::value_bytes`.
     let predicate_bytes: usize = c
         .stages
         .iter()
@@ -208,9 +210,18 @@ pub(super) fn validate_shape_indexed(
             StageNode::Act(inv) => Some(inv),
             _ => None,
         })
-        .flat_map(predicate_value_sizes)
-        .flat_map(|(_, _, sizes)| sizes)
-        .map(|s| s.bytes)
+        .map(|inv| {
+            predicate_value_sizes(inv)
+                .into_iter()
+                .flat_map(|(_, _, sizes)| sizes)
+                .map(|s| s.bytes)
+                .sum::<usize>()
+                + inv
+                    .artifact_filter
+                    .iter()
+                    .map(ArtifactAsk::value_bytes)
+                    .sum::<usize>()
+        })
         .sum();
     if predicate_bytes > MAX_COMPOSITION_PROPERTY_VALUE_BYTES {
         errs.push(refusal(
@@ -1216,7 +1227,34 @@ fn caller_text_bytes(inv: &ActInvocation) -> usize {
         .intention
         .as_ref()
         .map_or(0, |i| worst_case_string_bytes(&i.query));
-    strings + facets + values + question
+    let asks: usize = inv.artifact_filter.iter().map(ask_text_bytes).sum();
+    strings + facets + values + question + asks
+}
+
+/// One artifact ask's caller text, counted as [`caller_text_bytes`] counts the rest: each path
+/// segment and each `intent` and `shape_states` term at [`worst_case_string_bytes`], and each value
+/// at [`worst_case_value_bytes`]. Its shape id and operator names encode the same under every
+/// encoder.
+fn ask_text_bytes(ask: &ArtifactAsk) -> usize {
+    let segments: usize = ask
+        .predicates
+        .iter()
+        .flat_map(|p| &p.path)
+        .map(|segment| worst_case_string_bytes(segment))
+        .sum();
+    let terms: usize = ask
+        .intent
+        .iter()
+        .chain(&ask.shape_states)
+        .map(|term| worst_case_string_bytes(term))
+        .sum();
+    let values: usize = ask
+        .predicates
+        .iter()
+        .flat_map(|p| p.op.values())
+        .map(worst_case_value_bytes)
+        .sum();
+    segments + terms + values
 }
 
 /// The three places a property predicate can sit on a stage, each named as the wire names it.

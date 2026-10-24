@@ -11,7 +11,8 @@
 //! - [`validate`] — refusal step 4 of §3.5, with its shape-free half [`validate_ask_form`]; the
 //!   steps 1–3 refusals a [`ShapeLoad`] carries; the [`RefusalTeaching`] a refusal carries;
 //! - [`session`] — [`AskSession`], the one way an ask is validated: one request's asks against one
-//!   [`ShapeContext`], each shape's walk built once and one work budget for them all;
+//!   [`ShapeContext`], each shape's walk built once and one work budget for them all, and each
+//!   shape's [`PathTeaching`] made once — or taken from the context, where a caller remembered it;
 //! - [`mod@reference`] — the Rust reference evaluator the SQL is differential-tested against.
 //!
 //! **Two halves, one seam** (§2.4). The loader in `temper-services` holds the pool, the principal
@@ -30,14 +31,15 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::types::ids::ShapeId;
+use crate::types::query::filter::property_value_bytes;
 use crate::types::query::PropertyOp;
 
 pub use reference::matches;
 pub use session::AskSession;
 pub use validate::{
-    validate_ask_form, RefusalTeaching, TeachingElision, ValidatedAsk, MAX_ARTIFACT_PATH_DEPTH,
-    MAX_ARTIFACT_PATH_SEGMENT_BYTES, MAX_ASK_PREDICATES, MAX_ASK_PROBES, MAX_MEMBERSHIP_STEPS,
-    MAX_TEACHING_BYTES,
+    validate_ask_form, PathTeaching, RefusalTeaching, TeachingElision, ValidatedAsk,
+    MAX_ARTIFACT_PATH_DEPTH, MAX_ARTIFACT_PATH_SEGMENT_BYTES, MAX_ASK_PREDICATES, MAX_ASK_PROBES,
+    MAX_MEMBERSHIP_STEPS, MAX_TEACHING_BYTES,
 };
 pub use walk::{
     enumerate, resolve, within_schema_bound, AskOperator, AskablePath, BoundKind, JsonType,
@@ -88,7 +90,8 @@ pub struct ArtifactAsk {
     /// Narrow by selection intent: `current`, `member`, `pinned`. Empty: `current` and `member`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub intent: Vec<String>,
-    /// Admit folded (superseded) artifacts.
+    /// Admit folded (superseded) artifacts. Not served: `true` is declined by name
+    /// (`filter_not_applicable`), and an ask reads live artifacts only.
     #[serde(default)]
     pub include_folded: bool,
     /// Narrow by verdict state: `declared_satisfied`, `declared_not_satisfied`,
@@ -112,6 +115,20 @@ pub struct ArtifactPredicate {
     /// `text[]`, so no caller text becomes an identifier or a JSON-path fragment (§3.1).
     pub path: Vec<String>,
     pub op: PropertyOp,
+}
+
+impl ArtifactAsk {
+    /// The bytes of every value this ask's predicates bind — each `contains` value and `compare`
+    /// bound in compact JSON — in the measure `property_value_bytes` gives a property predicate's,
+    /// so an ask's values and a filter's count toward one budget in one unit. The composable arm
+    /// counts them into a composition's `MAX_COMPOSITION_PROPERTY_VALUE_BYTES`.
+    pub fn value_bytes(&self) -> usize {
+        self.predicates
+            .iter()
+            .flat_map(|p| p.op.values())
+            .map(property_value_bytes)
+            .sum()
+    }
 }
 
 /// A shape the loader read, found live, and compiled with the no-fetch compiler — so the walk sees
@@ -174,6 +191,29 @@ pub struct ShapeIdentity {
     pub artifact_kind: String,
 }
 
+impl ShapeIdentity {
+    /// The home this version is declared in — the scope of every ask against it (§2.1).
+    pub fn home(&self) -> ShapeHome {
+        ShapeHome {
+            anchor_table: self.home_anchor_table.clone(),
+            anchor_id: self.home_anchor_id,
+        }
+    }
+}
+
+/// A shape's home: the context or cogmap whose resources an ask against it ranges over. A resource
+/// has exactly one home, so asks AND-ed on one resource must share one (§4.1, *Scope*).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "artifact_ask.ts"))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct ShapeHome {
+    /// `"kb_contexts"` or `"kb_cogmaps"`.
+    pub anchor_table: String,
+    pub anchor_id: Uuid,
+}
+
 /// The version in force after a fold: the live row at the same home and family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
@@ -210,18 +250,57 @@ pub enum ShapeLoad {
 /// Every shape an ask in one request names, loaded before the gate (§4.3): plain data, fixed
 /// before validation runs and untouched by anything after it.
 ///
-/// What a request derives from these shapes — each one's walk, the paths it has resolved, its
-/// vocabulary, each ask's answer — and the work budget its asks share live in the [`AskSession`]
-/// begun from it with [`ShapeContext::session`], which borrows the shapes held here.
+/// What a request derives from these shapes — each one's walk, the paths it has resolved, what a
+/// path refusal teaches of it, each ask's answer — and the work budget its asks share live in the
+/// [`AskSession`] begun from it with [`ShapeContext::session`], which borrows the shapes held here.
+///
+/// **Beside a loaded shape it may hold that shape's [`PathTeaching`]**, remembered by its caller
+/// from an earlier request ([`ShapeContext::with_path_teaching`]), so that a path refusal on the
+/// shape teaches from it and enumerates nothing. Only a loaded shape's is held: a shape whose load
+/// refused is never walked, so nothing it would teach is consulted.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ShapeContext {
     loads: BTreeMap<ShapeId, ShapeLoad>,
+    path_teachings: BTreeMap<ShapeId, PathTeaching>,
 }
 
 impl ShapeContext {
+    /// No shapes: the context of a request that names none. An ask validated against it is
+    /// refused `shape_not_askable`, as an absent shape's is — never checked against nothing and
+    /// admitted.
+    pub const fn empty() -> ShapeContext {
+        ShapeContext {
+            loads: BTreeMap::new(),
+            path_teachings: BTreeMap::new(),
+        }
+    }
+
     /// What the loader found for a shape, or `None` for a shape it was not asked to load.
     pub fn get(&self, shape: &ShapeId) -> Option<&ShapeLoad> {
         self.loads.get(shape)
+    }
+
+    /// This context, holding `teaching` for the shape it teaches — when that shape is loaded here,
+    /// under its own id. For any other shape the teaching is not held, and the context is
+    /// returned as it was.
+    ///
+    /// A session begun from the context then teaches a path refusal on that shape from
+    /// `teaching`, byte for byte what it would have made, and enumerates nothing for it.
+    pub fn with_path_teaching(mut self, teaching: PathTeaching) -> ShapeContext {
+        let shape = teaching.shape();
+        let loaded_here = matches!(
+            self.loads.get(&shape),
+            Some(ShapeLoad::Loaded(loaded)) if loaded.shape_id == shape
+        );
+        if loaded_here {
+            self.path_teachings.insert(shape, teaching);
+        }
+        self
+    }
+
+    /// The path teaching held for a loaded shape, if one was remembered for it.
+    fn path_teaching(&self, shape: &ShapeId) -> Option<&PathTeaching> {
+        self.path_teachings.get(shape)
     }
 }
 
@@ -229,6 +308,7 @@ impl FromIterator<(ShapeId, ShapeLoad)> for ShapeContext {
     fn from_iter<I: IntoIterator<Item = (ShapeId, ShapeLoad)>>(iter: I) -> ShapeContext {
         ShapeContext {
             loads: iter.into_iter().collect(),
+            path_teachings: BTreeMap::new(),
         }
     }
 }
@@ -321,5 +401,26 @@ mod tests {
         let context: ShapeContext = [(shape_id(), ShapeLoad::NotAskable)].into_iter().collect();
         assert_eq!(context.get(&shape_id()), Some(&ShapeLoad::NotAskable));
         assert_eq!(context.get(&other), None);
+    }
+
+    #[test]
+    fn an_asks_value_bytes_are_its_bound_values_in_compact_json() {
+        let ask: ArtifactAsk = serde_json::from_value(json!({
+            "shape": Uuid::nil(),
+            "predicates": [
+                { "path": ["a"], "op": { "op": "has_key" } },
+                { "path": ["b"], "op": { "op": "contains", "values": ["ms", { "k": [1, 2] }] } },
+                { "path": ["c"], "op": { "op": "compare", "direction": "gte", "value": 10 } }
+            ]
+        }))
+        .unwrap();
+        // `"ms"` 4, `{"k":[1,2]}` 11, `10` 2; `has_key` binds nothing.
+        assert_eq!(ask.value_bytes(), 17);
+    }
+
+    #[test]
+    fn the_empty_context_holds_no_shape() {
+        assert_eq!(ShapeContext::empty(), ShapeContext::default());
+        assert_eq!(ShapeContext::empty().get(&shape_id()), None);
     }
 }

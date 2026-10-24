@@ -11,8 +11,8 @@
 //! **A `$ref` the walk does not follow is `true`, under every draft.** An anchor, a remote one, or
 //! any reference made inside a resource the schema embeds under its own `$id` (where `#` means that
 //! resource, not the root): the walk cannot see what it says, so the subschema it stands for is
-//! declared and unconstrained. That never refuses a declared path; a
-//! value admitted there may then match nothing, which is an honest empty.
+//! declared and unconstrained. That never refuses a declared path; a value admitted there may then
+//! match nothing, which is an honest empty.
 //!
 //! **The walk sees only schemas that compiled.** The loader (spec §2.4) compiled the schema with
 //! the no-fetch compiler before handing it here, so an unrecognised `$schema` or a remote `$ref` has
@@ -48,8 +48,9 @@
 //!   by its size — its bytes and the values nested in it; the set a keyword declares is built once
 //!   per walk and shared rather than copied; sets intersect and union by member id in linear time,
 //!   charged by their sizes each time; and copying them into an answer is charged by size again.
-//!   An ask's paths are never copied at all. So a wide `allOf` over a large enum stops at the work
-//!   budget instead of holding millions of values or comparing them pairwise.
+//!   An ask's paths are never copied at all, and a refusal's teaching copies only the paths it
+//!   sends. So a wide `allOf` over a large enum stops at the work budget instead of holding
+//!   millions of values or comparing them pairwise.
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -58,7 +59,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::reference::canonical;
-use super::validate::MAX_ARTIFACT_PATH_SEGMENT_BYTES;
+use super::validate::{PathTeaching, MAX_ARTIFACT_PATH_SEGMENT_BYTES};
 use crate::types::ids::ShapeId;
 use crate::types::query::filter::{json_string_bytes, property_value_nodes};
 
@@ -356,6 +357,24 @@ fn unwalked(bound: BoundKind) -> Vocabulary {
     }
 }
 
+/// An enumeration's paths, each with its facts in whichever form the enumeration keeps them, and
+/// every bound it was cut at — a [`Vocabulary`] before its facts are put on the wire.
+#[derive(Debug)]
+pub(super) struct Enumerated<F> {
+    pub(super) paths: Vec<(Vec<String>, F)>,
+    pub(super) truncated: BTreeSet<BoundKind>,
+}
+
+impl<F> Enumerated<F> {
+    /// The enumeration of a schema the walk would not read, as [`unwalked`] says it.
+    fn unwalked(bound: BoundKind) -> Enumerated<F> {
+        Enumerated {
+            paths: Vec::new(),
+            truncated: BTreeSet::from([bound]),
+        }
+    }
+}
+
 /// The draft a schema is applied under, as far as the walk needs to know it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Draft {
@@ -451,6 +470,10 @@ impl Draft {
 ///   meets `work`, visibly. Paths over distinct enums each pay the read as well as the copy, `3n`
 ///   a path, so about four paths over distinct 5,000-code enums fit (4 · 15,000 = 60,000) and the
 ///   fifth meets `work`. Each copy is memory the answer holds, so it is charged every time.
+/// - **A refusal's teaching** enumerates the same paths in the same order without copying their
+///   values — each is the walk's own borrowed facts — so it costs what an ask's paths cost: the
+///   twelve paths above, and many more, fit. It copies only the paths it sends, which fit
+///   `MAX_TEACHING_BYTES`.
 pub const BYTES_PER_VISIT: usize = 64;
 
 /// The bytes a member's nested value is charged as, beside its canonical text. A value nested in
@@ -630,34 +653,78 @@ impl<'s> Walk<'s> {
 
     /// Breadth-first over property keys, shallowest paths first and keys in byte order within a
     /// level, so a truncated vocabulary is the shallow part of the full one. One budget covers
-    /// every frame and every path.
+    /// every frame and every path. Every value is copied onto the wire, charged before it is made:
+    /// the whole vocabulary, for `askable`.
     pub(super) fn enumerate(&self) -> Vocabulary {
+        let found =
+            self.enumerate_with(
+                |walk, path, budget| match walk.resolve_within(path, budget) {
+                    PathResolution::Declared(facts) => Ok(Some(facts)),
+                    PathResolution::NotDeclared => Ok(None),
+                    PathResolution::BeyondBound(bound) => Err(bound),
+                },
+            );
+        Vocabulary {
+            paths: found
+                .paths
+                .into_iter()
+                .map(|(path, facts)| AskablePath::new(path, facts))
+                .collect(),
+            truncated: found.truncated,
+        }
+    }
+
+    /// The same paths in the same order, each with the walk's own facts, borrowed from the schema:
+    /// no value is copied, so nothing is charged for a copy. What a refusal teaches from — it
+    /// copies only the paths it sends (`teaching` in `validate`).
+    ///
+    /// Where [`Walk::enumerate`]'s copy charge is what stops it at [`BoundKind::Work`], this one
+    /// goes on and lists more paths; everywhere else the two list the same paths with the same
+    /// facts and the same cuts.
+    pub(super) fn enumerate_borrowed(&self) -> Enumerated<Facts<'s>> {
+        self.enumerate_with(|walk, path, budget| match walk.reach(path, budget) {
+            Resolved::Declared(facts) => Ok(Some(facts)),
+            Resolved::NotDeclared => Ok(None),
+            Resolved::BeyondBound(bound) => Err(bound),
+        })
+    }
+
+    /// One enumeration, with `facts_at` deciding what each candidate path declares and in what
+    /// form it is kept — `Ok(None)` for a path not declared, `Err` for a bound that stops the walk.
+    fn enumerate_with<F>(
+        &self,
+        facts_at: impl Fn(&Walk<'s>, &[String], &mut Budget<'s>) -> Result<Option<F>, BoundKind>,
+    ) -> Enumerated<F> {
         #[cfg(test)]
         VOCABULARIES_ENUMERATED.with(|enumerated| enumerated.set(enumerated.get() + 1));
         let mut budget = Budget::new(self.bounds.max_visits);
-        let mut vocabulary = Vocabulary::default();
-        if let Err(bound) = self.enumerate_into(&mut vocabulary, &mut budget) {
-            vocabulary.truncated.insert(bound);
+        let mut found = Enumerated {
+            paths: Vec::new(),
+            truncated: BTreeSet::new(),
+        };
+        if let Err(bound) = self.enumerate_into(&mut found, &mut budget, &facts_at) {
+            found.truncated.insert(bound);
         }
-        vocabulary
+        found
     }
 
-    /// The breadth-first walk behind [`Walk::enumerate`]. A depth cut is recorded and the walk goes
-    /// on; any other bound stops it, and is returned.
+    /// The breadth-first walk behind [`Walk::enumerate_with`]. A depth cut is recorded and the walk
+    /// goes on; any other bound stops it, and is returned.
     ///
     /// **No prefix is held twice.** A queued frame names the path it sits under by its index in
     /// `out.paths`, so a prefix lives only in the path the vocabulary carries; and each candidate
     /// path is charged its bytes before it is built, whether or not it is then advertised.
-    fn enumerate_into(
+    fn enumerate_into<F>(
         &self,
-        out: &mut Vocabulary,
+        out: &mut Enumerated<F>,
         budget: &mut Budget<'s>,
+        facts_at: &impl Fn(&Walk<'s>, &[String], &mut Budget<'s>) -> Result<Option<F>, BoundKind>,
     ) -> Result<(), BoundKind> {
         let root = self.frame([self.root], budget)?;
         // (the index in `out.paths` of the path a frame sits under — none for the root; the frame)
         let mut queue: VecDeque<(Option<usize>, Vec<&'s Value>)> = VecDeque::from([(None, root)]);
         while let Some((parent, frame)) = queue.pop_front() {
-            let depth = parent.map_or(0, |at| out.paths[at].path.len());
+            let depth = parent.map_or(0, |at| out.paths[at].0.len());
             if depth == self.bounds.max_depth {
                 // Whether keys exist below the bound, read without collecting them: a cut costs the
                 // frame, not the keys under it. Whether each is declared is past the bound too, so
@@ -669,7 +736,7 @@ impl<'s> Walk<'s> {
             }
             for key in child_keys(&frame, budget)? {
                 let prefix: &[String] = match parent {
-                    Some(at) => &out.paths[at].path,
+                    Some(at) => &out.paths[at].0,
                     None => &[],
                 };
                 let bytes = prefix.iter().map(String::len).sum::<usize>() + key.len();
@@ -677,15 +744,13 @@ impl<'s> Walk<'s> {
                 let mut path = Vec::with_capacity(prefix.len() + 1);
                 path.extend_from_slice(prefix);
                 path.push(key.to_string());
-                let facts = match self.resolve_within(&path, budget) {
-                    PathResolution::Declared(facts) => facts,
-                    PathResolution::NotDeclared => continue,
-                    PathResolution::BeyondBound(bound) => return Err(bound),
+                let Some(facts) = facts_at(self, path.as_slice(), &mut *budget)? else {
+                    continue;
                 };
                 if out.paths.len() == self.bounds.max_paths {
                     return Err(BoundKind::Paths);
                 }
-                out.paths.push(AskablePath::new(path, facts));
+                out.paths.push((path, facts));
                 let at = out.paths.len() - 1;
                 // Each frame node is asked for the key, so the child frame costs the frame's size.
                 budget.spend(frame.len())?;
@@ -749,9 +814,10 @@ impl<'s> Walk<'s> {
 }
 
 /// One shape's walk as a request reads it: built once, on the first ask that needs it, and kept
-/// with what it has said — each path it has resolved, and its vocabulary once enumerated — so
-/// every later ask in the request reuses them (spec §2.4: a shape row is immutable per id, so what
-/// is derived from it is cached by id safely).
+/// with what it has said — each path it has resolved, and what a path refusal teaches of the shape
+/// once made — so every later ask in the request reuses them (spec §2.4: a shape row is immutable
+/// per id, so what is derived from it is cached by id safely). Resolved paths are kept as the walk
+/// found them, borrowed from the schema: no value is copied until a refusal's teaching sends it.
 ///
 /// **Owned by an [`AskSession`](super::AskSession), never by the schema's owner.** A [`Walk`]
 /// borrows the schema it reads, so the cache cannot live beside the schema in one struct; it lives
@@ -766,17 +832,36 @@ pub(super) struct ShapeWalk<'s> {
     /// Built on first use, so an ask refused before the shape is consulted builds nothing.
     walk: Option<Result<Walk<'s>, BoundKind>>,
     resolved: HashMap<Vec<String>, Resolved<'s>>,
-    vocabulary: Option<Vocabulary>,
+    /// What a path refusal teaches of the shape: the one its context remembered, or the one made
+    /// here on the first path refusal.
+    taught: Option<Taught>,
+    /// Whether this walk enumerated the shape's vocabulary — at most once, to make its teaching.
+    enumerated: bool,
+}
+
+/// Where a shape's path teaching came from: its context, which remembered it from an earlier
+/// request, or this walk, which made it.
+#[derive(Debug)]
+enum Taught {
+    Remembered(PathTeaching),
+    Made(PathTeaching),
 }
 
 impl<'s> ShapeWalk<'s> {
-    pub(super) fn new(shape: ShapeId, schema: &'s Value) -> ShapeWalk<'s> {
+    /// A walk of `schema`, the shape `shape`'s, holding `remembered` — what a path refusal teaches
+    /// of that shape, if its context carried one — so that no refusal enumerates it again.
+    pub(super) fn new(
+        shape: ShapeId,
+        schema: &'s Value,
+        remembered: Option<PathTeaching>,
+    ) -> ShapeWalk<'s> {
         ShapeWalk {
             shape,
             schema,
             walk: None,
             resolved: HashMap::new(),
-            vocabulary: None,
+            taught: remembered.map(Taught::Remembered),
+            enumerated: false,
         }
     }
 
@@ -804,17 +889,52 @@ impl<'s> ShapeWalk<'s> {
         reached
     }
 
-    /// The shape's askable vocabulary, enumerated once — under a budget of its own, so a request
-    /// that has spent its budget still teaches what may be asked.
-    pub(super) fn vocabulary(&mut self) -> &Vocabulary {
-        let schema = self.schema;
-        let walk = self
-            .walk
-            .get_or_insert_with(|| Walk::new(schema, &WalkBounds::BUILD));
-        self.vocabulary.get_or_insert_with(|| match walk {
-            Ok(walk) => walk.enumerate(),
-            Err(at) => unwalked(*at),
-        })
+    /// What a path refusal teaches of this shape: the teaching its context remembered, or — the
+    /// first time one is needed, when there is none — the one `teach` makes from the shape's
+    /// askable vocabulary over borrowed facts ([`Walk::enumerate_borrowed`]), enumerated here once
+    /// under a budget of its own, so a request that has spent its budget still teaches what may be
+    /// asked. Either is kept for every later refusal; the vocabulary is not.
+    pub(super) fn path_teaching(
+        &mut self,
+        teach: impl FnOnce(&Enumerated<Facts<'s>>, ShapeId) -> PathTeaching,
+    ) -> &PathTeaching {
+        let ShapeWalk {
+            shape,
+            schema,
+            walk,
+            taught,
+            enumerated,
+            ..
+        } = self;
+        let schema: &'s Value = schema;
+        let shape = *shape;
+        let taught = taught.get_or_insert_with(|| {
+            let vocabulary = match walk.get_or_insert_with(|| Walk::new(schema, &WalkBounds::BUILD))
+            {
+                Ok(walk) => {
+                    *enumerated = true;
+                    walk.enumerate_borrowed()
+                }
+                Err(at) => Enumerated::unwalked(*at),
+            };
+            Taught::Made(teach(&vocabulary, shape))
+        });
+        match taught {
+            Taught::Remembered(teaching) | Taught::Made(teaching) => teaching,
+        }
+    }
+
+    /// The path teaching this walk made, if it made one — never one its context remembered.
+    pub(super) fn made_path_teaching(&self) -> Option<&PathTeaching> {
+        match &self.taught {
+            Some(Taught::Made(teaching)) => Some(teaching),
+            Some(Taught::Remembered(_)) | None => None,
+        }
+    }
+
+    /// Whether this walk enumerated the shape's vocabulary.
+    pub(super) fn enumerated(&self) -> bool {
+        self.enumerated
     }
 }
 
@@ -1046,11 +1166,11 @@ impl Facts<'_> {
 thread_local! {
     /// Every value [`Facts::to_wire`] has copied on this thread — what a test reads to see that a
     /// copy was, or was not, made.
-    pub(super) static VALUES_COPIED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static VALUES_COPIED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Every [`Walk`] built on this thread — measured, its draft selected, its `$ref`s resolved.
-    pub(super) static WALKS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    /// Every vocabulary [`Walk::enumerate`] has walked on this thread.
-    pub(super) static VOCABULARIES_ENUMERATED: std::cell::Cell<usize> =
+    pub(crate) static WALKS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Every vocabulary a [`Walk`] has enumerated on this thread, copied or borrowed.
+    pub(crate) static VOCABULARIES_ENUMERATED: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
 

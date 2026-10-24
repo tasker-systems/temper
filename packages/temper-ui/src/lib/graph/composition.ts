@@ -145,6 +145,7 @@ const act = (fields: {
 	resource_filter: null,
 	edge_filter: null,
 	properties: [],
+	artifact_filter: [],
 });
 
 /**

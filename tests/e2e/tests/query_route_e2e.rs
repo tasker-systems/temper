@@ -68,6 +68,7 @@ fn find_about(stage: &str, query: &str) -> StageNode {
         resource_filter: None,
         edge_filter: None,
         properties: vec![],
+        artifact_filter: vec![],
     })
 }
 
@@ -375,6 +376,7 @@ async fn a_walk_seeded_by_a_find_returns_its_provenance_through_the_route(pool: 
         resource_filter: None,
         edge_filter: None,
         properties: vec![],
+        artifact_filter: vec![],
     });
 
     let (status, body) = post_query(&app, &returning_all(vec![walk])).await;

@@ -82,6 +82,49 @@ Four things carry the design, and each is worth understanding rather than copyin
 - **You may supply an `embedding` on an intention, or omit it** and the server computes one. Omitting
   is correct for every caller that cannot embed.
 
+## Selecting resources by what their data artifacts hold
+
+`find-resources-with` takes `artifact_filter` beside `resource_filter`: a list of **asks**, each
+naming a data-artifact shape by id and predicates over the paths that shape declares. A resource is
+selected when, for **every** ask, one of its artifacts satisfies **all** of that ask's predicates.
+This one asks for resources owning a measurement in milliseconds whose `p99` is above 250, then
+searches inside them:
+
+```json
+{
+  "stages": [
+    { "name": "slow", "act": "find-resources-with",
+      "artifact_filter": [
+        { "shape": "0194b1a0-0000-7000-8000-000000000001",
+          "predicates": [
+            { "path": ["unit"], "op": { "op": "contains", "values": ["ms"] } },
+            { "path": ["p99"], "op": { "op": "compare", "direction": "gt", "value": 250 } }
+          ] }
+      ] },
+    { "name": "why", "act": "find-about-within",
+      "intention": { "query": "why latency regressed" },
+      "inputs": [ { "from": "upstream", "as": "bound", "stage": "slow" } ],
+      "terms": { "limit": 5 } }
+  ],
+  "outcome": { "returns": [ { "stage": "why", "with": [] } ] }
+}
+```
+
+- **Predicates in one ask hold of one artifact; separate asks may be met by different artifacts.**
+  Split the two predicates above into two asks and a resource owning one artifact in milliseconds
+  and another with a high `p99` is selected too.
+- **Read the shape's vocabulary first** — `temper data-artifact schema show <shape-id>` carries
+  `askable`, every path and the operators it admits. A path, operator or value outside the shape is
+  refused, and the refusal's `teaches` names the vocabulary.
+- **An ask ranges over its shape's home**: live artifacts on resources homed there that you can see
+  and that have finished ingesting. Leave the stage unanchored or anchor it to that home; asks of
+  shapes in two homes need two stages and a `union`. A shape whose home you cannot read is refused
+  as if it did not exist.
+- **`--check` checks an ask's form only.** It loads no shape, so its report lists the shapes it did
+  not check under `shapes_not_checked`; the server checks every ask before anything runs.
+- **A refused ask teaches as data.** Under the JSON output format, `temper query` prints the
+  refusals in the error payload's `details.refusals`, each with its `reason` and `teaches`.
+
 ## Read the trace, not just the hits
 
 The response carries `trace.stages` for **every** stage, including ones whose rows never came back.

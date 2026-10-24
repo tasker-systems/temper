@@ -12,6 +12,7 @@ use super::filter::{EdgeFilter, PropertyPredicate, ResourceFilter};
 use super::hits::RegionDisclosure;
 use super::scalars::{BoundTerm, Extent};
 use super::stage::{StageInput, StageName, StageOutput};
+use crate::types::artifact_ask::ArtifactAsk;
 
 /// One act, invoked — a named node in the composition DAG.
 ///
@@ -102,12 +103,22 @@ pub struct ActInvocation {
     /// (`RefusalReason::BoundTermNotApplicable`), never reinterpreted to fit.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub terms: BTreeMap<BoundTerm, i64>,
-    /// Narrowing by what a thing IS. At most one slot applies per act; supplying the other is
-    /// `RefusalReason::FilterNotApplicable`.
+    /// Narrowing by what a thing IS. At most one slot applies per candidate population; a slot the
+    /// act does not admit is `RefusalReason::FilterNotApplicable`. `resource_filter` and
+    /// `artifact_filter` both narrow the resources a selection considers, and AND together;
+    /// `edge_filter` narrows the edges a walk follows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_filter: Option<ResourceFilter>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edge_filter: Option<EdgeFilter>,
+    /// Narrowing by what a resource's data artifacts hold: each ask names a shape and predicates
+    /// over the paths it declares, and the resource must own an artifact satisfying it.
+    ///
+    /// Predicates within one ask hold of one artifact; different asks may be satisfied by
+    /// different artifacts of the resource. Every ask in one filter must name a shape homed where
+    /// the stage is — a resource has one home — or the stage is refused `ask_scope_conflict`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifact_filter: Vec<ArtifactAsk>,
     /// # A tombstone
     ///
     /// Every predicate here is refused, and the refusal says where the capability went.
@@ -436,6 +447,7 @@ mod tests {
             resource_filter: None,
             edge_filter: None,
             properties: vec![],
+            artifact_filter: vec![],
         };
         let json = serde_json::to_string(&inv).unwrap();
         assert!(!json.contains("input"));

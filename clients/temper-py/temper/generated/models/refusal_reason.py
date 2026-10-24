@@ -62,7 +62,7 @@ class RefusalReason(BaseModel):
     # data type: str
     oneof_schema_17_validator: Optional[StrictStr] = Field(default=None, description="The composition asks the server to embed more question text than it can inside its budget.  `[added — 2026-08-28]` The one member of the declaration family that is **not** a contract fact, and it is raised in the CAPABILITY pass for exactly that reason: what a deployment can embed inside `DEFAULT_QUERY_EMBED_BUDGET_MS` is a property of the machine it runs on, not of the wire. A beefier deployment could raise it, and a client refusing on this number against a server that raised it would refuse a plan that server answers — which is what the shape pass may never do. Its unpublished siblings `MAX_PER_CANDIDATE_PREDICATES` and `MAX_PER_CANDIDATE_PROBES` are the same shape: cost bounds over a SUM, unexpressible per field, and capability for the same reason.  **It counts only what the SERVER must embed** — stages whose `intention` carries no vector. A caller who precomputed has already paid that cost, and refusing them for it would bound work nobody does.  **The repair is fewer or shorter questions, and it is a real repair**: over the budget no stage gets a vector at all, so the alternative to this refusal is not a slower answer, it is every find stage refusing `embedding_unavailable` at once with nothing saying why.")
     # data type: str
-    oneof_schema_18_validator: Optional[StrictStr] = Field(default=None, description="A narrowing list carries more values than the contract admits.  `[added — 2026-08-28, found in review]` `ResourceFilter::doc_type`, `ResourceFilter::tags` and `EdgeFilter::labels` are the three narrowings that cost nothing per candidate — array containment and `= ANY` are single operations whatever their length — which is precisely why nothing had capped them. What they cost is BODY: ten thousand one-character labels per stage serialized to 4.7 MB and validated `Ok`, so the door answered a plan its own contract admits with a bare 413. See `MAX_FILTER_VALUES`.")
+    oneof_schema_18_validator: Optional[StrictStr] = Field(default=None, description="A narrowing list carries more values than the contract admits.  `[added — 2026-08-28, found in review]` `ResourceFilter::doc_type`, `ResourceFilter::tags` and `EdgeFilter::labels` are the three narrowings that cost nothing per candidate — array containment and `= ANY` are single operations whatever their length — which is precisely why nothing had capped them. What they cost is BODY: ten thousand one-character labels per stage serialized to 4.7 MB and validated `Ok`, so the door answered a plan its own contract admits with a bare 413. See `MAX_FILTER_VALUES`.  Also an artifact predicate path past `MAX_ARTIFACT_PATH_DEPTH` segments, or an artifact ask's `intent` or `shape_states` longer than its vocabulary (with `teaches.terms`). And a composition whose artifact filters together carry more asks than `MAX_ASKS_PER_REQUEST` or name more distinct shapes than `MAX_ASKED_SHAPES` — refused before any shape is loaded.")
     # data type: str
     oneof_schema_19_validator: Optional[StrictStr] = Field(default=None, description="A list that means a SET names the same member twice.  `[added — 2026-08-28, found in review]` `ReturnSpec::with` and `EdgeFilter::edge_kinds` are both closed vocabularies carried as lists, and a repeat in either changes nothing about the answer — hydrating a section twice hydrates it once, and walking `leads_to` twice walks it once. Left admitted, the repeat is a caller's only way to make an unbounded body out of a bounded vocabulary: `with: [open_meta; 10_000]` per return validated `Ok` at **9.6 MB** `[measured — 2026-08-28]`.  **Refusing rather than deduplicating**, which is this contract's standing choice and the same one [`RefusalReason::DuplicateReturnStage`] made one field over: silently collapsing a caller's list answers a question they did not quite ask, and says nothing about it. De-duplicating is also what makes the bound disappear — the count would be silently clamped to the vocabulary size, which is a cost decision taken by omission.")
     # data type: str
@@ -120,9 +120,11 @@ class RefusalReason(BaseModel):
     # data type: str
     oneof_schema_46_validator: Optional[StrictStr] = Field(default=None, description="An ask's `shape_states` names a term outside the three a live shape admits — including `never_declared`, which no artifact under a live shape can have. `teaches` names the set.")
     # data type: str
-    oneof_schema_47_validator: Optional[StrictStr] = Field(default=None, description="An ask's scope cannot be one home: a stage anchored to a home that is not the shape's, or two asks in one filter whose shapes live in different homes. Either is empty by construction, since a resource has exactly one home.")
+    oneof_schema_47_validator: Optional[StrictStr] = Field(default=None, description="An ask's scope cannot be one home: a stage anchored to a home that is not the shape's, or two asks in one filter whose shapes live in different homes. Either is empty by construction, since a resource has exactly one home. `teaches` names the shapes' homes.")
     # data type: str
-    oneof_schema_48_validator: Optional[StrictStr] = Field(default=None, description="A reason outside the declared vocabulary.  `[corrected — 2026-08-09]` This said \"Never constructed by this crate — only by deserializing a producer newer than this consumer.\" **That was false at the time**: `validate` constructed it for twelve topology and vocabulary refusals, kebab-case, while every declared variant was snake_case — a client's vocabulary was two conventions at once. Found in review; recorded rather than repaired then, because promoting twelve strings to variants is a wire change and nothing consumed them yet — `/api/query` did not exist, so the change was free and the door was the moment it would stop being free.  `[promoted — 2026-08-12]` That moment arrived first: the twelve are now the variants above, and this crate no longer constructs `Other` for anything. What `Other` is FOR now is exactly what its original doc said — a reason from a producer newer than this consumer, one this binary has never been taught to name. Deserializing it never fails; `is_known` answers `false`; a caller degrades gracefully instead of losing the whole response to a parse error.")
+    oneof_schema_48_validator: Optional[StrictStr] = Field(default=None, description="An artifact predicate value carries U+0000, in a string or an object key. No stored content can hold it — jsonb cannot represent the character — so the value could match nothing, and binding it would be a database error where a refusal belongs.")
+    # data type: str
+    oneof_schema_49_validator: Optional[StrictStr] = Field(default=None, description="A reason outside the declared vocabulary.  `[corrected — 2026-08-09]` This said \"Never constructed by this crate — only by deserializing a producer newer than this consumer.\" **That was false at the time**: `validate` constructed it for twelve topology and vocabulary refusals, kebab-case, while every declared variant was snake_case — a client's vocabulary was two conventions at once. Found in review; recorded rather than repaired then, because promoting twelve strings to variants is a wire change and nothing consumed them yet — `/api/query` did not exist, so the change was free and the door was the moment it would stop being free.  `[promoted — 2026-08-12]` That moment arrived first: the twelve are now the variants above, and this crate no longer constructs `Other` for anything. What `Other` is FOR now is exactly what its original doc said — a reason from a producer newer than this consumer, one this binary has never been taught to name. Deserializing it never fails; `is_known` answers `false`; a caller degrades gracefully instead of losing the whole response to a parse error.")
     actual_instance: Optional[Union[str]] = None
     one_of_schemas: Set[str] = { "str" }
 
@@ -432,6 +434,12 @@ class RefusalReason(BaseModel):
         # validate data type: str
         try:
             instance.oneof_schema_48_validator = v
+            match += 1
+        except (ValidationError, ValueError) as e:
+            error_messages.append(str(e))
+        # validate data type: str
+        try:
+            instance.oneof_schema_49_validator = v
             match += 1
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
@@ -884,6 +892,15 @@ class RefusalReason(BaseModel):
             instance.oneof_schema_48_validator = json.loads(json_str)
             # assign value to actual_instance
             instance.actual_instance = instance.oneof_schema_48_validator
+            match += 1
+        except (ValidationError, ValueError) as e:
+            error_messages.append(str(e))
+        # deserialize data into str
+        try:
+            # validation
+            instance.oneof_schema_49_validator = json.loads(json_str)
+            # assign value to actual_instance
+            instance.actual_instance = instance.oneof_schema_49_validator
             match += 1
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
