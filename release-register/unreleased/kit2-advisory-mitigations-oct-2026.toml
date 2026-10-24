@@ -1,0 +1,17 @@
+title    = "temper-ui off the cookie and zod advisories on SvelteKit 2, and refuses //-leading paths"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["internal"]
+status   = "signal-only"
+body = '''
+Root `overrides` lift `cookie` to 0.7.2 under SvelteKit 2 (GHSA-pxg6-pf52-xh8x; kit 2 pins ^0.6, and
+0.7 keeps the `parse`/`serialize` API kit calls) and `zod` to 4.6.x under @vercel/cli-config's exact
+4.1.11 pin (GHSA-mrhx-c7xc-m3w5). Neither was reachable: every cookie name, path and domain is a
+constant, and cli-config parses only the local Vercel CLI auth file with no array schema. The
+`handle` hook now answers a pathname that opens with `//` with a bare 404 before routing or
+proxying, the advisory's interim workaround for GHSA-pfhg-q3qv-9q6r (open redirect via enhanced
+forms on `//`-matching routes), which SvelteKit fixes only in 3.0. No route here matched such a
+path, so none was exposed; the guard makes that structural. Who observes: anyone requesting a
+`//`-leading URL now gets a plain 404 instead of the app's error page. Release relevance:
+behavioral, dependency-and-hardening only.
+'''
