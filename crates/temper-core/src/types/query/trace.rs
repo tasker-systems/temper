@@ -10,6 +10,8 @@ use super::envelope::NarrowedBy;
 use super::hits::RegionDisclosure;
 use super::scalars::{BoundTerm, Extent};
 use super::stage::{StageName, StageRelation};
+use crate::types::artifact_ask::ShapeSuccessor;
+use crate::types::ids::ShapeId;
 
 /// Where a stage's input set came from: an earlier stage, or the caller.
 ///
@@ -263,6 +265,77 @@ pub struct StageTrace {
     /// (`disclosed_regions_for`), read twice.
     #[serde(default)]
     pub disclosed_regions: Vec<RegionDisclosure>,
+    /// What each artifact ask of this stage counted, one entry per ask in `artifact_filter` order.
+    /// Empty, and absent on the wire, for a stage that asks nothing.
+    ///
+    /// **This is where an empty `find-resources-with` stage says why.** An empty selection that
+    /// asked artifacts is one of three things — nothing in what you can see is governed by the
+    /// shape; some is and none matched; or the ask narrowed by verdict state and reconciliation has
+    /// not reached the rows — and the per-ask population tells them apart (spec
+    /// `2026-10-19-asking-artifacts-by-what-they-are` §4.5). See [`ArtifactAskPopulation`] for what
+    /// is counted.
+    ///
+    /// It describes the stage's INPUT, not its output: no entry is a quantity, and none orders
+    /// anything. A stage that refused carries no entries: its asks did not run. A stage downstream
+    /// of a refusal carries them like any other, because its counts never read its input.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifact_asks: Vec<ArtifactAskTrace>,
+}
+
+/// One artifact ask as a stage ran it: which ask, which shape version it was validated against,
+/// which version is in force now, and the population it counted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct ArtifactAskTrace {
+    /// The ask's position in the stage's `artifact_filter`, from 0.
+    pub position: usize,
+    /// The shape the ask named, and the version of it the plan was validated against.
+    pub shape_id: ShapeId,
+    pub shape_version: i32,
+    /// The live version of the shape's lineage — its home and family — when the statement ran.
+    /// It differs from `shape_id`/`shape_version` when the shape was amended after validation; the
+    /// population still ranges over the lineage, so it does not empty when that happens.
+    ///
+    /// `null` when the shape's home is not readable to you at execution, or the shape no longer
+    /// exists. The population is then all zeros: nothing was counted under a shape you cannot read.
+    pub in_force: Option<ShapeSuccessor>,
+    pub population: ArtifactAskPopulation,
+}
+
+/// The population one artifact ask counted, by shape state, and how many of it matched.
+///
+/// **What is counted.** Every count ranges over the ask's counted set (spec
+/// `2026-10-19-asking-artifacts-by-what-they-are` §2.3): the live artifacts its shape's lineage
+/// governs — the shape's home and family — on resources you can see that have finished ingesting,
+/// while you can read the shape's home. Nothing outside that set moves a count.
+///
+/// - **The three by-state counts apply the ask's `intent` but not its `shape_states`.** An ask
+///   narrowed to `declared_satisfied` while reconciliation is behind still counts its
+///   `declared_not_yet_checked` rows here, so a small answer reads as lag rather than absence.
+///   An artifact is in the population by governance, never by having a verdict.
+/// - **`matched` applies the whole ask**: its intent, its `shape_states` and every predicate, each
+///   holding of one artifact.
+/// - **Both ignore the stage's `resource_filter`.** The counted set is the shape's, not the stage's,
+///   so `matched > 0` beside an empty stage is possible and meaningful: matching artifacts exist on
+///   resources the stage's other narrowings excluded.
+/// - **Counts of different asks do not combine.** A stage's asks AND together on one resource, and
+///   each ask counts its own population, so neither the sum nor the minimum of two asks' `matched`
+///   is the number of resources the stage selected.
+///
+/// Counts are of artifacts, not resources.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct ArtifactAskPopulation {
+    pub declared_satisfied: i64,
+    pub declared_not_satisfied: i64,
+    pub declared_not_yet_checked: i64,
+    pub matched: i64,
 }
 
 /// The whole composition's disclosure: an ordered per-stage record array.
@@ -305,7 +378,71 @@ mod tests {
             terms_applied: BTreeMap::new(),
             narrowed_by: vec![],
             disclosed_regions: vec![],
+            artifact_asks: vec![],
         }
+    }
+
+    /// **A stage that asks nothing carries no `artifact_asks` key, and one that asks carries every
+    /// count by name.** Additive on the wire: an entry an older reader does not know is skipped, and
+    /// a trace without the key reads back as empty. Navigated from the root rather than grepped, for
+    /// the reason `a_trace_entry_discloses_the_page_it_ran_and_whether_that_page_was_truncated`
+    /// gives. An `in_force` of `None` is serialized as `null`, never dropped: an unreadable home is
+    /// a fact the entry states.
+    #[test]
+    fn a_stage_that_asked_discloses_each_asks_population_and_one_that_did_not_omits_the_key() {
+        let quiet = trace("sel", ActName::FindResourcesWith, StageDisposition::Empty);
+        let json = serde_json::to_string(&quiet).unwrap();
+        assert!(!json.contains("artifact_asks"), "got: {json}");
+        assert_eq!(serde_json::from_str::<StageTrace>(&json).unwrap(), quiet);
+
+        let shape = ShapeId::from(uuid::Uuid::from_u128(7));
+        let mut asked = trace("sel", ActName::FindResourcesWith, StageDisposition::Empty);
+        asked.artifact_asks = vec![
+            ArtifactAskTrace {
+                position: 0,
+                shape_id: shape,
+                shape_version: 1,
+                in_force: Some(ShapeSuccessor {
+                    shape_id: ShapeId::from(uuid::Uuid::from_u128(8)),
+                    shape_version: 2,
+                }),
+                population: ArtifactAskPopulation {
+                    declared_satisfied: 1,
+                    declared_not_satisfied: 2,
+                    declared_not_yet_checked: 3,
+                    matched: 0,
+                },
+            },
+            ArtifactAskTrace {
+                position: 1,
+                shape_id: shape,
+                shape_version: 1,
+                in_force: None,
+                population: ArtifactAskPopulation {
+                    declared_satisfied: 0,
+                    declared_not_satisfied: 0,
+                    declared_not_yet_checked: 0,
+                    matched: 0,
+                },
+            },
+        ];
+        let v: serde_json::Value = serde_json::to_value(&asked).unwrap();
+        let first = &v["artifact_asks"][0];
+        assert_eq!(first["position"], 0, "{v}");
+        assert_eq!(first["shape_version"], 1, "{v}");
+        assert_eq!(first["in_force"]["shape_version"], 2, "{v}");
+        assert_eq!(first["population"]["declared_satisfied"], 1, "{v}");
+        assert_eq!(first["population"]["declared_not_satisfied"], 2, "{v}");
+        assert_eq!(first["population"]["declared_not_yet_checked"], 3, "{v}");
+        assert_eq!(first["population"]["matched"], 0, "{v}");
+        assert!(
+            v["artifact_asks"][1]["in_force"].is_null()
+                && v["artifact_asks"][1]
+                    .as_object()
+                    .is_some_and(|o| o.contains_key("in_force")),
+            "an unreadable home is stated, not dropped: {v}"
+        );
+        assert_eq!(serde_json::from_value::<StageTrace>(v).unwrap(), asked);
     }
 
     #[test]

@@ -63,6 +63,8 @@ lib/temper/generated/models/anchor_shape.rb
 lib/temper/generated/models/anchor_verdict.rb
 lib/temper/generated/models/append_block_payload.rb
 lib/temper/generated/models/artifact_ask.rb
+lib/temper/generated/models/artifact_ask_population.rb
+lib/temper/generated/models/artifact_ask_trace.rb
 lib/temper/generated/models/artifact_commit_request.rb
 lib/temper/generated/models/artifact_commit_response.rb
 lib/temper/generated/models/artifact_predicate.rb

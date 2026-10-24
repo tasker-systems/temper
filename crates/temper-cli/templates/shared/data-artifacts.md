@@ -133,6 +133,18 @@ artifacts satisfies **all** of that ask's predicates. So "an artifact with `unit
 - **Live artifacts only.** `include_folded: true` on an ask is refused by name.
 - **The answer is resource ids.** The stage pipes them into the next stage like any selection; read
   the artifacts themselves through the resources it found.
+- **An empty stage says why in its trace entry.** The selection's entry in `trace.stages` carries
+  `artifact_asks`: for each ask, in filter order, the shape version it was validated against, the
+  version `in_force` when it ran, and the `population` it counted — how many governed artifacts are
+  `declared_satisfied`, `declared_not_satisfied` and `declared_not_yet_checked`, and how many
+  `matched`. All zeros: nothing governed by the shape is in what you can see (and with `in_force`
+  null, you can no longer read the shape's home). A population with `matched: 0`: some is, and
+  none matched. `matched` above zero beside an empty stage: matches exist, and another ask (asks
+  AND on one resource) or the stage's `resource_filter` excluded their resources.
+- **The by-state counts ignore your `shape_states`; `matched` applies the whole ask.** So an ask
+  narrowed to `declared_satisfied` while the validation sweep is behind still names the excluded
+  `declared_not_yet_checked` rows by count — a small answer reads as lag, not absence. Each ask
+  counts its own population: two asks' counts do not add or intersect into the stage's answer.
 
 {%- if surface == "cli" %}
 

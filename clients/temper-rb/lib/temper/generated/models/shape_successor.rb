@@ -14,7 +14,7 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # The version in force after a fold: the live row at the same home and family.
+  # The version in force of a shape's lineage: the live row at its home and family when a read found it. One type for one fact, named by each holder's field for how the row relates to it — `successor` on a folded shape's refusal, `in_force` on a query trace's artifact ask. The type carries the refusal's name; a trace entry whose shape was not amended names the asked row itself.
   class ShapeSuccessor < ApiModelBase
     # A `kb_data_artifact_shapes.id` value — one declared JSON Schema governing a data-artifact family within a single home (spec: data-artifact shape registry, 2026-08-21).
     attr_accessor :shape_id

@@ -16,7 +16,7 @@
 //! twice. (`input_contributed` was a second derived number until ratification ⟨6⟩/9d removed the
 //! field — see the tombstone on `StageResult`.)
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -24,18 +24,23 @@ use uuid::Uuid;
 use crate::backend::substrate_read::{embed_query_texts, QueryEmbedBatch};
 use crate::error::{ApiError, ApiResult};
 use crate::services::shape_loader;
-use temper_core::types::artifact_ask::{AskSession, ShapeContext, ValidatedAsk};
-use temper_core::types::ids::{ProfileId, ResourceId};
+use temper_core::types::artifact_ask::{AskSession, ShapeContext, ShapeSuccessor, ValidatedAsk};
+use temper_core::types::ids::{ProfileId, ResourceId, ShapeId};
 use temper_core::types::query::{
     applied_terms, declaration, text_to_embed, texts_to_embed, validate, ActName, ActRefusal,
     CombineNode, Composition, Extent, NarrowedBy, PlanRefusal, QueryResponse, RegionDisclosure,
     ResourceHit, ReturnSpec, Scoring, StageDisposition, StageInput, StageNode, StageOutput,
     StageResult, StageTrace, ValidatedComposition, ViaEntry,
 };
-use temper_core::types::query::{BoundTerm, CompositionTrace, InputSource, StageInputTrace};
+use temper_core::types::query::{
+    ArtifactAskPopulation, ArtifactAskTrace, BoundTerm, CompositionTrace, InputSource,
+    StageInputTrace,
+};
 use temper_core::types::resource_view::{ResourceSection, ResourceView};
 use temper_substrate::readback;
-use temper_substrate::readback::query_exec::{execute, QueryRows, StageIndex, TallyRow};
+use temper_substrate::readback::query_exec::{
+    execute, PopulationRow, QueryRows, StageIndex, TallyRow,
+};
 use temper_substrate::readback::query_plan::compile;
 
 /// Run a validated composition and answer in the shape `POST /api/query` publishes.
@@ -114,6 +119,73 @@ fn required_tally<'a>(stage: &str, rows: &'a StageIndex<'_>) -> ApiResult<&'a Ta
             "compiler/executor contradiction: no tally row for stage `{stage}`"
         ))
     })
+}
+
+/// The population row of a stage's `position`th artifact ask — and a missing one fails the
+/// response, for [`required_tally`]'s reason.
+///
+/// `compile` emits one population arm per sealed ask of every stage that ran its asks — every
+/// stage carrying sealed asks that no refusal names — and each arm reads the one row
+/// `__temper_ungated_artifact_ask_counts` returns whatever the population (`20261105000000`). So
+/// through [`run_composition`] a row exists for every `(stage, position)` [`artifact_ask_traces`]
+/// asks for, and reaching here without one is a compiler/executor contradiction.
+///
+/// **Zero is a real population**: a shape governing nothing in view, or a home unreadable at
+/// execution, counts zeros. A defaulted row of zeros for an absent one would read as *"nothing is
+/// governed here"* — the exact answer the counts exist to distinguish — so absence fails.
+fn required_population<'a>(
+    stage: &str,
+    position: usize,
+    rows: &'a StageIndex<'_>,
+) -> ApiResult<&'a PopulationRow> {
+    i64::try_from(position)
+        .ok()
+        .and_then(|p| rows.population(stage, p))
+        .ok_or_else(|| {
+            opaque(anyhow::anyhow!(
+                "compiler/executor contradiction: no population row for ask {position} of stage \
+                 `{stage}`"
+            ))
+        })
+}
+
+/// Every population row came from an arm the plan asked for: a sealed ask of a stage no refusal
+/// names, once.
+///
+/// The other half of [`required_population`]'s rule. A row for a position the seal holds no ask
+/// at, for a stage that asks nothing, or for a refused stage (whose asks did not run) is a row the
+/// plan did not ask for; a second row for one ask is a duplicate. Each is the compiler and the
+/// executor disagreeing about the plan, and is failed rather than dropped: a dropped row would
+/// leave a disclosure that matched nothing the response could name.
+fn every_population_was_asked_for(
+    v: &ValidatedComposition,
+    by_name: &HashMap<&str, &StageNode>,
+    rows: &StageIndex<'_>,
+) -> ApiResult<()> {
+    let populations = rows.population_rows();
+    let mut seen: HashSet<(&str, i64)> = HashSet::with_capacity(populations.len());
+    for p in populations {
+        let asks = by_name
+            .get(p.stage.as_str())
+            .map_or(0, |node| v.asks(node.name()).len());
+        let sealed = usize::try_from(p.position).is_ok_and(|k| k < asks);
+        if !sealed || rows.refusal(&p.stage).is_some() {
+            return Err(opaque(anyhow::anyhow!(
+                "compiler/executor contradiction: a population row for ask {} of stage `{}` the \
+                 plan did not ask for",
+                p.position,
+                p.stage
+            )));
+        }
+        if !seen.insert((p.stage.as_str(), p.position)) {
+            return Err(opaque(anyhow::anyhow!(
+                "compiler/executor contradiction: a second population row for ask {} of stage `{}`",
+                p.position,
+                p.stage
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Turn a caller's composition into one this server will run: shape-gate it, embed on its behalf,
@@ -425,7 +497,9 @@ struct Hydrated {
 /// question has already been asked, which is what makes the derivations below testable without one.
 ///
 /// A stage without a tally row is a compile/execute contradiction ([`required_tally`]) and fails
-/// the response rather than rendering invented numbers for it.
+/// the response rather than rendering invented numbers for it. So does a stage whose artifact asks
+/// ran without a population row for each ([`required_population`]), and a population row no ask
+/// accounts for ([`every_population_was_asked_for`]).
 fn assemble(
     v: &ValidatedComposition,
     rows: &QueryRows,
@@ -438,6 +512,7 @@ fn assemble(
     // returned stages — and each of those was a scan over a list as long as the stage count. See
     // [`StageIndex`]: the assembler is linear in stage count because this exists.
     let rows = &rows.index();
+    every_population_was_asked_for(v, &by_name, rows)?;
 
     let returned = v
         .returns()
@@ -801,7 +876,57 @@ fn stage_trace(
         terms_applied: n.terms_applied,
         narrowed_by: narrowed_by(node, asks, rows)?,
         disclosed_regions: disclosed_regions_for(node.name().as_str(), rows),
+        artifact_asks: artifact_ask_traces(node.name().as_str(), asks, rows)?,
     })
+}
+
+/// What each of a stage's artifact asks counted: one entry per sealed ask, in `artifact_filter`
+/// order — and none for a refused stage, whose asks did not run.
+///
+/// **Refused, and nothing wider, is the exemption.** A stage downstream of a refusal ran its asks,
+/// and its counts range over the counted set rather than the stage's input, so they are complete
+/// and carried. The fact is one the response already holds ([`StageIndex::refusal`]); `compile`
+/// arms by the same rule (`query_plan`'s `asks_ran_or_refused`).
+///
+/// **The asks are the seal's** (`ValidatedComposition::asks`), the same source the statement bound
+/// them from, so the shape id and version an entry names are the ones the plan was validated
+/// against — never re-read from the caller's `artifact_filter`. The `i`th sealed ask is the
+/// filter's `i`th, which is what `position` reports. Each entry's numbers come from its population
+/// row, and a missing row fails the response ([`required_population`]).
+///
+/// Trace only: `find-resources-with` is never returnable, so no `StageResult` carries a copy and
+/// the pair rule has nothing to pair.
+fn artifact_ask_traces(
+    stage: &str,
+    asks: &[ValidatedAsk],
+    rows: &StageIndex<'_>,
+) -> ApiResult<Vec<ArtifactAskTrace>> {
+    if rows.refusal(stage).is_some() {
+        return Ok(vec![]);
+    }
+    asks.iter()
+        .enumerate()
+        .map(|(position, ask)| {
+            let row = required_population(stage, position, rows)?;
+            Ok(ArtifactAskTrace {
+                position,
+                shape_id: ask.shape().shape_id,
+                shape_version: ask.shape().shape_version,
+                in_force: row.in_force_shape_id.zip(row.in_force_shape_version).map(
+                    |(id, shape_version)| ShapeSuccessor {
+                        shape_id: ShapeId::from(id),
+                        shape_version,
+                    },
+                ),
+                population: ArtifactAskPopulation {
+                    declared_satisfied: row.declared_satisfied,
+                    declared_not_satisfied: row.declared_not_satisfied,
+                    declared_not_yet_checked: row.declared_not_yet_checked,
+                    matched: row.matched,
+                },
+            })
+        })
+        .collect()
 }
 
 /// Is there more than you got back?
@@ -1375,6 +1500,7 @@ mod tests {
     /// invocation and never off a tally.
     fn no_rows() -> QueryRows {
         QueryRows {
+            populations: vec![],
             hits: vec![],
             tallies: vec![],
             refusals: vec![],
@@ -1429,6 +1555,7 @@ mod tests {
         }
         let v = plan(vec![node], vec!["hits"]);
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![],
             tallies: vec![tally("hits", 0, 0)],
             refusals: vec![],
@@ -1486,6 +1613,7 @@ mod tests {
             vec!["seeds"],
         );
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![],
             // The walk filled its clamped page exactly, which is the truncation being disclosed.
             tallies: vec![tally("seeds", 2, 0), tally("near", 50, 0)],
@@ -1535,6 +1663,7 @@ mod tests {
         }
         let v = plan(vec![node], vec!["hits"]);
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![],
             tallies: vec![tally("hits", 50, 0)],
             refusals: vec![],
@@ -1589,6 +1718,7 @@ mod tests {
             vec!["narrowed"],
         );
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![],
             tallies: vec![tally("hits", 3, 0), tally("narrowed", 0, 0)],
             refusals: vec![],
@@ -1613,6 +1743,7 @@ mod tests {
             vec!["wide"],
         );
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![],
             tallies: vec![tally("wide", 0, 0)],
             refusals: vec![PlanRefusal {
@@ -1672,6 +1803,7 @@ mod tests {
         );
         let id = Uuid::from_u128(1);
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![hit("exact", id, 0.7)],
             tallies: vec![tally("wide", 0, 0), tally("exact", 1, 0)],
             refusals: vec![PlanRefusal {
@@ -1733,6 +1865,7 @@ mod tests {
         let v = plan(vec![node], vec!["hits"]);
 
         let full = QueryRows {
+            populations: vec![],
             hits: vec![],
             tallies: vec![tally("hits", 2, 0)],
             refusals: vec![],
@@ -1748,6 +1881,7 @@ mod tests {
 
         // The other side of the same boundary, so the test measures the RULE and not a constant.
         let short = QueryRows {
+            populations: vec![],
             hits: vec![],
             tallies: vec![tally("hits", 1, 0)],
             refusals: vec![],
@@ -1771,6 +1905,7 @@ mod tests {
             vec!["hits"],
         );
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![],
             tallies: vec![tally("hits", 0, 0)],
             refusals: vec![],
@@ -1803,6 +1938,7 @@ mod tests {
             vec!["narrowed"],
         );
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![],
             tallies: vec![tally("hits", 12, 0), tally("narrowed", 4, 0)],
             refusals: vec![],
@@ -1852,6 +1988,7 @@ mod tests {
             vec!["tasks"],
         );
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![],
             tallies: vec![
                 tally("tasks", 31, 0),
@@ -1931,6 +2068,7 @@ mod tests {
             vec!["tasks"],
         );
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![],
             tallies: vec![
                 tally("tasks", 33, 0),
@@ -2000,6 +2138,7 @@ mod tests {
             vec!["a"],
         );
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![],
             tallies: vec![tally("a", 3, 0), tally("b", 4, 0), tally("merged", 6, 0)],
             refusals: vec![],
@@ -2074,6 +2213,7 @@ mod tests {
             vec!["hits"],
         );
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![hit("hits", vanished, 0.9), hit("hits", present, 0.5)],
             tallies: vec![tally("hits", 2, 0)],
             refusals: vec![],
@@ -2125,6 +2265,7 @@ mod tests {
             vec!["hits"],
         );
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![HitRow {
                 quantity: None,
                 ..hit("hits", id, 0.0)
@@ -2183,6 +2324,7 @@ mod tests {
             vec!["wide"],
         );
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![],
             tallies: vec![tally("wide", 0, 0)],
             refusals: vec![PlanRefusal {
@@ -2224,6 +2366,7 @@ mod tests {
             vec!["shape"],
         );
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![],
             tallies: vec![tally("shape", 0, 0)],
             refusals: vec![],
@@ -2254,6 +2397,7 @@ mod tests {
             vec!["hits"],
         );
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![],
             tallies: vec![tally("hits", 0, 0)],
             refusals: vec![],
@@ -2284,6 +2428,7 @@ mod tests {
             vec!["hits"],
         );
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![],
             tallies: vec![],
             refusals: vec![],
@@ -2319,6 +2464,7 @@ mod tests {
             vec!["narrowed"],
         );
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![],
             tallies: vec![tally("narrowed", 4, 0)],
             refusals: vec![],
@@ -2347,6 +2493,7 @@ mod tests {
             inputs: vec![name("tasks"), name("declared")],
         });
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![],
             tallies: vec![tally("tasks", 4, 0), tally("merged", 4, 0)],
             refusals: vec![],
@@ -2380,6 +2527,7 @@ mod tests {
             vec!["tasks"],
         );
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![],
             tallies: vec![tally("declared", 6, 0), tally("gap", 25, 0)],
             refusals: vec![],
@@ -2406,6 +2554,7 @@ mod tests {
             vec!["hits"],
         );
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![],
             tallies: vec![tally("hits", 0, 0)],
             refusals: vec![],
@@ -2480,6 +2629,7 @@ mod tests {
         );
         let v = plan(vec![node, sink], vec!["hits"]);
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![],
             tallies: vec![tally("sel", 0, 0), tally("hits", 0, 0)],
             refusals: vec![],
@@ -2598,6 +2748,7 @@ mod tests {
         // passed with `sort_by` deleted. Here the two orders disagree, so the sort is load-bearing.
         let (best, worst) = (Uuid::from_u128(9), Uuid::from_u128(2));
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![
                 hit_in_region("s1", Uuid::from_u128(11), worst, 0.44),
                 hit_in_region("s1", Uuid::from_u128(12), best, 0.91),
@@ -2624,6 +2775,7 @@ mod tests {
     fn regions_tied_on_score_are_ordered_by_id_so_the_trace_is_stable() {
         let (lo, hi) = (Uuid::from_u128(3), Uuid::from_u128(7));
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![
                 hit_in_region("s1", Uuid::from_u128(11), hi, 0.5),
                 hit_in_region("s1", Uuid::from_u128(12), lo, 0.5),
@@ -2642,6 +2794,7 @@ mod tests {
     #[test]
     fn a_walk_stage_discloses_no_regions() {
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![hit("w", Uuid::from_u128(10), 0.7)],
             tallies: vec![tally("w", 1, 0)],
             refusals: vec![],
@@ -2657,6 +2810,7 @@ mod tests {
     #[test]
     fn a_negative_region_score_survives_the_aggregation() {
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![hit_in_region(
                 "s1",
                 Uuid::from_u128(10),
@@ -2682,6 +2836,7 @@ mod tests {
         let v = plan(vec![act_node("s1", ActName::Survey, None)], vec!["s1"]);
         let id = Uuid::from_u128(10);
         let rows = QueryRows {
+            populations: vec![],
             hits: vec![hit_in_region("s1", id, Uuid::from_u128(1), 0.9)],
             tallies: vec![tally("s1", 1, 0)],
             refusals: vec![],
@@ -3136,5 +3291,300 @@ mod tests {
                 "sealed at sel{i}"
             );
         }
+    }
+
+    // ── What each artifact ask counted, on the trace ────────────────────────────────────────────
+
+    /// Shape `n` as [`loaded_shape`] builds it, in the same home but its own family
+    /// (`artifact_kind` `kind`), so two shapes can share one stage (`check_scope` admits asks of
+    /// two families in one home).
+    fn shape_of_family(n: u128, kind: &str, schema: serde_json::Value) -> LoadedShape {
+        LoadedShape {
+            artifact_kind: kind.to_string(),
+            ..loaded_shape(n, schema)
+        }
+    }
+
+    /// Shapes 1 (`measurement`) and 2 (`run`), in one home, each declaring `unit` and `count`.
+    fn two_family_shapes() -> ShapeContext {
+        let schema = serde_json::json!({ "properties": { "unit": {}, "count": {} } });
+        [
+            shape_of_family(1, "measurement", schema.clone()),
+            shape_of_family(2, "run", schema),
+        ]
+        .into_iter()
+        .map(|s| (s.shape_id, ShapeLoad::Loaded(s)))
+        .collect()
+    }
+
+    fn returning_hits(stages: Vec<StageNode>) -> ValidatedComposition {
+        let c = Composition {
+            outcome: OutcomeDeclaration {
+                returns: vec![ReturnSpec {
+                    stage: name("hits"),
+                    with: vec![],
+                }],
+            },
+            stages,
+        };
+        validate(&c, &mut two_family_shapes().session()).expect("every ask lies inside its shape")
+    }
+
+    /// `sel` asks shape 1 for `unit`, then shape 2 for `count`, and feeds a returned `hits`. Two
+    /// asks of two shapes, so a position and a shape are each a fact about the filter.
+    fn two_asks_plan() -> ValidatedComposition {
+        returning_hits(vec![
+            selecting("sel", vec![has_keys(1, &["unit"]), has_keys(2, &["count"])]),
+            act_node("hits", ActName::FindExact, bounded_by("sel")),
+        ])
+    }
+
+    /// One population row for ask `position` of `stage`, shape `shape` in force, with four counts
+    /// distinct from each other and derived from `matched`, so a column read for another shows.
+    fn population(stage: &str, position: i64, shape: u128, matched: i64) -> PopulationRow {
+        PopulationRow {
+            stage: stage.to_string(),
+            position,
+            in_force_shape_id: Some(shape_id(shape).uuid()),
+            in_force_shape_version: Some(1),
+            declared_satisfied: 10 * matched,
+            declared_not_satisfied: 20 * matched,
+            declared_not_yet_checked: 30 * matched,
+            matched,
+        }
+    }
+
+    fn rows_with(stages: &[&str], populations: Vec<PopulationRow>) -> QueryRows {
+        QueryRows {
+            hits: vec![],
+            tallies: stages.iter().map(|s| tally(s, 0, 0)).collect(),
+            populations,
+            refusals: vec![],
+        }
+    }
+
+    fn rows_for_two_asks(populations: Vec<PopulationRow>) -> QueryRows {
+        rows_with(&["sel", "hits"], populations)
+    }
+
+    fn trace_of<'r>(r: &'r QueryResponse, stage: &str) -> &'r StageTrace {
+        r.trace
+            .stages
+            .iter()
+            .find(|s| s.stage == name(stage))
+            .expect("the stage is traced")
+    }
+
+    fn sel_trace(r: &QueryResponse) -> &StageTrace {
+        trace_of(r, "sel")
+    }
+
+    fn refused(stage: &str) -> PlanRefusal {
+        PlanRefusal {
+            stage: Some(name(stage)),
+            reason: RefusalReason::EmbeddingUnavailable,
+            detail: "a refusal recorded by hand".to_string(),
+            teaches: None,
+        }
+    }
+
+    /// **One entry per sealed ask, in filter order, each naming its own shape and reading its own
+    /// row.** The asks are of two shapes, so the seal's `(shape_id, shape_version)` tells the
+    /// entries apart; the rows carry different counts and in-force shapes, so an entry reading the
+    /// other ask's row is visible too. Every count is copied from its own column. A stage that asks
+    /// nothing (`hits`) carries no entries.
+    ///
+    /// Bites reading the asks in another order (`asks.iter().rev().enumerate()` in
+    /// `artifact_ask_traces`): entry 0 then names shape 2. And bites a column copied from its
+    /// neighbour (`declared_not_satisfied: row.declared_satisfied`).
+    #[test]
+    fn each_sealed_ask_is_traced_in_filter_order_from_its_own_population_row() {
+        let v = two_asks_plan();
+        let rows = rows_for_two_asks(vec![population("sel", 1, 2, 5), population("sel", 0, 1, 3)]);
+
+        let r = assemble(&v, &rows, &Hydrated::default()).expect("every ask has its row");
+        let entries = &sel_trace(&r).artifact_asks;
+        let got: Vec<(usize, ShapeId, i32, Option<ShapeId>)> = entries
+            .iter()
+            .map(|e| {
+                (
+                    e.position,
+                    e.shape_id,
+                    e.shape_version,
+                    e.in_force.map(|f| f.shape_id),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (0, shape_id(1), 1, Some(shape_id(1))),
+                (1, shape_id(2), 1, Some(shape_id(2))),
+            ]
+        );
+        let counts: Vec<ArtifactAskPopulation> = entries.iter().map(|e| e.population).collect();
+        assert_eq!(
+            counts,
+            vec![
+                ArtifactAskPopulation {
+                    declared_satisfied: 30,
+                    declared_not_satisfied: 60,
+                    declared_not_yet_checked: 90,
+                    matched: 3,
+                },
+                ArtifactAskPopulation {
+                    declared_satisfied: 50,
+                    declared_not_satisfied: 100,
+                    declared_not_yet_checked: 150,
+                    matched: 5,
+                },
+            ]
+        );
+        assert_eq!(
+            entries[0].in_force,
+            Some(ShapeSuccessor {
+                shape_id: shape_id(1),
+                shape_version: 1,
+            })
+        );
+        assert!(
+            trace_of(&r, "hits").artifact_asks.is_empty(),
+            "a stage that asks nothing"
+        );
+    }
+
+    /// **Two asking stages, each reading its own rows.** `sel_a` and `sel_b` each ask at position
+    /// 0 and carry different counts there; their `union` feeds the returned `hits`. Each stage's
+    /// entry carries its own count.
+    ///
+    /// Bites the index keyed by position alone (in `QueryRows::index`, `(p.stage.as_str(),
+    /// p.position)` → `("", p.position)`, with `population` looking up `("", position)`): both
+    /// entries read whichever row came first.
+    #[test]
+    fn two_asking_stages_each_read_their_own_population_rows() {
+        let v = returning_hits(vec![
+            selecting("sel_a", vec![has_keys(1, &["unit"])]),
+            selecting("sel_b", vec![has_keys(2, &["unit"])]),
+            StageNode::Combine(CombineNode {
+                name: name("both"),
+                op: CombineOp::Union,
+                inputs: vec![name("sel_a"), name("sel_b")],
+            }),
+            act_node("hits", ActName::FindExact, bounded_by("both")),
+        ]);
+        let rows = rows_with(
+            &["sel_a", "sel_b", "both", "hits"],
+            vec![population("sel_a", 0, 1, 3), population("sel_b", 0, 2, 7)],
+        );
+
+        let r = assemble(&v, &rows, &Hydrated::default()).expect("each ask has its row");
+        let of = |stage: &str| -> Vec<(ShapeId, i64)> {
+            trace_of(&r, stage)
+                .artifact_asks
+                .iter()
+                .map(|e| (e.shape_id, e.population.matched))
+                .collect()
+        };
+        assert_eq!(of("sel_a"), vec![(shape_id(1), 3)]);
+        assert_eq!(of("sel_b"), vec![(shape_id(2), 7)]);
+    }
+
+    /// **A stage whose asks ran, missing a population row, fails the response** — as a stage missing
+    /// its tally does, and for the same reason: a row of zeros is a real answer ("nothing governed
+    /// here"), so absence substituted by zeros would be that answer, invented.
+    ///
+    /// Bites `required_population` defaulting to a row of zeros: the response assembles, with ask
+    /// 1 reporting a population nobody counted.
+    #[test]
+    fn a_stage_whose_asks_ran_without_a_population_row_fails_the_response() {
+        let v = two_asks_plan();
+        let rows = rows_for_two_asks(vec![population("sel", 0, 1, 3)]);
+        assert!(
+            assemble(&v, &rows, &Hydrated::default()).is_err(),
+            "ask 1 ran and has no row"
+        );
+    }
+
+    /// **A population row no sealed ask accounts for fails the response too**: a position past the
+    /// seal's asks, a stage that asks nothing, a refused stage (its asks did not run), and a second
+    /// row for one ask are each the compiler and the executor disagreeing about the plan.
+    ///
+    /// Bites removing `every_population_was_asked_for` from `assemble`: each response assembles,
+    /// with the stray row silently dropped. The refused case alone bites dropping
+    /// `rows.refusal(&p.stage).is_some()` from that function: the refused stage's row is then
+    /// accepted and never attached.
+    #[test]
+    fn a_population_row_no_sealed_ask_accounts_for_fails_the_response() {
+        let v = two_asks_plan();
+        let both = || vec![population("sel", 0, 1, 3), population("sel", 1, 2, 5)];
+        assert!(
+            assemble(&v, &rows_for_two_asks(both()), &Hydrated::default()).is_ok(),
+            "the control: exactly the rows the seal asks for"
+        );
+        for stray in [
+            population("sel", 2, 1, 1),
+            population("hits", 0, 1, 1),
+            population("sel", 1, 2, 5),
+        ] {
+            let mut populations = both();
+            populations.push(stray.clone());
+            assert!(
+                assemble(&v, &rows_for_two_asks(populations), &Hydrated::default()).is_err(),
+                "a row for ask {} of `{}` the plan did not ask for, or a second one",
+                stray.position,
+                stray.stage
+            );
+        }
+
+        let mut refused_with_a_row = rows_for_two_asks(vec![population("sel", 0, 1, 3)]);
+        refused_with_a_row.refusals = vec![refused("sel")];
+        assert!(
+            assemble(&v, &refused_with_a_row, &Hydrated::default()).is_err(),
+            "a refused stage ran no asks, so a population row for it is a contradiction"
+        );
+    }
+
+    /// **A refused stage carries no entries and needs no rows.** A refused stage's body runs no act,
+    /// so `compile` arms it no population, and the assembler exempts exactly the stages a refusal
+    /// names: a refusal recorded for `sel` assembles with no population rows and an empty
+    /// `artifact_asks`. (A selection has no compile-time refusal, so this is reached only with
+    /// hand-built rows.)
+    ///
+    /// Bites dropping the refusal check from `artifact_ask_traces`: the refused stage then requires
+    /// rows it was never given, and the response fails.
+    #[test]
+    fn a_refused_stage_carries_no_artifact_ask_entries() {
+        let v = two_asks_plan();
+        let mut rows = rows_for_two_asks(vec![]);
+        rows.refusals = vec![refused("sel")];
+        let r = assemble(&v, &rows, &Hydrated::default())
+            .expect("a refused stage owes no population rows");
+        assert!(sel_trace(&r).artifact_asks.is_empty());
+        assert_eq!(sel_trace(&r).disposition, StageDisposition::Refused);
+    }
+
+    /// **A refusal exempts only the stage it names.** With `hits` refused, `sel` — which ran — still
+    /// owes its rows and still carries its entries.
+    ///
+    /// A selection downstream of a refusal (the tainted, unrefused case) is not expressible: a
+    /// selection admits no upstream stage (`find-resources-with` takes `Context`/`Cogmap` bounds
+    /// only), so no validated plan holds one. The rule it would test — only a refusal exempts —
+    /// is this one, from the other side. Bites an exemption wider than the named stage (in
+    /// `artifact_ask_traces`, `rows.refusal(stage).is_some()` → any refusal in the response): `sel`
+    /// then carries nothing.
+    #[test]
+    fn a_refusal_exempts_only_the_stage_it_names() {
+        let v = two_asks_plan();
+        let mut rows =
+            rows_for_two_asks(vec![population("sel", 0, 1, 3), population("sel", 1, 2, 5)]);
+        rows.refusals = vec![refused("hits")];
+        let r = assemble(&v, &rows, &Hydrated::default()).expect("sel's rows are all there");
+        assert_eq!(sel_trace(&r).artifact_asks.len(), 2);
+        let mut empty = rows_for_two_asks(vec![]);
+        empty.refusals = vec![refused("hits")];
+        assert!(
+            assemble(&v, &empty, &Hydrated::default()).is_err(),
+            "and without its rows, sel fails the response although another stage refused"
+        );
     }
 }

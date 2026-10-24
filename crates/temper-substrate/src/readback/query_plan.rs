@@ -16,7 +16,7 @@
 //! The placeholder arm survives regardless — unreachable through `validate`, and emitted anyway, as
 //! the drift guard for an act that ever declares itself into `search_family()` without a fragment.
 //!
-//! [`query_exec`](super::query_exec) runs a [`CompiledQuery`] and hands back its two row classes.
+//! [`query_exec`](super::query_exec) runs a [`CompiledQuery`] and hands back its three row classes.
 //! What does NOT live in either module is the assembly of a `QueryResponse` — deciding a stage's
 //! disposition, hydrating the returned arms, building the trace. That needs the composition and the
 //! act declarations together, and keeping it out of the substrate is what stops this layer forming
@@ -161,6 +161,13 @@ pub const EMIT_FOLLOW_FROM: &str = "__temper_ungated_follow_from";
 /// disclosed columns. See `CoreCall::Survey` and the migration for the two-gate design.
 pub const EMIT_SURVEY: &str = "__temper_ungated_survey";
 
+/// What one artifact ask counted (`20261105000000`): one row of counts over the ask's counted set
+/// and the version of its shape in force. Not an act's core — no stage's ids come from it — but it
+/// is handed the verdict and the principal as the cores are, so it is emitted the same way:
+/// through `emit_ungated_core_call`, as `CoreCall::Population`. `final_select`'s doc describes the
+/// arm it fills.
+pub const EMIT_ARTIFACT_ASK_COUNTS: &str = "__temper_ungated_artifact_ask_counts";
+
 /// **Every emitted identifier is double-quoted**, here and at each CTE definition and reference.
 /// `[fixed — 2026-08-09]` `StageName::parse` admits `[a-z][a-z0-9_]{0,62}`, which includes `both`,
 /// `all`, `order` and every other reserved word in lower case; unquoted, each is a syntax error a
@@ -274,16 +281,29 @@ pub fn compile(
     ));
 
     let mut tallies: Vec<StageTally> = Vec::new();
+    let mut populations: Vec<StagePopulation> = Vec::new();
     let mut refusals: Vec<PlanRefusal> = Vec::new();
     // Stages whose output cannot be trusted to be COMPLETE: they refused, or something upstream of
     // them did and they answered over less than the truth. See [`tainted_by_refusal`] for why this
     // is a different question from "did this stage refuse", and why only one position reads it.
     let mut tainted: BTreeSet<String> = BTreeSet::new();
     for node in v.ordered() {
-        let (name, body, unusable) = match node {
+        let (name, body, unusable, asks_bound_at) = match node {
             StageNode::Act(inv) => {
                 let emitted = emit_act_body(inv, v.asks(&inv.name), &mut binds, &mut refusals)?;
-                (inv.name.as_str(), emitted.body, emitted.unusable)
+                let refused = refusals.iter().any(|r| r.stage.as_ref() == Some(&inv.name));
+                asks_ran_or_refused(
+                    &inv.name,
+                    v.asks(&inv.name).len(),
+                    emitted.asks_bound_at,
+                    refused,
+                )?;
+                (
+                    inv.name.as_str(),
+                    emitted.body,
+                    emitted.unusable,
+                    emitted.asks_bound_at,
+                )
             }
             // A combinator's inputs are upstream stages, so nothing it was handed can be unusable.
             StageNode::Combine(cn) => {
@@ -295,11 +315,22 @@ pub fn compile(
                     }
                     None => emit_combine_body(cn),
                 };
-                (cn.name.as_str(), body, NO_UNUSABLE.to_string())
+                (cn.name.as_str(), body, NO_UNUSABLE.to_string(), None)
             }
         };
         if tainted_by_refusal(node, &refusals, &tainted) {
             tainted.insert(name.to_string());
+        }
+        // One population arm per ask of every stage that ran its asks. A refused stage's body runs
+        // no act, so it bound no asks and gets no arm; the assembler exempts exactly the stages a
+        // refusal names. A stage merely downstream of a refusal still gets its arms: its counts
+        // range over the counted set, never over the stage's input, so they are complete.
+        if let Some(asks_at) = asks_bound_at {
+            populations.push(StagePopulation {
+                stage: name.to_string(),
+                asks_at,
+                asks: v.asks(node.name()).len(),
+            });
         }
         ctes.push(format!("\"{name}\" AS (\n{body}\n)"));
         cte_names.push((name.to_string(), name.to_string()));
@@ -309,7 +340,11 @@ pub fn compile(
         });
     }
 
-    let sql = format!("WITH {}\n{}", ctes.join(",\n"), final_select(v, &tallies));
+    let sql = format!(
+        "WITH {}\n{}",
+        ctes.join(",\n"),
+        final_select(v, &tallies, &populations)
+    );
     Ok(CompiledQuery {
         sql,
         binds,
@@ -318,11 +353,14 @@ pub fn compile(
     })
 }
 
-/// What one stage contributes to the statement: its CTE body, and the scalar expression that counts
-/// the ids it was handed and could not use.
+/// What one stage contributes to the statement: its CTE body, the scalar expression that counts
+/// the ids it was handed and could not use, and where its sealed artifact asks were bound.
 struct EmittedAct {
     body: String,
     unusable: String,
+    /// The `$n` holding the stage's sealed asks ([`artifact_asks_slot`]) — `None` for a stage that
+    /// asks nothing. The population arms read the asks through this one bind.
+    asks_bound_at: Option<usize>,
 }
 
 /// One stage's entry in the disclosure half of the final select.
@@ -331,6 +369,57 @@ struct StageTally {
     /// A SQL scalar expression yielding `bigint`. See [`NO_UNUSABLE`] for when it is a literal zero
     /// and why that is a fact rather than a default.
     unusable: String,
+}
+
+/// A stage whose artifact asks ran: one population arm per ask, each reading its ask as element
+/// `k` of the stage's one asks bind.
+struct StagePopulation {
+    stage: String,
+    /// The `$n` [`artifact_asks_slot`] bound the stage's asks at.
+    asks_at: usize,
+    /// How many asks the seal holds for the stage — the bind array's length.
+    asks: usize,
+}
+
+/// A stage whose seal holds asks either ran them — its emitter bound them, so it gets population
+/// arms — or refused without binding them, so they did not run. Exactly one: a stage that did
+/// neither, or both, fails the compile.
+///
+/// **This is the one fact the assembler's rule rests on.** The assembler requires a population
+/// row for every sealed ask of every stage no refusal names, and refuses any row for a stage a
+/// refusal names; that agrees with what `compile` arms only while every stage carrying sealed asks
+/// either binds them or refuses, never both. Today `validate` refuses a non-empty `artifact_filter`
+/// on every act but `find-resources-with`, whose emitter always binds and never refuses, so this
+/// cannot fire. It guards a future act admitted to the filter whose emitter does not bind it, or
+/// binds it and then refuses: that plan fails here, loudly, rather than answering with a trace the
+/// assembler would refuse as a 500.
+fn asks_ran_or_refused(
+    stage: &temper_core::types::query::StageName,
+    sealed: usize,
+    asks_bound_at: Option<usize>,
+    refused: bool,
+) -> Result<(), PlanRefusal> {
+    let bound = asks_bound_at.is_some();
+    if sealed == 0 || bound != refused {
+        return Ok(());
+    }
+    let detail = if bound {
+        format!(
+            "this stage bound its {sealed} artifact asks and also refused, so its population rows \
+             would answer for a stage the trace reports as refused"
+        )
+    } else {
+        format!(
+            "this stage's seal holds {sealed} artifact asks and its act's emitter bound none; the \
+             validator should have refused its artifact filter before compilation"
+        )
+    };
+    Err(PlanRefusal {
+        stage: Some(stage.clone()),
+        reason: RefusalReason::FilterNotApplicable,
+        detail,
+        teaches: None,
+    })
 }
 
 /// The body of a stage that REFUSED — the stage-contract shape, and no rows.
@@ -452,6 +541,7 @@ fn emit_act_body(
     let emitted = |body: String| EmittedAct {
         body,
         unusable: unusable.clone(),
+        asks_bound_at: None,
     };
     let (anchor_table, anchor_id) = narrowing.anchor();
     let (anchor_table, anchor_id) = (anchor_table.to_string(), anchor_id.to_string());
@@ -545,7 +635,7 @@ fn emit_act_body(
             // signature order — the narrowings, the asks, then the open-key one — and each slot's
             // `$n` follows the one before it.
             let narrowings = selection_narrowings_for(inv, binds);
-            let (artifact_asks, _asks_bound_at) = artifact_asks_slot(asks, binds);
+            let (artifact_asks, asks_bound_at) = artifact_asks_slot(asks, binds);
             let properties = resource_properties_for(inv, binds);
             let call = emit_ungated_core_call(&CoreCall::Selection {
                 core: EMIT_FIND_RESOURCES_WITH,
@@ -555,12 +645,17 @@ fn emit_act_body(
                 anchor_id: &anchor_id,
                 properties,
             });
-            Ok(emitted(format!(
-                "  -- act: {act} -> {EMIT_FIND_RESOURCES_WITH}\n  \
-                 SELECT resource_id AS id, 'resource'::text AS kind, \
-                 NULL::double precision AS quantity, NULL::jsonb AS via, NULL::uuid AS region\n    \
-                 FROM {call}"
-            )))
+            // The asks' `$n` travels out with the body, so each population arm reads its ask from
+            // this one bind rather than binding the list a second time.
+            Ok(EmittedAct {
+                asks_bound_at,
+                ..emitted(format!(
+                    "  -- act: {act} -> {EMIT_FIND_RESOURCES_WITH}\n  \
+                     SELECT resource_id AS id, 'resource'::text AS kind, \
+                     NULL::double precision AS quantity, NULL::jsonb AS via, NULL::uuid AS region\n    \
+                     FROM {call}"
+                ))
+            })
         }
         Some(EMIT_FIND_WIDE) => {
             let bound = bound_for_find(inv)?;
@@ -865,6 +960,14 @@ enum CoreCall<'a> {
         anchor_table: &'a str,
         anchor_id: &'a str,
     },
+    /// One artifact ask's counts (`20261105000000`): the verdict, the principal as the reader of
+    /// the shape's home, and the ask.
+    ///
+    /// **`ask` is element `k` of the stage's one asks bind** — `($n::jsonb -> k)`, where `$n` is
+    /// the placeholder [`artifact_asks_slot`] returned for the stage — so the counts read the very
+    /// value the selection's asks conjunct read, and the list is bound once. The principal reads
+    /// the home for the reason it does in the selection core: anchor readability, its one use.
+    Population { core: &'a str, ask: String },
 }
 
 /// **The one place an ungated core is called, and the only place its authorization inputs are
@@ -966,6 +1069,11 @@ fn emit_ungated_core_call(c: &CoreCall) -> String {
             "{core}({VISIBLE_IDS}, {PRINCIPAL_BIND}, {embedding}, {regions_n}, {anchor_table}, \
              {anchor_id})"
         ),
+        // The counted set's own argument order — the verdict, the reader, the ask — with both
+        // authorization inputs fixed here, as for every core.
+        CoreCall::Population { core, ask } => {
+            format!("{core}({VISIBLE_IDS}, {PRINCIPAL_BIND}, {ask})")
+        }
     }
 }
 
@@ -1573,7 +1681,8 @@ fn emit_combine_body(cn: &temper_core::types::query::CombineNode) -> String {
 }
 
 /// The final select: one `hit` arm per RETURNED stage, then one `tally` arm per stage — every
-/// stage, returned or not.
+/// stage, returned or not — then one `population` arm per artifact ask of every stage that ran its
+/// asks.
 ///
 /// Each returned stage is its own arm, labelled by its stage name; nothing ranks one arm's quantity
 /// against another's, and there is no arm two acts' rows share.
@@ -1590,11 +1699,33 @@ fn emit_combine_body(cn: &temper_core::types::query::CombineNode) -> String {
 /// construction, so an intermediate stage's membership stays the pipe's internal currency — and
 /// `via` most of all, since it names the very edges a tally is refusing to disclose.
 ///
-/// The two classes share one column list because they are one statement's result set. `row_class`
+/// The classes share one column list because they are one statement's result set. `row_class`
 /// is what the executor switches on; it is a literal in the SQL rather than an inferred property of
 /// a NULL id, because "this row has no id" and "this row is a tally" are different claims and
 /// deriving one from the other would make an act that legitimately produced a NULL id unreadable.
-fn final_select(v: &ValidatedComposition, tallies: &[StageTally]) -> String {
+///
+/// # The third class: one `population` arm per (stage, ask)
+///
+/// A tally counts a stage's OUTPUT; a population arm counts the INPUT of one artifact ask — its
+/// counted set by shape state, how many matched, and the shape version in force (spec
+/// `2026-10-19-asking-artifacts-by-what-they-are` §4.5). It rides this statement for the tallies'
+/// reason: asked separately, it would describe a different snapshot from the stage beside it.
+///
+/// Each arm selects from [`EMIT_ARTIFACT_ASK_COUNTS`], which returns exactly one row whatever the
+/// population — zeros for an empty one — so the arm yields one row and a missing row is a
+/// contradiction the assembler fails on, never a zero. Its ask is element `k` of the stage's one
+/// asks bind. The population columns are new columns on EVERY arm, typed NULLs everywhere but here
+/// ([`NO_POPULATION`]); no existing column carries a population value. A refused stage ran no asks,
+/// so it has no entry in `populations` and no arm.
+///
+/// The arm reads its row FROM the function rather than being `FROM`-less as a tally is: a tally
+/// must not read `FROM` a stage that may be empty, while this function's contract is one row,
+/// and a `FROM`-less spelling (`(f(…)).col` per column) would run it once per column.
+fn final_select(
+    v: &ValidatedComposition,
+    tallies: &[StageTally],
+    populations: &[StagePopulation],
+) -> String {
     // Returned stages arm as hits. Survey stages arm as hits TOO, returned or not — an
     // intermediate survey stage's rows carry `region` and `region_score`, and the stage's
     // `disclosed_regions` is documented as *which regions the stage matched and at what score*:
@@ -1624,7 +1755,8 @@ fn final_select(v: &ValidatedComposition, tallies: &[StageTally]) -> String {
         .map(|s| {
             format!(
                 "SELECT 'hit'::text AS row_class, '{s}'::text AS stage, id, kind, quantity, via, \
-                 region, NULL::bigint AS produced, NULL::bigint AS unusable FROM \"{s}\""
+                 region, NULL::bigint AS produced, NULL::bigint AS unusable, {NO_POPULATION} \
+                 FROM \"{s}\""
             )
         })
         .collect();
@@ -1635,21 +1767,63 @@ fn final_select(v: &ValidatedComposition, tallies: &[StageTally]) -> String {
             "SELECT 'tally'::text AS row_class, '{s}'::text AS stage, NULL::uuid AS id, \
              NULL::text AS kind, NULL::double precision AS quantity, NULL::jsonb AS via, \
              NULL::uuid AS region, \
-             (SELECT count(*) FROM \"{s}\")::bigint AS produced, {unusable} AS unusable"
+             (SELECT count(*) FROM \"{s}\")::bigint AS produced, {unusable} AS unusable, \
+             {NO_POPULATION}"
         )
     }));
+    arms.extend(populations.iter().flat_map(population_arms));
     if arms.is_empty() {
         // Unreachable through `validate`, which refuses an empty `stages` — a claim that was FALSE
         // when this comment was first written and is true now (`RefusalReason::Other("no-stages")`,
         // added 2026-08-09 after review found the gap). Kept because `compile` is public and a
         // zero-arm UNION is not valid SQL.
-        return "SELECT NULL::text AS row_class, NULL::text AS stage, NULL::uuid AS id, \
-                NULL::text AS kind, NULL::double precision AS quantity, NULL::jsonb AS via, \
-                NULL::uuid AS region, \
-                NULL::bigint AS produced, NULL::bigint AS unusable WHERE false"
-            .to_string();
+        return format!(
+            "SELECT NULL::text AS row_class, NULL::text AS stage, NULL::uuid AS id, \
+             NULL::text AS kind, NULL::double precision AS quantity, NULL::jsonb AS via, \
+             NULL::uuid AS region, \
+             NULL::bigint AS produced, NULL::bigint AS unusable, {NO_POPULATION} WHERE false"
+        );
     }
     arms.join("\nUNION ALL\n")
+}
+
+/// The population columns as every arm but a population arm carries them: typed NULLs, in the
+/// order [`population_arms`] projects them. Declared once so the hit arms, the tally arms and the
+/// empty fallback cannot disagree with each other about the column list — a missing column is a
+/// `UNION` arity error, and a mistyped one a type error, each raised only when Postgres runs the
+/// statement.
+const NO_POPULATION: &str = "NULL::bigint AS ask_position, NULL::uuid AS in_force_shape_id, \
+     NULL::int AS in_force_shape_version, NULL::bigint AS declared_satisfied, \
+     NULL::bigint AS declared_not_satisfied, NULL::bigint AS declared_not_yet_checked, \
+     NULL::bigint AS matched";
+
+/// One `population` arm per ask of `p`, in filter order: the shared column list with every
+/// non-population column NULL, then the ask's position and the one row
+/// [`EMIT_ARTIFACT_ASK_COUNTS`] returns for element `k` of the stage's asks bind.
+///
+/// `k` and the stage name are the only values rendered into the text, and neither is a caller's:
+/// `k` is an index this compiler counts, and the stage name is [`StageName`]-proven safe.
+///
+/// [`StageName`]: temper_core::types::query::StageName
+fn population_arms(p: &StagePopulation) -> Vec<String> {
+    let s = &p.stage;
+    let n = p.asks_at;
+    (0..p.asks)
+        .map(|k| {
+            let call = emit_ungated_core_call(&CoreCall::Population {
+                core: EMIT_ARTIFACT_ASK_COUNTS,
+                ask: format!("(${n}::jsonb -> {k})"),
+            });
+            format!(
+                "SELECT 'population'::text AS row_class, '{s}'::text AS stage, NULL::uuid AS id, \
+                 NULL::text AS kind, NULL::double precision AS quantity, NULL::jsonb AS via, \
+                 NULL::uuid AS region, NULL::bigint AS produced, NULL::bigint AS unusable, \
+                 {k}::bigint AS ask_position, c.in_force_shape_id, c.in_force_shape_version, \
+                 c.declared_satisfied, c.declared_not_satisfied, c.declared_not_yet_checked, \
+                 c.matched FROM {call} AS c"
+            )
+        })
+        .collect()
 }
 
 fn act_name(act: &temper_core::types::query::ActName) -> String {
@@ -1834,6 +2008,41 @@ mod tests {
         assert!(
             !narrowing(vec![caller(StageRelation::Bound)], &mut binds).has_seed(),
             "and false of a purely bounded one, or every find stage would refuse"
+        );
+    }
+
+    /// **A stage whose seal holds asks either bound them or refused, never both; anything else
+    /// fails the compile.** Sealed asks with no bind and no refusal, or with both a bind and a
+    /// refusal, err, naming the stage. Bound asks, a refused stage, and a stage that asks nothing
+    /// each compile.
+    ///
+    /// Unreachable through `compile` today — `validate` refuses `artifact_filter` on every act
+    /// whose emitter does not bind it, and `ValidatedComposition` has no other constructor — so the
+    /// rule is witnessed here, at the function `compile` calls for every act stage. Bites
+    /// `asks_ran_or_refused` answering `Ok(())` whatever it is handed, and the guard made inclusive
+    /// (`bound || refused`), which passes the stage that did both.
+    #[test]
+    fn sealed_asks_either_run_or_refuse_and_never_both() {
+        let stage = StageName::parse("sel").unwrap();
+        let unbound = asks_ran_or_refused(&stage, 2, None, false)
+            .expect_err("two sealed asks, none bound, nothing refused");
+        assert_eq!(unbound.stage.as_ref(), Some(&stage));
+        assert_eq!(unbound.reason, RefusalReason::FilterNotApplicable);
+        assert!(
+            asks_ran_or_refused(&stage, 2, Some(3), false).is_ok(),
+            "bound at $3"
+        );
+        assert!(
+            asks_ran_or_refused(&stage, 2, None, true).is_ok(),
+            "refused"
+        );
+        let both =
+            asks_ran_or_refused(&stage, 2, Some(3), true).expect_err("bound at $3 and refused");
+        assert_eq!(both.stage.as_ref(), Some(&stage));
+        assert_eq!(both.reason, RefusalReason::FilterNotApplicable);
+        assert!(
+            asks_ran_or_refused(&stage, 0, None, false).is_ok(),
+            "asks nothing"
         );
     }
 }

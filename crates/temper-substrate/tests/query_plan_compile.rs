@@ -1559,7 +1559,8 @@ fn every_ungated_core_call_takes_its_ids_from_the_hoisted_relation_and_nothing_e
             survey_stage("surveyed"),
             // A selection carrying artifact asks: the `Selection` arm with its asks slot bound, so
             // the guard covers the call shape the counted set is reached through. The asks are a
-            // narrowing argument and never an id source.
+            // narrowing argument and never an id source. Its one ask also gives the statement a
+            // `Population` call — the ask's counts — which this guard holds to the same rule.
             asking_selection("asked"),
         ],
         vec!["narrowed"],
@@ -1570,10 +1571,18 @@ fn every_ungated_core_call_takes_its_ids_from_the_hoisted_relation_and_nothing_e
     let calls = ungated_core_calls(&c.sql);
     assert_eq!(
         calls.len(),
-        5,
-        "both find stages, both selections, AND the survey must reach an ungated core; got \
-         {calls:?} in:\n{}",
+        6,
+        "both find stages, both selections, the survey AND the asking selection's one population \
+         arm must reach an ungated function; got {calls:?} in:\n{}",
         c.sql
+    );
+    assert!(
+        calls.iter().any(|c| c
+            .lines()
+            .next()
+            .is_some_and(|own| own.contains("::jsonb -> 0)) AS c"))),
+        "the `Population` variant must be among the calls this guard inspects, or it verifies \
+         only the variants that already existed: {calls:?}"
     );
     // The asks slot sits just before the anchor pair; bound, it is a `$n::jsonb` rather than the
     // typed NULL a stage that asks nothing renders there. Each call is emitted on one line, so its
@@ -1797,6 +1806,86 @@ fn a_selection_binds_its_sealed_asks_once_between_the_narrowings_and_the_anchor(
             "SELECT resource_id AS id, 'resource'::text AS kind, NULL::double precision AS quantity"
         ),
         "the selection produces resource ids: {}",
+        q.sql
+    );
+
+    // **The population arm reads the same bind.** The ask's counts take the verdict, the
+    // principal, and the ask as element 0 of `$2` — the placeholder the selection call bound — so
+    // the asks are bound once, and the statement's two readers of them read one value.
+    let population = "__temper_ungated_artifact_ask_counts((SELECT ids FROM __temper_vis), $1, \
+                      ($2::jsonb -> 0)) AS c";
+    assert_eq!(
+        q.sql.matches(population).count(),
+        1,
+        "one population arm for the one ask.\n  expected: {population}\n  in: {}",
+        q.sql
+    );
+    assert_eq!(
+        q.binds
+            .iter()
+            .filter(|b| matches!(b, QueryBind::Json(value) if *value == bound))
+            .count(),
+        1,
+        "the asks are bound once, never a second time for the population arm"
+    );
+    assert!(
+        q.sql
+            .contains("'population'::text AS row_class, 'sel'::text AS stage"),
+        "the arm is labelled with its class and stage: {}",
+        q.sql
+    );
+    assert!(
+        q.sql.contains("0::bigint AS ask_position"),
+        "and with the ask's position in the filter: {}",
+        q.sql
+    );
+}
+
+/// **A stage that asks nothing has no population arm, and every arm carries the population
+/// columns.** The hit arm, the tally arms and the population arm are one result set, so each must
+/// project the same column list: a missing column is a `UNION` arity error that only running the
+/// statement would raise. Asserted per arm, as `every_arm_of_the_union_carries_the_region_column`
+/// does for `region`.
+///
+/// Bites a population column dropped from the hit or tally arms (`NO_POPULATION` left out of
+/// either format string), or a population arm emitted for a stage with no asks.
+#[test]
+fn every_arm_carries_the_population_columns_and_only_an_asking_stage_has_a_population_arm() {
+    let v = build_with(
+        vec![asking_selection("sel"), find_from("hits", "sel")],
+        vec!["hits"],
+        &asked_shapes(),
+    );
+    let q = compile(&v, test_profile()).expect("compiles");
+
+    let arms: Vec<&str> = q
+        .sql
+        .split("\nUNION ALL\n")
+        .filter(|arm| arm.contains("AS row_class"))
+        .collect();
+    assert_eq!(
+        arms.len(),
+        4,
+        "the returned stage's hit arm, two tally arms and one population arm: {}",
+        q.sql
+    );
+    for arm in &arms {
+        for column in [
+            "AS ask_position",
+            "in_force_shape_id",
+            "in_force_shape_version",
+            "declared_satisfied",
+            "declared_not_satisfied",
+            "declared_not_yet_checked",
+            "matched",
+        ] {
+            assert!(arm.contains(column), "an arm without `{column}`: {arm}");
+        }
+    }
+    assert!(
+        !q.sql
+            .contains("'population'::text AS row_class, 'hits'::text AS stage"),
+        "a stage that asks nothing has no population arm: {}",
         q.sql
     );
 }
@@ -2354,4 +2443,56 @@ fn survey_s_region_gate_pays_two_team_closures_per_stage_and_the_count_is_pinned
          visible_region_anchors — so an N-survey-stage statement pays 2N for the region gate \
          beside its one hoisted resource gate"
     );
+}
+
+/// **Each ask of a stage has its own population arm, labelled with its position and reading the
+/// bind's element at that position.** A stage asking twice compiles two arms: the one labelled
+/// `0` reads `($2::jsonb -> 0)` and the one labelled `1` reads `($2::jsonb -> 1)`, both from the
+/// stage's one asks bind.
+///
+/// Bites the arm's element and label coming apart: `-> {k}` written `-> 0` (the arm labelled 1
+/// reads ask 0), or `{k}::bigint` written `0::bigint` (two arms labelled 0).
+#[test]
+fn each_ask_of_a_stage_has_its_own_population_arm_reading_its_own_element() {
+    let mut node = asking_selection("sel");
+    if let StageNode::Act(a) = &mut node {
+        a.artifact_filter.push(ArtifactAsk {
+            predicates: vec![ArtifactPredicate {
+                path: vec!["unit".to_string()],
+                op: temper_core::types::query::PropertyOp::Contains {
+                    values: vec![serde_json::json!("ms")],
+                },
+            }],
+            ..the_callers_ask()
+        });
+    }
+    let v = build_with(
+        vec![node, find_from("hits", "sel")],
+        vec!["hits"],
+        &asked_shapes(),
+    );
+    let q = compile(&v, test_profile()).expect("a stage asking twice compiles");
+
+    assert_eq!(
+        q.sql.matches("'population'::text AS row_class").count(),
+        2,
+        "one arm per ask: {}",
+        q.sql
+    );
+    for k in 0..2 {
+        let label = format!("{k}::bigint AS ask_position, c.in_force_shape_id");
+        let reads = format!(
+            "__temper_ungated_artifact_ask_counts((SELECT ids FROM __temper_vis), $1, \
+             ($2::jsonb -> {k})) AS c"
+        );
+        let arm = q
+            .sql
+            .split("\nUNION ALL\n")
+            .find(|arm| arm.contains(&label))
+            .unwrap_or_else(|| panic!("no arm labelled {k} in:\n{}", q.sql));
+        assert!(
+            arm.contains(&reads),
+            "the arm labelled {k} must read element {k}.\n  expected: {reads}\n  arm: {arm}"
+        );
+    }
 }

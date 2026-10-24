@@ -22,6 +22,7 @@ from typing import Any, ClassVar, Dict, List, Optional
 from typing_extensions import Annotated
 from temper.generated.models.act_name import ActName
 from temper.generated.models.act_refusal import ActRefusal
+from temper.generated.models.artifact_ask_trace import ArtifactAskTrace
 from temper.generated.models.extent import Extent
 from temper.generated.models.narrowed_by import NarrowedBy
 from temper.generated.models.region_disclosure import RegionDisclosure
@@ -36,6 +37,7 @@ class StageTrace(BaseModel):
     One stage's mandatory disclosure. Exists whether or not the stage produced a result.  **`Eq` was dropped when `disclosed_regions` arrived** `[2026-08-20]`. `region_score` is an `f64` carried raw and un-normalized — see [`super::hits::RegionDisclosure`] for why — so this type is `PartialEq` and cannot be `Eq`. Nothing used it as a set or map key. [`super::envelope::StageResult`] never derived either.
     """ # noqa: E501
     act: ActName
+    artifact_asks: Optional[List[ArtifactAskTrace]] = Field(default=None, description="What each artifact ask of this stage counted, one entry per ask in `artifact_filter` order. Empty, and absent on the wire, for a stage that asks nothing.  **This is where an empty `find-resources-with` stage says why.** An empty selection that asked artifacts is one of three things — nothing in what you can see is governed by the shape; some is and none matched; or the ask narrowed by verdict state and reconciliation has not reached the rows — and the per-ask population tells them apart (spec `2026-10-19-asking-artifacts-by-what-they-are` §4.5). See [`ArtifactAskPopulation`] for what is counted.  It describes the stage's INPUT, not its output: no entry is a quantity, and none orders anything. A stage that refused carries no entries: its asks did not run. A stage downstream of a refusal carries them like any other, because its counts never read its input.")
     disclosed_regions: Optional[List[RegionDisclosure]] = Field(default=None, description="Which regions a `survey` stage matched, and at what score. Empty for every other act.  **This is what `discloses: [Disclosure::Region]` MEANS**, and until 2026-08-20 it meant nothing: the declaration existed in the registry with no consumer anywhere, no `region_id` in the assembler, and no field here — so a caller was told which regions matched by nothing at all. A declaration describes the DEPLOYED system; this field is what makes that true for `survey`.  **The pair rule**: [`super::envelope::StageResult::disclosed_regions`] carries the same value, for the same reason as [`Self::extent`], [`Self::terms_applied`] and the input numbers — the trace covers every stage and the results only the returned ones, so disagreeing copies would leave a reader unable to tell which was right. One definition (`disclosed_regions_for`), read twice.")
     disposition: StageDisposition
     extent: Extent = Field(description="Complete / partial / indeterminate — **for every stage, not only the returned ones.** NOT a total; see [`Extent`].  **The pair rule**: [`super::envelope::StageResult::extent`] carries the same value, and the two must stay identical for the same reason as [`Self::input_ids`], [`Self::input_unusable`] and [`Self::refusal`] — the trace covers every stage and the results only the returned ones, so disagreeing copies would leave a reader unable to tell which was right.  **It is a fact about THIS stage's own bound.** A combinator applies none, so it reports `Complete`, meaning *\"I dropped nothing\"* rather than *\"the corpus behind my arms is exhausted\"*: an arm's `Partial` is not propagated up, because that would make one stage's extent a claim about another stage's bound. Every arm is a stage and carries its own entry here, which is how a reader sees that an `intersect` was computed against a truncated walk.")
@@ -47,7 +49,7 @@ class StageTrace(BaseModel):
     refusal: Optional[ActRefusal] = Field(default=None, description="Present iff `disposition` is `refused` — the reason and standing-aware detail. The trace covers every stage while results cover only returned ones, so this is the ONLY refusal record for an intermediate stage. **The pair rule**: identical to [`super::envelope::StageResult::refusal`], for the same reason as the input numbers.")
     stage: Annotated[str, Field(strict=True)] = Field(description="A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the name is a safe SQL identifier.  The compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the whole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no `new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter, then up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).")
     terms_applied: Dict[str, StrictInt] = Field(description="The APPLIED value of every admitted term: the page this stage actually RAN with, clamped to the act's published ceiling and defaulted where the caller named nothing.  **The pair rule** again — identical to [`super::envelope::StageResult::terms_applied`], from one [`super::registry::applied_terms`] DEFINITION rather than two. That function's own doc argues it from the other end: *\"The one definition, and it exists because there are two consumers who must not disagree… Computed twice, they would eventually differ, and the difference would be a response claiming a page size that did not run.\"* It already had two consumers (the compiler binds these values, the assembler reports them); this adds a second READER of the map the assembler already holds, never a second definition of it.  **\"One definition\" is the claim; \"one evaluation\" is not.** `stage_numbers` is called once per carrier, so a returned stage evaluates it twice. What forbids disagreement is that the definition is pure — the property to preserve if it is ever edited.  Empty for a combinator, which admits no terms — a union runs no page of its own.  **No \"you were clamped\" flag rides beside this, and this field does not add one.** That call is not taken here — it belongs to [`super::registry::applied_terms`], which states it: ceilings are published per act, so the applied value is the whole story, and clamping to a ceiling nobody published would be the bug rather than the silence. `temper-services`' `the_page_a_stage_reports_is_the_clamped_one_the_statement_actually_ran` pins the other half — *\"reporting the request back would make `terms_applied` an echo rather than a disclosure\"* — so what rides here is what ran, never what was asked for.")
-    __properties: ClassVar[List[str]] = ["act", "disclosed_regions", "disposition", "extent", "input_ids", "input_unusable", "inputs", "narrowed_by", "produced_ids", "refusal", "stage", "terms_applied"]
+    __properties: ClassVar[List[str]] = ["act", "artifact_asks", "disclosed_regions", "disposition", "extent", "input_ids", "input_unusable", "inputs", "narrowed_by", "produced_ids", "refusal", "stage", "terms_applied"]
 
     @field_validator('stage')
     def stage_validate_regular_expression(cls, value):
@@ -101,6 +103,13 @@ class StageTrace(BaseModel):
         # override the default output from pydantic by calling `to_dict()` of act
         if self.act:
             _dict['act'] = self.act.to_dict()
+        # override the default output from pydantic by calling `to_dict()` of each item in artifact_asks (list)
+        _items = []
+        if self.artifact_asks:
+            for _item_artifact_asks in self.artifact_asks:
+                if _item_artifact_asks:
+                    _items.append(_item_artifact_asks.to_dict())
+            _dict['artifact_asks'] = _items
         # override the default output from pydantic by calling `to_dict()` of each item in disclosed_regions (list)
         _items = []
         if self.disclosed_regions:
@@ -146,6 +155,7 @@ class StageTrace(BaseModel):
 
         _obj = cls.model_validate({
             "act": ActName.from_dict(obj["act"]) if obj.get("act") is not None else None,
+            "artifact_asks": [ArtifactAskTrace.from_dict(_item) for _item in obj["artifact_asks"]] if obj.get("artifact_asks") is not None else None,
             "disclosed_regions": [RegionDisclosure.from_dict(_item) for _item in obj["disclosed_regions"]] if obj.get("disclosed_regions") is not None else None,
             "disposition": obj.get("disposition"),
             "extent": Extent.from_dict(obj["extent"]) if obj.get("extent") is not None else None,

@@ -65,6 +65,8 @@ temper/generated/models/anchor_shape.py
 temper/generated/models/anchor_verdict.py
 temper/generated/models/append_block_payload.py
 temper/generated/models/artifact_ask.py
+temper/generated/models/artifact_ask_population.py
+temper/generated/models/artifact_ask_trace.py
 temper/generated/models/artifact_commit_request.py
 temper/generated/models/artifact_commit_response.py
 temper/generated/models/artifact_predicate.py

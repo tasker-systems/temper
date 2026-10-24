@@ -87,6 +87,8 @@ __all__ = [
     "AnchorVerdict",
     "AppendBlockPayload",
     "ArtifactAsk",
+    "ArtifactAskPopulation",
+    "ArtifactAskTrace",
     "ArtifactCommitRequest",
     "ArtifactCommitResponse",
     "ArtifactPredicate",
@@ -592,6 +594,8 @@ from temper.generated.models.anchor_shape import AnchorShape as AnchorShape
 from temper.generated.models.anchor_verdict import AnchorVerdict as AnchorVerdict
 from temper.generated.models.append_block_payload import AppendBlockPayload as AppendBlockPayload
 from temper.generated.models.artifact_ask import ArtifactAsk as ArtifactAsk
+from temper.generated.models.artifact_ask_population import ArtifactAskPopulation as ArtifactAskPopulation
+from temper.generated.models.artifact_ask_trace import ArtifactAskTrace as ArtifactAskTrace
 from temper.generated.models.artifact_commit_request import ArtifactCommitRequest as ArtifactCommitRequest
 from temper.generated.models.artifact_commit_response import ArtifactCommitResponse as ArtifactCommitResponse
 from temper.generated.models.artifact_predicate import ArtifactPredicate as ArtifactPredicate

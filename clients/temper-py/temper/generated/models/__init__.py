@@ -43,6 +43,8 @@ from temper.generated.models.anchor_shape import AnchorShape
 from temper.generated.models.anchor_verdict import AnchorVerdict
 from temper.generated.models.append_block_payload import AppendBlockPayload
 from temper.generated.models.artifact_ask import ArtifactAsk
+from temper.generated.models.artifact_ask_population import ArtifactAskPopulation
+from temper.generated.models.artifact_ask_trace import ArtifactAskTrace
 from temper.generated.models.artifact_commit_request import ArtifactCommitRequest
 from temper.generated.models.artifact_commit_response import ArtifactCommitResponse
 from temper.generated.models.artifact_predicate import ArtifactPredicate

@@ -54,14 +54,16 @@ use super::{refusal, PlanRefusal};
 /// 2 MiB + 1.5 MiB = 3.5 MiB, and a refusal list carrying every ask's teaching is at most 1.5 MiB
 /// of them.
 ///
-/// **The cap is also the statement's multiplier**: each ask is one call of the counted set
-/// (`__temper_ungated_artifact_ask_population`, `20261104000000`), which reads its shape's family in
-/// its home, so a request runs at most 32 such reads. Within one filter a repeated ask is refused
-/// (`duplicate_set_member`), including one that differs only in term order or in a default spelled
-/// out, since the validated bind is canonical in its terms and defaults (not in predicate or value
-/// order, which the SQL also reads order-free); the same ask on two stages is two reads, inside the
-/// cap. A real composition asks one or two shapes from a few stages; 32 is an order of magnitude
-/// above it.
+/// **The cap is also the statement's multiplier**: each ask is two calls of the counted set
+/// (`__temper_ungated_artifact_ask_population`, `20261104000000`), each reading its shape's family
+/// in its home — one in the selection's asks conjunct, one in the ask's population arm
+/// (`__temper_ungated_artifact_ask_counts`, `20261105000000`) — plus one live-row lookup of its
+/// shape, gated by the home check. So a request runs at most 64 counted-set reads and 32 lookups.
+/// Within one filter a repeated ask is refused (`duplicate_set_member`), including one that differs
+/// only in term order or in a default spelled out, since the validated bind is canonical in its
+/// terms and defaults (not in predicate or value order, which the SQL also reads order-free); the
+/// same ask on two stages is four reads, inside the cap. A real composition asks one or two shapes
+/// from a few stages; 32 is an order of magnitude above it.
 pub const MAX_ASKS_PER_REQUEST: usize = 32;
 
 /// The most distinct shapes one request's asks may name. Refused as `too_many_filter_values`
@@ -224,8 +226,8 @@ pub(super) fn validate_asks(
 /// `duplicate_set_member` when a stage's filter asks one question twice, over the asks it admitted.
 ///
 /// **Equality is the validated bind** ([`ValidatedAsk::bind`]), not the caller's text: the bind is
-/// what the statement runs, so two asks with one bind are one counted-set call made twice. The
-/// bind is canonical in its terms and defaults — terms in vocabulary order, defaults applied — so it
+/// what the statement runs, so two asks with one bind are one ask's counted-set calls made
+/// twice. The bind is canonical in its terms and defaults — terms in vocabulary order, defaults applied — so it
 /// also catches asks that differ only in term order or in a default spelled out, which the caller's
 /// text would call different. Predicates and `contains` values keep the caller's order, so asks
 /// differing only there are not caught; the request cap bounds them. AND-ing an ask with itself narrows nothing, so the repeat is refused rather than

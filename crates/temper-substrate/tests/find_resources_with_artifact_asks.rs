@@ -25,6 +25,14 @@
 //! execution, around one run of the compiled statement — in both directions: a small home in a
 //! large family, and a small family in a large home.
 //!
+//! **What each ask counted.** Migration `20261105000000` adds `__temper_ungated_artifact_ask_counts`,
+//! one row per ask over the same counted set, and the compiled statement reads it in a `population`
+//! arm per ask. The last section holds its witnesses — unverdicted content still matching and
+//! counted, a narrowed ask still counting what it excluded, the deny direction for counts (the
+//! owner gate, and the floor and home check the counts inherit), exactly one row, the version in
+//! force after an amendment, every count in its own column — and the executor's refusal of a row
+//! class it was not taught. Their bites are variants of the deployed bodies, built as above.
+//!
 //! Every resource is created through the real write path with its embedding deferred, so no model
 //! is needed; the background rows of the plan tests are fixture inserts, as in
 //! `artifact_ask_parity.rs`.
@@ -47,6 +55,7 @@ use temper_core::types::query::{
 use temper_substrate::events::EventContext;
 use temper_substrate::ids::{ContextId, DataArtifactId, EntityId, ProfileId, ResourceId};
 use temper_substrate::payloads::{AnchorRef, ArtifactIntent, EnforcementMode, KindOwner};
+use temper_substrate::readback::query_exec::{execute, PopulationRow, QueryRows};
 use temper_substrate::readback::query_plan::{compile, CompiledQuery, QueryBind};
 use temper_substrate::scenario::bootseed;
 use temper_substrate::writes::{
@@ -74,6 +83,12 @@ const STATES_IN_SIGNATURE: &str = "(p_visible_ids uuid[], p_home_anchor_table te
      p_home_anchor_id uuid, p_kind_owner_table text, p_kind_owner_id uuid, p_artifact_kind text) \
      RETURNS TABLE (artifact_id uuid, resource_id uuid, shape_id uuid, shape_version int, \
      content_hash text, shape_state text)";
+
+const COUNTS: &str = "__temper_ungated_artifact_ask_counts";
+const COUNTS_SIGNATURE: &str = "(p_visible_ids uuid[], p_reader uuid, p_ask jsonb) \
+     RETURNS TABLE (in_force_shape_id uuid, in_force_shape_version int, \
+     declared_satisfied bigint, declared_not_satisfied bigint, \
+     declared_not_yet_checked bigint, matched bigint)";
 
 const CORE: &str = "__temper_ungated_find_resources_with";
 const CORE_SIGNATURE: &str = "(p_visible_ids uuid[], p_doc_types text[], p_tags text[], \
@@ -885,6 +900,25 @@ async fn a_resource_still_ingesting_is_not_counted(pool: PgPool) {
 
 // ── What the compiled statement reads ───────────────────────────────────────────────────────────
 
+/// The most `kb_data_artifacts` rows one call of the counted set may read over these fixtures,
+/// measured on its own through `__temper_ungated_artifact_ask_counts` ([`counts_rows_read`]): the
+/// home's few artifacts, each read once through governance and once by id for its intent, and
+/// nothing of the family or the home beyond them. One call reads 14 rows over the small home and
+/// 16 over the small family; the bound is twice the larger, so a call that more than doubles the
+/// larger fixture's reads fails, while a walk of either fixture reads thousands.
+const ONE_CALL_BOUND: i64 = 32;
+
+/// The most `kb_data_artifacts` rows one run of the compiled statement may read for one ask.
+///
+/// **The arithmetic: 2 calls × [`ONE_CALL_BOUND`].** The statement calls the counted set twice for
+/// the ask — in the selection's asks conjunct and in the ask's population arm — with the same three
+/// arguments (the hoisted visible set, the principal, the ask as element 0 of one bind). One call
+/// over these fixtures reads at most [`ONE_CALL_BOUND`], which the counts-alone measurement holds,
+/// so two read at most twice that.
+/// Against a family of 9,000 outside the home, or a home of 18,000, a walk of either reads
+/// thousands, so the bound separates the two plans by more than an order of magnitude.
+const TWO_CALL_BOUND: i64 = 2 * ONE_CALL_BOUND;
+
 const BACKGROUND_HOMES: i32 = 150;
 const BACKGROUND_RESOURCES: i32 = 3_000;
 const ARTIFACTS_PER_BACKGROUND_RESOURCE: i32 = 6;
@@ -902,10 +936,11 @@ async fn artifact_rows_read(conn: &mut PgConnection) -> i64 {
     .unwrap()
 }
 
-/// The compiled statement for one composition: a selection stage asking `ask` of the world's
+/// The compiled statement for one composition: a selection stage asking `asks` of the world's
 /// shape, piped into a returned `find-exact` over the bodies — validated against the shape as the
-/// handler loads it, and compiled by `compile` as `run_composition` compiles it.
-fn compiled_plan(w: &World, ask: ArtifactAsk) -> CompiledQuery {
+/// handler loads it (its first version), and compiled by `compile` as `run_composition` compiles
+/// it.
+fn compiled_plan(w: &World, asks: Vec<ArtifactAsk>) -> CompiledQuery {
     let loaded = LoadedShape {
         shape_id: ShapeId::from(w.shape),
         shape_version: 1,
@@ -938,7 +973,7 @@ fn compiled_plan(w: &World, ask: ArtifactAsk) -> CompiledQuery {
                 resource_filter: None,
                 edge_filter: None,
                 properties: vec![],
-                artifact_filter: vec![ask],
+                artifact_filter: asks,
             }),
             StageNode::Act(ActInvocation {
                 name: hits,
@@ -994,14 +1029,49 @@ async fn run_compiled(conn: &mut PgConnection, q: &CompiledQuery) -> BTreeSet<Uu
 /// One run of the compiled statement for `ask`, and how many `kb_data_artifacts` rows it read,
 /// measured inside one transaction around that run alone. The count sees the counted set's
 /// `EXECUTE`, which an outer `EXPLAIN` cannot.
+///
+/// **The whole statement, population arm included.** The statement calls the counted set twice
+/// for the one ask: once in the selection's asks conjunct, once in the ask's population arm
+/// (`__temper_ungated_artifact_ask_counts`). The arm is asserted present here, so a bound measured
+/// over the run is a bound on both calls.
 async fn compiled_rows_read(pool: &PgPool, w: &World, ask: ArtifactAsk) -> (BTreeSet<Uuid>, i64) {
-    let q = compiled_plan(w, ask);
+    let q = compiled_plan(w, vec![ask]);
+    assert_eq!(
+        q.sql
+            .matches(&format!("{COUNTS}((SELECT ids FROM __temper_vis),"))
+            .count(),
+        1,
+        "one population arm, for the one ask, in:\n{}",
+        q.sql
+    );
     let mut tx = pool.begin().await.unwrap();
     let before = artifact_rows_read(&mut tx).await;
     let answered = run_compiled(&mut tx, &q).await;
     let read = artifact_rows_read(&mut tx).await - before;
     tx.rollback().await.unwrap();
     (answered, read)
+}
+
+/// The counts function alone for `ask`, called as the population arm calls it — the principal's
+/// own visible set, the principal as reader, the ask's bind — and how many `kb_data_artifacts` rows
+/// that one call read, measured as [`compiled_rows_read`] measures the statement.
+async fn counts_rows_read(pool: &PgPool, w: &World, ask: &ArtifactAsk) -> (CountsRow, i64) {
+    let mut tx = pool.begin().await.unwrap();
+    let before = artifact_rows_read(&mut tx).await;
+    let row: CountsRow = sqlx::query_as(
+        "SELECT in_force_shape_id, in_force_shape_version, declared_satisfied, \
+                declared_not_satisfied, declared_not_yet_checked, matched \
+           FROM __temper_ungated_artifact_ask_counts(\
+                (SELECT array_agg(resource_id) FROM resources_visible_to($1)), $1, $2::jsonb)",
+    )
+    .bind(w.owner.uuid())
+    .bind(bound(ask))
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    let read = artifact_rows_read(&mut tx).await - before;
+    tx.rollback().await.unwrap();
+    (row, read)
 }
 
 async fn analyze(pool: &PgPool) {
@@ -1039,12 +1109,23 @@ async fn any_event(pool: &PgPool) -> Uuid {
 /// 1. the run answers {R1};
 /// 2. it read at least one row — the count sees the read at all, so the bound cannot pass by
 ///    measuring nothing;
-/// 3. it read at most 64 — the home's four artifacts and the lookups by id beside them, where a
-///    walk of the family reads thousands.
+/// 3. it read at most [`TWO_CALL_BOUND`] — the counted set called twice (the asks conjunct and the
+///    population arm) over the home's four artifacts and the lookups by id beside them, where a
+///    walk of the family reads thousands;
+/// 4. the counts function alone, called as the population arm calls it, counts the home's four
+///    artifacts with three matching and reads at least one row and at most [`ONE_CALL_BOUND`];
+/// 5. the statement's reads beyond that call — the selection's asks conjunct, the only other reader
+///    of `kb_data_artifacts` in it — are at most [`ONE_CALL_BOUND`] too. Each half of the statement
+///    is within its own bound, so one half regressing to twice its reads is not hidden by the other
+///    staying cheap.
 ///
-/// Bites the counted set reverted to `LANGUAGE sql` reading the shape row in-statement (its
-/// home and family no longer values when the artifact query is planned): the family walk reads
-/// about 18,000 rows and assertion 3 goes red.
+/// Bites the counted set reverted to `LANGUAGE sql` reading the shape row in-statement (its home
+/// and family no longer values when the artifact query is planned): the family walk reads about
+/// 18,000 rows and assertions 3 and 4 go red. And bites a population arm correlated to every
+/// visible resource (in `query_plan.rs`'s `population_arms`, `FROM {call} AS c` written
+/// `FROM unnest({VISIBLE_IDS}) AS each_visible CROSS JOIN LATERAL {call} AS c`, with the ask
+/// written `((${n}::jsonb -> {k}) || jsonb_build_object('v', each_visible))` so the call depends on
+/// the row and is not computed once): the home is re-read 3,002 times and assertion 3 goes red.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn a_small_home_in_a_large_family_is_not_answered_by_walking_the_family(pool: PgPool) {
     let w = world(&pool).await;
@@ -1113,13 +1194,32 @@ async fn a_small_home_in_a_large_family_is_not_answered_by_walking_the_family(po
     );
 
     let ask = ask_of(w.shape, vec![at("unit", contains(json!("ms")))]);
-    let (answered, read) = compiled_rows_read(&pool, &w, ask).await;
+    let (answered, read) = compiled_rows_read(&pool, &w, ask.clone()).await;
     assert_eq!(answered, ids(&[r1]));
     assert!(read > 0, "the count sees the call's reads");
     assert!(
-        read <= 64,
+        read <= TWO_CALL_BOUND,
         "the compiled statement read {read} rows of kb_data_artifacts for a home holding four, \
          beside a family of {family_outside}"
+    );
+
+    let (counts, one_call) = counts_rows_read(&pool, &w, &ask).await;
+    assert_eq!(
+        by_state(counts),
+        (4, 0, 0, 3),
+        "the home's four, three matching"
+    );
+    assert!(one_call > 0, "the count sees the counts call's reads");
+    assert!(
+        one_call <= ONE_CALL_BOUND,
+        "the counts call alone read {one_call} rows of kb_data_artifacts for a home holding four, \
+         beside a family of {family_outside}"
+    );
+    let conjunct = read - one_call;
+    assert!(
+        conjunct <= ONE_CALL_BOUND,
+        "the selection's asks conjunct read {conjunct} rows of kb_data_artifacts for a home \
+         holding four, beside a family of {family_outside}"
     );
 }
 
@@ -1130,14 +1230,18 @@ async fn a_small_home_in_a_large_family_is_not_answered_by_walking_the_family(po
 /// family (a fresh team owner per row) — 18,000 artifacts in the home (asserted) — and three
 /// resources each owning one artifact of the asked family, `tiny`, whose shape is declared there.
 /// Run as above, through the compiled statement, and asserted on the rows the transaction read
-/// from `kb_data_artifacts` around that run: it answers the three, read at least one row, and read at
-/// most 64 — about the family, where reaching the artifacts through the home's resources reads
-/// thousands.
+/// from `kb_data_artifacts` around that run, population arm included: it answers the three, read at
+/// least one row, and read at most [`TWO_CALL_BOUND`] — two calls about the family, where reaching
+/// the artifacts through the home's resources reads thousands. The counts function alone, called
+/// as the population arm calls it, counts the three and reads at least one row and at most
+/// [`ONE_CALL_BOUND`], and the statement's reads beyond it (the selection's asks conjunct) are at
+/// most [`ONE_CALL_BOUND`] too.
 ///
 /// Bites the family made unindexable in `__temper_ungated_governed_artifacts_in` — e.g. its
 /// `a.artifact_kind = p_artifact_kind` join condition written `a.artifact_kind || '' =
 /// p_artifact_kind` — so the plan can only reach artifacts through the home's resources: the read
-/// count climbs toward the home's 18,000 and the bound goes red.
+/// count climbs toward the home's 18,000 and both bounds go red. The correlated population arm
+/// described on the test above bites the whole-statement bound here too.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn a_small_family_in_a_large_home_is_not_answered_by_walking_the_home(pool: PgPool) {
     let first = world(&pool).await;
@@ -1210,12 +1314,774 @@ async fn a_small_family_in_a_large_home_is_not_answered_by_walking_the_home(pool
     );
 
     let ask = ask_of(w.shape, vec![at("unit", contains(json!("ms")))]);
-    let (answered, read) = compiled_rows_read(&pool, &w, ask).await;
+    let (answered, read) = compiled_rows_read(&pool, &w, ask.clone()).await;
     assert_eq!(answered, ids(&tiny));
     assert!(read > 0, "the count sees the call's reads");
     assert!(
-        read <= 64,
+        read <= TWO_CALL_BOUND,
         "the compiled statement read {read} rows of kb_data_artifacts for a family of three, \
          in a home holding {in_home}"
+    );
+
+    let (counts, one_call) = counts_rows_read(&pool, &w, &ask).await;
+    assert_eq!(
+        by_state(counts),
+        (3, 0, 0, 3),
+        "the family's three, all matching"
+    );
+    assert!(one_call > 0, "the count sees the counts call's reads");
+    assert!(
+        one_call <= ONE_CALL_BOUND,
+        "the counts call alone read {one_call} rows of kb_data_artifacts for a family of three, \
+         in a home holding {in_home}"
+    );
+    let conjunct = read - one_call;
+    assert!(
+        conjunct <= ONE_CALL_BOUND,
+        "the selection's asks conjunct read {conjunct} rows of kb_data_artifacts for a family of \
+         three, in a home holding {in_home}"
+    );
+}
+
+// ── What each ask counted: the population beside the stage ──────────────────────────────────────
+
+/// A home and family with no shape declared yet: `shape` is nil until [`declare`] runs, so
+/// artifacts committed first carry no verdict when the shape arrives.
+async fn undeclared_world(pool: &PgPool) -> World {
+    bootseed::seed_system(pool).await.unwrap();
+    let (owner, emitter) = system_actor(pool).await;
+    let home = AnchorRef::context(ContextId::from(
+        common::insert_context(pool, "kb_profiles", owner.uuid(), "asked", "asked")
+            .await
+            .unwrap(),
+    ));
+    World {
+        owner,
+        emitter,
+        home,
+        family: (KindOwner::Profile(owner.uuid()), MEASUREMENT),
+        shape: Uuid::nil(),
+    }
+}
+
+/// Declare the world's family's shape in its home with `schema` — its first declaration, or an
+/// amendment of the shape in force, which folds that row and mints a new id.
+async fn declare(pool: &PgPool, w: &World, schema: &Value) -> Uuid {
+    writes::declare_shape(
+        pool,
+        DeclareShapeParams {
+            home: w.home,
+            kind: w.family.1,
+            kind_owner: Some(w.family.0),
+            schema,
+            enforcement: EnforcementMode::Advisory,
+            emitter: w.emitter,
+        },
+    )
+    .await
+    .unwrap()
+    .uuid()
+}
+
+/// [`shape_schema`] with one more declared path: a different schema, so declaring it amends.
+fn amended_schema() -> Value {
+    let mut schema = shape_schema();
+    schema["properties"]["p99"] = json!({ "type": "number" });
+    schema
+}
+
+/// One row of the counts function: the in-force id and version, then the three by-state counts
+/// and `matched`.
+type CountsRow = (Option<Uuid>, Option<i32>, i64, i64, i64, i64);
+
+/// Every row the counts `function` — the deployed one or a variant — returns for one ask.
+async fn counts_through(
+    conn: &mut PgConnection,
+    function: &str,
+    visible: Option<Vec<Uuid>>,
+    reader: Uuid,
+    ask: &Value,
+) -> Vec<CountsRow> {
+    // `function` is one of this file's literals; every value is bound.
+    let sql = format!(
+        "SELECT in_force_shape_id, in_force_shape_version, declared_satisfied, \
+                declared_not_satisfied, declared_not_yet_checked, matched \
+           FROM {function}($1::uuid[], $2::uuid, $3::jsonb)"
+    );
+    sqlx::query_as::<_, CountsRow>(&sql)
+        .bind(visible)
+        .bind(reader)
+        .bind(ask)
+        .fetch_all(&mut *conn)
+        .await
+        .unwrap()
+}
+
+async fn counts(
+    pool: &PgPool,
+    visible: Option<Vec<Uuid>>,
+    reader: ProfileId,
+    ask: &Value,
+) -> Vec<CountsRow> {
+    let mut conn = pool.acquire().await.unwrap();
+    counts_through(&mut conn, COUNTS, visible, reader.uuid(), ask).await
+}
+
+/// The one row an ask's counts are, asserted to be exactly one.
+fn one(rows: Vec<CountsRow>) -> CountsRow {
+    assert_eq!(rows.len(), 1, "exactly one row per ask: {rows:?}");
+    rows[0]
+}
+
+/// `(declared_satisfied, declared_not_satisfied, declared_not_yet_checked, matched)`.
+fn by_state(row: CountsRow) -> (i64, i64, i64, i64) {
+    (row.2, row.3, row.4, row.5)
+}
+
+fn population_by_state(p: &PopulationRow) -> (i64, i64, i64, i64) {
+    (
+        p.declared_satisfied,
+        p.declared_not_satisfied,
+        p.declared_not_yet_checked,
+        p.matched,
+    )
+}
+
+/// The compiled statement for a selection asking `asks`, run through `query_exec::execute` as
+/// `run_composition` runs it: every row class, typed.
+async fn executed(pool: &PgPool, w: &World, asks: Vec<ArtifactAsk>) -> QueryRows {
+    execute(pool, &compiled_plan(w, asks))
+        .await
+        .expect("the statement runs")
+}
+
+fn produced(rows: &QueryRows, stage: &str) -> i64 {
+    rows.tally(stage)
+        .map(|t| t.produced)
+        .unwrap_or_else(|| panic!("`{stage}` is tallied"))
+}
+
+/// **Content committed before its shape was declared still matches, and is counted as not yet
+/// checked** (spec §5: the population is governance, never verdicts). R1 (`unit: "ms"`) and R2
+/// (`unit: "s"`) commit their artifacts; then the shape is declared, and nothing reconciles them
+/// (no verdict row exists, asserted). Through the compiled statement the selection still selects
+/// R1 on content, and the ask's population row counts both artifacts under
+/// `declared_not_yet_checked`, one matched, with the shape itself in force.
+///
+/// The bite is the population defined by verdict-row presence: a chain of variants whose
+/// governance states relation INNER-joins the verdicts (`LEFT JOIN kb_data_artifact_verdicts v` →
+/// `JOIN kb_data_artifact_verdicts v`), read by the counted set, read by the selection core and by
+/// the counts. Through it the stage selects nothing and the counts are zeros — the test's two
+/// assertions above, red.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn unverdicted_content_still_matches_and_is_counted_as_not_yet_checked(pool: PgPool) {
+    let mut w = undeclared_world(&pool).await;
+    let r1 = resource(&pool, &w, "r1-ms").await;
+    let r2 = resource(&pool, &w, "r2-s").await;
+    commit(&pool, &w, r1, json!({ "unit": "ms" })).await;
+    commit(&pool, &w, r2, json!({ "unit": "s" })).await;
+    w.shape = declare(&pool, &w, &shape_schema()).await;
+    let verdicts: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_data_artifact_verdicts")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        verdicts, 0,
+        "the fixture is reconciliation that has not run"
+    );
+    let ask = ask_of(w.shape, vec![at("unit", contains(json!("ms")))]);
+
+    let rows = executed(&pool, &w, vec![ask.clone()]).await;
+    assert_eq!(produced(&rows, "sel"), 1, "the stage matches on content");
+    assert_eq!(rows.populations.len(), 1, "one row for the one ask");
+    let p = &rows.populations[0];
+    assert_eq!((p.stage.as_str(), p.position), ("sel", 0));
+    assert_eq!(
+        population_by_state(p),
+        (0, 0, 2, 1),
+        "both artifacts are counted unchecked, and the content match is counted"
+    );
+    assert_eq!(
+        (p.in_force_shape_id, p.in_force_shape_version),
+        (Some(w.shape), Some(1))
+    );
+
+    let mut conn = pool.acquire().await.unwrap();
+    variant(
+        &mut conn,
+        STATES_IN,
+        6,
+        STATES_IN_SIGNATURE,
+        "states_by_verdict",
+        "LEFT JOIN kb_data_artifact_verdicts v",
+        "JOIN kb_data_artifact_verdicts v",
+    )
+    .await;
+    variant(
+        &mut conn,
+        POPULATION,
+        3,
+        POPULATION_SIGNATURE,
+        "population_by_verdict",
+        "__temper_ungated_governed_artifact_states_in(",
+        "pg_temp.states_by_verdict(",
+    )
+    .await;
+    variant(
+        &mut conn,
+        CORE,
+        14,
+        CORE_SIGNATURE,
+        "core_by_verdict",
+        "__temper_ungated_artifact_ask_population(",
+        "pg_temp.population_by_verdict(",
+    )
+    .await;
+    variant(
+        &mut conn,
+        COUNTS,
+        3,
+        COUNTS_SIGNATURE,
+        "counts_by_verdict",
+        "__temper_ungated_artifact_ask_population(",
+        "pg_temp.population_by_verdict(",
+    )
+    .await;
+    assert_eq!(
+        select_through(
+            &mut conn,
+            "pg_temp.core_by_verdict",
+            Some(vec![r1, r2]),
+            Some(asks(&[&ask])),
+            w.owner.uuid(),
+            None,
+        )
+        .await,
+        BTreeSet::new(),
+        "the bite: a population of verdicts selects nothing while reconciliation lags"
+    );
+    assert_eq!(
+        by_state(one(counts_through(
+            &mut conn,
+            "pg_temp.counts_by_verdict",
+            Some(vec![r1, r2]),
+            w.owner.uuid(),
+            &bound(&ask),
+        )
+        .await)),
+        (0, 0, 0, 0),
+        "and counts nothing, so the lag would read as absence"
+    );
+}
+
+/// **An ask narrowed by verdict state returns less and still names what it excluded.** The early
+/// artifact was committed before the shape (unchecked); the late one after it, conforming, so the
+/// commit verdicts it `declared_satisfied`. Asked with every state, the stage selects both; asked
+/// for `declared_satisfied` alone, it selects one — and its counts still show the unchecked row,
+/// with `matched` the narrowed figure.
+///
+/// Bites the counted set applying `shape_states` as a row filter rather than inside `matched` (a
+/// variant whose `WHERE` gains `$7->'shape_states' @> jsonb_build_array(g.shape_state)`, read by
+/// the counts): the narrowed counts lose the unchecked row, and the narrowness reads as absence.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_narrowed_ask_leaves_the_rows_it_excluded_counted(pool: PgPool) {
+    let mut w = undeclared_world(&pool).await;
+    let early = resource(&pool, &w, "early-unchecked").await;
+    commit(&pool, &w, early, json!({ "unit": "ms" })).await;
+    w.shape = declare(&pool, &w, &shape_schema()).await;
+    let late = resource(&pool, &w, "late-satisfied").await;
+    commit(&pool, &w, late, json!({ "unit": "ms" })).await;
+    let all = ask_of(w.shape, vec![at("unit", contains(json!("ms")))]);
+    let narrowed = ArtifactAsk {
+        shape_states: vec!["declared_satisfied".to_string()],
+        ..all.clone()
+    };
+
+    let wide = executed(&pool, &w, vec![all]).await;
+    let narrow = executed(&pool, &w, vec![narrowed.clone()]).await;
+    assert_eq!(produced(&wide, "sel"), 2);
+    assert_eq!(
+        produced(&narrow, "sel"),
+        1,
+        "the narrowed ask returns fewer"
+    );
+    assert_eq!(
+        population_by_state(&wide.populations[0]),
+        (1, 0, 1, 2),
+        "the fixture: one satisfied, one unchecked, both matching"
+    );
+    assert_eq!(
+        population_by_state(&narrow.populations[0]),
+        (1, 0, 1, 1),
+        "the excluded unchecked row is still counted; matched is the narrowed figure"
+    );
+
+    let mut conn = pool.acquire().await.unwrap();
+    variant(
+        &mut conn,
+        POPULATION,
+        3,
+        POPULATION_SIGNATURE,
+        "population_state_filtered",
+        "WHERE jsonb_typeof($7->'intent') = 'array'",
+        "WHERE $7->'shape_states' @> jsonb_build_array(g.shape_state) \
+         AND jsonb_typeof($7->'intent') = 'array'",
+    )
+    .await;
+    variant(
+        &mut conn,
+        COUNTS,
+        3,
+        COUNTS_SIGNATURE,
+        "counts_state_filtered",
+        "__temper_ungated_artifact_ask_population(",
+        "pg_temp.population_state_filtered(",
+    )
+    .await;
+    assert_eq!(
+        by_state(one(counts_through(
+            &mut conn,
+            "pg_temp.counts_state_filtered",
+            Some(vec![early, late]),
+            w.owner.uuid(),
+            &bound(&narrowed),
+        )
+        .await)),
+        (1, 0, 0, 1),
+        "the bite: with the state narrowing as a row filter the unchecked row leaves the counts"
+    );
+}
+
+/// **The counts range over the caller's verdict, and a NULL verdict counts nothing** (spec §6.3:
+/// a count computed with the owner gate removed must differ). R1 is in the visible set and R2 is
+/// not; each owns a matching artifact. The gated counts see R1's alone; a NULL set counts zeros.
+/// The version in force still names the shape — it is about the shape's home, which the owner
+/// reads, not about the population.
+///
+/// The bite is the owner gate removed: the governance relation's visibility join cut, read through
+/// its states form, the counted set and the counts. Through that chain R2's artifact is counted,
+/// for the visible set and for NULL alike, so the two answers differ.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_counts_range_over_the_callers_verdict_and_a_null_verdict_counts_nothing(pool: PgPool) {
+    let w = world(&pool).await;
+    let r1 = resource(&pool, &w, "r1-visible").await;
+    let r2 = resource(&pool, &w, "r2-invisible").await;
+    commit(&pool, &w, r1, json!({ "unit": "ms" })).await;
+    commit(&pool, &w, r2, json!({ "unit": "ms" })).await;
+    let ask = bound(&ask_of(w.shape, vec![at("unit", contains(json!("ms")))]));
+
+    let gated = one(counts(&pool, Some(vec![r1]), w.owner, &ask).await);
+    assert_eq!(by_state(gated), (1, 0, 0, 1), "R1's artifact alone");
+    assert_eq!((gated.0, gated.1), (Some(w.shape), Some(1)));
+    let nothing = one(counts(&pool, None, w.owner, &ask).await);
+    assert_eq!(by_state(nothing), (0, 0, 0, 0), "NULL admits nothing");
+    assert_eq!(
+        (nothing.0, nothing.1),
+        (Some(w.shape), Some(1)),
+        "the version in force is the home's, readable to the owner"
+    );
+
+    let mut conn = pool.acquire().await.unwrap();
+    variant(
+        &mut conn,
+        GOVERNED_IN,
+        6,
+        GOVERNED_IN_SIGNATURE,
+        "governed_ungated",
+        "JOIN unnest(p_visible_ids) AS v(resource_id) ON v.resource_id = h.resource_id",
+        "",
+    )
+    .await;
+    variant(
+        &mut conn,
+        STATES_IN,
+        6,
+        STATES_IN_SIGNATURE,
+        "states_ungated",
+        "__temper_ungated_governed_artifacts_in(",
+        "pg_temp.governed_ungated(",
+    )
+    .await;
+    variant(
+        &mut conn,
+        POPULATION,
+        3,
+        POPULATION_SIGNATURE,
+        "population_ungated",
+        "__temper_ungated_governed_artifact_states_in(",
+        "pg_temp.states_ungated(",
+    )
+    .await;
+    variant(
+        &mut conn,
+        COUNTS,
+        3,
+        COUNTS_SIGNATURE,
+        "counts_ungated",
+        "__temper_ungated_artifact_ask_population(",
+        "pg_temp.population_ungated(",
+    )
+    .await;
+    for visible in [Some(vec![r1]), None] {
+        let leaked = one(counts_through(
+            &mut conn,
+            "pg_temp.counts_ungated",
+            visible.clone(),
+            w.owner.uuid(),
+            &ask,
+        )
+        .await);
+        assert_eq!(
+            by_state(leaked),
+            (2, 0, 0, 2),
+            "the bite: without the owner gate R2 is counted for {visible:?}"
+        );
+        assert_ne!(by_state(leaked), by_state(gated));
+    }
+}
+
+/// **A home unreadable at execution counts nothing and names no version in force.** The outsider
+/// holds R1 in its visible set but cannot read the shape's home: one row, all zeros, and a NULL
+/// in-force pair. The owner, the control, reads both.
+///
+/// The bite is the in-force lookup's home re-check removed (`anchor_readable_by_profile(p_reader,
+/// asked.home_anchor_table,` → `true OR ...`): the outsider is then told the live shape's id and
+/// version under a home it cannot read. The counts stay zero through it, because the counted set
+/// re-checks the home on its own.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_unreadable_home_counts_nothing_and_names_no_version_in_force(pool: PgPool) {
+    let w = world(&pool).await;
+    let outsider = ProfileId::from(common::insert_profile(&pool, "artifact-counts-outsider").await);
+    let r1 = resource(&pool, &w, "r1").await;
+    commit(&pool, &w, r1, json!({ "unit": "ms" })).await;
+    let ask = bound(&ask_of(w.shape, vec![at("unit", contains(json!("ms")))]));
+
+    assert_eq!(
+        one(counts(&pool, Some(vec![r1]), w.owner, &ask).await),
+        (Some(w.shape), Some(1), 1, 0, 0, 1),
+        "the control: the home's owner"
+    );
+    assert_eq!(
+        one(counts(&pool, Some(vec![r1]), outsider, &ask).await),
+        (None, None, 0, 0, 0, 0)
+    );
+
+    let mut conn = pool.acquire().await.unwrap();
+    variant(
+        &mut conn,
+        COUNTS,
+        3,
+        COUNTS_SIGNATURE,
+        "counts_without_home_check",
+        "anchor_readable_by_profile(p_reader, asked.home_anchor_table,",
+        "true OR anchor_readable_by_profile(p_reader, asked.home_anchor_table,",
+    )
+    .await;
+    assert_eq!(
+        one(counts_through(
+            &mut conn,
+            "pg_temp.counts_without_home_check",
+            Some(vec![r1]),
+            outsider.uuid(),
+            &ask,
+        )
+        .await),
+        (Some(w.shape), Some(1), 0, 0, 0, 0),
+        "the bite: without the re-check the outsider is told the version in force"
+    );
+}
+
+/// **An ask is always one row.** A governed shape with nothing in view counts one row of zeros,
+/// with the shape in force — not a missing row — through the counts function and through the
+/// compiled statement, where the empty stage still carries its population row. An ask naming no
+/// shape at all counts one row of zeros and a NULL in-force pair.
+///
+/// Bites the counts grouped (`AS p) AS n` → `AS p GROUP BY p.shape_state) AS n`): an empty
+/// population is then no row at all, and the absence would have to be read as a number.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_ask_counts_exactly_one_row_even_over_nothing(pool: PgPool) {
+    let w = world(&pool).await;
+    let r1 = resource(&pool, &w, "r1-owns-nothing").await;
+    let everything = ask_of(w.shape, vec![]);
+
+    assert_eq!(
+        one(counts(&pool, Some(vec![r1]), w.owner, &bound(&everything)).await),
+        (Some(w.shape), Some(1), 0, 0, 0, 0)
+    );
+    let absent = bound(&ask_of(Uuid::now_v7(), vec![]));
+    assert_eq!(
+        one(counts(&pool, Some(vec![r1]), w.owner, &absent).await),
+        (None, None, 0, 0, 0, 0),
+        "an ask naming no row"
+    );
+
+    let rows = executed(&pool, &w, vec![everything.clone()]).await;
+    assert_eq!(produced(&rows, "sel"), 0, "the stage is empty");
+    assert_eq!(rows.populations.len(), 1, "and its ask still has its row");
+    assert_eq!(population_by_state(&rows.populations[0]), (0, 0, 0, 0));
+
+    let mut conn = pool.acquire().await.unwrap();
+    variant(
+        &mut conn,
+        COUNTS,
+        3,
+        COUNTS_SIGNATURE,
+        "counts_grouped",
+        "AS p) AS n",
+        "AS p GROUP BY p.shape_state) AS n",
+    )
+    .await;
+    assert!(
+        counts_through(
+            &mut conn,
+            "pg_temp.counts_grouped",
+            Some(vec![r1]),
+            w.owner.uuid(),
+            &bound(&everything),
+        )
+        .await
+        .is_empty(),
+        "the bite: grouped, an empty population is no row"
+    );
+}
+
+/// **After an amendment the counts name the live version and keep the lineage.** The statement is
+/// compiled against the shape's first version; the shape is then amended, which folds that row
+/// and mints a new id at version 2. Run afterwards, the ask's population row names the new id and
+/// version 2 in force, and still counts R1's artifact — unchecked now, since its verdict was
+/// against version 1 — so the population does not empty when its shape is amended.
+///
+/// Bites the in-force lookup answering with the asked row rather than the live one
+/// (`SELECT live.id, live.shape_version` → `SELECT asked.id, asked.shape_version`): it reports the
+/// folded first version as in force.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn after_an_amendment_the_counts_name_the_live_version_and_keep_the_lineage(pool: PgPool) {
+    let w = world(&pool).await;
+    let r1 = resource(&pool, &w, "r1").await;
+    commit(&pool, &w, r1, json!({ "unit": "ms" })).await;
+    let ask = ask_of(w.shape, vec![at("unit", contains(json!("ms")))]);
+    let q = compiled_plan(&w, vec![ask.clone()]);
+
+    let amended = declare(&pool, &w, &amended_schema()).await;
+    assert_ne!(amended, w.shape, "an amendment mints a new id");
+    let rows = execute(&pool, &q).await.expect("the statement runs");
+    let p = &rows.populations[0];
+    assert_eq!(
+        (p.in_force_shape_id, p.in_force_shape_version),
+        (Some(amended), Some(2))
+    );
+    assert_eq!(
+        population_by_state(p),
+        (0, 0, 1, 1),
+        "the lineage's artifact is still counted, unchecked against the new version"
+    );
+    assert_eq!(produced(&rows, "sel"), 1);
+
+    let mut conn = pool.acquire().await.unwrap();
+    variant(
+        &mut conn,
+        COUNTS,
+        3,
+        COUNTS_SIGNATURE,
+        "counts_of_the_asked_row",
+        "SELECT live.id, live.shape_version",
+        "SELECT asked.id, asked.shape_version",
+    )
+    .await;
+    let asked_row = one(counts_through(
+        &mut conn,
+        "pg_temp.counts_of_the_asked_row",
+        Some(vec![r1]),
+        w.owner.uuid(),
+        &bound(&ask),
+    )
+    .await);
+    assert_eq!(
+        (asked_row.0, asked_row.1),
+        (Some(w.shape), Some(1)),
+        "the bite: the asked row reports the folded version as in force"
+    );
+}
+
+/// **A row class the executor was not taught fails the read; it is never read as a tally.** A
+/// hand-built statement in the compiled column list labels its one row `mystery`: `execute` errors
+/// naming the class. The control labels the same row `tally` and reads as one.
+///
+/// Bites `RowClass::parse` answering an unknown value with `Tally`: the mystery row then reads as
+/// a stage's disclosure numbers.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_unknown_row_class_fails_the_read_rather_than_reading_as_a_tally(pool: PgPool) {
+    let labelled = |class: &str| CompiledQuery {
+        sql: format!(
+            "SELECT '{class}'::text AS row_class, 's'::text AS stage, NULL::uuid AS id, \
+             NULL::text AS kind, NULL::double precision AS quantity, NULL::jsonb AS via, \
+             NULL::uuid AS region, 0::bigint AS produced, 0::bigint AS unusable, \
+             NULL::bigint AS ask_position, NULL::uuid AS in_force_shape_id, \
+             NULL::int AS in_force_shape_version, NULL::bigint AS declared_satisfied, \
+             NULL::bigint AS declared_not_satisfied, NULL::bigint AS declared_not_yet_checked, \
+             NULL::bigint AS matched"
+        ),
+        binds: vec![],
+        cte_names: vec![],
+        refusals: vec![],
+    };
+
+    let err = execute(&pool, &labelled("mystery"))
+        .await
+        .expect_err("an unknown class is not read");
+    assert!(
+        err.to_string().contains("unknown row class `mystery`"),
+        "got: {err}"
+    );
+    let control = execute(&pool, &labelled("tally"))
+        .await
+        .expect("the same row, labelled a tally");
+    assert_eq!(control.tallies.len(), 1);
+}
+
+/// **Every count is its own column.** One home whose artifacts are in all three states, in distinct
+/// numbers: three committed before the shape was declared (`declared_not_yet_checked`), one
+/// conforming committed after it (`declared_satisfied`), and two non-conforming committed after it
+/// under the advisory shape (`count` a string, so `declared_not_satisfied`). The ask is `unit`
+/// contains `"ms"`, which the three unchecked artifacts and the satisfied one hold. Through the
+/// compiled statement and `execute`, and through the counts function directly, the population is
+/// `(1, 2, 3, 4)`: each figure distinct, so a column read for another shows.
+///
+/// Bites the `declared_not_satisfied` FILTER literal misspelled in `20261105000000` (e.g.
+/// `'declared_unsatisfied'`): that figure reads 0. And bites `execute` reading
+/// `try_get("declared_satisfied")` into `declared_not_satisfied`: it reads 1.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn every_count_is_its_own_column(pool: PgPool) {
+    let mut w = undeclared_world(&pool).await;
+    let early = resource(&pool, &w, "early-unchecked").await;
+    for count in [1, 2, 3] {
+        commit(&pool, &w, early, json!({ "unit": "ms", "count": count })).await;
+    }
+    w.shape = declare(&pool, &w, &shape_schema()).await;
+    let late = resource(&pool, &w, "late-verdicted").await;
+    commit(&pool, &w, late, json!({ "unit": "ms", "count": 4 })).await;
+    for count in ["five", "six"] {
+        commit(&pool, &w, late, json!({ "unit": "s", "count": count })).await;
+    }
+    let ask = ask_of(w.shape, vec![at("unit", contains(json!("ms")))]);
+
+    let rows = executed(&pool, &w, vec![ask.clone()]).await;
+    assert_eq!(population_by_state(&rows.populations[0]), (1, 2, 3, 4));
+    assert_eq!(produced(&rows, "sel"), 2);
+    assert_eq!(
+        by_state(one(counts(
+            &pool,
+            Some(vec![early, late]),
+            w.owner,
+            &bound(&ask)
+        )
+        .await)),
+        (1, 2, 3, 4)
+    );
+}
+
+/// **The counts inherit the ingest floor and the home check from the counted set, and each bites
+/// through the counts.** R_live and R_off each own a matching artifact; R_off is then deactivated.
+/// The gated counts see R_live's alone, and an outsider handed R_live counts nothing.
+///
+/// Both conjuncts live in `__temper_ungated_artifact_ask_population` and the counts call it, never
+/// restate it, so each bite is a chain read through `counts_through`:
+/// - the floor cut (`JOIN kb_resources_live lv ON lv.id = g.resource_id` removed): the counts then
+///   see R_off's artifact too;
+/// - the counted set's home check answering yes (`anchor_readable_by_profile(p_reader,` → `true OR
+///   anchor_readable_by_profile(p_reader,`): the outsider then counts R_live's artifact, though the
+///   counts' own lookup still names no version in force for it.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_counts_inherit_the_floor_and_the_home_check_from_the_counted_set(pool: PgPool) {
+    let w = world(&pool).await;
+    let outsider = ProfileId::from(common::insert_profile(&pool, "artifact-floor-outsider").await);
+    let live = resource(&pool, &w, "r-live").await;
+    let off = resource(&pool, &w, "r-off").await;
+    commit(&pool, &w, live, json!({ "unit": "ms" })).await;
+    commit(&pool, &w, off, json!({ "unit": "ms" })).await;
+    sqlx::query("UPDATE kb_resources SET is_active = false WHERE id = $1")
+        .bind(off)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let ask = bound(&ask_of(w.shape, vec![at("unit", contains(json!("ms")))]));
+    let both = Some(vec![live, off]);
+
+    assert_eq!(
+        by_state(one(counts(&pool, both.clone(), w.owner, &ask).await)),
+        (1, 0, 0, 1),
+        "the control: the deactivated resource is outside the floor"
+    );
+    assert_eq!(
+        one(counts(&pool, Some(vec![live]), outsider, &ask).await),
+        (None, None, 0, 0, 0, 0),
+        "the control: the outsider cannot read the home"
+    );
+
+    let mut conn = pool.acquire().await.unwrap();
+    variant(
+        &mut conn,
+        POPULATION,
+        3,
+        POPULATION_SIGNATURE,
+        "population_without_floor",
+        "JOIN kb_resources_live lv ON lv.id = g.resource_id",
+        "",
+    )
+    .await;
+    variant(
+        &mut conn,
+        COUNTS,
+        3,
+        COUNTS_SIGNATURE,
+        "counts_without_floor",
+        "__temper_ungated_artifact_ask_population(",
+        "pg_temp.population_without_floor(",
+    )
+    .await;
+    assert_eq!(
+        by_state(one(counts_through(
+            &mut conn,
+            "pg_temp.counts_without_floor",
+            both,
+            w.owner.uuid(),
+            &ask
+        )
+        .await)),
+        (2, 0, 0, 2),
+        "the bite: without the floor the deactivated resource is counted"
+    );
+
+    variant(
+        &mut conn,
+        POPULATION,
+        3,
+        POPULATION_SIGNATURE,
+        "population_without_home_check",
+        "anchor_readable_by_profile(p_reader,",
+        "true OR anchor_readable_by_profile(p_reader,",
+    )
+    .await;
+    variant(
+        &mut conn,
+        COUNTS,
+        3,
+        COUNTS_SIGNATURE,
+        "counts_without_home_check",
+        "__temper_ungated_artifact_ask_population(",
+        "pg_temp.population_without_home_check(",
+    )
+    .await;
+    assert_eq!(
+        one(counts_through(
+            &mut conn,
+            "pg_temp.counts_without_home_check",
+            Some(vec![live]),
+            outsider.uuid(),
+            &ask,
+        )
+        .await),
+        (None, None, 1, 0, 0, 1),
+        "the bite: without the counted set's home check the outsider counts under the shape"
     );
 }
