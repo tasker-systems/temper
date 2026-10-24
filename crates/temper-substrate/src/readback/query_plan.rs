@@ -388,10 +388,11 @@ struct StagePopulation {
 /// **This is the one fact the assembler's rule rests on.** The assembler requires a population
 /// row for every sealed ask of every stage no refusal names, and refuses any row for a stage a
 /// refusal names; that agrees with what `compile` arms only while every stage carrying sealed asks
-/// either binds them or refuses, never both. Today `validate` refuses a non-empty `artifact_filter` on every act but
-/// `find-resources-with`, whose emitter always binds, so this cannot fire. It guards a future act
-/// admitted to the filter whose emitter does not bind it: that plan fails here, loudly, rather than
-/// answering with a trace the assembler would refuse as a 500.
+/// either binds them or refuses, never both. Today `validate` refuses a non-empty `artifact_filter`
+/// on every act but `find-resources-with`, whose emitter always binds and never refuses, so this
+/// cannot fire. It guards a future act admitted to the filter whose emitter does not bind it, or
+/// binds it and then refuses: that plan fails here, loudly, rather than answering with a trace the
+/// assembler would refuse as a 500.
 fn asks_ran_or_refused(
     stage: &temper_core::types::query::StageName,
     sealed: usize,
@@ -2010,14 +2011,16 @@ mod tests {
         );
     }
 
-    /// **A stage whose seal holds asks either bound them or refused; anything else fails the
-    /// compile.** Sealed asks with no bind and no refusal is the one case that errs, naming the
-    /// stage. Bound asks, a refused stage, and a stage that asks nothing each compile.
+    /// **A stage whose seal holds asks either bound them or refused, never both; anything else
+    /// fails the compile.** Sealed asks with no bind and no refusal, or with both a bind and a
+    /// refusal, err, naming the stage. Bound asks, a refused stage, and a stage that asks nothing
+    /// each compile.
     ///
     /// Unreachable through `compile` today — `validate` refuses `artifact_filter` on every act
     /// whose emitter does not bind it, and `ValidatedComposition` has no other constructor — so the
     /// rule is witnessed here, at the function `compile` calls for every act stage. Bites
-    /// `asks_ran_or_refused` answering `Ok(())` whatever it is handed.
+    /// `asks_ran_or_refused` answering `Ok(())` whatever it is handed, and the guard made inclusive
+    /// (`bound || refused`), which passes the stage that did both.
     #[test]
     fn sealed_asks_either_run_or_refuse_and_never_both() {
         let stage = StageName::parse("sel").unwrap();

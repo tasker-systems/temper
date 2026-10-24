@@ -904,8 +904,8 @@ async fn a_resource_still_ingesting_is_not_counted(pool: PgPool) {
 /// measured on its own through `__temper_ungated_artifact_ask_counts` ([`counts_rows_read`]): the
 /// home's few artifacts, each read once through governance and once by id for its intent, and
 /// nothing of the family or the home beyond them. One call reads 14 rows over the small home and
-/// 16 over the small family; the bound is twice the larger, so a call that more than doubles its
-/// reads fails while a walk of either fixture reads thousands.
+/// 16 over the small family; the bound is twice the larger, so a call that more than doubles the
+/// larger fixture's reads fails, while a walk of either fixture reads thousands.
 const ONE_CALL_BOUND: i64 = 32;
 
 /// The most `kb_data_artifacts` rows one run of the compiled statement may read for one ask.
