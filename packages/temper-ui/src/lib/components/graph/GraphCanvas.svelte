@@ -155,6 +155,14 @@
 		return Math.max(shape, rings && !reached(id) ? r + 6 : 0) + 1.5;
 	};
 
+	/** Each self-joined node's relations, for the band: such a node has no line to draw. */
+	const selfJoined = $derived.by(() => {
+		const out = new Map<string, string[]>();
+		for (const e of settled.selfJoined)
+			out.set(e.source, [...(out.get(e.source) ?? []), e.label ?? e.edgeKind]);
+		return out;
+	});
+
 	/** A relation in words: the read's label (or its kind), and its weight or that none was read. */
 	const relation = (e: GraphEdge): string =>
 		`${e.label ?? e.edge_kind} · ${e.weight == null ? 'weight not reported' : `weight ${e.weight.toFixed(2)}`}`;
@@ -170,7 +178,9 @@
 					target: rimAt(pair.target.id, -dx, -dy),
 				}),
 				stroke: pairStroke(pair.edges),
-				relations: pair.edges.map(({ edge }) => relation(edge.row)),
+				// A reversed relation runs target → source; it is marked so a pair headed at both ends
+				// says which relation points which way.
+				relations: pair.edges.map(({ edge, reversed }) => `${reversed ? '← ' : '→ '}${relation(edge.row)}`),
 			};
 		}),
 	);
@@ -192,7 +202,7 @@
 	 * plane, so a small answer is not blown up to fill it.
 	 */
 	const box = $derived.by(() => {
-		const f = frame(settled.nodes, labels, 24, { width: W, height: H });
+		const f = frame(settled.nodes, labels, { margin: 24, plane: { width: W, height: H } });
 		return {
 			x: Math.min(0, f.x1),
 			y: Math.min(0, f.y1),
@@ -351,7 +361,7 @@
 
 	<!-- Beneath the drawing, never in it. The list makes no spatial claim, which is the whole of
 	     what the row of marks it replaces got wrong. -->
-	<UnconnectedBand nodes={unconnected} total={model.nodes.length} {onSelect} {selected} />
+	<UnconnectedBand nodes={unconnected} {selfJoined} total={model.nodes.length} {onSelect} {selected} />
 </div>
 
 <style>

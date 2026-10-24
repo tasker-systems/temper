@@ -99,17 +99,24 @@ describe('settling', () => {
 		expect(Math.abs(cy - 310)).toBeLessThan(20);
 	});
 
-	it('pulls core nodes toward the centre when the input holds both core and ring', () => {
-		const { nodes: many, edges: spokes } = star(11, (i) => i === 0);
-		const g = settle(many, spokes, 'radial');
-		expect(g.radial).toBe(true);
-		const cx = g.nodes.reduce((s, n) => s + n.x, 0) / g.nodes.length;
-		const cy = g.nodes.reduce((s, n) => s + n.y, 0) / g.nodes.length;
-		const dist = (id: string) => {
+	it('pulls the core toward the centre and rings the rest, when the input holds both', () => {
+		// The core is a LEAF, not the hub: plain force already centres a star's hub, so a hub core
+		// would pass whether or not the radial force did anything.
+		const { nodes: many, edges: spokes } = star(11, (i) => i === 5);
+		const plane = { width: 640, height: 400 };
+		const fromCentre = (g: ReturnType<typeof settle>, id: string) => {
 			const n = g.nodes.find((m) => m.id === id);
-			return n ? Math.hypot(n.x - cx, n.y - cy) : Number.NaN;
+			return n ? Math.hypot(n.x - plane.width / 2, n.y - plane.height / 2) : Number.NaN;
 		};
-		for (const n of many.slice(1)) expect(dist('n0')).toBeLessThan(dist(n.id));
+		const radial = settle(many, spokes, 'radial', plane);
+		expect(radial.radial).toBe(true);
+		const ring = many.filter((n) => n.id !== 'n5' && n.id !== 'n0');
+		const ringMean = ring.reduce((s, n) => s + fromCentre(radial, n.id), 0) / ring.length;
+		expect(fromCentre(radial, 'n5')).toBeLessThan(ringMean * 0.8);
+		// Under force the same leaf sits among the other leaves, so the separation is the radial's.
+		const force = settle(many, spokes, 'force', plane);
+		const forceRing = ring.reduce((s, n) => s + fromCentre(force, n.id), 0) / ring.length;
+		expect(fromCentre(force, 'n5')).toBeGreaterThan(forceRing * 0.8);
 	});
 
 	it('settles as force when a radial layout is asked of an input with no contrast', () => {
@@ -210,6 +217,23 @@ describe('captions', () => {
 		expect(truncate('ab😀cd', 4)).toBe('ab😀…');
 	});
 
+	it('frames captions with the options they were placed with', () => {
+		const g = settle(nodes, edges, 'force');
+		const caps = [{ id: 'a', x: 0, y: 0, text: 'abcdefghij' }];
+		const narrow = frame(
+			g.nodes.slice(0, 1).map((n) => ({ ...n, x: 0, y: 0 })),
+			caps,
+		);
+		const wide = frame(
+			g.nodes.slice(0, 1).map((n) => ({ ...n, x: 0, y: 0 })),
+			caps,
+			{
+				caption: { charWidth: 20 },
+			},
+		);
+		expect(wide.x2 - wide.x1).toBeGreaterThan(narrow.x2 - narrow.x1);
+	});
+
 	it('frames every mark and caption it draws', () => {
 		const g = settle(nodes, edges, 'force');
 		const f = frame(g.nodes, []);
@@ -231,6 +255,19 @@ describe('edge geometry', () => {
 		expect(fwd.heads).toHaveLength(1);
 		expect(first(fwd.heads).startsWith(`M${fwd.x2.toFixed(2)},`)).toBe(true);
 		expect(edgeGeometry(s, t, { atSource: false, atTarget: false }).heads).toHaveLength(0);
+	});
+
+	it('collapses rather than turning a head backwards when the marks overlap their rims', () => {
+		const near = { id: 'n', degree: 0, x: 10, y: 0 };
+		const g = edgeGeometry(
+			s,
+			near,
+			{ atSource: false, atTarget: true },
+			{ source: 15, target: 15 },
+		);
+		expect(g.x1).toBeLessThanOrEqual(g.x2);
+		expect(g.x1).toBeCloseTo(5);
+		expect(g.x2).toBeCloseTo(5);
 	});
 
 	it('ends where a surface says a mark that is not a circle ends', () => {

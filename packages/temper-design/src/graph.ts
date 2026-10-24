@@ -268,14 +268,19 @@ export function placeCaptions(
 
 /**
  * The drawing's frame: every mark and caption, with a margin. A surface that fits its viewBox to
- * the drawing reads it; one with a fixed canvas does not need it.
+ * the drawing reads it; one with a fixed canvas does not need it. Captions are measured with the
+ * same options `placeCaptions` was given, so the frame fits what was placed.
  */
 export function frame(
 	nodes: Placed[],
 	captions: Caption[],
-	margin = 12,
-	plane: Plane = DEFAULT_PLANE,
+	{
+		margin = 12,
+		plane = DEFAULT_PLANE,
+		caption = {},
+	}: { margin?: number; plane?: Plane; caption?: Partial<CaptionOptions> } = {},
 ): Box {
+	const o = { ...CAPTION, ...caption };
 	if (nodes.length === 0) return { x1: 0, y1: 0, x2: plane.width, y2: plane.height };
 	let box: Box = { x1: Infinity, y1: Infinity, x2: -Infinity, y2: -Infinity };
 	const grow = (b: Box) => {
@@ -291,8 +296,8 @@ export function frame(
 		grow({ x1: n.x - r, y1: n.y - r, x2: n.x + r, y2: n.y + r });
 	}
 	for (const c of captions) {
-		const half = ([...c.text].length * CAPTION.charWidth) / 2;
-		grow({ x1: c.x - half, y1: c.y - CAPTION.lineHeight, x2: c.x + half, y2: c.y + 3 });
+		const half = ([...c.text].length * o.charWidth) / 2;
+		grow({ x1: c.x - half, y1: c.y - o.lineHeight, x2: c.x + half, y2: c.y + 3 });
 	}
 	return { x1: box.x1 - margin, y1: box.y1 - margin, x2: box.x2 + margin, y2: box.y2 + margin };
 }
@@ -320,10 +325,13 @@ export function edgeGeometry(
 	const len = Math.hypot(dx, dy) || 1;
 	const ux = dx / len;
 	const uy = dy / len;
-	const x1 = source.x + ux * rims.source;
-	const y1 = source.y + uy * rims.source;
-	const x2 = target.x - ux * rims.target;
-	const y2 = target.y - uy * rims.target;
+	// Marks closer than their two rims would trim the line past itself and turn a head backwards;
+	// the trims shrink together until they meet, so the line collapses instead.
+	const fit = Math.min(1, len / (rims.source + rims.target || 1));
+	const x1 = source.x + ux * rims.source * fit;
+	const y1 = source.y + uy * rims.source * fit;
+	const x2 = target.x - ux * rims.target * fit;
+	const y2 = target.y - uy * rims.target * fit;
 	const head = (tipX: number, tipY: number, dirX: number, dirY: number): string => {
 		const size = 6;
 		const bx = tipX - dirX * size;

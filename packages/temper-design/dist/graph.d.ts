@@ -96,9 +96,14 @@ export declare function placeCaptions(nodes: {
 }[], options?: Partial<CaptionOptions>): Caption[];
 /**
  * The drawing's frame: every mark and caption, with a margin. A surface that fits its viewBox to
- * the drawing reads it; one with a fixed canvas does not need it.
+ * the drawing reads it; one with a fixed canvas does not need it. Captions are measured with the
+ * same options `placeCaptions` was given, so the frame fits what was placed.
  */
-export declare function frame(nodes: Placed[], captions: Caption[], margin?: number, plane?: Plane): Box;
+export declare function frame(nodes: Placed[], captions: Caption[], { margin, plane, caption, }?: {
+    margin?: number;
+    plane?: Plane;
+    caption?: Partial<CaptionOptions>;
+}): Box;
 /** How far from its centre a line ends at a mark: just past the mark's own rim. */
 export declare const rimOf: (degree: number) => number;
 /**

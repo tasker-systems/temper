@@ -142,7 +142,45 @@ describe('edges are drawn one line per pair', () => {
 		const ab = lines.find((l) => l.getAttribute('aria-label')?.includes('contradicts'));
 		expect(ab?.getAttribute('data-role')).toBe('contradicts');
 		expect(ab?.getAttribute('aria-label')).toBe(
-			'relates · weight 1.00; contradicts · weight not reported',
+			'→ relates · weight 1.00; ← contradicts · weight not reported',
 		);
+	});
+});
+
+describe('a node joined only to itself', () => {
+	it('is listed beneath, naming what joins it, not counted as links the drawing lacks', async () => {
+		const m = model();
+		m.nodes.push({
+			id: 'd',
+			title: 'Delta',
+			doc_type: 'task',
+			home: 'context',
+			homeRef: '@me/x',
+			degree: 2,
+			corpusDegree: null,
+		} as unknown as GraphModel['nodes'][number]);
+		m.edges.push({
+			source: 'd',
+			target: 'd',
+			edge_kind: 'contains',
+			label: 'refines',
+			polarity: 'forward',
+			seedIds: [],
+			weight: null,
+		} as unknown as GraphModel['edges'][number]);
+		const { container } = render(GraphCanvas, {
+			model: m,
+			selected: null,
+			onSelect: () => {},
+			emptyMessage: 'nothing',
+		});
+
+		expect(container.querySelectorAll('.node-chip')).toHaveLength(3);
+		const row = container.querySelector('[data-testid="unconnected-list"] li');
+		expect(row?.textContent).toContain('Delta');
+		expect(row?.querySelector('[data-testid="self-joined"]')?.textContent).toBe(
+			'joined only to itself · refines',
+		);
+		expect(row?.textContent).not.toContain('2 links');
 	});
 });
