@@ -91,6 +91,18 @@ export const handleError: HandleServerError = ({ error, message, status, event }
 export const handle: Handle = (input) => traceRequest(input.event, () => handleRequest(input));
 
 const handleRequest = async (input: Parameters<Handle>[0]): Promise<Response> => {
+	// A path that opens with `//` is refused before anything routes it. SvelteKit 2 derives an
+	// enhanced form's action from the page's own path, so on a route that matched `//host/…` the
+	// action would be protocol-relative and the form's navigation would leave for `host`
+	// (GHSA-pfhg-q3qv-9q6r, fixed only in kit 3). No route here matches such a path today — there is
+	// no catch-all — so this makes that safety structural rather than incidental. No proxied root
+	// opens with `//` either, which is why it can stand ahead of the proxy short-circuit.
+	if (input.event.url.pathname.startsWith('//')) {
+		const refused = new Response('Not Found', { status: 404 });
+		applySecurityHeaders(refused.headers);
+		return refused;
+	}
+
 	// Reverse-proxy the API/MCP/OAuth/discovery surface to the upstream host
 	// before any SvelteKit handling. These paths are not UI routes. This
 	// includes the SAML ACS (`/oauth/saml/acs`), which by design takes a
