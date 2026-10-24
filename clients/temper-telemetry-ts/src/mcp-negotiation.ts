@@ -38,7 +38,7 @@
  */
 
 import { type SpanStatus, SpanStatusCode } from '@opentelemetry/api';
-import type { ReadableSpan, Span, SpanProcessor } from '@opentelemetry/sdk-trace-base';
+import type { ReadableSpan, Span, SpanProcessor } from '@opentelemetry/sdk-trace';
 import {
 	ATTR_HTTP_REQUEST_METHOD,
 	ATTR_HTTP_RESPONSE_STATUS_CODE,
