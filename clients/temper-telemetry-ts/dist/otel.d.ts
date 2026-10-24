@@ -2,7 +2,7 @@
  * OpenTelemetry span-export bootstrap for Temper's Node hops (temper-ui, eve agents).
  *
  * The TypeScript counterpart of the Rust `temper-telemetry` crate: it builds a
- * `NodeTracerProvider` that self-exports spans over OTLP/protobuf to the same Grafana
+ * `TracerProvider` that self-exports spans over OTLP/protobuf to the same Grafana
  * Cloud endpoint the Rust functions use, driven by the SAME env vars
  * (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME`).
  *
@@ -22,7 +22,7 @@
  * true value, and guessing at others would let a typo silently disable observability.
  */
 import { type Tracer } from '@opentelemetry/api';
-import type { Sampler, SpanProcessor } from '@opentelemetry/sdk-trace-base';
+import { type Sampler, type SpanProcessor } from '@opentelemetry/sdk-trace';
 export interface InitTelemetryOptions {
     /**
      * `service.name` for exported spans, and the instrumentation-scope name for

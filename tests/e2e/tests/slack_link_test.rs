@@ -2277,7 +2277,7 @@ async fn an_as_mode_relink_revokes_the_superseded_refresh_token(pool: PgPool) {
     link_a_vaulted_principal(&app, &pool).await;
 
     // The AS's own row for the vaulted token, as the TypeScript writer leaves it.
-    let superseded_hash = format!("{:x}", Sha256::digest(STUB_REFRESH_TOKEN.as_bytes()));
+    let superseded_hash = hex::encode(Sha256::digest(STUB_REFRESH_TOKEN.as_bytes()));
     sqlx::query(
         "INSERT INTO kb_oauth_refresh_tokens (token_hash, client_id, claims, expires_at) \
          VALUES ($1, $2, '{}'::jsonb, now() + interval '30 days')",

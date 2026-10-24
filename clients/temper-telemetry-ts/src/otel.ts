@@ -2,7 +2,7 @@
  * OpenTelemetry span-export bootstrap for Temper's Node hops (temper-ui, eve agents).
  *
  * The TypeScript counterpart of the Rust `temper-telemetry` crate: it builds a
- * `NodeTracerProvider` that self-exports spans over OTLP/protobuf to the same Grafana
+ * `TracerProvider` that self-exports spans over OTLP/protobuf to the same Grafana
  * Cloud endpoint the Rust functions use, driven by the SAME env vars
  * (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME`).
  *
@@ -22,13 +22,18 @@
  * true value, and guessing at others would let a typo silently disable observability.
  */
 
-import { trace, type Tracer } from '@opentelemetry/api';
-import { AsyncHooksContextManager } from '@opentelemetry/context-async-hooks';
+import { context, propagation, trace, type Tracer } from '@opentelemetry/api';
+import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import { W3CTraceContextPropagator } from '@opentelemetry/core';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto';
 import { resourceFromAttributes } from '@opentelemetry/resources';
-import type { Sampler, SpanProcessor } from '@opentelemetry/sdk-trace-base';
-import { AlwaysOnSampler, BatchSpanProcessor, NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
+import {
+	AlwaysOnSampler,
+	BatchSpanProcessor,
+	type Sampler,
+	type SpanProcessor,
+	TracerProvider
+} from '@opentelemetry/sdk-trace';
 import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
 import { McpNegotiationStatusProcessor, negotiationKey } from './mcp-negotiation.js';
 
@@ -63,7 +68,7 @@ export interface InitTelemetryOptions {
 	readonly mcpEndpoint?: string;
 }
 
-let provider: NodeTracerProvider | null = null;
+let provider: TracerProvider | null = null;
 let enabled = false;
 let tracerName = 'temper-telemetry-ts';
 
@@ -264,7 +269,7 @@ function buildSpanProcessors(
 	// BatchSpanProcessor + a per-request flush (the consumer's job) is the JS mirror of
 	// the Rust `flush_within_budget`. The batch timer alone is unsafe on Vercel: the
 	// sandbox freezes between invocations and the timer may never fire.
-	spanProcessors.push(new BatchSpanProcessor(exporter));
+	spanProcessors.push(new BatchSpanProcessor({ exporter }));
 	return spanProcessors;
 }
 
@@ -298,16 +303,16 @@ export function initTelemetry({
 
 	const spanProcessors = buildSpanProcessors(resolution, mcpEndpoint);
 
-	const built = new NodeTracerProvider({
+	const built = new TracerProvider({
 		resource: resourceFromAttributes({ [ATTR_SERVICE_NAME]: resolvedServiceName }),
 		sampler: telemetrySampler(),
 		spanProcessors
 	});
 
-	built.register({
-		contextManager: new AsyncHooksContextManager().enable(),
-		propagator: new W3CTraceContextPropagator()
-	});
+	// sdk-trace 3 dropped `register()`; these are the three globals it set, in its order.
+	trace.setGlobalTracerProvider(built);
+	context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
+	propagation.setGlobalPropagator(new W3CTraceContextPropagator());
 
 	provider = built;
 	enabled = true;

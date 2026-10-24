@@ -1,7 +1,7 @@
 import { context, propagation, TraceFlags, trace } from '@opentelemetry/api';
-import { AsyncHooksContextManager } from '@opentelemetry/context-async-hooks';
+import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import { W3CTraceContextPropagator } from '@opentelemetry/core';
-import { BatchSpanProcessor, SamplingDecision } from '@opentelemetry/sdk-trace-base';
+import { BatchSpanProcessor, SamplingDecision } from '@opentelemetry/sdk-trace';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { activeTraceparent, extractContext } from '../src/context.js';
 import { McpNegotiationStatusProcessor } from '../src/mcp-negotiation.js';
@@ -18,11 +18,11 @@ const TRACE_ID = '0af7651916cd43dd8448eb211c80319c';
 const SPAN_ID = 'b7ad6b7169203331';
 
 describe('activeTraceparent', () => {
-	let cm: AsyncHooksContextManager;
+	let cm: AsyncLocalStorageContextManager;
 
 	beforeEach(() => {
 		context.disable();
-		cm = new AsyncHooksContextManager().enable();
+		cm = new AsyncLocalStorageContextManager().enable();
 		context.setGlobalContextManager(cm);
 	});
 
