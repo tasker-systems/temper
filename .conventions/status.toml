@@ -12,7 +12,7 @@
 # two; their rules read `uncovered` here until they land.
 #
 # `reviewed_at` is the baseline revision these statuses were reviewed against (check F).
-reviewed_at = "730e9d31a18de40955380d15e84a81861042cea0"
+reviewed_at = "7c1fce34bd6dfe1a9cd16463af1bd16ef28472b9"
 [rules]
 
 # --- Rust ----------------------------------------------------------------------------------------
