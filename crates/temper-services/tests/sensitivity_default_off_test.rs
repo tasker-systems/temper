@@ -99,7 +99,10 @@ async fn unmigrated(pool: &PgPool) -> (PgPool, String) {
         .await
         .unwrap();
     for ddl in [
-        format!(r#"DROP DATABASE IF EXISTS "{name}""#),
+        // `WITH (FORCE)`: a pool's `close()` returns before Postgres has reaped its backends, so a
+        // plain DROP can race one ("is being accessed by other users", 55006). Here that matters
+        // when a retry follows a failed run.
+        format!(r#"DROP DATABASE IF EXISTS "{name}" WITH (FORCE)"#),
         format!(r#"CREATE DATABASE "{name}" TEMPLATE template0"#),
     ] {
         sqlx::query(&ddl).execute(pool).await.unwrap();
@@ -153,7 +156,8 @@ async fn default_off_turns_temper_detectors_off_and_leaves_an_organizations_alon
     assert_eq!(rows, expect);
 
     pool.close().await;
-    sqlx::query(&format!(r#"DROP DATABASE "{name}""#))
+    // FORCE for the same reason as the setup drop above.
+    sqlx::query(&format!(r#"DROP DATABASE "{name}" WITH (FORCE)"#))
         .execute(&own)
         .await
         .unwrap();
