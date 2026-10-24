@@ -470,6 +470,9 @@ require 'temper/generated/models/vault_config'
 require 'temper/generated/models/via_entry'
 require 'temper/generated/models/vocabulary'
 require 'temper/generated/models/wide_arm'
+require 'temper/generated/models/wide_draw'
+require 'temper/generated/models/wide_draw_one_of'
+require 'temper/generated/models/wide_draw_one_of1'
 require 'temper/generated/models/wide_hit'
 
 # APIs

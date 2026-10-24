@@ -20,6 +20,7 @@ import json
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional
 from temper.generated.models.search_reason import SearchReason
+from temper.generated.models.wide_draw import WideDraw
 from temper.generated.models.wide_hit import WideHit
 from typing import Optional, Set
 from typing_extensions import Self
@@ -30,11 +31,12 @@ class WideArm(BaseModel):
     The **wide** arm, its disposition, and whether its signal was available at all.
     """ # noqa: E501
     degraded: StrictBool = Field(description="True when the server had to embed the query and could not — error, panic, or budget timeout.  **This belongs to this arm and not to the response.** A failed embed leaves the exact arm entirely unaffected and makes the wide arm *impossible*; reporting it at response level described a blend that no longer exists. An arm that could not run says so here rather than returning an empty list that reads like an answer.")
+    draw: Optional[WideDraw] = Field(default=None, description="What the arm read its answer from. `None` when the arm did not run (`degraded`) or the server predates the field — a reader must not take absence for [`WideDraw::Exhaustive`].")
     hint: Optional[StrictStr] = None
     hits: List[WideHit]
     reason: SearchReason
-    truncated: Optional[StrictBool] = Field(default=None, description="Are there hits beyond this page among what the arm draws? Read from the probe row past the page, as on the exact arm. Unscoped, the arm draws a bounded set of nearest chunks first, so `false` means nothing more within that draw, not nothing more similar anywhere.")
-    __properties: ClassVar[List[str]] = ["degraded", "hint", "hits", "reason", "truncated"]
+    truncated: Optional[StrictBool] = Field(default=None, description="Are there hits beyond this page among what the arm draws? Read from the probe row past the page, as on the exact arm. What `false` means depends on [`Self::draw`]: nothing more in scope after an exhaustive read, nothing more within the draw after a nearest-chunk one.")
+    __properties: ClassVar[List[str]] = ["degraded", "draw", "hint", "hits", "reason", "truncated"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -75,6 +77,9 @@ class WideArm(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # override the default output from pydantic by calling `to_dict()` of draw
+        if self.draw:
+            _dict['draw'] = self.draw.to_dict()
         # override the default output from pydantic by calling `to_dict()` of each item in hits (list)
         _items = []
         if self.hits:
@@ -82,6 +87,11 @@ class WideArm(BaseModel):
                 if _item_hits:
                     _items.append(_item_hits.to_dict())
             _dict['hits'] = _items
+        # set to None if draw (nullable) is None
+        # and model_fields_set contains the field
+        if self.draw is None and "draw" in self.model_fields_set:
+            _dict['draw'] = None
+
         # set to None if hint (nullable) is None
         # and model_fields_set contains the field
         if self.hint is None and "hint" in self.model_fields_set:
@@ -100,6 +110,7 @@ class WideArm(BaseModel):
 
         _obj = cls.model_validate({
             "degraded": obj.get("degraded"),
+            "draw": WideDraw.from_dict(obj["draw"]) if obj.get("draw") is not None else None,
             "hint": obj.get("hint"),
             "hits": [WideHit.from_dict(_item) for _item in obj["hits"]] if obj.get("hits") is not None else None,
             "reason": obj.get("reason"),

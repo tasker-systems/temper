@@ -93,3 +93,59 @@ async fn each_page_says_whether_more_hits_follow_it(pool: PgPool) {
         "the last page has nothing after it"
     );
 }
+
+/// The wide arm's `draw` for one read of the shared term, with a caller-supplied vector so the
+/// server embeds nothing and the arm is never degraded.
+async fn wide_draw(
+    app: &common::TestApp,
+    token: &str,
+    scope: serde_json::Value,
+) -> serde_json::Value {
+    let mut body = json!({ "query": "ztmptruncword", "embedding": vec![0.1_f32; 768], "limit": 2 });
+    body.as_object_mut()
+        .expect("object")
+        .extend(scope.as_object().expect("scope is an object").clone());
+    let resp = app
+        .client
+        .post(app.url("/api/search"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&body)
+        .send()
+        .await
+        .expect("search request failed");
+    assert_eq!(resp.status().as_u16(), 200, "search must return 200");
+    let body: serde_json::Value = resp.json().await.expect("search JSON");
+    assert_eq!(body["wide"]["degraded"], json!(false), "got {body}");
+    body["wide"]["draw"].clone()
+}
+
+/// `truncated: false` on the wide arm reads differently by scope, and only `draw` says which: an
+/// unscoped read is bounded by its nearest-chunk draw however short its page, a scoped one is not.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_wide_arm_says_what_it_drew_from(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+
+    let email = format!("search-draw-{}@example.com", uuid::Uuid::new_v4());
+    let (profile_id, context_id) =
+        common::fixtures::create_test_profile_with_context(&app.pool, &email).await;
+    let sub = format!("test|{profile_id}");
+    let token = common::generate_test_jwt(&sub, &email);
+    create_resource_in_context(&app, &token, context_id, "ztmptruncword alpha").await;
+
+    assert_eq!(
+        wide_draw(&app, &token, json!({})).await,
+        json!({ "kind": "nearest", "chunks": 100 }),
+        "an unscoped read draws the nearest chunks first"
+    );
+    assert_eq!(
+        wide_draw(&app, &token, json!({ "bound_ids": [] })).await,
+        json!({ "kind": "exhaustive" }),
+        "a resource bound is a scope, even an empty one"
+    );
+    // The fixture context's slug is `temper`.
+    assert_eq!(
+        wide_draw(&app, &token, json!({ "context_ref": "@me/temper" })).await,
+        json!({ "kind": "exhaustive" }),
+        "a context read scores every resource it homes"
+    );
+}

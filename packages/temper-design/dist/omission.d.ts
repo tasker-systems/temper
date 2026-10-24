@@ -63,6 +63,18 @@ export declare function omissionSentence(total: number, shown: number, scope: st
  * does not say at all is told exactly that, rather than "more" inferred from a full page.
  */
 export declare function uncountedSentence(shown: number, scope: string, cursor: Cursor | More | null): string;
+/**
+ * A read that ranked its answer from a bounded draw — the `draw` nearest of something — before
+ * anything else narrowed it. Past the draw it knows nothing, so a short page is never "all" of
+ * anything: the sentence names the draw, and says more were not shown only on the read's own word.
+ */
+export type Draw = {
+    more: boolean;
+    draw: number;
+    of: string;
+};
+/** The omission sentence for a view read from a bounded draw. */
+export declare function drawnSentence(shown: number, scope: string, { more, draw, of }: Draw): string;
 /** The clause naming where a graph figure was read from, for its description. */
 export declare function graphStanding(arm: GraphArm, nameOf: (id: string) => string): string;
 /** The omission sentence for a graph view, composed from the read's own numbers. */

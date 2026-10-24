@@ -117,10 +117,26 @@ export type WideArm = { hits: Array<WideHit>, reason: SearchReason, hint: string
 degraded: boolean, 
 /**
  * Are there hits beyond this page among what the arm draws? Read from the probe row past the
- * page, as on the exact arm. Unscoped, the arm draws a bounded set of nearest chunks first,
- * so `false` means nothing more within that draw, not nothing more similar anywhere.
+ * page, as on the exact arm. What `false` means depends on [`Self::draw`]: nothing more in
+ * scope after an exhaustive read, nothing more within the draw after a nearest-chunk one.
  */
-truncated: boolean, };
+truncated: boolean, 
+/**
+ * What the arm read its answer from. `None` when the arm did not run (`degraded`) or the
+ * server predates the field — a reader must not take absence for [`WideDraw::Exhaustive`].
+ */
+draw: WideDraw | null, };
+
+/**
+ * What the wide arm ranked its answer from.
+ *
+ * A scoped read (a context, a cogmap, or a resource bound) scores every resource the scope admits,
+ * so an answer with nothing after it is the whole answer. An unscoped read first draws the nearest
+ * chunks across the corpus and only then applies visibility and doc type, so its answer is bounded
+ * by that draw however short the page is — and unscoped similarity has no membership threshold
+ * that could make it whole.
+ */
+export type WideDraw = { "kind": "exhaustive" } | { "kind": "nearest", chunks: number, };
 
 /**
  * One hit from the **wide** arm: you had the idea, not the words.
