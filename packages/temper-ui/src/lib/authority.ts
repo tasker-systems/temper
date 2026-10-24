@@ -52,8 +52,9 @@ export function mayChangeResource(
 	if (resource.owner_profile_id === viewerProfileId) return true;
 
 	// Container arm. A resource homed in a cognitive map has no `kb_context_id`; this arm
-	// cannot speak to it and does not pretend to.
-	if (resource.kb_context_id === null) return false;
+	// cannot speak to it and does not pretend to. Loose `== null`: the wire omits the field
+	// rather than sending null (`skip_serializing_if`), so absent arrives as `undefined`.
+	if (resource.kb_context_id == null) return false;
 	const home = contexts?.find((c) => c.id === resource.kb_context_id);
 	return home?.can_write === true;
 }

@@ -36,7 +36,7 @@ has_pending_request: boolean,
  * Present only when the `email_contains` filter drove the match: the address that
  * satisfied it, so "why was this person enumerated" is answerable from the row itself.
  */
-matched_email: string | null, };
+matched_email?: string | null, };
 
 /**
  * A page of the directory. Carries `total` — the count of EVERY profile matching the filter,

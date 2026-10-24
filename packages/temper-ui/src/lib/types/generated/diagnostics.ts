@@ -27,7 +27,7 @@ message: string,
 /**
  * Optional next-step hint, the same field the API carries per-arm.
  */
-hint: string | null, };
+hint?: string | null, };
 
 /**
  * What kind of diagnostic this is. Never `error` — errors are the
@@ -57,10 +57,10 @@ message: string,
 /**
  * Optional next-step hint.
  */
-hint: string | null, 
+hint?: string | null, 
 /**
  * Structured detail, in the shape the HTTP door puts in `error.details`: the refusal list of
  * a plan the server would not run, each with its `reason` and `teaches`. Present only for a
  * refused plan; skipped when `None`, so other errors' payloads carry no `details` key.
  */
-details: ErrorDetails | null, };
+details?: ErrorDetails | null, };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ResourceListResponse } from '$lib/types';
+import type { ResourceFacets, ResourceListResponse } from '$lib/types';
 import { pageState, searchFailureMessage, toVaultFacets, toVaultList } from './vault-list';
 
 const response = (over: Partial<ResourceListResponse> = {}): ResourceListResponse =>
@@ -29,7 +29,14 @@ describe('toVaultFacets', () => {
 	});
 
 	it('reads a missing count as zero rather than NaN', () => {
-		expect(toVaultFacets({ doc_type: { task: undefined }, stage: {}, status: {} })).toEqual({
+		// Off-contract on purpose: a serialized map never carries an undefined value, and the wire
+		// type says so. `counts` stays defensive anyway, and this pins that it does.
+		const facets = {
+			doc_type: { task: undefined },
+			stage: {},
+			status: {},
+		} as unknown as ResourceFacets;
+		expect(toVaultFacets(facets)).toEqual({
 			doc_type: { task: 0 },
 			stage: {},
 			status: {},

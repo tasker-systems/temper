@@ -34,12 +34,12 @@ occurred_at: string,
 /**
  * The invocation this act is correlated under (`kb_events.invocation_id`).
  */
-invocation_id: string | null, 
+invocation_id?: string | null, 
 /**
  * The graded agent authorship of this act (decoded from `kb_events.metadata`); `None` for an
  * act with no authorship attached.
  */
-authorship: AgentAuthorship | null, };
+authorship?: AgentAuthorship | null, };
 
 /**
  * The lighter list-row projection of an invocation envelope (no acts).
@@ -73,7 +73,7 @@ closed_at: string | null,
  * The dispatch tick that spawned this run; `None` for a manual open. Filtering a list by this
  * answers "every session this tick fanned out to".
  */
-correlation_id: string | null, };
+correlation_id?: string | null, };
 
 /**
  * The full show projection of an invocation envelope: the `kb_invocations`
@@ -98,7 +98,7 @@ status: string,
  * on `kb_invocations.outcome` in the canonical schema migration claims. Surfacing it
  * under its own name here makes "did the close take?" answerable without knowing that.
  */
-disposition: Disposition | null, 
+disposition?: Disposition | null, 
 /**
  * What triggered this invocation.
  */
@@ -136,7 +136,7 @@ closed_at: string | null,
  * job for `originating_cogmap_id`. `None` for a manual open with no active job. This is the
  * run→tick join; an individual act joins through its `invocation_id`, not by carrying the tick.
  */
-correlation_id: string | null, 
+correlation_id?: string | null, 
 /**
  * The acts (stamped events) under this envelope that the caller can read. An act on an element
  * the caller cannot read is omitted, so a reader of the cogmap alone may see fewer acts than
