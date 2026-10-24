@@ -5,6 +5,7 @@
 		"src/routes/(app)",
 		"src/lib/components/Sidebar.svelte",
 		"src/lib/components/ThemeSwitch.svelte",
+		"src/lib/components/ChromeMenu.svelte",
 		"src/lib/components/CommandPalette.svelte",
 		"src/lib/components/vault/FilterBar.svelte",
 		"src/lib/components/ContextNavGroup.svelte",

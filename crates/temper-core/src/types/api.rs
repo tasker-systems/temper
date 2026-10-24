@@ -277,12 +277,37 @@ pub struct WideArm {
     /// returning an empty list that reads like an answer.
     pub degraded: bool,
     /// Are there hits beyond this page among what the arm draws? Read from the probe row past the
-    /// page, as on the exact arm. Unscoped, the arm draws a bounded set of nearest chunks first,
-    /// so `false` means nothing more within that draw, not nothing more similar anywhere.
+    /// page, as on the exact arm. What `false` means depends on [`Self::draw`]: nothing more in
+    /// scope after an exhaustive read, nothing more within the draw after a nearest-chunk one.
     // Optional in the published contract on purpose: a required response field is a shape
     // break for a generated client reading an older server. The server always writes it.
     #[serde(default)]
     pub truncated: bool,
+    /// What the arm read its answer from. `None` when the arm had no vector to rank by (a
+    /// `degraded` embed, or neither a query nor an embedding) or the server predates the field —
+    /// a reader must not take absence for [`WideDraw::Exhaustive`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draw: Option<WideDraw>,
+}
+
+/// What the wide arm ranked its answer from.
+///
+/// A scoped read (a context, a cogmap, or a resource bound) scores every resource the scope admits,
+/// so an answer with nothing after it is the whole answer. An unscoped read first draws the nearest
+/// chunks across the corpus and only then applies visibility and doc type, so its answer is bounded
+/// by that draw however short the page is — and unscoped similarity has no membership threshold
+/// that could make it whole.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "search.ts"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WideDraw {
+    /// Every resource in scope was scored.
+    Exhaustive,
+    /// The `chunks` nearest chunks were drawn before anything else narrowed the answer.
+    Nearest { chunks: u32 },
 }
 
 /// What bounded the corpus — shared by both arms, because both were asked the same question of the

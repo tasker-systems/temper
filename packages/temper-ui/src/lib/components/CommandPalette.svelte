@@ -2,7 +2,7 @@
 	import { goto } from '$app/navigation';
 	import type { ResourceView } from '$lib/types';
 	import type { SearchResponse } from '$lib/types/generated/search';
-	import { uncountedSentence } from '@tasker-systems/temper-design/omission';
+	import { drawnSentence, uncountedSentence } from '@tasker-systems/temper-design/omission';
 	import { resourceHref } from '$lib/vault-url';
 
 	let open = $state(false);
@@ -33,23 +33,20 @@
 	// D6 — the palette states its bound on every answer. The search read counts nothing but each
 	// arm says whether more matched (`truncated`, from the row it read past the page), never
 	// "more" inferred from a full page. The exact arm's `false` means nothing more matched. The
-	// wide arm's does not: unscoped, it ranks a bounded draw of nearest chunks before visibility,
-	// so `false` says nothing about what lies past the draw, and the sentence says "not reported"
-	// rather than "all". An answer from a server that does not send the field is not reported
-	// either.
-	const bound = $derived.by(() => {
+	// wide arm's means that only when its `draw` says the read was exhaustive; a read ranked from
+	// the nearest chunks says so, and is never "all". A wide arm that does not say what it drew
+	// from, or an arm that does not send `truncated`, is "not reported".
+	const omission = $derived.by(() => {
+		const scope = `${hits.length === 1 ? 'result' : 'results'} ${exactMode ? 'matching these words' : 'similar in meaning'}`;
 		const more = arm?.truncated;
-		if (more === undefined) return null;
-		if (more) return { more: true };
-		return exactMode ? { more: false } : null;
+		if (more === undefined) return uncountedSentence(hits.length, scope, null);
+		if (exactMode) return uncountedSentence(hits.length, scope, { more });
+		const draw = answer?.wide.draw;
+		if (draw?.kind === 'nearest')
+			return drawnSentence(hits.length, scope, { more, draw: draw.chunks, of: 'nearest passages' });
+		if (draw?.kind === 'exhaustive') return uncountedSentence(hits.length, scope, { more });
+		return uncountedSentence(hits.length, scope, more ? { more } : null);
 	});
-	const omission = $derived(
-		uncountedSentence(
-			hits.length,
-			`${hits.length === 1 ? 'result' : 'results'} ${exactMode ? 'matching these words' : 'similar in meaning'}`,
-			bound
-		)
-	);
 	// Degraded belongs to the wide arm alone — the exact arm has no such case — so the face is
 	// decided here rather than by touching a field the union only sometimes carries.
 	const wideDegraded = $derived(!exactMode && (answer?.wide.degraded ?? false));

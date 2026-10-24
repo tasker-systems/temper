@@ -1,0 +1,18 @@
+title    = "The web's appearance control, identity and Sign out live in a menu at the sidebar's head, reachable with the rail collapsed"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["clients"]
+status   = "signal-only"
+body = '''
+The sidebar's head gains a menu (≡, at its left in both rail states), as the desktop's chrome
+menu sits at its masthead's left. It holds the appearance choice (Follow system and each published
+theme), the reader's name, and Sign out. It opens only when the reader opens it, and closes on
+Escape or a pointer outside it. The sidebar footer that held them is gone.
+
+Before this, a reader with the rail collapsed had no appearance control and no Sign out, because
+the collapsed rail renders no footer. The collapsed rail's expand control now reads `›`, since `≡`
+is the menu's. The theme choice, its cookie and the server-rendered first paint do not change.
+
+Who observes it: a reader of the web. User-visible: yes. Release relevance: behavioral (where the
+controls are).
+'''

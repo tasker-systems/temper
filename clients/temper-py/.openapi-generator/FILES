@@ -492,6 +492,9 @@ temper/generated/models/vault_config.py
 temper/generated/models/via_entry.py
 temper/generated/models/vocabulary.py
 temper/generated/models/wide_arm.py
+temper/generated/models/wide_draw.py
+temper/generated/models/wide_draw_one_of.py
+temper/generated/models/wide_draw_one_of1.py
 temper/generated/models/wide_hit.py
 temper/generated/py.typed
 temper/generated/rest.py

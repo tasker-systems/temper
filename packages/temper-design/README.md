@@ -74,7 +74,7 @@ What a consumer imports:
 | `@tasker-systems/temper-design/sanitize` | the one sanitizer pass for that HTML; needs a DOM |
 | `@tasker-systems/temper-design/highlight` | the one highlight.js registration, for direct code viewers |
 | `@tasker-systems/temper-design/region` | the four region states' words, markers and ARIA roles |
-| `@tasker-systems/temper-design/omission` | the omission sentence a bounded view ends with — counted (`omissionSentence`), uncounted (`uncountedSentence`: a read that reports only whether more exist, a cursor page, or nothing), or a graph read (`graphSentence`) |
+| `@tasker-systems/temper-design/omission` | the omission sentence a bounded view ends with — counted (`omissionSentence`), uncounted (`uncountedSentence`: a read that reports only whether more exist, a cursor page, or nothing), drawn (`drawnSentence`: a read ranked from a bounded draw, which says what it drew from and never "all"), or a graph read (`graphSentence`) |
 | `@tasker-systems/temper-design/theme` | the theme model: a reader's preference (follow the system within a family, or one theme) resolved against `themes.json` |
 | `@tasker-systems/temper-design/vocabulary` | bound vocabularies: core's doc type → slot binding, `tintFor` (a doc type's slot, or the neutral), and `bindingsFrom`, which refuses a binding to anything but a slot |
 

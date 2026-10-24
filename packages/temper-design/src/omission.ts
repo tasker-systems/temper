@@ -86,6 +86,18 @@ export function uncountedSentence(
 	return `${shown} ${scope}; more before this page${more ? ', more after it' : ''}.`;
 }
 
+/**
+ * A read that ranked its answer from a bounded draw — the `draw` nearest of something — before
+ * anything else narrowed it. Past the draw it knows nothing, so a short page is never "all" of
+ * anything: the sentence names the draw, and says more were not shown only on the read's own word.
+ */
+export type Draw = { more: boolean; draw: number; of: string };
+
+/** The omission sentence for a view read from a bounded draw. */
+export function drawnSentence(shown: number, scope: string, { more, draw, of }: Draw): string {
+	return `${shown} ${scope} from a draw of the ${draw} ${of}; ${more ? 'more not shown' : 'past the draw not reported'}.`;
+}
+
 const counted = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 /** The clause naming where a graph figure was read from, for its description. */

@@ -490,5 +490,8 @@ lib/temper/generated/models/vault_config.rb
 lib/temper/generated/models/via_entry.rb
 lib/temper/generated/models/vocabulary.rb
 lib/temper/generated/models/wide_arm.rb
+lib/temper/generated/models/wide_draw.rb
+lib/temper/generated/models/wide_draw_one_of.rb
+lib/temper/generated/models/wide_draw_one_of1.rb
 lib/temper/generated/models/wide_hit.rb
 lib/temper/generated/version.rb

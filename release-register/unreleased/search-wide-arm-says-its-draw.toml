@@ -1,0 +1,27 @@
+title    = "The `/api/search` wide arm says what it ranked its answer from (`draw`); the web palette names the draw instead of \"more not reported\""
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp", "clients"]
+status   = "signal-only"
+body = '''
+`WideArm` gains an optional `draw`: `{ "kind": "exhaustive" }` when the read was scoped (a context,
+a cogmap or a resource bound), so every resource in scope was scored; `{ "kind": "nearest",
+"chunks": 100 }` when it was unscoped, so the answer was ranked from the nearest chunks before
+visibility and doc type narrowed it. It is absent when the arm had no vector (a degraded embed, or
+neither a query nor an embedding) and from older servers, and a reader must not take absence for
+exhaustive. `truncated` keeps its meaning on both.
+
+`@tasker-systems/temper-design/omission` gains `drawnSentence` and the `Draw` type, for a view read
+from a bounded draw. It names the draw and never says "all".
+
+Who observes it:
+- Every search caller over HTTP and MCP, and the three generated SDKs: one new optional field on
+  the wide arm, and a new `WideDraw` model. The CLI's stdout does not carry it.
+- A surface importing the design package: a new export.
+- A reader of the web's palette: an unscoped similar-in-meaning answer now reads "N results similar
+  in meaning from a draw of the 100 nearest passages; past the draw not reported." It used to read
+  "more not reported". A scoped one with nothing after it reads "All N".
+
+User-visible: yes, on the web's palette. Release relevance: additive (a response field, an export)
+and behavioral (the palette's wording).
+'''
