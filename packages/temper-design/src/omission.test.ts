@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+	drawnSentence,
 	type GraphOmissions,
 	graphSentence,
 	graphStanding,
@@ -84,6 +85,20 @@ describe('the omission sentence of a read that counts nothing', () => {
 		);
 		expect(uncountedSentence(7, 'artifacts', { first: false, more: false })).toBe(
 			'7 artifacts; more before this page.',
+		);
+	});
+});
+
+describe('the omission sentence of a read ranked from a bounded draw', () => {
+	it('names the draw and never calls a short page all of them', () => {
+		expect(drawnSentence(3, 'results', { more: false, draw: 100, of: 'nearest passages' })).toBe(
+			'3 results from a draw of the 100 nearest passages; past the draw not reported.',
+		);
+	});
+
+	it("says more were not shown on the read's own word", () => {
+		expect(drawnSentence(10, 'results', { more: true, draw: 100, of: 'nearest passages' })).toBe(
+			'10 results from a draw of the 100 nearest passages; more not shown.',
 		);
 	});
 });

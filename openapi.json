@@ -28206,6 +28206,17 @@
             "type": "boolean",
             "description": "True when the server had to embed the query and could not — error, panic, or budget timeout.\n\n**This belongs to this arm and not to the response.** A failed embed leaves the exact arm\nentirely unaffected and makes the wide arm *impossible*; reporting it at response level\ndescribed a blend that no longer exists. An arm that could not run says so here rather than\nreturning an empty list that reads like an answer."
           },
+          "draw": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WideDraw",
+                "description": "What the arm read its answer from. `None` when the arm had no vector to rank by (a\n`degraded` embed, or neither a query nor an embedding) or the server predates the field —\na reader must not take absence for [`WideDraw::Exhaustive`]."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "hint": {
             "type": [
               "string",
@@ -28223,9 +28234,50 @@
           },
           "truncated": {
             "type": "boolean",
-            "description": "Are there hits beyond this page among what the arm draws? Read from the probe row past the\npage, as on the exact arm. Unscoped, the arm draws a bounded set of nearest chunks first,\nso `false` means nothing more within that draw, not nothing more similar anywhere."
+            "description": "Are there hits beyond this page among what the arm draws? Read from the probe row past the\npage, as on the exact arm. What `false` means depends on [`Self::draw`]: nothing more in\nscope after an exhaustive read, nothing more within the draw after a nearest-chunk one."
           }
         }
+      },
+      "WideDraw": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Every resource in scope was scored.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "exhaustive"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The `chunks` nearest chunks were drawn before anything else narrowed the answer.",
+            "required": [
+              "chunks",
+              "kind"
+            ],
+            "properties": {
+              "chunks": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "nearest"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What the wide arm ranked its answer from.\n\nA scoped read (a context, a cogmap, or a resource bound) scores every resource the scope admits,\nso an answer with nothing after it is the whole answer. An unscoped read first draws the nearest\nchunks across the corpus and only then applies visibility and doc type, so its answer is bounded\nby that draw however short the page is — and unscoped similarity has no membership threshold\nthat could make it whole."
       },
       "WideHit": {
         "type": "object",

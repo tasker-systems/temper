@@ -468,5 +468,8 @@ from temper.generated.models.vault_config import VaultConfig
 from temper.generated.models.via_entry import ViaEntry
 from temper.generated.models.vocabulary import Vocabulary
 from temper.generated.models.wide_arm import WideArm
+from temper.generated.models.wide_draw import WideDraw
+from temper.generated.models.wide_draw_one_of import WideDrawOneOf
+from temper.generated.models.wide_draw_one_of1 import WideDrawOneOf1
 from temper.generated.models.wide_hit import WideHit
 

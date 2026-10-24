@@ -31,7 +31,7 @@ use temper_core::context_ref::parse_context_ref;
 use temper_core::error::TemperError;
 use temper_core::types::api::{
     ExactArm, ExactHit, SearchParams, SearchReason, SearchResponse, SearchScope, SearchScopeInfo,
-    WideArm, WideHit,
+    WideArm, WideDraw, WideHit,
 };
 use temper_core::types::cognitive_maps::{
     AnchorShape, CharterBlock, CogmapAnalyticsRow, CogmapRegionMetricsRow, CogmapRegionRow,
@@ -1470,11 +1470,29 @@ pub async fn search_select(
             hits: wide,
             degraded,
             truncated: wide_truncated,
+            draw: wide_draw(params.embedding.is_some(), arm),
         },
         scope: SearchScopeInfo {
             kind: scope,
             size: scope_size,
         },
+    })
+}
+
+/// What the wide arm read its answer from — the same predicate `__temper_ungated_find_wide` branches
+/// on (`p_anchor_id IS NULL AND p_bound_ids IS NULL` takes the top-k draw; `20260810000010`). An
+/// arm with no vector drew nothing, so it says nothing: a degraded embed, or a request with neither
+/// a query to embed nor an embedding.
+fn wide_draw(has_vector: bool, arm: readback::ArmQuery<'_>) -> Option<WideDraw> {
+    if !has_vector {
+        return None;
+    }
+    Some(if arm.anchor.is_none() && arm.bound_ids.is_none() {
+        WideDraw::Nearest {
+            chunks: VECTOR_K.unsigned_abs(),
+        }
+    } else {
+        WideDraw::Exhaustive
     })
 }
 
@@ -2186,6 +2204,47 @@ mod clamp_tests {
             ..SearchParams::default()
         };
         assert_eq!(classify_scope(&cog), SearchScope::Cogmap);
+    }
+
+    #[test]
+    fn wide_draw_is_exhaustive_exactly_when_the_read_is_scoped() {
+        let unscoped = readback::ArmQuery {
+            principal: ProfileId::from(Uuid::now_v7()),
+            bound_ids: None,
+            anchor: None,
+            doc_type: None,
+            limit: Some(11),
+            offset: 0,
+        };
+        assert_eq!(
+            wide_draw(true, unscoped),
+            Some(WideDraw::Nearest { chunks: 100 })
+        );
+        // A doc-type filter narrows after the draw, so it leaves the read unscoped.
+        let typed = readback::ArmQuery {
+            doc_type: Some("research"),
+            ..unscoped
+        };
+        assert_eq!(
+            wide_draw(true, typed),
+            Some(WideDraw::Nearest { chunks: 100 })
+        );
+        // An empty bound is still a bound: it takes the exhaustive branch and returns nothing.
+        let bounded = readback::ArmQuery {
+            bound_ids: Some(&[]),
+            ..unscoped
+        };
+        assert_eq!(wide_draw(true, bounded), Some(WideDraw::Exhaustive));
+        let anchored = readback::ArmQuery {
+            anchor: Some(HomeAnchor::Context(ContextId::from(Uuid::now_v7()))),
+            ..unscoped
+        };
+        assert_eq!(wide_draw(true, anchored), Some(WideDraw::Exhaustive));
+        assert_eq!(
+            wide_draw(false, unscoped),
+            None,
+            "an arm with no vector drew nothing"
+        );
     }
 
     #[test]

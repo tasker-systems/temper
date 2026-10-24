@@ -391,6 +391,7 @@ mod tests {
                 hint: None,
                 degraded: false,
                 truncated: false,
+                draw: None,
             },
             scope: SearchScopeInfo {
                 kind: SearchScope::Global,
@@ -424,6 +425,7 @@ mod tests {
                 hint: Some("try rephrasing".to_string()),
                 degraded: true,
                 truncated: false,
+                draw: None,
             },
             scope: SearchScopeInfo {
                 kind: SearchScope::Global,
@@ -457,6 +459,7 @@ mod tests {
                 hint: None,
                 degraded: false,
                 truncated: false,
+                draw: None,
             },
             scope: SearchScopeInfo {
                 kind: SearchScope::Global,
@@ -489,6 +492,7 @@ mod tests {
                 hint: None,
                 degraded: false,
                 truncated: false,
+                draw: None,
             },
             scope: SearchScopeInfo {
                 kind: SearchScope::Global,

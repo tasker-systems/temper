@@ -62,7 +62,15 @@ const arms = ({
 	wide?: Partial<WideArm>;
 } = {}): SearchResponse => ({
 	exact: { hits: [], reason: 'no_match', hint: null, truncated: false, ...exact },
-	wide: { hits: [], reason: 'no_match', hint: null, degraded: false, truncated: false, ...wide },
+	wide: {
+		hits: [],
+		reason: 'no_match',
+		hint: null,
+		degraded: false,
+		truncated: false,
+		draw: null,
+		...wide,
+	},
 	scope: { kind: 'global', size: null },
 });
 
@@ -231,9 +239,76 @@ describe('CommandPalette — the bound it states (D6)', () => {
 		);
 	});
 
-	it('never calls the wide arm all of them — its draw is bounded before visibility', async () => {
+	it('never calls a wide answer ranked from the nearest chunks all of them, however short', async () => {
 		vi.useFakeTimers();
-		answer(200, arms({ wide: { hits: [wideHit('Find one')], reason: 'ok', hint: null } }));
+		answer(
+			200,
+			arms({
+				wide: {
+					hits: [wideHit('Find one')],
+					reason: 'ok',
+					hint: null,
+					draw: { kind: 'nearest', chunks: 100 },
+				},
+			}),
+		);
+		const { getByPlaceholderText, getByTestId } = await mountOpen();
+
+		await type(getByPlaceholderText('Search the vault...'), 'ledger');
+
+		expect(getByTestId('omission').textContent?.trim()).toBe(
+			'1 result similar in meaning from a draw of the 100 nearest passages; past the draw not reported.',
+		);
+	});
+
+	it('says more were not shown of a drawn wide answer only on the arm’s word', async () => {
+		vi.useFakeTimers();
+		answer(
+			200,
+			arms({
+				wide: {
+					hits: Array.from({ length: SEARCH_PAGE_SIZE }, (_, i) => wideHit(`Find ${i}`)),
+					reason: 'ok',
+					hint: null,
+					truncated: true,
+					draw: { kind: 'nearest', chunks: 100 },
+				},
+			}),
+		);
+		const { getByPlaceholderText, getByTestId } = await mountOpen();
+
+		await type(getByPlaceholderText('Search the vault...'), 'ledger');
+
+		expect(getByTestId('omission').textContent?.trim()).toBe(
+			`${SEARCH_PAGE_SIZE} results similar in meaning from a draw of the 100 nearest passages; more not shown.`,
+		);
+	});
+
+	it('calls a wide answer all of them when the read was exhaustive and nothing follows', async () => {
+		vi.useFakeTimers();
+		answer(
+			200,
+			arms({
+				wide: {
+					hits: [wideHit('Find one'), wideHit('Find two')],
+					reason: 'ok',
+					hint: null,
+					draw: { kind: 'exhaustive' },
+				},
+			}),
+		);
+		const { getByPlaceholderText, getByTestId } = await mountOpen();
+
+		await type(getByPlaceholderText('Search the vault...'), 'ledger');
+
+		expect(getByTestId('omission').textContent?.trim()).toBe('All 2 results similar in meaning.');
+	});
+
+	it('never calls a wide answer all of them when the server does not say what it drew from', async () => {
+		vi.useFakeTimers();
+		const old = arms({ wide: { hits: [wideHit('Find one')], reason: 'ok', hint: null } });
+		delete (old.wide as { draw?: unknown }).draw;
+		answer(200, old);
 		const { getByPlaceholderText, getByTestId } = await mountOpen();
 
 		await type(getByPlaceholderText('Search the vault...'), 'ledger');

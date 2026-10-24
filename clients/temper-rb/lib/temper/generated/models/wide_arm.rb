@@ -19,13 +19,16 @@ module Temper::Generated
     # True when the server had to embed the query and could not — error, panic, or budget timeout.  **This belongs to this arm and not to the response.** A failed embed leaves the exact arm entirely unaffected and makes the wide arm *impossible*; reporting it at response level described a blend that no longer exists. An arm that could not run says so here rather than returning an empty list that reads like an answer.
     attr_accessor :degraded
 
+    # What the arm read its answer from. `None` when the arm had no vector to rank by (a `degraded` embed, or neither a query nor an embedding) or the server predates the field — a reader must not take absence for [`WideDraw::Exhaustive`].
+    attr_accessor :draw
+
     attr_accessor :hint
 
     attr_accessor :hits
 
     attr_accessor :reason
 
-    # Are there hits beyond this page among what the arm draws? Read from the probe row past the page, as on the exact arm. Unscoped, the arm draws a bounded set of nearest chunks first, so `false` means nothing more within that draw, not nothing more similar anywhere.
+    # Are there hits beyond this page among what the arm draws? Read from the probe row past the page, as on the exact arm. What `false` means depends on [`Self::draw`]: nothing more in scope after an exhaustive read, nothing more within the draw after a nearest-chunk one.
     attr_accessor :truncated
 
     class EnumAttributeValidator
@@ -54,6 +57,7 @@ module Temper::Generated
     def self.attribute_map
       {
         :'degraded' => :'degraded',
+        :'draw' => :'draw',
         :'hint' => :'hint',
         :'hits' => :'hits',
         :'reason' => :'reason',
@@ -75,6 +79,7 @@ module Temper::Generated
     def self.openapi_types
       {
         :'degraded' => :'Boolean',
+        :'draw' => :'WideDraw',
         :'hint' => :'String',
         :'hits' => :'Array<WideHit>',
         :'reason' => :'SearchReason',
@@ -85,6 +90,7 @@ module Temper::Generated
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
+        :'draw',
         :'hint',
       ])
     end
@@ -109,6 +115,10 @@ module Temper::Generated
         self.degraded = attributes[:'degraded']
       else
         self.degraded = nil
+      end
+
+      if attributes.key?(:'draw')
+        self.draw = attributes[:'draw']
       end
 
       if attributes.key?(:'hint')
@@ -200,6 +210,7 @@ module Temper::Generated
       return true if self.equal?(o)
       self.class == o.class &&
           degraded == o.degraded &&
+          draw == o.draw &&
           hint == o.hint &&
           hits == o.hits &&
           reason == o.reason &&
@@ -215,7 +226,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [degraded, hint, hits, reason, truncated].hash
+      [degraded, draw, hint, hits, reason, truncated].hash
     end
 
     # Builds the object from hash

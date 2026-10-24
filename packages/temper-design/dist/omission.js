@@ -37,6 +37,10 @@ export function uncountedSentence(shown, scope, cursor) {
         return `${shown} ${scope}; more after this page.`;
     return `${shown} ${scope}; more before this page${more ? ', more after it' : ''}.`;
 }
+/** The omission sentence for a view read from a bounded draw. */
+export function drawnSentence(shown, scope, { more, draw, of }) {
+    return `${shown} ${scope} from a draw of the ${draw} ${of}; ${more ? 'more not shown' : 'past the draw not reported'}.`;
+}
 const counted = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 /** The clause naming where a graph figure was read from, for its description. */
 export function graphStanding(arm, nameOf) {

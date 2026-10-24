@@ -512,6 +512,9 @@ __all__ = [
     "ViaEntry",
     "Vocabulary",
     "WideArm",
+    "WideDraw",
+    "WideDrawOneOf",
+    "WideDrawOneOf1",
     "WideHit",
 ]
 
@@ -1014,5 +1017,8 @@ from temper.generated.models.vault_config import VaultConfig as VaultConfig
 from temper.generated.models.via_entry import ViaEntry as ViaEntry
 from temper.generated.models.vocabulary import Vocabulary as Vocabulary
 from temper.generated.models.wide_arm import WideArm as WideArm
+from temper.generated.models.wide_draw import WideDraw as WideDraw
+from temper.generated.models.wide_draw_one_of import WideDrawOneOf as WideDrawOneOf
+from temper.generated.models.wide_draw_one_of1 import WideDrawOneOf1 as WideDrawOneOf1
 from temper.generated.models.wide_hit import WideHit as WideHit
 
