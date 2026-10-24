@@ -283,8 +283,9 @@ pub struct WideArm {
     // break for a generated client reading an older server. The server always writes it.
     #[serde(default)]
     pub truncated: bool,
-    /// What the arm read its answer from. `None` when the arm did not run (`degraded`) or the
-    /// server predates the field — a reader must not take absence for [`WideDraw::Exhaustive`].
+    /// What the arm read its answer from. `None` when the arm had no vector to rank by (a
+    /// `degraded` embed, or neither a query nor an embedding) or the server predates the field —
+    /// a reader must not take absence for [`WideDraw::Exhaustive`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub draw: Option<WideDraw>,
 }

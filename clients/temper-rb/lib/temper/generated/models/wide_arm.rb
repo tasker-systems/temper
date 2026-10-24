@@ -19,7 +19,7 @@ module Temper::Generated
     # True when the server had to embed the query and could not — error, panic, or budget timeout.  **This belongs to this arm and not to the response.** A failed embed leaves the exact arm entirely unaffected and makes the wide arm *impossible*; reporting it at response level described a blend that no longer exists. An arm that could not run says so here rather than returning an empty list that reads like an answer.
     attr_accessor :degraded
 
-    # What the arm read its answer from. `None` when the arm did not run (`degraded`) or the server predates the field — a reader must not take absence for [`WideDraw::Exhaustive`].
+    # What the arm read its answer from. `None` when the arm had no vector to rank by (a `degraded` embed, or neither a query nor an embedding) or the server predates the field — a reader must not take absence for [`WideDraw::Exhaustive`].
     attr_accessor :draw
 
     attr_accessor :hint

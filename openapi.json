@@ -28111,7 +28111,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/WideDraw",
-                "description": "What the arm read its answer from. `None` when the arm did not run (`degraded`) or the\nserver predates the field — a reader must not take absence for [`WideDraw::Exhaustive`]."
+                "description": "What the arm read its answer from. `None` when the arm had no vector to rank by (a\n`degraded` embed, or neither a query nor an embedding) or the server predates the field —\na reader must not take absence for [`WideDraw::Exhaustive`]."
               },
               {
                 "type": "null"

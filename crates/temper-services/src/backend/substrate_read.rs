@@ -1470,7 +1470,7 @@ pub async fn search_select(
             hits: wide,
             degraded,
             truncated: wide_truncated,
-            draw: wide_draw(degraded, arm),
+            draw: wide_draw(params.embedding.is_some(), arm),
         },
         scope: SearchScopeInfo {
             kind: scope,
@@ -1480,10 +1480,11 @@ pub async fn search_select(
 }
 
 /// What the wide arm read its answer from — the same predicate `__temper_ungated_find_wide` branches
-/// on (`p_anchor_id IS NULL AND p_bound_ids IS NULL` takes the top-k draw; `20260810000010`). A
-/// degraded arm drew nothing, so it says nothing.
-fn wide_draw(degraded: bool, arm: readback::ArmQuery<'_>) -> Option<WideDraw> {
-    if degraded {
+/// on (`p_anchor_id IS NULL AND p_bound_ids IS NULL` takes the top-k draw; `20260810000010`). An
+/// arm with no vector drew nothing, so it says nothing: a degraded embed, or a request with neither
+/// a query to embed nor an embedding.
+fn wide_draw(has_vector: bool, arm: readback::ArmQuery<'_>) -> Option<WideDraw> {
+    if !has_vector {
         return None;
     }
     Some(if arm.anchor.is_none() && arm.bound_ids.is_none() {
@@ -2216,7 +2217,7 @@ mod clamp_tests {
             offset: 0,
         };
         assert_eq!(
-            wide_draw(false, unscoped),
+            wide_draw(true, unscoped),
             Some(WideDraw::Nearest { chunks: 100 })
         );
         // A doc-type filter narrows after the draw, so it leaves the read unscoped.
@@ -2225,7 +2226,7 @@ mod clamp_tests {
             ..unscoped
         };
         assert_eq!(
-            wide_draw(false, typed),
+            wide_draw(true, typed),
             Some(WideDraw::Nearest { chunks: 100 })
         );
         // An empty bound is still a bound: it takes the exhaustive branch and returns nothing.
@@ -2233,16 +2234,16 @@ mod clamp_tests {
             bound_ids: Some(&[]),
             ..unscoped
         };
-        assert_eq!(wide_draw(false, bounded), Some(WideDraw::Exhaustive));
+        assert_eq!(wide_draw(true, bounded), Some(WideDraw::Exhaustive));
         let anchored = readback::ArmQuery {
             anchor: Some(HomeAnchor::Context(ContextId::from(Uuid::now_v7()))),
             ..unscoped
         };
-        assert_eq!(wide_draw(false, anchored), Some(WideDraw::Exhaustive));
+        assert_eq!(wide_draw(true, anchored), Some(WideDraw::Exhaustive));
         assert_eq!(
-            wide_draw(true, unscoped),
+            wide_draw(false, unscoped),
             None,
-            "a degraded arm drew nothing"
+            "an arm with no vector drew nothing"
         );
     }
 

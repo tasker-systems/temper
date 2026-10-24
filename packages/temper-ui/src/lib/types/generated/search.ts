@@ -122,8 +122,9 @@ degraded: boolean,
  */
 truncated: boolean, 
 /**
- * What the arm read its answer from. `None` when the arm did not run (`degraded`) or the
- * server predates the field — a reader must not take absence for [`WideDraw::Exhaustive`].
+ * What the arm read its answer from. `None` when the arm had no vector to rank by (a
+ * `degraded` embed, or neither a query nor an embedding) or the server predates the field —
+ * a reader must not take absence for [`WideDraw::Exhaustive`].
  */
 draw: WideDraw | null, };
 
