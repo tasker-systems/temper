@@ -54,7 +54,9 @@ from temper.errors import (
 # tree already carries it — we alias it rather than reasserting it, and callers never
 # reach into `temper.generated` for it. Independent of `__version__`, which is the
 # SDK's own SemVer: a package version and an API version answer different questions.
-from temper.generated import __version__ as CONTRACT_VERSION
+from temper.generated import (
+    __version__ as CONTRACT_VERSION,  # noqa: N812 - a public constant, named as one
+)
 from temper.refs import parse_ref
 from temper.version import __version__
 

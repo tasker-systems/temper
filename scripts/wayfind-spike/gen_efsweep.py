@@ -5,13 +5,16 @@ Same LATERAL/parameterized form as gen_recall.py, so the index engages exactly a
 for the deployed `search_vector_candidates`. Reports, per ef: chunks drawn, distinct
 resources admitted after the production visibility/active/complete predicates, and wall time.
 """
+
 import sys
+from pathlib import Path
+
 PRINCIPAL = "019d4add-f49d-7c43-a87d-dda470e5dd9c"
 K = 100
 EFS = [40, 64, 100, 200, 400, 800]
 
 rows = []
-for line in open(sys.argv[1]):
+for line in Path(sys.argv[1]).read_text().splitlines():
     line = line.rstrip("\n")
     if line:
         q, v = line.split("\t", 1)

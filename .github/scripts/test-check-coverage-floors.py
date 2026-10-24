@@ -55,7 +55,7 @@ end_of_record
 
 
 def arm(name: str, expected: int, lcov: str, thresholds: dict) -> None:
-    global passed, failed
+    global passed, failed  # noqa: PLW0603 - the harness's two module-level tallies, reported at exit
     got = run(lcov, thresholds)
     if got == expected:
         passed += 1
@@ -68,16 +68,42 @@ def arm(name: str, expected: int, lcov: str, thresholds: dict) -> None:
 print("=== check-coverage-floors harness ===\n")
 
 arm("all above floor passes", PASS, LCOV, {"rust": {"alpha": 50, "beta": 50, "gamma": 0}})
-arm("a crate below floor fails, named by the checker", FAIL, LCOV,
-    {"rust": {"alpha": 50, "beta": 50, "gamma": 50}})
-arm("floor exactly at measured coverage passes", PASS, LCOV, {"rust": {"alpha": 66, "beta": 100, "gamma": 0}})
-arm("a floor LOWERED below measurement is a pass, never a failure", PASS, LCOV, {"rust": {"alpha": 60, "beta": 90, "gamma": 0}})
-arm("a new crate with no floor recorded fails (coverage may never be averaged away)", FAIL, LCOV, {"rust": {"alpha": 50, "beta": 50}})
-arm("a floored crate absent from the report fails", FAIL, LCOV, {"rust": {"alpha": 50, "beta": 50, "gamma": 0, "delta": 40}})
+arm(
+    "a crate below floor fails, named by the checker",
+    FAIL,
+    LCOV,
+    {"rust": {"alpha": 50, "beta": 50, "gamma": 50}},
+)
+arm(
+    "floor exactly at measured coverage passes",
+    PASS,
+    LCOV,
+    {"rust": {"alpha": 66, "beta": 100, "gamma": 0}},
+)
+arm(
+    "a floor LOWERED below measurement is a pass, never a failure",
+    PASS,
+    LCOV,
+    {"rust": {"alpha": 60, "beta": 90, "gamma": 0}},
+)
+arm(
+    "a new crate with no floor recorded fails (coverage may never be averaged away)",
+    FAIL,
+    LCOV,
+    {"rust": {"alpha": 50, "beta": 50}},
+)
+arm(
+    "a floored crate absent from the report fails",
+    FAIL,
+    LCOV,
+    {"rust": {"alpha": 50, "beta": 50, "gamma": 0, "delta": 40}},
+)
 arm("an empty report is unusable, not a pass", 2, "", {"rust": {"alpha": 50}})
 
 # Non-crate sources are excluded from the computation, not averaged in.
-arm("non-crate SF paths are ignored", PASS,
+arm(
+    "non-crate SF paths are ignored",
+    PASS,
     """TN:
 SF:crates/alpha/src/lib.rs
 DA:1,1
@@ -85,25 +111,35 @@ end_of_record
 SF:target/debug/build/out.rs
 DA:1,0
 end_of_record
-""", {"rust": {"alpha": 100}})
+""",
+    {"rust": {"alpha": 100}},
+)
 
 # llvm-cov emits ABSOLUTE paths from a local run; the crate anchor must survive that.
-arm("absolute SF paths anchor on crates/", PASS,
+arm(
+    "absolute SF paths anchor on crates/",
+    PASS,
     """TN:
 SF:/Users/somebody/temper/crates/alpha/src/lib.rs
 DA:1,1
 DA:2,0
 end_of_record
-""", {"rust": {"alpha": 50}})
+""",
+    {"rust": {"alpha": 50}},
+)
 
 # tests/e2e is a crate-shaped member with its own floor vocabulary.
-arm("tests/e2e reports under its own name", PASS,
+arm(
+    "tests/e2e reports under its own name",
+    PASS,
     """TN:
 SF:tests/e2e/tests/t.rs
 DA:1,1
 DA:2,0
 end_of_record
-""", {"rust": {"tests-e2e": 50}})
+""",
+    {"rust": {"tests-e2e": 50}},
+)
 
 print(f"\npassed={passed} failed={failed}")
 raise SystemExit(1 if failed else 0)

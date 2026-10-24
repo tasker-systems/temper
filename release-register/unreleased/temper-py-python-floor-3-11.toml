@@ -1,0 +1,13 @@
+title    = "temper-py requires Python 3.11 or newer"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["clients"]
+status   = "signal-only"
+body = '''
+`requires-python` in clients/temper-py moves from `>=3.10` to `>=3.11`, with mypy's
+`python_version` beside it; ruff's target-version comes from the tasker-systems baseline's floor,
+which is now 3.11 (PY-VER-1). No wire shape and no SDK API changes. Who observes: an installer on
+Python 3.10, which stops resolving releases after this one and keeps the last 3.10-compatible
+version. 3.10 reaches end of life in October 2026. User-visible: yes, at install time on 3.10
+only. Release relevance: name it in the temper-py release notes.
+'''

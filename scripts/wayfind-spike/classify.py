@@ -12,11 +12,13 @@ anchor's live-region count.
 Pass the UNION of every id set you intend to analyze — rows from an unclassified width come
 back 'unknown' in analyze.py.
 """
+
 import sys
+from pathlib import Path
 
-PRINCIPAL = '019d4add-f49d-7c43-a87d-dda470e5dd9c'
+PRINCIPAL = "019d4add-f49d-7c43-a87d-dda470e5dd9c"
 
-ids = sorted({l.strip() for l in open(sys.argv[1]) if l.strip()})
+ids = sorted({x.strip() for x in Path(sys.argv[1]).read_text().splitlines() if x.strip()})
 if not ids:
     sys.exit("no ids on stdin file")
 values = ",".join(f"('{i}'::uuid)" for i in ids)

@@ -1,0 +1,34 @@
+# This repository's pin on the tasker-systems conventions baseline. Doctrine: CONS-* in
+# .conventions/baseline/doctrine/consuming.md. `revision` is written by `conventions.py bump`.
+name = "temper"
+revision = "7c1fce34bd6dfe1a9cd16463af1bd16ef28472b9"
+
+# Each adopted canonical file: where it lives here, and how it is compared (exact, extends,
+# table, superset). Not yet adopted, each a measured step of its own (status.toml says so):
+# rust/workspace-lints.toml (the workspace Cargo.toml, table mode), typescript/biome.json and
+# typescript/tsconfig.base.json (one entry per package).
+[[adopted]]
+canonical = "rust/deny.toml"
+path = "deny.toml"
+mode = "superset"
+
+[[adopted]]
+canonical = "rust/audit.toml"
+path = ".cargo/audit.toml"
+mode = "superset"
+
+[[adopted]]
+canonical = "rust/clippy.toml"
+path = "clippy.toml"
+mode = "exact"
+
+[[adopted]]
+canonical = "python/ruff.toml"
+path = "ruff.toml"
+mode = "extends"
+
+[guidance]
+# Agent entry files that must link the projected skill, and where the skill is projected. Both
+# entry files are routers to internal/agents/*.md, mirrored; each links the skill.
+entry = ["CLAUDE.md", "AGENTS.md"]
+skill = ".claude/skills/tasker-systems-conventions"

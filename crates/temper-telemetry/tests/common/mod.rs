@@ -30,6 +30,10 @@ use std::net::TcpListener;
 use std::sync::mpsc;
 use std::time::Duration;
 
+/// How many requests a sink holds before its thread waits for the test to read one (CONC-BOUND-1:
+/// no unbounded queue, test code included). Far above what any test sends.
+const REQUEST_BOUND: usize = 64;
+
 /// How long to wait for an export before concluding none is coming.
 ///
 /// Generous: the assertion "nothing was exported" must not be satisfiable by being impatient.
@@ -53,7 +57,7 @@ impl Sink {
             .local_addr()
             .expect("listener has an address")
             .port();
-        let (tx, requests) = mpsc::channel();
+        let (tx, requests) = mpsc::sync_channel(REQUEST_BOUND);
 
         std::thread::spawn(move || {
             for stream in listener.incoming() {
@@ -88,7 +92,7 @@ impl Sink {
             .local_addr()
             .expect("listener has an address")
             .port();
-        let (tx, requests) = mpsc::channel();
+        let (tx, requests) = mpsc::sync_channel(REQUEST_BOUND);
 
         std::thread::spawn(move || {
             let mut held = Vec::new();

@@ -202,10 +202,11 @@ jobs:
       - name: Security audit
         run: cargo audit
 
-      # BLOCKING, beside the audit: every crate comes from crates.io, and every license
-      # expression is satisfiable from deny.toml's allowlist. Advisories stay with cargo audit.
-      - name: Dependency sources and licenses
-        run: cargo deny check sources licenses
+      # BLOCKING, beside the audit: every crate comes from crates.io, every license expression is
+      # satisfiable from deny.toml's allowlist, and no dependency has a `*` version requirement
+      # (duplicate versions only warn). Advisories stay with cargo audit.
+      - name: Dependency sources, licenses and bans
+        run: cargo deny check sources licenses bans
 
   # The guards' own tests. Every script above is a bash tripwire whose entire value is that it
   # FAILS when the thing it protects is broken — and nothing about a passing tripwire distinguishes
@@ -719,3 +720,60 @@ jobs:
       # UPDATE_BASELINE it instead of writing down why.
       - name: Guard test — audit-ignored-tests
         run: bash .github/scripts/test-audit-ignored-tests.sh
+
+  # The tasker-systems conventions baseline, as this repository is pinned to it
+  # (.conventions/consumer.toml; doctrine in .conventions/baseline/doctrine/consuming.md).
+  #
+  # `check` fails when an adopted config drifts from the pinned projection without a reasoned
+  # exception, when the projection itself was hand-edited or the pin is not a commit on the
+  # baseline's main, when a status names a gate that does not exist, when the projected skill or
+  # the entry files' link to it is stale, and when status.toml was not reviewed at the pin. It
+  # reports how far the pin trails the baseline, and never fails on that.
+  #
+  # `witness` is the check's bite test: it seeds one violation per case into a copy of the tree and
+  # requires `check` to refuse each, naming what was seeded. Its control run happens online in an
+  # environment with no credential, which is the evidence that a fork's pull request gets the
+  # same verdict.
+  #
+  # NO `if:`: guidance and adopted config change in docs-only and rust-inert changes too. It reads
+  # only files and the public baseline repository, so this job holds no secret and must not gain
+  # one (the witness fails if it does). Needs python3 >= 3.11 and git, both on the runner.
+  conventions:
+    name: Conventions baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Python and git versions
+        run: python3 --version && git --version
+
+      - name: Check against the pinned baseline
+        run: python3 -I .conventions/baseline/tools/conventions.py check
+
+      - name: Witness — each check refuses a seeded violation
+        run: python3 -I .conventions/baseline/tools/conventions.py witness
+
+  # Every .py file in the repository, from the root ruff.toml (the baseline's canonical
+  # configuration, PY-LINT-1). temper-py's own job lints its package again under its pinned dev
+  # tools; this one is what reaches scripts/, tools/ and .github/scripts/. The version is the one
+  # temper-py pins, so the two agree. Installed prebuilt; nothing here compiles.
+  python-lint:
+    name: Python lint (ruff, every .py)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RUFF_VERSION: 0.16.5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install ruff (exact version)
+        run: pipx install "ruff==${RUFF_VERSION}"
+
+      - name: ruff check
+        run: ruff check .
+
+      - name: ruff format --check
+        run: ruff format --check .

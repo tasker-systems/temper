@@ -233,9 +233,10 @@ freezing what its consumers resolve, the same call `temper-rb` makes by gitignor
 and `mypy` EXACTLY in `pyproject.toml`: those two can redden CI on their own release
 schedule, and nothing else in the dev group can.
 
-Supported interpreters are **3.10+**. That is above the generated package's own `>= 3.9`
-on purpose: 3.9 is end-of-life, and mypy 2.x already requires 3.10, so a 3.9 floor would
-promise a version whose type-check we could not run.
+Supported interpreters are **3.11+**. That is above the generated package's own `>= 3.9`
+on purpose: 3.9 and 3.10 are end-of-life, and 3.11 is the floor the tasker-systems baseline
+sets for every Python surface, so this package's floor, ruff's target and mypy's target are one
+value.
 
 Regenerating needs no Python at all — a Rust developer who changed a DTO can run
 `cargo make openapi-py` with either Docker or a JVM. The generator pin and its

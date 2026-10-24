@@ -21,6 +21,7 @@ Read-only: both functions are STABLE.
 
     python3 gen_returned.py vectors-24.tsv 'Temper — self-cognition' > returned.sql
 """
+
 import sys
 
 WIDTHS = [1, 3, 5, 10, 20]

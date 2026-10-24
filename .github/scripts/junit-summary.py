@@ -36,11 +36,15 @@ from pathlib import Path
 def parse_args():
     parser = argparse.ArgumentParser(description="Summarize a nextest JUnit report")
     parser.add_argument("--junit", type=Path, required=True)
-    parser.add_argument("--name", required=True, help="the job/invocation label, e.g. integration-2")
+    parser.add_argument(
+        "--name", required=True, help="the job/invocation label, e.g. integration-2"
+    )
     parser.add_argument(
         "--summary",
         type=Path,
-        default=Path(os.environ["GITHUB_STEP_SUMMARY"]) if os.environ.get("GITHUB_STEP_SUMMARY") else None,
+        default=Path(os.environ["GITHUB_STEP_SUMMARY"])
+        if os.environ.get("GITHUB_STEP_SUMMARY")
+        else None,
         help="markdown file to append to (defaults to $GITHUB_STEP_SUMMARY; stdout if unset)",
     )
     return parser.parse_args()
@@ -55,7 +59,9 @@ def unusable(msg: str) -> None:
 def main() -> None:
     args = parse_args()
     if not args.junit.is_file():
-        unusable(f"no JUnit report at {args.junit} for {args.name} (did nextest run under --profile ci?)")
+        unusable(
+            f"no JUnit report at {args.junit} for {args.name} (did nextest run under --profile ci?)"
+        )
     try:
         root = ET.parse(args.junit).getroot()
     except ET.ParseError as e:
@@ -76,7 +82,9 @@ def main() -> None:
             passed += 1
 
     for label, attempts in flaky:
-        print(f"::warning title=Flaky test ({args.name})::{label} passed only after {attempts} failed attempt(s)")
+        print(
+            f"::warning title=Flaky test ({args.name})::{label} passed only after {attempts} failed attempt(s)"
+        )
 
     lines = [
         f"### Tests — {args.name}",

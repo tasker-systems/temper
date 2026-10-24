@@ -35,6 +35,7 @@ Read-only.
 
     python3 gen_salnorm_alt.py vectors-24.tsv 'Temper — self-cognition' > salnorm_alt.sql
 """
+
 import sys
 
 WIDTHS = [1, 3, 5, 10, 20]

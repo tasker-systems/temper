@@ -23,14 +23,27 @@ from pathlib import Path
 # Known top-level section headings in temper session/research docs.
 # These appear as bare words on their own line and should be ## headings.
 KNOWN_H2 = {
-    "Goal", "What Happened", "Decisions", "Connections", "Next Steps",
-    "Acceptance Criteria", "Summary", "Implementation", "Context",
-    "Related", "Background", "Scope", "Design", "Architecture",
-    "Observations", "Reproduction", "References",
+    "Goal",
+    "What Happened",
+    "Decisions",
+    "Connections",
+    "Next Steps",
+    "Acceptance Criteria",
+    "Summary",
+    "Implementation",
+    "Context",
+    "Related",
+    "Background",
+    "Scope",
+    "Design",
+    "Architecture",
+    "Observations",
+    "Reproduction",
+    "References",
 }
 
-BREADCRUMB_RE = re.compile(r'^([A-Z][^>\n]+?)( > [A-Z][^>\n]+)+$')
-STANDALONE_HEADING_RE = re.compile(r'^[A-Z][A-Za-z ]+$')
+BREADCRUMB_RE = re.compile(r"^([A-Z][^>\n]+?)( > [A-Z][^>\n]+)+$")
+STANDALONE_HEADING_RE = re.compile(r"^[A-Z][A-Za-z ]+$")
 
 
 def is_breadcrumb_line(line: str, prev_line: str, next_line: str) -> bool:
@@ -84,7 +97,7 @@ def repair_standalone(line: str) -> str:
 def process_file(path: Path, fix: bool = False) -> list[str]:
     """Process a single file, returning list of changes found."""
     content = path.read_text()
-    lines = content.split('\n')
+    lines = content.split("\n")
     changes = []
     new_lines = []
 
@@ -99,17 +112,17 @@ def process_file(path: Path, fix: bool = False) -> list[str]:
 
         if is_breadcrumb_line(line, prev_line, next_line):
             repaired = repair_line(line)
-            changes.append(f"  L{i+1}: {line.strip()!r} -> {repaired!r}")
+            changes.append(f"  L{i + 1}: {line.strip()!r} -> {repaired!r}")
             new_lines.append(repaired)
         elif is_standalone_heading(line, prev_line, next_line):
             repaired = repair_standalone(line)
-            changes.append(f"  L{i+1}: {line.strip()!r} -> {repaired!r}")
+            changes.append(f"  L{i + 1}: {line.strip()!r} -> {repaired!r}")
             new_lines.append(repaired)
         else:
             new_lines.append(line)
 
     if fix and changes:
-        path.write_text('\n'.join(new_lines))
+        path.write_text("\n".join(new_lines))
 
     return changes
 
@@ -142,7 +155,9 @@ def main():
             for c in changes:
                 print(c)
 
-    print(f"\n{'Fixed' if fix else 'Found'}: {total_changes} breadcrumb headings in {affected_files} files")
+    print(
+        f"\n{'Fixed' if fix else 'Found'}: {total_changes} breadcrumb headings in {affected_files} files"
+    )
     if not fix and total_changes > 0:
         print("Run with --fix to apply repairs")
 

@@ -143,9 +143,15 @@ def main() -> int:
         )
         print(file=sys.stderr)
         for name, count in sorted(missing.items()):
-            print(f"  IN SCHEMA, NOT RENDERED  `{name}`" + (f" x{count}" if count > 1 else ""), file=sys.stderr)
+            print(
+                f"  IN SCHEMA, NOT RENDERED  `{name}`" + (f" x{count}" if count > 1 else ""),
+                file=sys.stderr,
+            )
         for name, count in sorted(extra.items()):
-            print(f"  RENDERED, NOT IN SCHEMA  `{name}`" + (f" x{count}" if count > 1 else ""), file=sys.stderr)
+            print(
+                f"  RENDERED, NOT IN SCHEMA  `{name}`" + (f" x{count}" if count > 1 else ""),
+                file=sys.stderr,
+            )
         print(file=sys.stderr)
         print(
             "       The drift gate cannot see this: it compares the rendered page against the\n"

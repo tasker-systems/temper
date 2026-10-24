@@ -16,7 +16,7 @@ fn redirecting_collector(location: String) -> (u16, mpsc::Receiver<String>) {
         .local_addr()
         .expect("listener has an address")
         .port();
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(64);
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };

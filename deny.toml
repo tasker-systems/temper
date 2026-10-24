@@ -1,9 +1,12 @@
 # cargo-deny configuration — the dependency-posture gate beside `cargo audit`.
 #
-# Two checks run from here: `cargo deny check sources licenses` (`cargo make deny`, and the
+# Three checks run from here: `cargo deny check sources licenses bans` (`cargo make deny`, and the
 # quality-gate job). Advisories stay with `cargo audit` and its reviewed ignore list in
-# `.cargo/audit.toml`; bans are not checked. A check left unnamed on the command line does not
-# run, so the defaults of the sections below this file omits are inert.
+# `.cargo/audit.toml`. A check left unnamed on the command line does not run, so the defaults of
+# the sections below this file omits are inert.
+#
+# Adopted from the tasker-systems baseline in `superset` mode (.conventions/consumer.toml): every
+# canonical key holds its canonical value, and conventions.py check fails if one drifts.
 #
 # The workspace publishes seven crates (temperkb-*) to crates.io and ships the `temper` binary,
 # so what the tree pulls in is what those artifacts carry.
@@ -50,3 +53,11 @@ unused-allowed-license = "warn"
 # deployment, under the workspace's own license.
 [licenses.private]
 ignore = true
+
+# Bans: `*` version requirements fail, and duplicate versions are reported, not gated. The canonical
+# `deny` list is empty; a crate refused here is added with its reason.
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+deny = []

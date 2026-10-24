@@ -13,6 +13,7 @@ reference material lives in `internal/agents/` — read the relevant file before
 | Key patterns — the operational invariants you must not break | [internal/agents/key-patterns.md](internal/agents/key-patterns.md) |
 | Code quality rules + SQL query checking | [internal/agents/code-quality.md](internal/agents/code-quality.md) |
 | Environment (Docker Postgres port, DATABASE_URL, pre-commit), tooling via mise + cloud agents | [internal/agents/environment.md](internal/agents/environment.md) |
+| The tasker-systems engineering baseline: each rule, why it exists, and whether a gate enforces it here | [`.claude/skills/tasker-systems-conventions`](.claude/skills/tasker-systems-conventions/SKILL.md) |
 
 ## The temper workflow
 
@@ -29,6 +30,14 @@ agent-first: with a non-TTY stdout (how agents invoke it) output defaults to JSO
 This repo ships a temper skill that teaches the workflow. Install it with
 `temper skill install --target opencode` (or `--target claude` for Claude Code). The skill teaches
 session lifecycle, grounding, and outcome registers — read it after install.
+
+## The engineering baseline
+
+temper is pinned to the shared tasker-systems baseline in `.conventions/consumer.toml`. It reaches
+agents as the projected skill linked above. Read it before adding a lint suppression, an `unsafe`
+block, a dependency, a CI workflow or a test exception, and before claiming that a rule is enforced.
+Move the pin with `python3 -I .conventions/baseline/tools/conventions.py bump`; never edit
+`.conventions/baseline/`. The `Conventions baseline` job in `quality-gate.yml` checks all of this.
 
 ## Where specs and plans go
 

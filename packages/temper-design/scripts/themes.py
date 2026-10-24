@@ -60,6 +60,7 @@ def shown(ratio: float, floor: float) -> str:
     two = f"{ratio:.2f}"
     return f"{ratio:.3f}" if two == f"{floor:.2f}" and ratio + 1e-9 < floor else two
 
+
 # ─── Distinctness ─────────────────────────────────────────────────────────────
 # Sets whose members must never read alike. Colour is one channel of several for
 # the region states (marker, words, border style carry the rest), but a theme that
@@ -100,7 +101,7 @@ def parse_color(value):
 
 def over(fg, bg):
     a = fg[3]
-    return tuple(fg[i] * a + bg[i] * (1 - a) for i in range(3)) + (1.0,)
+    return (*tuple(fg[i] * a + bg[i] * (1 - a) for i in range(3)), 1.0)
 
 
 def luminance(c):
@@ -226,32 +227,39 @@ def tailwind_utilities():
 def tailwind_roles_css():
     """The utilities alone, leaving Tailwind's default palette in place — for a consumer moving
     off that palette one area at a time. It switches to `tailwind.css` once nothing reads it."""
-    return "\n".join(
-        [
-            "/* Generated from contract/theme.schema.json by themes/scripts/themes.sh build. Do not edit.",
-            "   The roles as utilities WITHOUT the default-palette reset: for a consumer still moving",
-            "   off Tailwind's palette. Import after tailwindcss and before any theme.css. */",
-            "",
-            "",
-        ]
-    ) + tailwind_utilities()
+    return (
+        "\n".join(
+            [
+                "/* Generated from contract/theme.schema.json by themes/scripts/themes.sh build. Do not edit.",
+                "   The roles as utilities WITHOUT the default-palette reset: for a consumer still moving",
+                "   off Tailwind's palette. Import after tailwindcss and before any theme.css. */",
+                "",
+                "",
+            ]
+        )
+        + tailwind_utilities()
+    )
 
 
 def tailwind_css():
     """The utilities with Tailwind's default palette reset: a component cannot reach for
     `zinc-800`. Both files are built from `tailwind_utilities()`, so they cannot disagree."""
-    return "\n".join(
-        [
-            "/* Generated from contract/theme.schema.json by themes/scripts/themes.sh build. Do not edit.",
-            "   Import after tailwindcss and before any theme.css. */",
-            "",
-            "@theme {",
-            "  --color-*: initial;",
-            "}",
-            "",
-            "",
-        ]
-    ) + tailwind_utilities()
+    return (
+        "\n".join(
+            [
+                "/* Generated from contract/theme.schema.json by themes/scripts/themes.sh build. Do not edit.",
+                "   Import after tailwindcss and before any theme.css. */",
+                "",
+                "@theme {",
+                "  --color-*: initial;",
+                "}",
+                "",
+                "",
+            ]
+        )
+        + tailwind_utilities()
+    )
+
 
 # Both generated Tailwind files: the roles alone, and the roles with the default palette reset.
 TAILWIND_FILES = {"tailwind.css": tailwind_css, "tailwind-roles.css": tailwind_roles_css}

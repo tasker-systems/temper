@@ -23,7 +23,9 @@ failed = 0
 def suite(*cases: str) -> str:
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
-        '<testsuites name="nextest-run"><testsuite name="nx">' + "".join(cases) + "</testsuite></testsuites>"
+        '<testsuites name="nextest-run"><testsuite name="nx">'
+        + "".join(cases)
+        + "</testsuite></testsuites>"
     )
 
 
@@ -47,15 +49,32 @@ def run(xml: str | None):
             junit.write_text(xml)
         summary = Path(tmp) / "summary.md"
         r = subprocess.run(
-            [sys.executable, str(SCRIPT), "--junit", str(junit), "--name", "shard-x", "--summary", str(summary)],
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--junit",
+                str(junit),
+                "--name",
+                "shard-x",
+                "--summary",
+                str(summary),
+            ],
             capture_output=True,
             text=True,
         )
         return r.returncode, r.stdout, summary.read_text() if summary.exists() else ""
 
 
-def arm(name: str, xml: str | None, code: int, stdout_has=(), stdout_lacks=(), summary_has=(), summary_lacks=()):
-    global passed, failed
+def arm(
+    name: str,
+    xml: str | None,
+    code: int,
+    stdout_has=(),
+    stdout_lacks=(),
+    summary_has=(),
+    summary_lacks=(),
+):
+    global passed, failed  # noqa: PLW0603 - the harness's two module-level tallies, reported at exit
     got, out, summ = run(xml)
     problems = []
     if got != code:
@@ -74,21 +93,40 @@ def arm(name: str, xml: str | None, code: int, stdout_has=(), stdout_lacks=(), s
 
 print("=== junit-summary harness ===\n")
 
-arm("a clean report passes, says so explicitly, and warns about nothing", suite(CLEAN), 0,
-    stdout_lacks=["::warning"], summary_has=["1 testcases: 1 passed first try, 0 flaky, 0 failed", "No flaky tests."])
+arm(
+    "a clean report passes, says so explicitly, and warns about nothing",
+    suite(CLEAN),
+    0,
+    stdout_lacks=["::warning"],
+    summary_has=["1 testcases: 1 passed first try, 0 flaky, 0 failed", "No flaky tests."],
+)
 
-arm("a flaky test is a ::warning naming it, and a summary line — never a silent pass", suite(CLEAN, FLAKY), 0,
+arm(
+    "a flaky test is a ::warning naming it, and a summary line — never a silent pass",
+    suite(CLEAN, FLAKY),
+    0,
     stdout_has=["::warning title=Flaky test (shard-x)::nx tests::flaky_once"],
     summary_has=["1 flaky", "`nx tests::flaky_once`", "Not a clean pass"],
-    summary_lacks=["No flaky tests."])
+    summary_lacks=["No flaky tests."],
+)
 
-arm("a test that failed every attempt counts as failed, not flaky", suite(CLEAN, FAILED_AFTER_RETRY), 0,
-    stdout_lacks=["::warning"], summary_has=["0 flaky, 1 failed", "No flaky tests."])
+arm(
+    "a test that failed every attempt counts as failed, not flaky",
+    suite(CLEAN, FAILED_AFTER_RETRY),
+    0,
+    stdout_lacks=["::warning"],
+    summary_has=["0 flaky, 1 failed", "No flaky tests."],
+)
 
 arm("a flake does not fail the step (the verdict stays nextest's)", suite(FLAKY), 0)
 
 arm("a missing report is unusable, not a pass", None, 2, stdout_has=["::error"])
-arm("a report with no testcases is unusable — the job tested nothing", suite(), 2, stdout_has=["::error"])
+arm(
+    "a report with no testcases is unusable — the job tested nothing",
+    suite(),
+    2,
+    stdout_has=["::error"],
+)
 arm("an unparseable report is unusable", "<testsuites><testcase", 2, stdout_has=["::error"])
 
 print(f"\n{passed} passed, {failed} failed")

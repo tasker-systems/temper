@@ -144,7 +144,7 @@ def server() -> Iterator[RecordingServer]:
             self.end_headers()
             self.wfile.write(scripted.body)
 
-        do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = _handle
+        do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = _handle  # noqa: N815 - http.server dispatches on these exact names
 
         def log_message(self, *args: Any) -> None:  # keep pytest output readable
             return

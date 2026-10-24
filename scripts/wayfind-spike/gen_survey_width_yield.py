@@ -36,6 +36,7 @@ tables (a read-only transaction forbids them).
     python3 gen_survey_width_yield.py vectors-24.tsv > survey_width_yield.sql
     ./prod-readonly.sh survey_width_yield.sql
 """
+
 import sys
 
 WIDTHS = [1, 3, 5, 10, 20]

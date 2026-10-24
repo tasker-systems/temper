@@ -448,9 +448,9 @@ args = ["audit"]
 # Standalone like `audit`, and for the same reason it is not in `check`: it needs a tool a
 # contributor may not have installed. CI runs it beside `cargo audit` in quality-gate.yml.
 [tasks.deny]
-description = "Check dependency sources and licenses against deny.toml"
+description = "Check dependency sources, licenses and bans against deny.toml"
 command = "cargo"
-args = ["deny", "check", "sources", "licenses"]
+args = ["deny", "check", "sources", "licenses", "bans"]
 
 [tasks.run]
 description = "Run the temper-api server locally"
