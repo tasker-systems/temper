@@ -160,7 +160,7 @@ export interface GraphEdge {
 	/**
 	 * **Always `null`.** `AtlasEdge` carries a stored `weight` that drives stroke thickness;
 	 * `ViaEntry` carries none, so this states the absence rather than substituting a 1 that would
-	 * read as a real, uniformly-light weight. {@link edgeStyle} renders a default stroke for it.
+	 * read as a real, uniformly-light weight. The shared edge grammar draws its stated unweighted width.
 	 */
 	weight: number | null;
 	/**

@@ -679,8 +679,18 @@ describe('a read that cannot change the marks does not take them down', () => {
 		await drawn(container);
 
 		// The same answer re-read, drawn from fewer marks — so "the new one arrived" is witnessable
-		// rather than indistinguishable from "the old one was never replaced".
-		const fewer: GraphModel = { ...flagship, nodes: flagship.nodes.slice(0, 3), edges: [] };
+		// rather than indistinguishable from "the old one was never replaced". The three are joined
+		// in a chain, because a mark is drawn only when an edge on the canvas connects it.
+		const three = flagship.nodes.slice(0, 3);
+		const edge = flagship.edges[0];
+		const fewer: GraphModel = {
+			...flagship,
+			nodes: three,
+			edges: [
+				{ ...edge, source: three[0].id, target: three[1].id },
+				{ ...edge, source: three[1].id, target: three[2].id },
+			],
+		};
 		setPage(`/graph/@me?q=what+keeps+a+surface+honest&sel=${node.id}`, { owner: '@me' });
 		await rerender({ data: view({ model: fewer, selected: node.id }) });
 

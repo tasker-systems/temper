@@ -1,0 +1,26 @@
+title    = "`@tasker-systems/temper-design` holds the graph's geometry and edge grammar; the web draws its graph through it"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["clients"]
+status   = "signal-only"
+body = '''
+The package gains `./graph` and `contract/graph.css`. `./graph` provides:
+- `settle`, a deterministic force layout. Unconnected nodes are returned, not placed. Every relation between one pair is joined onto one line. Degree counts neighbours. Radial runs only when the input holds both core and ring nodes.
+- `placeCaptions`, which drops a colliding caption rather than moving it, and breaks ties in code-unit order.
+- `edgeGeometry`, whose lines end at the marks' rims, with heads drawn as shapes.
+- The stroke grammar: role, dash, width over weights in (0, 1], heads, and a cross on contradicts.
+
+`contract/graph.css` paints a stroke role on contract roles only, and `d3-force` becomes a dependency of the package.
+
+The web deletes its own layout, its label placement, and its radius and edge-style functions, and draws through the package:
+- One line per pair: a hover names every relation and its weight, or says that no weight was read.
+- Arrowheads at the marks' rims, where before they ended under the mark.
+- The entry read settles as force. It is all one arm, so it was packed into a disc.
+- A viewBox fitted to the drawing.
+
+Who observes:
+- a surface importing the package (new exports and a new dependency);
+- a reader of the web's graph, whose layout, edge widths and arrowheads change.
+
+User-visible: yes, on the web. Release relevance: additive (the exports) and behavioral (how the web's graph draws).
+'''

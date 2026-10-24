@@ -56,8 +56,14 @@
 		onSelect: (id: string) => void;
 		/** Which row's rail is open, if any. */
 		selected: string | null;
+		/**
+		 * The relations joining a member only to itself, by node id. Such a node has no line to draw,
+		 * so it is here, and its row names what joins it rather than a link count that would read
+		 * as connections the drawing does not show.
+		 */
+		selfJoined?: Map<string, string[]>;
 	}
-	let { nodes, total, onSelect, selected }: Props = $props();
+	let { nodes, total, onSelect, selected, selfJoined = new Map() }: Props = $props();
 
 	// The corpus figures are read off the nodes rather than passed in: `describeUnconnected` requires
 	// one per member and states the answer-scoped sentence unless every one of them is reported, so
@@ -89,7 +95,13 @@
 						<span class="kind" style="color: var(--tp-{docTypeTint(n.doc_type)})"
 							>{n.doc_type ?? 'kind not reported'}</span
 						>
-						<span class="elsewhere">{describeNodeLinks(n)}</span>
+						{#if selfJoined.has(n.id)}
+							<span class="elsewhere" data-testid="self-joined"
+								>joined only to itself · {selfJoined.get(n.id)?.join(', ')}</span
+							>
+						{:else}
+							<span class="elsewhere">{describeNodeLinks(n)}</span>
+						{/if}
 					</button>
 				</li>
 			{/each}

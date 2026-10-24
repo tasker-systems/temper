@@ -15,6 +15,7 @@
 @import "@tasker-systems/temper-design/contract/base.css" layer(base);
 @import "@tasker-systems/temper-design/contract/markdown.css" layer(base);
 @import "@tasker-systems/temper-design/contract/region.css";
+@import "@tasker-systems/temper-design/contract/graph.css";
 @import "./recipes.css";
 
 /* ============================================================================

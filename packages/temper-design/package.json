@@ -54,6 +54,10 @@
       "types": "./dist/vocabulary.d.ts",
       "default": "./dist/vocabulary.js"
     },
+    "./graph": {
+      "types": "./dist/graph.d.ts",
+      "default": "./dist/graph.js"
+    },
     "./themes.json": "./themes.json",
     "./contract/*": "./contract/*",
     "./brand/*": "./brand/*",
@@ -67,6 +71,7 @@
     "lint": "biome check"
   },
   "dependencies": {
+    "d3-force": "^3.0.0",
     "dompurify": "^3.4.17",
     "highlight.js": "^11.12.0",
     "marked": "^18.1.1",
@@ -74,6 +79,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",
+    "@types/d3-force": "^3.0.10",
     "jsdom": "^30",
     "typescript": "^6.0.3",
     "vitest": "^5.0.3"

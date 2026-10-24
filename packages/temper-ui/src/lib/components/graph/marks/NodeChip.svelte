@@ -10,7 +10,7 @@
 	 * once, after every mark; this component only reports that the pointer is over it.
 	 */
 	import { docTypeTint, CANVAS_BG } from '$lib/graph/palette';
-	import { truncateLabel } from '$lib/graph/labels';
+	import { truncate } from '@tasker-systems/temper-design/graph';
 	import { nodeMarkShape } from '$lib/graph/marks';
 
 	interface Props {
@@ -104,7 +104,7 @@
 		/>
 	{/if}
 	{#if showLabel}
-		<text x={x} y={y + r + 13} text-anchor="middle" style="fill: var(--tp-text)" font-size="10">{truncateLabel(title, 22)}</text>
+		<text x={x} y={y + r + 13} text-anchor="middle" style="fill: var(--tp-text)" font-size="10">{truncate(title, 22)}</text>
 	{/if}
 	<circle class="focus-ring" cx={x} cy={y} r={r + 4} stroke-width="2" />
 </g>
