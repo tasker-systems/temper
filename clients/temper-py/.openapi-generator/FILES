@@ -438,7 +438,7 @@ temper/generated/models/set_webhook_events_request.py
 temper/generated/models/shape_declare_request.py
 temper/generated/models/shape_emptiness.py
 temper/generated/models/shape_home.py
-temper/generated/models/shape_in_force.py
+temper/generated/models/shape_successor.py
 temper/generated/models/shape_view.py
 temper/generated/models/share_context_outcome.py
 temper/generated/models/share_context_request.py

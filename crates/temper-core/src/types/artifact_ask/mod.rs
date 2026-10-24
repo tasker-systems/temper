@@ -216,13 +216,14 @@ pub struct ShapeHome {
 
 /// The version in force of a shape's lineage: the live row at its home and family when a read
 /// found it. One type for one fact, named by each holder's field for how the row relates to it —
-/// `successor` on a folded shape's refusal, `in_force` on a query trace's artifact ask.
+/// `successor` on a folded shape's refusal, `in_force` on a query trace's artifact ask. The type
+/// carries the refusal's name; a trace entry whose shape was not amended names the asked row itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "artifact_ask.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-pub struct ShapeInForce {
+pub struct ShapeSuccessor {
     pub shape_id: ShapeId,
     pub shape_version: i32,
 }
@@ -237,7 +238,7 @@ pub enum ShapeLoad {
     /// Folded. `successor` is `None` when no live row holds the home and family (decision P16:
     /// unreachable today, since amendment is the only fold); the refusal then omits it.
     Superseded {
-        successor: Option<ShapeInForce>,
+        successor: Option<ShapeSuccessor>,
     },
     /// The schema did not compile under the no-fetch compiler.
     Uncompilable,

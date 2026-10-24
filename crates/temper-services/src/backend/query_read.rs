@@ -24,7 +24,7 @@ use uuid::Uuid;
 use crate::backend::substrate_read::{embed_query_texts, QueryEmbedBatch};
 use crate::error::{ApiError, ApiResult};
 use crate::services::shape_loader;
-use temper_core::types::artifact_ask::{AskSession, ShapeContext, ShapeInForce, ValidatedAsk};
+use temper_core::types::artifact_ask::{AskSession, ShapeContext, ShapeSuccessor, ValidatedAsk};
 use temper_core::types::ids::{ProfileId, ResourceId, ShapeId};
 use temper_core::types::query::{
     applied_terms, declaration, text_to_embed, texts_to_embed, validate, ActName, ActRefusal,
@@ -913,7 +913,7 @@ fn artifact_ask_traces(
                 shape_id: ask.shape().shape_id,
                 shape_version: ask.shape().shape_version,
                 in_force: row.in_force_shape_id.zip(row.in_force_shape_version).map(
-                    |(id, shape_version)| ShapeInForce {
+                    |(id, shape_version)| ShapeSuccessor {
                         shape_id: ShapeId::from(id),
                         shape_version,
                     },
@@ -3442,7 +3442,7 @@ mod tests {
         );
         assert_eq!(
             entries[0].in_force,
-            Some(ShapeInForce {
+            Some(ShapeSuccessor {
                 shape_id: shape_id(1),
                 shape_version: 1,
             })

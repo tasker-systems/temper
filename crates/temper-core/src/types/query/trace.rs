@@ -10,7 +10,7 @@ use super::envelope::NarrowedBy;
 use super::hits::RegionDisclosure;
 use super::scalars::{BoundTerm, Extent};
 use super::stage::{StageName, StageRelation};
-use crate::types::artifact_ask::ShapeInForce;
+use crate::types::artifact_ask::ShapeSuccessor;
 use crate::types::ids::ShapeId;
 
 /// Where a stage's input set came from: an earlier stage, or the caller.
@@ -301,7 +301,7 @@ pub struct ArtifactAskTrace {
     ///
     /// `null` when the shape's home is not readable to you at execution, or the shape no longer
     /// exists. The population is then all zeros: nothing was counted under a shape you cannot read.
-    pub in_force: Option<ShapeInForce>,
+    pub in_force: Option<ShapeSuccessor>,
     pub population: ArtifactAskPopulation,
 }
 
@@ -402,7 +402,7 @@ mod tests {
                 position: 0,
                 shape_id: shape,
                 shape_version: 1,
-                in_force: Some(ShapeInForce {
+                in_force: Some(ShapeSuccessor {
                     shape_id: ShapeId::from(uuid::Uuid::from_u128(8)),
                     shape_version: 2,
                 }),

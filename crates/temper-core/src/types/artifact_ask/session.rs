@@ -243,7 +243,7 @@ mod tests {
         BoundKind, MAX_WALK_DEPTH, VOCABULARIES_ENUMERATED, WALKS_BUILT,
     };
     use crate::types::artifact_ask::{
-        ArtifactPredicate, LoadedShape, ShapeInForce, ShapeLoad, ARTIFACT_INTENTS,
+        ArtifactPredicate, LoadedShape, ShapeLoad, ShapeSuccessor, ARTIFACT_INTENTS,
         ASKABLE_SHAPE_STATES, MAX_ASK_PREDICATES,
     };
     use crate::types::query::{PropertyOp, RefusalReason};
@@ -825,7 +825,7 @@ mod tests {
             });
             a
         };
-        let successor = ShapeInForce {
+        let successor = ShapeSuccessor {
             shape_id: ShapeId::from(Uuid::from_u128(SHAPE + 1)),
             shape_version: 2,
         };

@@ -16296,7 +16296,7 @@
           "in_force": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/ShapeInForce",
+                "$ref": "#/components/schemas/ShapeSuccessor",
                 "description": "The live version of the shape's lineage — its home and family — when the statement ran.\nIt differs from `shape_id`/`shape_version` when the shape was amended after validation; the\npopulation still ranges over the lineage, so it does not empty when that happens.\n\n`null` when the shape's home is not readable to you at execution, or the shape no longer\nexists. The population is then all zeros: nothing was counted under a shape you cannot read."
               },
               {
@@ -24527,7 +24527,7 @@
           "successor": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/ShapeInForce",
+                "$ref": "#/components/schemas/ShapeSuccessor",
                 "description": "The version now in force, for a folded shape that has one."
               },
               {
@@ -26761,9 +26761,9 @@
         "format": "uuid",
         "description": "A `kb_data_artifact_shapes.id` value — one declared JSON Schema governing a data-artifact\nfamily within a single home (spec: data-artifact shape registry, 2026-08-21)."
       },
-      "ShapeInForce": {
+      "ShapeSuccessor": {
         "type": "object",
-        "description": "The version in force of a shape's lineage: the live row at its home and family when a read\nfound it. One type for one fact, named by each holder's field for how the row relates to it —\n`successor` on a folded shape's refusal, `in_force` on a query trace's artifact ask.",
+        "description": "The version in force of a shape's lineage: the live row at its home and family when a read\nfound it. One type for one fact, named by each holder's field for how the row relates to it —\n`successor` on a folded shape's refusal, `in_force` on a query trace's artifact ask. The type\ncarries the refusal's name; a trace entry whose shape was not amended names the asked row itself.",
         "required": [
           "shape_id",
           "shape_version"

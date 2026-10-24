@@ -11,7 +11,7 @@ import type { RefusalTeaching } from "./artifact_ask";
 import type { ResourceSection } from "./ResourceSection";
 import type { ResourceView } from "./resource_view";
 import type { ShapeId } from "./ShapeId";
-import type { ShapeInForce } from "./artifact_ask";
+import type { ShapeSuccessor } from "./artifact_ask";
 
 /**
  * One act, declared.
@@ -286,7 +286,7 @@ shape_id: ShapeId, shape_version: number,
  * `null` when the shape's home is not readable to you at execution, or the shape no longer
  * exists. The population is then all zeros: nothing was counted under a shape you cannot read.
  */
-in_force: ShapeInForce | null, population: ArtifactAskPopulation, };
+in_force: ShapeSuccessor | null, population: ArtifactAskPopulation, };
 
 /**
  * A bound term. CLOSED, and each term has exactly one meaning on every read: `limit` is rows,

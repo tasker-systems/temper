@@ -4092,7 +4092,7 @@ export interface components {
          *     which version is in force now, and the population it counted.
          */
         ArtifactAskTrace: {
-            in_force?: components["schemas"]["ShapeInForce"] | null;
+            in_force?: components["schemas"]["ShapeSuccessor"] | null;
             population: components["schemas"]["ArtifactAskPopulation"];
             /** @description The ask's position in the stage's `artifact_filter`, from 0. */
             position: number;
@@ -8861,7 +8861,7 @@ export interface components {
              *     declare (spec §3.4).
              */
             non_closure?: string | null;
-            successor?: components["schemas"]["ShapeInForce"] | null;
+            successor?: components["schemas"]["ShapeSuccessor"] | null;
             /** @description A closed vocabulary of terms: the intents, or the askable shape states. */
             terms?: string[];
             vocabulary?: components["schemas"]["Vocabulary"] | null;
@@ -10394,9 +10394,10 @@ export interface components {
         /**
          * @description The version in force of a shape's lineage: the live row at its home and family when a read
          *     found it. One type for one fact, named by each holder's field for how the row relates to it —
-         *     `successor` on a folded shape's refusal, `in_force` on a query trace's artifact ask.
+         *     `successor` on a folded shape's refusal, `in_force` on a query trace's artifact ask. The type
+         *     carries the refusal's name; a trace entry whose shape was not amended names the asked row itself.
          */
-        ShapeInForce: {
+        ShapeSuccessor: {
             shape_id: components["schemas"]["ShapeId"];
             /** Format: int32 */
             shape_version: number;

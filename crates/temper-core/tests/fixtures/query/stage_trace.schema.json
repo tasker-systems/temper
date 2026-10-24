@@ -51,7 +51,7 @@
         "in_force": {
           "anyOf": [
             {
-              "$ref": "#/$defs/ShapeInForce"
+              "$ref": "#/$defs/ShapeSuccessor"
             },
             {
               "type": "null"
@@ -483,8 +483,8 @@
       ],
       "type": "object"
     },
-    "ShapeInForce": {
-      "description": "The version in force of a shape's lineage: the live row at its home and family when a read\nfound it. One type for one fact, named by each holder's field for how the row relates to it —\n`successor` on a folded shape's refusal, `in_force` on a query trace's artifact ask.",
+    "ShapeSuccessor": {
+      "description": "The version in force of a shape's lineage: the live row at its home and family when a read\nfound it. One type for one fact, named by each holder's field for how the row relates to it —\n`successor` on a folded shape's refusal, `in_force` on a query trace's artifact ask. The type\ncarries the refusal's name; a trace entry whose shape was not amended names the asked row itself.",
       "properties": {
         "shape_id": {
           "description": "A `kb_data_artifact_shapes.id` value — one declared JSON Schema governing a data-artifact\nfamily within a single home (spec: data-artifact shape registry, 2026-08-21).",

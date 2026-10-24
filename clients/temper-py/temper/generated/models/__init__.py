@@ -416,7 +416,7 @@ from temper.generated.models.set_webhook_events_request import SetWebhookEventsR
 from temper.generated.models.shape_declare_request import ShapeDeclareRequest
 from temper.generated.models.shape_emptiness import ShapeEmptiness
 from temper.generated.models.shape_home import ShapeHome
-from temper.generated.models.shape_in_force import ShapeInForce
+from temper.generated.models.shape_successor import ShapeSuccessor
 from temper.generated.models.shape_view import ShapeView
 from temper.generated.models.share_context_outcome import ShareContextOutcome
 from temper.generated.models.share_context_request import ShareContextRequest

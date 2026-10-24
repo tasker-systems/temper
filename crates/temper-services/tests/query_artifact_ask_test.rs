@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 
 use serde_json::json;
 use sqlx::PgPool;
-use temper_core::types::artifact_ask::{ArtifactAsk, ArtifactPredicate, ShapeInForce};
+use temper_core::types::artifact_ask::{ArtifactAsk, ArtifactPredicate, ShapeSuccessor};
 use temper_core::types::ids::ShapeId;
 use temper_core::types::query::filter::PropertyOp;
 use temper_core::types::query::{
@@ -331,7 +331,7 @@ async fn a_shape_amended_after_prepare_answers_over_the_validated_population(poo
     );
     assert_eq!(
         e.in_force,
-        Some(ShapeInForce {
+        Some(ShapeSuccessor {
             shape_id: ShapeId::from(amended),
             shape_version: 2,
         }),
@@ -460,8 +460,8 @@ async fn commit_kind(
     .unwrap();
 }
 
-fn in_force(shape: Uuid, version: i32) -> Option<ShapeInForce> {
-    Some(ShapeInForce {
+fn in_force(shape: Uuid, version: i32) -> Option<ShapeSuccessor> {
+    Some(ShapeSuccessor {
         shape_id: ShapeId::from(shape),
         shape_version: version,
     })

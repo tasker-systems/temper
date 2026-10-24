@@ -22,7 +22,7 @@ use sqlx::PgPool;
 use temper_core::types::artifact_ask::walk::MAX_SCHEMA_BYTES;
 use temper_core::types::artifact_ask::{
     within_schema_bound, ArtifactAsk, ArtifactPredicate, BoundKind, JsonType, PathFacts,
-    ShapeContext, ShapeInForce, ShapeLoad, Vocabulary,
+    ShapeContext, ShapeLoad, ShapeSuccessor, Vocabulary,
 };
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, EntityId, ProfileId, ShapeId};
@@ -366,7 +366,7 @@ async fn a_folded_shape_loads_superseded_with_its_live_successor(pool: PgPool) {
     assert_eq!(
         load_one(&pool, w.owner, first).await.unwrap(),
         ShapeLoad::Superseded {
-            successor: Some(ShapeInForce {
+            successor: Some(ShapeSuccessor {
                 shape_id: second,
                 shape_version: 2,
             }),
@@ -478,7 +478,7 @@ async fn fold_is_decided_before_compile(pool: PgPool) {
     assert_eq!(
         load_one(&pool, w.owner, broken).await.unwrap(),
         ShapeLoad::Superseded {
-            successor: Some(ShapeInForce {
+            successor: Some(ShapeSuccessor {
                 shape_id: mended,
                 shape_version: 2,
             }),

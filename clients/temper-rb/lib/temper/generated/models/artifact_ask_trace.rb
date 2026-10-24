@@ -53,7 +53,7 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
-        :'in_force' => :'ShapeInForce',
+        :'in_force' => :'ShapeSuccessor',
         :'population' => :'ArtifactAskPopulation',
         :'position' => :'Integer',
         :'shape_id' => :'String',

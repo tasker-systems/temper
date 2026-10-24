@@ -59,7 +59,7 @@ use crate::error::{ApiError, ApiResult};
 use temper_core::error::TemperError;
 use temper_core::types::artifact_ask::{
     enumerate, within_schema_bound, AskOperator, AskablePath, BoundKind, JsonType, LoadedShape,
-    PathFacts, PathTeaching, RefusalTeaching, ShapeContext, ShapeInForce, ShapeLoad, Vocabulary,
+    PathFacts, PathTeaching, RefusalTeaching, ShapeContext, ShapeLoad, ShapeSuccessor, Vocabulary,
     WalkBounds, NODE_BYTES,
 };
 use temper_core::types::ids::{ProfileId, ShapeId};
@@ -128,7 +128,7 @@ pub async fn load_one(pool: &PgPool, principal: ProfileId, id: ShapeId) -> ApiRe
         )
         .await
         .map_err(read_fault)?
-        .map(|live| ShapeInForce {
+        .map(|live| ShapeSuccessor {
             shape_id: live.shape_id,
             shape_version: live.shape_version,
         });
