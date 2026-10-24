@@ -204,13 +204,48 @@ PREFIX='__temper_ungated_'
 #   and an arm that composes these without the home check answers under a shape that principal
 #   cannot read. The second function composes the first, so the two cannot disagree on the
 #   population; both are held to their plpgsql incumbents by `artifact_ask_parity.rs`.
+#
+# REVIEWED 2026-10-23 (`__temper_ungated_artifact_ask_population`, and the values-taking
+# `__temper_ungated_governed_artifacts_in` / `__temper_ungated_governed_artifact_states_in`, migration
+# 20261104000000, the composable arm of asking data artifacts). The function-NAME set grows by
+# three, the SQL-file set by one; the relation watch does not move (every relation the new bodies
+# read is already watched), and neither does the Rust half — the compiler still names only
+# `EMIT_FIND_RESOURCES_WITH`, and the asks reach SQL as a narrowing argument of that one call.
+#   VERDICT: each takes `p_visible_ids` and joins it with `unnest`, so a NULL set admits nothing.
+#     The `_in` relations are 20261103000000's bodies with the home and family as arguments; the
+#     two by-id relations now read the row and delegate to them, passing their own `p_visible_ids`
+#     through unchanged. The counted set passes its `p_visible_ids` to the `_in` relation unchanged,
+#     by `EXECUTE ... USING` — the one set handed in is the one set handed down, never an id from the
+#     ask or another stage. Its callers hand it their own verdict: the widened selection core passes
+#     its `p_visible_ids` through, which the compiler fills from the hoisted `__temper_vis` and the
+#     gated wrapper from `resources_visible_to(p_principal)`.
+#   EMITTER: no Rust names any of the three. The counted set is reached through
+#     `__temper_ungated_find_resources_with`, which `emit_ungated_core_call` emits with
+#     `VISIBLE_IDS` and `PRINCIPAL_BIND` fixed. Its `p_reader` is that core's `p_anchor_reader` — the
+#     principal — used for the one thing that parameter exists for, anchor readability: the asked
+#     shape's home, checked before anything is read.
+#   RESIDUE: unchanged and accepted.
+#
+#   THE COUNTED SET IS PLPGSQL AND RUNS DYNAMIC SQL, which is new to this file and the thing to
+#   check: the query text is a constant and every value — the visible set, the home and family read
+#   from the shape row, the ask — rides `USING`. A later edit that `format()`s any of them into the
+#   text would make the ask's JSON SQL text; that is the shape to refuse.
+#
+#   IT IS THE ONE PLACE THE ARMS' CONJUNCTS MEET GOVERNANCE (spec 2026-10-19 §6.1): the
+#   `kb_resources_live` floor, the home re-check, live-only and the intent narrowing, over the
+#   governance relation's visibility join. A later arm that counts or pages artifacts composes this
+#   function rather than the relations beneath it, or it owes this file the answer to which of
+#   those conjuncts it re-applies.
 read -r -d '' SQL_BASELINE <<'EOF' || true
+__temper_ungated_artifact_ask_population
 __temper_ungated_find_exact
 __temper_ungated_find_resources_with
 __temper_ungated_find_wide
 __temper_ungated_follow_from
 __temper_ungated_governed_artifact_states
+__temper_ungated_governed_artifact_states_in
 __temper_ungated_governed_artifacts
+__temper_ungated_governed_artifacts_in
 __temper_ungated_survey
 EOF
 
@@ -544,6 +579,13 @@ sql_relations_current() {
 # Reviewed 2026-10-21, migration 20261103000000: it DEFINES two ungated functions, the governance
 #   relations. The review is the SQL_BASELINE entry of the same date; this list moves for the same
 #   reason.
+# Reviewed 2026-10-23, migration 20261104000000: it DEFINES the counted set, the two values-taking
+#   governance relations (and re-points 20261103000000's by-id pair to delegate to them), and a 14-argument
+#   `__temper_ungated_find_resources_with` — a new arity of an existing name, which `SQL_BASELINE`
+#   does not see — and re-points the 13-argument one to delegate with NULL asks. The review is the
+#   SQL_BASELINE entry of the same date. The widened core's verdict is unchanged: `p_visible_ids` is
+#   still its first argument and its only authorization input, and the new `p_artifact_asks` is a
+#   narrowing whose NULL narrows nothing, the opposite polarity from the verdict.
 read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260808000030_composable_find_family.sql
 20260810000010_anchor_readability_both_kinds.sql
@@ -561,6 +603,7 @@ read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260825000020_staleness_member_gate.sql
 20260828000050_follow_from_depth_clamp.sql
 20261103000000_artifact_ask_relations.sql
+20261104000000_find_resources_with_artifact_asks.sql
 EOF
 
 # ── THE RELATION WATCH — derived from what the cores READ, not what names them ──

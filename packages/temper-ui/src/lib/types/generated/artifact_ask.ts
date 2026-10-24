@@ -30,7 +30,8 @@ predicates: Array<ArtifactPredicate>,
  */
 intent: Array<string>, 
 /**
- * Admit folded (superseded) artifacts.
+ * Admit folded (superseded) artifacts. Not served: `true` is declined by name
+ * (`filter_not_applicable`), and an ask reads live artifacts only.
  */
 include_folded: boolean, 
 /**
@@ -107,8 +108,10 @@ items: PathFacts | null, };
  * | `operator_outside_shape` | `vocabulary` (each offending path's facts and feasible operators) |
  * | `value_outside_shape` | `vocabulary` (each offending path's declared types and values), `non_closure` |
  * | `unknown_artifact_intent`, `unknown_shape_state` | `terms` |
+ * | `too_many_filter_values` (a term list longer than its vocabulary) | `terms` |
  * | `shape_superseded` | `successor` |
  * | `shape_schema_uncompilable` | `beyond_bound: schema_bytes` for a schema past the byte bound |
+ * | `ask_scope_conflict` | `homes` |
  */
 export type RefusalTeaching = { 
 /**
@@ -137,7 +140,23 @@ non_closure: string | null,
 /**
  * Paths cut from `vocabulary` to keep the teaching bounded.
  */
-elided: TeachingElision | null, };
+elided: TeachingElision | null, 
+/**
+ * The homes of the shapes a stage's asks name, when no one home can hold them all. Each is
+ * the home of a shape the asker can read — refusal step 1 admitted it — so naming it
+ * discloses nothing a by-id read of the shape would not.
+ */
+homes: Array<ShapeHome>, };
+
+/**
+ * A shape's home: the context or cogmap whose resources an ask against it ranges over. A resource
+ * has exactly one home, so asks AND-ed on one resource must share one (§4.1, *Scope*).
+ */
+export type ShapeHome = { 
+/**
+ * `"kb_contexts"` or `"kb_cogmaps"`.
+ */
+anchor_table: string, anchor_id: string, };
 
 /**
  * The version in force after a fold: the live row at the same home and family.

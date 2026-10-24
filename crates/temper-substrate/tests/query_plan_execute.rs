@@ -28,6 +28,7 @@
 
 mod common;
 
+use temper_core::types::artifact_ask::ShapeContext;
 use temper_core::types::query::{
     validate, ActInvocation, ActName, BoundTerm, Composition, IdKind, IdSet, Intention,
     OutcomeDeclaration, RefusalReason, ReturnSpec, StageInput, StageName, StageNode, StageRelation,
@@ -101,6 +102,7 @@ fn two_stage_find(query: &str) -> ValidatedComposition {
             resource_filter: None,
             edge_filter: None,
             properties: vec![],
+            artifact_filter: vec![],
         })
     };
     let c = Composition {
@@ -121,7 +123,7 @@ fn two_stage_find(query: &str) -> ValidatedComposition {
             ),
         ],
     };
-    validate(&c).expect("plan is valid")
+    validate(&c, &mut ShapeContext::empty().session()).expect("plan is valid")
 }
 
 /// Run a [`CompiledQuery`] through the shipped executor, returning `(id, stage)` per HIT row.
@@ -292,9 +294,10 @@ fn one_find_exact(query: &str, bound: Option<Vec<Uuid>>) -> ValidatedComposition
             resource_filter: None,
             edge_filter: None,
             properties: vec![],
+            artifact_filter: vec![],
         })],
     };
-    validate(&c).expect("plan is valid")
+    validate(&c, &mut ShapeContext::empty().session()).expect("plan is valid")
 }
 
 /// One `find-exact` stage carrying declared bound terms, returned.
@@ -319,9 +322,10 @@ fn find_exact_paged(query: &str, terms: Vec<(BoundTerm, i64)>) -> ValidatedCompo
             resource_filter: None,
             edge_filter: None,
             properties: vec![],
+            artifact_filter: vec![],
         })],
     };
-    validate(&c).expect("plan is valid")
+    validate(&c, &mut ShapeContext::empty().session()).expect("plan is valid")
 }
 
 /// **`limit` returns that many rows and `offset` returns different ones.**
@@ -565,6 +569,7 @@ async fn a_stage_named_after_a_reserved_word_still_compiles_to_valid_sql(pool: s
                 resource_filter: None,
                 edge_filter: None,
                 properties: vec![],
+                artifact_filter: vec![],
             })
         };
         let c = Composition {
@@ -585,7 +590,8 @@ async fn a_stage_named_after_a_reserved_word_still_compiles_to_valid_sql(pool: s
                 ),
             ],
         };
-        let v = validate(&c).expect("a reserved word is a legal stage name");
+        let v = validate(&c, &mut ShapeContext::empty().session())
+            .expect("a reserved word is a legal stage name");
         let compiled = compile(&v, owner).expect("compiles");
         let rows = execute(&pool, &compiled)
             .await
@@ -662,6 +668,7 @@ async fn intersect_across_stages_returns_the_true_intersection_not_the_empty_set
             resource_filter: None,
             edge_filter: None,
             properties: vec![],
+            artifact_filter: vec![],
         })
     };
     let compose = |op: temper_core::types::query::CombineOp| Composition {
@@ -694,7 +701,11 @@ async fn intersect_across_stages_returns_the_true_intersection_not_the_empty_set
     };
 
     // Precondition: the two stages genuinely differ, or neither assertion below means anything.
-    let v = validate(&compose(temper_core::types::query::CombineOp::Intersect)).expect("valid");
+    let v = validate(
+        &compose(temper_core::types::query::CombineOp::Intersect),
+        &mut ShapeContext::empty().session(),
+    )
+    .expect("valid");
     let rows = execute(&pool, &compile(&v, owner).expect("compiles"))
         .await
         .expect("runs");
@@ -706,7 +717,11 @@ async fn intersect_across_stages_returns_the_true_intersection_not_the_empty_set
         "the intersection is Kestrel — an empty result here is the whole-row comparison bug"
     );
 
-    let v = validate(&compose(temper_core::types::query::CombineOp::Union)).expect("valid");
+    let v = validate(
+        &compose(temper_core::types::query::CombineOp::Union),
+        &mut ShapeContext::empty().session(),
+    )
+    .expect("valid");
     let rows = execute(&pool, &compile(&v, owner).expect("compiles"))
         .await
         .expect("runs");
@@ -760,6 +775,7 @@ async fn difference_subtracts_and_swapping_the_arms_changes_the_answer(pool: sql
             resource_filter: None,
             edge_filter: None,
             properties: vec![],
+            artifact_filter: vec![],
         })
     };
     // `just_one` is bounded to Kestrel, so it is a strict SUBSET of `all_hits` — which is what
@@ -795,7 +811,7 @@ async fn difference_subtracts_and_swapping_the_arms_changes_the_answer(pool: sql
     let run = |c: Composition| {
         let pool = pool.clone();
         async move {
-            let v = validate(&c).expect("valid");
+            let v = validate(&c, &mut ShapeContext::empty().session()).expect("valid");
             execute(&pool, &compile(&v, owner).expect("compiles"))
                 .await
                 .expect("runs")
@@ -854,6 +870,7 @@ fn wide_then_narrowed(query: &str, bind_to_wide: bool) -> ValidatedComposition {
             resource_filter: None,
             edge_filter: None,
             properties: vec![],
+            artifact_filter: vec![],
         }));
     }
     stages.push(StageNode::Act(ActInvocation {
@@ -874,6 +891,7 @@ fn wide_then_narrowed(query: &str, bind_to_wide: bool) -> ValidatedComposition {
         resource_filter: None,
         edge_filter: None,
         properties: vec![],
+        artifact_filter: vec![],
     }));
 
     let c = Composition {
@@ -885,7 +903,7 @@ fn wide_then_narrowed(query: &str, bind_to_wide: bool) -> ValidatedComposition {
         },
         stages,
     };
-    validate(&c).expect("plan is valid")
+    validate(&c, &mut ShapeContext::empty().session()).expect("plan is valid")
 }
 
 /// **A refused stage's downstream receives an EMPTY set, not an absent one — run, not read.**
@@ -1005,9 +1023,10 @@ fn one_find_about_anywhere(
             resource_filter: None,
             edge_filter: None,
             properties: vec![],
+            artifact_filter: vec![],
         })],
     };
-    validate(&c).expect("plan is valid")
+    validate(&c, &mut ShapeContext::empty().session()).expect("plan is valid")
 }
 
 /// **The wide core's 10-slot call, executed — the only test anywhere that runs it.**
@@ -1262,9 +1281,10 @@ fn walk_plan(seeds: Vec<Uuid>, bound: Option<Vec<Uuid>>) -> ValidatedComposition
             resource_filter: None,
             edge_filter: None,
             properties: vec![],
+            artifact_filter: vec![],
         })],
     };
-    validate(&c).expect("a seeded walk is well-formed")
+    validate(&c, &mut ShapeContext::empty().session()).expect("a seeded walk is well-formed")
 }
 
 async fn walk_ids(
@@ -1312,9 +1332,11 @@ fn walk_plan_paged(seeds: Vec<Uuid>, terms: Vec<(BoundTerm, i64)>) -> ValidatedC
             resource_filter: None,
             edge_filter: None,
             properties: vec![],
+            artifact_filter: vec![],
         })],
     };
-    validate(&c).expect("a seeded walk with declared terms is well-formed")
+    validate(&c, &mut ShapeContext::empty().session())
+        .expect("a seeded walk with declared terms is well-formed")
 }
 
 /// **A declared `offset` on a WALK moves the window** — the composition-level analogue of

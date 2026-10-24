@@ -62,8 +62,10 @@ lib/temper/generated/models/anchor_address_resolution_one_of2.rb
 lib/temper/generated/models/anchor_shape.rb
 lib/temper/generated/models/anchor_verdict.rb
 lib/temper/generated/models/append_block_payload.rb
+lib/temper/generated/models/artifact_ask.rb
 lib/temper/generated/models/artifact_commit_request.rb
 lib/temper/generated/models/artifact_commit_response.rb
+lib/temper/generated/models/artifact_predicate.rb
 lib/temper/generated/models/artifact_view.rb
 lib/temper/generated/models/ask_operator.rb
 lib/temper/generated/models/askable_path.rb
@@ -431,6 +433,7 @@ lib/temper/generated/models/set_tool_manifest_request.rb
 lib/temper/generated/models/set_webhook_events_request.rb
 lib/temper/generated/models/shape_declare_request.rb
 lib/temper/generated/models/shape_emptiness.rb
+lib/temper/generated/models/shape_home.rb
 lib/temper/generated/models/shape_successor.rb
 lib/temper/generated/models/shape_view.rb
 lib/temper/generated/models/share_context_outcome.rb

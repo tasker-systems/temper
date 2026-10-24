@@ -3557,6 +3557,15 @@ export interface components {
          */
         ActInvocation: {
             act: components["schemas"]["ActName"];
+            /**
+             * @description Narrowing by what a resource's data artifacts hold: each ask names a shape and predicates
+             *     over the paths it declares, and the resource must own an artifact satisfying it.
+             *
+             *     Predicates within one ask hold of one artifact; different asks may be satisfied by
+             *     different artifacts of the resource. Every ask in one filter must name a shape homed where
+             *     the stage is — a resource has one home — or the stage is refused `ask_scope_conflict`.
+             */
+            artifact_filter?: components["schemas"]["ArtifactAsk"][];
             edge_filter?: components["schemas"]["EdgeFilter"] | null;
             /**
              * @description Where this stage's sets come from, and what this act does with each: caller-supplied ids or
@@ -4012,6 +4021,39 @@ export interface components {
              */
             sources?: components["schemas"]["ProvenanceSource"][];
         };
+        /**
+         * @description One ask: a governing shape, and what the asker holds about artifacts it governs (§2.1).
+         *
+         *     `intent` and `shape_states` are **strings**, validated by [`AskSession::validate`] into
+         *     `unknown_artifact_intent` / `unknown_shape_state` with `teaches` naming the vocabulary — never
+         *     serde enums, whose unknown-variant failure would land before validation, in the deserializer's
+         *     words, and outside the every-refusal-at-once body. Empty means the default, applied by the
+         *     validator: `current` and `member`, and every askable state.
+         *
+         *     **Strict**, like `ActInvocation`: an unknown field is a deserialization error, never a field
+         *     that silently narrows nothing.
+         */
+        ArtifactAsk: {
+            /**
+             * @description Admit folded (superseded) artifacts. Not served: `true` is declined by name
+             *     (`filter_not_applicable`), and an ask reads live artifacts only.
+             */
+            include_folded?: boolean;
+            /** @description Narrow by selection intent: `current`, `member`, `pinned`. Empty: `current` and `member`. */
+            intent?: string[];
+            /**
+             * @description What the asker holds, AND-composed. Empty is the whole governed population — a vacuous
+             *     conjunction, said on purpose (§2.1).
+             */
+            predicates?: components["schemas"]["ArtifactPredicate"][];
+            /** @description The governing shape, by id. An id names one version (§2.2). */
+            shape: components["schemas"]["ShapeId"];
+            /**
+             * @description Narrow by verdict state: `declared_satisfied`, `declared_not_satisfied`,
+             *     `declared_not_yet_checked`. Empty: all three.
+             */
+            shape_states?: string[];
+        };
         /** @description Request body for `POST /api/resources/{id}/artifacts` — commit one data artifact. */
         ArtifactCommitRequest: components["schemas"]["ActInput"] & {
             /** @description The structured payload as JSON. Hashed and stored verbatim — the hash is the proof. */
@@ -4036,6 +4078,19 @@ export interface components {
         ArtifactCommitResponse: {
             artifact: components["schemas"]["ArtifactView"];
             artifact_id: components["schemas"]["DataArtifactId"];
+        };
+        /**
+         * @description One predicate: a path of object-key segments into the content, and an operator from the closed
+         *     `PropertyOp` set — reused, not copied (§3.2). There is no `eq`, regex, prefix or text-search
+         *     operator, so a resemblance-shaped question has no way to be written down.
+         */
+        ArtifactPredicate: {
+            op: components["schemas"]["PropertyOp"];
+            /**
+             * @description Object keys, outermost first: `["measurements", "unit"]`. Not a string syntax; bound as a
+             *     `text[]`, so no caller text becomes an identifier or a JSON-path fragment (§3.1).
+             */
+            path: string[];
         };
         /**
          * @description One data artifact, as returned by the API and MCP surfaces.
@@ -8726,7 +8781,7 @@ export interface components {
          *     change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,
          *     matched exhaustively.
          */
-        RefusalReason: "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "intention_budget_exceeded" | "too_many_filter_values" | "duplicate_set_member" | "malformed_embedding" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | "property_value_too_large" | "property_value_budget_exceeded" | "filter_string_too_long" | "list_too_long" | "text_budget_exceeded" | "shape_not_askable" | "shape_superseded" | "shape_schema_uncompilable" | "empty_artifact_path" | "path_outside_shape" | "operator_outside_shape" | "value_outside_shape" | "unknown_artifact_intent" | "unknown_shape_state" | "ask_scope_conflict" | string;
+        RefusalReason: "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "intention_budget_exceeded" | "too_many_filter_values" | "duplicate_set_member" | "malformed_embedding" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | "property_value_too_large" | "property_value_budget_exceeded" | "filter_string_too_long" | "list_too_long" | "text_budget_exceeded" | "shape_not_askable" | "shape_superseded" | "shape_schema_uncompilable" | "empty_artifact_path" | "path_outside_shape" | "operator_outside_shape" | "value_outside_shape" | "unknown_artifact_intent" | "unknown_shape_state" | "ask_scope_conflict" | "unstorable_value" | string;
         /**
          * @description What a refusal teaches, as data an agent reads without parsing English (spec §3.5).
          *
@@ -8740,12 +8795,20 @@ export interface components {
          *     | `operator_outside_shape` | `vocabulary` (each offending path's facts and feasible operators) |
          *     | `value_outside_shape` | `vocabulary` (each offending path's declared types and values), `non_closure` |
          *     | `unknown_artifact_intent`, `unknown_shape_state` | `terms` |
+         *     | `too_many_filter_values` (a term list longer than its vocabulary) | `terms` |
          *     | `shape_superseded` | `successor` |
          *     | `shape_schema_uncompilable` | `beyond_bound: schema_bytes` for a schema past the byte bound |
+         *     | `ask_scope_conflict` | `homes` |
          */
         RefusalTeaching: {
             beyond_bound?: components["schemas"]["BoundKind"] | null;
             elided?: components["schemas"]["TeachingElision"] | null;
+            /**
+             * @description The homes of the shapes a stage's asks name, when no one home can hold them all. Each is
+             *     the home of a shape the asker can read — refusal step 1 admitted it — so naming it
+             *     discloses nothing a by-id read of the shape would not.
+             */
+            homes?: components["schemas"]["ShapeHome"][];
             /**
              * @description That stored content is not closed by its shape, and the route to values it does not
              *     declare (spec §3.4).
@@ -10265,6 +10328,16 @@ export interface components {
          * @enum {string}
          */
         ShapeEmptiness: "lens_narrowed" | "nothing_visible" | "never_clustered" | "unreadable_or_absent";
+        /**
+         * @description A shape's home: the context or cogmap whose resources an ask against it ranges over. A resource
+         *     has exactly one home, so asks AND-ed on one resource must share one (§4.1, *Scope*).
+         */
+        ShapeHome: {
+            /** Format: uuid */
+            anchor_id: string;
+            /** @description `"kb_contexts"` or `"kb_cogmaps"`. */
+            anchor_table: string;
+        };
         /**
          * Format: uuid
          * @description A `kb_data_artifact_shapes.id` value — one declared JSON Schema governing a data-artifact

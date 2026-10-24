@@ -20,6 +20,7 @@ import json
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional
 from temper.generated.models.bound_kind import BoundKind
+from temper.generated.models.shape_home import ShapeHome
 from temper.generated.models.shape_successor import ShapeSuccessor
 from temper.generated.models.teaching_elision import TeachingElision
 from temper.generated.models.vocabulary import Vocabulary
@@ -29,15 +30,16 @@ from pydantic_core import to_jsonable_python
 
 class RefusalTeaching(BaseModel):
     """
-    What a refusal teaches, as data an agent reads without parsing English (spec §3.5).  **Open, by being a struct of optional fields** rather than a tagged enum: a later refusal that teaches something new adds a field older clients skip, where a new variant would fail their parse of the whole refusal list. Each refusal fills what is relevant to it:  | reason | teaches | |---|---| | `path_outside_shape` | `vocabulary` (the askable paths), `beyond_bound` when a walk bound stopped it | | `operator_outside_shape` | `vocabulary` (each offending path's facts and feasible operators) | | `value_outside_shape` | `vocabulary` (each offending path's declared types and values), `non_closure` | | `unknown_artifact_intent`, `unknown_shape_state` | `terms` | | `shape_superseded` | `successor` | | `shape_schema_uncompilable` | `beyond_bound: schema_bytes` for a schema past the byte bound |
+    What a refusal teaches, as data an agent reads without parsing English (spec §3.5).  **Open, by being a struct of optional fields** rather than a tagged enum: a later refusal that teaches something new adds a field older clients skip, where a new variant would fail their parse of the whole refusal list. Each refusal fills what is relevant to it:  | reason | teaches | |---|---| | `path_outside_shape` | `vocabulary` (the askable paths), `beyond_bound` when a walk bound stopped it | | `operator_outside_shape` | `vocabulary` (each offending path's facts and feasible operators) | | `value_outside_shape` | `vocabulary` (each offending path's declared types and values), `non_closure` | | `unknown_artifact_intent`, `unknown_shape_state` | `terms` | | `too_many_filter_values` (a term list longer than its vocabulary) | `terms` | | `shape_superseded` | `successor` | | `shape_schema_uncompilable` | `beyond_bound: schema_bytes` for a schema past the byte bound | | `ask_scope_conflict` | `homes` |
     """ # noqa: E501
     beyond_bound: Optional[BoundKind] = Field(default=None, description="The walk bound an asked path lies beyond, or — on `shape_schema_uncompilable` — `schema_bytes`, for a whole schema too large for the walk to read.")
     elided: Optional[TeachingElision] = Field(default=None, description="Paths cut from `vocabulary` to keep the teaching bounded.")
+    homes: Optional[List[ShapeHome]] = Field(default=None, description="The homes of the shapes a stage's asks name, when no one home can hold them all. Each is the home of a shape the asker can read — refusal step 1 admitted it — so naming it discloses nothing a by-id read of the shape would not.")
     non_closure: Optional[StrictStr] = Field(default=None, description="That stored content is not closed by its shape, and the route to values it does not declare (spec §3.4).")
     successor: Optional[ShapeSuccessor] = Field(default=None, description="The version now in force, for a folded shape that has one.")
     terms: Optional[List[StrictStr]] = Field(default=None, description="A closed vocabulary of terms: the intents, or the askable shape states.")
     vocabulary: Optional[Vocabulary] = Field(default=None, description="The shape's askable paths — the same structure as a shape's `askable` — narrowed to what the refusal is about, and held to a bounded size.")
-    __properties: ClassVar[List[str]] = ["beyond_bound", "elided", "non_closure", "successor", "terms", "vocabulary"]
+    __properties: ClassVar[List[str]] = ["beyond_bound", "elided", "homes", "non_closure", "successor", "terms", "vocabulary"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -81,6 +83,13 @@ class RefusalTeaching(BaseModel):
         # override the default output from pydantic by calling `to_dict()` of elided
         if self.elided:
             _dict['elided'] = self.elided.to_dict()
+        # override the default output from pydantic by calling `to_dict()` of each item in homes (list)
+        _items = []
+        if self.homes:
+            for _item_homes in self.homes:
+                if _item_homes:
+                    _items.append(_item_homes.to_dict())
+            _dict['homes'] = _items
         # override the default output from pydantic by calling `to_dict()` of successor
         if self.successor:
             _dict['successor'] = self.successor.to_dict()
@@ -126,6 +135,7 @@ class RefusalTeaching(BaseModel):
         _obj = cls.model_validate({
             "beyond_bound": obj.get("beyond_bound"),
             "elided": TeachingElision.from_dict(obj["elided"]) if obj.get("elided") is not None else None,
+            "homes": [ShapeHome.from_dict(_item) for _item in obj["homes"]] if obj.get("homes") is not None else None,
             "non_closure": obj.get("non_closure"),
             "successor": ShapeSuccessor.from_dict(obj["successor"]) if obj.get("successor") is not None else None,
             "terms": obj.get("terms"),

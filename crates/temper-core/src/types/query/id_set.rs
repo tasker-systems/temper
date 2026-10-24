@@ -38,6 +38,18 @@ impl IdKind {
     pub fn is_known(&self) -> bool {
         !matches!(self, IdKind::Other(_))
     }
+
+    /// The table an anchor of this kind lives in — `kb_contexts` or `kb_cogmaps` — as the
+    /// fragments' `(anchor_table, anchor_id)` pair and a shape's home name it; `None` for a kind
+    /// that is not an anchor. One mapping, so a stage's emitted anchor and the home an ask is
+    /// scoped to are compared in one vocabulary.
+    pub fn anchor_table(&self) -> Option<&'static str> {
+        match self {
+            IdKind::Context => Some("kb_contexts"),
+            IdKind::Cogmap => Some("kb_cogmaps"),
+            IdKind::Resource | IdKind::Region | IdKind::Other(_) => None,
+        }
+    }
 }
 
 /// Which anchor produced a set of region ids.

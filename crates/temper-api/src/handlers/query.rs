@@ -2,11 +2,14 @@ use axum::extract::{FromRequest, Request, State};
 use axum::{Extension, Json};
 
 use crate::middleware::auth::AnyPrincipal;
+use temper_core::types::artifact_ask::ShapeContext;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::query::composition::{Composition, CompositionShape};
 use temper_core::types::query::envelope::QueryResponse;
+use temper_core::types::query::shapes_to_load;
 use temper_services::backend::query_read;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
+use temper_services::services::shape_loader;
 use temper_services::state::AppState;
 use temper_workflow::operations::{RelayedSurface, Surface};
 
@@ -61,6 +64,10 @@ use temper_workflow::operations::{RelayedSurface, Surface};
 // order out here would make this the second place that knows it, and the day the MCP tool and the
 // CLI arrive, the third and fourth.
 //
+// What this handler adds before `prepare` is the one thing `prepare` cannot do for itself: load the
+// shapes the plan's artifact asks name, which needs the pool and the principal. `prepare` takes the
+// loaded context and validates against it; it never loads.
+//
 // The refusal branch is the only thing that differs from `super::search::search`, whose shape
 // this otherwise copies: `search_select` takes params and answers, while `prepare` may refuse
 // first.
@@ -104,16 +111,23 @@ pub async fn query(
     };
     CompositionShape::of(&composition).record(door);
 
-    let validated = query_read::prepare(composition)
+    let principal = ProfileId::from(auth.0.profile().id);
+
+    // **The shapes the plan's artifact asks name are loaded BEFORE the gate**, for this principal,
+    // so the gate refuses an ask that cannot be answered before any ONNX is paid (spec
+    // 2026-10-19-asking-artifacts-by-what-they-are §4.3). Over the request caps nothing is loaded:
+    // the empty context is passed and `validate` raises the cap refusals itself, beside every other
+    // refusal, in one body.
+    let shapes = match shapes_to_load(&composition) {
+        Ok(ids) => shape_loader::load(&state.pool, principal, &ids).await?,
+        Err(_) => ShapeContext::empty(),
+    };
+
+    let validated = query_read::prepare(composition, &shapes)
         .await
         .map_err(|refusals| ApiError::PlanRefused { refusals })?;
 
-    let response = query_read::run_composition(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        &validated,
-    )
-    .await?;
+    let response = query_read::run_composition(&state.pool, principal, &validated).await?;
     Ok(Json(response))
 }
 

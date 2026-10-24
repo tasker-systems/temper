@@ -734,6 +734,7 @@ mod tests {
                 resource_filter: None,
                 edge_filter: None,
                 properties: vec![],
+                artifact_filter: vec![],
             })
         }
 
@@ -882,6 +883,7 @@ mod tests {
             resource_filter: None,
             edge_filter: None,
             properties: vec![],
+            artifact_filter: vec![],
         })
     }
 
@@ -1128,6 +1130,7 @@ mod tests {
             edge_filter: None,
             properties: vec![],
             act: ActName::FollowFrom,
+            artifact_filter: vec![],
         });
         assert_eq!(seeded.upstream_names().len(), 1);
 
@@ -1140,6 +1143,7 @@ mod tests {
             edge_filter: None,
             properties: vec![],
             act: ActName::FindExact,
+            artifact_filter: vec![],
         });
         assert!(rooted.upstream_names().is_empty());
     }

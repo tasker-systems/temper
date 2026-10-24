@@ -390,6 +390,16 @@ fn section_advice(section: ResourceSection) -> &'static str {
     }
 }
 
+/// The redirect every act but `find-resources-with` answers a resource narrowing with: the
+/// narrowing has an act, and a modifier saying the same thing elsewhere would be a second spelling.
+fn narrow_by_selecting(field: &str) -> String {
+    format!(
+        "this act does not narrow by `{field}`; narrowing by what a resource IS is the \
+         `find-resources-with` act — select with it and pipe the result in as a bound. Applying it \
+         here would answer a different question than the one asked"
+    )
+}
+
 /// Declaration-driven checks for one act node. Every axis is independent — a node can fail more
 /// than one — so nothing short-circuits; a caller sees the whole picture.
 fn check_act(
@@ -613,15 +623,20 @@ fn check_act(
                 errs.push(refusal(
                     Some(name),
                     RefusalReason::FilterNotApplicable,
-                    format!(
-                        "this act does not narrow by `{field}`; narrowing by what a resource IS is \
-                         the `find-resources-with` act — select with it and pipe the result in as a \
-                         bound. Applying it here would answer a different question than the one \
-                         asked"
-                    ),
+                    narrow_by_selecting(field),
                 ));
             }
         }
+    }
+    // **An artifact filter is a parameter of the same one act**, and every other act refuses it
+    // with the same redirect: what a resource's artifacts hold is one more thing known about what
+    // the resource IS. One refusal for the slot, however many asks it carries.
+    if !inv.artifact_filter.is_empty() && !decl.accepts_filters.contains(&FilterField::Artifact) {
+        errs.push(refusal(
+            Some(name),
+            RefusalReason::FilterNotApplicable,
+            narrow_by_selecting("artifact_filter"),
+        ));
     }
     // **The `properties` refusal is now ONE arm, because the subject tag is gone** `[2026-08-15]`.
     // It fired once for the whole field on every act, then briefly in two arms while only the edge

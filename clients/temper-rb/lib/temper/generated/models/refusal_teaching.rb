@@ -14,13 +14,16 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # What a refusal teaches, as data an agent reads without parsing English (spec §3.5).  **Open, by being a struct of optional fields** rather than a tagged enum: a later refusal that teaches something new adds a field older clients skip, where a new variant would fail their parse of the whole refusal list. Each refusal fills what is relevant to it:  | reason | teaches | |---|---| | `path_outside_shape` | `vocabulary` (the askable paths), `beyond_bound` when a walk bound stopped it | | `operator_outside_shape` | `vocabulary` (each offending path's facts and feasible operators) | | `value_outside_shape` | `vocabulary` (each offending path's declared types and values), `non_closure` | | `unknown_artifact_intent`, `unknown_shape_state` | `terms` | | `shape_superseded` | `successor` | | `shape_schema_uncompilable` | `beyond_bound: schema_bytes` for a schema past the byte bound |
+  # What a refusal teaches, as data an agent reads without parsing English (spec §3.5).  **Open, by being a struct of optional fields** rather than a tagged enum: a later refusal that teaches something new adds a field older clients skip, where a new variant would fail their parse of the whole refusal list. Each refusal fills what is relevant to it:  | reason | teaches | |---|---| | `path_outside_shape` | `vocabulary` (the askable paths), `beyond_bound` when a walk bound stopped it | | `operator_outside_shape` | `vocabulary` (each offending path's facts and feasible operators) | | `value_outside_shape` | `vocabulary` (each offending path's declared types and values), `non_closure` | | `unknown_artifact_intent`, `unknown_shape_state` | `terms` | | `too_many_filter_values` (a term list longer than its vocabulary) | `terms` | | `shape_superseded` | `successor` | | `shape_schema_uncompilable` | `beyond_bound: schema_bytes` for a schema past the byte bound | | `ask_scope_conflict` | `homes` |
   class RefusalTeaching < ApiModelBase
     # The walk bound an asked path lies beyond, or — on `shape_schema_uncompilable` — `schema_bytes`, for a whole schema too large for the walk to read.
     attr_accessor :beyond_bound
 
     # Paths cut from `vocabulary` to keep the teaching bounded.
     attr_accessor :elided
+
+    # The homes of the shapes a stage's asks name, when no one home can hold them all. Each is the home of a shape the asker can read — refusal step 1 admitted it — so naming it discloses nothing a by-id read of the shape would not.
+    attr_accessor :homes
 
     # That stored content is not closed by its shape, and the route to values it does not declare (spec §3.4).
     attr_accessor :non_closure
@@ -61,6 +64,7 @@ module Temper::Generated
       {
         :'beyond_bound' => :'beyond_bound',
         :'elided' => :'elided',
+        :'homes' => :'homes',
         :'non_closure' => :'non_closure',
         :'successor' => :'successor',
         :'terms' => :'terms',
@@ -83,6 +87,7 @@ module Temper::Generated
       {
         :'beyond_bound' => :'BoundKind',
         :'elided' => :'TeachingElision',
+        :'homes' => :'Array<ShapeHome>',
         :'non_closure' => :'String',
         :'successor' => :'ShapeSuccessor',
         :'terms' => :'Array<String>',
@@ -123,6 +128,12 @@ module Temper::Generated
 
       if attributes.key?(:'elided')
         self.elided = attributes[:'elided']
+      end
+
+      if attributes.key?(:'homes')
+        if (value = attributes[:'homes']).is_a?(Array)
+          self.homes = value
+        end
       end
 
       if attributes.key?(:'non_closure')
@@ -166,6 +177,7 @@ module Temper::Generated
       self.class == o.class &&
           beyond_bound == o.beyond_bound &&
           elided == o.elided &&
+          homes == o.homes &&
           non_closure == o.non_closure &&
           successor == o.successor &&
           terms == o.terms &&
@@ -181,7 +193,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [beyond_bound, elided, non_closure, successor, terms, vocabulary].hash
+      [beyond_bound, elided, homes, non_closure, successor, terms, vocabulary].hash
     end
 
     # Builds the object from hash

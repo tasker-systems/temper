@@ -23,6 +23,8 @@ use uuid::Uuid;
 
 use crate::backend::substrate_read::{embed_query_texts, QueryEmbedBatch};
 use crate::error::{ApiError, ApiResult};
+use crate::services::shape_loader;
+use temper_core::types::artifact_ask::{AskSession, ShapeContext, ValidatedAsk};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::query::{
     applied_terms, declaration, text_to_embed, texts_to_embed, validate, ActName, ActRefusal,
@@ -146,7 +148,46 @@ fn required_tally<'a>(stage: &str, rows: &'a StageIndex<'_>) -> ApiResult<&'a Ta
 /// `[2026-08-13]` The alternative was to leave the seal ahead of the embed and hand `compile` a
 /// side-channel `BTreeMap<StageName, Vec<f32>>`. It was declined: that is two sources for one
 /// fact — the shape spec ⟨7⟩ removed from `compile`'s signature, reintroduced one layer down.
-pub async fn prepare(mut c: Composition) -> Result<ValidatedComposition, Vec<PlanRefusal>> {
+///
+/// **`shapes` are the shapes the composition's artifact asks name, loaded before this is called**
+/// (spec `2026-10-19-asking-artifacts-by-what-they-are` §4.3): the handler loads them with
+/// `shape_loader::load`, and every caller whose plan asks nothing — or whose asks are over the
+/// request caps, which [`validate()`] refuses again in the same body — passes
+/// [`ShapeContext::empty`]. One [`AskSession`] is begun from them here and held for the gate, the
+/// embed and the seal, so the seal re-validates the asks the gate admitted from the gate's memo.
+///
+/// **After the seal, what the session taught is remembered.** Each path teaching it made — one
+/// enumeration of a shape's vocabulary, for a path refusal on a shape whose teaching the context
+/// did not carry — is handed to `shape_loader::remember_path_teachings`, whether the plan was
+/// admitted or refused, so a later request refusing a path on that shape is taught from memory and
+/// enumerates nothing.
+pub async fn prepare(
+    c: Composition,
+    shapes: &ShapeContext,
+) -> Result<ValidatedComposition, Vec<PlanRefusal>> {
+    let mut session = shapes.session();
+    let prepared = gate_embed_seal(c, &mut session).await;
+    tracing::debug!(
+        shapes_walked = session.shapes_walked(),
+        asks_answered_again = session.answered_again(),
+        vocabularies_enumerated = session.vocabularies_enumerated(),
+        "query ask session"
+    );
+    #[cfg(feature = "test-db")]
+    shape_loader::test_support::record_path_teachings(shapes, session.taught().cloned());
+    shape_loader::remember_path_teachings(shapes, session.taught().cloned());
+    prepared
+}
+
+/// The gate, the embed and the seal, every validation through the one `session` it is handed.
+///
+/// **It holds no [`ShapeContext`], so it cannot begin a second session**: the gate and the seal
+/// share this one by construction, and what the seal reused is readable on it afterwards
+/// ([`AskSession::answered_again`]).
+async fn gate_embed_seal(
+    mut c: Composition,
+    session: &mut AskSession<'_>,
+) -> Result<ValidatedComposition, Vec<PlanRefusal>> {
     // **The gate is the FULL pass, not the shape half** `[widened — 2026-08-28]`. It was
     // `validate_shape`, which was right while every cost bound was a shape bound; the embed budget
     // is not — what this deployment can embed inside one request is a fact about the machine, so
@@ -167,7 +208,13 @@ pub async fn prepare(mut c: Composition) -> Result<ValidatedComposition, Vec<Pla
     // `the_gate_and_the_seal_agree_across_the_embed` holds it, over a composition near the cap —
     // its first fixture asked one ten-byte question, so the budget check could not fire and the
     // test certified the invariant its own commit had broken.
-    if validate(&c).is_ok() {
+    //
+    // **One ask session for both passes**, held across the embed: the seal re-reads the asks the
+    // gate validated and is answered from the gate's work (see `validate`). The embed writes only
+    // `intention.embedding`, never `artifact_filter`, so the seal sees byte-identical asks. An ask
+    // whose shape the context does not hold is refused `shape_not_askable` here, at the gate,
+    // before any ONNX is paid — never admitted unchecked.
+    if validate(&c, session).is_ok() {
         let phase = embed_missing_intentions(&mut c).await;
         tracing::debug!(
             asked = phase.asked,
@@ -176,7 +223,7 @@ pub async fn prepare(mut c: Composition) -> Result<ValidatedComposition, Vec<Pla
             "query embed phase"
         );
     }
-    validate(&c)
+    validate(&c, session)
 }
 
 /// Fill in the vectors the caller could not compute, in place, before the plan is sealed.
@@ -208,6 +255,8 @@ pub async fn prepare(mut c: Composition) -> Result<ValidatedComposition, Vec<Pla
 /// One question that no stage can use is therefore **not** a failed composition: its siblings run,
 /// and the refusal is per stage.
 async fn embed_missing_intentions(c: &mut Composition) -> EmbedPhase {
+    #[cfg(test)]
+    EMBED_PHASES_ENTERED.with(|entered| entered.set(entered.get() + 1));
     let queries: Vec<String> = texts_to_embed(c).into_iter().collect();
     let asked = queries.len();
     if asked == 0 {
@@ -265,6 +314,13 @@ async fn embed_missing_intentions(c: &mut Composition) -> EmbedPhase {
         }
     }
     phase
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Every time the embed phase was entered on this thread — what a test reads to see that a
+    /// composition the gate refuses pays no ONNX at all.
+    static EMBED_PHASES_ENTERED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// What the embed phase of one composition cost, and what it produced.
@@ -388,7 +444,10 @@ fn assemble(
         .iter()
         .filter_map(|spec| {
             let node = by_name.get(spec.stage.as_str())?;
-            Some(stage_result(node, spec, rows, hydrated).map(|r| (spec.stage.clone(), r)))
+            Some(
+                stage_result(node, v.asks(&spec.stage), spec, rows, hydrated)
+                    .map(|r| (spec.stage.clone(), r)),
+            )
         })
         .collect::<ApiResult<Vec<_>>>()?
         .into_iter()
@@ -397,7 +456,7 @@ fn assemble(
     let stages = v
         .ordered()
         .iter()
-        .map(|node| stage_trace(node, rows))
+        .map(|node| stage_trace(node, v.asks(node.name()), rows))
         .collect::<ApiResult<Vec<_>>>()?;
 
     Ok(QueryResponse {
@@ -565,6 +624,7 @@ fn stage_numbers(node: &StageNode, rows: &StageIndex<'_>) -> ApiResult<StageNumb
 
 fn stage_result(
     node: &StageNode,
+    asks: &[ValidatedAsk],
     spec: &ReturnSpec,
     rows: &StageIndex<'_>,
     hydrated: &Hydrated,
@@ -651,7 +711,7 @@ fn stage_result(
         // fragments return a page, not a count. Absent rather than guessed from the page size.
         total: None,
         terms_applied: n.terms_applied,
-        narrowed_by: narrowed_by(node, rows)?,
+        narrowed_by: narrowed_by(node, asks, rows)?,
         input_ids: n.input_ids,
         input_unusable: n.input_unusable,
         disclosed_regions: disclosed_regions_for(node.name().as_str(), rows),
@@ -719,7 +779,11 @@ fn disclosed_regions_for(stage: &str, rows: &StageIndex<'_>) -> Vec<RegionDisclo
     out
 }
 
-fn stage_trace(node: &StageNode, rows: &StageIndex<'_>) -> ApiResult<StageTrace> {
+fn stage_trace(
+    node: &StageNode,
+    asks: &[ValidatedAsk],
+    rows: &StageIndex<'_>,
+) -> ApiResult<StageTrace> {
     let n = stage_numbers(node, rows)?;
     Ok(StageTrace {
         stage: node.name().clone(),
@@ -735,7 +799,7 @@ fn stage_trace(node: &StageNode, rows: &StageIndex<'_>) -> ApiResult<StageTrace>
         // of the page it ran and of whether that page was full.
         extent: n.extent,
         terms_applied: n.terms_applied,
-        narrowed_by: narrowed_by(node, rows)?,
+        narrowed_by: narrowed_by(node, asks, rows)?,
         disclosed_regions: disclosed_regions_for(node.name().as_str(), rows),
     })
 }
@@ -880,7 +944,11 @@ fn subtraction_disclosure(cn: &CombineNode, rows: &StageIndex<'_>) -> ApiResult<
     }])
 }
 
-fn narrowed_by(node: &StageNode, rows: &StageIndex<'_>) -> ApiResult<Vec<NarrowedBy>> {
+fn narrowed_by(
+    node: &StageNode,
+    asks: &[ValidatedAsk],
+    rows: &StageIndex<'_>,
+) -> ApiResult<Vec<NarrowedBy>> {
     let inv = match node {
         StageNode::Act(inv) => inv,
         // **A combinator discloses a narrowing only when it NARROWS, and only one of them does.**
@@ -956,6 +1024,19 @@ fn narrowed_by(node: &StageNode, rows: &StageIndex<'_>) -> ApiResult<Vec<Narrowe
                 )
         })
         .collect();
+
+    // **The artifact filter is echoed, one entry per ask, naming the shape it asked.** It narrows
+    // the selection's set as the resource filter does, so leaving it out would be the
+    // applied-but-not-echoed defect this function exists against. Read from the seal (`asks`, the
+    // stage's `ValidatedComposition::asks`), the one source the statement also binds from. The
+    // value is the shape's id and nothing of the ask's predicates, for the reason the property
+    // echoes give: the caller holds its own ask, and its values are caller JSON of arbitrary size.
+    out.extend(asks.iter().map(|ask| {
+        entry(
+            "artifact_shape".to_string(),
+            ask.shape().shape_id.to_string(),
+        )
+    }));
 
     let Some(f) = &inv.resource_filter else {
         return Ok(out);
@@ -1074,7 +1155,7 @@ mod tests {
             });
         }
 
-        let disclosed = narrowed_by(&node, &no_rows().index())
+        let disclosed = narrowed_by(&node, &[], &no_rows().index())
             .expect("an act stage's narrowing reads no tallies");
         let pairs: Vec<(&str, &str)> = disclosed
             .iter()
@@ -1112,7 +1193,7 @@ mod tests {
     #[test]
     fn a_stage_that_narrowed_by_nothing_discloses_an_empty_list() {
         let node = act_node("hits", ActName::FindExact, None);
-        assert!(narrowed_by(&node, &no_rows().index())
+        assert!(narrowed_by(&node, &[], &no_rows().index())
             .expect("an act stage's narrowing reads no tallies")
             .is_empty());
     }
@@ -1130,6 +1211,7 @@ mod tests {
             resource_filter: None,
             edge_filter: None,
             properties: vec![],
+            artifact_filter: vec![],
         })
     }
 
@@ -1146,7 +1228,7 @@ mod tests {
             },
             stages,
         };
-        validate(&c).expect("plan is valid")
+        validate(&c, &mut ShapeContext::empty().session()).expect("plan is valid")
     }
 
     /// A find-about stage asking a specific question — the act the server embeds for.
@@ -1274,7 +1356,9 @@ mod tests {
             stages: vec![node],
         };
 
-        let refusals = prepare(c).await.expect_err("the plan is refused");
+        let refusals = prepare(c, &ShapeContext::empty())
+            .await
+            .expect_err("the plan is refused");
         assert!(
             refusals
                 .iter()
@@ -2662,6 +2746,7 @@ mod tests {
                     resource_filter: None,
                     edge_filter: None,
                     properties: vec![],
+                    artifact_filter: vec![],
                 })
             })
             .collect();
@@ -2715,6 +2800,7 @@ mod tests {
                     resource_filter: None,
                     edge_filter: None,
                     properties: vec![],
+                    artifact_filter: vec![],
                 })
             })
             .collect();
@@ -2728,7 +2814,7 @@ mod tests {
             stages,
         };
 
-        let refusals = prepare(c)
+        let refusals = prepare(c, &ShapeContext::empty())
             .await
             .expect_err("over budget must not be prepared");
         assert!(
@@ -2775,5 +2861,280 @@ mod tests {
             phase.budget_windows, 0,
             "nothing to embed is not an attempt"
         );
+    }
+
+    // ── Artifact asks through the gate, the embed and the seal ──────────────────────────────────
+
+    use std::cell::Cell;
+    use temper_core::types::artifact_ask::{
+        ArtifactAsk, ArtifactPredicate, LoadedShape, ShapeLoad,
+    };
+    use temper_core::types::ids::ShapeId;
+    use temper_core::types::query::PropertyOp;
+
+    fn shape_id(n: u128) -> ShapeId {
+        ShapeId::from(Uuid::from_u128(n))
+    }
+
+    /// Shape `n`, loaded, in one context home and one family, declaring `schema`.
+    fn loaded_shape(n: u128, schema: serde_json::Value) -> LoadedShape {
+        LoadedShape {
+            shape_id: shape_id(n),
+            shape_version: 1,
+            home_anchor_table: "kb_contexts".to_string(),
+            home_anchor_id: Uuid::from_u128(0xc0),
+            kind_owner_table: "kb_profiles".to_string(),
+            kind_owner_id: Uuid::from_u128(0xd0),
+            artifact_kind: "measurement".to_string(),
+            schema,
+        }
+    }
+
+    /// An ask of shape `n` that each of `paths` is present.
+    fn has_keys(n: u128, paths: &[&str]) -> ArtifactAsk {
+        ArtifactAsk {
+            shape: shape_id(n),
+            predicates: paths
+                .iter()
+                .map(|p| ArtifactPredicate {
+                    path: vec![p.to_string()],
+                    op: PropertyOp::HasKey,
+                })
+                .collect(),
+            intent: vec![],
+            include_folded: false,
+            shape_states: vec![],
+        }
+    }
+
+    /// A `find-resources-with` stage carrying `asks` and no question — the act asks the corpus
+    /// nothing.
+    fn selecting(n: &str, asks: Vec<ArtifactAsk>) -> StageNode {
+        let mut node = act_node(n, ActName::FindResourcesWith, None);
+        if let StageNode::Act(a) = &mut node {
+            a.intention = None;
+            a.artifact_filter = asks;
+        }
+        node
+    }
+
+    fn bounded_by(stage: &str) -> Option<StageInput> {
+        Some(StageInput::Upstream {
+            relation: StageRelation::Bound,
+            stage: name(stage),
+        })
+    }
+
+    fn embed_phases_entered() -> usize {
+        EMBED_PHASES_ENTERED.with(Cell::get)
+    }
+
+    /// **A composition whose one fault is an unaskable shape is refused at the gate, and the embed
+    /// is never entered.** The plan pipes a selection asking shape 1 into a `find-about-within`
+    /// whose question the server would embed. Against a context where shape 1 is `NotAskable`, the
+    /// refusal is that arm's own, at the selection's stage, and the only one — and the embed phase
+    /// was not entered, so no ONNX was paid for a plan that cannot run. The same plan against a
+    /// context where shape 1 loaded is prepared, and enters the embed once: the control that shows
+    /// the counter sees the phase at all.
+    ///
+    /// Bites the gate removed from `gate_embed_seal` (embedding unconditionally): the refused plan
+    /// enters the embed phase once.
+    #[tokio::test]
+    async fn an_unaskable_shape_is_refused_at_the_gate_and_no_embed_is_paid() {
+        let plan = |asks: Vec<ArtifactAsk>| {
+            let mut about = act_node("about", ActName::FindAboutWithin, bounded_by("sel"));
+            if let StageNode::Act(a) = &mut about {
+                a.intention = Some(Intention {
+                    query: "kestrel migration routes".to_string(),
+                    embedding: None,
+                });
+            }
+            Composition {
+                outcome: OutcomeDeclaration {
+                    returns: vec![ReturnSpec {
+                        stage: name("about"),
+                        with: vec![],
+                    }],
+                },
+                stages: vec![selecting("sel", asks), about],
+            }
+        };
+
+        let unaskable: ShapeContext = [(shape_id(1), ShapeLoad::NotAskable)].into_iter().collect();
+        let before = embed_phases_entered();
+        let refusals = prepare(plan(vec![has_keys(1, &["unit"])]), &unaskable)
+            .await
+            .expect_err("the shape cannot be asked");
+        assert_eq!(
+            embed_phases_entered() - before,
+            0,
+            "a plan the gate refuses pays no embed"
+        );
+        let mut expected = ShapeLoad::NotAskable
+            .loaded()
+            .expect_err("NotAskable refuses");
+        expected.stage = Some(name("sel"));
+        assert_eq!(
+            refusals,
+            vec![expected],
+            "the plan's one fault, and only it"
+        );
+
+        let askable: ShapeContext = [(
+            shape_id(1),
+            ShapeLoad::Loaded(loaded_shape(
+                1,
+                serde_json::json!({ "properties": { "unit": { "type": "string" } } }),
+            )),
+        )]
+        .into_iter()
+        .collect();
+        let before = embed_phases_entered();
+        prepare(plan(vec![has_keys(1, &["unit"])]), &askable)
+            .await
+            .expect("the same plan, its shape loaded, is prepared");
+        assert_eq!(
+            embed_phases_entered() - before,
+            1,
+            "the control: an admitted plan enters the embed phase once"
+        );
+    }
+
+    /// **An applied artifact filter is echoed in the narrowing disclosure, read from the seal**: one
+    /// entry per sealed ask, keyed `artifact_shape` and naming the shape it was validated against —
+    /// and nothing of the predicates. The same sealed asks beside a node whose own filter was
+    /// cleared still echo, so the echo's source is the seal and never the caller's filter.
+    ///
+    /// Bites the echo removed (no entry), and the echo read from `inv.artifact_filter` (the cleared
+    /// node echoes nothing).
+    #[test]
+    fn an_applied_artifact_filter_is_echoed_from_the_seal() {
+        let schema = serde_json::json!({ "properties": { "unit": {}, "count": {} } });
+        let shapes: ShapeContext = [1, 2]
+            .into_iter()
+            .map(|n| {
+                (
+                    shape_id(n),
+                    ShapeLoad::Loaded(loaded_shape(n, schema.clone())),
+                )
+            })
+            .collect();
+        let c = Composition {
+            outcome: OutcomeDeclaration {
+                returns: vec![ReturnSpec {
+                    stage: name("hits"),
+                    with: vec![],
+                }],
+            },
+            stages: vec![
+                selecting("sel", vec![has_keys(1, &["unit"]), has_keys(2, &["count"])]),
+                act_node("hits", ActName::FindExact, bounded_by("sel")),
+            ],
+        };
+        let v = validate(&c, &mut shapes.session()).expect("both asks lie inside their shapes");
+        let sealed = v.asks(&name("sel"));
+        let expected = vec![
+            ("artifact_shape".to_string(), shape_id(1).to_string()),
+            ("artifact_shape".to_string(), shape_id(2).to_string()),
+        ];
+        let pairs = |node: &StageNode| -> Vec<(String, String)> {
+            narrowed_by(node, sealed, &no_rows().index())
+                .expect("an act stage's narrowing reads no tallies")
+                .iter()
+                .map(|n| (n.key.clone(), n.value.clone()))
+                .collect()
+        };
+        let node = &c.stages[0];
+        assert_eq!(pairs(node), expected);
+
+        let mut cleared = node.clone();
+        if let StageNode::Act(a) = &mut cleared {
+            a.artifact_filter.clear();
+        }
+        assert_eq!(pairs(&cleared), expected, "the echo reads the seal");
+    }
+
+    /// The `n`th (`1 <= n < 64`) of a run of asks naming both of the heavy shape's paths, each with
+    /// its own subset of the intents and the shape states: different asks, walking the same paths.
+    fn heavy_ask(n: usize) -> ArtifactAsk {
+        use temper_core::types::artifact_ask::{ARTIFACT_INTENTS, ASKABLE_SHAPE_STATES};
+        let pick = |terms: &[&str], bits: usize| -> Vec<String> {
+            terms
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| ((bits >> i) & 1) == 1)
+                .map(|(_, t)| t.to_string())
+                .collect()
+        };
+        ArtifactAsk {
+            intent: pick(&ARTIFACT_INTENTS, n & 7),
+            shape_states: pick(&ASKABLE_SHAPE_STATES, (n >> 3) & 7),
+            ..has_keys(1, &["p0", "p1"])
+        }
+    }
+
+    /// **Through `gate_embed_seal`, the gate and the seal share one ask session**, and a
+    /// many-stage composition over one heavy shape costs one walk: sixteen selections, each asking a
+    /// different ask of a shape whose two paths each reference one `allOf` of 2,500 branches. After
+    /// the gate, the embed and the seal, the session has walked the shape once, and answered every
+    /// one of the sixteen asks a second time from what the gate validated — which is the seal
+    /// re-validating them, spending nothing. What one walk costs in visits is pinned in temper-core
+    /// (`a_many_stage_composition_over_one_heavy_shape_costs_one_walk_across_gate_and_seal`).
+    ///
+    /// That `prepare` hands both passes one session is structural rather than witnessed here:
+    /// `prepare` begins exactly one session and calls this function, which holds no
+    /// [`ShapeContext`] and so cannot begin another.
+    ///
+    /// Bites `gate_embed_seal` sealing through a session other than the one it is handed (given the
+    /// context and sealing through `shapes.session()`): the handed session then answers nothing
+    /// again, and `answered_again` reads 0.
+    #[tokio::test]
+    async fn the_gate_and_the_seal_share_one_ask_session_through_gate_embed_seal() {
+        const STAGES: usize = 16;
+        let branches: Vec<serde_json::Value> = (0..2_500).map(|_| serde_json::json!({})).collect();
+        let heavy = loaded_shape(
+            1,
+            serde_json::json!({
+                "$defs": { "w": { "allOf": branches } },
+                "properties": {
+                    "p0": { "$ref": "#/$defs/w" },
+                    "p1": { "$ref": "#/$defs/w" }
+                }
+            }),
+        );
+        let shapes: ShapeContext = [(shape_id(1), ShapeLoad::Loaded(heavy))]
+            .into_iter()
+            .collect();
+        let mut stages: Vec<StageNode> = (0..STAGES)
+            .map(|i| selecting(&format!("sel{i}"), vec![heavy_ask(i + 1)]))
+            .collect();
+        stages.push(act_node("hits", ActName::FindExact, bounded_by("sel0")));
+        let c = Composition {
+            outcome: OutcomeDeclaration {
+                returns: vec![ReturnSpec {
+                    stage: name("hits"),
+                    with: vec![],
+                }],
+            },
+            stages,
+        };
+
+        let mut session = shapes.session();
+        let v = gate_embed_seal(c, &mut session)
+            .await
+            .expect("every stage's ask lies inside its shape");
+        assert_eq!(session.shapes_walked(), 1, "one walk for sixteen stages");
+        assert_eq!(
+            session.answered_again(),
+            STAGES,
+            "the seal answered every ask from the gate's session"
+        );
+        for i in 0..STAGES {
+            assert_eq!(
+                v.asks(&name(&format!("sel{i}"))).len(),
+                1,
+                "sealed at sel{i}"
+            );
+        }
     }
 }

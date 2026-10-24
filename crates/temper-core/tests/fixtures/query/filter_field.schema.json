@@ -3,7 +3,8 @@
   "description": "Which filter slot an act admits. An unadmitted filter is DECLINED, never ignored.",
   "enum": [
     "resource",
-    "edge"
+    "edge",
+    "artifact"
   ],
   "title": "FilterField",
   "type": "string"

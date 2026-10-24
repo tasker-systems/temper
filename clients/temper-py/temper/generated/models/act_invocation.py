@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 from typing import Any, ClassVar, Dict, List, Optional
 from typing_extensions import Annotated
 from temper.generated.models.act_name import ActName
+from temper.generated.models.artifact_ask import ArtifactAsk
 from temper.generated.models.edge_filter import EdgeFilter
 from temper.generated.models.intention import Intention
 from temper.generated.models.property_predicate import PropertyPredicate
@@ -35,14 +36,15 @@ class ActInvocation(BaseModel):
     One act, invoked — a named node in the composition DAG.  **No `Eq`, only `PartialEq`** — [`Self::intention`] carries the query vector. See [`super::composition::Intention`].
     """ # noqa: E501
     act: ActName
+    artifact_filter: Optional[List[ArtifactAsk]] = Field(default=None, description="Narrowing by what a resource's data artifacts hold: each ask names a shape and predicates over the paths it declares, and the resource must own an artifact satisfying it.  Predicates within one ask hold of one artifact; different asks may be satisfied by different artifacts of the resource. Every ask in one filter must name a shape homed where the stage is — a resource has one home — or the stage is refused `ask_scope_conflict`.")
     edge_filter: Optional[EdgeFilter] = None
     inputs: Optional[Annotated[List[StageInput], Field(max_length=2)]] = Field(default=None, description="Where this stage's sets come from, and what this act does with each: caller-supplied ids or an upstream stage, each carrying its own [`super::stage::StageRelation`]. Empty for a root act that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal `bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`].  There is deliberately no sibling `bounds_mode` here `[decided — 2026-08-08, Pete]`. It was an `Option<BoundsMode>` whose \"required whenever an input is present\" invariant lived in prose, which admitted a meaningless state the validator then read as `bound`. The relation belongs to the edge, and nesting it there makes the meaningless state unrepresentable rather than merely invalid.  # A LIST, and at most one per relation  `[widened — 2026-08-14, Pete]` This was `Option<StageInput>` — **one** set, carrying **one** relation. That made a bounded walk inexpressible: `follow-from` needs seeds to start from *and* a bound to stay inside, at the same time, and a single slot can hold one or the other. The fragment (`20260814000030`) had the `p_bound_ids` parameter and no caller could fill it, so `accepts_bounds: [Resource]` would have declared a capability nothing could reach.  **The cardinality rule is one per RELATION, not one per source.** Two seeds is malformed ([`super::disposition::RefusalReason::DuplicateInputRelation`]) rather than a union — a union is `CombineOp::Union`, which is an existing, visible stage rather than a silent merge inside one. So the list is short by construction and is not a general fan-in.  **Why a list rather than a second `bound` field beside this one.** The relation already distinguishes them, so a list gives a bound exactly one spelling; a sibling field would give it two — the new field, and this one with a `Bound` relation — which is the incumbent literal `bounds: Option<IdSet>` shape this contract deliberately replaced `[decided — 2026-08-14, Pete]`, returning under a different name.  At most two, one per relation (`list_too_long` past that).")
     intention: Optional[Intention] = Field(default=None, description="The question this act asks: its text, and the caller's vector when there is one.  **A parameter of the act, exactly like [`Self::terms`] and [`Self::resource_filter`]** `[decided — 2026-08-12, Pete]`, spec ⟨7⟩. It lived on the composition envelope until then, which made a DAG able to ask only one question — every find stage reading the same string.  `None` for an act that asks nothing (`follow-from`, `survey`, the combinators). `None` on a find act is `MissingIntention`, refused by the shape pass: `find-exact` sources its `p_query` from here and there is nowhere else to get it.")
     name: Annotated[str, Field(strict=True)] = Field(description="This node's name, referenced by downstream stages and by `returns`.")
     properties: Optional[List[PropertyPredicate]] = Field(default=None, description="# A tombstone  Every predicate here is refused, and the refusal says where the capability went.  **Keep this heading to one line** `[found in review — 2026-08-15]`. schemars takes the first heading LINE as the schema `title` and the remainder as `description`, so a heading that wraps ships a truncated sentence as the title and an orphan word as the start of the description — into `act_invocation.schema.json`, `openapi.json`, and every generated client. A mechanical constraint of the generator, not a style preference.  `[2026-08-15]` **Both halves now have containers** — [`super::filter::ResourceFilter`]'s `properties` and [`super::filter::EdgeFilter`]'s — so a property predicate has a home that names its own subject, and this field has nothing left to mean. The subject tag it carried (`PropertySubject`), that tag's open arm, the `UnknownFilterValue` refusal the open arm existed to raise, and the subject-tagged predicate type are all **deleted**.  **The field is not deleted with them, and that is the whole decision** `[decided — 2026-08-15, Pete]`. [`ActInvocation`] carries `deny_unknown_fields`, and serde short-circuits before `validate` runs — so removing the field would turn a named `FilterNotApplicable` inside `ErrorBody` into a deserializer 400 **outside** that shape. A stale caller would go from being told where to move their predicate to being told their body is unparseable. Retyping to [`super::filter::PropertyPredicate`], which carries no `deny_unknown_fields`, keeps a stale `{\"subject\":…,\"key\":…,\"op\":…}` parsing: the tag is ignored and the redirect still fires.  **The residue:** with the tag gone the redirect cannot name *which* container, so it names both and lets the caller pick. That is a real loss of fidelity in the refusal, accepted as the price of deleting the type.")
-    resource_filter: Optional[ResourceFilter] = Field(default=None, description="Narrowing by what a thing IS. At most one slot applies per act; supplying the other is `RefusalReason::FilterNotApplicable`.")
+    resource_filter: Optional[ResourceFilter] = Field(default=None, description="Narrowing by what a thing IS. At most one slot applies per candidate population; a slot the act does not admit is `RefusalReason::FilterNotApplicable`. `resource_filter` and `artifact_filter` both narrow the resources a selection considers, and AND together; `edge_filter` narrows the edges a walk follows.")
     terms: Optional[Dict[str, StrictInt]] = Field(default=None, description="Act-level bound terms. A term this act does not admit is refused STATICALLY (`RefusalReason::BoundTermNotApplicable`), never reinterpreted to fit.")
-    __properties: ClassVar[List[str]] = ["act", "edge_filter", "inputs", "intention", "name", "properties", "resource_filter", "terms"]
+    __properties: ClassVar[List[str]] = ["act", "artifact_filter", "edge_filter", "inputs", "intention", "name", "properties", "resource_filter", "terms"]
 
     @field_validator('name')
     def name_validate_regular_expression(cls, value):
@@ -96,6 +98,13 @@ class ActInvocation(BaseModel):
         # override the default output from pydantic by calling `to_dict()` of act
         if self.act:
             _dict['act'] = self.act.to_dict()
+        # override the default output from pydantic by calling `to_dict()` of each item in artifact_filter (list)
+        _items = []
+        if self.artifact_filter:
+            for _item_artifact_filter in self.artifact_filter:
+                if _item_artifact_filter:
+                    _items.append(_item_artifact_filter.to_dict())
+            _dict['artifact_filter'] = _items
         # override the default output from pydantic by calling `to_dict()` of edge_filter
         if self.edge_filter:
             _dict['edge_filter'] = self.edge_filter.to_dict()
@@ -147,6 +156,7 @@ class ActInvocation(BaseModel):
 
         _obj = cls.model_validate({
             "act": ActName.from_dict(obj["act"]) if obj.get("act") is not None else None,
+            "artifact_filter": [ArtifactAsk.from_dict(_item) for _item in obj["artifact_filter"]] if obj.get("artifact_filter") is not None else None,
             "edge_filter": EdgeFilter.from_dict(obj["edge_filter"]) if obj.get("edge_filter") is not None else None,
             "inputs": [StageInput.from_dict(_item) for _item in obj["inputs"]] if obj.get("inputs") is not None else None,
             "intention": Intention.from_dict(obj["intention"]) if obj.get("intention") is not None else None,

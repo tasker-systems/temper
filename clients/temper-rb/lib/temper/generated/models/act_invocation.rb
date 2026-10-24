@@ -18,6 +18,9 @@ module Temper::Generated
   class ActInvocation < ApiModelBase
     attr_accessor :act
 
+    # Narrowing by what a resource's data artifacts hold: each ask names a shape and predicates over the paths it declares, and the resource must own an artifact satisfying it.  Predicates within one ask hold of one artifact; different asks may be satisfied by different artifacts of the resource. Every ask in one filter must name a shape homed where the stage is — a resource has one home — or the stage is refused `ask_scope_conflict`.
+    attr_accessor :artifact_filter
+
     attr_accessor :edge_filter
 
     # Where this stage's sets come from, and what this act does with each: caller-supplied ids or an upstream stage, each carrying its own [`super::stage::StageRelation`]. Empty for a root act that takes no incoming set (e.g. `find-exact`). Replaces the incumbent literal `bounds: Option<IdSet>`, whose caller case survives as [`StageInput::Caller`].  There is deliberately no sibling `bounds_mode` here `[decided — 2026-08-08, Pete]`. It was an `Option<BoundsMode>` whose \"required whenever an input is present\" invariant lived in prose, which admitted a meaningless state the validator then read as `bound`. The relation belongs to the edge, and nesting it there makes the meaningless state unrepresentable rather than merely invalid.  # A LIST, and at most one per relation  `[widened — 2026-08-14, Pete]` This was `Option<StageInput>` — **one** set, carrying **one** relation. That made a bounded walk inexpressible: `follow-from` needs seeds to start from *and* a bound to stay inside, at the same time, and a single slot can hold one or the other. The fragment (`20260814000030`) had the `p_bound_ids` parameter and no caller could fill it, so `accepts_bounds: [Resource]` would have declared a capability nothing could reach.  **The cardinality rule is one per RELATION, not one per source.** Two seeds is malformed ([`super::disposition::RefusalReason::DuplicateInputRelation`]) rather than a union — a union is `CombineOp::Union`, which is an existing, visible stage rather than a silent merge inside one. So the list is short by construction and is not a general fan-in.  **Why a list rather than a second `bound` field beside this one.** The relation already distinguishes them, so a list gives a bound exactly one spelling; a sibling field would give it two — the new field, and this one with a `Bound` relation — which is the incumbent literal `bounds: Option<IdSet>` shape this contract deliberately replaced `[decided — 2026-08-14, Pete]`, returning under a different name.  At most two, one per relation (`list_too_long` past that).
@@ -32,7 +35,7 @@ module Temper::Generated
     # # A tombstone  Every predicate here is refused, and the refusal says where the capability went.  **Keep this heading to one line** `[found in review — 2026-08-15]`. schemars takes the first heading LINE as the schema `title` and the remainder as `description`, so a heading that wraps ships a truncated sentence as the title and an orphan word as the start of the description — into `act_invocation.schema.json`, `openapi.json`, and every generated client. A mechanical constraint of the generator, not a style preference.  `[2026-08-15]` **Both halves now have containers** — [`super::filter::ResourceFilter`]'s `properties` and [`super::filter::EdgeFilter`]'s — so a property predicate has a home that names its own subject, and this field has nothing left to mean. The subject tag it carried (`PropertySubject`), that tag's open arm, the `UnknownFilterValue` refusal the open arm existed to raise, and the subject-tagged predicate type are all **deleted**.  **The field is not deleted with them, and that is the whole decision** `[decided — 2026-08-15, Pete]`. [`ActInvocation`] carries `deny_unknown_fields`, and serde short-circuits before `validate` runs — so removing the field would turn a named `FilterNotApplicable` inside `ErrorBody` into a deserializer 400 **outside** that shape. A stale caller would go from being told where to move their predicate to being told their body is unparseable. Retyping to [`super::filter::PropertyPredicate`], which carries no `deny_unknown_fields`, keeps a stale `{\"subject\":…,\"key\":…,\"op\":…}` parsing: the tag is ignored and the redirect still fires.  **The residue:** with the tag gone the redirect cannot name *which* container, so it names both and lets the caller pick. That is a real loss of fidelity in the refusal, accepted as the price of deleting the type.
     attr_accessor :properties
 
-    # Narrowing by what a thing IS. At most one slot applies per act; supplying the other is `RefusalReason::FilterNotApplicable`.
+    # Narrowing by what a thing IS. At most one slot applies per candidate population; a slot the act does not admit is `RefusalReason::FilterNotApplicable`. `resource_filter` and `artifact_filter` both narrow the resources a selection considers, and AND together; `edge_filter` narrows the edges a walk follows.
     attr_accessor :resource_filter
 
     # Act-level bound terms. A term this act does not admit is refused STATICALLY (`RefusalReason::BoundTermNotApplicable`), never reinterpreted to fit.
@@ -42,6 +45,7 @@ module Temper::Generated
     def self.attribute_map
       {
         :'act' => :'act',
+        :'artifact_filter' => :'artifact_filter',
         :'edge_filter' => :'edge_filter',
         :'inputs' => :'inputs',
         :'intention' => :'intention',
@@ -66,6 +70,7 @@ module Temper::Generated
     def self.openapi_types
       {
         :'act' => :'ActName',
+        :'artifact_filter' => :'Array<ArtifactAsk>',
         :'edge_filter' => :'EdgeFilter',
         :'inputs' => :'Array<StageInput>',
         :'intention' => :'Intention',
@@ -105,6 +110,12 @@ module Temper::Generated
         self.act = attributes[:'act']
       else
         self.act = nil
+      end
+
+      if attributes.key?(:'artifact_filter')
+        if (value = attributes[:'artifact_filter']).is_a?(Array)
+          self.artifact_filter = value
+        end
       end
 
       if attributes.key?(:'edge_filter')
@@ -225,6 +236,7 @@ module Temper::Generated
       return true if self.equal?(o)
       self.class == o.class &&
           act == o.act &&
+          artifact_filter == o.artifact_filter &&
           edge_filter == o.edge_filter &&
           inputs == o.inputs &&
           intention == o.intention &&
@@ -243,7 +255,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [act, edge_filter, inputs, intention, name, properties, resource_filter, terms].hash
+      [act, artifact_filter, edge_filter, inputs, intention, name, properties, resource_filter, terms].hash
     end
 
     # Builds the object from hash
