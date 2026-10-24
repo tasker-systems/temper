@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import ContextNavGroup from './ContextNavGroup.svelte';
-	import ThemeSwitch from './ThemeSwitch.svelte';
+	import ChromeMenu from './ChromeMenu.svelte';
 	import { navContextsState } from '$lib/nav-groups';
 	import { parseGraphAddress } from '$lib/vault-url';
 	import { sidebarGroups } from '$lib/stores/sidebar.svelte';
@@ -80,14 +80,22 @@
 		? 'w-12'
 		: 'w-52'} bg-tp-surface border-r border-tp-rule overflow-hidden transition-[width] duration-150"
 >
-	<button
-		type="button"
-		onclick={onToggle}
-		class="block px-3 pt-3 pb-2 border-b border-tp-rule font-mono text-xs tracking-[0.15em] text-tp-text-muted hover:text-tp-text text-left truncate"
-		title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-	>
-		{collapsed ? '≡' : brand}
-	</button>
+	<!-- The menu is in the head in BOTH rail states: a collapsed rail renders no footer, and the
+	     reader's appearance, identity and Sign out must not depend on the rail being open. -->
+	<div class="flex {collapsed ? 'flex-col' : 'items-center'} border-b border-tp-rule">
+		<ChromeMenu {user} />
+		<button
+			type="button"
+			onclick={onToggle}
+			class="block {collapsed
+				? 'px-3 py-2 text-center'
+				: 'flex-1 min-w-0 pr-3 py-2 text-left'} font-mono text-xs tracking-[0.15em] text-tp-text-muted hover:text-tp-text truncate"
+			title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+			aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+		>
+			{collapsed ? '›' : brand}
+		</button>
+	</div>
 	{#if collapsed}
 		<a
 			href="/vault/all"
@@ -165,21 +173,5 @@
 				{/each}
 			{/if}
 		</nav>
-
-		<div class="border-t border-tp-rule py-2">
-			<ThemeSwitch />
-			<a
-				href="/auth/logout"
-				class="flex items-center gap-2 px-3 py-1.5 text-sm text-tp-text-muted hover:text-tp-text"
-			>
-				<span class="w-1.5 h-1.5 rounded-sm bg-tp-text-faint"></span>Sign out
-			</a>
-			{#if user}
-				<div class="flex items-center gap-2 px-3 py-2 text-xs text-tp-text-subtle">
-					<div class="w-5 h-5 rounded-full bg-tp-text-faint flex-shrink-0"></div>
-					{user.display_name}
-				</div>
-			{/if}
-		</div>
 	{/if}
 </aside>
