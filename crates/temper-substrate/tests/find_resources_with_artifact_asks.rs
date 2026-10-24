@@ -903,15 +903,18 @@ async fn a_resource_still_ingesting_is_not_counted(pool: PgPool) {
 /// The most `kb_data_artifacts` rows one call of the counted set may read over these fixtures,
 /// measured on its own through `__temper_ungated_artifact_ask_counts` ([`counts_rows_read`]): the
 /// home's few artifacts, each read once through governance and once by id for its intent, and
-/// nothing of the family or the home beyond them.
-const ONE_CALL_BOUND: i64 = 64;
+/// nothing of the family or the home beyond them. One call reads 14 rows over the small home and
+/// 16 over the small family; the bound is twice the larger, so a call that more than doubles its
+/// reads fails while a walk of either fixture reads thousands.
+const ONE_CALL_BOUND: i64 = 32;
 
 /// The most `kb_data_artifacts` rows one run of the compiled statement may read for one ask.
 ///
 /// **The arithmetic: 2 calls × [`ONE_CALL_BOUND`].** The statement calls the counted set twice for
 /// the ask — in the selection's asks conjunct and in the ask's population arm — with the same three
 /// arguments (the hoisted visible set, the principal, the ask as element 0 of one bind). One call
-/// over these fixtures reads ≤ 64, which the counts-alone measurement holds; two read ≤ 128.
+/// over these fixtures reads at most [`ONE_CALL_BOUND`], which the counts-alone measurement holds,
+/// so two read at most twice that.
 /// Against a family of 9,000 outside the home, or a home of 18,000, a walk of either reads
 /// thousands, so the bound separates the two plans by more than an order of magnitude.
 const TWO_CALL_BOUND: i64 = 2 * ONE_CALL_BOUND;
@@ -1110,9 +1113,11 @@ async fn any_event(pool: &PgPool) -> Uuid {
 ///    population arm) over the home's four artifacts and the lookups by id beside them, where a
 ///    walk of the family reads thousands;
 /// 4. the counts function alone, called as the population arm calls it, counts the home's four
-///    artifacts with three matching and reads at least one row and at most [`ONE_CALL_BOUND`] —
-///    each half of the statement within its own bound, so one half regressing to twice its reads
-///    is not hidden by the other staying cheap.
+///    artifacts with three matching and reads at least one row and at most [`ONE_CALL_BOUND`];
+/// 5. the statement's reads beyond that call — the selection's asks conjunct, the only other reader
+///    of `kb_data_artifacts` in it — are at most [`ONE_CALL_BOUND`] too. Each half of the statement
+///    is within its own bound, so one half regressing to twice its reads is not hidden by the other
+///    staying cheap.
 ///
 /// Bites the counted set reverted to `LANGUAGE sql` reading the shape row in-statement (its home
 /// and family no longer values when the artifact query is planned): the family walk reads about
@@ -1210,6 +1215,12 @@ async fn a_small_home_in_a_large_family_is_not_answered_by_walking_the_family(po
         "the counts call alone read {one_call} rows of kb_data_artifacts for a home holding four, \
          beside a family of {family_outside}"
     );
+    let conjunct = read - one_call;
+    assert!(
+        conjunct <= ONE_CALL_BOUND,
+        "the selection's asks conjunct read {conjunct} rows of kb_data_artifacts for a home \
+         holding four, beside a family of {family_outside}"
+    );
 }
 
 /// **A small family in a large home is answered from the family, never by walking the home.** The
@@ -1223,7 +1234,8 @@ async fn a_small_home_in_a_large_family_is_not_answered_by_walking_the_family(po
 /// least one row, and read at most [`TWO_CALL_BOUND`] — two calls about the family, where reaching
 /// the artifacts through the home's resources reads thousands. The counts function alone, called
 /// as the population arm calls it, counts the three and reads at least one row and at most
-/// [`ONE_CALL_BOUND`].
+/// [`ONE_CALL_BOUND`], and the statement's reads beyond it (the selection's asks conjunct) are at
+/// most [`ONE_CALL_BOUND`] too.
 ///
 /// Bites the family made unindexable in `__temper_ungated_governed_artifacts_in` — e.g. its
 /// `a.artifact_kind = p_artifact_kind` join condition written `a.artifact_kind || '' =
@@ -1322,6 +1334,12 @@ async fn a_small_family_in_a_large_home_is_not_answered_by_walking_the_home(pool
         one_call <= ONE_CALL_BOUND,
         "the counts call alone read {one_call} rows of kb_data_artifacts for a family of three, \
          in a home holding {in_home}"
+    );
+    let conjunct = read - one_call;
+    assert!(
+        conjunct <= ONE_CALL_BOUND,
+        "the selection's asks conjunct read {conjunct} rows of kb_data_artifacts for a family of \
+         three, in a home holding {in_home}"
     );
 }
 

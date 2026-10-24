@@ -3580,8 +3580,10 @@ mod tests {
         rows.refusals = vec![refused("hits")];
         let r = assemble(&v, &rows, &Hydrated::default()).expect("sel's rows are all there");
         assert_eq!(sel_trace(&r).artifact_asks.len(), 2);
+        let mut empty = rows_for_two_asks(vec![]);
+        empty.refusals = vec![refused("hits")];
         assert!(
-            assemble(&v, &rows_for_two_asks(vec![]), &Hydrated::default()).is_err(),
+            assemble(&v, &empty, &Hydrated::default()).is_err(),
             "and without its rows, sel fails the response although another stage refused"
         );
     }

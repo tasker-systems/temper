@@ -382,12 +382,13 @@ struct StagePopulation {
 }
 
 /// A stage whose seal holds asks either ran them — its emitter bound them, so it gets population
-/// arms — or refused, so they did not run. Anything else fails the compile.
+/// arms — or refused without binding them, so they did not run. Exactly one: a stage that did
+/// neither, or both, fails the compile.
 ///
 /// **This is the one fact the assembler's rule rests on.** The assembler requires a population
-/// row for every sealed ask of every stage no refusal names, and finds none required for a refused
-/// one; that agrees with what `compile` arms only while every stage carrying sealed asks either
-/// binds them or refuses. Today `validate` refuses a non-empty `artifact_filter` on every act but
+/// row for every sealed ask of every stage no refusal names, and refuses any row for a stage a
+/// refusal names; that agrees with what `compile` arms only while every stage carrying sealed asks
+/// either binds them or refuses, never both. Today `validate` refuses a non-empty `artifact_filter` on every act but
 /// `find-resources-with`, whose emitter always binds, so this cannot fire. It guards a future act
 /// admitted to the filter whose emitter does not bind it: that plan fails here, loudly, rather than
 /// answering with a trace the assembler would refuse as a 500.
@@ -397,16 +398,25 @@ fn asks_ran_or_refused(
     asks_bound_at: Option<usize>,
     refused: bool,
 ) -> Result<(), PlanRefusal> {
-    if sealed == 0 || asks_bound_at.is_some() || refused {
+    let bound = asks_bound_at.is_some();
+    if sealed == 0 || bound != refused {
         return Ok(());
     }
+    let detail = if bound {
+        format!(
+            "this stage bound its {sealed} artifact asks and also refused, so its population rows \
+             would answer for a stage the trace reports as refused"
+        )
+    } else {
+        format!(
+            "this stage's seal holds {sealed} artifact asks and its act's emitter bound none; the \
+             validator should have refused its artifact filter before compilation"
+        )
+    };
     Err(PlanRefusal {
         stage: Some(stage.clone()),
         reason: RefusalReason::FilterNotApplicable,
-        detail: format!(
-            "this stage's seal holds {sealed} artifact asks and its act's emitter bound none; the \
-             validator should have refused its artifact filter before compilation"
-        ),
+        detail,
         teaches: None,
     })
 }
@@ -2009,7 +2019,7 @@ mod tests {
     /// rule is witnessed here, at the function `compile` calls for every act stage. Bites
     /// `asks_ran_or_refused` answering `Ok(())` whatever it is handed.
     #[test]
-    fn sealed_asks_that_neither_ran_nor_refused_fail_the_compile() {
+    fn sealed_asks_either_run_or_refuse_and_never_both() {
         let stage = StageName::parse("sel").unwrap();
         let unbound = asks_ran_or_refused(&stage, 2, None, false)
             .expect_err("two sealed asks, none bound, nothing refused");
@@ -2023,6 +2033,10 @@ mod tests {
             asks_ran_or_refused(&stage, 2, None, true).is_ok(),
             "refused"
         );
+        let both =
+            asks_ran_or_refused(&stage, 2, Some(3), true).expect_err("bound at $3 and refused");
+        assert_eq!(both.stage.as_ref(), Some(&stage));
+        assert_eq!(both.reason, RefusalReason::FilterNotApplicable);
         assert!(
             asks_ran_or_refused(&stage, 0, None, false).is_ok(),
             "asks nothing"
