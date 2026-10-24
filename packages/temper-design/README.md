@@ -23,6 +23,7 @@ packages/temper-design/
 │   ├── shadcn-bridge.css    # shadcn-svelte's variable names answered from roles
 │   ├── base.css             # base styles + t-*/ed-* recipes, roles only
 │   ├── region.css           # the four region states' recipe, roles only
+│   ├── graph.css            # the graph's edge recipe: colour per stroke role, roles only
 │   └── markdown.css         # the rendered document's recipe (`.md-body`), roles only
 ├── quiet-instrument/        # dark — temper's house theme
 │   ├── theme.json           # source of truth
@@ -31,7 +32,7 @@ packages/temper-design/
 ├── brand/                   # the threaded-t mark and wordmark, in currentColor
 ├── preview/index.html       # every role and the foundational components, both themes
 ├── scripts/themes.sh        # build · check · contrast · --self-check
-├── src/                     # the shared modules: markdown, sanitize, highlight, region, omission, theme, vocabulary
+├── src/                     # the shared modules: markdown, sanitize, highlight, region, omission, theme, vocabulary, graph
 ├── dist/                    # their compiled output (committed; see "The shared modules")
 ├── toolchain/               # the toolchain majors every surface builds on, and their check
 └── tests/fixtures/broken/   # themes the check must refuse
@@ -69,6 +70,7 @@ What a consumer imports:
 | `@tasker-systems/temper-design/toolchain/check.mjs` | the check a surface runs against them (see below) |
 | `@tasker-systems/temper-design/guard/colours.mjs` | the colour guard a surface runs over the components it has moved onto roles (see below) |
 | `@tasker-systems/temper-design/contract/region.css` | the `region-state` recipe: the four region states' colour and border |
+| `@tasker-systems/temper-design/contract/graph.css` | the `graph-edge` recipe: a graph line, its heads and its cross, coloured by the stroke role `./graph` decides |
 | `@tasker-systems/temper-design/contract/markdown.css` | the `md-body` recipe: how a rendered document reads — headings, links, lists, code, tables, refusals |
 | `@tasker-systems/temper-design/markdown` | markdown → HTML with highlighted fences, bounded; DOM-free |
 | `@tasker-systems/temper-design/sanitize` | the one sanitizer pass for that HTML; needs a DOM |
@@ -77,6 +79,7 @@ What a consumer imports:
 | `@tasker-systems/temper-design/omission` | the omission sentence a bounded view ends with — counted (`omissionSentence`), uncounted (`uncountedSentence`: a read that reports only whether more exist, a cursor page, or nothing), drawn (`drawnSentence`: a read ranked from a bounded draw, which says what it drew from and never "all"), or a graph read (`graphSentence`) |
 | `@tasker-systems/temper-design/theme` | the theme model: a reader's preference (follow the system within a family, or one theme) resolved against `themes.json` |
 | `@tasker-systems/temper-design/vocabulary` | bound vocabularies: core's doc type → slot binding, `tintFor` (a doc type's slot, or the neutral), and `bindingsFrom`, which refuses a binding to anything but a slot |
+| `@tasker-systems/temper-design/graph` | the graph's geometry and edge grammar: `settle` (deterministic; unconnected nodes listed, not placed; one line per pair; radial only when the input holds both core and ring), `placeCaptions`, `edgeGeometry` (lines end at the marks' rims, heads as shapes), and `stroke`/`pairStroke`/`pairEnds` (role, dash, width over weights in (0, 1], heads, the contradicts cross). A surface supplies its plane and its caption room |
 
 The theme checker (`scripts/`, `tests/`, `pyproject.toml`) is not published: it runs in this
 repository's CI, and the package carries only what it proves. The toolchain check is
@@ -114,7 +117,7 @@ the check's harness.
 
 `src/` holds what both surfaces render through, so a rendered body, a region's state and a
 bounded view's omission read the same on each: one sanitizer policy (what one surface strips
-or refuses, the other does not render), one set of region words, one omission sentence. They
+or refuses, the other does not render), one set of region words, one omission sentence, one graph geometry. They
 compile with `tsc` into `dist/`, which is committed — bun copies a `file:` dependency rather
 than building it — and CI rebuilds it and fails when it is stale.
 

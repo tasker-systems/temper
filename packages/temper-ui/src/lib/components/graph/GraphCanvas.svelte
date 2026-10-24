@@ -28,16 +28,19 @@
 	 */
 	import { onDestroy, onMount } from 'svelte';
 	import { type Camera, attachCamera } from '$lib/graph/camera';
-	import { type LabelCandidate, placeLabels } from '$lib/graph/labels';
-	import { forceNeighborhood } from '$lib/graph/layout/forceNeighborhood';
-	import { CANVAS_BG } from '$lib/graph/palette';
-	import type { GraphModel } from '$lib/graph/model';
 	import {
-		armsDistinguish,
-		nodeMeta,
+		edgeGeometry,
+		frame,
 		nodeRadius,
-		partitionByConnection,
-	} from '$lib/graph/presentation';
+		pairEnds,
+		pairStroke,
+		placeCaptions,
+		settle,
+		truncate,
+	} from '@tasker-systems/temper-design/graph';
+	import { CANVAS_BG } from '$lib/graph/palette';
+	import type { GraphEdge, GraphModel } from '$lib/graph/model';
+	import { armsDistinguish, nodeMeta } from '$lib/graph/presentation';
 	import Edge from '$lib/components/graph/marks/Edge.svelte';
 	import NodeChip from '$lib/components/graph/marks/NodeChip.svelte';
 	import NodeHoverCard from '$lib/components/graph/marks/NodeHoverCard.svelte';
@@ -57,10 +60,6 @@
 	const MIN_ZOOM = 0.3;
 	const MAX_ZOOM = 4;
 
-	// What this answer connected is drawn here; what it did not is listed beneath. The core therefore
-	// has the whole canvas on every answer, which is what it had before the band was ever drawn in it.
-	const parts = $derived(partitionByConnection(model.nodes));
-
 	// Where this read stood holds the core; what it reached from there rings it. Keyed on the ARM
 	// rather than on `home`, because on this surface both homes are ordinary — a reader whose
 	// corpus is entirely context-homed would otherwise find all of it flung to the outer ring.
@@ -71,12 +70,31 @@
 	const legend = $derived(new Map(model.arms.map((a) => [a.key, a])));
 	const armOfNode = $derived(new Map(model.nodes.map((n) => [n.id, legend.get(n.arm)])));
 	const reached = (id: string): boolean => armOfNode.get(id)?.reached === true;
-	const graph = $derived(
-		forceNeighborhood({ nodes: parts.connected, edges: model.edges }, [], {
-			width: W,
-			height: H,
-			coreOf: (n) => !reached(n.id),
-		}),
+
+	/**
+	 * The shared geometry (`@tasker-systems/temper-design/graph`): what this answer connected is
+	 * placed, what it did not is returned to be listed beneath, and every relation between one pair
+	 * is joined onto one line. Radial runs only when the view holds both a core and what was
+	 * reached from it — the entry read, all one arm, settles as force rather than being packed
+	 * into the centre.
+	 *
+	 * The edges carry their row, so the pair's relations can be named in the read's own words.
+	 */
+	const settled = $derived(
+		settle(
+			model.nodes.map((n) => ({ id: n.id, core: !reached(n.id) })),
+			model.edges.map((e) => ({
+				source: e.source,
+				target: e.target,
+				edgeKind: e.edge_kind,
+				polarity: e.polarity,
+				label: e.label,
+				weight: e.weight,
+				row: e,
+			})),
+			'radial',
+			{ width: W, height: H },
+		),
 	);
 
 	// The ring encodes a contrast between arms. Where every mark shares one — which is every entry
@@ -89,39 +107,99 @@
 	/**
 	 * Every mark on the canvas — which is now every node this answer **connected**, and only those.
 	 *
-	 * Kept as its own list rather than read off `graph.nodes` at each use because label placement, the
-	 * selected-node fallback and the hover card all ask it the same question, and one shape for one
-	 * question is what kept the band from ever becoming a second kind of mark while it existed.
+	 * Kept as its own list rather than read off `settled.nodes` at each use because label placement,
+	 * the selected-node fallback and the hover card all ask it the same question, and one shape for
+	 * one question is what kept the band from ever becoming a second kind of mark while it existed.
+	 *
+	 * `degree` is the geometry's — distinct neighbours, the lines drawn — and sizes the mark.
+	 * `edges` is the model's count of relations, which the hover card says.
 	 */
 	const marks = $derived(
-		graph.nodes.map((n) => ({
-			id: n.id,
-			x: n.x,
-			y: n.y,
-			degree: n.degree,
-			title: n.title,
-			docType: n.docType,
-			home: n.home,
-		})),
+		settled.nodes.flatMap((p) => {
+			const n = nodeById.get(p.id);
+			return n
+				? [
+						{
+							id: p.id,
+							x: p.x,
+							y: p.y,
+							degree: p.degree,
+							edges: n.degree,
+							title: n.title,
+							docType: n.doc_type,
+							home: n.home,
+						},
+					]
+				: [];
+		}),
+	);
+	const markById = $derived(new Map(marks.map((m) => [m.id, m])));
+	const unconnected = $derived(
+		settled.unconnected.flatMap((id) => {
+			const n = nodeById.get(id);
+			return n ? [n] : [];
+		}),
+	);
+
+	/**
+	 * Where a line ends at a mark, along the line's direction: past a circle's rim, past a square's
+	 * edge (which reaches √2 further at its corner), and past the arm ring when the mark carries
+	 * one, so a head is never drawn over by the mark or the ring it points at.
+	 */
+	const rimAt = (id: string, dx: number, dy: number): number => {
+		const m = markById.get(id);
+		if (!m) return 0;
+		const r = nodeRadius(m.degree);
+		const len = Math.hypot(dx, dy) || 1;
+		const shape = m.home === 'cogmap' ? r : r / Math.max(Math.abs(dx) / len, Math.abs(dy) / len);
+		return Math.max(shape, rings && !reached(id) ? r + 6 : 0) + 1.5;
+	};
+
+	/** A relation in words: the read's label (or its kind), and its weight or that none was read. */
+	const relation = (e: GraphEdge): string =>
+		`${e.label ?? e.edge_kind} · ${e.weight == null ? 'weight not reported' : `weight ${e.weight.toFixed(2)}`}`;
+
+	const lines = $derived(
+		settled.edges.map((pair) => {
+			const dx = pair.target.x - pair.source.x;
+			const dy = pair.target.y - pair.source.y;
+			return {
+				key: `${pair.source.id}|${pair.target.id}`,
+				geometry: edgeGeometry(pair.source, pair.target, pairEnds(pair.edges), {
+					source: rimAt(pair.source.id, dx, dy),
+					target: rimAt(pair.target.id, -dx, -dy),
+				}),
+				stroke: pairStroke(pair.edges),
+				relations: pair.edges.map(({ edge }) => relation(edge.row)),
+			};
+		}),
 	);
 
 	// G2 — captions are placed so none lands on another caption or on another node's mark.
 	// Every node is still drawn and still hoverable; what is bounded is the always-on label.
 	const labels = $derived(
-		placeLabels(
-			marks.map(
-				(n): LabelCandidate => ({
-					id: n.id,
-					x: n.x,
-					y: n.y,
-					r: nodeRadius(n.degree),
-					title: n.title,
-					degree: n.degree,
-				}),
-			),
+		placeCaptions(
+			marks.map((n) => ({ id: n.id, x: n.x, y: n.y, degree: n.degree, label: n.title })),
+			{ max: 14 },
 		),
 	);
 	const labelled = $derived(new Set(labels.map((l) => l.id)));
+
+	/**
+	 * The viewBox: the plane, grown to take in every mark and caption the layout placed. Nodes
+	 * settle where the forces put them, not inside the plane, so a spread-out answer would
+	 * otherwise lose its edges off the canvas before the reader had panned. Never smaller than the
+	 * plane, so a small answer is not blown up to fill it.
+	 */
+	const box = $derived.by(() => {
+		const f = frame(settled.nodes, labels, 24, { width: W, height: H });
+		return {
+			x: Math.min(0, f.x1),
+			y: Math.min(0, f.y1),
+			w: Math.max(W, f.x2) - Math.min(0, f.x1),
+			h: Math.max(H, f.y2) - Math.min(0, f.y1),
+		};
+	});
 
 	/**
 	 * The band's sentence is no longer folded into this label, and that is a repair rather than a
@@ -161,16 +239,8 @@
 </script>
 
 <div class="graph-canvas">
-	<svg bind:this={svgEl} viewBox={`0 0 ${W} ${H}`} role="img" aria-label={ariaLabel}>
-		<rect x="0" y="0" width={W} height={H} style:fill={CANVAS_BG} />
-		<defs>
-			<marker id="arrow-end" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-				<path d="M0,0 L10,5 L0,10 z" fill="context-stroke" />
-			</marker>
-			<marker id="arrow-start" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-				<path d="M10,0 L0,5 L10,10 z" fill="context-stroke" />
-			</marker>
-		</defs>
+	<svg bind:this={svgEl} viewBox={`${box.x} ${box.y} ${box.w} ${box.h}`} role="img" aria-label={ariaLabel}>
+		<rect x={box.x} y={box.y} width={box.w} height={box.h} style:fill={CANVAS_BG} />
 		<g bind:this={viewportEl}>
 			{#if marks.length === 0}
 				<!-- Two different facts, two different sentences: nothing came back at all, versus this
@@ -180,20 +250,18 @@
 					>{model.nodes.length === 0 ? emptyMessage : nothingConnected}</text
 				>
 			{:else}
-				<!-- Edges first, so a mark is never hidden under a stroke. Keyed on the four fields
-				     that identify the row, which is also the key the model deduped on. -->
-				{#each graph.edges as e, i (`${e.edge.source}|${e.edge.target}|${e.edge.edge_kind}|${e.edge.label}`)}
+				<!-- Edges first, so a mark is never hidden under a stroke. One line per pair, keyed on
+				     the pair; every relation between the two rides it and is named on hover. -->
+				{#each lines as l, i (l.key)}
 					<g
 						role="presentation"
 						onmouseenter={() => (hoveredEdge = i)}
 						onmouseleave={() => (hoveredEdge = null)}
 					>
 						<Edge
-							x1={e.source.x}
-							y1={e.source.y}
-							x2={e.target.x}
-							y2={e.target.y}
-							edge={e.edge}
+							{...l.geometry}
+							stroke={l.stroke}
+							relations={l.relations}
 							label={hoveredEdge === i}
 						/>
 					</g>
@@ -245,7 +313,7 @@
 							y={s.y + nodeRadius(s.degree) + 12}
 							text-anchor="middle"
 							font-size="10"
-							style="fill: var(--tp-text)">{s.title.length > 28 ? `${s.title.slice(0, 27)}…` : s.title}</text
+							style="fill: var(--tp-text)">{truncate(s.title, 28)}</text
 						>
 					{/if}
 				{/if}
@@ -271,7 +339,7 @@
 							r={nodeRadius(h.degree)}
 							title={h.title}
 							docType={h.docType}
-							edges={h.degree}
+							edges={h.edges}
 							excerpt={hn.excerpt}
 							meta={nodeMeta(hn, legend.get(hn.arm))}
 						/>
@@ -283,7 +351,7 @@
 
 	<!-- Beneath the drawing, never in it. The list makes no spatial claim, which is the whole of
 	     what the row of marks it replaces got wrong. -->
-	<UnconnectedBand nodes={parts.unconnected} total={model.nodes.length} {onSelect} {selected} />
+	<UnconnectedBand nodes={unconnected} total={model.nodes.length} {onSelect} {selected} />
 </div>
 
 <style>

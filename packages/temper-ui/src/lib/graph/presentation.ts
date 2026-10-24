@@ -71,16 +71,6 @@ export function nodeMeta(
 }
 
 /**
- * Mark radius from degree.
- *
- * Degree is counted over the **deduped** edge set, which is why this is safe to size on: the
- * highest-degree node in the measured walk carried 98 `via` entries over 25 distinct edges, so
- * sizing on the raw count would have inflated it fourfold and made the hub look like an outlier
- * of the reader's corpus rather than of the walk's bookkeeping.
- */
-export const nodeRadius = (degree: number): number => 7 + Math.min(9, degree * 0.6);
-
-/**
  * The unconnected band — the nodes this answer connects to nothing.
  *
  * `[ruled — 2026-08-20, Pete]` Measured on the flagship question after Beat 0.5: **80 of 155 nodes
@@ -112,21 +102,6 @@ export const nodeRadius = (degree: number): number => 7 + Math.min(9, degree * 0
  *   about the most connected material the reader has. The per-row figure states the same fact per
  *   item and REINFORCES it; it never replaces it.
  */
-
-/**
- * Split the answer's nodes by whether anything in **this answer** connects them.
- *
- * Degree is over the deduped edge set, and it is a property of the answer rather than of the
- * resource: the same resource is connected in one question's answer and isolated in another's.
- */
-export function partitionByConnection<T extends { degree: number }>(
-	nodes: T[],
-): { connected: T[]; unconnected: T[] } {
-	return {
-		connected: nodes.filter((n) => n.degree > 0),
-		unconnected: nodes.filter((n) => n.degree === 0),
-	};
-}
 
 /**
  * What the band is, said without a machine word in it.

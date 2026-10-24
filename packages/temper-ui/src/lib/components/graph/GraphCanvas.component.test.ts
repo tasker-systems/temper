@@ -117,3 +117,32 @@ describe('the hover card is painted after every mark', () => {
 		expect(chips[0].contains(card)).toBe(false);
 	});
 });
+
+describe('edges are drawn one line per pair', () => {
+	it('joins two relations between one pair onto one line, and names both on hover', async () => {
+		const m = model();
+		m.edges.push({
+			source: 'b',
+			target: 'a',
+			edge_kind: 'express',
+			label: 'contradicts',
+			polarity: 'forward',
+			seedIds: [],
+			weight: null,
+		} as unknown as GraphModel['edges'][number]);
+		const { container } = render(GraphCanvas, {
+			model: m,
+			selected: null,
+			onSelect: () => {},
+			emptyMessage: 'nothing',
+		});
+
+		const lines = [...container.querySelectorAll('.graph-edge')];
+		expect(lines).toHaveLength(2);
+		const ab = lines.find((l) => l.getAttribute('aria-label')?.includes('contradicts'));
+		expect(ab?.getAttribute('data-role')).toBe('contradicts');
+		expect(ab?.getAttribute('aria-label')).toBe(
+			'relates · weight 1.00; contradicts · weight not reported',
+		);
+	});
+});

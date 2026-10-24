@@ -1,0 +1,53 @@
+/* The graph's edge recipe: how a line is painted for its role, on every surface.
+
+   The package's `graph` module decides a pair's role, dash, width, heads and cross; this recipe
+   decides only colour, so a relation reads the same on every surface that draws it:
+
+     structural   text-muted                       the ordinary relation
+     derived      text-subtle, and always dashed   the derivation bridge, quieter than structure
+     contradicts  danger, with a cross at the mid  never told by colour alone
+
+   The rule roles are hairlines, too faint for a line 1–2.5 wide, so edges take text roles.
+
+   A component composes it as
+
+     <g class="graph-edge" data-role="<role>">
+       <line class="graph-line" stroke-width=… stroke-dasharray=… />
+       <path class="graph-head" d=… />                one per head the pair carries
+       <g class="graph-cross"><line …/><line …/></g>   when the pair contradicts
+     </g>
+
+   and paints no edge colour of its own. Roles only — no literal colour appears here. */
+
+/* Each role spelled out per rule rather than through a variable of the recipe's own, so a colour
+   guard reading a surface sees a role wherever a colour is painted. */
+
+.graph-line {
+  stroke: var(--tp-text-muted);
+  fill: none;
+}
+.graph-head {
+  fill: var(--tp-text-muted);
+  stroke: none;
+}
+
+.graph-edge[data-role="derived"] .graph-line {
+  stroke: var(--tp-text-subtle);
+}
+.graph-edge[data-role="derived"] .graph-head {
+  fill: var(--tp-text-subtle);
+}
+
+.graph-edge[data-role="contradicts"] .graph-line,
+.graph-edge[data-role="contradicts"] .graph-cross {
+  stroke: var(--tp-danger);
+}
+.graph-edge[data-role="contradicts"] .graph-head {
+  fill: var(--tp-danger);
+}
+
+.graph-cross {
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  fill: none;
+}

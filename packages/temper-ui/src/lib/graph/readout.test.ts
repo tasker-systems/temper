@@ -271,8 +271,11 @@ describe('derived structure is confined to the two modules that declare it — t
 	 * green result here says nothing about how much it swept. Bite-probed after the move — a
 	 * `region_id` planted in `palette.ts` fails it.
 	 *
-	 * Still NOT swept, unchanged by the move: `lib/graph/layout/`, because `readdirSync` does not
-	 * recurse. A layout module reaching for derived structure would not be caught here.
+	 * `[denominator narrowed — 2026-10-24, T14]` `labels.ts` and `lib/graph/layout/` left the web:
+	 * the geometry is now `@tasker-systems/temper-design/graph`, which this sweep does not read.
+	 * It cannot reach derived structure by construction — it imports no wire type, and takes only
+	 * ids, a core flag and an edge's label, kind, polarity and weight — so the narrowing loses no
+	 * module that could. (The old `layout/` was never swept: `readdirSync` does not recurse.)
 	 */
 	test('there is more than one module here, so this sweep is not vacuous', () => {
 		expect(modules.length).toBeGreaterThan(DECLARE_DERIVED.length);
@@ -282,7 +285,7 @@ describe('derived structure is confined to the two modules that declare it — t
 	test('the sweep covers the modules Beat D moved in, not just the ones it always had', () => {
 		// Names the denominator so a future move OUT of this directory fails here rather than
 		// silently shrinking what the sweep above proves.
-		for (const moved of ['palette.ts', 'labels.ts', 'marks.ts', 'model.ts', 'presentation.ts']) {
+		for (const moved of ['palette.ts', 'marks.ts', 'model.ts', 'presentation.ts']) {
 			expect(modules).toContain(moved);
 		}
 	});

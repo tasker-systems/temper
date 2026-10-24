@@ -6,8 +6,6 @@ import {
 	describeNodeLinks,
 	describeUnconnected,
 	nodeMeta,
-	nodeRadius,
-	partitionByConnection,
 	whereOf,
 } from './presentation';
 
@@ -132,53 +130,6 @@ describe('N2 — the hover card carries node metadata, not only the title', () =
 
 		expect(rows.map((r) => r.label)).not.toContain('how');
 		expect(rows.map((r) => r.label)).not.toContain('reached');
-	});
-});
-
-describe('a mark is sized on deduped degree', () => {
-	test('an isolated node still has a mark', () => {
-		expect(nodeRadius(0)).toBeGreaterThan(0);
-	});
-
-	test('the measured worst case does not run away', () => {
-		// Degree 25 over distinct edges, not the 98 raw `via` entries the same node carried.
-		expect(nodeRadius(25)).toBeLessThanOrEqual(16);
-		expect(nodeRadius(25)).toBeGreaterThan(nodeRadius(1));
-	});
-
-	test('it is monotone, so a busier node never reads as smaller', () => {
-		const radii = [0, 1, 5, 9, 25, 98].map(nodeRadius);
-		expect([...radii].sort((a, b) => a - b)).toEqual(radii);
-	});
-});
-
-describe('the unconnected band — degree-zero nodes are declared, not drawn', () => {
-	test('the partition is on whether THIS answer connects the node', () => {
-		const { connected, unconnected } = partitionByConnection([
-			{ id: 'a', degree: 2 },
-			{ id: 'b', degree: 0 },
-			{ id: 'c', degree: 1 },
-		]);
-
-		expect(connected.map((n) => n.id)).toEqual(['a', 'c']);
-		expect(unconnected.map((n) => n.id)).toEqual(['b']);
-	});
-
-	test('the partition is exhaustive and order-preserving — the list may not rank', () => {
-		// `[ruled — 2026-08-22, Pete]` The band's row of marks became a list, and `packField` went
-		// with it: there is no box to run out of, so there is nothing left to pack or to truncate.
-		// §2.3's rule survives the change of medium — the members are rendered in the order the
-		// answer returned them, and placing them must never become a ranking.
-		const given = [
-			{ id: 'z', degree: 0 },
-			{ id: 'a', degree: 3 },
-			{ id: 'm', degree: 0 },
-			{ id: 'b', degree: 0 },
-		];
-		const { connected, unconnected } = partitionByConnection(given);
-
-		expect(unconnected.map((n) => n.id)).toEqual(['z', 'm', 'b']);
-		expect(connected.length + unconnected.length).toBe(given.length);
 	});
 });
 
