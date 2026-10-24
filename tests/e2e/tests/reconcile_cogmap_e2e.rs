@@ -37,7 +37,7 @@ fn body_hash_from_chunk_hashes(chunk_hashes: &[String]) -> String {
     fn sha256_hex(s: &str) -> String {
         let mut h = Sha256::new();
         h.update(s.as_bytes());
-        format!("{:x}", h.finalize())
+        hex::encode(h.finalize())
     }
     if chunk_hashes.is_empty() {
         return sha256_hex("");

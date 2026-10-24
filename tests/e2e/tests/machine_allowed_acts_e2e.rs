@@ -36,7 +36,7 @@ const L0_COGMAP: Uuid = Uuid::from_u128(0x00000000_0000_0000_0005_000000000001);
 /// write path verifies.
 fn entry(title: &str) -> ReconcileEntry {
     use sha2::{Digest, Sha256};
-    let hex = |s: &str| format!("{:x}", Sha256::digest(s.as_bytes()));
+    let hex = |s: &str| hex::encode(Sha256::digest(s.as_bytes()));
     let chunk = PackedChunk {
         chunk_index: 0,
         header_path: String::new(),
