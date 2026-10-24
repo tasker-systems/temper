@@ -138,4 +138,4 @@ truncated: boolean, };
  * Each field maps to an edge type. Values are raw strings — either UUIDs
  * or slugs — that get resolved to `kb_resources.id` at ingest time.
  */
-export type ResourceRelationships = { relates_to: Array<string>, extends: Array<string>, depends_on: Array<string>, references: Array<string>, parent: string | null, preceded_by: Array<string>, derived_from: Array<string>, };
+export type ResourceRelationships = { relates_to?: Array<string>, extends?: Array<string>, depends_on?: Array<string>, references?: Array<string>, parent?: string | null, preceded_by?: Array<string>, derived_from?: Array<string>, };

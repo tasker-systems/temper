@@ -313,7 +313,7 @@ export function buildEntryGraph(entry: AtlasEntry, homes: Map<string, string>): 
 	const nodes: GraphNode[] = entry.nodes.map((n) => ({
 		id: n.id,
 		title: n.title,
-		doc_type: n.doc_type,
+		doc_type: n.doc_type ?? null,
 		home: n.home,
 		// Recomputed below over the drawn edges. Starting from the wire's corpus degree and
 		// incrementing would blend two different quantities into one number.
@@ -322,11 +322,11 @@ export function buildEntryGraph(entry: AtlasEntry, homes: Map<string, string>): 
 		// (`graph_service.rs`: "§5.3's ruling ... is a claim about the screen, not the wire").
 		// It is what lets the band say what its marks ARE connected to instead of asserting 0.
 		corpusDegree: n.degree,
-		excerpt: n.excerpt,
+		excerpt: n.excerpt ?? null,
 		homeRef: (n.home_id && homes.get(n.home_id)) ?? null,
-		updated: n.updated,
+		updated: n.updated ?? null,
 		arm: ENTRY_ARMS[0].key,
-		stage: n.stage,
+		stage: n.stage ?? null,
 		resource: null,
 	}));
 	const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -335,7 +335,7 @@ export function buildEntryGraph(entry: AtlasEntry, homes: Map<string, string>): 
 		source: e.source,
 		target: e.target,
 		edge_kind: e.edge_kind,
-		label: e.label,
+		label: e.label ?? null,
 		polarity: e.polarity,
 		weight: e.weight,
 		// No walk, so no seed reached this edge. Empty rather than fabricated.
@@ -409,15 +409,15 @@ export function buildTraversal(
 	const nodes: GraphNode[] = sub.nodes.map((n) => ({
 		id: n.id,
 		title: n.title,
-		doc_type: n.doc_type,
+		doc_type: n.doc_type ?? null,
 		home: n.home,
 		degree: 0,
 		corpusDegree: n.degree,
-		excerpt: n.excerpt,
+		excerpt: n.excerpt ?? null,
 		homeRef: (n.home_id && homes.get(n.home_id)) ?? null,
-		updated: n.updated,
+		updated: n.updated ?? null,
 		arm: hoppedFrom.has(n.id) ? TRAVERSAL_ARMS[0].key : TRAVERSAL_ARMS[1].key,
-		stage: n.stage,
+		stage: n.stage ?? null,
 		resource: null,
 	}));
 	const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -426,7 +426,7 @@ export function buildTraversal(
 		source: e.source,
 		target: e.target,
 		edge_kind: e.edge_kind,
-		label: e.label,
+		label: e.label ?? null,
 		polarity: e.polarity,
 		weight: e.weight,
 		// The walk grew from the seeds, so every edge here was reached from one — but WHICH one is
@@ -532,7 +532,7 @@ export function buildGraph({ response, plan, seeds }: GraphInput): GraphModel {
 		for (const v of hit.via ?? []) {
 			viaEntries++;
 			if (!nodes.has(v.source_id) || !nodes.has(v.target_id)) continue;
-			const key = edgeIdentity(v.source_id, v.target_id, v.edge_kind, v.label);
+			const key = edgeIdentity(v.source_id, v.target_id, v.edge_kind, v.label ?? null);
 			const seen = edges.get(key);
 			if (seen) {
 				if (!seen.seedIds.includes(v.seed_id)) seen.seedIds.push(v.seed_id);
@@ -542,7 +542,7 @@ export function buildGraph({ response, plan, seeds }: GraphInput): GraphModel {
 				source: v.source_id,
 				target: v.target_id,
 				edge_kind: v.edge_kind,
-				label: v.label,
+				label: v.label ?? null,
 				polarity: v.polarity,
 				weight: null,
 				seedIds: [v.seed_id],

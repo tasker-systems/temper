@@ -1,0 +1,14 @@
+title    = "ts-rs 12: generated TypeScript marks serde-omittable fields optional"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["internal"]
+status   = "signal-only"
+body = '''
+ts-rs 12 honors `skip_serializing_if`, so a field the server omits when empty is now
+`x?: T | null` in the generated TypeScript instead of `x: T | null`; open-keyed maps render as
+`{ [key in K]: V }`. Types only: the JSON on the wire is unchanged, and the new types describe
+what it already was. temper-ui normalizes the graph wire rows to `null` at its model boundary, and
+`mayChangeResource` now treats an absent `kb_context_id` as absent rather than relying on the
+lookup below it to fail. The mention agent's generated tree is byte-identical. Who observes:
+nobody at runtime. Release relevance: none beyond the dependency.
+'''

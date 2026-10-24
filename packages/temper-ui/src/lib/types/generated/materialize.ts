@@ -33,7 +33,7 @@ anchor_id: string,
  * Legacy alias for `anchor_id`, present iff the anchor is a cogmap. Prefer the anchor pair;
  * see the type's docs for why this is still here.
  */
-cogmap_id: string | null, 
+cogmap_id?: string | null, 
 /**
  * Whether a materialize actually ran (`formation_events >= threshold`). False = idempotent no-op.
  */
@@ -49,11 +49,11 @@ threshold: bigint,
 /**
  * Regions produced by the materialize — `Some` only when `materialized` is true.
  */
-regions: bigint | null, 
+regions?: bigint | null, 
 /**
  * The full-clustering membership fingerprint the materialize produced — `Some` only when `materialized`.
  */
-membership_fingerprint: string | null, };
+membership_fingerprint?: string | null, };
 
 /**
  * The materialize delta for an ANCHOR since its last materialize — the trigger signal the
@@ -89,13 +89,13 @@ anchor_id: string,
  * Legacy alias for `anchor_id`, present iff the anchor is a cogmap. Prefer the anchor pair;
  * see the type's docs for why this is still here.
  */
-cogmap_id: string | null, 
+cogmap_id?: string | null, 
 /**
  * The materialize watermark the delta was computed against (the anchor's
  * `shape_materialized_event_id`); `None` when the anchor has never been materialized (the delta
  * then counts from the beginning).
  */
-watermark: string | null, 
+watermark?: string | null, 
 /**
  * Formation-affecting events anchored to the anchor since the watermark (the gated drift signal).
  */

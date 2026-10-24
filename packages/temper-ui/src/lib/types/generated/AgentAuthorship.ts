@@ -9,4 +9,4 @@ import type { ConfidenceBand } from "./ConfidenceBand";
  * attaches authorship — and must grade its confidence — or attaches none at all (the whole
  * [`ActContext::authorship`] is `None`). The other fields are optional context.
  */
-export type AgentAuthorship = { reasoning: string | null, confidence: ConfidenceBand, rationale: string | null, persona: string | null, model: string | null, };
+export type AgentAuthorship = { reasoning?: string | null, confidence: ConfidenceBand, rationale?: string | null, persona?: string | null, model?: string | null, };

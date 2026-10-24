@@ -125,7 +125,7 @@ workspace-isolated (not a bun `workspaces` member), so no import path reaches te
 tree and it needs its own copy. That export is **filtered to one type**
 (`export_bindings_linkrefusal`) because ts-rs exports each type's transitive closure: two
 files instead of the 36 an unfiltered crate export deposits. It also runs with
-`ts-rs/import-esm`, since the agent is `moduleResolution: NodeNext` where an
+`TS_RS_IMPORT_EXTENSION=js` (ts-rs 12's replacement for the old `ts-rs/import-esm` feature), since the agent is `moduleResolution: NodeNext` where an
 extensionless relative import is TS2835 — a flag temper-ui neither needs nor gets, so the
 two trees differ in import style **by design**.
 
