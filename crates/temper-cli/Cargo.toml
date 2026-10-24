@@ -15,7 +15,7 @@ path = "src/main.rs"
 [dependencies]
 anstream = "1.0"
 anstyle = "1"
-askama = "0.12"
+askama = "0.16"
 async-trait = "0.1"
 base64 = "0.23"
 chrono = { version = "0.4", features = ["serde"] }
