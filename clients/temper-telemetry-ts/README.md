@@ -9,7 +9,7 @@ Consumed as a `file:` dependency (compiled `dist/`), mirroring `clients/temper-t
 ## Public API (`src/index.ts`)
 
 - `initTelemetry({ serviceName, instrumentHttp, mcpEndpoint })` — build + register a
-  `NodeTracerProvider` that exports OTLP/proto to the endpoint in
+  `TracerProvider` that exports OTLP/proto to the endpoint in
   `OTEL_EXPORTER_OTLP_*`. No-op when no endpoint is set. `instrumentHttp` (default off)
   registers `@opentelemetry/instrumentation-undici` for consumers whose outbound HTTP
   is internal to a framework (the eve agents' MCP client); consumers that inject at

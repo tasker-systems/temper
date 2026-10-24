@@ -2,9 +2,9 @@ import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
 import {
 	InMemorySpanExporter,
 	type ReadableSpan,
-	SimpleSpanProcessor
-} from '@opentelemetry/sdk-trace-base';
-import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
+	SimpleSpanProcessor,
+	TracerProvider
+} from '@opentelemetry/sdk-trace';
 import {
 	ATTR_HTTP_REQUEST_METHOD,
 	ATTR_HTTP_RESPONSE_STATUS_CODE,
@@ -17,7 +17,7 @@ const MCP_ENDPOINT = 'https://temperkb.io/mcp';
 const ENDPOINT_KEY = 'https://temperkb.io/mcp';
 
 let exporter: InMemorySpanExporter;
-let provider: NodeTracerProvider;
+let provider: TracerProvider;
 
 /**
  * Drive a span through a real provider carrying the processor, exactly as `initTelemetry`
@@ -48,10 +48,10 @@ function exportClientSpan(attrs: {
 
 beforeEach(() => {
 	exporter = new InMemorySpanExporter();
-	provider = new NodeTracerProvider({
+	provider = new TracerProvider({
 		spanProcessors: [
 			new McpNegotiationStatusProcessor(ENDPOINT_KEY),
-			new SimpleSpanProcessor(exporter)
+			new SimpleSpanProcessor({ exporter })
 		]
 	});
 });
@@ -148,9 +148,9 @@ describe('McpNegotiationStatusProcessor under a wrapper that forwards only onEnd
 		exporter = new InMemorySpanExporter();
 		const inner = [
 			new McpNegotiationStatusProcessor(ENDPOINT_KEY),
-			new SimpleSpanProcessor(exporter)
+			new SimpleSpanProcessor({ exporter })
 		];
-		provider = new NodeTracerProvider({
+		provider = new TracerProvider({
 			spanProcessors: [
 				{
 					onStart: (span, ctx) => {

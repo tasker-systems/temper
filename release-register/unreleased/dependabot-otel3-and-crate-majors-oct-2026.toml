@@ -1,0 +1,16 @@
+title    = "temper-telemetry-ts on OpenTelemetry JS 3.0; sha2 0.11, askama 0.16 and the Oct cargo/JS refresh"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["internal", "clients"]
+status   = "signal-only"
+body = '''
+temper-telemetry-ts moves to OpenTelemetry JS 3.0 (core/resources/context-async-hooks 3, the merged
+@opentelemetry/sdk-trace 3, OTLP exporter 0.300, api 1.10). Its public surface — initTelemetry,
+the tracer, the span-processor factory — is unchanged; internally the provider is TracerProvider
+with the three globals set explicitly, and context propagation uses AsyncLocalStorage. Consumers
+(temper-ui, the mention and steward agents) need Node >=22.15. Rust: askama 0.16 (rendered
+templates byte-identical to 0.12), sha2 0.11 in the e2e suite, and a lockfile-only cargo minor
+group. JS: eve 0.81, docx 9.13, jose 6.2.13. No HTTP/MCP shape or CLI stdout changes. Who
+observes: telemetry consumers, only through span export, which keeps its OTLP/proto wire.
+Release relevance: behavioral, dependency-only.
+'''

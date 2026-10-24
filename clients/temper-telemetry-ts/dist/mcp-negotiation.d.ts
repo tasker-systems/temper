@@ -36,7 +36,7 @@
  * listed after this one, which is why `otlpSpanProcessors` puts it ahead of the exporter. The span
  * is the same `SpanImpl` there, ended but not frozen, so the assignment is the same one.
  */
-import type { ReadableSpan, Span, SpanProcessor } from '@opentelemetry/sdk-trace-base';
+import type { ReadableSpan, Span, SpanProcessor } from '@opentelemetry/sdk-trace';
 /**
  * Reduce a URL to the `origin + pathname` form the predicate compares on, dropping query,
  * fragment and any trailing slash. Returns `null` for anything unparseable — a caller that
