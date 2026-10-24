@@ -54,7 +54,7 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 COMMENT ON FUNCTION __temper_ungated_artifact_ask_counts(uuid[], uuid, jsonb) IS
-    'UNGATED. Exactly one row for one artifact ask (one element of ValidatedAsk::bind): over its counted set, __temper_ungated_artifact_ask_population, how many artifacts are declared_satisfied, declared_not_satisfied and declared_not_yet_checked (the ask''s intent applied, its shape_states not), and how many matched (the whole ask applied); beside them the live row of the asked shape''s home and family, its id and shape_version, while p_reader can read that home. An empty population is zeros; an unreadable home or an absent shape is zeros and a NULL pair. The caller owes the verdict (p_visible_ids, NULL admits none) and the reader, as for the counted set (20261105000000).';
+    'UNGATED. Exactly one row for one artifact ask (one element of ValidatedAsk::bind): over its counted set, __temper_ungated_artifact_ask_population (20261104000000), how many artifacts are declared_satisfied, declared_not_satisfied and declared_not_yet_checked (the ask''s intent applied, its shape_states not), and how many matched (the whole ask applied); beside them the live row of the asked shape''s home and family, its id and shape_version, while p_reader can read that home. An empty population is zeros; an unreadable home or an absent shape is zeros and a NULL pair. The caller owes the verdict (p_visible_ids, NULL admits none) and the reader, as for the counted set. (20261105000000)';
 
 SELECT declare_migration(
     20261105000000,

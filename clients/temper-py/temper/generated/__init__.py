@@ -461,7 +461,6 @@ __all__ = [
     "ShapeEmptiness",
     "ShapeHome",
     "ShapeInForce",
-    "ShapeSuccessor",
     "ShapeView",
     "ShareContextOutcome",
     "ShareContextRequest",
@@ -966,7 +965,6 @@ from temper.generated.models.shape_declare_request import ShapeDeclareRequest as
 from temper.generated.models.shape_emptiness import ShapeEmptiness as ShapeEmptiness
 from temper.generated.models.shape_home import ShapeHome as ShapeHome
 from temper.generated.models.shape_in_force import ShapeInForce as ShapeInForce
-from temper.generated.models.shape_successor import ShapeSuccessor as ShapeSuccessor
 from temper.generated.models.shape_view import ShapeView as ShapeView
 from temper.generated.models.share_context_outcome import ShareContextOutcome as ShareContextOutcome
 from temper.generated.models.share_context_request import ShareContextRequest as ShareContextRequest

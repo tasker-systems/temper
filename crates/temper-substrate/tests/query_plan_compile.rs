@@ -2444,3 +2444,55 @@ fn survey_s_region_gate_pays_two_team_closures_per_stage_and_the_count_is_pinned
          beside its one hoisted resource gate"
     );
 }
+
+/// **Each ask of a stage has its own population arm, labelled with its position and reading the
+/// bind's element at that position.** A stage asking twice compiles two arms: the one labelled
+/// `0` reads `($2::jsonb -> 0)` and the one labelled `1` reads `($2::jsonb -> 1)`, both from the
+/// stage's one asks bind.
+///
+/// Bites the arm's element and label coming apart: `-> {k}` written `-> 0` (the arm labelled 1
+/// reads ask 0), or `{k}::bigint` written `0::bigint` (two arms labelled 0).
+#[test]
+fn each_ask_of_a_stage_has_its_own_population_arm_reading_its_own_element() {
+    let mut node = asking_selection("sel");
+    if let StageNode::Act(a) = &mut node {
+        a.artifact_filter.push(ArtifactAsk {
+            predicates: vec![ArtifactPredicate {
+                path: vec!["unit".to_string()],
+                op: temper_core::types::query::PropertyOp::Contains {
+                    values: vec![serde_json::json!("ms")],
+                },
+            }],
+            ..the_callers_ask()
+        });
+    }
+    let v = build_with(
+        vec![node, find_from("hits", "sel")],
+        vec!["hits"],
+        &asked_shapes(),
+    );
+    let q = compile(&v, test_profile()).expect("a stage asking twice compiles");
+
+    assert_eq!(
+        q.sql.matches("'population'::text AS row_class").count(),
+        2,
+        "one arm per ask: {}",
+        q.sql
+    );
+    for k in 0..2 {
+        let label = format!("{k}::bigint AS ask_position, c.in_force_shape_id");
+        let reads = format!(
+            "__temper_ungated_artifact_ask_counts((SELECT ids FROM __temper_vis), $1, \
+             ($2::jsonb -> {k})) AS c"
+        );
+        let arm = q
+            .sql
+            .split("\nUNION ALL\n")
+            .find(|arm| arm.contains(&label))
+            .unwrap_or_else(|| panic!("no arm labelled {k} in:\n{}", q.sql));
+        assert!(
+            arm.contains(&reads),
+            "the arm labelled {k} must read element {k}.\n  expected: {reads}\n  arm: {arm}"
+        );
+    }
+}

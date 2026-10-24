@@ -31,7 +31,7 @@ class ArtifactAskTrace(BaseModel):
     """
     One artifact ask as a stage ran it: which ask, which shape version it was validated against, which version is in force now, and the population it counted.
     """ # noqa: E501
-    in_force: Optional[ShapeInForce] = Field(default=None, description="The live version of the shape's lineage — its home and family — when the statement ran. It differs from `shape_id`/`shape_version` when the shape was amended after validation; the population still ranges over the lineage, so it does not empty when that happens.  `None` when the shape's home is not readable to you at execution, or the shape no longer exists. The population is then all zeros: nothing was counted under a shape you cannot read.")
+    in_force: Optional[ShapeInForce] = Field(default=None, description="The live version of the shape's lineage — its home and family — when the statement ran. It differs from `shape_id`/`shape_version` when the shape was amended after validation; the population still ranges over the lineage, so it does not empty when that happens.  `null` when the shape's home is not readable to you at execution, or the shape no longer exists. The population is then all zeros: nothing was counted under a shape you cannot read.")
     population: ArtifactAskPopulation
     position: Annotated[int, Field(strict=True, ge=0)] = Field(description="The ask's position in the stage's `artifact_filter`, from 0.")
     shape_id: UUID = Field(description="The shape the ask named, and the version of it the plan was validated against.")

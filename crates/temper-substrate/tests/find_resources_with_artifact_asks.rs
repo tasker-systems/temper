@@ -28,9 +28,10 @@
 //! **What each ask counted.** Migration `20261105000000` adds `__temper_ungated_artifact_ask_counts`,
 //! one row per ask over the same counted set, and the compiled statement reads it in a `population`
 //! arm per ask. The last section holds its witnesses — unverdicted content still matching and
-//! counted, a narrowed ask still counting what it excluded, the deny direction for counts, exactly
-//! one row, the version in force after an amendment — and the executor's refusal of a row class it
-//! was not taught. Their bites are variants of the deployed bodies, built as above.
+//! counted, a narrowed ask still counting what it excluded, the deny direction for counts (the
+//! owner gate, and the floor and home check the counts inherit), exactly one row, the version in
+//! force after an amendment, every count in its own column — and the executor's refusal of a row
+//! class it was not taught. Their bites are variants of the deployed bodies, built as above.
 //!
 //! Every resource is created through the real write path with its embedding deferred, so no model
 //! is needed; the background rows of the plan tests are fixture inserts, as in
@@ -899,16 +900,21 @@ async fn a_resource_still_ingesting_is_not_counted(pool: PgPool) {
 
 // ── What the compiled statement reads ───────────────────────────────────────────────────────────
 
+/// The most `kb_data_artifacts` rows one call of the counted set may read over these fixtures,
+/// measured on its own through `__temper_ungated_artifact_ask_counts` ([`counts_rows_read`]): the
+/// home's few artifacts, each read once through governance and once by id for its intent, and
+/// nothing of the family or the home beyond them.
+const ONE_CALL_BOUND: i64 = 64;
+
 /// The most `kb_data_artifacts` rows one run of the compiled statement may read for one ask.
 ///
-/// **The arithmetic: 2 calls × 64.** One run of the counted set over these fixtures reads at most
-/// 64 rows — the bound the statement met when it called the counted set once, from the asks
-/// conjunct alone. The population arm calls it a second time with the same three arguments (the
-/// hoisted visible set, the principal, the ask as element 0 of the same bind), so it reads what the
-/// first call read: at most 2 × 64 = 128. Against a family of 9,000 outside the home, or a home of
-/// 18,000, a walk of either reads thousands, so the bound still separates the two plans by more
-/// than an order of magnitude.
-const TWO_CALL_BOUND: i64 = 2 * 64;
+/// **The arithmetic: 2 calls × [`ONE_CALL_BOUND`].** The statement calls the counted set twice for
+/// the ask — in the selection's asks conjunct and in the ask's population arm — with the same three
+/// arguments (the hoisted visible set, the principal, the ask as element 0 of one bind). One call
+/// over these fixtures reads ≤ 64, which the counts-alone measurement holds; two read ≤ 128.
+/// Against a family of 9,000 outside the home, or a home of 18,000, a walk of either reads
+/// thousands, so the bound separates the two plans by more than an order of magnitude.
+const TWO_CALL_BOUND: i64 = 2 * ONE_CALL_BOUND;
 
 const BACKGROUND_HOMES: i32 = 150;
 const BACKGROUND_RESOURCES: i32 = 3_000;
@@ -1023,8 +1029,8 @@ async fn run_compiled(conn: &mut PgConnection, q: &CompiledQuery) -> BTreeSet<Uu
 ///
 /// **The whole statement, population arm included.** The statement calls the counted set twice
 /// for the one ask: once in the selection's asks conjunct, once in the ask's population arm
-/// (`__temper_ungated_artifact_ask_counts`). Asserted present here, so a bound measured over it is
-/// a bound on both calls rather than on the one the statement used to make.
+/// (`__temper_ungated_artifact_ask_counts`). The arm is asserted present here, so a bound measured
+/// over the run is a bound on both calls.
 async fn compiled_rows_read(pool: &PgPool, w: &World, ask: ArtifactAsk) -> (BTreeSet<Uuid>, i64) {
     let q = compiled_plan(w, vec![ask]);
     assert_eq!(
@@ -1041,6 +1047,28 @@ async fn compiled_rows_read(pool: &PgPool, w: &World, ask: ArtifactAsk) -> (BTre
     let read = artifact_rows_read(&mut tx).await - before;
     tx.rollback().await.unwrap();
     (answered, read)
+}
+
+/// The counts function alone for `ask`, called as the population arm calls it — the principal's
+/// own visible set, the principal as reader, the ask's bind — and how many `kb_data_artifacts` rows
+/// that one call read, measured as [`compiled_rows_read`] measures the statement.
+async fn counts_rows_read(pool: &PgPool, w: &World, ask: &ArtifactAsk) -> (CountsRow, i64) {
+    let mut tx = pool.begin().await.unwrap();
+    let before = artifact_rows_read(&mut tx).await;
+    let row: CountsRow = sqlx::query_as(
+        "SELECT in_force_shape_id, in_force_shape_version, declared_satisfied, \
+                declared_not_satisfied, declared_not_yet_checked, matched \
+           FROM __temper_ungated_artifact_ask_counts(\
+                (SELECT array_agg(resource_id) FROM resources_visible_to($1)), $1, $2::jsonb)",
+    )
+    .bind(w.owner.uuid())
+    .bind(bound(ask))
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    let read = artifact_rows_read(&mut tx).await - before;
+    tx.rollback().await.unwrap();
+    (row, read)
 }
 
 async fn analyze(pool: &PgPool) {
@@ -1080,14 +1108,19 @@ async fn any_event(pool: &PgPool) -> Uuid {
 ///    measuring nothing;
 /// 3. it read at most [`TWO_CALL_BOUND`] — the counted set called twice (the asks conjunct and the
 ///    population arm) over the home's four artifacts and the lookups by id beside them, where a
-///    walk of the family reads thousands.
+///    walk of the family reads thousands;
+/// 4. the counts function alone, called as the population arm calls it, counts the home's four
+///    artifacts with three matching and reads at least one row and at most [`ONE_CALL_BOUND`] —
+///    each half of the statement within its own bound, so one half regressing to twice its reads
+///    is not hidden by the other staying cheap.
 ///
-/// Bites the counted set reverted to `LANGUAGE sql` reading the shape row in-statement (its
-/// home and family no longer values when the artifact query is planned): the family walk reads
-/// about 18,000 rows and assertion 3 goes red. And bites a population arm that runs its call once
-/// per visible resource rather than once per ask (in `query_plan.rs`'s `population_arms`,
-/// `FROM {call} AS c` written `FROM unnest({VISIBLE_IDS}) AS each_visible CROSS JOIN LATERAL
-/// {call} AS c`): the home is re-read 3,002 times.
+/// Bites the counted set reverted to `LANGUAGE sql` reading the shape row in-statement (its home
+/// and family no longer values when the artifact query is planned): the family walk reads about
+/// 18,000 rows and assertions 3 and 4 go red. And bites a population arm correlated to every
+/// visible resource (in `query_plan.rs`'s `population_arms`, `FROM {call} AS c` written
+/// `FROM unnest({VISIBLE_IDS}) AS each_visible CROSS JOIN LATERAL {call} AS c`, with the ask
+/// written `((${n}::jsonb -> {k}) || jsonb_build_object('v', each_visible))` so the call depends on
+/// the row and is not computed once): the home is re-read 3,002 times and assertion 3 goes red.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn a_small_home_in_a_large_family_is_not_answered_by_walking_the_family(pool: PgPool) {
     let w = world(&pool).await;
@@ -1156,12 +1189,25 @@ async fn a_small_home_in_a_large_family_is_not_answered_by_walking_the_family(po
     );
 
     let ask = ask_of(w.shape, vec![at("unit", contains(json!("ms")))]);
-    let (answered, read) = compiled_rows_read(&pool, &w, ask).await;
+    let (answered, read) = compiled_rows_read(&pool, &w, ask.clone()).await;
     assert_eq!(answered, ids(&[r1]));
     assert!(read > 0, "the count sees the call's reads");
     assert!(
         read <= TWO_CALL_BOUND,
         "the compiled statement read {read} rows of kb_data_artifacts for a home holding four, \
+         beside a family of {family_outside}"
+    );
+
+    let (counts, one_call) = counts_rows_read(&pool, &w, &ask).await;
+    assert_eq!(
+        by_state(counts),
+        (4, 0, 0, 3),
+        "the home's four, three matching"
+    );
+    assert!(one_call > 0, "the count sees the counts call's reads");
+    assert!(
+        one_call <= ONE_CALL_BOUND,
+        "the counts call alone read {one_call} rows of kb_data_artifacts for a home holding four, \
          beside a family of {family_outside}"
     );
 }
@@ -1175,13 +1221,15 @@ async fn a_small_home_in_a_large_family_is_not_answered_by_walking_the_family(po
 /// Run as above, through the compiled statement, and asserted on the rows the transaction read
 /// from `kb_data_artifacts` around that run, population arm included: it answers the three, read at
 /// least one row, and read at most [`TWO_CALL_BOUND`] — two calls about the family, where reaching
-/// the artifacts through the home's resources reads thousands.
+/// the artifacts through the home's resources reads thousands. The counts function alone, called
+/// as the population arm calls it, counts the three and reads at least one row and at most
+/// [`ONE_CALL_BOUND`].
 ///
 /// Bites the family made unindexable in `__temper_ungated_governed_artifacts_in` — e.g. its
 /// `a.artifact_kind = p_artifact_kind` join condition written `a.artifact_kind || '' =
 /// p_artifact_kind` — so the plan can only reach artifacts through the home's resources: the read
-/// count climbs toward the home's 18,000 and the bound goes red. The per-visible-resource
-/// population arm described on the test above bites here too.
+/// count climbs toward the home's 18,000 and both bounds go red. The correlated population arm
+/// described on the test above bites the whole-statement bound here too.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn a_small_family_in_a_large_home_is_not_answered_by_walking_the_home(pool: PgPool) {
     let first = world(&pool).await;
@@ -1254,12 +1302,25 @@ async fn a_small_family_in_a_large_home_is_not_answered_by_walking_the_home(pool
     );
 
     let ask = ask_of(w.shape, vec![at("unit", contains(json!("ms")))]);
-    let (answered, read) = compiled_rows_read(&pool, &w, ask).await;
+    let (answered, read) = compiled_rows_read(&pool, &w, ask.clone()).await;
     assert_eq!(answered, ids(&tiny));
     assert!(read > 0, "the count sees the call's reads");
     assert!(
         read <= TWO_CALL_BOUND,
         "the compiled statement read {read} rows of kb_data_artifacts for a family of three, \
+         in a home holding {in_home}"
+    );
+
+    let (counts, one_call) = counts_rows_read(&pool, &w, &ask).await;
+    assert_eq!(
+        by_state(counts),
+        (3, 0, 0, 3),
+        "the family's three, all matching"
+    );
+    assert!(one_call > 0, "the count sees the counts call's reads");
+    assert!(
+        one_call <= ONE_CALL_BOUND,
+        "the counts call alone read {one_call} rows of kb_data_artifacts for a family of three, \
          in a home holding {in_home}"
     );
 }
@@ -1858,4 +1919,151 @@ async fn an_unknown_row_class_fails_the_read_rather_than_reading_as_a_tally(pool
         .await
         .expect("the same row, labelled a tally");
     assert_eq!(control.tallies.len(), 1);
+}
+
+/// **Every count is its own column.** One home whose artifacts are in all three states, in distinct
+/// numbers: three committed before the shape was declared (`declared_not_yet_checked`), one
+/// conforming committed after it (`declared_satisfied`), and two non-conforming committed after it
+/// under the advisory shape (`count` a string, so `declared_not_satisfied`). The ask is `unit`
+/// contains `"ms"`, which the three unchecked artifacts and the satisfied one hold. Through the
+/// compiled statement and `execute`, and through the counts function directly, the population is
+/// `(1, 2, 3, 4)`: each figure distinct, so a column read for another shows.
+///
+/// Bites the `declared_not_satisfied` FILTER literal misspelled in `20261105000000` (e.g.
+/// `'declared_unsatisfied'`): that figure reads 0. And bites `execute` reading
+/// `try_get("declared_satisfied")` into `declared_not_satisfied`: it reads 1.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn every_count_is_its_own_column(pool: PgPool) {
+    let mut w = undeclared_world(&pool).await;
+    let early = resource(&pool, &w, "early-unchecked").await;
+    for count in [1, 2, 3] {
+        commit(&pool, &w, early, json!({ "unit": "ms", "count": count })).await;
+    }
+    w.shape = declare(&pool, &w, &shape_schema()).await;
+    let late = resource(&pool, &w, "late-verdicted").await;
+    commit(&pool, &w, late, json!({ "unit": "ms", "count": 4 })).await;
+    for count in ["five", "six"] {
+        commit(&pool, &w, late, json!({ "unit": "s", "count": count })).await;
+    }
+    let ask = ask_of(w.shape, vec![at("unit", contains(json!("ms")))]);
+
+    let rows = executed(&pool, &w, vec![ask.clone()]).await;
+    assert_eq!(population_by_state(&rows.populations[0]), (1, 2, 3, 4));
+    assert_eq!(produced(&rows, "sel"), 2);
+    assert_eq!(
+        by_state(one(counts(
+            &pool,
+            Some(vec![early, late]),
+            w.owner,
+            &bound(&ask)
+        )
+        .await)),
+        (1, 2, 3, 4)
+    );
+}
+
+/// **The counts inherit the ingest floor and the home check from the counted set, and each bites
+/// through the counts.** R_live and R_off each own a matching artifact; R_off is then deactivated.
+/// The gated counts see R_live's alone, and an outsider handed R_live counts nothing.
+///
+/// Both conjuncts live in `__temper_ungated_artifact_ask_population` and the counts call it, never
+/// restate it, so each bite is a chain read through `counts_through`:
+/// - the floor cut (`JOIN kb_resources_live lv ON lv.id = g.resource_id` removed): the counts then
+///   see R_off's artifact too;
+/// - the counted set's home check answering yes (`anchor_readable_by_profile(p_reader,` → `true OR
+///   anchor_readable_by_profile(p_reader,`): the outsider then counts R_live's artifact, though the
+///   counts' own lookup still names no version in force for it.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_counts_inherit_the_floor_and_the_home_check_from_the_counted_set(pool: PgPool) {
+    let w = world(&pool).await;
+    let outsider = ProfileId::from(common::insert_profile(&pool, "artifact-floor-outsider").await);
+    let live = resource(&pool, &w, "r-live").await;
+    let off = resource(&pool, &w, "r-off").await;
+    commit(&pool, &w, live, json!({ "unit": "ms" })).await;
+    commit(&pool, &w, off, json!({ "unit": "ms" })).await;
+    sqlx::query("UPDATE kb_resources SET is_active = false WHERE id = $1")
+        .bind(off)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let ask = bound(&ask_of(w.shape, vec![at("unit", contains(json!("ms")))]));
+    let both = Some(vec![live, off]);
+
+    assert_eq!(
+        by_state(one(counts(&pool, both.clone(), w.owner, &ask).await)),
+        (1, 0, 0, 1),
+        "the control: the deactivated resource is outside the floor"
+    );
+    assert_eq!(
+        one(counts(&pool, Some(vec![live]), outsider, &ask).await),
+        (None, None, 0, 0, 0, 0),
+        "the control: the outsider cannot read the home"
+    );
+
+    let mut conn = pool.acquire().await.unwrap();
+    variant(
+        &mut conn,
+        POPULATION,
+        3,
+        POPULATION_SIGNATURE,
+        "population_without_floor",
+        "JOIN kb_resources_live lv ON lv.id = g.resource_id",
+        "",
+    )
+    .await;
+    variant(
+        &mut conn,
+        COUNTS,
+        3,
+        COUNTS_SIGNATURE,
+        "counts_without_floor",
+        "__temper_ungated_artifact_ask_population(",
+        "pg_temp.population_without_floor(",
+    )
+    .await;
+    assert_eq!(
+        by_state(one(counts_through(
+            &mut conn,
+            "pg_temp.counts_without_floor",
+            both,
+            w.owner.uuid(),
+            &ask
+        )
+        .await)),
+        (2, 0, 0, 2),
+        "the bite: without the floor the deactivated resource is counted"
+    );
+
+    variant(
+        &mut conn,
+        POPULATION,
+        3,
+        POPULATION_SIGNATURE,
+        "population_without_home_check",
+        "anchor_readable_by_profile(p_reader,",
+        "true OR anchor_readable_by_profile(p_reader,",
+    )
+    .await;
+    variant(
+        &mut conn,
+        COUNTS,
+        3,
+        COUNTS_SIGNATURE,
+        "counts_without_home_check",
+        "__temper_ungated_artifact_ask_population(",
+        "pg_temp.population_without_home_check(",
+    )
+    .await;
+    assert_eq!(
+        one(counts_through(
+            &mut conn,
+            "pg_temp.counts_without_home_check",
+            Some(vec![live]),
+            outsider.uuid(),
+            &ask,
+        )
+        .await),
+        (None, None, 1, 0, 0, 1),
+        "the bite: without the counted set's home check the outsider counts under the shape"
+    );
 }

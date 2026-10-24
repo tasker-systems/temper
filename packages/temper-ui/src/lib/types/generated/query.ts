@@ -11,6 +11,7 @@ import type { RefusalTeaching } from "./artifact_ask";
 import type { ResourceSection } from "./ResourceSection";
 import type { ResourceView } from "./resource_view";
 import type { ShapeId } from "./ShapeId";
+import type { ShapeInForce } from "./artifact_ask";
 
 /**
  * One act, declared.
@@ -282,7 +283,7 @@ shape_id: ShapeId, shape_version: number,
  * It differs from `shape_id`/`shape_version` when the shape was amended after validation; the
  * population still ranges over the lineage, so it does not empty when that happens.
  *
- * `None` when the shape's home is not readable to you at execution, or the shape no longer
+ * `null` when the shape's home is not readable to you at execution, or the shape no longer
  * exists. The population is then all zeros: nothing was counted under a shape you cannot read.
  */
 in_force: ShapeInForce | null, population: ArtifactAskPopulation, };
@@ -1103,11 +1104,6 @@ score: number,
 score_present: boolean | null, };
 
 /**
- * A shape version by id: the live row of a lineage at the moment a statement read it.
- */
-export type ShapeInForce = { shape_id: ShapeId, shape_version: number, };
-
-/**
  * How a single stage resolved. CLOSED — adding a variant is a breaking change (design §6.1).
  */
 export type StageDisposition = "answered" | "empty" | "withheld" | "refused";
@@ -1463,7 +1459,8 @@ disclosed_regions: Array<RegionDisclosure>,
  * is counted.
  *
  * It describes the stage's INPUT, not its output: no entry is a quantity, and none orders
- * anything. A stage that refused, or that runs downstream of one, carries no entries.
+ * anything. A stage that refused carries no entries: its asks did not run. A stage downstream
+ * of a refusal carries them like any other, because its counts never read its input.
  */
 artifact_asks: Array<ArtifactAskTrace>, };
 

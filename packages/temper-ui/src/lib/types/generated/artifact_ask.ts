@@ -131,7 +131,7 @@ terms: Array<string>,
 /**
  * The version now in force, for a folded shape that has one.
  */
-successor: ShapeSuccessor | null, 
+successor: ShapeInForce | null, 
 /**
  * That stored content is not closed by its shape, and the route to values it does not
  * declare (spec §3.4).
@@ -159,9 +159,11 @@ export type ShapeHome = {
 anchor_table: string, anchor_id: string, };
 
 /**
- * The version in force after a fold: the live row at the same home and family.
+ * The version in force of a shape's lineage: the live row at its home and family when a read
+ * found it. One type for one fact, named by each holder's field for how the row relates to it —
+ * `successor` on a folded shape's refusal, `in_force` on a query trace's artifact ask.
  */
-export type ShapeSuccessor = { shape_id: ShapeId, shape_version: number, };
+export type ShapeInForce = { shape_id: ShapeId, shape_version: number, };
 
 /**
  * How much of a teaching was cut, and where the whole of it is read: the shape's by-id read —

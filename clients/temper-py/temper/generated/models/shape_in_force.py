@@ -26,7 +26,7 @@ from pydantic_core import to_jsonable_python
 
 class ShapeInForce(BaseModel):
     """
-    A shape version by id: the live row of a lineage at the moment a statement read it.
+    The version in force of a shape's lineage: the live row at its home and family when a read found it. One type for one fact, named by each holder's field for how the row relates to it — `successor` on a folded shape's refusal, `in_force` on a query trace's artifact ask.
     """ # noqa: E501
     shape_id: UUID = Field(description="A `kb_data_artifact_shapes.id` value — one declared JSON Schema governing a data-artifact family within a single home (spec: data-artifact shape registry, 2026-08-21).")
     shape_version: StrictInt

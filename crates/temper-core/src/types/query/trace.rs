@@ -10,6 +10,7 @@ use super::envelope::NarrowedBy;
 use super::hits::RegionDisclosure;
 use super::scalars::{BoundTerm, Extent};
 use super::stage::{StageName, StageRelation};
+use crate::types::artifact_ask::ShapeInForce;
 use crate::types::ids::ShapeId;
 
 /// Where a stage's input set came from: an earlier stage, or the caller.
@@ -275,7 +276,8 @@ pub struct StageTrace {
     /// is counted.
     ///
     /// It describes the stage's INPUT, not its output: no entry is a quantity, and none orders
-    /// anything. A stage that refused, or that runs downstream of one, carries no entries.
+    /// anything. A stage that refused carries no entries: its asks did not run. A stage downstream
+    /// of a refusal carries them like any other, because its counts never read its input.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifact_asks: Vec<ArtifactAskTrace>,
 }
@@ -297,21 +299,10 @@ pub struct ArtifactAskTrace {
     /// It differs from `shape_id`/`shape_version` when the shape was amended after validation; the
     /// population still ranges over the lineage, so it does not empty when that happens.
     ///
-    /// `None` when the shape's home is not readable to you at execution, or the shape no longer
+    /// `null` when the shape's home is not readable to you at execution, or the shape no longer
     /// exists. The population is then all zeros: nothing was counted under a shape you cannot read.
     pub in_force: Option<ShapeInForce>,
     pub population: ArtifactAskPopulation,
-}
-
-/// A shape version by id: the live row of a lineage at the moment a statement read it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-pub struct ShapeInForce {
-    pub shape_id: ShapeId,
-    pub shape_version: i32,
 }
 
 /// The population one artifact ask counted, by shape state, and how many of it matched.

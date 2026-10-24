@@ -89,7 +89,7 @@ module Temper::Generated
         :'elided' => :'TeachingElision',
         :'homes' => :'Array<ShapeHome>',
         :'non_closure' => :'String',
-        :'successor' => :'ShapeSuccessor',
+        :'successor' => :'ShapeInForce',
         :'terms' => :'Array<String>',
         :'vocabulary' => :'Vocabulary'
       }

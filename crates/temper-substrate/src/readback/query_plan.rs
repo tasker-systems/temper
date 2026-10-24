@@ -291,6 +291,13 @@ pub fn compile(
         let (name, body, unusable, asks_bound_at) = match node {
             StageNode::Act(inv) => {
                 let emitted = emit_act_body(inv, v.asks(&inv.name), &mut binds, &mut refusals)?;
+                let refused = refusals.iter().any(|r| r.stage.as_ref() == Some(&inv.name));
+                asks_ran_or_refused(
+                    &inv.name,
+                    v.asks(&inv.name).len(),
+                    emitted.asks_bound_at,
+                    refused,
+                )?;
                 (
                     inv.name.as_str(),
                     emitted.body,
@@ -314,10 +321,11 @@ pub fn compile(
         if tainted_by_refusal(node, &refusals, &tainted) {
             tainted.insert(name.to_string());
         }
-        // One population arm per ask of a stage that ran over a complete input. A tainted stage —
-        // refused, or downstream of a refusal — gets none, and the assembler, reading the same
-        // [`tainted_stages`], attaches no entry for it.
-        if let Some(asks_at) = asks_bound_at.filter(|_| !tainted.contains(name)) {
+        // One population arm per ask of every stage that ran its asks. A refused stage's body runs
+        // no act, so it bound no asks and gets no arm; the assembler exempts exactly the stages a
+        // refusal names. A stage merely downstream of a refusal still gets its arms: its counts
+        // range over the counted set, never over the stage's input, so they are complete.
+        if let Some(asks_at) = asks_bound_at {
             populations.push(StagePopulation {
                 stage: name.to_string(),
                 asks_at,
@@ -373,22 +381,34 @@ struct StagePopulation {
     asks: usize,
 }
 
-/// The stages whose output is assumed incomplete — refused, or downstream of a stage that was —
-/// for a plan whose compile recorded `refusals`.
+/// A stage whose seal holds asks either ran them — its emitter bound them, so it gets population
+/// arms — or refused, so they did not run. Anything else fails the compile.
 ///
-/// **The same definition `compile` decides with, evaluated again rather than restated.** It folds
-/// `tainted_by_refusal` over the plan in topological order, as `compile`'s loop does; a stage's
-/// answer reads only its own refusals and its upstreams' taint, so the set the loop builds and
-/// this one agree for any `refusals` the loop recorded. The assembler reads it to know which stages
-/// were given no population arm.
-pub fn tainted_stages(v: &ValidatedComposition, refusals: &[PlanRefusal]) -> BTreeSet<String> {
-    let mut tainted: BTreeSet<String> = BTreeSet::new();
-    for node in v.ordered() {
-        if tainted_by_refusal(node, refusals, &tainted) {
-            tainted.insert(node.name().as_str().to_string());
-        }
+/// **This is the one fact the assembler's rule rests on.** The assembler requires a population
+/// row for every sealed ask of every stage no refusal names, and finds none required for a refused
+/// one; that agrees with what `compile` arms only while every stage carrying sealed asks either
+/// binds them or refuses. Today `validate` refuses a non-empty `artifact_filter` on every act but
+/// `find-resources-with`, whose emitter always binds, so this cannot fire. It guards a future act
+/// admitted to the filter whose emitter does not bind it: that plan fails here, loudly, rather than
+/// answering with a trace the assembler would refuse as a 500.
+fn asks_ran_or_refused(
+    stage: &temper_core::types::query::StageName,
+    sealed: usize,
+    asks_bound_at: Option<usize>,
+    refused: bool,
+) -> Result<(), PlanRefusal> {
+    if sealed == 0 || asks_bound_at.is_some() || refused {
+        return Ok(());
     }
-    tainted
+    Err(PlanRefusal {
+        stage: Some(stage.clone()),
+        reason: RefusalReason::FilterNotApplicable,
+        detail: format!(
+            "this stage's seal holds {sealed} artifact asks and its act's emitter bound none; the \
+             validator should have refused its artifact filter before compilation"
+        ),
+        teaches: None,
+    })
 }
 
 /// The body of a stage that REFUSED — the stage-contract shape, and no rows.
@@ -1650,7 +1670,8 @@ fn emit_combine_body(cn: &temper_core::types::query::CombineNode) -> String {
 }
 
 /// The final select: one `hit` arm per RETURNED stage, then one `tally` arm per stage — every
-/// stage, returned or not — then one `population` arm per artifact ask of every untainted stage.
+/// stage, returned or not — then one `population` arm per artifact ask of every stage that ran its
+/// asks.
 ///
 /// Each returned stage is its own arm, labelled by its stage name; nothing ranks one arm's quantity
 /// against another's, and there is no arm two acts' rows share.
@@ -1683,8 +1704,12 @@ fn emit_combine_body(cn: &temper_core::types::query::CombineNode) -> String {
 /// population — zeros for an empty one — so the arm yields one row and a missing row is a
 /// contradiction the assembler fails on, never a zero. Its ask is element `k` of the stage's one
 /// asks bind. The population columns are new columns on EVERY arm, typed NULLs everywhere but here
-/// ([`NO_POPULATION`]); no existing column carries a population value. A tainted stage has no
-/// entry in `populations` and so no arm.
+/// ([`NO_POPULATION`]); no existing column carries a population value. A refused stage ran no asks,
+/// so it has no entry in `populations` and no arm.
+///
+/// The arm reads its row FROM the function rather than being `FROM`-less as a tally is: a tally
+/// must not read `FROM` a stage that may be empty, while this function's contract is one row,
+/// and a `FROM`-less spelling (`(f(…)).col` per column) would run it once per column.
 fn final_select(
     v: &ValidatedComposition,
     tallies: &[StageTally],
@@ -1972,6 +1997,35 @@ mod tests {
         assert!(
             !narrowing(vec![caller(StageRelation::Bound)], &mut binds).has_seed(),
             "and false of a purely bounded one, or every find stage would refuse"
+        );
+    }
+
+    /// **A stage whose seal holds asks either bound them or refused; anything else fails the
+    /// compile.** Sealed asks with no bind and no refusal is the one case that errs, naming the
+    /// stage. Bound asks, a refused stage, and a stage that asks nothing each compile.
+    ///
+    /// Unreachable through `compile` today — `validate` refuses `artifact_filter` on every act
+    /// whose emitter does not bind it, and `ValidatedComposition` has no other constructor — so the
+    /// rule is witnessed here, at the function `compile` calls for every act stage. Bites
+    /// `asks_ran_or_refused` answering `Ok(())` whatever it is handed.
+    #[test]
+    fn sealed_asks_that_neither_ran_nor_refused_fail_the_compile() {
+        let stage = StageName::parse("sel").unwrap();
+        let unbound = asks_ran_or_refused(&stage, 2, None, false)
+            .expect_err("two sealed asks, none bound, nothing refused");
+        assert_eq!(unbound.stage.as_ref(), Some(&stage));
+        assert_eq!(unbound.reason, RefusalReason::FilterNotApplicable);
+        assert!(
+            asks_ran_or_refused(&stage, 2, Some(3), false).is_ok(),
+            "bound at $3"
+        );
+        assert!(
+            asks_ran_or_refused(&stage, 2, None, true).is_ok(),
+            "refused"
+        );
+        assert!(
+            asks_ran_or_refused(&stage, 0, None, false).is_ok(),
+            "asks nothing"
         );
     }
 }

@@ -173,6 +173,13 @@ impl<'a> StageIndex<'a> {
         self.populations.get(&(stage, position)).copied()
     }
 
+    /// Every population row in the response, as the statement returned them — the raw list, for
+    /// the check that each one was asked for exactly once, which the index above (first occurrence
+    /// wins) cannot make.
+    pub fn population_rows(&self) -> &'a [PopulationRow] {
+        &self.rows.populations
+    }
+
     /// One stage's disclosure numbers. `None` means no tally row was found for the stage. The
     /// planner emits one tally arm per planned stage and each arm yields a row even over an
     /// empty CTE, so a producer-built index never carries `None` for a planned stage — the

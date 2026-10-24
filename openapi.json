@@ -16297,7 +16297,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/ShapeInForce",
-                "description": "The live version of the shape's lineage — its home and family — when the statement ran.\nIt differs from `shape_id`/`shape_version` when the shape was amended after validation; the\npopulation still ranges over the lineage, so it does not empty when that happens.\n\n`None` when the shape's home is not readable to you at execution, or the shape no longer\nexists. The population is then all zeros: nothing was counted under a shape you cannot read."
+                "description": "The live version of the shape's lineage — its home and family — when the statement ran.\nIt differs from `shape_id`/`shape_version` when the shape was amended after validation; the\npopulation still ranges over the lineage, so it does not empty when that happens.\n\n`null` when the shape's home is not readable to you at execution, or the shape no longer\nexists. The population is then all zeros: nothing was counted under a shape you cannot read."
               },
               {
                 "type": "null"
@@ -24527,7 +24527,7 @@
           "successor": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/ShapeSuccessor",
+                "$ref": "#/components/schemas/ShapeInForce",
                 "description": "The version now in force, for a folded shape that has one."
               },
               {
@@ -26763,24 +26763,7 @@
       },
       "ShapeInForce": {
         "type": "object",
-        "description": "A shape version by id: the live row of a lineage at the moment a statement read it.",
-        "required": [
-          "shape_id",
-          "shape_version"
-        ],
-        "properties": {
-          "shape_id": {
-            "$ref": "#/components/schemas/ShapeId"
-          },
-          "shape_version": {
-            "type": "integer",
-            "format": "int32"
-          }
-        }
-      },
-      "ShapeSuccessor": {
-        "type": "object",
-        "description": "The version in force after a fold: the live row at the same home and family.",
+        "description": "The version in force of a shape's lineage: the live row at its home and family when a read\nfound it. One type for one fact, named by each holder's field for how the row relates to it —\n`successor` on a folded shape's refusal, `in_force` on a query trace's artifact ask.",
         "required": [
           "shape_id",
           "shape_version"
@@ -27326,7 +27309,7 @@
             "items": {
               "$ref": "#/components/schemas/ArtifactAskTrace"
             },
-            "description": "What each artifact ask of this stage counted, one entry per ask in `artifact_filter` order.\nEmpty, and absent on the wire, for a stage that asks nothing.\n\n**This is where an empty `find-resources-with` stage says why.** An empty selection that\nasked artifacts is one of three things — nothing in what you can see is governed by the\nshape; some is and none matched; or the ask narrowed by verdict state and reconciliation has\nnot reached the rows — and the per-ask population tells them apart (spec\n`2026-10-19-asking-artifacts-by-what-they-are` §4.5). See [`ArtifactAskPopulation`] for what\nis counted.\n\nIt describes the stage's INPUT, not its output: no entry is a quantity, and none orders\nanything. A stage that refused, or that runs downstream of one, carries no entries."
+            "description": "What each artifact ask of this stage counted, one entry per ask in `artifact_filter` order.\nEmpty, and absent on the wire, for a stage that asks nothing.\n\n**This is where an empty `find-resources-with` stage says why.** An empty selection that\nasked artifacts is one of three things — nothing in what you can see is governed by the\nshape; some is and none matched; or the ask narrowed by verdict state and reconciliation has\nnot reached the rows — and the per-ask population tells them apart (spec\n`2026-10-19-asking-artifacts-by-what-they-are` §4.5). See [`ArtifactAskPopulation`] for what\nis counted.\n\nIt describes the stage's INPUT, not its output: no entry is a quantity, and none orders\nanything. A stage that refused carries no entries: its asks did not run. A stage downstream\nof a refusal carries them like any other, because its counts never read its input."
           },
           "disclosed_regions": {
             "type": "array",

@@ -8861,7 +8861,7 @@ export interface components {
              *     declare (spec §3.4).
              */
             non_closure?: string | null;
-            successor?: components["schemas"]["ShapeSuccessor"] | null;
+            successor?: components["schemas"]["ShapeInForce"] | null;
             /** @description A closed vocabulary of terms: the intents, or the askable shape states. */
             terms?: string[];
             vocabulary?: components["schemas"]["Vocabulary"] | null;
@@ -10391,14 +10391,12 @@ export interface components {
          *     family within a single home (spec: data-artifact shape registry, 2026-08-21).
          */
         ShapeId: string;
-        /** @description A shape version by id: the live row of a lineage at the moment a statement read it. */
+        /**
+         * @description The version in force of a shape's lineage: the live row at its home and family when a read
+         *     found it. One type for one fact, named by each holder's field for how the row relates to it —
+         *     `successor` on a folded shape's refusal, `in_force` on a query trace's artifact ask.
+         */
         ShapeInForce: {
-            shape_id: components["schemas"]["ShapeId"];
-            /** Format: int32 */
-            shape_version: number;
-        };
-        /** @description The version in force after a fold: the live row at the same home and family. */
-        ShapeSuccessor: {
             shape_id: components["schemas"]["ShapeId"];
             /** Format: int32 */
             shape_version: number;
@@ -10789,7 +10787,8 @@ export interface components {
              *     is counted.
              *
              *     It describes the stage's INPUT, not its output: no entry is a quantity, and none orders
-             *     anything. A stage that refused, or that runs downstream of one, carries no entries.
+             *     anything. A stage that refused carries no entries: its asks did not run. A stage downstream
+             *     of a refusal carries them like any other, because its counts never read its input.
              */
             artifact_asks?: components["schemas"]["ArtifactAskTrace"][];
             /**

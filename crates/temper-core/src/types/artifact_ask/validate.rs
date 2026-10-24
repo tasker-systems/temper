@@ -28,8 +28,8 @@ use super::walk::{
     MAX_WALK_VISITS,
 };
 use super::{
-    ArtifactAsk, ArtifactPredicate, LoadedShape, ShapeHome, ShapeIdentity, ShapeLoad,
-    ShapeSuccessor, ARTIFACT_INTENTS, ASKABLE_SHAPE_STATES, DEFAULT_ARTIFACT_INTENTS,
+    ArtifactAsk, ArtifactPredicate, LoadedShape, ShapeHome, ShapeIdentity, ShapeInForce, ShapeLoad,
+    ARTIFACT_INTENTS, ASKABLE_SHAPE_STATES, DEFAULT_ARTIFACT_INTENTS,
 };
 use crate::types::ids::ShapeId;
 use crate::types::query::filter::{
@@ -138,7 +138,7 @@ pub struct RefusalTeaching {
     pub terms: Vec<String>,
     /// The version now in force, for a folded shape that has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub successor: Option<ShapeSuccessor>,
+    pub successor: Option<ShapeInForce>,
     /// That stored content is not closed by its shape, and the route to values it does not
     /// declare (spec §3.4).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2044,7 +2044,7 @@ mod tests {
 
     #[test]
     fn a_folded_shape_teaches_its_successor() {
-        let successor = ShapeSuccessor {
+        let successor = ShapeInForce {
             shape_id: ShapeId::from(Uuid::from_u128(8)),
             shape_version: 2,
         };

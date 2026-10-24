@@ -4733,7 +4733,7 @@ mod tests {
 
     use crate::types::artifact_ask::walk::{VOCABULARIES_ENUMERATED, WALKS_BUILT};
     use crate::types::artifact_ask::{
-        ArtifactAsk, ArtifactPredicate, LoadedShape, ShapeHome, ShapeLoad, ShapeSuccessor,
+        ArtifactAsk, ArtifactPredicate, LoadedShape, ShapeHome, ShapeInForce, ShapeLoad,
         ARTIFACT_INTENTS, ASKABLE_SHAPE_STATES,
     };
     use crate::types::ids::ShapeId;
@@ -5050,7 +5050,7 @@ mod tests {
             ShapeLoad::Loaded(measurement(1)),
             ShapeLoad::NotAskable,
             ShapeLoad::Superseded {
-                successor: Some(ShapeSuccessor {
+                successor: Some(ShapeInForce {
                     shape_id: sid(9),
                     shape_version: 2,
                 }),
