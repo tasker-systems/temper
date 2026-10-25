@@ -8162,9 +8162,9 @@ export interface components {
              * Format: int64
              * @description The artifact's stored `content_bytes`: its content's length in compact JSON as committed.
              *     The content a page or a read by id serves can be longer, because storage prints a number
-             *     from 1e16 up to the 64-bit integer limits in full (`1e19`, four bytes committed, is served
-             *     as twenty digits). A page measures what it would write, so an artifact can be named here
-             *     though its `content_bytes` alone would fit a page.
+             *     from 1e16 up to the 64-bit integer limits in full (`1e19`, committed as the five bytes
+             *     `1e+19`, is served as twenty digits). A page measures what it would write, so an artifact
+             *     can be named here though its `content_bytes` alone would fit a page.
              */
             content_bytes: number;
             resource_id: components["schemas"]["ResourceId"];

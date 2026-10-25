@@ -124,8 +124,8 @@ pub const VERCEL_RESPONSE_BODY_CAP_BYTES: usize = 4_500_000;
 /// flag — and an oversized row [`ARTIFACT_ROW_FIXED_BYTES`]. That charge is an estimate, not a
 /// measure: `content_bytes` is the content's compact length as committed, and a page serves it
 /// re-serialized from storage, which prints a number from 1e16 up to the 64-bit integer limits in
-/// full and is read back as an integer (`1e19`, committed as the five bytes `1e+19`, is served as twenty digits).
-/// So the service (`artifact_ask_read`) measures each served row as it writes it and walks the
+/// full and is read back as an integer (`1e19`, committed as the five bytes `1e+19`, is served
+/// as twenty digits). So the service (`artifact_ask_read`) measures each served row as it writes it and walks the
 /// rows in order against this budget: a row longer than the budget alone moves to `oversized` in
 /// its place, and a row that fits alone but not in what is left ends the page, with `next` the
 /// last row kept, and opens the next page. `serde_json`'s `float_roundtrip`, which this crate and

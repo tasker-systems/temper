@@ -258,8 +258,8 @@ fn written(row: Examined, budget: usize) -> ApiResult<Written> {
 
 /// **The page held to `budget` on the bytes its rows write.** The SQL charges a served row its
 /// `content_bytes` and metadata, but storage can print a number longer than it was committed
-/// (`1e19`, committed as the five bytes `1e+19`, is served as twenty digits), so that charge is an estimate. Here
-/// each served row is measured as the response writes it, compactly, and the rows are walked in
+/// (`1e19`, committed as the five bytes `1e+19`, is served as twenty digits), so that charge is
+/// an estimate. Here each served row is measured as the response writes it, compactly, and the rows are walked in
 /// order against `budget`: a served row longer than `budget` alone becomes an oversized entry in
 /// its place; a row whose cost fits alone but not in what is left ends the page, with it and
 /// every row after it dropped and `next` the last row kept. Otherwise the SQL's rows and `next`
