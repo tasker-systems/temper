@@ -4166,7 +4166,13 @@ export interface components {
             /** Format: double */
             precedence: number;
             resource_id: components["schemas"]["ResourceId"];
-            /** @description `"never_declared"` today; will carry conformance verdicts when the shape registry lands. */
+            /**
+             * @description Conformance to the shape in force for the artifact's family in its home, by the staleness
+             *     triple (shape id, shape version, content hash): `"never_declared"` when no shape is in
+             *     force, else `"declared_satisfied"`, `"declared_not_satisfied"`, or
+             *     `"declared_not_yet_checked"` when no verdict matches the triple (`_data_artifact_shape_state`,
+             *     `20260822000020`; a batch read's rows carry the same state, computed set-based).
+             */
             shape_state: string;
         };
         /**
@@ -8828,7 +8834,7 @@ export interface components {
          *     change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,
          *     matched exhaustively.
          */
-        RefusalReason: "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "intention_budget_exceeded" | "too_many_filter_values" | "duplicate_set_member" | "malformed_embedding" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | "property_value_too_large" | "property_value_budget_exceeded" | "filter_string_too_long" | "list_too_long" | "text_budget_exceeded" | "shape_not_askable" | "shape_superseded" | "shape_schema_uncompilable" | "empty_artifact_path" | "path_outside_shape" | "operator_outside_shape" | "value_outside_shape" | "unknown_artifact_intent" | "unknown_shape_state" | "ask_scope_conflict" | "unstorable_value" | string;
+        RefusalReason: "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "intention_budget_exceeded" | "too_many_filter_values" | "duplicate_set_member" | "malformed_embedding" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | "property_value_too_large" | "property_value_budget_exceeded" | "filter_string_too_long" | "list_too_long" | "text_budget_exceeded" | "shape_not_askable" | "shape_superseded" | "shape_schema_uncompilable" | "empty_artifact_path" | "path_outside_shape" | "operator_outside_shape" | "value_outside_shape" | "unknown_artifact_intent" | "unknown_shape_state" | "ask_scope_conflict" | "unstorable_value" | "page_limit_out_of_range" | string;
         /**
          * @description What a refusal teaches, as data an agent reads without parsing English (spec §3.5).
          *

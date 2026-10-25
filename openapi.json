@@ -16474,7 +16474,7 @@
           },
           "shape_state": {
             "type": "string",
-            "description": "`\"never_declared\"` today; will carry conformance verdicts when the shape registry lands."
+            "description": "Conformance to the shape in force for the artifact's family in its home, by the staleness\ntriple (shape id, shape version, content hash): `\"never_declared\"` when no shape is in\nforce, else `\"declared_satisfied\"`, `\"declared_not_satisfied\"`, or\n`\"declared_not_yet_checked\"` when no verdict matches the triple (`_data_artifact_shape_state`,\n`20260822000020`; a batch read's rows carry the same state, computed set-based)."
           }
         }
       },
@@ -24475,6 +24475,13 @@
             "description": "An artifact predicate value carries U+0000, in a string or an object key. No stored content\ncan hold it — jsonb cannot represent the character — so the value could match nothing, and\nbinding it would be a database error where a refusal belongs.",
             "enum": [
               "unstorable_value"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "A batch read's `limit` is 0, or above the page ceiling `MAX_ARTIFACT_PAGE_ROWS` (200).\nRefused, never clamped, with no stage, and beside the ask's own refusals: a caller asking\nfor more than a page holds is told so rather than handed a short page it might read as the\nend. The detail names the body field.",
+            "enum": [
+              "page_limit_out_of_range"
             ]
           },
           {

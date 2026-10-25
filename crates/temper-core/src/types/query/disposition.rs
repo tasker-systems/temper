@@ -452,6 +452,11 @@ pub enum RefusalReason {
     /// can hold it — jsonb cannot represent the character — so the value could match nothing, and
     /// binding it would be a database error where a refusal belongs.
     UnstorableValue,
+    /// A batch read's `limit` is 0, or above the page ceiling `MAX_ARTIFACT_PAGE_ROWS` (200).
+    /// Refused, never clamped, with no stage, and beside the ask's own refusals: a caller asking
+    /// for more than a page holds is told so rather than handed a short page it might read as the
+    /// end. The detail names the body field.
+    PageLimitOutOfRange,
 
     /// A reason outside the declared vocabulary.
     ///
@@ -657,6 +662,7 @@ mod tests {
             RefusalReason::UnknownShapeState,
             RefusalReason::AskScopeConflict,
             RefusalReason::UnstorableValue,
+            RefusalReason::PageLimitOutOfRange,
         ] {
             assert!(
                 reason.is_known(),

@@ -15,7 +15,9 @@
 //!    one value by construction.
 //! 2. **Folded?** `Superseded`, carrying the live row at the same home and family when there is one
 //!    ([`readback::live_shape_at`]). A successor is in the same home, so it is as readable as the
-//!    row step 1 admitted, and the lookup is gated besides.
+//!    row step 1 admitted, and the lookup is gated besides. A batch read's later pages skip this
+//!    step for the row their first page named ([`load_one_pinned`]) and carry the successor beside
+//!    the load instead.
 //! 3. **Compiles?** First measured: a schema larger than the walk reads
 //!    ([`within_schema_bound`]) is `SchemaTooLarge` and is never compiled. Within the bound,
 //!    through the no-fetch constructor ([`shape_schema::compile`]); a schema it refuses is
@@ -42,8 +44,8 @@
 //! `shape_schema::MAX_PATTERN_BYTES`. A shape row is immutable per id (amendment mints a new id), so
 //! a remembered verdict, vocabulary or teaching never goes stale. Each is consulted only with a row
 //! a gated read returned — the loader reads its own, and the by-id read is passed only such rows —
-//! and a teaching is remembered only for a shape the request's load found live and compiling, so
-//! none answers anything about a shape the caller cannot read.
+//! and a teaching is remembered only for a shape the request's load returned readable and
+//! compiling (`ShapeLoad::Loaded`), so none answers anything about a shape the caller cannot read.
 //!
 //! The successor lookup reads only the home and family of the row step 1 returned; no caller text
 //! reaches SQL here except the shape id, bound as a `uuid`.
@@ -58,9 +60,9 @@ use tokio::sync::Semaphore;
 use crate::error::{ApiError, ApiResult};
 use temper_core::error::TemperError;
 use temper_core::types::artifact_ask::{
-    enumerate, within_schema_bound, AskOperator, AskablePath, BoundKind, JsonType, LoadedShape,
-    PathFacts, PathTeaching, RefusalTeaching, ShapeContext, ShapeLoad, ShapeSuccessor, Vocabulary,
-    WalkBounds, NODE_BYTES,
+    enumerate, within_schema_bound, AskOperator, AskSession, AskablePath, BoundKind, JsonType,
+    LoadedShape, PathFacts, PathTeaching, RefusalTeaching, ShapeContext, ShapeLoad, ShapeSuccessor,
+    Vocabulary, WalkBounds, NODE_BYTES,
 };
 use temper_core::types::ids::{ProfileId, ShapeId};
 use temper_core::types::query::filter::{property_value_bytes, property_value_nodes};
@@ -75,7 +77,7 @@ use temper_substrate::shape_schema;
 /// one gated read (the stored schema whole), one bounded measurement, at most one compile within
 /// the walk's byte bound, and — once validation teaches its vocabulary, if no teaching of it is
 /// remembered — one enumeration under a budget of its own. The asks then share one budget for path
-/// resolution and membership ([`AskSession`](temper_core::types::artifact_ask::AskSession)).
+/// resolution and membership ([`AskSession`]).
 ///
 /// **Each shape loaded live and compiling carries its remembered [`PathTeaching`]**, if the
 /// process remembers one (`remember_path_teachings`), so a path refusal on it teaches without
@@ -90,18 +92,25 @@ pub async fn load(
     ids: &BTreeSet<ShapeId>,
 ) -> ApiResult<ShapeContext> {
     let mut loads = Vec::with_capacity(ids.len());
-    let mut taught = Vec::new();
     for &id in ids {
-        let load = load_one(pool, principal, id).await?;
-        if matches!(load, ShapeLoad::Loaded(_)) {
-            taught.extend(remembered_path_teaching(id));
-        }
-        loads.push((id, load));
+        loads.push((id, load_one(pool, principal, id).await?));
     }
+    Ok(context_of(loads))
+}
+
+/// The context of these loads, each shape loaded under its own id carrying the [`PathTeaching`]
+/// the process remembers for it, if any (`remember_path_teachings`). Only a loaded shape's is
+/// looked up: one whose load refused is never walked.
+pub(crate) fn context_of(loads: Vec<(ShapeId, ShapeLoad)>) -> ShapeContext {
+    let taught: Vec<PathTeaching> = loads
+        .iter()
+        .filter(|(_, load)| matches!(load, ShapeLoad::Loaded(_)))
+        .filter_map(|(id, _)| remembered_path_teaching(*id))
+        .collect();
     let context: ShapeContext = loads.into_iter().collect();
-    Ok(taught
+    taught
         .into_iter()
-        .fold(context, ShapeContext::with_path_teaching))
+        .fold(context, ShapeContext::with_path_teaching)
 }
 
 /// Load one shape for `principal`: refusal steps 1–3 of §3.5, in order (see the module doc).
@@ -119,23 +128,90 @@ pub async fn load_one(pool: &PgPool, principal: ProfileId, id: ShapeId) -> ApiRe
 
     // Step 2 — reached only for a row step 1 admitted.
     if row.is_folded {
-        let successor = readback::live_shape_at(
-            pool,
-            principal,
-            row.home_anchor,
-            row.kind_owner,
-            &row.artifact_kind,
-        )
-        .await
-        .map_err(read_fault)?
-        .map(|live| ShapeSuccessor {
-            shape_id: live.shape_id,
-            shape_version: live.shape_version,
-        });
+        let successor = successor_of(pool, principal, &row).await?;
         return Ok(ShapeLoad::Superseded { successor });
     }
 
     // Step 3 — reached only for a live row.
+    compiled(row).await
+}
+
+/// What a continuation page's load found for the shape row its first page named: the load, and,
+/// when that row has been folded since, the version of its lineage now in force.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PinnedLoad {
+    /// Steps 1 and 3 on the named row, folded or not: `NotAskable`, `Uncompilable`,
+    /// `SchemaTooLarge`, or `Loaded` — never `Superseded`.
+    pub load: ShapeLoad,
+    /// The live row at the named row's home and family, when the named row is folded and the load
+    /// is `Loaded`; `None` otherwise.
+    pub amended_since: Option<ShapeSuccessor>,
+}
+
+/// Load the shape row a batch read's first page named, for a later page (spec §7.3, P17): refusal
+/// steps 1 and 3 on that row **even when it is folded**, and step 2 skipped, so an amendment
+/// between pages never strands an enumeration on `shape_superseded`. The row stays readable by id
+/// after folding (`shape_by_id`, `20260822000030`), and step 1 re-decides that readability on every
+/// page. A first page goes through [`load_one`], so a fresh ask naming a folded id is still refused
+/// `shape_superseded` and taught its successor.
+///
+/// # Errors
+/// A database fault, never a refusal.
+pub async fn load_one_pinned(
+    pool: &PgPool,
+    principal: ProfileId,
+    id: ShapeId,
+) -> ApiResult<PinnedLoad> {
+    // Step 1 — as `load_one`'s: absent and unreadable are both `None`.
+    let Some(row) = readback::shape_by_id(pool, principal, id)
+        .await
+        .map_err(read_fault)?
+    else {
+        return Ok(PinnedLoad {
+            load: ShapeLoad::NotAskable,
+            amended_since: None,
+        });
+    };
+
+    let successor = if row.is_folded {
+        successor_of(pool, principal, &row).await?
+    } else {
+        None
+    };
+    // Step 3 — on the named row, folded or not.
+    let load = compiled(row).await?;
+    let amended_since = successor.filter(|_| matches!(load, ShapeLoad::Loaded(_)));
+    Ok(PinnedLoad {
+        load,
+        amended_since,
+    })
+}
+
+/// The live row at a folded row's home and family — its successor — read through the gated
+/// [`readback::live_shape_at`]. Reached only for a row step 1 admitted; a successor is in the same
+/// home, so it is as readable as that row.
+async fn successor_of(
+    pool: &PgPool,
+    principal: ProfileId,
+    row: &RetrievedShape,
+) -> ApiResult<Option<ShapeSuccessor>> {
+    Ok(readback::live_shape_at(
+        pool,
+        principal,
+        row.home_anchor,
+        row.kind_owner,
+        &row.artifact_kind,
+    )
+    .await
+    .map_err(read_fault)?
+    .map(|live| ShapeSuccessor {
+        shape_id: live.shape_id,
+        shape_version: live.shape_version,
+    }))
+}
+
+/// Step 3 for a row a gated read returned: `Loaded`, or the refusal its schema's verdict decides.
+async fn compiled(row: RetrievedShape) -> ApiResult<ShapeLoad> {
     let verdict = verdict_of(row.shape_id, &row.schema).await?;
     Ok(match verdict.refusing_load() {
         Some(refused) => refused,
@@ -470,7 +546,7 @@ const TRUNCATED_NODE_BYTES: usize = 11 * size_of::<BoundKind>() + size_of::<usiz
 /// validated, whether they were admitted or refused — a refusal is what makes a teaching.
 ///
 /// **Only a teaching of a shape `shapes` holds as loaded, under that id, is remembered** — one the
-/// request's gated read returned live and compiling. A session makes a teaching only for such a
+/// request's gated read returned and that compiles. A session makes a teaching only for such a
 /// shape, since it walks no other; the check keeps that true of what this map holds whatever a
 /// caller passes. What the map lets go of is freed here, after its lock is released.
 ///
@@ -498,6 +574,16 @@ pub(crate) fn remember_path_teachings(
             .insert(id, teaching, weight, MAX_REMEMBERED_TEACHING_BYTES);
         drop(let_go);
     }
+}
+
+/// Once one request's asks are validated, remember each path teaching its session made, by the
+/// shape it teaches ([`remember_path_teachings`]), whether the asks were admitted or refused — a
+/// refusal is what makes a teaching. Every reader that validates asks calls this with the session
+/// it validated them through: `/api/query`'s `prepare`, and the batch read.
+pub(crate) fn remember_session(shapes: &ShapeContext, session: &AskSession<'_>) {
+    #[cfg(feature = "test-db")]
+    test_support::record_path_teachings(shapes, session.taught().cloned());
+    remember_path_teachings(shapes, session.taught().cloned());
 }
 
 /// What a caller may ask of a shape, for its by-id read (spec §2.5): the vocabulary the walk
@@ -634,8 +720,8 @@ pub mod test_support {
     }
 
     /// Count each path teaching a request's ask session made, by the tag of the loaded shape's
-    /// schema it teaches. Called by `query_read::prepare` beside remembering them, and apart from
-    /// it, so a request that remembers nothing is still counted.
+    /// schema it teaches. Called by `remember_session` beside remembering them, and apart from it,
+    /// so a request that remembers nothing is still counted.
     pub(crate) fn record_path_teachings(
         shapes: &ShapeContext,
         made: impl IntoIterator<Item = PathTeaching>,

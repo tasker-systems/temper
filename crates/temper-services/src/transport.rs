@@ -103,6 +103,48 @@ where
 /// plan the contract calls legal must not meet that bare `413` on the deployment we run.
 pub const VERCEL_REQUEST_BODY_CAP_BYTES: usize = 4_500_000;
 
+/// The hosting platform's hard response-body cap on Vercel: a function whose response body is past
+/// it fails there, whatever the door meant to send. The same figure as the request cap.
+///
+/// What is held under it: a batch read's page, through [`ARTIFACT_ASK_PAGE_CONTENT_BYTES`], on
+/// both doors that answer it — the API's body and the MCP relay's.
+pub const VERCEL_RESPONSE_BODY_CAP_BYTES: usize = 4_500_000;
+
+/// The most stored content one page of a batch read (`POST /api/data-artifacts/ask`) serves: the
+/// sum of its served rows' `content_bytes`. A matching row larger than this alone is named in the
+/// page's `oversized` list without its content; a row that fits alone but not in what is left ends
+/// the page, and the next page starts with it.
+///
+/// # 2,000,000 bytes, under [`VERCEL_RESPONSE_BODY_CAP_BYTES`] twice over
+///
+/// `content_bytes` is the length of the committed content in compact JSON, and a page serves that
+/// same value compactly re-serialized from storage, so a page's content is at most this many bytes
+/// of its body. Around it:
+///
+/// - **Row metadata**: each examined row's other fields (ids, family, hashes, timestamps), or an
+///   oversized entry, is under [`ARTIFACT_ROW_METADATA_BYTES`]; `MAX_ARTIFACT_PAGE_ROWS` (200)
+///   rows of it is 204,800 bytes. The family name is repeated on every row, so this holds while it
+///   is a few hundred bytes.
+/// - **The envelope** (shape, population, order, `next`, `amended_since`, keys): under
+///   [`ARTIFACT_PAGE_ENVELOPE_BYTES`].
+///
+/// So the API's body is at most 2,000,000 + 204,800 + 1,024 bytes. **The MCP relay re-encodes that
+/// body as one escaped JSON string**, and the budget is sized for it on two conditions the tool must
+/// keep: the body is written **compactly** — pretty-printing adds indentation per nesting level,
+/// which no byte budget bounds — and it is sent once, as text. Escaping compact JSON at most
+/// doubles it (`"` and `\` gain a backslash; every other byte it emits is written as it is or gains
+/// one byte). Twice the body plus the relay's own envelope is 4,412,672 bytes, under the 4,500,000
+/// cap.
+pub const ARTIFACT_ASK_PAGE_CONTENT_BYTES: usize = 2_000_000;
+
+/// The most one batch-read row costs a page beside its content (see
+/// [`ARTIFACT_ASK_PAGE_CONTENT_BYTES`]).
+pub const ARTIFACT_ROW_METADATA_BYTES: usize = 1024;
+
+/// The most a batch-read page's envelope, or the MCP relay's around it, costs (see
+/// [`ARTIFACT_ASK_PAGE_CONTENT_BYTES`]).
+pub const ARTIFACT_PAGE_ENVELOPE_BYTES: usize = 1024;
+
 /// The default request-body ceiling, in **decompressed** bytes, for a door that declares none.
 ///
 /// **This number is ratified, not derived, and that is the point of it being here.** Before this
@@ -223,6 +265,21 @@ pub async fn fallback_handler(req: axum::extract::Request) -> axum::response::Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A full page of a batch read fits the response cap after the MCP relay escapes it**, by the
+    /// arithmetic on [`ARTIFACT_ASK_PAGE_CONTENT_BYTES`]. Bite: the budget raised to 2,100,000, or
+    /// the doubling dropped from the sum.
+    #[test]
+    fn a_full_batch_page_fits_the_response_cap_after_the_relay_escapes_it() {
+        let rows = usize::try_from(temper_core::types::data_artifact::MAX_ARTIFACT_PAGE_ROWS)
+            .expect("the page ceiling fits a usize");
+        let body = ARTIFACT_ASK_PAGE_CONTENT_BYTES
+            + rows * ARTIFACT_ROW_METADATA_BYTES
+            + ARTIFACT_PAGE_ENVELOPE_BYTES;
+        let relayed = 2 * body + ARTIFACT_PAGE_ENVELOPE_BYTES;
+        assert_eq!(relayed, 4_412_672, "the figure the budget's doc states");
+        assert!(relayed <= VERCEL_RESPONSE_BODY_CAP_BYTES);
+    }
 
     /// An unmatched request is exactly how a token-in-path would travel if a route ever
     /// reintroduced one — the fallback must run the same redaction the root spans do,

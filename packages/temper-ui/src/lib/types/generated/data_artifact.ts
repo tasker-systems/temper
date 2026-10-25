@@ -113,7 +113,11 @@ kind_owner_table: string, kind_owner_id: string, artifact_kind: string,
  */
 intent: string, precedence: number, content_hash: string, content_bytes: bigint, 
 /**
- * `"never_declared"` today; will carry conformance verdicts when the shape registry lands.
+ * Conformance to the shape in force for the artifact's family in its home, by the staleness
+ * triple (shape id, shape version, content hash): `"never_declared"` when no shape is in
+ * force, else `"declared_satisfied"`, `"declared_not_satisfied"`, or
+ * `"declared_not_yet_checked"` when no verdict matches the triple (`_data_artifact_shape_state`,
+ * `20260822000020`; a batch read's rows carry the same state, computed set-based).
  */
 shape_state: string, is_folded: boolean, created: string, 
 /**

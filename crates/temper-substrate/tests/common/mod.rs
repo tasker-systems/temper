@@ -501,3 +501,6 @@ pub mod context_fixture;
 
 /// A loopback listener that counts connections — the "nothing was fetched" witness.
 pub mod fetch_probe;
+
+/// Test-only `pg_temp` variants of deployed SQL functions — how the artifact-ask bites are cut.
+pub mod function_variant;

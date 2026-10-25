@@ -1873,8 +1873,9 @@ pub async fn invocation_list_select(
 // ── Data artifact reads ───────────────────────────────────────────────────────────────────────
 
 /// Project a substrate readback artifact onto its wire shape. The one place the typed enums
-/// (`kind_owner`, `intent`, `shape_state`) become the strings the wire carries.
-fn artifact_view(
+/// (`kind_owner`, `intent`, `shape_state`) become the strings the wire carries — for the
+/// per-resource reads here and the batch read (`artifact_ask_read`).
+pub(crate) fn artifact_view(
     a: readback::RetrievedArtifact,
 ) -> temper_core::types::data_artifact::ArtifactView {
     temper_core::types::data_artifact::ArtifactView {

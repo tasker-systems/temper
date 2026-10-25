@@ -2833,6 +2833,184 @@ pub async fn artifacts_for_resource_page(
     Ok(RetrievedArtifactPage { artifacts, next })
 }
 
+/// The ask, bound and position of one [`artifacts_matching_ask`] page.
+#[derive(Debug, Clone, Copy)]
+pub struct AskPageParams<'a> {
+    pub principal: ProfileId,
+    /// One `ValidatedAsk::bind`, never the caller's own ask.
+    pub ask: &'a Value,
+    /// Continue strictly after this `(created, id)` position; `None` starts at the beginning.
+    pub after: Option<ArtifactCursor>,
+    /// Matching rows to examine, served and oversized alike. The caller has checked it against the
+    /// server ceiling.
+    pub limit: u32,
+    /// The most content bytes the page serves.
+    pub content_budget: usize,
+}
+
+/// One page of the artifacts matching an ask, and where the next one starts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RetrievedAskPage {
+    /// The examined rows within the content budget, whole, in `(created, id)` order.
+    pub artifacts: Vec<RetrievedArtifact>,
+    /// The examined rows larger than the budget alone, in the same order, without content.
+    pub oversized: Vec<temper_core::types::artifact_ask::OversizedArtifact>,
+    /// The last row examined, when a matching row remains after it; `None` when the page reaches
+    /// the end.
+    pub next: Option<ArtifactCursor>,
+}
+
+/// The `artifacts_matching_ask` row: an `artifacts_for_resource` row's columns, plus whether the
+/// page examined it and whether it served it.
+struct AskPageRow {
+    artifact_id: Uuid,
+    resource_id: Uuid,
+    kind_owner_table: String,
+    kind_owner_id: Uuid,
+    artifact_kind: String,
+    intent: String,
+    precedence: f64,
+    content_hash: String,
+    content_bytes: i64,
+    shape_state: String,
+    is_folded: bool,
+    created: DateTime<Utc>,
+    examined: bool,
+    served: bool,
+    content: Option<serde_json::Value>,
+}
+
+impl AskPageRow {
+    fn position(&self) -> ArtifactCursor {
+        ArtifactCursor {
+            created: self.created,
+            artifact_id: DataArtifactId::from(self.artifact_id),
+        }
+    }
+
+    fn into_artifact(self) -> Result<RetrievedArtifact> {
+        RetrievedArtifact::try_from(ArtifactRow {
+            artifact_id: self.artifact_id,
+            resource_id: self.resource_id,
+            kind_owner_table: self.kind_owner_table,
+            kind_owner_id: self.kind_owner_id,
+            artifact_kind: self.artifact_kind,
+            intent: self.intent,
+            precedence: self.precedence,
+            content_hash: self.content_hash,
+            content_bytes: self.content_bytes,
+            shape_state: self.shape_state,
+            is_folded: self.is_folded,
+            created: self.created,
+            content: self.content,
+        })
+    }
+}
+
+/// One page of the artifacts matching one ask, for `principal`, in `(created, id)` order, oldest
+/// first — through the gated `artifacts_matching_ask` (`20261106000000`), which builds the
+/// principal's visible set and reads the ask's counted set through its one body.
+///
+/// **What is decided in SQL, from `content_bytes`, in that one statement:** which rows are
+/// examined (within `limit` and the content budget), which of them are served with their content
+/// and which are oversized (larger than the budget alone, carried without it), and the first row
+/// not examined. Content past the budget never reaches this function. Here the examined rows are
+/// split into the two lists, and `next` is the last of them when a row was left unexamined.
+pub async fn artifacts_matching_ask(
+    pool: &PgPool,
+    params: AskPageParams<'_>,
+) -> Result<RetrievedAskPage> {
+    let rows = sqlx::query_as!(
+        AskPageRow,
+        r#"SELECT artifact_id        AS "artifact_id!",
+                  resource_id        AS "resource_id!",
+                  kind_owner_table   AS "kind_owner_table!",
+                  kind_owner_id      AS "kind_owner_id!",
+                  artifact_kind      AS "artifact_kind!",
+                  intent             AS "intent!",
+                  precedence         AS "precedence!",
+                  content_hash       AS "content_hash!",
+                  content_bytes      AS "content_bytes!",
+                  shape_state        AS "shape_state!",
+                  is_folded          AS "is_folded!",
+                  created            AS "created!",
+                  examined           AS "examined!",
+                  served             AS "served!",
+                  content
+             FROM artifacts_matching_ask($1, $2, $3, $4, $5, $6)"#,
+        params.principal.uuid(),
+        params.ask,
+        params.after.map(|c| c.created),
+        params.after.map(|c| c.artifact_id.uuid()),
+        i64::from(params.limit),
+        i64::try_from(params.content_budget)?,
+    )
+    .fetch_all(pool)
+    .await?;
+    ask_page_of(rows)
+}
+
+/// Split one page's rows, in order: the examined ones are a prefix, each served or oversized, and
+/// any row after them means the set goes on past the last of them.
+fn ask_page_of(rows: Vec<AskPageRow>) -> Result<RetrievedAskPage> {
+    let more = rows.iter().any(|r| !r.examined);
+    let mut artifacts = Vec::new();
+    let mut oversized = Vec::new();
+    let mut last = None;
+    for row in rows.into_iter().filter(|r| r.examined) {
+        last = Some(row.position());
+        if row.served {
+            artifacts.push(row.into_artifact()?);
+        } else {
+            oversized.push(temper_core::types::artifact_ask::OversizedArtifact {
+                artifact_id: DataArtifactId::from(row.artifact_id),
+                resource_id: ResourceId::from(row.resource_id),
+                content_bytes: row.content_bytes,
+            });
+        }
+    }
+    let next = match (more, last) {
+        (false, _) => None,
+        (true, Some(last)) => Some(last),
+        // The first matching row is always examined — it is within any limit, and either fits
+        // the budget or is oversized — so rows with none examined is a contract break, never an
+        // end of the set.
+        (true, None) => anyhow::bail!("artifacts_matching_ask examined no row of a non-empty page"),
+    };
+    Ok(RetrievedAskPage {
+        artifacts,
+        oversized,
+        next,
+    })
+}
+
+/// What one ask counted over its whole population, for `principal`: the gated
+/// `artifact_ask_counts` (`20261106000000`) over `__temper_ungated_artifact_ask_counts`
+/// (`20261105000000`), exactly one row whatever the population.
+pub async fn artifact_ask_population(
+    pool: &PgPool,
+    principal: ProfileId,
+    ask: &Value,
+) -> Result<temper_core::types::query::ArtifactAskPopulation> {
+    let row = sqlx::query!(
+        r#"SELECT declared_satisfied       AS "declared_satisfied!",
+                  declared_not_satisfied   AS "declared_not_satisfied!",
+                  declared_not_yet_checked AS "declared_not_yet_checked!",
+                  matched                  AS "matched!"
+             FROM artifact_ask_counts($1, $2)"#,
+        principal.uuid(),
+        ask,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(temper_core::types::query::ArtifactAskPopulation {
+        declared_satisfied: row.declared_satisfied,
+        declared_not_satisfied: row.declared_not_satisfied,
+        declared_not_yet_checked: row.declared_not_yet_checked,
+        matched: row.matched,
+    })
+}
+
 /// Counts only: per-family counts and total bytes, no content hydration. Same visibility gate.
 pub async fn artifact_counts_for_resource(
     pool: &PgPool,
