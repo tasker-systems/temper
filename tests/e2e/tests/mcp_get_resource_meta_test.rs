@@ -243,6 +243,7 @@ async fn mcp_list_emits_ref_for_every_row(pool: sqlx::PgPool) {
             ListResourcesInput {
                 goal: None,
                 cogmap: None,
+                ids: None,
                 stage: None,
                 status: None,
                 tags: None,
@@ -320,6 +321,7 @@ async fn mcp_list_envelope_carries_paging_state(pool: sqlx::PgPool) {
                     ListResourcesInput {
                         goal: None,
                         cogmap: None,
+                        ids: None,
                         stage: None,
                         status: None,
                         tags: None,
@@ -402,6 +404,7 @@ async fn mcp_list_carries_both_meta_tiers_for_every_row(pool: sqlx::PgPool) {
             ListResourcesInput {
                 goal: None,
                 cogmap: None,
+                ids: None,
                 stage: None,
                 status: None,
                 tags: None,

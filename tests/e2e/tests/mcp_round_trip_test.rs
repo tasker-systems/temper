@@ -981,6 +981,7 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
         temper_mcp::tools::resources::ListResourcesInput {
             goal: None,
             cogmap: None,
+            ids: None,
             stage: None,
             status: None,
             tags: None,
@@ -1044,6 +1045,7 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
         temper_mcp::tools::resources::ListResourcesInput {
             goal: None,
             cogmap: None,
+            ids: None,
             stage: None,
             status: None,
             tags: None,
