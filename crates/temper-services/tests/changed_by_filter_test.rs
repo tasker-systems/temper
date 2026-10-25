@@ -25,10 +25,13 @@ use uuid::Uuid;
 use temper_core::types::authorship::ActContext;
 use temper_core::types::element_trail::ElementKind;
 use temper_core::types::home::HomeAnchor;
-use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
+use temper_core::types::ids::{ContextId, EntityId, ProfileId, ResourceId};
 use temper_services::backend::{substrate_read, DbBackend};
 use temper_services::error::ApiError;
 use temper_services::services::{context_service, event_service};
+use temper_substrate::affinity::EdgeKind;
+use temper_substrate::events::{fire, EdgeHome, SeedAction};
+use temper_substrate::payloads::{AnchorRef, EdgePolarity};
 use temper_workflow::operations::{Backend, CreateResource, Surface, UpdateResource};
 use temper_workflow::types::managed_meta::ManagedMeta;
 use temper_workflow::types::resource::{
@@ -80,10 +83,7 @@ async fn seed_own_context(pool: &PgPool, profile: Uuid, slug: &str) -> Uuid {
 async fn seed_team_context(pool: &PgPool, members: &[Uuid]) -> (Uuid, Uuid) {
     let team: Uuid =
         sqlx::query_scalar("INSERT INTO kb_teams (slug, name) VALUES ($1,$1) RETURNING id")
-            .bind(format!(
-                "changes-{}",
-                &Uuid::now_v7().simple().to_string()[..8]
-            ))
+            .bind(format!("changes-{}", Uuid::now_v7().simple()))
             .fetch_one(pool)
             .await
             .expect("seed team");
@@ -590,29 +590,25 @@ async fn a_change_that_only_owns_a_property_or_names_a_block_counts(pool: PgPool
     );
 }
 
-/// Every domain event type is either an AUTHORED change, which counts, or one the system computes,
-/// which never does. A new type fails here until it is put on one side: counted or dropped by
+/// Every domain event type is either an AUTHORED change to the reader's work, which counts, or one
+/// that never does: computed by the system, an erasure, or an act that runs or routes work rather
+/// than changing it. A new type fails here until it is put on one side: counted or dropped by
 /// default would each be a silent decision about what "your change" means.
 const AUTHORED: &[&str] = &[
     "blob_committed",
     "blob_deleted",
-    "blob_erased",
     "block_created",
     "block_folded",
     "block_mutated",
     "block_provenance_annotated",
     "block_provenance_corrected",
     "charter_set",
-    "citation_audited",
     "cogmap_seeded",
-    "context_erased",
     "context_reassigned",
     "context_renamed",
     "context_restored",
     "context_retired",
     "data_artifact_committed",
-    "delegated_launch",
-    "invocation_closed",
     "property_asserted",
     "property_folded",
     "property_retracted",
@@ -633,14 +629,22 @@ const AUTHORED: &[&str] = &[
     "resource_rehomed",
     "resource_updated",
     "shape_declared",
-    "subscription_delivery_disposed",
 ];
-const COMPUTED: &[&str] = &[
+const NOT_COUNTED: &[&str] = &[
     "region_materialized",
     "salience_refreshed",
     "relationship_decayed",
     // Not computed, but never a change: an inbound webhook as received (the trail drops it too).
     "webhook_received",
+    // Erasures: admin-only, with surfaces of their own, and no change to the admin's work.
+    "blob_erased",
+    "context_erased",
+    // Acts that run or route work rather than change it.
+    "delegated_launch",
+    "invocation_closed",
+    "subscription_delivery_disposed",
+    // A ledger record of a judgement, seen in the event trail and never on the work itself.
+    "citation_audited",
 ];
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
@@ -653,13 +657,13 @@ async fn every_domain_event_type_is_classified_and_only_authored_ones_count(pool
     .expect("domain types");
     let mut classified: Vec<String> = AUTHORED
         .iter()
-        .chain(COMPUTED)
+        .chain(NOT_COUNTED)
         .map(|s| s.to_string())
         .collect();
     classified.sort();
     assert_eq!(
         classified, domain,
-        "classify every domain event type as AUTHORED or COMPUTED in this file"
+        "classify every domain event type as AUTHORED or NOT_COUNTED in this file"
     );
 
     let reader = seed_profile(&pool, "reader").await;
@@ -671,7 +675,7 @@ async fn every_domain_event_type_is_classified_and_only_authored_ones_count(pool
     for (name, counts) in AUTHORED
         .iter()
         .map(|n| (*n, true))
-        .chain(COMPUTED.iter().map(|n| (*n, false)))
+        .chain(NOT_COUNTED.iter().map(|n| (*n, false)))
     {
         let id = create(&backend(&pool, teammate), shared, name).await;
         emit(
@@ -689,7 +693,7 @@ async fn every_domain_event_type_is_classified_and_only_authored_ones_count(pool
     let mut got = changed(&pool, reader).await;
     got.sort();
     want.sort();
-    assert_eq!(got, want, "authored types count and computed ones do not");
+    assert_eq!(got, want, "authored types count and the others do not");
 }
 
 /// The region-job case the security review reproduced: a materialization stamped with the reader's
@@ -718,6 +722,134 @@ async fn a_materialization_stamped_with_the_readers_emitter_is_not_their_change(
     let after = at(&activity(&pool, reader).await, shared);
     assert_eq!(after, before, "a computed event is no act of the reader's");
     assert_eq!(changed(&pool, reader).await, vec![mine]);
+}
+
+async fn entity_of(pool: &PgPool, profile: Uuid) -> Uuid {
+    sqlx::query_scalar("SELECT id FROM kb_entities WHERE profile_id = $1 ORDER BY id LIMIT 1")
+        .bind(profile)
+        .fetch_one(pool)
+        .await
+        .expect("the profile has an entity")
+}
+
+/// A field scrub and a resource erasure, each run on a teammate's work, write ordinary domain
+/// events under the admin's emitter: the scrub's `resource_updated` and property events, the
+/// erasure's `relationship_folded` per edge it ends. They are the act, correlated with its own
+/// record, and no change to the admin's work. A fold the admin makes themselves still is, whatever
+/// reason it gives.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_admins_scrub_and_erasure_are_not_their_change_and_their_own_fold_is(pool: PgPool) {
+    let admin = seed_profile(&pool, "admin").await;
+    let teammate = seed_profile(&pool, "teammate").await;
+    let (_, scrubbed_in) = seed_team_context(&pool, &[admin, teammate]).await;
+    let (_, erased_in) = seed_team_context(&pool, &[admin, teammate]).await;
+    let (_, folded_in) = seed_team_context(&pool, &[admin, teammate]).await;
+    let t = backend(&pool, teammate);
+    let scrubbed = create(&t, scrubbed_in, "scrubbed").await;
+    let erased = create(&t, erased_in, "erased").await;
+    let neighbour = create(&t, erased_in, "neighbour").await;
+    let mut conn = pool.acquire().await.expect("acquire");
+    fire(
+        &mut conn,
+        SeedAction::RelationshipAssert {
+            src: AnchorRef::resource(ResourceId::from(erased)),
+            tgt: AnchorRef::resource(ResourceId::from(neighbour)),
+            kind: EdgeKind::LeadsTo,
+            polarity: EdgePolarity::Forward,
+            label: Some("advances"),
+            weight: 1.0,
+            home: EdgeHome::Context(ContextId::from(erased_in)),
+            emitter: EntityId::from(entity_of(&pool, teammate).await),
+        },
+    )
+    .await
+    .expect("the edge the erasure will end");
+    drop(conn);
+
+    let emitter = entity_of(&pool, admin).await;
+    let scrub_ref = Uuid::now_v7();
+    sqlx::query("SELECT resource_field_scrub_execute($1, 'title', NULL, true, $2, $3, $4)")
+        .bind(scrubbed)
+        .bind(admin)
+        .bind(emitter)
+        .bind(scrub_ref)
+        .execute(&pool)
+        .await
+        .expect("the scrub clears the title");
+    sqlx::query("SELECT resource_erasure_execute($1, $2, $3, $4)")
+        .bind(erased)
+        .bind(admin)
+        .bind(emitter)
+        .bind(Uuid::now_v7())
+        .execute(&pool)
+        .await
+        .expect("the erasure completes");
+
+    // Not vacuous: the acts wrote counted types, anchored, under the admin's emitter.
+    let written: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT et.name FROM kb_events ev JOIN kb_event_types et ON et.id = ev.event_type_id \
+          WHERE ev.emitter_entity_id = $1 AND et.category = 'domain' \
+            AND ev.producing_anchor_table IS NOT NULL ORDER BY 1",
+    )
+    .bind(emitter)
+    .fetch_all(&pool)
+    .await
+    .expect("the acts' events");
+    for counted in ["relationship_folded", "resource_updated"] {
+        assert!(
+            written.iter().any(|n| n == counted),
+            "the acts wrote a {counted}: {written:?}"
+        );
+    }
+
+    assert_eq!(changed(&pool, admin).await, Vec::<Uuid>::new());
+    let places = activity(&pool, admin).await;
+    assert_eq!(at(&places, scrubbed_in), None, "a scrub moves no time");
+    assert_eq!(at(&places, erased_in), None, "an erasure moves no time");
+
+    emit(
+        &pool,
+        admin,
+        "relationship_folded",
+        folded_in,
+        serde_json::json!({ "edge_id": Uuid::now_v7(), "reason": "resource_erased" }),
+    )
+    .await;
+    assert!(
+        at(&activity(&pool, admin).await, folded_in).is_some(),
+        "the admin's own fold is their change, whatever its reason"
+    );
+
+    // A sibling emitter of the same profile, an agent's surface, writing under the scrub's id:
+    // the act's record is the other emitter's, so this is the admin's change.
+    let sibling: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_entities (id, profile_id, name, metadata, created) \
+         VALUES ($1, $2, 'admin@agent', '{}'::jsonb, now()) RETURNING id",
+    )
+    .bind(Uuid::now_v7())
+    .bind(admin)
+    .fetch_one(&pool)
+    .await
+    .expect("a sibling emitter");
+    let agents = create(&t, scrubbed_in, "agents").await;
+    sqlx::query(
+        "INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, \
+                                producing_anchor_id, payload, category, correlation_id) \
+         SELECT et.id, $1, 'kb_contexts', $2, $3, et.category, $4 \
+           FROM kb_event_types et WHERE et.name = 'resource_updated'",
+    )
+    .bind(sibling)
+    .bind(scrubbed_in)
+    .bind(serde_json::json!({ "resource_id": agents }))
+    .bind(scrub_ref)
+    .execute(&pool)
+    .await
+    .expect("the sibling's write");
+    assert_eq!(
+        changed(&pool, admin).await,
+        vec![agents],
+        "one emitter's act hides nothing a sibling emitter wrote"
+    );
 }
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]

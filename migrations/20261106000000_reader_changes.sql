@@ -12,14 +12,30 @@
 --      its own profile (`kb_machine_clients.profile_id`), so its changes are never the reader's,
 --      whoever registered it. Do not widen this to `registered_by_profile_id` or to team members.
 --      `p_profile` is the principal, as in every gate function here: the doors bind the caller.
---   2. AUTHORED CHANGES ONLY. Domain events, anchored, never `webhook_received` (the filter
---      `element_trail_node` applies, 20261007100000), and never an event the SYSTEM computes:
---      `region_materialized`, `salience_refreshed` and `relationship_decayed`. A region job
---      carries the emitter of the write that first queued it (`queue_region_clocks`), and the
---      queue folds later writers into that one job, so a materialization driven by teammates'
---      writes is stamped with whoever wrote first. Counting it would move a reader's "last
---      changed" with no act of theirs. `changed_by_filter_test.rs` partitions every domain type
---      into authored or computed, so a new type is classified before it is counted or dropped.
+--   2. AUTHORED CHANGES TO THE READER'S WORK ONLY. Domain events, anchored, never
+--      `webhook_received` (the filter `element_trail_node` applies, 20261007100000), and never an
+--      event the SYSTEM computes: `region_materialized`, `salience_refreshed` and
+--      `relationship_decayed`. A region job carries the emitter of the write that first queued it
+--      (`queue_region_clocks`), and the queue folds later writers into that one job, so a
+--      materialization driven by teammates' writes is stamped with whoever wrote first. Counting
+--      it would move a reader's "last changed" with no act of theirs. Never an ADMIN ACT on
+--      others' work either: `blob_erased` and `context_erased`, and every event an erasure or scrub writes
+--      through the ordinary write paths — the `relationship_folded` per edge an erasure ends, the
+--      `resource_updated`, `property_set` and `property_unset` a field scrub clears with. Each act
+--      gives its events its request reference as their correlation id and records itself under
+--      that id (`resource_erased`, `principal_erased`, `resource_scrubbed`,
+--      `block_history_scrubbed`), so an event is the act's when it shares a correlation id with
+--      one of those records AND was written by the same emitter. Both sides already read only this
+--      profile's entities; the emitter bound keeps one surface's act from hiding what a sibling
+--      emitter of the same profile wrote under that id (an agent's writes, another surface's).
+--      Principal erasure takes its request reference from the request, so an admin who reuses an
+--      id they gave their own ordinary writes hides those writes from themselves. Only an admin runs these, they have
+--      their own surfaces, and they are no change to the admin's work; an ordinary fold is a soft
+--      delete and counts, whatever reason it gives. Nor the acts that run or route work rather
+--      than change it (`invocation_closed`, `delegated_launch`, `subscription_delivery_disposed`),
+--      nor `citation_audited`, a ledger record of a judgement seen in the event trail and never on
+--      the work itself. `changed_by_filter_test.rs` partitions every domain type into counted
+--      or not, so a new type is classified before it is counted or dropped.
 --   3. THE TRAIL'S ARMS, OVER AUTHORED EVENTS. A resource counts when its element trail holds one
 --      of these events, through the trail's three arms: the event names the resource, owns a
 --      property of it, or names one of its blocks. The trail itself also shows the computed types
@@ -42,6 +58,18 @@ RETURNS TABLE (occurred_at timestamptz,
                resource_id uuid, owner_resource_id uuid, block_id uuid,
                producing_anchor_table varchar, producing_anchor_id uuid)
 LANGUAGE sql STABLE AS $$
+    -- The admin acts this profile's emitters recorded, by correlation id: bounded by the
+    -- profile's own history and four rare types, so it never reads the rest of the ledger.
+    WITH acts AS MATERIALIZED (
+        SELECT act.correlation_id, act.emitter_entity_id
+          FROM kb_entities en
+          JOIN kb_events act ON act.emitter_entity_id = en.id
+          JOIN kb_event_types act_t ON act_t.id = act.event_type_id
+         WHERE en.profile_id = p_profile
+           AND act.correlation_id IS NOT NULL
+           AND act_t.name IN ('resource_erased', 'principal_erased',
+                              'resource_scrubbed', 'block_history_scrubbed')
+    )
     SELECT ev.occurred_at,
            (ev.payload ->> 'resource_id')::uuid,
            CASE WHEN ev.payload -> 'owner' ->> 'table' = 'kb_resources'
@@ -55,11 +83,17 @@ LANGUAGE sql STABLE AS $$
        AND ev.producing_anchor_table IS NOT NULL
        AND et.category = 'domain'
        AND et.name <> ALL (ARRAY['webhook_received',
-                                 'region_materialized', 'salience_refreshed', 'relationship_decayed'])
+                                 'region_materialized', 'salience_refreshed', 'relationship_decayed',
+                                 'blob_erased', 'context_erased',
+                                 'invocation_closed', 'delegated_launch',
+                                 'subscription_delivery_disposed', 'citation_audited'])
+       AND NOT EXISTS (SELECT 1 FROM acts
+                        WHERE acts.correlation_id = ev.correlation_id
+                          AND acts.emitter_entity_id = ev.emitter_entity_id)
 $$;
 
 COMMENT ON FUNCTION _profile_change_events(uuid) IS
-    'UNGATED, and private to resources_changed_by and contexts_changed_by: the anchored, authored domain events emitted by any entity of p_profile (never webhook_received, and never the system-computed region_materialized, salience_refreshed or relationship_decayed), with the three resource ids the element trail matches on. The reader''s own changes, including those of agents acting under the profile, and never a machine client''s, which is its own profile. Not one of the verdict-handed ungated fragments (20260808000030): it is handed none. Call the gated readers instead. (20261106000000)';
+    'UNGATED, and private to resources_changed_by and contexts_changed_by: the anchored, authored domain events emitted by any entity of p_profile (never webhook_received; never the system-computed region_materialized, salience_refreshed or relationship_decayed; never an admin act on others'' work: blob_erased, context_erased, or any event sharing its correlation id and emitter with a resource_erased, principal_erased, resource_scrubbed or block_history_scrubbed record; never invocation_closed, delegated_launch, subscription_delivery_disposed or citation_audited), with the three resource ids the element trail matches on. The reader''s own changes, including those of agents acting under the profile, and never a machine client''s, which is its own profile. Not one of the verdict-handed ungated fragments (20260808000030): it is handed none. Call the gated readers instead. (20261106000000)';
 
 CREATE FUNCTION resources_changed_by(p_profile uuid)
 RETURNS TABLE (resource_id uuid, changed_at timestamptz)

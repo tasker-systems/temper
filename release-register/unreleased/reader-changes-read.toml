@@ -7,6 +7,8 @@ body = '''
 `GET /api/resources` gains `changed_by` and the sort field `changed_by_me`.
 - `changed_by=@me` narrows the list to resources the caller changed. A change counts when the resource's own element trail holds an authored event the caller's profile emitted: by the caller themselves, or by an agent writing under their profile, on any surface.
 - Events the system computes (`region_materialized`, `salience_refreshed`, `relationship_decayed`) never count, even though a region job carries the emitter of whoever's write queued it.
+- An admin's erasures and scrubs never count: `blob_erased`, `context_erased`, and every ordinary event such an act writes (an erasure's `relationship_folded` per edge, a field scrub's `resource_updated` and property events), which the act ties to its own record by correlation id and emitter, so an agent's or another surface's writes under the same id still count. Only an admin runs these, and they have surfaces of their own. Any other fold is a soft delete and counts.
+- Acts that run or route work rather than change it never count: `invocation_closed`, `delegated_launch`, `subscription_delivery_disposed`, `citation_audited`.
 - A machine client is its own profile, and its changes are not the caller's, even when the caller registered it. A teammate's change to the caller's resource does not count; the caller's change to a teammate's resource does. That is how this differs from `owner=@me`.
 - The filter composes with every other filter as one more AND, under the same visibility join, so a resource the caller changed and can no longer read is absent from the rows, from `total` and from the facet histograms.
 - `sort=changed_by_me` orders by the caller's own latest change to each resource, not by the resource's `updated`.
