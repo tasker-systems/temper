@@ -247,8 +247,9 @@ pub fn ask_result(page: &AskResponse) -> Result<CallToolResult, rmcp::ErrorData>
     compact_result("ask_data_artifacts", page)
 }
 
-/// A read's answer as every read tool here gives it (`list_data_artifacts`, `get_data_artifact`,
-/// `ask_data_artifacts`): **compact JSON**, as one text block. The relay escapes the block into its
+/// An answer as every tool here that returns an artifact gives it (`list_data_artifacts`,
+/// `get_data_artifact`, `ask_data_artifacts`, and `commit_data_artifact`, which echoes the artifact
+/// it stored): **compact JSON**, as one text block. The relay escapes the block into its
 /// response, which at most about doubles compact JSON, so an answer here stays within about twice
 /// what the API serves for the same value. Pretty-printing would add a line break and indentation
 /// for every array element and object member, which nothing bounds.

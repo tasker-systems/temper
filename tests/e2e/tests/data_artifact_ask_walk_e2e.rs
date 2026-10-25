@@ -91,8 +91,10 @@ const PAGE_TIMEOUT: Duration = Duration::from_secs(15);
 /// runner kills this binary at 240 seconds (its override in `.config/nextest.toml`), and every
 /// collected finding is lost with it. So once this is spent no further walk or page starts, and
 /// each one skipped is a finding. One page already in flight can still take [`PAGE_TIMEOUT`]
-/// twice (raw, and through the client), so the run ends by 210 seconds, inside the kill, whatever
-/// building the world costs.
+/// twice (raw, and through the client), so the test body ends by 210 seconds, inside the kill,
+/// whatever building the world costs. The test database's setup (the harness creating it and
+/// applying the migrations) runs before the body and outside this budget, so it has the last 30
+/// seconds of the kill to itself.
 const WALK_BUDGET: Duration = Duration::from_secs(180);
 
 /// The page limits the `tag`-present ask, the ask with no predicates and the long family are
@@ -1437,7 +1439,7 @@ fn shown(limit: Option<u32>) -> String {
 ///   `unstorable_nul` check): the three U+0000 probes answer 500, "not refused as a 400".
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn every_walk_of_a_hostile_corpus_ends_and_every_page_parses_fits_and_is_whole(pool: PgPool) {
-    // Counted from the test's start, so the run ends inside the kill whatever building the world
+    // Counted from the body's start, so the body ends inside the kill whatever building the world
     // costs: a slow world leaves fewer walks run, each a named finding.
     let mut clock = Clock::starting_now();
     let w = world(pool).await;

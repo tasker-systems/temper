@@ -80,10 +80,12 @@ RSpec.describe Temper::WireTime do
   end
 
   # A `Time` in free-form JSON is no declared timestamp: the body is exactly the one the generated
-  # core writes, so the content a caller commits is stored, and hashed, as the caller wrote it.
+  # core writes, so the content a caller commits is stored, and hashed, as the caller wrote it. A
+  # generated model placed there is free-form too: its declared timestamps are not stamped.
   it 'leaves a Time in free-form content to the json gem' do
     at = Time.parse(created)
-    [at, { observed_at: at, readings: [at, { at: at }] }].each do |content|
+    model = Temper::Generated::ArtifactCursor.new(created: at, artifact_id: artifact_id)
+    [at, { observed_at: at, readings: [at, { at: at }] }, model, [model]].each do |content|
       request = Temper::Generated::ArtifactCommitRequest.new(kind: 'measurement', intent: 'current', content: content)
       expect(Temper.api_client.object_to_http_body(request)).to eq(request.to_hash.to_json)
     end

@@ -53,7 +53,7 @@ module Temper
     end
 
     # Each field of `model_class` that `written` holds: stamped where the class declares it a
-    # timestamp, and entered by its declared type (`stamp_slot`). `value_of` gives the caller's
+    # timestamp, and entered by its declared type (`stamp_slot`). The block gives the caller's
     # value for an attribute, which for a model is the attribute and for a hash is its entry.
     def self.stamp_fields(model_class, written)
       model_class.openapi_types.each do |attr, type|
@@ -68,9 +68,11 @@ module Temper
     # A slot declared `type`, holding the caller's `value` and written as `written`. A model is
     # entered as itself. A hash is entered when the slot declares a model, so a part a caller writes
     # as a hash (`after: { created: …, artifact_id: … }`, the idiom the SDK's own surfaces use) is
-    # stamped as its model would be. An array is entered element by element. Anything the slot
-    # declares free-form (`Object`) is never entered.
+    # stamped as its model would be. An array is entered element by element. A slot declared
+    # free-form (`Object`) is never entered, whatever it holds, a generated model included.
     def self.stamp_slot(type, value, written)
+      return if type.to_s == 'Object'
+
       if value.class.respond_to?(:openapi_types)
         stamp_declared(value, written)
       elsif value.is_a?(Array) && written.is_a?(Array)
