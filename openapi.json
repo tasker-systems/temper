@@ -7421,6 +7421,99 @@
         "x-apidog-folder": "Reference/API Reference/Contexts"
       }
     },
+    "/api/data-artifacts/ask": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Data Artifacts"
+        ],
+        "summary": "Read the artifacts one ask matches, whole",
+        "description": "The body is one ask — a shape by id and predicates over the paths that shape declares — with\nan optional `limit` and the previous page's `next` as `after`. The answer is the artifacts the\nask matches among those you can see, each whole (`content` is the stored content, absent for an\nartifact committed with no bytes), in `(created, artifact_id)` order, oldest first. POST,\nbecause the ask is a document rather than a query string.\n\nEvery page is bounded twice: by `limit` (absent: 50; at least 1 and at most 200), and by a\nbyte budget over the whole page. A matching artifact too large for any page is named in\n`oversized`, in order, by id and size, and is read whole by id (`GET\n/api/data-artifacts/{artifact_id}`). `population` counts the ask's whole governed population on\nthe first page and is `null` after it. Continue by sending the same ask with `next` as `after`;\nevery page validates the ask again for its caller, so the position carries no authority.\n\nThis is an enumeration: an artifact on a resource still ingesting, or one an operator ended, is\nnot in it, though `GET /api/resources/{id}/artifacts` addressed to that resource lists it. It\nnever returns resources, and it is not a stage of `/api/query`.",
+        "operationId": "ask_data_artifacts",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "One page of the matching artifacts, whole, in `(created, artifact_id)` order, with where to continue (`next`, `null` on the last page)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AskResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Two codes. `PLAN_REFUSED`: the ask will not be answered, with every refusal at once in `error.details.refusals` — the ask's own (each naming its reason and, where it has one, a `teaches` carrying the shape's vocabulary) and the request's (`page_limit_out_of_range`, `property_value_budget_exceeded`), none with a stage. A shape you cannot read is refused exactly as one that does not exist (`shape_not_askable`). `UNREADABLE_PLAN`, with no `details`: the body is not JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "System access required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The body is not an ask this door can read — a value of the wrong type, a field it does not declare, or an `after` missing half its position — under the code `UNREADABLE_PLAN`, the message naming what failed and repeating at most 1024 bytes of it. A non-JSON content type answers `415` under the same code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Data Artifacts"
+      }
+    },
     "/api/data-artifacts/{artifact_id}": {
       "parameters": [
         {
@@ -16391,6 +16484,25 @@
           }
         }
       },
+      "ArtifactCursor": {
+        "type": "object",
+        "description": "A position in the `(created, id)` keyset order that `artifacts_for_resource` returns rows in.\n\nIt carries position and no authority: each page re-runs the read gate for the asker, so a\ncursor handed to another principal, or replayed after access is revoked, reveals nothing\nthe read would not. That is why it is a legible object and not an opaque token, and needs\nno decoder in any SDK. Every bounded artifact read continues with this one type.",
+        "required": [
+          "created",
+          "artifact_id"
+        ],
+        "properties": {
+          "artifact_id": {
+            "$ref": "#/components/schemas/DataArtifactId",
+            "description": "The `artifact_id` of the last artifact on the previous page; breaks ties on `created`."
+          },
+          "created": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The `created` of the last artifact on the previous page."
+          }
+        }
+      },
       "ArtifactPredicate": {
         "type": "object",
         "description": "One predicate: a path of object-key segments into the content, and an operator from the closed\n`PropertyOp` set — reused, not copied (§3.2). There is no `eq`, regex, prefix or text-search\noperator, so a resemblance-shaped question has no way to be written down.",
@@ -16487,6 +16599,114 @@
           "compare"
         ]
       },
+      "AskOrder": {
+        "type": "string",
+        "description": "The order a batch read returns rows in: `created`, oldest first, ties broken by artifact id.\nThe one order v0 serves; closed, so a reader can match it exhaustively.",
+        "enum": [
+          "created"
+        ]
+      },
+      "AskRequest": {
+        "type": "object",
+        "description": "One page of a batch read: the ask, re-sent whole on every page, and where to continue.\n\n**The continuation carries position, never authority** (§7.3): every page runs the ask's\nvalidation again for the asker, so a cursor handed to another principal, or replayed after\naccess is revoked, reveals nothing a first page would not.\n\n**Strict**, like [`ArtifactAsk`]: an unknown field is a body that cannot be read, never a field\nthat silently changes nothing. `after` is one [`ArtifactCursor`] object, so half a position is\na body that cannot be read either.",
+        "required": [
+          "ask"
+        ],
+        "properties": {
+          "after": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ArtifactCursor",
+                "description": "Continue after this position: the previous page's `next`, unchanged, with the same ask.\nAbsent: the first page."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ask": {
+            "$ref": "#/components/schemas/ArtifactAsk",
+            "description": "The question, against its governing shape."
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How many matching artifacts this page examines — served and oversized alike. At least 1\nand at most `MAX_ARTIFACT_PAGE_ROWS`, which is 200; a value outside that range is refused\n(`page_limit_out_of_range`), never clamped. Absent: `ARTIFACT_DRAIN_PAGE_ROWS`, which is\n50.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "AskResponse": {
+        "type": "object",
+        "description": "One page of the artifacts matching an ask, in `(created, artifact_id)` order, oldest first.",
+        "required": [
+          "shape",
+          "artifacts",
+          "oversized",
+          "ordered_by"
+        ],
+        "properties": {
+          "amended_since": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ShapeSuccessor",
+                "description": "The version of the shape's lineage now in force, when the version this enumeration was\nvalidated against has been amended since its first page; `null` otherwise. Later pages keep\nanswering against the version the first page named."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactView"
+            },
+            "description": "The matching artifacts that fit this page's byte budget, each whole: `content` is the\nstored content, absent for an artifact committed with no bytes. `resource_id` is\nattribution, not a set."
+          },
+          "next": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ArtifactCursor",
+                "description": "Where to continue, or `null` when this page is the last. Pass it back unchanged as the next\nrequest's `after`, with the same ask."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ordered_by": {
+            "$ref": "#/components/schemas/AskOrder",
+            "description": "The order rows arrive in. Enumeration order, never rank."
+          },
+          "oversized": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OversizedArtifact"
+            },
+            "description": "Matching artifacts too large for any page's byte budget, in order among the rest, by id and\nsize and without content. Each is read whole by id (`GET /api/data-artifacts/{artifact_id}`)."
+          },
+          "population": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ArtifactAskPopulation",
+                "description": "What the ask counted over its whole population, on the first page; `null` on every later\npage."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "shape": {
+            "$ref": "#/components/schemas/AskedShape",
+            "description": "The shape version this page was validated against: on the first page the version the ask\nnamed, and on every later page that same version, even once amended (see `amended_since`)."
+          }
+        }
+      },
       "AskablePath": {
         "type": "object",
         "description": "One askable path: its segments, what the schema declares there, and the operators feasible at\nit (spec §2.5).",
@@ -16510,6 +16730,33 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "AskedShape": {
+        "type": "object",
+        "description": "The shape version a batch page was validated against, and the home its population ranges over.",
+        "required": [
+          "shape_id",
+          "shape_version",
+          "home_anchor_table",
+          "home_anchor_id"
+        ],
+        "properties": {
+          "home_anchor_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "home_anchor_table": {
+            "type": "string",
+            "description": "`\"kb_contexts\"` or `\"kb_cogmaps\"`."
+          },
+          "shape_id": {
+            "$ref": "#/components/schemas/ShapeId"
+          },
+          "shape_version": {
+            "type": "integer",
+            "format": "int32"
           }
         }
       },
@@ -22595,6 +22842,27 @@
             "description": "The stages whose rows are hydrated and returned. DECLARED, not inferred from graph shape:\ninferring from out-degree zero makes returning an intermediate impossible without a dummy\nconsumer, and means adding a downstream stage silently stops returning what you used to get\nback. The composition's produced kind(s) are DERIVED from these, replacing the old single\n`produces` field which could only ever be right for a one-arm plan.",
             "maxItems": 64,
             "minItems": 1
+          }
+        }
+      },
+      "OversizedArtifact": {
+        "type": "object",
+        "description": "A matching artifact too large for a page's byte budget by itself, its content and the rest of its\nrow together: named, sized, and left to be read by id.",
+        "required": [
+          "artifact_id",
+          "resource_id",
+          "content_bytes"
+        ],
+        "properties": {
+          "artifact_id": {
+            "$ref": "#/components/schemas/DataArtifactId"
+          },
+          "content_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "resource_id": {
+            "$ref": "#/components/schemas/ResourceId"
           }
         }
       },

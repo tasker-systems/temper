@@ -164,8 +164,8 @@ export type BoundKind = "depth" | "paths" | "schema_bytes" | "work";
 export type JsonType = "null" | "boolean" | "integer" | "number" | "string" | "array" | "object";
 
 /**
- * A matching artifact whose content alone is larger than a page's byte budget: named, sized, and
- * left to be read by id.
+ * A matching artifact too large for a page's byte budget by itself, its content and the rest of its
+ * row together: named, sized, and left to be read by id.
  */
 export type OversizedArtifact = { artifact_id: DataArtifactId, resource_id: ResourceId, content_bytes: bigint, };
 

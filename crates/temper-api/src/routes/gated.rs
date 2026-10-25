@@ -31,6 +31,10 @@ pub(super) fn gated_routes() -> OpenApiRouter<AppState> {
         // takes only the artifact id; the nested route's REST parent is a field its
         // declaration cannot grow). Route-first for the beat G4 door crossing.
         .routes(routes!(handlers::data_artifacts::get_by_id))
+        // The batch read of one artifact ask. Its path is a static segment beside the flat read's
+        // `{artifact_id}`; the static one is matched first, so a GET to it meets this POST-only
+        // route rather than the flat read.
+        .routes(routes!(handlers::data_artifacts::ask))
         // `blobs::commit` and `blobs::append_segment` are NOT mounted here: they are the
         // two doors whose legal body sizes exceed axum's inherited default, so they merge
         // through `blob_commit_routes` / `blob_segment_routes` with limits sized from

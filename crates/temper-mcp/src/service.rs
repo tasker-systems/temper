@@ -880,6 +880,20 @@ impl TemperMcpService {
     }
 
     #[tool(
+        description = "Ask one shape's data artifacts what they hold, and receive the matching artifacts themselves, whole, one bounded page at a time. `ask` names a shape by id (read its askable paths with `get_data_artifact_shape`) and predicates over that shape's paths, with the same operators `run_query`'s `artifact_filter` takes; to find the RESOURCES that own matching artifacts instead, use `run_query`'s `find-resources-with`. The answer is `{shape, artifacts, oversized, population, ordered_by, next, amended_since}`: `artifacts` in (created, artifact_id) order, oldest first, each with its content whole; `oversized` names, in order, matching artifacts too large for a page, to read whole with `get_data_artifact`; `population` (first page only) counts the ask's governed artifacts by shape state and how many matched. `limit` is 1 to 200 (default 50). To continue, call again with the same `ask` and `next` passed back unchanged as `after`; `next` is null on the last page, and `amended_since` names the shape version now in force if the shape was amended between pages. This is an enumeration: artifacts of resources still ingesting are not in it, though `list_data_artifacts` on that resource lists them. A refused ask returns every refusal at once; the error's `data` carries them as structured `{refusals: [...]}`, each with its `reason` and, where it has one, a `teaches` naming the shape's vocabulary. A shape you cannot read is refused exactly as one that does not exist.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn ask_data_artifacts(
+        &self,
+        Parameters(input): Parameters<tools::data_artifacts::AskInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::data_artifacts::ask_artifacts(self, &parts, input).await
+    }
+
+    #[tool(
         description = "Commit one data artifact to a resource. The content payload is JSON, hashed and stored verbatim. Auth-gated: requires write standing on the owning resource. Use intent 'current' for the active value, 'member' for an ordered peer, or 'pinned' for a frozen reference. Use supersedes to name artifacts this one replaces (they become folded).",
         annotations(
             read_only_hint = false,

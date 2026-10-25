@@ -2844,16 +2844,20 @@ pub struct AskPageParams<'a> {
     /// Matching rows to examine, served and oversized alike. The caller has checked it against the
     /// server ceiling.
     pub limit: u32,
-    /// The most content bytes the page serves.
-    pub content_budget: usize,
+    /// The most bytes the page's rows cost together: each served row its content and metadata, each
+    /// oversized row `row_bytes`.
+    pub page_budget: usize,
+    /// What a row costs beside its content and its text columns — its ids, numbers, timestamps,
+    /// keys and punctuation — and what an oversized row costs whole.
+    pub row_bytes: usize,
 }
 
 /// One page of the artifacts matching an ask, and where the next one starts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RetrievedAskPage {
-    /// The examined rows within the content budget, whole, in `(created, id)` order.
+    /// The examined rows that fit the page's budget, whole, in `(created, id)` order.
     pub artifacts: Vec<RetrievedArtifact>,
-    /// The examined rows larger than the budget alone, in the same order, without content.
+    /// The examined rows that do not fit the budget alone, in the same order, without content.
     pub oversized: Vec<temper_core::types::artifact_ask::OversizedArtifact>,
     /// The last row examined, when a matching row remains after it; `None` when the page reaches
     /// the end.
@@ -2911,11 +2915,12 @@ impl AskPageRow {
 /// first — through the gated `artifacts_matching_ask` (`20261106000000`), which builds the
 /// principal's visible set and reads the ask's counted set through its one body.
 ///
-/// **What is decided in SQL, from `content_bytes`, in that one statement:** which rows are
-/// examined (within `limit` and the content budget), which of them are served with their content
-/// and which are oversized (larger than the budget alone, carried without it), and the first row
-/// not examined. Content past the budget never reaches this function. Here the examined rows are
-/// split into the two lists, and `next` is the last of them when a row was left unexamined.
+/// **What is decided in SQL, in that one statement:** what each row costs the page (a served row
+/// its `content_bytes` and its metadata, an oversized row `row_bytes`), which rows are examined
+/// (within `limit` and the page budget), which of them are served with their content and which are
+/// oversized (not fitting the budget alone, carried without content), and the first row not
+/// examined. Content past the budget never reaches this function. Here the examined rows are split
+/// into the two lists, and `next` is the last of them when a row was left unexamined.
 pub async fn artifacts_matching_ask(
     pool: &PgPool,
     params: AskPageParams<'_>,
@@ -2937,13 +2942,14 @@ pub async fn artifacts_matching_ask(
                   examined           AS "examined!",
                   served             AS "served!",
                   content
-             FROM artifacts_matching_ask($1, $2, $3, $4, $5, $6)"#,
+             FROM artifacts_matching_ask($1, $2, $3, $4, $5, $6, $7)"#,
         params.principal.uuid(),
         params.ask,
         params.after.map(|c| c.created),
         params.after.map(|c| c.artifact_id.uuid()),
         i64::from(params.limit),
-        i64::try_from(params.content_budget)?,
+        i64::try_from(params.page_budget)?,
+        i64::try_from(params.row_bytes)?,
     )
     .fetch_all(pool)
     .await?;
@@ -2973,8 +2979,8 @@ fn ask_page_of(rows: Vec<AskPageRow>) -> Result<RetrievedAskPage> {
         (false, _) => None,
         (true, Some(last)) => Some(last),
         // The first matching row is always examined — it is within any limit, and either fits
-        // the budget or is oversized — so rows with none examined is a contract break, never an
-        // end of the set.
+        // the budget alone or is oversized, which costs `row_bytes`, never more than the budget —
+        // so rows with none examined is a contract break, never an end of the set.
         (true, None) => anyhow::bail!("artifacts_matching_ask examined no row of a non-empty page"),
     };
     Ok(RetrievedAskPage {

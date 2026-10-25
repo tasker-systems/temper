@@ -110,10 +110,22 @@ coercive contract. Shapes are not "just schema validation" — the why-anchor is
 and the reader are different sessions separated in time, and a shape tells the reader whether the
 data they retrieved conforms to anything the writer declared.
 
+## Asking — two arms, one ask
+
+A declared shape makes its family **askable**: you can ask its artifacts what they hold, in the
+paths the shape declares. One ask has two arms, and which you want depends on what you need back:
+
+- **the resources that own matching artifacts** — `find-resources-with`'s `artifact_filter`, in a
+  query composition. The answer is resource ids, which pipe into the next stage like any selection.
+- **the matching artifacts themselves, whole** — the batch read, below. The answer is artifacts,
+  never resources, and it is not a stage of a composition.
+
+The ask is the same object on both arms: a shape by id, and predicates over that shape's paths.
+
 ## Asking which resources hold matching data
 
-A declared shape makes its family **askable**. `find-resources-with`, the selection act of a query
-composition, takes `artifact_filter`: a list of asks, each naming a shape by id and predicates over
+`find-resources-with`, the selection act of a query composition, takes `artifact_filter`: a list of
+asks, each naming a shape by id and predicates over
 the paths that shape declares, with the same closed operators a property predicate uses
 (`has_key`, `contains`, `compare`). A resource is selected when, for **every** ask, one of its
 artifacts satisfies **all** of that ask's predicates. So "an artifact with `unit = "ms"` and
@@ -123,6 +135,13 @@ artifacts satisfies **all** of that ask's predicates. So "an artifact with `unit
 - **Read the vocabulary first.** A shape's by-id read carries `askable`: every path it declares and
   the operators each admits. An ask naming a path, operator or value outside its shape is refused
   before anything runs, and the refusal's `teaches` carries the vocabulary to correct it from.
+- **A value outside a declared enum is refused, and the refusal names the route to it.** Stored
+  content is not closed by its shape — an advisory shape records non-conforming content, artifacts
+  committed before the shape stay `declared_not_yet_checked`, and an amendment can narrow an enum
+  over older data — so `value_outside_shape` says the shape does not declare the value, not that
+  nothing matches. Its `teaches` carries the declared values and the route: ask `has_key` at the
+  path with `shape_states: ["declared_not_satisfied", "declared_not_yet_checked"]` in the batch
+  read, which returns those artifacts whole.
 - **An ask ranges over its shape's home.** It reads the live artifacts of that shape's family on
   resources homed there that you can see and that have finished ingesting. Anchor the stage to that
   home or leave it unanchored; asks of shapes in two homes cannot share a stage (`ask_scope_conflict`)
@@ -158,11 +177,77 @@ Send the plan with `run_query`. A refused plan returns `invalid_params`; the err
 `{"refusals": [...]}`, each refusal with its `reason` and `teaches`.
 {%- endif %}
 
+## Reading the matching artifacts themselves
+
+The batch read answers one ask with the matching artifacts, whole: the same ask object, sent
+alone. It reads what `find-resources-with` reads — the live artifacts of the shape's family on
+resources homed in the shape's home that you can see — and the same refusals apply, every one at
+once. A shape you cannot read is refused exactly as one that does not exist.
+
+- **Pages, oldest first.** A page holds at most `limit` matching artifacts (1 to 200, default 50),
+  in `(created, artifact_id)` order — enumeration order, never rank (`ordered_by: "created"`). The
+  answer is `{shape, artifacts, oversized, population, ordered_by, next, amended_since}`.
+- **Continue with `next`.** Send the same ask again with the page's `next` as `after`, unchanged.
+  `next` is `null` on the last page, so a page with a `next` is not the whole answer. The position
+  carries no authority: every page checks the ask again for you.
+- **`oversized` is fetched by id.** A page is also bounded in bytes. A matching artifact too large
+  for any page is named in `oversized`, in order, by id, resource and size, without its content;
+  read it whole by id. It does not end the page.
+- **`population` is on the first page only**: the ask's governed artifacts by shape state, and how
+  many matched — the same counts `find-resources-with`'s trace gives. Later pages carry `null`.
+- **`amended_since`.** If the shape is amended between your pages, later pages keep answering
+  against the version your first page named, and `amended_since` names the version now in force.
+  A new ask naming the folded version is refused `shape_superseded`, teaching its successor.
+- **An artifact with no content** is returned only by an ask with no predicates, and is served
+  without a `content` field.
+- **The enumeration floor.** Listing a resource's artifacts is an *addressed* read: it names one
+  resource and answers its artifacts whatever that resource's state. Asking is an *enumeration*
+  across every resource you can see in the home, and like listing resources and search it leaves out
+  a resource still ingesting, or one whose ingest ended without finishing. So an ask can answer
+  fewer artifacts than listing each resource would, and that is the rule, not a gap.
+{%- if surface == "cli" %}
+
+```bash
+# The ask whole: inline, @<path>, or - for stdin
+temper data-artifact ask --ask '{"shape": "<shape-id>", "predicates": [{"path": ["unit"], "op": {"op": "contains", "values": ["ms"]}}]}'
+
+# The same ask, built from flags: one --where per predicate, each one predicate as JSON
+temper data-artifact ask --shape <shape-id> \
+  --where '{"path": ["unit"], "op": {"op": "contains", "values": ["ms"]}}' \
+  --limit 50
+
+# The next page: the same ask, with the previous page's `next` passed back exactly
+temper data-artifact ask --shape <shape-id> --where '...' \
+  --after '{"created": "<next.created>", "artifact_id": "<next.artifact_id>"}'
+```
+
+`--ask` and `--shape`/`--where` are one form or the other, never both. A refused ask, under the JSON
+output format, prints its refusals in the error payload's `details.refusals`, each with its `reason`
+and `teaches`. Read an `oversized` artifact with `temper data-artifact get <artifact-id>`.
+{%- else %}
+
+```
+Tool: ask_data_artifacts
+Input: {
+  "ask": {
+    "shape": "<shape UUID>",
+    "predicates": [ { "path": ["unit"], "op": { "op": "contains", "values": ["ms"] } } ]
+  },
+  "limit": 50,                                           // optional: 1 to 200, default 50
+  "after": { "created": "...", "artifact_id": "..." }   // optional: the previous page's `next`
+}
+```
+
+A refused ask returns `invalid_params`; the error's `data` carries `{"refusals": [...]}`, each
+refusal with its `reason` and `teaches`. Read an `oversized` artifact with `get_data_artifact`.
+{%- endif %}
+
 ## What data artifacts are NOT
 
 - **Not searchable.** Data artifacts are never found by resemblance or text match. They are
   reached through the resource that owns them, and asked by what they hold only through a declared
   shape's paths (above) — the graph is the index; the artifact is the payload at the end of it.
+  Asking adds nothing to the search corpus: an artifact's content is never found by search.
 - **Not embedded.** Data artifact content never enters the search corpus. The corpus is built for
   prose, and structured data injected into it is semantic noise.
 - **Not a replacement for `open_meta`.** `open_meta` is for small, key-scoped metadata values

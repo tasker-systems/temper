@@ -69,10 +69,15 @@ temper/generated/models/artifact_ask_population.py
 temper/generated/models/artifact_ask_trace.py
 temper/generated/models/artifact_commit_request.py
 temper/generated/models/artifact_commit_response.py
+temper/generated/models/artifact_cursor.py
 temper/generated/models/artifact_predicate.py
 temper/generated/models/artifact_view.py
 temper/generated/models/ask_operator.py
+temper/generated/models/ask_order.py
+temper/generated/models/ask_request.py
+temper/generated/models/ask_response.py
 temper/generated/models/askable_path.py
+temper/generated/models/asked_shape.py
 temper/generated/models/assert_relationship_request.py
 temper/generated/models/atlas_edge.py
 temper/generated/models/atlas_entry.py
@@ -304,6 +309,7 @@ temper/generated/models/orphan_node.py
 temper/generated/models/other_author_edge.py
 temper/generated/models/other_author_edge_property.py
 temper/generated/models/outcome_declaration.py
+temper/generated/models/oversized_artifact.py
 temper/generated/models/path_facts.py
 temper/generated/models/pending_invitation_counts.py
 temper/generated/models/plan_refusal.py

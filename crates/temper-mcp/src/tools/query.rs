@@ -41,9 +41,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer};
 
 use temper_client::error::ClientError;
-use temper_core::types::error_details::PlanRefusalDetails;
 use temper_core::types::query::Composition;
 
+use super::refusals::{map_refusable_error, Refused};
 use crate::service::{AcrossAuth, TemperMcpService};
 
 /// MCP input for `run_query`: a composition plan and a trace flag.
@@ -143,67 +143,15 @@ pub async fn run_query(
     ]))
 }
 
-/// Map a query-path error onto an MCP error.
+/// Map a query-path error onto an MCP error: the rendering every door that relays its body unread
+/// shares (`super::refusals`), naming a plan.
 ///
-/// Two error shapes this door produces are ones an agent can act on. `UnreadablePlan` carries the
-/// server's bounded account of what in the body it could not read. `PlanRefused` carries every
-/// static refusal, each naming its stage and reason. The 400 arrives under the wire code
-/// `PLAN_REFUSED` and temper-client reconstructs the refusal list
-/// (`ClientError::PlanRefused`), so the rendering is the direct binding's, arm for arm —
-/// `invalid_params` with the joined refusal details lets the agent repair the plan in one round
-/// trip, the same care `contexts.rs::map_api_error` gives `BadRequest`, because `PlanRefused` IS
-/// a `BadRequest` variant at the HTTP layer. Everything else stays opaque, matching the
-/// established pattern.
-///
-/// **A refusal reaches the agent twice, for two readers.** The message is the prose line per
-/// refusal, which a reader that only shows `message` still gets. The error's `data` slot carries
-/// the same list as [`PlanRefusalDetails`] — the type `error.details` carries on the HTTP door —
-/// so `reason` and `teaches` arrive as fields an agent reads without parsing English. Without the
-/// `data`, a refusal's `teaches` would survive the API and the client and be dropped here, at the
-/// last hop.
+/// `PlanRefused` IS a `BadRequest` variant at the HTTP layer, so `invalid_params` carrying every
+/// refusal lets the agent repair the plan in one round trip — the same care
+/// `contexts.rs::map_api_error` gives `BadRequest` — and the error's `data` carries the refusals
+/// as `PlanRefusalDetails`, `teaches` included.
 fn map_query_error(context: &str, err: ClientError) -> rmcp::ErrorData {
-    match err {
-        ClientError::PlanRefused { refusals } => {
-            // `[added — 2026-08-28, found in review]` The HTTP door logs every refusal's reason in
-            // `ApiError`'s `IntoResponse`; this door never reaches that impl, so an MCP refusal
-            // emitted NOTHING and the agent-facing surface — the one carrying the most automated
-            // traffic — was the one with no operator signal. Reasons only, never `detail`, which
-            // quotes the caller's own composition back.
-            tracing::warn!(
-                context,
-                refusal_count = refusals.len(),
-                reasons = ?refusals.iter().map(|r| &r.reason).collect::<Vec<_>>(),
-                "plan refused"
-            );
-            let details = refusals
-                .iter()
-                .map(|r| {
-                    let stage = r
-                        .stage
-                        .as_ref()
-                        .map(|s| format!("stage '{}': ", s.as_str()))
-                        .unwrap_or_default();
-                    format!("{}{:?} — {}", stage, r.reason, r.detail)
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            // Typed, not `json!`: the same struct the HTTP door serializes into `error.details`,
-            // so the two doors cannot disagree about the shape of a refusal list.
-            let data = serde_json::to_value(PlanRefusalDetails { refusals })
-                .inspect_err(|error| {
-                    tracing::error!(context, %error, "plan refusals did not serialize");
-                })
-                .ok();
-            rmcp::ErrorData::invalid_params(format!("{context}: plan refused — {details}"), data)
-        }
-        // The API could not read the plan this door relayed unread. A caller error, in the API's
-        // own words (bounded there), so the agent can repair it.
-        ClientError::UnreadablePlan { message } => rmcp::ErrorData::invalid_params(
-            format!("{context}: plan could not be read — {message}"),
-            None,
-        ),
-        other => rmcp::ErrorData::internal_error(format!("{context} failed: {other}"), None),
-    }
+    map_refusable_error(context, Refused::Plan, err)
 }
 
 #[cfg(test)]
@@ -254,6 +202,7 @@ mod tests {
     use temper_core::types::artifact_ask::{
         AskOperator, AskablePath, BoundKind, JsonType, PathFacts, RefusalTeaching, Vocabulary,
     };
+    use temper_core::types::error_details::PlanRefusalDetails;
     use temper_core::types::query::PlanRefusal;
     use temper_core::types::query::RefusalReason;
     use temper_core::types::query::StageName;

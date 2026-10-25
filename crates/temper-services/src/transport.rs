@@ -106,43 +106,45 @@ pub const VERCEL_REQUEST_BODY_CAP_BYTES: usize = 4_500_000;
 /// The hosting platform's hard response-body cap on Vercel: a function whose response body is past
 /// it fails there, whatever the door meant to send. The same figure as the request cap.
 ///
-/// What is held under it: a batch read's page, through [`ARTIFACT_ASK_PAGE_CONTENT_BYTES`], on
-/// both doors that answer it — the API's body and the MCP relay's.
+/// What is held under it: a batch read's page, through [`ARTIFACT_ASK_PAGE_BYTES`], on both doors
+/// that answer it — the API's body and the MCP relay's.
 pub const VERCEL_RESPONSE_BODY_CAP_BYTES: usize = 4_500_000;
 
-/// The most stored content one page of a batch read (`POST /api/data-artifacts/ask`) serves: the
-/// sum of its served rows' `content_bytes`. A matching row larger than this alone is named in the
-/// page's `oversized` list without its content; a row that fits alone but not in what is left ends
-/// the page, and the next page starts with it.
+/// The most one page of a batch read (`POST /api/data-artifacts/ask`) costs, rows and all: the sum
+/// of what every row the page examines is charged. A row that fits this alone is charged its
+/// `content_bytes` and its metadata; a matching row that does not is named in the page's
+/// `oversized` list without its content and charged [`ARTIFACT_ROW_FIXED_BYTES`]; a row that fits
+/// alone but not in what is left ends the page, and the next page starts with it. The charge is
+/// made in SQL (`artifacts_matching_ask`, migration `20261106000000`).
 ///
 /// # 2,000,000 bytes, under [`VERCEL_RESPONSE_BODY_CAP_BYTES`] twice over
 ///
-/// `content_bytes` is the length of the committed content in compact JSON, and a page serves that
-/// same value compactly re-serialized from storage, so a page's content is at most this many bytes
-/// of its body. Around it:
+/// **Every byte a row writes is charged.** `content_bytes` is the length of the committed content
+/// in compact JSON, and a page serves that same value compactly re-serialized from storage. A row's
+/// metadata is each of its text fields (the family's namespace table and name, `intent`,
+/// `content_hash`, `shape_state`) at the length of the JSON string the page writes for it —
+/// quotes and escapes included, so a family name of any length is paid for on every row — plus
+/// [`ARTIFACT_ROW_FIXED_BYTES`] for everything else the row writes: its keys and punctuation, ids,
+/// numbers, timestamp and flag. An oversized entry writes only ids and a size, under that same
+/// constant.
 ///
-/// - **Row metadata**: each examined row's other fields (ids, family, hashes, timestamps), or an
-///   oversized entry, is under [`ARTIFACT_ROW_METADATA_BYTES`]; `MAX_ARTIFACT_PAGE_ROWS` (200)
-///   rows of it is 204,800 bytes. The family name is repeated on every row, so this holds while it
-///   is a few hundred bytes.
-/// - **The envelope** (shape, population, order, `next`, `amended_since`, keys): under
-///   [`ARTIFACT_PAGE_ENVELOPE_BYTES`].
-///
-/// So the API's body is at most 2,000,000 + 204,800 + 1,024 bytes. **The MCP relay re-encodes that
-/// body as one escaped JSON string**, and the budget is sized for it on two conditions the tool must
-/// keep: the body is written **compactly** — pretty-printing adds indentation per nesting level,
-/// which no byte budget bounds — and it is sent once, as text. Escaping compact JSON at most
-/// doubles it (`"` and `\` gain a backslash; every other byte it emits is written as it is or gains
-/// one byte). Twice the body plus the relay's own envelope is 4,412,672 bytes, under the 4,500,000
-/// cap.
-pub const ARTIFACT_ASK_PAGE_CONTENT_BYTES: usize = 2_000_000;
+/// So a page's rows are at most this many bytes of its body, and **the envelope** (shape,
+/// population, order, `next`, `amended_since`, keys) is under [`ARTIFACT_PAGE_ENVELOPE_BYTES`]:
+/// the API's body is at most 2,000,000 + 1,024 bytes. **The MCP relay re-encodes that body as one
+/// escaped JSON string**, and the budget is sized for it on two conditions the tool must keep: the
+/// body is written **compactly** — pretty-printing adds indentation per nesting level, which no
+/// byte budget bounds — and it is sent once, as text. Escaping compact JSON at most doubles it (`"`
+/// and `\` gain a backslash; every other byte it emits is written as it is or gains one byte).
+/// Twice the body plus the relay's own envelope is 4,003,072 bytes, under the 4,500,000 cap.
+pub const ARTIFACT_ASK_PAGE_BYTES: usize = 2_000_000;
 
-/// The most one batch-read row costs a page beside its content (see
-/// [`ARTIFACT_ASK_PAGE_CONTENT_BYTES`]).
-pub const ARTIFACT_ROW_METADATA_BYTES: usize = 1024;
+/// What one batch-read row is charged beside its content and its text fields — every other byte an
+/// `ArtifactView` row writes — and what an oversized entry is charged whole (see
+/// [`ARTIFACT_ASK_PAGE_BYTES`]). The widest such row writes under 400 bytes of it.
+pub const ARTIFACT_ROW_FIXED_BYTES: usize = 1024;
 
 /// The most a batch-read page's envelope, or the MCP relay's around it, costs (see
-/// [`ARTIFACT_ASK_PAGE_CONTENT_BYTES`]).
+/// [`ARTIFACT_ASK_PAGE_BYTES`]).
 pub const ARTIFACT_PAGE_ENVELOPE_BYTES: usize = 1024;
 
 /// The default request-body ceiling, in **decompressed** bytes, for a door that declares none.
@@ -267,18 +269,80 @@ mod tests {
     use super::*;
 
     /// **A full page of a batch read fits the response cap after the MCP relay escapes it**, by the
-    /// arithmetic on [`ARTIFACT_ASK_PAGE_CONTENT_BYTES`]. Bite: the budget raised to 2,100,000, or
-    /// the doubling dropped from the sum.
+    /// arithmetic on [`ARTIFACT_ASK_PAGE_BYTES`]: the budget charges every byte a row writes, so the
+    /// body is the budget and the envelope. Bite: the budget raised to 2,300,000, or the doubling
+    /// dropped from the sum.
     #[test]
     fn a_full_batch_page_fits_the_response_cap_after_the_relay_escapes_it() {
-        let rows = usize::try_from(temper_core::types::data_artifact::MAX_ARTIFACT_PAGE_ROWS)
-            .expect("the page ceiling fits a usize");
-        let body = ARTIFACT_ASK_PAGE_CONTENT_BYTES
-            + rows * ARTIFACT_ROW_METADATA_BYTES
-            + ARTIFACT_PAGE_ENVELOPE_BYTES;
+        let body = ARTIFACT_ASK_PAGE_BYTES + ARTIFACT_PAGE_ENVELOPE_BYTES;
         let relayed = 2 * body + ARTIFACT_PAGE_ENVELOPE_BYTES;
-        assert_eq!(relayed, 4_412_672, "the figure the budget's doc states");
+        assert_eq!(relayed, 4_003_072, "the figure the budget's doc states");
         assert!(relayed <= VERCEL_RESPONSE_BODY_CAP_BYTES);
+    }
+
+    /// The JSON-string length of one text field, as a page writes it and as the page's SQL charges
+    /// it (`octet_length(to_json(..)::text)`).
+    fn written(text: &str) -> usize {
+        serde_json::to_string(text)
+            .expect("a string serializes")
+            .len()
+    }
+
+    /// **[`ARTIFACT_ROW_FIXED_BYTES`] covers every byte a row writes but its content and its text
+    /// fields**, measured on the widest row there is: the longest `f64` and `i64` forms, a
+    /// nanosecond timestamp, `is_folded` false, the `content` key present. And an oversized entry is
+    /// under it whole. The text fields here carry escapes, so the subtraction is of their written
+    /// length, which is what the SQL charges. Bite: the constant lowered to 256.
+    #[test]
+    fn the_fixed_row_charge_covers_every_byte_but_content_and_text() {
+        use temper_core::types::artifact_ask::OversizedArtifact;
+        use temper_core::types::data_artifact::ArtifactView;
+        use temper_core::types::ids::{DataArtifactId, ResourceId};
+
+        let id = uuid::Uuid::max();
+        let content = serde_json::Value::from(0);
+        let row = ArtifactView {
+            artifact_id: DataArtifactId::from(id),
+            resource_id: ResourceId::from(id),
+            kind_owner_table: "kb_profiles".to_string(),
+            kind_owner_id: id,
+            artifact_kind: "a \"quoted\" \\ family\u{1}".to_string(),
+            intent: "member".to_string(),
+            precedence: -f64::MIN_POSITIVE,
+            content_hash: "f".repeat(64),
+            content_bytes: i64::MIN,
+            shape_state: "declared_not_yet_checked".to_string(),
+            is_folded: false,
+            created: chrono::DateTime::parse_from_rfc3339("2026-10-24T09:15:30.123456789Z")
+                .expect("literal parses")
+                .with_timezone(&chrono::Utc),
+            content: Some(content.clone()),
+        };
+        let text = written(&row.kind_owner_table)
+            + written(&row.artifact_kind)
+            + written(&row.intent)
+            + written(&row.content_hash)
+            + written(&row.shape_state);
+        let whole = serde_json::to_string(&row).expect("a row serializes").len();
+        let content_len = serde_json::to_string(&content).expect("serializes").len();
+        // One more byte for the comma that separates it from the next row.
+        let fixed = whole - content_len - text + 1;
+        assert!(
+            fixed <= ARTIFACT_ROW_FIXED_BYTES,
+            "a row writes {fixed} bytes beside its content and text"
+        );
+
+        let entry = serde_json::to_string(&OversizedArtifact {
+            artifact_id: DataArtifactId::from(id),
+            resource_id: ResourceId::from(id),
+            content_bytes: i64::MIN,
+        })
+        .expect("an entry serializes")
+        .len();
+        assert!(
+            entry < ARTIFACT_ROW_FIXED_BYTES,
+            "an entry writes {entry} bytes"
+        );
     }
 
     /// An unmatched request is exactly how a token-in-path would travel if a route ever

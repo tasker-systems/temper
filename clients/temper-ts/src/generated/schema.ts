@@ -1826,6 +1826,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/data-artifacts/ask": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read the artifacts one ask matches, whole
+         * @description The body is one ask — a shape by id and predicates over the paths that shape declares — with
+         *     an optional `limit` and the previous page's `next` as `after`. The answer is the artifacts the
+         *     ask matches among those you can see, each whole (`content` is the stored content, absent for an
+         *     artifact committed with no bytes), in `(created, artifact_id)` order, oldest first. POST,
+         *     because the ask is a document rather than a query string.
+         *
+         *     Every page is bounded twice: by `limit` (absent: 50; at least 1 and at most 200), and by a
+         *     byte budget over the whole page. A matching artifact too large for any page is named in
+         *     `oversized`, in order, by id and size, and is read whole by id (`GET
+         *     /api/data-artifacts/{artifact_id}`). `population` counts the ask's whole governed population on
+         *     the first page and is `null` after it. Continue by sending the same ask with `next` as `after`;
+         *     every page validates the ask again for its caller, so the position carries no authority.
+         *
+         *     This is an enumeration: an artifact on a resource still ingesting, or one an operator ended, is
+         *     not in it, though `GET /api/resources/{id}/artifacts` addressed to that resource lists it. It
+         *     never returns resources, and it is not a stage of `/api/query`.
+         */
+        post: operations["ask_data_artifacts"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/data-artifacts/{artifact_id}": {
         parameters: {
             query?: never;
@@ -4127,6 +4165,23 @@ export interface components {
             artifact_id: components["schemas"]["DataArtifactId"];
         };
         /**
+         * @description A position in the `(created, id)` keyset order that `artifacts_for_resource` returns rows in.
+         *
+         *     It carries position and no authority: each page re-runs the read gate for the asker, so a
+         *     cursor handed to another principal, or replayed after access is revoked, reveals nothing
+         *     the read would not. That is why it is a legible object and not an opaque token, and needs
+         *     no decoder in any SDK. Every bounded artifact read continues with this one type.
+         */
+        ArtifactCursor: {
+            /** @description The `artifact_id` of the last artifact on the previous page; breaks ties on `created`. */
+            artifact_id: components["schemas"]["DataArtifactId"];
+            /**
+             * Format: date-time
+             * @description The `created` of the last artifact on the previous page.
+             */
+            created: string;
+        };
+        /**
          * @description One predicate: a path of object-key segments into the content, and an operator from the closed
          *     `PropertyOp` set — reused, not copied (§3.2). There is no `eq`, regex, prefix or text-search
          *     operator, so a resemblance-shaped question has no way to be written down.
@@ -4182,6 +4237,60 @@ export interface components {
          */
         AskOperator: "has_key" | "contains" | "compare";
         /**
+         * @description The order a batch read returns rows in: `created`, oldest first, ties broken by artifact id.
+         *     The one order v0 serves; closed, so a reader can match it exhaustively.
+         * @enum {string}
+         */
+        AskOrder: "created";
+        /**
+         * @description One page of a batch read: the ask, re-sent whole on every page, and where to continue.
+         *
+         *     **The continuation carries position, never authority** (§7.3): every page runs the ask's
+         *     validation again for the asker, so a cursor handed to another principal, or replayed after
+         *     access is revoked, reveals nothing a first page would not.
+         *
+         *     **Strict**, like [`ArtifactAsk`]: an unknown field is a body that cannot be read, never a field
+         *     that silently changes nothing. `after` is one [`ArtifactCursor`] object, so half a position is
+         *     a body that cannot be read either.
+         */
+        AskRequest: {
+            after?: components["schemas"]["ArtifactCursor"] | null;
+            /** @description The question, against its governing shape. */
+            ask: components["schemas"]["ArtifactAsk"];
+            /**
+             * Format: int32
+             * @description How many matching artifacts this page examines — served and oversized alike. At least 1
+             *     and at most `MAX_ARTIFACT_PAGE_ROWS`, which is 200; a value outside that range is refused
+             *     (`page_limit_out_of_range`), never clamped. Absent: `ARTIFACT_DRAIN_PAGE_ROWS`, which is
+             *     50.
+             */
+            limit?: number | null;
+        };
+        /** @description One page of the artifacts matching an ask, in `(created, artifact_id)` order, oldest first. */
+        AskResponse: {
+            amended_since?: components["schemas"]["ShapeSuccessor"] | null;
+            /**
+             * @description The matching artifacts that fit this page's byte budget, each whole: `content` is the
+             *     stored content, absent for an artifact committed with no bytes. `resource_id` is
+             *     attribution, not a set.
+             */
+            artifacts: components["schemas"]["ArtifactView"][];
+            next?: components["schemas"]["ArtifactCursor"] | null;
+            /** @description The order rows arrive in. Enumeration order, never rank. */
+            ordered_by: components["schemas"]["AskOrder"];
+            /**
+             * @description Matching artifacts too large for any page's byte budget, in order among the rest, by id and
+             *     size and without content. Each is read whole by id (`GET /api/data-artifacts/{artifact_id}`).
+             */
+            oversized: components["schemas"]["OversizedArtifact"][];
+            population?: components["schemas"]["ArtifactAskPopulation"] | null;
+            /**
+             * @description The shape version this page was validated against: on the first page the version the ask
+             *     named, and on every later page that same version, even once amended (see `amended_since`).
+             */
+            shape: components["schemas"]["AskedShape"];
+        };
+        /**
          * @description One askable path: its segments, what the schema declares there, and the operators feasible at
          *     it (spec §2.5).
          */
@@ -4189,6 +4298,16 @@ export interface components {
             facts: components["schemas"]["PathFacts"];
             operators: components["schemas"]["AskOperator"][];
             path: string[];
+        };
+        /** @description The shape version a batch page was validated against, and the home its population ranges over. */
+        AskedShape: {
+            /** Format: uuid */
+            home_anchor_id: string;
+            /** @description `"kb_contexts"` or `"kb_cogmaps"`. */
+            home_anchor_table: string;
+            shape_id: components["schemas"]["ShapeId"];
+            /** Format: int32 */
+            shape_version: number;
         };
         /** @description Request body for `POST /api/relationships`. */
         AssertRelationshipRequest: components["schemas"]["ActInput"] & {
@@ -8018,6 +8137,16 @@ export interface components {
              *     `produces` field which could only ever be right for a one-arm plan.
              */
             returns: components["schemas"]["ReturnSpec"][];
+        };
+        /**
+         * @description A matching artifact too large for a page's byte budget by itself, its content and the rest of its
+         *     row together: named, sized, and left to be read by id.
+         */
+        OversizedArtifact: {
+            artifact_id: components["schemas"]["DataArtifactId"];
+            /** Format: int64 */
+            content_bytes: number;
+            resource_id: components["schemas"]["ResourceId"];
         };
         /**
          * @description What the schema declares at one path. Each field is `None` when the schema leaves it
@@ -16316,6 +16445,69 @@ export interface operations {
             };
             /** @description Caller may not unshare this context from this team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    ask_data_artifacts: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AskRequest"];
+            };
+        };
+        responses: {
+            /** @description One page of the matching artifacts, whole, in `(created, artifact_id)` order, with where to continue (`next`, `null` on the last page) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AskResponse"];
+                };
+            };
+            /** @description Two codes. `PLAN_REFUSED`: the ask will not be answered, with every refusal at once in `error.details.refusals` — the ask's own (each naming its reason and, where it has one, a `teaches` carrying the shape's vocabulary) and the request's (`page_limit_out_of_range`, `property_value_budget_exceeded`), none with a stage. A shape you cannot read is refused exactly as one that does not exist (`shape_not_askable`). `UNREADABLE_PLAN`, with no `details`: the body is not JSON. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description System access required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The body is not an ask this door can read — a value of the wrong type, a field it does not declare, or an `after` missing half its position — under the code `UNREADABLE_PLAN`, the message naming what failed and repeating at most 1024 bytes of it. A non-JSON content type answers `415` under the same code. */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

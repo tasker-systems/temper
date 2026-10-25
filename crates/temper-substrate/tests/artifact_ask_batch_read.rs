@@ -51,6 +51,10 @@ const MEASUREMENT: &str = "measurement";
 /// so a page's edges can be built from small contents.
 const ROOMY: usize = 1_000_000;
 
+/// What these tests charge a row beside its content and its text fields (the production door
+/// passes `ARTIFACT_ROW_FIXED_BYTES`).
+const ROW_BYTES: usize = 64;
+
 const ROWS: &str = "__temper_ungated_artifact_ask_rows";
 const ROWS_SIGNATURE: &str = "(p_visible_ids uuid[], p_reader uuid, p_ask jsonb, \
      p_after_created timestamptz, p_after_id uuid, p_limit bigint, p_matched_only boolean) \
@@ -59,7 +63,7 @@ const ROWS_SIGNATURE: &str = "(p_visible_ids uuid[], p_reader uuid, p_ask jsonb,
 
 const PAGE: &str = "artifacts_matching_ask";
 const PAGE_SIGNATURE: &str = "(p_principal uuid, p_ask jsonb, p_after_created timestamptz, \
-     p_after_id uuid, p_limit bigint, p_content_budget bigint) \
+     p_after_id uuid, p_limit bigint, p_page_budget bigint, p_row_bytes bigint) \
      RETURNS TABLE (artifact_id uuid, resource_id uuid, kind_owner_table varchar, \
      kind_owner_id uuid, artifact_kind text, intent text, precedence double precision, \
      content_hash text, content_bytes bigint, shape_state text, is_folded boolean, \
@@ -116,17 +120,21 @@ fn shape_schema() -> Value {
     })
 }
 
-/// One context home owned by the system profile P, and P's `measurement` family; `shape` is the
-/// family's shape there, or nil until [`declare`] runs.
+/// One context home owned by the system profile P, and one of P's families (`measurement`, unless
+/// a test names another); `shape` is the family's shape there, or nil until [`declare`] runs.
 struct World {
     owner: ProfileId,
     emitter: EntityId,
     home: AnchorRef,
-    family: (KindOwner, &'static str),
+    family: (KindOwner, String),
     shape: Uuid,
 }
 
 async fn undeclared_world(pool: &PgPool) -> World {
+    undeclared_world_of(pool, MEASUREMENT).await
+}
+
+async fn undeclared_world_of(pool: &PgPool, kind: &str) -> World {
     bootseed::seed_system(pool).await.unwrap();
     let (owner, emitter) = system_actor(pool).await;
     let home = AnchorRef::context(ContextId::from(
@@ -138,7 +146,7 @@ async fn undeclared_world(pool: &PgPool) -> World {
         owner,
         emitter,
         home,
-        family: (KindOwner::Profile(owner.uuid()), MEASUREMENT),
+        family: (KindOwner::Profile(owner.uuid()), kind.to_string()),
         shape: Uuid::nil(),
     }
 }
@@ -156,7 +164,7 @@ async fn declare(pool: &PgPool, w: &World, schema: &Value) -> Uuid {
         pool,
         DeclareShapeParams {
             home: w.home,
-            kind: w.family.1,
+            kind: &w.family.1,
             kind_owner: Some(w.family.0),
             schema,
             enforcement: EnforcementMode::Advisory,
@@ -206,7 +214,7 @@ async fn commit_as(
         pool,
         CommitDataArtifactParams {
             resource: ResourceId::from(on),
-            kind: w.family.1,
+            kind: &w.family.1,
             kind_owner: Some(w.family.0),
             intent,
             precedence: 0.0,
@@ -277,7 +285,7 @@ async fn page(
     ask: &ArtifactAsk,
     after: Option<ArtifactCursor>,
     limit: u32,
-    content_budget: usize,
+    page_budget: usize,
 ) -> RetrievedAskPage {
     readback::artifacts_matching_ask(
         pool,
@@ -286,7 +294,8 @@ async fn page(
             ask: &bound(ask),
             after,
             limit,
-            content_budget,
+            page_budget,
+            row_bytes: ROW_BYTES,
         },
     )
     .await
@@ -315,6 +324,11 @@ fn set(list: &[DataArtifactId]) -> BTreeSet<Uuid> {
     list.iter().map(|id| id.uuid()).collect()
 }
 
+/// [`ROW_BYTES`] as the page function binds it.
+fn row_bytes() -> i64 {
+    i64::try_from(ROW_BYTES).expect("fits")
+}
+
 fn position(a: &RetrievedArtifact) -> ArtifactCursor {
     ArtifactCursor {
         created: a.created,
@@ -330,18 +344,19 @@ async fn served_through(
     principal: ProfileId,
     ask: &Value,
     limit: i64,
-    content_budget: i64,
+    page_budget: i64,
 ) -> Vec<(Uuid, Option<Value>)> {
     // `function` is one of this file's literals; every value is bound.
     let sql = format!(
         "SELECT artifact_id, content FROM {function}($1::uuid, $2::jsonb, NULL::timestamptz, \
-         NULL::uuid, $3::bigint, $4::bigint) WHERE served ORDER BY created, artifact_id"
+         NULL::uuid, $3::bigint, $4::bigint, $5::bigint) WHERE served ORDER BY created, artifact_id"
     );
     sqlx::query_as::<_, (Uuid, Option<Value>)>(&sql)
         .bind(principal.uuid())
         .bind(ask)
         .bind(limit)
-        .bind(content_budget)
+        .bind(page_budget)
+        .bind(row_bytes())
         .fetch_all(&mut *conn)
         .await
         .unwrap()
@@ -391,7 +406,7 @@ async fn page_over(conn: &mut PgConnection, name: &str, rows: &str) {
     variant(
         conn,
         PAGE,
-        6,
+        7,
         PAGE_SIGNATURE,
         name,
         &format!("{ROWS}("),
@@ -444,7 +459,7 @@ async fn a_matching_artifact_is_served_whole_across_two_owning_resources(pool: P
     variant(
         &mut conn,
         PAGE,
-        6,
+        7,
         PAGE_SIGNATURE,
         "page_one_key",
         "(SELECT c.content FROM",
@@ -536,19 +551,50 @@ fn sized(bytes: usize) -> Value {
     content
 }
 
-/// **A row over the budget alone is named in `oversized`, in order, and the page goes on; a row
-/// that fits alone but not the remainder ends the page and opens the next.** Budget 100: A (30), B
-/// (200, alone over it), C (30), D (30), E (30). The first page serves A, C, D (90 bytes), names B
-/// between them, and stops before E, which would make 120; `next` is D. The second page serves E
-/// and is the last.
+/// What a page charges a served row beside its content, as `20261106000000`'s page measures it:
+/// [`ROW_BYTES`], and each text field the row writes at the length of its JSON string. The test's
+/// own reckoning of the charge, from the row as served.
+fn metadata_charge(a: &RetrievedArtifact) -> usize {
+    let written = |text: &str| serde_json::to_string(text).unwrap().len();
+    ROW_BYTES
+        + written(a.kind_owner.owner_table())
+        + written(&a.artifact_kind)
+        + serde_json::to_string(&a.intent).unwrap().len()
+        + written(&a.content_hash)
+        + serde_json::to_string(&a.shape_state).unwrap().len()
+}
+
+/// What a served row costs the page: its content and its metadata.
+fn charge(a: &RetrievedArtifact) -> usize {
+    usize::try_from(a.content_bytes).unwrap() + metadata_charge(a)
+}
+
+/// The one metadata charge every row of `p` carries: the fixtures commit one family with one intent
+/// and a hash of one length, and the state is asserted alike, so every row's is the same.
+fn one_metadata_charge(p: &RetrievedAskPage) -> usize {
+    let charges: BTreeSet<usize> = p.artifacts.iter().map(metadata_charge).collect();
+    assert_eq!(
+        charges.len(),
+        1,
+        "every row of the fixture carries one metadata charge"
+    );
+    charges.into_iter().next().unwrap()
+}
+
+/// **A row that does not fit the budget alone is named in `oversized`, in order, and the page goes
+/// on; a row that fits alone but not the remainder ends the page and opens the next.** Every row is
+/// charged its metadata `M` beside its content (measured from a roomy page). A (30), B (10,000,
+/// alone over the budget), C (30), D (30), E (30), under a budget of `4 × (30 + M) + ROW_BYTES - 1`:
+/// the first page serves A, C, D, names B between them (charged `ROW_BYTES`), and stops before E,
+/// which would be one byte past the budget; `next` is D. The second page serves E and is the last.
 ///
 /// Bites, in the test:
-/// - **oversized ends the page** — the running total counting an oversized row's bytes
-///   (`THEN r.content_bytes ELSE 0 END` → `THEN r.content_bytes ELSE r.content_bytes END`): B ends
-///   the first page, which then holds A alone.
-/// - **the remainder row goes to oversized** — a row examined whatever the running total (`b.n <=
-///   p_limit AND b.fitted <= p_content_budget AS examined` → `b.n <= p_limit AS examined`): E is
-///   named oversized on the first page, which no longer ends.
+/// - **oversized ends the page** — an oversized row charged its content (`ELSE p_row_bytes END AS
+///   charge` → `ELSE k.content_bytes END AS charge`): B ends the first page, which then holds A
+///   alone.
+/// - **the page serves past its budget** — a row examined whatever the running charge (`b.n <=
+///   p_limit AND b.spent <= p_page_budget AS examined` → `b.n <= p_limit AS examined`): E is served
+///   on the first page, past the budget, and the page no longer ends.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn an_oversized_row_is_named_in_order_and_a_row_past_the_remainder_ends_the_page(
     pool: PgPool,
@@ -556,39 +602,52 @@ async fn an_oversized_row_is_named_in_order_and_a_row_past_the_remainder_ends_th
     let w = world(&pool).await;
     let on = resource(&pool, &w, "budgeted").await;
     let mut made = Vec::new();
-    for bytes in [30, 200, 30, 30, 30] {
+    for bytes in [30, 10_000, 30, 30, 30] {
         made.push(commit(&pool, &w, on, &sized(bytes)).await);
     }
     let &[a, b, c, d, e] = made.as_slice() else {
         unreachable!("five commits")
     };
     let ask = unit_ms(w.shape);
+    let roomy = page(&pool, w.owner, &ask, None, 10, ROOMY).await;
+    assert_eq!(
+        served(&roomy),
+        ids(&made),
+        "the fixture: all five fit a roomy page"
+    );
+    let m = one_metadata_charge(&roomy);
+    let budget = 4 * (30 + m) + ROW_BYTES - 1;
+    assert!(
+        10_000 + m > budget,
+        "the fixture: B does not fit the budget alone"
+    );
 
-    let first = page(&pool, w.owner, &ask, None, 10, 100).await;
+    let first = page(&pool, w.owner, &ask, None, 10, budget).await;
     assert_eq!(served(&first), ids(&[a, c, d]));
     assert_eq!(oversized(&first), ids(&[b]));
-    assert_eq!(first.oversized[0].content_bytes, 200);
+    assert_eq!(first.oversized[0].content_bytes, 10_000);
     assert_eq!(first.oversized[0].resource_id.uuid(), on);
     assert_eq!(
         first.next,
         first.artifacts.last().map(position),
         "the page ends after D, the last row it examined"
     );
-    let second = page(&pool, w.owner, &ask, first.next, 10, 100).await;
+    let second = page(&pool, w.owner, &ask, first.next, 10, budget).await;
     assert_eq!(served(&second), ids(&[e]), "E opens the next page");
     assert!(second.oversized.is_empty());
     assert_eq!(second.next, None);
 
     let mut conn = pool.acquire().await.unwrap();
     let bind = bound(&ask);
+    let budget = i64::try_from(budget).unwrap();
     variant(
         &mut conn,
         PAGE,
-        6,
+        7,
         PAGE_SIGNATURE,
         "page_oversized_counts",
-        "THEN r.content_bytes ELSE 0 END",
-        "THEN r.content_bytes ELSE r.content_bytes END",
+        "ELSE p_row_bytes END AS charge",
+        "ELSE k.content_bytes END AS charge",
     )
     .await;
     let ended: Vec<Uuid> = served_through(
@@ -597,7 +656,7 @@ async fn an_oversized_row_is_named_in_order_and_a_row_past_the_remainder_ends_th
         w.owner,
         &bind,
         10,
-        100,
+        budget,
     )
     .await
     .into_iter()
@@ -608,33 +667,116 @@ async fn an_oversized_row_is_named_in_order_and_a_row_past_the_remainder_ends_th
     variant(
         &mut conn,
         PAGE,
-        6,
+        7,
         PAGE_SIGNATURE,
-        "page_remainder_oversized",
-        "b.n <= p_limit AND b.fitted <= p_content_budget AS examined",
+        "page_past_budget",
+        "b.n <= p_limit AND b.spent <= p_page_budget AS examined",
         "b.n <= p_limit AS examined",
     )
     .await;
-    let examined: Vec<(Uuid, bool)> = sqlx::query_as(
-        "SELECT artifact_id, served FROM pg_temp.page_remainder_oversized($1, $2::jsonb, \
-         NULL::timestamptz, NULL::uuid, 10::bigint, 100::bigint) WHERE examined \
-         ORDER BY created, artifact_id",
+    let past: Vec<Uuid> = served_through(
+        &mut conn,
+        "pg_temp.page_past_budget",
+        w.owner,
+        &bind,
+        10,
+        budget,
     )
-    .bind(w.owner.uuid())
-    .bind(&bind)
-    .fetch_all(&mut *conn)
     .await
-    .unwrap();
+    .into_iter()
+    .map(|(id, _)| id)
+    .collect();
     assert_eq!(
-        examined,
-        vec![
-            (a.uuid(), true),
-            (b.uuid(), false),
-            (c.uuid(), true),
-            (d.uuid(), true),
-            (e.uuid(), false)
-        ],
-        "the bite: the row past the remainder is named oversized and the page goes on"
+        past,
+        ids(&[a, c, d, e]),
+        "the bite: the row past the remainder is served and the page goes on"
+    );
+}
+
+/// **The budget bounds the whole page, a family name of several KiB included: a page of small
+/// contents under a long family name ends at the budget, and serves no byte past it.** The family
+/// name is 4,096 bytes, repeated on every row; each content is 13 bytes. The budget holds three rows
+/// and half a fourth, counting each row's metadata: the first page serves three, what they cost is
+/// within the budget, and `next` is the third. The rest follow on later pages, every match once.
+///
+/// The bite, in the test: a page variant that charges content only (the metadata multiplied out,
+/// `AS metadata_bytes` → `* 0 AS metadata_bytes`) serves all five on the first page — 65 content
+/// bytes, far under the budget, but more than the budget once the family name is written five times.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_long_family_name_is_charged_on_every_row_and_the_page_ends_at_the_budget(pool: PgPool) {
+    let family = "f".repeat(4096);
+    let mut w = undeclared_world_of(&pool, &family).await;
+    w.shape = declare(&pool, &w, &shape_schema()).await;
+    let on = resource(&pool, &w, "long-family").await;
+    let mut made = Vec::new();
+    for _ in 0..5 {
+        made.push(commit(&pool, &w, on, &json!({ "unit": "ms" })).await);
+    }
+    let ask = unit_ms(w.shape);
+    let roomy = page(&pool, w.owner, &ask, None, 10, ROOMY).await;
+    assert_eq!(
+        served(&roomy),
+        ids(&made),
+        "the fixture: all five fit a roomy page"
+    );
+    let m = one_metadata_charge(&roomy);
+    assert!(m > family.len(), "the family name is charged: {m}");
+    let row = 13 + m;
+    let budget = 3 * row + row / 2;
+
+    let first = page(&pool, w.owner, &ask, None, 10, budget).await;
+    assert_eq!(
+        served(&first),
+        ids(&made[..3]),
+        "three rows fit, the fourth does not"
+    );
+    assert!(
+        first.oversized.is_empty(),
+        "no row is over the budget alone"
+    );
+    let spent: usize = first.artifacts.iter().map(charge).sum();
+    assert!(
+        spent <= budget,
+        "the page served {spent} bytes of rows under a {budget} budget"
+    );
+    assert_eq!(first.next, first.artifacts.last().map(position));
+
+    let mut read = served(&first);
+    let mut after = first.next;
+    let mut pages = 1;
+    while let Some(cursor) = after {
+        let p = page(&pool, w.owner, &ask, Some(cursor), 10, budget).await;
+        read.extend(served(&p));
+        after = p.next;
+        pages += 1;
+        assert!(pages <= made.len(), "the walk ends");
+    }
+    assert_eq!(read, ids(&made), "every match once, in order");
+
+    let mut conn = pool.acquire().await.unwrap();
+    variant(
+        &mut conn,
+        PAGE,
+        7,
+        PAGE_SIGNATURE,
+        "page_content_only",
+        "AS metadata_bytes",
+        "* 0 AS metadata_bytes",
+    )
+    .await;
+    let content_only = served_through(
+        &mut conn,
+        "pg_temp.page_content_only",
+        w.owner,
+        &bound(&ask),
+        10,
+        i64::try_from(budget).unwrap(),
+    )
+    .await;
+    assert_eq!(
+        content_only.len(),
+        5,
+        "the bite: charged its content alone, the page serves past its budget"
     );
 }
 
@@ -1168,11 +1310,12 @@ async fn limited_page_reads(
     // `function` is one of this file's literals; every value is bound.
     let served: i64 = sqlx::query_scalar(&format!(
         "SELECT count(*) FILTER (WHERE served) FROM {function}($1::uuid, $2::jsonb, \
-         NULL::timestamptz, NULL::uuid, $3::bigint, 2000000::bigint)"
+         NULL::timestamptz, NULL::uuid, $3::bigint, 2000000::bigint, $4::bigint)"
     ))
     .bind(principal.uuid())
     .bind(ask)
     .bind(i64::from(LIMIT))
+    .bind(row_bytes())
     .fetch_one(&mut *tx)
     .await
     .unwrap();
@@ -1269,7 +1412,7 @@ async fn a_limited_page_reads_content_only_for_the_rows_it_examines(pool: PgPool
                 PAGE,
                 PAGE_SIGNATURE,
                 "__temper_ungated_artifact_ask_rows(",
-                6,
+                7,
                 "pg_temp.rows_matching_first(",
             ),
         ],

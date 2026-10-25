@@ -103,8 +103,8 @@ impl From<&ShapeIdentity> for AskedShape {
     }
 }
 
-/// A matching artifact whose content alone is larger than a page's byte budget: named, sized, and
-/// left to be read by id.
+/// A matching artifact too large for a page's byte budget by itself, its content and the rest of its
+/// row together: named, sized, and left to be read by id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -358,5 +358,73 @@ mod tests {
             })
         );
         assert!(serde_json::from_value::<AskOrder>(json!("rank")).is_err());
+    }
+
+    /// **The masquerade boundary, the batch direction (spec §9): a batch answer cannot enter a
+    /// composition as a set, and a composition returns no artifact section.** A full page — rows,
+    /// an oversized entry, a population and a continuation — fails to read as a `StageInput` or as
+    /// an `IdSet`, so nothing in the composition grammar accepts it; and `/api/query` still admits
+    /// `OpenMeta` alone. Bites: an `IdSet` that reads anything (`#[serde(default)]` on `kind` and
+    /// `ids`), or a second admitted section.
+    #[test]
+    fn a_batch_answer_is_never_a_set_and_a_composition_returns_no_artifacts() {
+        use crate::types::query::{IdSet, ReturnSpec, StageInput};
+        use crate::types::resource_view::ResourceSection;
+
+        let shape = ShapeIdentity {
+            shape_id: ShapeId::from(Uuid::from_u128(7)),
+            shape_version: 1,
+            home_anchor_table: "kb_contexts".to_string(),
+            home_anchor_id: Uuid::from_u128(1),
+            kind_owner_table: "kb_profiles".to_string(),
+            kind_owner_id: Uuid::from_u128(2),
+            artifact_kind: "measurement".to_string(),
+        };
+        let row = ArtifactView {
+            artifact_id: DataArtifactId::from(Uuid::from_u128(10)),
+            resource_id: ResourceId::from(Uuid::from_u128(11)),
+            kind_owner_table: "kb_profiles".to_string(),
+            kind_owner_id: Uuid::from_u128(2),
+            artifact_kind: "measurement".to_string(),
+            intent: "member".to_string(),
+            precedence: 0.0,
+            content_hash: "0".repeat(64),
+            content_bytes: 13,
+            shape_state: "declared_satisfied".to_string(),
+            is_folded: false,
+            created: cursor().created,
+            content: Some(json!({ "unit": "ms" })),
+        };
+        let page = serde_json::to_value(AskResponse {
+            shape: AskedShape::from(&shape),
+            artifacts: vec![row],
+            oversized: vec![OversizedArtifact {
+                artifact_id: DataArtifactId::from(Uuid::from_u128(12)),
+                resource_id: ResourceId::from(Uuid::from_u128(11)),
+                content_bytes: 3_000_000,
+            }],
+            population: Some(ArtifactAskPopulation {
+                declared_satisfied: 2,
+                declared_not_satisfied: 0,
+                declared_not_yet_checked: 0,
+                matched: 2,
+            }),
+            ordered_by: AskOrder::Created,
+            next: Some(cursor()),
+            amended_since: Some(ShapeSuccessor {
+                shape_id: ShapeId::from(Uuid::from_u128(8)),
+                shape_version: 2,
+            }),
+        })
+        .unwrap();
+        assert!(
+            serde_json::from_value::<StageInput>(page.clone()).is_err(),
+            "a batch answer is not a stage input"
+        );
+        assert!(
+            serde_json::from_value::<IdSet>(page).is_err(),
+            "a batch answer is not an id set"
+        );
+        assert_eq!(ReturnSpec::ADMITTED_SECTIONS, [ResourceSection::OpenMeta]);
     }
 }

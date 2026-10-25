@@ -17,9 +17,13 @@
 --      whole home: artifact_ask_batch_read.rs's plan witness fails that.
 --   3. THE KEYSET IS A ROW COMPARISON, both halves or neither (20261102000000 point 3): half a
 --      position answers nothing. A NULL limit is the whole set — the counted set's call only.
---   4. CONTENT OVER THE PAGE BUDGET NEVER LEAVES SQL. The page decides served, oversized and the
---      row that ends the page from content_bytes in one window over at most limit + 1 rows, and
---      reads content for served rows alone.
+--   4. THE BUDGET BOUNDS THE WHOLE PAGE, AND CONTENT OVER IT NEVER LEAVES SQL. Every row the page
+--      examines is charged against it: a served row its content_bytes plus its metadata (each text
+--      column it carries, measured as the JSON string the page writes, plus p_row_bytes for the
+--      rest), an oversized row p_row_bytes. The family name has no length cap and repeats on every
+--      row, so a content-only charge cannot hold the response cap. One window over at most
+--      limit + 1 rows decides served, oversized and the row that ends the page; content is read
+--      for served rows alone.
 --   5. THE GATED FUNCTIONS BUILD THE VISIBLE SET ONCE, COALESCEd to ARRAY[]::uuid[] (the array_agg
 --      fall-open scar, 20260820000030), and restate no conjunct.
 --   6. NO DEFAULT on any parameter.
@@ -102,19 +106,22 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 -- ── The gated page ──────────────────────────────────────────────────────────────────────────────
--- One window over at most p_limit + 1 matched rows, in order. `fitted` is the running total of the
--- content of every row that fits the budget alone, so at a row that does not it is the total before
--- it. A row is examined while it is within the limit and `fitted` is within the budget: a row over
--- the budget alone is examined (oversized) and the page goes on; the first row that fits alone but
--- not the remainder, and every row after it, is not examined. A row is served when it is examined,
--- fits alone, and the total through it is within the budget — so no served content is past it.
+-- One window over at most p_limit + 1 matched rows, in order. A row's `charge` is what it costs the
+-- page: content_bytes plus metadata_bytes when it fits the budget alone (content and metadata), else
+-- p_row_bytes, the size of the oversized entry that names it. `spent` is the running total of the
+-- charges. A row is examined while it is within the limit and `spent` is within the budget, so a row
+-- that does not fit alone is examined (oversized) and the page goes on, and the first row that fits
+-- alone but not what is left ends the page with every row after it. A row is served when it is
+-- examined and fits alone, so no served byte is past the budget. A budget below p_row_bytes reads
+-- nothing, so the first matching row is always examined.
 CREATE FUNCTION artifacts_matching_ask(
-    p_principal      uuid,
-    p_ask            jsonb,
-    p_after_created  timestamptz,
-    p_after_id       uuid,
-    p_limit          bigint,
-    p_content_budget bigint)
+    p_principal     uuid,
+    p_ask           jsonb,
+    p_after_created timestamptz,
+    p_after_id      uuid,
+    p_limit         bigint,
+    p_page_budget   bigint,
+    p_row_bytes     bigint)
 RETURNS TABLE (artifact_id uuid, resource_id uuid, kind_owner_table varchar, kind_owner_id uuid,
                artifact_kind text, intent text, precedence double precision, content_hash text,
                content_bytes bigint, shape_state text, is_folded boolean, created timestamptz,
@@ -128,23 +135,38 @@ LANGUAGE sql STABLE AS $$
                        WHERE c.artifact_id = w.artifact_id)
            END
       FROM (SELECT e.artifact_id, e.shape_state, e.created, e.content_bytes, e.examined,
-                   e.examined AND e.fits AND e.fitted <= p_content_budget AS served
+                   e.examined AND e.fits AS served
               FROM (SELECT b.artifact_id, b.shape_state, b.created, b.content_bytes, b.fits,
-                           b.fitted,
-                           b.n <= p_limit AND b.fitted <= p_content_budget AS examined
-                      FROM (SELECT r.artifact_id, r.shape_state, r.created, r.content_bytes,
-                                   r.content_bytes <= p_content_budget AS fits,
+                           b.n <= p_limit AND b.spent <= p_page_budget AS examined
+                      FROM (SELECT m.artifact_id, m.shape_state, m.created, m.content_bytes, m.fits,
                                    row_number() OVER ordered AS n,
-                                   sum(CASE WHEN r.content_bytes <= p_content_budget
-                                            THEN r.content_bytes ELSE 0 END) OVER ordered AS fitted
-                              FROM __temper_ungated_artifact_ask_rows(
-                                     COALESCE((SELECT array_agg(v.resource_id)
-                                                 FROM resources_visible_to(p_principal) v),
-                                              ARRAY[]::uuid[]),
-                                     p_principal, p_ask, p_after_created, p_after_id,
-                                     p_limit + 1, true) AS r
-                             WHERE p_limit >= 1 AND p_content_budget >= 0
-                            WINDOW ordered AS (ORDER BY r.created, r.artifact_id
+                                   sum(m.charge) OVER ordered AS spent
+                              FROM (SELECT k.artifact_id, k.shape_state, k.created, k.content_bytes,
+                                           k.content_bytes + k.metadata_bytes <= p_page_budget
+                                               AS fits,
+                                           CASE WHEN k.content_bytes + k.metadata_bytes
+                                                     <= p_page_budget
+                                                THEN k.content_bytes + k.metadata_bytes
+                                                ELSE p_row_bytes END AS charge
+                                      FROM (SELECT r.artifact_id, r.shape_state, r.created,
+                                                   r.content_bytes,
+                                                   (p_row_bytes
+                                                    + octet_length(to_json(d.kind_owner_table)::text)
+                                                    + octet_length(to_json(d.artifact_kind)::text)
+                                                    + octet_length(to_json(d.intent)::text)
+                                                    + octet_length(to_json(d.content_hash)::text)
+                                                    + octet_length(to_json(r.shape_state)::text))
+                                                       AS metadata_bytes
+                                              FROM __temper_ungated_artifact_ask_rows(
+                                                     COALESCE((SELECT array_agg(v.resource_id)
+                                                                 FROM resources_visible_to(p_principal) v),
+                                                              ARRAY[]::uuid[]),
+                                                     p_principal, p_ask, p_after_created, p_after_id,
+                                                     p_limit + 1, true) AS r
+                                              JOIN kb_data_artifacts d ON d.id = r.artifact_id
+                                             WHERE p_limit >= 1 AND p_row_bytes >= 0
+                                               AND p_page_budget >= p_row_bytes) AS k) AS m
+                            WINDOW ordered AS (ORDER BY m.created, m.artifact_id
                                                ROWS UNBOUNDED PRECEDING)) AS b) AS e) AS w
       JOIN kb_data_artifacts a ON a.id = w.artifact_id
      ORDER BY w.created, w.artifact_id
@@ -170,8 +192,8 @@ COMMENT ON FUNCTION __temper_ungated_artifact_ask_rows(uuid[], uuid, jsonb, time
 COMMENT ON FUNCTION __temper_ungated_artifact_ask_population(uuid[], uuid, jsonb) IS
     'UNGATED. The counted set of one artifact ask: every governed row with its shape in force, shape_state and matched, as __temper_ungated_artifact_ask_rows defines them, which this delegates to with no position, no limit and every row, matched or not. The selection core''s asks conjunct and __temper_ungated_artifact_ask_counts read it. The caller owes the verdict (p_visible_ids, NULL admits none) and the reader (20261104000000, 20261106000000).';
 
-COMMENT ON FUNCTION artifacts_matching_ask(uuid, jsonb, timestamptz, uuid, bigint, bigint) IS
-    'One page of the artifacts matching one ask (one element of ValidatedAsk::bind), for p_principal: its own resources_visible_to, built once, handed to __temper_ungated_artifact_ask_rows with p_principal as reader, matched rows only, at most p_limit + 1 in (created, id) order after the position. examined is within p_limit and the page''s content budget; served is examined and within the budget alone (content carried), an examined row over it is oversized (no content). The first unexamined row, if any, is where the next page starts. Nothing for a NULL or non-positive p_limit or a NULL or negative budget (20261106000000).';
+COMMENT ON FUNCTION artifacts_matching_ask(uuid, jsonb, timestamptz, uuid, bigint, bigint, bigint) IS
+    'One page of the artifacts matching one ask (one element of ValidatedAsk::bind), for p_principal: its own resources_visible_to, built once, handed to __temper_ungated_artifact_ask_rows with p_principal as reader, matched rows only, at most p_limit + 1 in (created, id) order after the position. p_page_budget bounds the whole page: a row that fits it alone is charged its content_bytes and its metadata (each text column as the JSON string the page writes, plus p_row_bytes), any other row p_row_bytes. examined is within p_limit and the running charge within the budget; served is examined and fitting alone (content carried), an examined row that does not fit alone is oversized (no content). The first unexamined row, if any, is where the next page starts. Nothing for a NULL or non-positive p_limit, a NULL or negative p_row_bytes, or a budget that is NULL or below p_row_bytes (20261106000000).';
 
 COMMENT ON FUNCTION artifact_ask_counts(uuid, jsonb) IS
     'The population of one ask for p_principal: __temper_ungated_artifact_ask_counts over its own resources_visible_to, built once (an empty set admits nothing), with p_principal as reader (20261106000000).';

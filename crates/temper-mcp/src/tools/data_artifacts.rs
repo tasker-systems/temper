@@ -5,8 +5,9 @@
 //! cluster): `list` → `GET /api/resources/{id}/artifacts`, `get` →
 //! `GET /api/data-artifacts/{artifact_id}` (the flat read, route-first in PR #968 —
 //! the tool carries no `resource_id` and the nested route could not be its door),
-//! `commit` → `POST /api/resources/{id}/artifacts`. Each call forwards the caller's
-//! bearer via the per-request temper-client relay built from the request's `Parts`.
+//! `commit` → `POST /api/resources/{id}/artifacts`, `ask` →
+//! `POST /api/data-artifacts/ask` (the batch read, relayed unread). Each call forwards the
+//! caller's bearer via the per-request temper-client relay built from the request's `Parts`.
 //!
 //! The per-act envelope (`confidence` / `persona` / `reasoning` / `rationale` /
 //! `model` / `invocation_id` / `correlation_id`) maps STRAIGHT into the wire
@@ -35,6 +36,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use temper_client::error::ClientError;
+use temper_core::types::artifact_ask::{AskRequest, AskResponse};
 use temper_core::types::authorship::ActInput;
 use temper_core::types::data_artifact::{
     ArtifactCommitRequest, ArtifactCursor, ArtifactListParams, ArtifactPageRefusal,
@@ -43,6 +45,7 @@ use temper_core::types::data_artifact::{
 use temper_core::types::ids::{DataArtifactId, ResourceId};
 use temper_core::types::resource::SortOrder;
 
+use super::refusals::{map_refusable_error, Refused};
 use crate::service::{api_error_cause, AcrossAuth, TemperMcpService};
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -202,6 +205,56 @@ pub async fn get_artifact(
     let json = serde_json::to_string_pretty(&artifact).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![
         rmcp::model::ContentBlock::text(json),
+    ]))
+}
+
+/// MCP input for `ask_data_artifacts`: one batch-read request, relayed unread.
+///
+/// **Declared as an `AskRequest` and relayed unread.** Its schema is `AskRequest`'s own
+/// (`schemars(with)`), so the tool's input schema is the batch read's contract, not a restatement
+/// of it, and an agent asks against exactly what `POST /api/data-artifacts/ask` reads. But this
+/// door never deserializes it: whether a request is readable — its fields, its types, a whole
+/// `after` — is the route's to decide, once, for both doors, and a request it cannot read comes back
+/// as its own bounded `UNREADABLE_PLAN` sentence rather than as this door's deserializer quoting the
+/// caller's input back.
+///
+/// **What "unread" still is, declared** (as for `run_query`'s `plan`): rmcp has already parsed the
+/// tool arguments into JSON values and the relay re-serializes them, so the API reads this door's
+/// encoding of the request, not the caller's bytes. A duplicate key keeps its last value here.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(transparent)]
+#[schemars(with = "AskRequest")]
+pub struct AskInput(pub serde_json::Value);
+
+/// Ask one shape's artifacts what they hold: one page of the matching artifacts, whole.
+///
+/// Relays the request, unread, to `POST /api/data-artifacts/ask`. A refused ask returns
+/// `invalid_params` carrying every refusal — the ask's and the request's — with the list as
+/// structured `data`; an unreadable one returns `invalid_params` in the server's own words.
+pub async fn ask_artifacts(
+    svc: &TemperMcpService,
+    parts: &http::request::Parts,
+    input: AskInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let client = svc.relay_client(parts)?;
+    let page = client
+        .data_artifacts()
+        .ask(&input.0)
+        .await
+        .across_auth(|e| map_refusable_error("ask_data_artifacts", Refused::Ask, e))?;
+    ask_result(&page)
+}
+
+/// The page as this tool answers it: **compact JSON, sent once**, as one text block and never also
+/// as structured content. The page's byte budget (`ARTIFACT_ASK_PAGE_BYTES` in temper-services) is
+/// sized for the relay on exactly those two conditions — escaping compact JSON into a string at
+/// most doubles it, while pretty-printing adds indentation per nesting level that no byte budget
+/// bounds, and a second copy would double it again.
+pub fn ask_result(page: &AskResponse) -> Result<CallToolResult, rmcp::ErrorData> {
+    let body = serde_json::to_string(page)
+        .map_err(|e| rmcp::ErrorData::internal_error(format!("ask_data_artifacts: {e}"), None))?;
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(body),
     ]))
 }
 

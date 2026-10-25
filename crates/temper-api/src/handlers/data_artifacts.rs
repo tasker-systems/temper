@@ -1,14 +1,16 @@
-use axum::extract::{Path, Query, State};
+use axum::extract::{FromRequest, Path, Query, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue};
 use axum::Json;
 use uuid::Uuid;
 
 use crate::middleware::auth::AnyPrincipal;
 use crate::middleware::surface::RequestSurface;
+use temper_core::types::artifact_ask::{AskRequest, AskResponse};
 use temper_core::types::data_artifact::{
     ArtifactCommitRequest, ArtifactCommitResponse, ArtifactCursor, ArtifactListParams, ArtifactView,
 };
 use temper_core::types::ids::{DataArtifactId, ProfileId, ResourceId};
+use temper_services::backend::artifact_ask_read;
 use temper_services::backend::substrate_read::ArtifactPageFilter;
 use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
@@ -210,6 +212,87 @@ pub async fn get_by_id(
     .await?
     .ok_or_else(|| ApiError::NotFound("artifact not found".to_string()))?;
     Ok(Json(artifact))
+}
+
+/// Read the artifacts one ask matches, whole
+///
+/// The body is one ask — a shape by id and predicates over the paths that shape declares — with
+/// an optional `limit` and the previous page's `next` as `after`. The answer is the artifacts the
+/// ask matches among those you can see, each whole (`content` is the stored content, absent for an
+/// artifact committed with no bytes), in `(created, artifact_id)` order, oldest first. POST,
+/// because the ask is a document rather than a query string.
+///
+/// Every page is bounded twice: by `limit` (absent: 50; at least 1 and at most 200), and by a
+/// byte budget over the whole page. A matching artifact too large for any page is named in
+/// `oversized`, in order, by id and size, and is read whole by id (`GET
+/// /api/data-artifacts/{artifact_id}`). `population` counts the ask's whole governed population on
+/// the first page and is `null` after it. Continue by sending the same ask with `next` as `after`;
+/// every page validates the ask again for its caller, so the position carries no authority.
+///
+/// This is an enumeration: an artifact on a resource still ingesting, or one an operator ended, is
+/// not in it, though `GET /api/resources/{id}/artifacts` addressed to that resource lists it. It
+/// never returns resources, and it is not a stage of `/api/query`.
+#[utoipa::path(
+    post,
+    operation_id = "ask_data_artifacts",
+    path = "/api/data-artifacts/ask",
+    tag = "Data Artifacts",
+    request_body = AskRequest,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "One page of the matching artifacts, whole, in `(created, artifact_id)` order, with where to continue (`next`, `null` on the last page)", body = AskResponse),
+        (
+            status = 400,
+            description = "Two codes. `PLAN_REFUSED`: the ask will not be answered, with every \
+                refusal at once in `error.details.refusals` — the ask's own (each naming its reason \
+                and, where it has one, a `teaches` carrying the shape's vocabulary) and the \
+                request's (`page_limit_out_of_range`, `property_value_budget_exceeded`), none with a \
+                stage. A shape you cannot read is refused exactly as one that does not exist \
+                (`shape_not_askable`). `UNREADABLE_PLAN`, with no `details`: the body is not JSON.",
+            body = ErrorBody,
+        ),
+        (
+            status = 422,
+            description = "The body is not an ask this door can read — a value of the wrong type, \
+                a field it does not declare, or an `after` missing half its position — under the \
+                code `UNREADABLE_PLAN`, the message naming what failed and repeating at most 1024 \
+                bytes of it. A non-JSON content type answers `415` under the same code.",
+            body = ErrorBody,
+        ),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "System access required", body = ErrorBody),
+    )
+)]
+// Thin: the read path is `artifact_ask_read::ask_page`, which loads the shape for this principal,
+// validates the ask and the request together, and reads the page. Its refusals arrive here as
+// `ApiError::PlanRefused` and are rendered unchanged.
+pub async fn ask(
+    State(state): State<AppState>,
+    auth: AnyPrincipal,
+    AskBody(request): AskBody,
+) -> ApiResult<Json<AskResponse>> {
+    let principal = ProfileId::from(auth.0.profile().id);
+    let response = artifact_ask_read::ask_page(&state.pool, principal, &request).await?;
+    Ok(Json(response))
+}
+
+/// The batch read's body, read as `Json` reads it, but every rejection — malformed JSON, a value
+/// of the wrong type, an unknown field, an `after` missing half its position — answered as a typed
+/// `ApiError::UnreadablePlan` rather than axum's plain-text rejection, and never quoting the body
+/// back whole (`super::query::read_unread_body`). The MCP edge relays the ask unread, so this is
+/// where it is read, once, for both doors.
+#[derive(Debug)]
+pub struct AskBody(pub AskRequest);
+
+impl<S> FromRequest<S> for AskBody
+where
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        super::query::read_unread_body(req, state).await.map(Self)
+    }
 }
 
 /// Commit one data artifact to a resource

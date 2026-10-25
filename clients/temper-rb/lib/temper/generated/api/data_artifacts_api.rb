@@ -19,6 +19,81 @@ module Temper::Generated
     def initialize(api_client = ApiClient.default)
       @api_client = api_client
     end
+    # Read the artifacts one ask matches, whole
+    # The body is one ask — a shape by id and predicates over the paths that shape declares — with an optional `limit` and the previous page's `next` as `after`. The answer is the artifacts the ask matches among those you can see, each whole (`content` is the stored content, absent for an artifact committed with no bytes), in `(created, artifact_id)` order, oldest first. POST, because the ask is a document rather than a query string.  Every page is bounded twice: by `limit` (absent: 50; at least 1 and at most 200), and by a byte budget over the whole page. A matching artifact too large for any page is named in `oversized`, in order, by id and size, and is read whole by id (`GET /api/data-artifacts/{artifact_id}`). `population` counts the ask's whole governed population on the first page and is `null` after it. Continue by sending the same ask with `next` as `after`; every page validates the ask again for its caller, so the position carries no authority.  This is an enumeration: an artifact on a resource still ingesting, or one an operator ended, is not in it, though `GET /api/resources/{id}/artifacts` addressed to that resource lists it. It never returns resources, and it is not a stage of `/api/query`.
+    # @param ask_request [AskRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [AskResponse]
+    def ask_data_artifacts(ask_request, opts = {})
+      data, _status_code, _headers = ask_data_artifacts_with_http_info(ask_request, opts)
+      data
+    end
+
+    # Read the artifacts one ask matches, whole
+    # The body is one ask — a shape by id and predicates over the paths that shape declares — with an optional &#x60;limit&#x60; and the previous page&#39;s &#x60;next&#x60; as &#x60;after&#x60;. The answer is the artifacts the ask matches among those you can see, each whole (&#x60;content&#x60; is the stored content, absent for an artifact committed with no bytes), in &#x60;(created, artifact_id)&#x60; order, oldest first. POST, because the ask is a document rather than a query string.  Every page is bounded twice: by &#x60;limit&#x60; (absent: 50; at least 1 and at most 200), and by a byte budget over the whole page. A matching artifact too large for any page is named in &#x60;oversized&#x60;, in order, by id and size, and is read whole by id (&#x60;GET /api/data-artifacts/{artifact_id}&#x60;). &#x60;population&#x60; counts the ask&#39;s whole governed population on the first page and is &#x60;null&#x60; after it. Continue by sending the same ask with &#x60;next&#x60; as &#x60;after&#x60;; every page validates the ask again for its caller, so the position carries no authority.  This is an enumeration: an artifact on a resource still ingesting, or one an operator ended, is not in it, though &#x60;GET /api/resources/{id}/artifacts&#x60; addressed to that resource lists it. It never returns resources, and it is not a stage of &#x60;/api/query&#x60;.
+    # @param ask_request [AskRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(AskResponse, Integer, Hash)>] AskResponse data, response status code and response headers
+    def ask_data_artifacts_with_http_info(ask_request, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: DataArtifactsApi.ask_data_artifacts ...'
+      end
+      # verify the required parameter 'ask_request' is set
+      if @api_client.config.client_side_validation && ask_request.nil?
+        fail ArgumentError, "Missing the required parameter 'ask_request' when calling DataArtifactsApi.ask_data_artifacts"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/data-artifacts/ask'
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      # HTTP header 'Content-Type'
+      content_type = @api_client.select_header_content_type(['application/json'])
+      if !content_type.nil?
+          header_params['Content-Type'] = content_type
+      end
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body] || @api_client.object_to_http_body(ask_request)
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'AskResponse'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"DataArtifactsApi.ask_data_artifacts",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:POST, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: DataArtifactsApi#ask_data_artifacts\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # Commit one data artifact to a resource
     # The content payload is JSON, hashed and stored verbatim. The hash is the proof — the ledger carries only the hash, never the bytes. Auth-gated: the caller must have write standing on the owning resource.
     # @param id [String] Resource ID (the artifact&#39;s owner)
