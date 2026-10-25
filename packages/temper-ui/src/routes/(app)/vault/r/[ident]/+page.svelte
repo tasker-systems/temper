@@ -91,11 +91,11 @@
 		<div class="body">
 			{#await data.content}
 				<RegionState state="arriving" label="document" />
-			{:then markdown}
-				{#if markdown.trim() === ''}
+			{:then body}
+				{#if body.markdown.trim() === ''}
 					<RegionState state="empty" label="document" />
 				{:else}
-					<MarkdownRenderer {markdown} />
+					<MarkdownRenderer markdown={body.markdown} links={body.links} />
 				{/if}
 			{:catch error}
 				<RegionState state={regionStateFor(error)} label="document" />

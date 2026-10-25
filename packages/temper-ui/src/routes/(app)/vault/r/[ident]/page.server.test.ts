@@ -98,6 +98,34 @@ describe('the resource page does not block on its fill', () => {
 	});
 });
 
+describe('the document read', () => {
+	const ID = '019d4add-f49d-7c43-a87d-dda470e5dd9c';
+	const BODY = `See [typed](./${ID}).`;
+	const answering = (links: () => Promise<unknown>) =>
+		apiGet.mockImplementation((path: string) => {
+			if (path.endsWith('/content')) return Promise.resolve({ markdown: BODY });
+			if (path.startsWith('/api/resources?')) return links();
+			return Promise.resolve({ id: 'r1', title: 'A resource', kb_context_id: CTX });
+		});
+
+	it("arrives with the body's links already answered, so the body first paints settled", async () => {
+		answering(() =>
+			Promise.resolve({ rows: [{ id: ID, title: 'Held' }], truncated: false, total: 1 }),
+		);
+		const data = await run();
+		await expect(data.content).resolves.toEqual({
+			markdown: BODY,
+			links: [[ID, { state: 'resolved', title: 'Held' }]],
+		});
+	});
+
+	it('a failed link read leaves the document whole, its links unanswered', async () => {
+		answering(() => Promise.reject(new Error('list down')));
+		const data = await run();
+		await expect(data.content).resolves.toEqual({ markdown: BODY, links: [] });
+	});
+});
+
 describe('the artifacts read', () => {
 	const AFTER_ID = '00000000-0000-0000-0000-0000000000aa';
 	const AFTER_CREATED = '2026-10-19T12:30:45.123456Z';

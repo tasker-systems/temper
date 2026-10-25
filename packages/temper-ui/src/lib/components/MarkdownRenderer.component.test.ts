@@ -42,6 +42,33 @@ describe('MarkdownRenderer', () => {
 		await waitFor(() => expect(container.querySelector('.md-refusal')).not.toBeNull());
 	});
 
+	const ID = '019d4add-f49d-7c43-a87d-dda470e5dd9c';
+
+	it('a resolved body link reads as the held title and links to the resource page', async () => {
+		const { container } = render(MarkdownRenderer, {
+			props: {
+				markdown: `See [typed](./${ID}).`,
+				links: [[ID, { state: 'resolved', title: 'Held title' }]],
+			},
+		});
+		await waitFor(() => expect(container.querySelector('.md-body')).not.toBeNull());
+		const a = container.querySelector('a');
+		expect(a?.textContent).toBe('Held title');
+		expect(a?.getAttribute('href')).toBe(`/vault/r/${ID}`);
+		expect(container.textContent).not.toContain('typed');
+	});
+
+	it('with no answers, a body link is unchecked: marked, and still followable to the resource page', async () => {
+		const { container } = render(MarkdownRenderer, {
+			props: { markdown: `See [typed](./${ID}).` },
+		});
+		await waitFor(() => expect(container.querySelector('.md-body')).not.toBeNull());
+		const a = container.querySelector('a');
+		expect(a?.classList.contains('md-ref-unchecked')).toBe(true);
+		expect(a?.getAttribute('href')).toBe(`/vault/r/${ID}`);
+		expect(a?.textContent).toContain('typed');
+	});
+
 	it('renders the fallback for an empty body, not an empty region', () => {
 		const { container } = render(MarkdownRenderer, { props: { markdown: '' } });
 		expect(container.querySelector('.md-body')).toBeNull();

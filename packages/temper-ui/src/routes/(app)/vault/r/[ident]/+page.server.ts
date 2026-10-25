@@ -10,6 +10,7 @@ import { mayChangeResource } from '$lib/authority';
 import { editableKind, revisedValue } from '$lib/descriptions';
 import { parseRef } from '$lib/ref';
 import { ApiError, apiGet, apiGetWithHeaders, apiPatch } from '$lib/server/api';
+import { resolveBodyLinks } from '$lib/server/body-links';
 import { bounded } from '$lib/server/bounded';
 import { readResourceConnections, readTrail } from '$lib/server/graph-reads';
 import type { ContentResponse, DocTypeDescription, ResourceView } from '$lib/types';
@@ -133,8 +134,14 @@ export const load: PageServerLoad = async ({ locals, params, parent, url }) => {
 	// not the `{:catch}` that renders the failure, and having one does not give you the other.
 	// The gap it closes is real in two places here — between these lines and SvelteKit subscribing
 	// in order to serialize, and on the 404 path below, which abandons all three.
+	// The body's links are answered INSIDE the document read, so the body arrives with them and
+	// first paints settled — a link never changes under the reader. `resolveBodyLinks` never
+	// rejects: links it could not check render unchecked, and the document region stays whole.
 	const content = bounded(
-		apiGet<ContentResponse>(`/api/resources/${id}/content`, accessToken).then((r) => r.markdown),
+		apiGet<ContentResponse>(`/api/resources/${id}/content`, accessToken).then(async (r) => ({
+			markdown: r.markdown,
+			links: await resolveBodyLinks(r.markdown, accessToken),
+		})),
 		'document',
 	);
 	const trail = bounded(readTrail(accessToken, 'node', id), 'history');

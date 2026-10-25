@@ -150,7 +150,9 @@ const PROPERTY_ROWS = 4;
 const data = (fill: Fill = {}): PageData =>
 	({
 		resource: RESOURCE,
-		content: fill.content ?? Promise.resolve('# A body\n\nWith a paragraph in it.'),
+		content:
+			fill.content ??
+			Promise.resolve({ markdown: '# A body\n\nWith a paragraph in it.', links: [] }),
 		trail: fill.trail ?? Promise.resolve(trailOf(2)),
 		connections: fill.connections ?? Promise.resolve(connectionsOf([edge(1)])),
 		// The default is the shape the overwhelming majority of resources arrive in — owning no
@@ -335,7 +337,7 @@ describe('C4: an empty region does not present like a failed one', () => {
 		'%s: what came back empty says something different from what did not come back',
 		async (_name, scope, key) => {
 			const emptyValue: Fill = {
-				content: Promise.resolve(''),
+				content: Promise.resolve({ markdown: '', links: [] }),
 				trail: Promise.resolve(trailOf(0)),
 				connections: Promise.resolve(connectionsOf([])),
 			};
@@ -1002,7 +1004,7 @@ describe('a state the system defines is changed where it is read', () => {
  */
 describe('a reader attaches and revises their own descriptions where they read them', () => {
 	const offering = {
-		content: pending<string>(),
+		content: pending<PageData['content'] extends Promise<infer T> ? T : never>(),
 		trail: pending<never>(),
 		connections: pending<never>(),
 		mayChange: true,
