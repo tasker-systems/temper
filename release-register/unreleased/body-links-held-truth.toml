@@ -1,12 +1,14 @@
 title    = "`GET /api/resources` lists resources by id, bounded to what the caller can see"
 pr       = "self"
 classes  = ["additive"]
-surfaces = ["http", "clients", "schema"]
+surfaces = ["http", "clients", "mcp", "cli-stdout", "schema"]
 status   = "signal-only"
 body = '''
 `ResourceListParams` gains `ids`: a comma-separated list of resource UUIDs, at most 256 (the id-set bound the query door already uses). The page holds the caller's visible resources among them and nothing else. An id that does not exist, was deleted, is not visible to the caller, or names an unfinished upload is simply absent from the rows, and the response carries no other trace of it: no per-id status, no error, no count. A malformed id, or more than 256, is a `400` that names the field and never echoes the values. Rows are the list's existing row, with no body. It composes with every other filter as one more AND.
 
-Who observes it: callers of `GET /api/resources` and the three SDKs, whose list parameters grow the field. A request that does not use it is unchanged.
+The same read is on every door: `temper resource list --ids <ref>` (repeatable or comma-separated) and MCP `list_resources.ids` take UUIDs or decorated refs, refuse a malformed ref or more than 256 before the round-trip, and raise the page size to at least the number of ids. MCP's 200-row clamp does not cut a by-id read.
+
+Who observes it: callers of `GET /api/resources` and the three SDKs, whose list parameters grow the field; `temper resource list`, which gains `--ids`; and MCP `list_resources`, whose input schema gains `ids`. A request that does not use it is unchanged.
 
 Release relevance: signal-only. An additive query parameter.
 '''

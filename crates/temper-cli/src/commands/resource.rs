@@ -1,4 +1,5 @@
 use chrono::Local;
+use temper_core::types::query::id_set::MAX_ID_SET_IDS;
 use temper_core::types::resource_view::{ResourceSection, SectionSet};
 use temper_workflow::schema;
 
@@ -1056,6 +1057,9 @@ pub struct ListParams<'a> {
     /// `--cogmap` (repeatable): scope to resources homed in these cognitive maps (UUID or decorated
     /// refs). Mutually exclusive with `context`. Empty = no cogmap filter.
     pub cogmap: &'a [String],
+    /// `--ids` (repeatable or comma-separated): list these resources by id (UUID or decorated
+    /// refs). Composes with every other filter. Empty = no id filter.
+    pub ids: &'a [String],
     pub limit: Option<usize>,
     /// `--all`: return every matching row (no page cap). Overrides `limit`
     /// (clap makes the two mutually exclusive, so both are never set together).
@@ -1099,6 +1103,29 @@ pub struct ListParams<'a> {
 /// asked for a section. Worse, it is the number `--page` counts in — two defaults would make
 /// `--page 3` mean row 40 or row 100 depending on an unrelated flag.
 const DEFAULT_LIST_LIMIT: usize = 20;
+
+/// Resolve `--ids` refs (trailing-UUID-only) into the comma-separated UUID string the list
+/// endpoint's `ids` query param expects. `None` when no `--ids` was given. A malformed ref, or
+/// more than the id-set bound the server enforces, is refused here before the round-trip.
+/// Unlike `--cogmap` it composes with `--context`: an id scope is a narrowing, not a home.
+fn resolve_ids_csv(refs: &[String]) -> Result<Option<String>> {
+    if refs.is_empty() {
+        return Ok(None);
+    }
+    if refs.len() > MAX_ID_SET_IDS {
+        return Err(TemperError::BadRequest(format!(
+            "--ids may carry at most {MAX_ID_SET_IDS} ids; this carries {}",
+            refs.len()
+        )));
+    }
+    let mut ids = Vec::with_capacity(refs.len());
+    for r in refs {
+        let id = temper_workflow::operations::parse_ref(r)
+            .map_err(|e| TemperError::Config(format!("invalid resource ref {r:?}: {e}")))?;
+        ids.push(id.0.to_string());
+    }
+    Ok(Some(ids.join(",")))
+}
 
 /// Resolve repeated `--cogmap` refs (trailing-UUID-only) into the comma-separated UUID string the
 /// list endpoint's `cogmap_ids` query param expects (the GET can't carry a `Vec`). `None` when no
@@ -1399,6 +1426,15 @@ fn list_api_params(
         }
         None => (None, None),
     };
+    // A by-id read is never cut by the default page: the page holds at least as many rows as
+    // ids were asked for. `--all` (no cap) and a larger `--limit` stand.
+    let limit = match (
+        resolve_list_limit(params.all, params.limit),
+        params.ids.len(),
+    ) {
+        (Some(l), n) if n > 0 => Some(l.max(n as i64)),
+        (limit, _) => limit,
+    };
     // Resolve --goal ref → goal resource id (trailing-UUID-only); the server filters on the live
     // `advances`→goal edge. An unparseable ref is a hard error (never a silent drop).
     let goal = params
@@ -1410,6 +1446,7 @@ fn list_api_params(
         doc_type_name: params.doc_type.map(ToString::to_string),
         context_ref: params.context.map(ToString::to_string),
         cogmap_ids: resolve_cogmap_scope_csv(params.cogmap, params.context)?,
+        ids: resolve_ids_csv(params.ids)?,
         tags: resolve_tag_csv(params.tag)?,
         stage: params.stage.map(str::to_string),
         status: params.status.map(str::to_string),
@@ -1417,7 +1454,7 @@ fn list_api_params(
         goal,
         sort,
         order,
-        limit: resolve_list_limit(params.all, params.limit),
+        limit,
         offset: Some(resolve_list_offset(params.page, params.offset, params.limit) as i64),
         // One envelope either way — the section is what varies, not the row type. Rendered
         // through `SectionSet::to_csv` rather than from a `contains` check per section, so a
@@ -3046,6 +3083,7 @@ mod list_helpers_tests {
             tag,
             context: None,
             cogmap,
+            ids: &[],
             limit: None,
             all: false,
             offset: None,
@@ -3152,6 +3190,50 @@ mod list_helpers_tests {
             Some(cogmap_uuid.to_string().as_str()),
             "--cogmap (resolved from the ref)"
         );
+    }
+
+    /// `--ids` resolves each ref to its trailing UUID and joins them in order, refusing a
+    /// malformed ref and a set over the id-set bound before any round-trip.
+    #[test]
+    fn ids_csv_resolves_decorated_and_bare_refs() {
+        assert_eq!(resolve_ids_csv(&[]).unwrap(), None);
+        let (u1, u2) = (uuid::Uuid::now_v7(), uuid::Uuid::now_v7());
+        let refs = vec![format!("some-note-{u1}"), u2.to_string()];
+        assert_eq!(
+            resolve_ids_csv(&refs).unwrap().as_deref(),
+            Some(format!("{u1},{u2}").as_str())
+        );
+        assert!(resolve_ids_csv(&["junk".to_string()]).is_err());
+        let over = vec![uuid::Uuid::nil().to_string(); MAX_ID_SET_IDS + 1];
+        assert!(resolve_ids_csv(&over).is_err());
+        let at = vec![uuid::Uuid::nil().to_string(); MAX_ID_SET_IDS];
+        assert!(resolve_ids_csv(&at).is_ok());
+    }
+
+    /// `--ids` reaches `ids`, and lifts the page size to at least the number of ids, so a
+    /// by-id read is never truncated by the default page. A larger explicit `--limit` is kept,
+    /// and `--all` stays uncapped.
+    #[test]
+    fn ids_reach_their_field_and_raise_the_page_limit() {
+        let refs: Vec<String> = (0..25).map(|_| uuid::Uuid::now_v7().to_string()).collect();
+        let mut params = list_params(&[], &[]);
+        params.ids = &refs;
+        let api = list_api_params(&params, &no_sections()).expect("--ids must build");
+        assert_eq!(api.ids.as_deref(), Some(refs.join(",").as_str()), "--ids");
+        assert_eq!(api.limit, Some(25), "default page raised to the id count");
+
+        params.limit = Some(100);
+        let api = list_api_params(&params, &no_sections()).unwrap();
+        assert_eq!(api.limit, Some(100), "a larger --limit is kept");
+
+        params.limit = Some(5);
+        let api = list_api_params(&params, &no_sections()).unwrap();
+        assert_eq!(api.limit, Some(25), "a smaller --limit is raised");
+
+        params.limit = None;
+        params.all = true;
+        let api = list_api_params(&params, &no_sections()).unwrap();
+        assert_eq!(api.limit, None, "--all stays uncapped");
     }
 
     /// Asking for a section changes the `sections` param and **nothing else** — the page
