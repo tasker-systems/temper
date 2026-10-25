@@ -5702,6 +5702,16 @@ export interface components {
             /** Format: uuid */
             kb_owner_id: string;
             kb_owner_table: string;
+            /**
+             * Format: date-time
+             * @description When the reading principal last changed anything in this context — themselves, or an agent
+             *     writing under their profile — or `None` when they never have. Their own changes only: a
+             *     teammate's, or a machine client's, never set it. Unlike `updated`, which the contexts read
+             *     synthesizes from `created`, this is a real activity time. Always `None` on the
+             *     retired-contexts read: it is computed through the caller's read predicate, which admits no
+             *     retired context.
+             */
+            last_changed_by_you?: string | null;
             name: string;
             /**
              * @description The already-sigil'd owner addressable: `@<handle>` for profiles, `+<team-slug>` for teams.
@@ -9702,7 +9712,7 @@ export interface components {
          * @description Sort field for resource listing.
          * @enum {string}
          */
-        ResourceSortField: "updated" | "created" | "title" | "stage" | "seq" | "context_name" | "doc_type_name";
+        ResourceSortField: "updated" | "created" | "title" | "stage" | "seq" | "context_name" | "doc_type_name" | "changed_by_me";
         /** @description Request body for updating a resource. */
         ResourceUpdateRequest: components["schemas"]["ActInput"] & {
             /**
@@ -18471,6 +18481,18 @@ export interface operations {
                  */
                 doc_type_name?: string | null;
                 owner?: string | null;
+                /**
+                 * @description `"@me"`: only resources the caller changed — themselves, or an agent writing under their
+                 *     profile, on any surface. A change counts when the resource's own element trail holds an
+                 *     event the caller's profile emitted, so this and the trail cannot disagree. A machine client
+                 *     is its own profile, and its changes are not the caller's.
+                 *
+                 *     **Only `"@me"`.** Any other value is a `400`: naming someone else would make this a read of
+                 *     another principal's activity, which no door offers. Composes with every other filter as one
+                 *     more AND, under the same visibility join, so a resource the caller changed and can no longer
+                 *     read is absent from the rows and from every count.
+                 */
+                changed_by?: string | null;
                 q?: string | null;
                 stage?: string | null;
                 /**

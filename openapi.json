@@ -10852,6 +10852,18 @@
             }
           },
           {
+            "name": "changed_by",
+            "in": "query",
+            "description": "`\"@me\"`: only resources the caller changed — themselves, or an agent writing under their\nprofile, on any surface. A change counts when the resource's own element trail holds an\nevent the caller's profile emitted, so this and the trail cannot disagree. A machine client\nis its own profile, and its changes are not the caller's.\n\n**Only `\"@me\"`.** Any other value is a `400`: naming someone else would make this a read of\nanother principal's activity, which no door offers. Composes with every other filter as one\nmore AND, under the same visibility join, so a resource the caller changed and can no longer\nread is absent from the rows and from every count.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "name": "q",
             "in": "query",
             "required": false,
@@ -18891,6 +18903,14 @@
           "kb_owner_table": {
             "type": "string"
           },
+          "last_changed_by_you": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the reading principal last changed anything in this context — themselves, or an agent\nwriting under their profile — or `None` when they never have. Their own changes only: a\nteammate's, or a machine client's, never set it. Unlike `updated`, which the contexts read\nsynthesizes from `created`, this is a real activity time. Always `None` on the\nretired-contexts read: it is computed through the caller's read predicate, which admits no\nretired context."
+          },
           "name": {
             "type": "string"
           },
@@ -25698,7 +25718,8 @@
           "stage",
           "seq",
           "context_name",
-          "doc_type_name"
+          "doc_type_name",
+          "changed_by_me"
         ]
       },
       "ResourceUpdateRequest": {

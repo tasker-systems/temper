@@ -1,0 +1,25 @@
+title    = "A reader can list the work they changed, most recent first, and see when they last changed anything in each context"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "clients", "schema"]
+status   = "signal-only"
+body = '''
+`GET /api/resources` gains `changed_by` and the sort field `changed_by_me`.
+- `changed_by=@me` narrows the list to resources the caller changed. A change counts when the resource's own element trail holds an event the caller's profile emitted: by the caller themselves, or by an agent writing under their profile, on any surface.
+- A machine client is its own profile, and its changes are not the caller's, even when the caller registered it. A teammate's change to the caller's resource does not count; the caller's change to a teammate's resource does. That is how this differs from `owner=@me`.
+- The filter composes with every other filter as one more AND, under the same visibility join, so a resource the caller changed and can no longer read is absent from the rows, from `total` and from the facet histograms.
+- `sort=changed_by_me` orders by the caller's own latest change to each resource, not by the resource's `updated`.
+- Any `changed_by` other than `@me` is a `400`, because naming another principal would make this a read of their activity. `sort=changed_by_me` without `changed_by=@me` is a `400`, because the rows would have no such time.
+
+The contexts list (`GET /api/contexts`, and the retired-contexts read) gains a nullable `last_changed_by_you`: when the caller last changed anything produced in that context, or `null` when they never have. Only the caller's own changes set it. It is always `null` on the retired read, whose rows the read predicate does not admit. `updated` is unchanged.
+
+Both are read through new SQL functions in migration `20261106000000_reader_changes.sql` (additive):
+- `resources_changed_by(uuid)` and `contexts_changed_by(uuid)`, each gated by the profile's own read predicate;
+- a private events helper both of them read, so "your change" has one definition.
+
+Reading either answer records nothing.
+
+Who observes it: HTTP callers and the three SDKs. Their list parameters and sort enum grow, and their context row gains the field. A request that sends neither parameter, and a client that ignores the new field, are unchanged. The CLI and MCP do not expose `changed_by` yet.
+
+Release relevance: signal-only. Additive (a query parameter, an enum value, a nullable response field, two functions) and behavioral (the contexts read now carries a real activity time).
+'''

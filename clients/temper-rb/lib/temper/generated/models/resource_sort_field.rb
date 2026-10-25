@@ -22,9 +22,10 @@ module Temper::Generated
     SEQ = "seq".freeze
     CONTEXT_NAME = "context_name".freeze
     DOC_TYPE_NAME = "doc_type_name".freeze
+    CHANGED_BY_ME = "changed_by_me".freeze
 
     def self.all_vars
-      @all_vars ||= [UPDATED, CREATED, TITLE, STAGE, SEQ, CONTEXT_NAME, DOC_TYPE_NAME].freeze
+      @all_vars ||= [UPDATED, CREATED, TITLE, STAGE, SEQ, CONTEXT_NAME, DOC_TYPE_NAME, CHANGED_BY_ME].freeze
     end
 
     # Builds the enum from string

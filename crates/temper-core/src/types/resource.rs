@@ -155,6 +155,10 @@ pub enum ResourceSortField {
     Seq,
     ContextName,
     DocTypeName,
+    /// The caller's own latest change to each resource. Valid only with `changed_by = "@me"`,
+    /// which is what gives every row that time; without it the door refuses the sort rather than
+    /// order rows by a time they do not have.
+    ChangedByMe,
 }
 
 /// Sort direction.
@@ -198,6 +202,16 @@ pub struct ResourceListParams {
     /// has. See `ResourceFacets::doc_type` for the histogram that makes the reachable set visible.
     pub doc_type_name: Option<String>,
     pub owner: Option<String>,
+    /// `"@me"`: only resources the caller changed — themselves, or an agent writing under their
+    /// profile, on any surface. A change counts when the resource's own element trail holds an
+    /// event the caller's profile emitted, so this and the trail cannot disagree. A machine client
+    /// is its own profile, and its changes are not the caller's.
+    ///
+    /// **Only `"@me"`.** Any other value is a `400`: naming someone else would make this a read of
+    /// another principal's activity, which no door offers. Composes with every other filter as one
+    /// more AND, under the same visibility join, so a resource the caller changed and can no longer
+    /// read is absent from the rows and from every count.
+    pub changed_by: Option<String>,
     pub q: Option<String>,
     pub stage: Option<String>,
     /// Goal-status filter (goal only): matches `temper-status` via the

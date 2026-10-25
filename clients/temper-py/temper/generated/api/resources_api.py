@@ -2846,6 +2846,7 @@ class ResourcesApi:
         context_ref: Annotated[Optional[StrictStr], Field(description="Context filter: UUID string or `@owner/slug` decorated ref. Bare context names are rejected server-side (spec Decision 1).")] = None,
         doc_type_name: Annotated[Optional[StrictStr], Field(description="Doc-type filter: one name, or a comma-separated list of them, in which case the filter is the UNION (a row matching any listed name is kept). Multi-select is the odd one out among the filters here — `tags` narrows with each addition because a resource has many tags, while a resource has exactly one doc type, so ANDing two names could only ever match nothing. A single name behaves exactly as it always has.  A CSV string rather than a `Vec` for the same reason as `tags` and `cogmap_ids`: the list endpoint is a GET whose params ride the query string, and serde_urlencoded does not encode sequences. Each piece is trimmed and empties are dropped; a CSV that trims away entirely is no filter at all rather than a filter matching nothing.  Unknown names are **not** rejected — an unrecognized doc type matches no row, as it always has. See `ResourceFacets::doc_type` for the histogram that makes the reachable set visible.")] = None,
         owner: Optional[StrictStr] = None,
+        changed_by: Annotated[Optional[StrictStr], Field(description="`\"@me\"`: only resources the caller changed — themselves, or an agent writing under their profile, on any surface. A change counts when the resource's own element trail holds an event the caller's profile emitted, so this and the trail cannot disagree. A machine client is its own profile, and its changes are not the caller's.  **Only `\"@me\"`.** Any other value is a `400`: naming someone else would make this a read of another principal's activity, which no door offers. Composes with every other filter as one more AND, under the same visibility join, so a resource the caller changed and can no longer read is absent from the rows and from every count.")] = None,
         q: Optional[StrictStr] = None,
         stage: Optional[StrictStr] = None,
         status: Annotated[Optional[StrictStr], Field(description="Goal-status filter (goal only): matches `temper-status` via the `kb_resource_workflow_props` pivot, exactly as `stage` does. Validated against the goal schema's enum surface-side, so an unknown value is an error rather than a silent full scan — which is what this field's absence used to produce.")] = None,
@@ -2885,6 +2886,8 @@ class ResourcesApi:
         :type doc_type_name: str
         :param owner:
         :type owner: str
+        :param changed_by: `\"@me\"`: only resources the caller changed — themselves, or an agent writing under their profile, on any surface. A change counts when the resource's own element trail holds an event the caller's profile emitted, so this and the trail cannot disagree. A machine client is its own profile, and its changes are not the caller's.  **Only `\"@me\"`.** Any other value is a `400`: naming someone else would make this a read of another principal's activity, which no door offers. Composes with every other filter as one more AND, under the same visibility join, so a resource the caller changed and can no longer read is absent from the rows and from every count.
+        :type changed_by: str
         :param q:
         :type q: str
         :param stage:
@@ -2940,6 +2943,7 @@ class ResourcesApi:
             context_ref=context_ref,
             doc_type_name=doc_type_name,
             owner=owner,
+            changed_by=changed_by,
             q=q,
             stage=stage,
             status=status,
@@ -2983,6 +2987,7 @@ class ResourcesApi:
         context_ref: Annotated[Optional[StrictStr], Field(description="Context filter: UUID string or `@owner/slug` decorated ref. Bare context names are rejected server-side (spec Decision 1).")] = None,
         doc_type_name: Annotated[Optional[StrictStr], Field(description="Doc-type filter: one name, or a comma-separated list of them, in which case the filter is the UNION (a row matching any listed name is kept). Multi-select is the odd one out among the filters here — `tags` narrows with each addition because a resource has many tags, while a resource has exactly one doc type, so ANDing two names could only ever match nothing. A single name behaves exactly as it always has.  A CSV string rather than a `Vec` for the same reason as `tags` and `cogmap_ids`: the list endpoint is a GET whose params ride the query string, and serde_urlencoded does not encode sequences. Each piece is trimmed and empties are dropped; a CSV that trims away entirely is no filter at all rather than a filter matching nothing.  Unknown names are **not** rejected — an unrecognized doc type matches no row, as it always has. See `ResourceFacets::doc_type` for the histogram that makes the reachable set visible.")] = None,
         owner: Optional[StrictStr] = None,
+        changed_by: Annotated[Optional[StrictStr], Field(description="`\"@me\"`: only resources the caller changed — themselves, or an agent writing under their profile, on any surface. A change counts when the resource's own element trail holds an event the caller's profile emitted, so this and the trail cannot disagree. A machine client is its own profile, and its changes are not the caller's.  **Only `\"@me\"`.** Any other value is a `400`: naming someone else would make this a read of another principal's activity, which no door offers. Composes with every other filter as one more AND, under the same visibility join, so a resource the caller changed and can no longer read is absent from the rows and from every count.")] = None,
         q: Optional[StrictStr] = None,
         stage: Optional[StrictStr] = None,
         status: Annotated[Optional[StrictStr], Field(description="Goal-status filter (goal only): matches `temper-status` via the `kb_resource_workflow_props` pivot, exactly as `stage` does. Validated against the goal schema's enum surface-side, so an unknown value is an error rather than a silent full scan — which is what this field's absence used to produce.")] = None,
@@ -3022,6 +3027,8 @@ class ResourcesApi:
         :type doc_type_name: str
         :param owner:
         :type owner: str
+        :param changed_by: `\"@me\"`: only resources the caller changed — themselves, or an agent writing under their profile, on any surface. A change counts when the resource's own element trail holds an event the caller's profile emitted, so this and the trail cannot disagree. A machine client is its own profile, and its changes are not the caller's.  **Only `\"@me\"`.** Any other value is a `400`: naming someone else would make this a read of another principal's activity, which no door offers. Composes with every other filter as one more AND, under the same visibility join, so a resource the caller changed and can no longer read is absent from the rows and from every count.
+        :type changed_by: str
         :param q:
         :type q: str
         :param stage:
@@ -3077,6 +3084,7 @@ class ResourcesApi:
             context_ref=context_ref,
             doc_type_name=doc_type_name,
             owner=owner,
+            changed_by=changed_by,
             q=q,
             stage=stage,
             status=status,
@@ -3120,6 +3128,7 @@ class ResourcesApi:
         context_ref: Annotated[Optional[StrictStr], Field(description="Context filter: UUID string or `@owner/slug` decorated ref. Bare context names are rejected server-side (spec Decision 1).")] = None,
         doc_type_name: Annotated[Optional[StrictStr], Field(description="Doc-type filter: one name, or a comma-separated list of them, in which case the filter is the UNION (a row matching any listed name is kept). Multi-select is the odd one out among the filters here — `tags` narrows with each addition because a resource has many tags, while a resource has exactly one doc type, so ANDing two names could only ever match nothing. A single name behaves exactly as it always has.  A CSV string rather than a `Vec` for the same reason as `tags` and `cogmap_ids`: the list endpoint is a GET whose params ride the query string, and serde_urlencoded does not encode sequences. Each piece is trimmed and empties are dropped; a CSV that trims away entirely is no filter at all rather than a filter matching nothing.  Unknown names are **not** rejected — an unrecognized doc type matches no row, as it always has. See `ResourceFacets::doc_type` for the histogram that makes the reachable set visible.")] = None,
         owner: Optional[StrictStr] = None,
+        changed_by: Annotated[Optional[StrictStr], Field(description="`\"@me\"`: only resources the caller changed — themselves, or an agent writing under their profile, on any surface. A change counts when the resource's own element trail holds an event the caller's profile emitted, so this and the trail cannot disagree. A machine client is its own profile, and its changes are not the caller's.  **Only `\"@me\"`.** Any other value is a `400`: naming someone else would make this a read of another principal's activity, which no door offers. Composes with every other filter as one more AND, under the same visibility join, so a resource the caller changed and can no longer read is absent from the rows and from every count.")] = None,
         q: Optional[StrictStr] = None,
         stage: Optional[StrictStr] = None,
         status: Annotated[Optional[StrictStr], Field(description="Goal-status filter (goal only): matches `temper-status` via the `kb_resource_workflow_props` pivot, exactly as `stage` does. Validated against the goal schema's enum surface-side, so an unknown value is an error rather than a silent full scan — which is what this field's absence used to produce.")] = None,
@@ -3159,6 +3168,8 @@ class ResourcesApi:
         :type doc_type_name: str
         :param owner:
         :type owner: str
+        :param changed_by: `\"@me\"`: only resources the caller changed — themselves, or an agent writing under their profile, on any surface. A change counts when the resource's own element trail holds an event the caller's profile emitted, so this and the trail cannot disagree. A machine client is its own profile, and its changes are not the caller's.  **Only `\"@me\"`.** Any other value is a `400`: naming someone else would make this a read of another principal's activity, which no door offers. Composes with every other filter as one more AND, under the same visibility join, so a resource the caller changed and can no longer read is absent from the rows and from every count.
+        :type changed_by: str
         :param q:
         :type q: str
         :param stage:
@@ -3214,6 +3225,7 @@ class ResourcesApi:
             context_ref=context_ref,
             doc_type_name=doc_type_name,
             owner=owner,
+            changed_by=changed_by,
             q=q,
             stage=stage,
             status=status,
@@ -3252,6 +3264,7 @@ class ResourcesApi:
         context_ref,
         doc_type_name,
         owner,
+        changed_by,
         q,
         stage,
         status,
@@ -3303,6 +3316,10 @@ class ResourcesApi:
         if owner is not None:
             
             _query_params.append(('owner', owner))
+            
+        if changed_by is not None:
+            
+            _query_params.append(('changed_by', changed_by))
             
         if q is not None:
             

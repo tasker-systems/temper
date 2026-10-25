@@ -97,7 +97,16 @@ can_write: boolean,
  * (`list_retired_administered`, `get_retired_administered`) — and is never re-derived any
  * other way, e.g. never inverted in Rust after the fact.
  */
-retired: boolean, };
+retired: boolean, 
+/**
+ * When the reading principal last changed anything in this context — themselves, or an agent
+ * writing under their profile — or `None` when they never have. Their own changes only: a
+ * teammate's, or a machine client's, never set it. Unlike `updated`, which the contexts read
+ * synthesizes from `created`, this is a real activity time. Always `None` on the
+ * retired-contexts read: it is computed through the caller's read predicate, which admits no
+ * retired context.
+ */
+last_changed_by_you: string | null, };
 
 /**
  * An explicit context read-grant that survives the ownership flip — inherited residual reach.

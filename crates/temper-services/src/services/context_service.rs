@@ -74,6 +74,14 @@ pub async fn list_visible(
     // A correlated scalar subquery rather than a join, so the statement stays one row per
     // context with no GROUP BY to hold in step with the select list.
     //
+    // `last_changed_by_you` is the caller's own latest change produced in each context, from
+    // `contexts_changed_by` (20261106000000), which reads the same definition of "your change" the
+    // list door's `changed_by` does. It is gated inside by `context_readable_by_profile`, and the
+    // WHERE gates the row as well, so a context the caller cannot read carries neither. One join
+    // rather than a per-row subquery, so the caller's events are read once, not once per context;
+    // a context they never changed is NULL. On the retired read it is always NULL: the read
+    // predicate admits no retired context, the same per-caller truth `resource_count` tells there.
+    //
     // Kept out of the SQL literal on purpose: sqlx keys the .sqlx cache on the whole query
     // TEXT, comments included, so a prose correction inside the literal orphans the cache
     // entry and forces a regenerate. Reasoning about the query as a whole belongs here,
@@ -105,8 +113,10 @@ pub async fn list_visible(
                   FROM kb_resource_homes rh
                   JOIN resources_visible_to($1) v ON v.resource_id = rh.resource_id
                   JOIN kb_resources r ON r.id = rh.resource_id AND r.is_active
-                 WHERE rh.anchor_table = 'kb_contexts' AND rh.anchor_id = c.id) AS "resource_count!"
+                 WHERE rh.anchor_table = 'kb_contexts' AND rh.anchor_id = c.id) AS "resource_count!",
+               mine.changed_at AS last_changed_by_you
           FROM kb_contexts c
+          LEFT JOIN contexts_changed_by($1) mine ON mine.context_id = c.id
          WHERE context_visible_to($1, c.id)
          ORDER BY c.name
         "#,
@@ -791,8 +801,10 @@ pub async fn list_retired_administered(
                   FROM kb_resource_homes rh
                   JOIN resources_visible_to($1) v ON v.resource_id = rh.resource_id
                   JOIN kb_resources r ON r.id = rh.resource_id AND r.is_active
-                 WHERE rh.anchor_table = 'kb_contexts' AND rh.anchor_id = c.id) AS "resource_count!"
+                 WHERE rh.anchor_table = 'kb_contexts' AND rh.anchor_id = c.id) AS "resource_count!",
+               mine.changed_at AS last_changed_by_you
           FROM kb_contexts c
+          LEFT JOIN contexts_changed_by($1) mine ON mine.context_id = c.id
          WHERE NOT c.is_active
            AND ( $3
                  OR (c.owner_table = 'kb_profiles' AND c.owner_id = $1)

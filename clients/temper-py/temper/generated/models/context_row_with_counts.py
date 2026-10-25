@@ -19,7 +19,7 @@ import json
 
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr
-from typing import Any, ClassVar, Dict, List
+from typing import Any, ClassVar, Dict, List, Optional
 from uuid import UUID
 from typing import Optional, Set
 from typing_extensions import Self
@@ -34,13 +34,14 @@ class ContextRowWithCounts(BaseModel):
     id: UUID = Field(description="A `kb_contexts.id` value.")
     kb_owner_id: UUID
     kb_owner_table: StrictStr
+    last_changed_by_you: Optional[datetime] = Field(default=None, description="When the reading principal last changed anything in this context — themselves, or an agent writing under their profile — or `None` when they never have. Their own changes only: a teammate's, or a machine client's, never set it. Unlike `updated`, which the contexts read synthesizes from `created`, this is a real activity time. Always `None` on the retired-contexts read: it is computed through the caller's read predicate, which admits no retired context.")
     name: StrictStr
     owner_ref: StrictStr = Field(description="The already-sigil'd owner addressable: `@<handle>` for profiles, `+<team-slug>` for teams. Together with `slug`, forms the full decorated context ref `{owner_ref}/{slug}`.")
     resource_count: StrictInt
     retired: StrictBool = Field(description="Whether this context is retired — invisible to every read path and unwriteable, with every row it homes preserved.  **Polarity is inverted from the column on purpose.** The database stores `is_active`, mirroring `kb_teams`; the wire says `retired`, which is the word the product uses. The inversion is written as the identical SQL literal `NOT c.is_active AS \"retired!\"` in every query that selects this column — the two read-axis queries (`list_visible`, `get_visible`, always `false` there by construction) and the two admin-axis queries (`list_retired_administered`, `get_retired_administered`) — and is never re-derived any other way, e.g. never inverted in Rust after the fact.")
     slug: StrictStr = Field(description="The context's per-owner-unique slug (the natural-key half of `@owner/slug`).")
     updated: datetime
-    __properties: ClassVar[List[str]] = ["can_write", "created", "id", "kb_owner_id", "kb_owner_table", "name", "owner_ref", "resource_count", "retired", "slug", "updated"]
+    __properties: ClassVar[List[str]] = ["can_write", "created", "id", "kb_owner_id", "kb_owner_table", "last_changed_by_you", "name", "owner_ref", "resource_count", "retired", "slug", "updated"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -81,6 +82,11 @@ class ContextRowWithCounts(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # set to None if last_changed_by_you (nullable) is None
+        # and model_fields_set contains the field
+        if self.last_changed_by_you is None and "last_changed_by_you" in self.model_fields_set:
+            _dict['last_changed_by_you'] = None
+
         return _dict
 
     @classmethod
@@ -98,6 +104,7 @@ class ContextRowWithCounts(BaseModel):
             "id": obj.get("id"),
             "kb_owner_id": obj.get("kb_owner_id"),
             "kb_owner_table": obj.get("kb_owner_table"),
+            "last_changed_by_you": obj.get("last_changed_by_you"),
             "name": obj.get("name"),
             "owner_ref": obj.get("owner_ref"),
             "resource_count": obj.get("resource_count"),

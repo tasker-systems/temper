@@ -33,6 +33,7 @@ class ResourceSortField(str, Enum):
     SEQ = 'seq'
     CONTEXT_NAME = 'context_name'
     DOC_TYPE_NAME = 'doc_type_name'
+    CHANGED_BY_ME = 'changed_by_me'
 
     @classmethod
     def from_json(cls, json_str: str) -> Self:

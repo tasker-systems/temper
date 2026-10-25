@@ -111,6 +111,9 @@ fn sort_column_sql(field: ResourceSortField) -> &'static str {
         ResourceSortField::Seq => "wp.seq::bigint",
         ResourceSortField::ContextName => "c.name",
         ResourceSortField::DocTypeName => "dt.property_value #>> '{}'",
+        // Bound only when `changed_by = "@me"`, which `filtered_visible_page` requires for this
+        // sort, so every row it orders carries a time.
+        ResourceSortField::ChangedByMe => "mine.changed_at",
     }
 }
 
@@ -180,6 +183,26 @@ async fn filtered_visible_page(
         Some(h) if h != "@me" => Some(h),
         _ => None,
     };
+    // `changed_by`: the caller's own changes, and nobody else's. Another value would make this door
+    // a read of someone else's activity, so it is refused rather than matched. The sort by the
+    // caller's latest change is refused without it: a row the filter did not admit has no such time,
+    // and ordering by one would present an order the rows do not hold.
+    let changed_by_self: Option<Uuid> = match params.changed_by.as_deref() {
+        None => None,
+        Some("@me") => Some(*profile_id),
+        Some(_) => {
+            return Err(ApiError::BadRequest(
+                "`changed_by` accepts only \"@me\": a caller may list their own changes, not another's"
+                    .into(),
+            ));
+        }
+    };
+    if matches!(params.sort, Some(ResourceSortField::ChangedByMe)) && changed_by_self.is_none() {
+        return Err(ApiError::BadRequest(
+            "sort `changed_by_me` needs `changed_by=@me`: only resources you changed carry that time"
+                .into(),
+        ));
+    }
     // Cognitive-map scope: a CSV of cogmap UUIDs (the list GET can't carry a Vec over the query
     // string). Parse to a `uuid[]`; the WHERE below filters on the resource's home anchor. A single
     // home per resource means this composes with `context_ref` only to the empty set (no resource is
@@ -321,6 +344,13 @@ async fn filtered_visible_page(
              ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
             AND dt.property_key = 'doc_type' AND NOT dt.is_folded
            LEFT JOIN kb_resource_workflow_props wp ON wp.resource_id = r.id
+           -- The caller's own changes ($12, set only by `changed_by=@me`): each resource they
+           -- changed and can read, at their latest change, from the one definition of your change
+           -- (20261106000000). Gated inside by the caller's own predicate, and again by the
+           -- visibility join above. The one-time filter keeps a request without $12 from
+           -- evaluating it at all.
+           LEFT JOIN (SELECT * FROM resources_changed_by($12) WHERE $12::uuid IS NOT NULL) mine
+             ON mine.resource_id = r.id
           WHERE r.is_active
             -- An interrupted segmented ingest is NOT a document. It is excluded from list (and from
             -- search, by the same predicate carried inline in `search_exact` and `search_wide`)
@@ -402,6 +432,7 @@ async fn filtered_visible_page(
             -- filter here, so an id the caller cannot see, or an unfinished upload, is simply not
             -- a row — never a separate signal.
             AND ($11::uuid[] IS NULL OR r.id = ANY($11))
+            AND ($12::uuid IS NULL OR mine.resource_id IS NOT NULL)
           ORDER BY {sort_col} {dir}, r.id ASC",
         sort_col = sort_column_sql(sort),
     );
@@ -413,7 +444,8 @@ async fn filtered_visible_page(
     // correspondence at compile time — a bind dropped or added out of order silently applies one
     // caller's filter as another's. Read it against the WHERE clause above, one for one:
     // $1 profile_id, $2 context_id, $3 owner_self, $4 owner_handle, $5 q, $6 goal,
-    // $7 GOAL_EDGE_LABEL, $8 cogmap_ids, $9 tag_filter, $10 has_artifacts, $11 ids.
+    // $7 GOAL_EDGE_LABEL, $8 cogmap_ids, $9 tag_filter, $10 has_artifacts, $11 ids,
+    // $12 changed_by_self.
     let rows = sqlx::query(&sql)
         .bind(profile_id)
         .bind(context_id)
@@ -426,6 +458,7 @@ async fn filtered_visible_page(
         .bind(tag_filter.as_deref())
         .bind(params.has_artifacts)
         .bind(ids)
+        .bind(changed_by_self)
         .fetch_all(pool)
         .await
         .map_err(api_err)?;
