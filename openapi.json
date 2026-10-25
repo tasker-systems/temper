@@ -10923,6 +10923,18 @@
             }
           },
           {
+            "name": "ids",
+            "in": "query",
+            "description": "Resource scope: a comma-separated list of resource UUIDs, at most `MAX_ID_SET_IDS` of them.\nReturns the caller's visible resources among them and nothing else — an id that does not\nexist, was deleted, is not visible, or names an unfinished upload is simply absent from the\nrows, with no other trace in the response. Rows are the list's own, with no body. A CSV for the same transport reason as `cogmap_ids`; `None`/empty = no\nfilter. Composes with every other filter as one more AND.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "name": "has_artifacts",
             "in": "query",
             "description": "Artifact-ownership filter: `true` → only resources owning at least one data artifact;\n`false` → only resources owning none. **Ownership, not liveness** — a folded artifact\nstill means \"owns\", because the clause this serves says \"own at least one artifact and\nwhich own none\", with no liveness qualifier. Absent = no narrowing.\n\nEvaluated inside the caller's visible set (the predicate sits under the same\n`resources_visible_to` join as every other filter here), so the answer can never widen\nwhat the caller can read — and a caller who cannot read a resource gets no existence\nsignal about its artifacts either way.",
