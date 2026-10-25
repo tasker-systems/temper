@@ -13,8 +13,10 @@ module Temper
   # `after` would not name the row it named, and a walk could not go on from it.
   #
   # Only declared timestamps are rewritten. In a body, that is an attribute its model declares a
-  # `Time` (`openapi_types`), in every model nested in it, whether the caller passes the nested part
-  # as its model or as a hash; in a query, every `Time` value, since a query is text on the URL and
+  # `Time` (`openapi_types`), in every model nested in it by a slot that declares a model or an
+  # array of models, whether the caller passes the nested part as its model or as a hash. A oneOf
+  # slot (`PropertyOp`) declares a union, not a model, and is not entered; no request-side timestamp
+  # sits behind one; in a query, every `Time` value, since a query is text on the URL and
   # never stored. A `Time` a caller places in free-form JSON (an artifact's `content`, a shape's
   # `schema`, any `Object` attribute) is written by the json gem exactly as the generated core
   # writes it, so the content a caller commits is stored, and hashed, as the caller wrote it. A
@@ -85,9 +87,9 @@ module Temper
       value.compact.zip(written) { |v, w| stamp_slot(element, v, w) } if element
     end
 
-    # A slot declaring `model_class`: a model instance is entered as itself, and a hash the caller
-    # wrote in its place (`after: { created: …, artifact_id: … }`, the idiom the SDK's own surfaces
-    # use) as that model's fields.
+    # A slot declaring `model_class`: a model instance is entered as itself (by its own class), and
+    # a hash the caller wrote in its place (`after: { created: …, artifact_id: … }`, the idiom the
+    # SDK's own surfaces use) as that model's fields.
     def self.stamp_model(model_class, value, written)
       return unless written.is_a?(Hash)
 

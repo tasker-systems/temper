@@ -91,18 +91,17 @@ RSpec.describe Temper::WireTime do
     end
   end
 
-  # The other free-form spellings: a map (`Hash<String, Object>`, a facet's `values`) and an
-  # untyped array (`Array<Object>`, a predicate's `values`) holding a generated model are written
-  # exactly as the generated core writes them.
-  it 'leaves a model in a free-form map or array to the json gem' do
+  # The other free-form spellings: a map (`Hash<String, Object>`, a facet's `values`), whether it
+  # holds a generated model or is one, and an untyped array (`Array<Object>`, a contains op's
+  # `values`) holding one are written exactly as the generated core writes them. And a oneOf slot
+  # (`PropertyOp`) is not entered, whichever variant it holds.
+  it 'leaves a model in a free-form map, an untyped array or a oneOf slot to the json gem' do
     model = Temper::Generated::ArtifactCursor.new(created: Time.parse(created), artifact_id: artifact_id)
-    facet = Temper::Generated::FacetSetRequest.new(resource: shape, values: { 'at' => model })
-    predicate = Temper::Generated::ArtifactPredicate.new(
-      path: ['at'], op: Temper::Generated::PropertyOpOneOf1.new(op: 'contains', values: [model])
-    )
-    ask_part = Temper::Generated::ArtifactAsk.new(shape: shape, predicates: [predicate])
-    ask = Temper::Generated::AskRequest.new(ask: ask_part)
-    [facet, ask].each do |request|
+    in_map = Temper::Generated::FacetSetRequest.new(resource: shape, values: { 'at' => model })
+    as_map = Temper::Generated::FacetSetRequest.new(resource: shape, values: {}).tap { |r| r.values = model }
+    op = Temper::Generated::PropertyOpOneOf1.new(op: 'contains', values: [model])
+    in_one_of = Temper::Generated::ArtifactPredicate.new(path: ['at'], op: op)
+    [in_map, as_map, op, in_one_of].each do |request|
       expect(Temper.api_client.object_to_http_body(request)).to eq(request.to_hash.to_json)
     end
   end
