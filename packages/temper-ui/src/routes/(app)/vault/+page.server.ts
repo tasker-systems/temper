@@ -8,7 +8,7 @@ import {
 	wayInShown,
 } from '$lib/first-view';
 import { apiGet } from '$lib/server/api';
-import { bounded } from '$lib/server/bounded';
+import { bounded, derive } from '$lib/server/bounded';
 import type { ContentResponse, ResourceListResponse } from '$lib/types';
 import type { PageServerLoad } from './$types';
 
@@ -28,18 +28,26 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		apiGet<ResourceListResponse>(handoffPath(), accessToken).then((r) => r.rows[0] ?? null),
 		HANDOFF_LABEL,
 	);
-	// The next steps are a second read, of the session's body. A reader with no session has none
-	// to quote, and a session with no "Next" heading quotes nothing: both are `null`, never a
-	// summary. A failed body read fails this region alone; the session itself still shows.
-	const next = bounded(
-		session.then((s) =>
+	// The next steps are a second read, of the session's body, with its own bound that starts when
+	// the session arrives — never the remainder of the session read's. A reader with no session has
+	// none to quote, and a session with no "Next" heading quotes nothing: both are `null`, never a
+	// summary. A failed body read fails this region alone; the session itself still shows. A failed
+	// session read is the handoff region's failure, and this region is never drawn under it, so it
+	// answers `null` rather than reporting the same failure twice.
+	const next = derive(
+		session.then(
+			(s) => s,
+			() => null,
+		),
+		(s) =>
 			s
-				? apiGet<ContentResponse>(`/api/resources/${s.id}/content`, accessToken).then((c) =>
-						nextSection(c.markdown),
+				? bounded(
+						apiGet<ContentResponse>(`/api/resources/${s.id}/content`, accessToken).then((c) =>
+							nextSection(c.markdown),
+						),
+						'next steps',
 					)
 				: null,
-		),
-		'next steps',
 	);
 
 	const ways = WAYS_IN.map((way) => {

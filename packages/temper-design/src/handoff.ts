@@ -1,9 +1,9 @@
 /**
- * The latest handoff: the newest session the reader wrote, and the next steps it recorded. Both
- * surfaces show it on arrival under the same name, and both quote the next steps through
- * `nextSection` — moved here from the desktop (`temper-contrib`,
- * `apps/desktop/src/lib/shell/next-section.ts`) unchanged, so the two cannot quote the same
- * session differently.
+ * The latest handoff: the reader's most recently updated session, and the next steps it recorded.
+ * Both surfaces show it on arrival under the same name. `nextSection` is copied here unchanged
+ * from the desktop (`temper-contrib`, `apps/desktop/src/lib/shell/next-section.ts`); once the
+ * desktop imports it from here instead of keeping its own copy, the two cannot quote the same
+ * session differently. Until then they can drift.
  *
  * The next steps a session recorded: the section under the first heading that starts with "Next"
  * ("Next", "Next steps", "Next: the home view"), at any level, up to the next heading of the same

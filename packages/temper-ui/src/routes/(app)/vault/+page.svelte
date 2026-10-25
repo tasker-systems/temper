@@ -12,11 +12,15 @@
 	import RegionState from '$lib/components/RegionState.svelte';
 	import ResourceLink from '$lib/components/ResourceLink.svelte';
 	import { type FirstViewList, RECENT_SCOPE, WAY_IN_MAX, wayInMoreHref } from '$lib/first-view';
+	import { relativeTime } from '$lib/graph/relativeTime';
 	import { regionStateFor } from '$lib/region';
 	import type { ResourceView } from '$lib/types';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
+
+	/** The handoff is the reader's own; every state of its region says so. */
+	const handoffRegion = `your ${HANDOFF_LABEL}`;
 </script>
 
 <svelte:head>
@@ -53,12 +57,16 @@
 
 	<section aria-labelledby="handoff-heading" class="rounded border border-tp-rule bg-tp-surface p-4">
 		<h2 id="handoff-heading" class="mb-2 text-[10px] uppercase tracking-widest text-tp-text-subtle">
-			{HANDOFF_LABEL}
+			{handoffRegion}
 		</h2>
 		{#await data.session}
-			<RegionState state="arriving" label={HANDOFF_LABEL} />
+			<RegionState state="arriving" label={handoffRegion} />
 		{:then session}
 			{#if session}
+				<!-- "Latest" is by last update, which is what the read orders by; the age says when. -->
+				<p class="mb-1 text-[10px] text-tp-text-subtle" data-testid="handoff-age">
+					session · updated {relativeTime(session.updated)}
+				</p>
 				<ResourceLink id={session.id} title={session.title} class="text-sm text-tp-text hover:text-tp-accent" />
 				{#await data.next}
 					<RegionState state="arriving" label="next steps" />
@@ -87,7 +95,7 @@
 				/>
 			{/if}
 		{:catch error}
-			<RegionState state={regionStateFor(error)} label={HANDOFF_LABEL} />
+			<RegionState state={regionStateFor(error)} label={handoffRegion} />
 		{/await}
 	</section>
 
@@ -99,7 +107,7 @@
 			<div class="min-w-0" data-testid="way-{way.id}">
 				<h2 class="mb-2 text-[10px] uppercase tracking-widest text-tp-text-subtle">{way.label}</h2>
 				{#await list}
-					<RegionState state="arriving" label={way.label} />
+					<RegionState state="arriving" label={way.scope} />
 				{:then got}
 					{#if got.total === 0}
 						<RegionState state="empty" label={way.scope} />
@@ -112,12 +120,16 @@
 								data-sveltekit-noscroll
 								class="mt-1 inline-block text-xs text-tp-accent hover:text-tp-text"
 							>
-								Show {Math.min(WAY_IN_BOUND, got.total - got.rows.length)} more
+								Show {Math.min(WAY_IN_BOUND, got.total - got.rows.length, WAY_IN_MAX - shown)} more
 							</a>
+						{:else if got.total > got.rows.length}
+							<p class="mt-1 text-xs text-tp-text-subtle">
+								The first view shows at most {WAY_IN_MAX}.
+							</p>
 						{/if}
 					{/if}
 				{:catch error}
-					<RegionState state={regionStateFor(error)} label={way.label} />
+					<RegionState state={regionStateFor(error)} label={way.scope} />
 				{/await}
 			</div>
 		{/each}

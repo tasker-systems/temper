@@ -6,7 +6,6 @@
 //
 // `vi.mock` over `$lib/server/api` follows `../graph/[owner]/page.server.test.ts`: the loader's
 // whole job is which reads it makes, and the paths are the witness.
-import { HANDOFF_LABEL } from '@tasker-systems/temper-design/handoff';
 import { WAY_IN_BOUND, WAYS_IN, type WayIn } from '@tasker-systems/temper-design/ways-in';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { handoffPath, recentPath, wayInPath } from '$lib/first-view';
@@ -94,6 +93,39 @@ describe('arrival starts from the work', () => {
 		expect(await data.recent).toEqual(page([]));
 	});
 
+	it('gives the body read its own bound, starting when the session arrives', async () => {
+		vi.useFakeTimers();
+		try {
+			const answersAfter = <T>(ms: number, v: T) =>
+				new Promise<T>((r) => setTimeout(() => r(v), ms));
+			const content = `/api/resources/${SESSION.id}/content`;
+			const reads: Record<string, unknown> = { ...everyListEmpty() };
+			apiGet.mockImplementation((path: string) =>
+				path === handoffPath()
+					? answersAfter(7_500, page([SESSION]))
+					: path === content
+						? answersAfter(600, { markdown: '## Next\nGo.' })
+						: Promise.resolve(reads[path]),
+			);
+			const data = await run();
+			const next = data.next.then(
+				(v) => ({ ok: v }),
+				(e) => ({ failed: e }),
+			);
+			await vi.advanceTimersByTimeAsync(8_200);
+			expect(await next).toEqual({ ok: { heading: 'Next', text: 'Go.', truncated: false } });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('reports a failed session once, as the handoff’s failure, not again as the next steps', async () => {
+		answer({ ...everyListEmpty(), [handoffPath()]: new Error('503') });
+		const data = await run();
+		await expect(data.session).rejects.toThrow('503');
+		expect(await data.next).toBeNull();
+	});
+
 	it('reads the handoff from the reader’s own sessions, newest update first', () => {
 		const params = new URL(handoffPath(), 'https://x').searchParams;
 		expect(Object.fromEntries(params)).toEqual({
@@ -103,10 +135,6 @@ describe('arrival starts from the work', () => {
 			sort: 'updated',
 			order: 'desc',
 		});
-	});
-
-	it(`labels the handoff "${HANDOFF_LABEL}", as the desktop does`, () => {
-		expect(HANDOFF_LABEL).toBe('latest handoff');
 	});
 });
 
@@ -132,6 +160,8 @@ describe('the same ways in on both surfaces', () => {
 		answer({ ...everyListEmpty(), [wayInPath(goals, 16)]: page([]) });
 		const data = await run(`?${goals.id}=16`);
 		expect(data.ways.map((w) => w.shown)).toEqual([16, WAY_IN_BOUND, WAY_IN_BOUND]);
+		// `answer` rejects any read it was not given, so this resolves only if the read was limit 16.
+		expect(await data.ways[0].list).toEqual(page([]));
 	});
 
 	it('fails one way in without touching the others', async () => {

@@ -4,7 +4,8 @@
  *
  * It holds what can be read today without recording anything about the reader:
  *
- * - **the latest handoff** — their newest session, and the next steps it recorded, quoted;
+ * - **the latest handoff** — their most recently updated session, and the next steps it
+ *   recorded, quoted;
  * - **the standing ways in** — the reader's own active goals, tasks in progress and sessions,
  *   declared once in `@tasker-systems/temper-design/ways-in`, so the web offers each under the
  *   desktop's name, scope, bound and order (`the-same-ways-in-on-both-surfaces`);
@@ -72,7 +73,7 @@ export function wayInPath(way: WayIn, bound: number): string {
 	return `/api/resources?${params}`;
 }
 
-/** The newest session the reader themselves wrote. */
+/** The reader's own most recently updated session. */
 export function handoffPath(): string {
 	const params = new URLSearchParams({
 		doc_type_name: 'session',

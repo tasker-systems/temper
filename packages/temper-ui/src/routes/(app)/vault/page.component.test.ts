@@ -87,6 +87,14 @@ describe('arrival starts from the work', () => {
 		);
 	});
 
+	it('says the handoff is the reader’s own, and how recently its session was updated', async () => {
+		const { container, getByTestId } = await mount(dataWith({}));
+		expect(container.querySelector('#handoff-heading')?.textContent?.trim()).toBe(
+			`your ${HANDOFF_LABEL}`,
+		);
+		expect(getByTestId('handoff-age').textContent).toMatch(/^\s*session · updated \S/);
+	});
+
 	it('quotes nothing when the session recorded no next steps', async () => {
 		const { queryByTestId, container } = await mount(dataWith({ next: Promise.resolve(null) }));
 		expect(queryByTestId('next-steps')).toBeNull();
@@ -136,6 +144,11 @@ describe('the same ways in on both surfaces', () => {
 		expect(getByTestId(`way-${WAYS_IN[0].id}`).querySelector('a[href^="/vault/all"]')).toBeNull();
 	});
 
+	it('offers no more when every row is shown', async () => {
+		const { getByTestId } = await mount(dataWith({ ways: [Promise.resolve(list(3))] }));
+		expect(getByTestId(`way-${WAYS_IN[0].id}`).querySelector('a[href^="/vault?"]')).toBeNull();
+	});
+
 	it('names an empty way in by what it holds', async () => {
 		const { getByTestId } = await mount(dataWith({ ways: [Promise.resolve(list(0))] }));
 		const region = getByTestId(`way-${WAYS_IN[0].id}`);
@@ -166,6 +179,14 @@ describe('a failed read is its own region’s failure', () => {
 			'Next steps unavailable',
 		);
 		expect(container.querySelector(`a[href="/vault/r/${SESSION.id}"]`)).not.toBeNull();
+	});
+});
+
+describe('recently updated, failing alone', () => {
+	it('fails without touching the handoff or the ways in', async () => {
+		const { getByTestId } = await mount(dataWith({ recent: broken() }));
+		expect(getByTestId('recent').querySelector('[data-region="failed"]')).not.toBeNull();
+		expect(getByTestId(`way-${WAYS_IN[0].id}`).querySelectorAll('li')).toHaveLength(2);
 	});
 });
 
