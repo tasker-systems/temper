@@ -1,7 +1,7 @@
 /**
  * The latest handoff: the reader's most recently updated session, and the next steps it recorded.
- * Both surfaces show it on arrival under the same name. `nextSection` is copied here unchanged
- * from the desktop (`temper-contrib`, `apps/desktop/src/lib/shell/next-section.ts`); once the
+ * Both surfaces show it on arrival under the same name. `nextSection` is copied here from the
+ * desktop, its heading parse rewritten without the backtracking pattern but answering identically, (`temper-contrib`, `apps/desktop/src/lib/shell/next-section.ts`); once the
  * desktop imports it from here instead of keeping its own copy, the two cannot quote the same
  * session differently. Until then they can drift.
  *

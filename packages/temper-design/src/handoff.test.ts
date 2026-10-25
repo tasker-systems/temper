@@ -47,4 +47,22 @@ describe('the next steps a session recorded', () => {
 		expect(next?.text.length).toBeLessThanOrEqual(101);
 		expect(next?.text.endsWith('…')).toBe(true);
 	});
+
+	// The heading parse was rewritten from `/^(#{1,6})\s+(.*?)\s*#*\s*$/`; these are the shapes in
+	// which that pattern's answer is easiest to change by accident, with the answers it gave.
+	it.each([
+		['## Next', 'Next'],
+		['## Next ##', 'Next'],
+		['## Next steps   ###   ', 'Next steps'],
+		['## Next#', 'Next'],
+		['## Next # #', 'Next #'],
+		['##\tNext\t', 'Next'],
+	])('reads the heading %j as %j', (line, title) => {
+		expect(nextSection(`${line}\nGo.`)?.heading).toBe(title);
+	});
+
+	it('does not read a line without space after the hashes, or seven hashes, as a heading', () => {
+		expect(nextSection('##Next\nGo.')).toBeNull();
+		expect(nextSection('####### Next\nGo.')).toBeNull();
+	});
 });
