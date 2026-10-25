@@ -65,4 +65,15 @@ describe('the next steps a session recorded', () => {
 		expect(nextSection('##Next\nGo.')).toBeNull();
 		expect(nextSection('####### Next\nGo.')).toBeNull();
 	});
+
+	// A heading line, a long non-space run, a long space run, then a non-space: the shape on which
+	// the old pattern backtracked super-linearly (~240ms at 4,000 characters, about eight-fold per
+	// doubling, so ~2s at 8,000). The parse runs synchronously in a server load, where no promise
+	// timer can interrupt it, so the time is asserted directly: a test timeout could not stop it either.
+	it('reads an adversarial heading line in linear time', () => {
+		const line = `# ${'a'.repeat(4_000)}${' '.repeat(4_000)}b`;
+		const started = performance.now();
+		expect(nextSection(`${line}\n## Next\nGo.`)?.text).toBe('Go.');
+		expect(performance.now() - started).toBeLessThan(200);
+	});
 });
