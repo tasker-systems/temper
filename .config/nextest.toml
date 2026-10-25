@@ -95,10 +95,12 @@ slow-timeout = { period = "60s", terminate-after = 5 }
 # MEASURED locally at 34–41s alone (three runs), 42s beside the other data-artifact e2e binaries.
 # CI runners ran the trybuild proof above about 2.75× slower than locally, which projects roughly
 # 95–115s here: inside the 120s default with no margin. The test bounds itself (`WALK_BUDGET`,
-# 180s, plus one page's two 15s timeouts, plus building the world), so 60s×4 ⇒ killed at 240s lets
-# a slow run report its findings rather than be killed with them lost. Tighten toward the default
-# once a CI run measures it (same measure-then-tighten pattern as the overrides above). Keyed to
-# the binary for the reason the compile_fail entry gives.
+# 180s from the test's start, plus one page's two 15s timeouts), so 60s×4 ⇒ killed at 240s lets a
+# slow run report its findings rather than be killed with them lost. The CI figure is projected,
+# not yet measured, and this entry names no task to delete it: its removal condition is a CI run
+# measuring it well inside the default, at which point tighten toward 120s (the same
+# measure-then-tighten pattern as the overrides above). Keyed to the binary for the reason the
+# compile_fail entry gives.
 [[profile.default.overrides]]
 filter = 'binary(=data_artifact_ask_walk_e2e)'
 slow-timeout = { period = "60s", terminate-after = 4 }

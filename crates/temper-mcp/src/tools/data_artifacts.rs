@@ -388,10 +388,7 @@ pub async fn commit_artifact(
             other => map_err(other, "commit_data_artifact"),
         })?;
 
-    let json = serde_json::to_string_pretty(&response).unwrap_or_else(|_| "{}".to_string());
-    Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(json),
-    ]))
+    compact_result("commit_data_artifact", &response)
 }
 
 fn parse_resource_ref(s: &str) -> Result<ResourceId, rmcp::ErrorData> {

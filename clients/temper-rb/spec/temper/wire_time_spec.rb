@@ -66,8 +66,21 @@ RSpec.describe Temper::WireTime do
     ['x', 1, nil, holding].each { |other| expect(described_class.stamp(other)).to equal(other) }
   end
 
+  # A position kept as plain data (`page._next.to_hash`, a `Time` inside) and passed back as a hash
+  # in the cursor's place is still the declared `ArtifactCursor`: its `created` is written to the
+  # microsecond, whichever key spelling the caller used, and the caller's hash is left unchanged.
+  it 'writes a declared timestamp in a part the caller passes as a hash' do
+    at = Time.parse(created)
+    [{ created: at, artifact_id: artifact_id }, { 'created' => at, 'artifact_id' => artifact_id }].each do |after|
+      request = Temper::Generated::AskRequest.new(ask: { shape: shape }, after: after)
+      body = JSON.parse(Temper.api_client.object_to_http_body(request))
+      expect(body['after']['created']).to eq(created)
+      expect(after.values).to include(at)
+    end
+  end
+
   # A `Time` in free-form JSON is no declared timestamp: the body is exactly the one the generated
-  # core writes without this patch, so the content a caller commits is stored, and hashed, as it was.
+  # core writes, so the content a caller commits is stored, and hashed, as the caller wrote it.
   it 'leaves a Time in free-form content to the json gem' do
     at = Time.parse(created)
     [at, { observed_at: at, readings: [at, { at: at }] }].each do |content|
