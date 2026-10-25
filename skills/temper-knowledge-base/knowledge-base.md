@@ -602,7 +602,9 @@ Contexts are workspaces that group resources. The typical flow:
   array, an unbounded default that is retiring.
 - **`ask_data_artifacts` answers in pages too** — one ask (a shape and predicates over its
   paths) answers `{"artifacts": [...], "oversized": [...], "next": ... | null, ...}`. To continue,
-  call it again with the same `ask` and `next` passed back unchanged as `after`. An artifact in
-  `oversized` is too large for a page; read it whole with `get_data_artifact`.
+  call it again with the same `ask` and `next` passed back unchanged as `after`. Only a `null`
+  `next` ends the answer: a page that stopped on its read budget can hold no artifacts and still
+  carry a `next`, so keep going. An artifact in `oversized` is too large for a page; read it whole
+  with `get_data_artifact`.
 - **Access control is automatic** — you only see resources and contexts your
   authenticated profile has access to. No need to handle permissions.

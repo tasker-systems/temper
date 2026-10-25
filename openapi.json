@@ -16697,7 +16697,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/ArtifactAskPopulation",
-                "description": "What the ask counted over its whole population, on the first page; `null` on every later\npage. These are exact counts over the whole counted set: to count them, the first page\nmatches every governed artifact of the home, content included, and the read budget that\nbounds the page's own rows does not bound that. They are read in a statement of their own beside the page's, so a commit landing between\nthe two can make `matched` differ from the rows by that commit; they describe the\npopulation, not the page."
+                "description": "What the ask counted over its whole population, on the first page; `null` on every later\npage. These are exact counts over the whole counted set: to count them, the first page\nmatches every governed artifact of the home, content included, and the read budget that\nbounds the page's own rows does not bound that. They are read in a statement of their own\nbeside the page's, so a commit landing between the two can make `matched` differ from the\nrows by that commit; they describe the population, not the page."
               },
               {
                 "type": "null"
@@ -22862,7 +22862,8 @@
           },
           "content_bytes": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "The artifact's stored `content_bytes`: its content's length in compact JSON as committed.\nThe content a page or a read by id serves can be longer, because storage prints a number\nfrom 1e16 up to the 64-bit integer limits in full (`1e19`, four bytes committed, is served\nas twenty digits). A page measures what it would write, so an artifact can be named here\nthough its `content_bytes` alone would fit a page."
           },
           "resource_id": {
             "$ref": "#/components/schemas/ResourceId"

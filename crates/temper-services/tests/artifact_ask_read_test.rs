@@ -9,20 +9,25 @@
 //! `temper-substrate`'s `artifact_ask_batch_read.rs`; this file holds what only the service shows:
 //! the population on the first page alone, a continuation answering on the row its first page named
 //! after an amendment — and reading its states against the version now in force — readability
-//! re-decided on every page, unreadable answering as absent, and served content as long as the
-//! budget charged it.
+//! re-decided on every page, unreadable answering as absent, an unstorable position refused before
+//! anything is read, served content measured against what was committed, and the page's byte
+//! budget held on what the page writes.
 
+use axum::http::StatusCode;
 use serde_json::json;
 use sqlx::PgPool;
 use temper_core::types::artifact_ask::{
-    ArtifactAsk, ArtifactPredicate, AskOrder, AskRequest, AskResponse, ShapeSuccessor,
+    ArtifactAsk, ArtifactPredicate, AskOrder, AskRequest, AskResponse, OversizedArtifact,
+    ShapeSuccessor,
 };
-use temper_core::types::data_artifact::ArtifactCursor;
+use temper_core::types::data_artifact::{ArtifactCursor, ArtifactView};
 use temper_core::types::ids::ShapeId;
 use temper_core::types::query::filter::PropertyOp;
 use temper_core::types::query::{ArtifactAskPopulation, PlanRefusal, RefusalReason};
 use temper_services::backend::artifact_ask_read::ask_page;
+use temper_services::backend::substrate_read::get_artifact;
 use temper_services::error::{ApiError, ApiResult};
+use temper_services::transport::{ARTIFACT_ASK_PAGE_BYTES, ARTIFACT_ROW_FIXED_BYTES};
 use temper_substrate::ids::{ContextId, DataArtifactId, EntityId, ProfileId, ResourceId};
 use temper_substrate::payloads::{AnchorRef, ArtifactIntent, EnforcementMode, KindOwner};
 use temper_substrate::scenario::bootseed;
@@ -394,26 +399,60 @@ fn written(text: &str) -> usize {
         .len()
 }
 
-/// **Served content is as long as its `content_bytes`, floats included, and a served row is
-/// within what the page charged for it.** Storage prints a number in plain notation (`1e300` as
-/// 301 digits), so each float here is committed, stored, read back and written again: large and
-/// small exponents, the extremes of `f64`, a subnormal, and long mantissas. Each served row's
-/// content, compactly serialized, is exactly its `content_bytes`; the whole row is within its
-/// charge (`content_bytes`, each text field's written length and `ARTIFACT_ROW_FIXED_BYTES`); and
-/// the page's rows together are within `ARTIFACT_ASK_PAGE_BYTES`.
-///
-/// The bite cannot be a perl edit: the length holds because `serde_json`'s `float_roundtrip`
-/// makes the parse back from storage exact, and that feature reaches every build also through
-/// `jsonschema`, which enables it unconditionally, so dropping it from temper-services and
-/// temper-client changes nothing. To see it red, build with every edge to `float_roundtrip` cut
-/// (a `[patch.crates-io]` `jsonschema` whose `serde_json` dependency omits it): without it the
-/// parse of a long plain expansion is best effort and may land a unit in the last place away,
-/// which is then written back in up to 17 significant digits, and the length assertion goes red
-/// on that value.
-#[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn served_floats_are_as_long_as_their_content_bytes(pool: PgPool) {
-    use temper_services::transport::{ARTIFACT_ASK_PAGE_BYTES, ARTIFACT_ROW_FIXED_BYTES};
+/// What the page's SQL charges a served row: its `content_bytes`, each text field as the page
+/// writes it, and `ARTIFACT_ROW_FIXED_BYTES` for the rest.
+fn sql_charge(a: &ArtifactView) -> usize {
+    usize::try_from(a.content_bytes).unwrap()
+        + written(&a.kind_owner_table)
+        + written(&a.artifact_kind)
+        + written(&a.intent)
+        + written(&a.content_hash)
+        + written(&a.shape_state)
+        + ARTIFACT_ROW_FIXED_BYTES
+}
 
+/// What a served row adds to a page as written: its compact JSON and the comma after it.
+fn written_row(a: &ArtifactView) -> usize {
+    serde_json::to_string(a).expect("a row serializes").len() + 1
+}
+
+/// What a page's rows write, measured as the service holds them to the budget: each served row as
+/// written, and each oversized entry at `ARTIFACT_ROW_FIXED_BYTES`, which bounds the entry with its
+/// comma (`transport`'s `the_fixed_row_charge_covers_every_byte_but_content_and_text`).
+fn page_bytes(page: &AskResponse) -> usize {
+    page.artifacts.iter().map(written_row).sum::<usize>()
+        + page.oversized.len() * ARTIFACT_ROW_FIXED_BYTES
+}
+
+/// A value's compact JSON length, as `content_bytes` counts it.
+fn compact_len(value: &serde_json::Value) -> i64 {
+    i64::try_from(serde_json::to_string(value).unwrap().len()).unwrap()
+}
+
+/// **A served number is as long as it was committed, except where storage prints it as a 64-bit
+/// integer, and there it is longer by exactly the digits storage writes.** Storage prints a number
+/// in plain notation. Outside 1e16 up to the 64-bit integer limits it is read back as a float and
+/// written in its shortest form: large and small exponents, the extremes of `f64`, a subnormal and
+/// long mantissas, each also negated and divided, are served as committed, at their
+/// `content_bytes`, and each row within the SQL's charge for it. Inside that range a float
+/// committed in exponent form is stored as an integer and read back as one: `1e16`, `1e19`,
+/// `-1e18` and `1.8e19` are each served as the integer, longer than committed by the bytes pinned
+/// here, while `content_bytes` stays the committed length. Either way the page's rows, as
+/// written, are within `ARTIFACT_ASK_PAGE_BYTES`.
+///
+/// The bite for the first kind cannot be a perl edit: it holds because `serde_json`'s
+/// `float_roundtrip` makes the parse back from storage exact, and that feature reaches every build
+/// also through `jsonschema`, which enables it unconditionally, so dropping it from temper-services
+/// and temper-client changes nothing. To see it red, build with every edge to `float_roundtrip` cut
+/// (a `[patch.crates-io]` `jsonschema` whose `serde_json` dependency omits it): without it the parse
+/// of a long plain expansion is best effort and may land a unit in the last place away, which is
+/// then written back in up to 17 significant digits. The second kind is storage's own printing,
+/// which the page holds to its budget as written:
+/// `a_row_served_longer_than_the_page_is_named_oversized_and_the_rows_after_it_are_served`.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_served_number_keeps_its_committed_length_unless_storage_prints_it_as_an_integer(
+    pool: PgPool,
+) {
     let w = world(&pool).await;
     let floats = [
         1e300,
@@ -430,43 +469,197 @@ async fn served_floats_are_as_long_as_their_content_bytes(pool: PgPool) {
         std::f64::consts::PI * 1e250,
         std::f64::consts::E * 1e-250,
     ];
-    let mut committed = Vec::new();
+    let mut kept = Vec::new();
     for (i, x) in floats.iter().enumerate() {
         let content = json!({ "unit": "ms", "count": i, "x": x, "xs": [x, -x, x / 3.0] });
-        committed.push((commit(&pool, &w, content.clone()).await.uuid(), content));
+        kept.push((commit(&pool, &w, content.clone()).await.uuid(), content));
+    }
+    // Each float as committed, the integer storage prints it as, and the bytes that adds.
+    let printed_whole = [
+        (1e16, json!(10_000_000_000_000_000_u64), 12_i64),
+        (1e19, json!(10_000_000_000_000_000_000_u64), 15),
+        (-1e18, json!(-1_000_000_000_000_000_000_i64), 14),
+        (1.8e19, json!(18_000_000_000_000_000_000_u64), 13),
+    ];
+    let mut grown = Vec::new();
+    for (i, (x, whole, more)) in printed_whole.iter().enumerate() {
+        let content = json!({ "unit": "ms", "count": i, "x": x });
+        let mut as_served = content.clone();
+        as_served["x"] = whole.clone();
+        let id = commit(&pool, &w, content.clone()).await.uuid();
+        grown.push((id, content, as_served, *more));
     }
 
     let page = ask_page(&pool, w.owner, &request(w.shape, 50, None))
         .await
         .expect("the owner asks its own shape");
-    assert_eq!(
-        page.artifacts
-            .iter()
-            .map(|a| (a.artifact_id.uuid(), a.content.clone().expect("content")))
-            .collect::<Vec<_>>(),
-        committed,
-        "every float served as committed"
-    );
-    let mut rows = 0;
-    for a in &page.artifacts {
+    assert_eq!(page.artifacts.len(), kept.len() + grown.len());
+    let (outside, inside) = page.artifacts.split_at(kept.len());
+    for (a, (id, committed)) in outside.iter().zip(&kept) {
+        assert_eq!(a.artifact_id.uuid(), *id);
         let content = a.content.as_ref().expect("content");
+        assert_eq!(content, committed, "served as committed");
         assert_eq!(
-            i64::try_from(serde_json::to_string(content).unwrap().len()).unwrap(),
+            compact_len(content),
             a.content_bytes,
             "served at its committed length: {content}"
         );
-        let charge = usize::try_from(a.content_bytes).unwrap()
-            + written(&a.kind_owner_table)
-            + written(&a.artifact_kind)
-            + written(&a.intent)
-            + written(&a.content_hash)
-            + written(&a.shape_state)
-            + ARTIFACT_ROW_FIXED_BYTES;
-        let row = serde_json::to_string(a).unwrap().len();
+        let (row, charge) = (written_row(a), sql_charge(a));
         assert!(row <= charge, "a row of {row} bytes charged {charge}");
-        rows += row;
     }
-    assert!(rows <= ARTIFACT_ASK_PAGE_BYTES);
+    for (a, (id, committed, as_served, more)) in inside.iter().zip(&grown) {
+        assert_eq!(a.artifact_id.uuid(), *id);
+        let content = a.content.as_ref().expect("content");
+        assert_eq!(content, as_served, "stored and read back as an integer");
+        assert_eq!(
+            a.content_bytes,
+            compact_len(committed),
+            "charged as committed"
+        );
+        assert_eq!(
+            compact_len(content),
+            a.content_bytes + more,
+            "served {more} bytes longer than committed: {content}"
+        );
+    }
+    assert!(page_bytes(&page) <= ARTIFACT_ASK_PAGE_BYTES);
+}
+
+/// Content holding `n` copies of `1e19`, which a commit writes as five bytes each (`1e+19`) and a
+/// page serves as twenty: an artifact whose charge is about a quarter of what it writes.
+fn plain_integers(count: usize, n: usize) -> serde_json::Value {
+    json!({ "unit": "ms", "count": count, "xs": vec![1e19_f64; n] })
+}
+
+/// **A row whose charge fits the page but whose served length does not is named in `oversized`,
+/// in its place, and the rows after it are served.** A holds 100,000 copies of `1e19`: charged
+/// about 0.6 MB, it writes about 2.1 MB, past `ARTIFACT_ASK_PAGE_BYTES`; read whole by id, it shows
+/// both. B and C are small matches after it. The page serves B and C, names A in `oversized` with
+/// its stored `content_bytes`, and ends the enumeration, its rows as written within the budget.
+///
+/// Bite (perl, Rust): in `artifact_ask_read::read`, `within_budget(page, ARTIFACT_ASK_PAGE_BYTES)`
+/// → `within_budget(page, usize::MAX)` — the enforcement removed: A is served at 2.1 MB, and the
+/// first assertion on the page goes red.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_row_served_longer_than_the_page_is_named_oversized_and_the_rows_after_it_are_served(
+    pool: PgPool,
+) {
+    let w = world(&pool).await;
+    let a = commit(&pool, &w, plain_integers(0, 100_000)).await;
+    let b = commit(&pool, &w, json!({ "unit": "ms", "count": 1 })).await;
+    let c = commit(&pool, &w, json!({ "unit": "ms", "count": 2 })).await;
+
+    let whole = get_artifact(&pool, w.owner, a)
+        .await
+        .expect("A reads by id")
+        .expect("A is visible to its owner");
+    assert!(
+        sql_charge(&whole) <= ARTIFACT_ASK_PAGE_BYTES,
+        "the fixture: A's charge fits a page alone"
+    );
+    assert!(
+        written_row(&whole) > ARTIFACT_ASK_PAGE_BYTES,
+        "the fixture: A as written does not"
+    );
+
+    let page = ask_page(&pool, w.owner, &request(w.shape, 50, None))
+        .await
+        .expect("the owner asks its own shape");
+    assert_eq!(served(&page), [b.uuid(), c.uuid()]);
+    assert_eq!(
+        page.oversized,
+        [OversizedArtifact {
+            artifact_id: a,
+            resource_id: ResourceId::from(w.on),
+            content_bytes: whole.content_bytes,
+        }],
+        "A is named in its place, with its stored content_bytes"
+    );
+    assert_eq!(page.next, None);
+    assert!(page_bytes(&page) <= ARTIFACT_ASK_PAGE_BYTES);
+}
+
+/// **Two rows whose charges fit one page together but whose served lengths do not are two pages.**
+/// A and B each hold 60,000 copies of `1e19`: each is charged about 0.36 MB and writes about
+/// 1.26 MB, so together they fit a page as charged, and each fits one alone as written, but not
+/// both. The first page serves A and ends there, `next` at A; the second, continuing from it,
+/// serves B and ends the enumeration. Each page's rows as written are within the budget.
+///
+/// Bite (perl, Rust): as for the oversized row above, `within_budget(page, ARTIFACT_ASK_PAGE_BYTES)`
+/// → `within_budget(page, usize::MAX)` — the first page serves both and answers `next: None`.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn two_rows_that_fit_a_page_as_charged_but_not_as_written_are_two_pages(pool: PgPool) {
+    let w = world(&pool).await;
+    let a = commit(&pool, &w, plain_integers(0, 60_000)).await;
+    let b = commit(&pool, &w, plain_integers(1, 60_000)).await;
+
+    let first = ask_page(&pool, w.owner, &request(w.shape, 50, None))
+        .await
+        .expect("page one");
+    assert_eq!(served(&first), [a.uuid()], "the page ends after A");
+    assert!(first.oversized.is_empty());
+    let at_a = first.artifacts.first().map(|row| ArtifactCursor {
+        created: row.created,
+        artifact_id: row.artifact_id,
+    });
+    assert_eq!(first.next, at_a, "`next` is A, the last row the page kept");
+    assert!(page_bytes(&first) <= ARTIFACT_ASK_PAGE_BYTES);
+
+    let second = ask_page(&pool, w.owner, &request(w.shape, 50, first.next))
+        .await
+        .expect("page two");
+    assert_eq!(served(&second), [b.uuid()], "B opens the next page");
+    assert!(second.oversized.is_empty());
+    assert_eq!(second.next, None);
+    assert!(page_bytes(&second) <= ARTIFACT_ASK_PAGE_BYTES);
+
+    let (row_a, row_b) = (&first.artifacts[0], &second.artifacts[0]);
+    assert!(
+        sql_charge(row_a) + sql_charge(row_b) <= ARTIFACT_ASK_PAGE_BYTES,
+        "the fixture: A and B fit one page as charged"
+    );
+    assert!(
+        written_row(row_a) + written_row(row_b) > ARTIFACT_ASK_PAGE_BYTES,
+        "the fixture: A and B do not fit one page as written"
+    );
+}
+
+/// **An `after` the store cannot hold is refused by the service read itself, before it reads
+/// anything**, with the refusal the API door gives: `ApiError::UnreadablePlan`, status `422`. The
+/// instant one microsecond before `timestamptz`'s first is refused; the first itself, the
+/// control, is a position like any other. Both are read as a caller's body reads them.
+///
+/// Bite (perl, Rust): in `artifact_ask_read::ask_page`, the line
+/// `refuse_unstorable_position(request)?;` removed — the position reaches the database, which
+/// refuses to bind it, and the answer is a fault, not `UnreadablePlan`.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_unstorable_after_is_refused_by_the_service_read(pool: PgPool) {
+    let w = world(&pool).await;
+    let at = |created: &str| -> Option<ArtifactCursor> {
+        Some(
+            serde_json::from_value(json!({ "created": created, "artifact_id": Uuid::nil() }))
+                .expect("a cursor reads"),
+        )
+    };
+    match ask_page(
+        &pool,
+        w.owner,
+        &request(w.shape, 1, at("-4713-11-23T23:59:59.999999Z")),
+    )
+    .await
+    {
+        Err(ApiError::UnreadablePlan { status, .. }) => {
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        }
+        other => panic!("expected an unreadable position, got {other:?}"),
+    }
+    ask_page(
+        &pool,
+        w.owner,
+        &request(w.shape, 1, at("-4713-11-24T00:00:00Z")),
+    )
+    .await
+    .expect("the first instant the store holds is a position");
 }
 
 /// **Unreadable is refused exactly as absent is, on every page.** An outsider asking the owner's

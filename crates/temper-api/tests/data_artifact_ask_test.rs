@@ -224,8 +224,9 @@ async fn an_unreadable_body_is_a_typed_refusal(pool: PgPool) {
 /// microsecond before the start is refused `422` under `UNREADABLE_PLAN` with a bounded message,
 /// and the start itself, the control, is answered. At the high end the latest instant a
 /// `DateTime<Utc>` holds is answered — it is inside `timestamptz`'s range — and one past it is not
-/// a position at all, refused the same way by the reader. Bite: the `is_storable` check removed
-/// from `AskBody::from_request` — the low case reaches the database and answers `500`.
+/// a position at all, refused the same way by the reader. Bite: in
+/// `artifact_ask_read::refuse_unstorable_position`, which the door and the service read both run,
+/// `!after.is_storable()` → `false` — the low case reaches the database and answers `500`.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn an_after_the_store_cannot_hold_is_unreadable_and_never_a_fault(pool: PgPool) {
     let w = world(pool).await;

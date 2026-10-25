@@ -1,5 +1,5 @@
 use axum::extract::{FromRequest, Path, Query, Request, State};
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue};
 use axum::Json;
 use uuid::Uuid;
 
@@ -294,14 +294,11 @@ pub async fn ask(
 /// `ApiError::UnreadablePlan` rather than axum's plain-text rejection, and never quoting the body
 /// back whole (`super::query::read_unread_body`). An `after` the store cannot hold
 /// (`ArtifactCursor::is_storable`) is refused the same way, as a position no page can continue
-/// from. The MCP edge relays the ask unread, so this is where it is read, once, for both doors.
+/// from, by the service's own check (`artifact_ask_read::refuse_unstorable_position`), which the
+/// service read runs again. The MCP edge relays the ask unread, so this is where it is read, once,
+/// for both doors.
 #[derive(Debug)]
 pub struct AskBody(pub AskRequest);
-
-/// What a caller is told when its `after` names an instant the store cannot hold. Fixed, so it
-/// quotes nothing back.
-const UNSTORABLE_POSITION: &str = "`after.created` is outside the instants an artifact can be \
-    created at (4714-11-24 BC to 294276 AD, UTC), so it is not a position any page returned";
 
 impl<S> FromRequest<S> for AskBody
 where
@@ -311,12 +308,7 @@ where
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
         let request: AskRequest = super::query::read_unread_body(req, state).await?;
-        if request.after.is_some_and(|after| !after.is_storable()) {
-            return Err(ApiError::UnreadablePlan {
-                status: StatusCode::UNPROCESSABLE_ENTITY,
-                message: UNSTORABLE_POSITION.to_string(),
-            });
-        }
+        artifact_ask_read::refuse_unstorable_position(&request)?;
         Ok(Self(request))
     }
 }

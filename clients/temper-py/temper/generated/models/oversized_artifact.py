@@ -29,7 +29,7 @@ class OversizedArtifact(BaseModel):
     A matching artifact too large for a page's byte budget by itself, its content and the rest of its row together: named, sized, and left to be read by id.
     """ # noqa: E501
     artifact_id: UUID = Field(description="A `kb_data_artifacts.id` value — one schema-boundable structured datum owned by a resource.")
-    content_bytes: StrictInt
+    content_bytes: StrictInt = Field(description="The artifact's stored `content_bytes`: its content's length in compact JSON as committed. The content a page or a read by id serves can be longer, because storage prints a number from 1e16 up to the 64-bit integer limits in full (`1e19`, four bytes committed, is served as twenty digits). A page measures what it would write, so an artifact can be named here though its `content_bytes` alone would fit a page.")
     resource_id: UUID = Field(description="A `kb_resources.id` value.")
     __properties: ClassVar[List[str]] = ["artifact_id", "content_bytes", "resource_id"]
 

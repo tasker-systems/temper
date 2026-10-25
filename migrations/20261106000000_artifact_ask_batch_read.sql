@@ -22,7 +22,7 @@
 --      always read and a page always moves forward. When the budget ends the scan, the last
 --      candidate read is returned marked `frontier`, matched or not, so a page can say where to
 --      continue. A NULL budget reads every candidate and marks none: the counted set's call, which
---      therefore answers exactly as before.
+--      therefore answers exactly as before. A matched-only call with a NULL budget or charge raises.
 --   4. THE KEYSET IS A ROW COMPARISON, both halves or neither (20261102000000 point 3): half a
 --      position answers nothing. A NULL limit is the whole set — the counted set's call only.
 --   5. THE BUDGET BOUNDS THE WHOLE PAGE, AND CONTENT OVER IT NEVER LEAVES SQL. Every matched row the
@@ -31,7 +31,9 @@
 --      rest), an oversized row p_row_bytes. The family name has no length cap and repeats on every
 --      row, so a content-only charge cannot hold the response cap. One window over the body's rows
 --      decides served, oversized and the row that ends the page; content, and the text columns, are
---      projected for served rows alone.
+--      projected for served rows alone. The charge estimates what a served row writes: storage can
+--      print a number longer than it was committed, so the caller (temper-services'
+--      artifact_ask_read) holds the page to the budget again on the bytes it writes.
 --   6. THE GATED FUNCTIONS BUILD THE VISIBLE SET ONCE, COALESCEd to ARRAY[]::uuid[] (the array_agg
 --      fall-open scar, 20260820000030), and restate no conjunct.
 --   7. NO DEFAULT on any parameter.
@@ -57,6 +59,9 @@ LANGUAGE plpgsql STABLE AS $$
 DECLARE
     v_shape kb_data_artifact_shapes%ROWTYPE;
 BEGIN
+    IF p_matched_only IS NOT false AND (p_read_budget IS NULL OR p_read_charge IS NULL) THEN
+        RAISE EXCEPTION 'a matched-only artifact ask read needs a read budget and charge';
+    END IF;
     SELECT * INTO v_shape FROM kb_data_artifact_shapes s WHERE s.id = (p_ask->>'shape')::uuid;
     IF NOT FOUND THEN
         RETURN;
@@ -132,9 +137,9 @@ $$;
 -- matched rows and `spent` totals the charges. A row is examined while `n` is within the limit and
 -- `spent` within the budget, so a matched row that does not fit alone is examined (oversized) and
 -- the page goes on, and the first that fits alone but not what is left ends the page with every row
--- after it. A row is served when it is examined, matched and fits alone, so no served byte is past
--- the budget. A budget below p_row_bytes reads nothing, so the first matching row is always
--- examined.
+-- after it. A row is served when it is examined, matched and fits alone, so no served row is past
+-- the budget as charged. A budget below p_row_bytes reads nothing, so the first matching row is
+-- always examined.
 CREATE FUNCTION artifacts_matching_ask(
     p_principal     uuid,
     p_ask           jsonb,
@@ -221,13 +226,13 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 COMMENT ON FUNCTION __temper_ungated_artifact_ask_rows(uuid[], uuid, jsonb, timestamptz, uuid, bigint, boolean, bigint, bigint) IS
-    'UNGATED. The one body of an artifact ask''s counted set: every live artifact the asked shape''s lineage governs (its home and family, read from the named row by id, through __temper_ungated_governed_artifact_states_in), on a resource in p_visible_ids (NULL admits none) that is live and fully ingested (kb_resources_live), while p_reader can read the shape''s home (anchor_readable_by_profile, checked once per call before anything is read) and the artifact''s intent is among the ask''s; include_folded true admits nothing. One row per artifact with its shape in force, shape_state, matched (its state is among the ask''s shape_states and its content satisfies every predicate, _temper_artifact_ask_match), created and content_bytes, in (created, id) order strictly after (p_after_created, p_after_id) — from the start when both are NULL, nothing when one is — at most p_limit rows (NULL: all), only matched rows when p_matched_only. p_read_budget bounds what one call reads: each candidate after the position is charged its content_bytes plus p_read_charge, and a candidate is read (matched, its content fetched) only while the charge before it is under the budget, so the first is always read; when the budget ends the scan, the last candidate read is returned with frontier true, matched or not, and is the one unmatched row a matched-only call can return. NULL reads every candidate and marks no frontier, which is the counted set''s call. plpgsql because the artifact query runs by EXECUTE … USING with the home and family as values, so it is planned with their real sizes. The order and the read charge are taken on cheap columns behind an OFFSET 0 fence and the matcher and the content read run above it, so a limited or budgeted call reads content only for the candidates it reads. p_ask is one element of ValidatedAsk::bind. The caller owes the verdict and the reader; this applies every other conjunct of spec 2026-10-19-asking-artifacts-by-what-they-are §6.1 (20261106000000).';
+    'UNGATED. The one body of an artifact ask''s counted set: every live artifact the asked shape''s lineage governs (its home and family, read from the named row by id, through __temper_ungated_governed_artifact_states_in), on a resource in p_visible_ids (NULL admits none) that is live and fully ingested (kb_resources_live), while p_reader can read the shape''s home (anchor_readable_by_profile, checked once per call before anything is read) and the artifact''s intent is among the ask''s; include_folded true admits nothing. One row per artifact with its shape in force, shape_state, matched (its state is among the ask''s shape_states and its content satisfies every predicate, _temper_artifact_ask_match), created and content_bytes, in (created, id) order strictly after (p_after_created, p_after_id) — from the start when both are NULL, nothing when one is — at most p_limit rows (NULL: all), only matched rows when p_matched_only. p_read_budget bounds what one call reads: each candidate after the position is charged its content_bytes plus p_read_charge, and a candidate is read (matched, its content fetched) only while the charge before it is under the budget, so the first is always read; when the budget ends the scan, the last candidate read is returned with frontier true, matched or not, and is the one unmatched row a matched-only call can return. NULL reads every candidate and marks no frontier, which is the counted set''s call; a matched-only call with a NULL p_read_budget or p_read_charge raises rather than reading without bound. plpgsql because the artifact query runs by EXECUTE … USING with the home and family as values, so it is planned with their real sizes. The order and the read charge are taken on cheap columns behind an OFFSET 0 fence and the matcher and the content read run above it, so a limited or budgeted call reads content only for the candidates it reads. p_ask is one element of ValidatedAsk::bind. The caller owes the verdict and the reader; this applies every other conjunct of spec 2026-10-19-asking-artifacts-by-what-they-are §6.1 (20261106000000).';
 
 COMMENT ON FUNCTION __temper_ungated_artifact_ask_population(uuid[], uuid, jsonb) IS
     'UNGATED. The counted set of one artifact ask: every governed row with its shape in force, shape_state and matched, as __temper_ungated_artifact_ask_rows defines them, which this delegates to with no position, no limit, every row matched or not, and no read budget. The selection core''s asks conjunct and __temper_ungated_artifact_ask_counts read it. The caller owes the verdict (p_visible_ids, NULL admits none) and the reader (20261104000000, 20261106000000).';
 
 COMMENT ON FUNCTION artifacts_matching_ask(uuid, jsonb, timestamptz, uuid, bigint, bigint, bigint, bigint, bigint) IS
-    'One page of the artifacts matching one ask (one element of ValidatedAsk::bind), for p_principal: its own resources_visible_to, built once, handed to __temper_ungated_artifact_ask_rows with p_principal as reader, matched rows only, at most p_limit + 1 in (created, id) order after the position, under the read budget p_read_budget at p_read_charge per candidate. p_page_budget bounds the whole page: a matched row that fits it alone is charged its content_bytes and its metadata (each text column as the JSON string the page writes, plus p_row_bytes), any other matched row p_row_bytes. examined is within p_limit matched rows and the running charge within the budget; served is examined, matched and fitting alone (content and text columns carried); an examined matched row that does not fit alone is oversized (ids, created and size only). The read frontier — the last candidate the body read when its read budget ended the scan — is returned with frontier true; unmatched, it is charged nothing, counts toward no limit and is neither served nor oversized. The earliest of three ends the page: the row limit, the page budget, and the read frontier. The last examined row is where the next page starts; when every row is examined and none is the frontier, the set is exhausted. Nothing for a NULL or non-positive p_limit, a NULL or negative p_row_bytes, a budget that is NULL or below p_row_bytes, or a NULL or non-positive p_read_budget or p_read_charge (20261106000000).';
+    'One page of the artifacts matching one ask (one element of ValidatedAsk::bind), for p_principal: its own resources_visible_to, built once, handed to __temper_ungated_artifact_ask_rows with p_principal as reader, matched rows only, at most p_limit + 1 in (created, id) order after the position, under the read budget p_read_budget at p_read_charge per candidate. p_page_budget bounds the whole page as charged, an estimate of what it writes: a matched row that fits it alone is charged its content_bytes and its metadata (each text column as the JSON string the page writes, plus p_row_bytes), any other matched row p_row_bytes. examined is within p_limit matched rows and the running charge within the budget; served is examined, matched and fitting alone (content and text columns carried); an examined matched row that does not fit alone is oversized (ids, created and size only). The read frontier — the last candidate the body read when its read budget ended the scan — is returned with frontier true; unmatched, it is charged nothing, counts toward no limit and is neither served nor oversized. The earliest of three ends the page: the row limit, the page budget, and the read frontier. The last examined row is where the next page starts; when every row is examined and none is the frontier, the set is exhausted. Nothing for a NULL or non-positive p_limit, a NULL or negative p_row_bytes, a budget that is NULL or below p_row_bytes, or a non-positive p_read_budget or p_read_charge; a NULL p_read_budget or p_read_charge is never read without bound, since the body raises if it is reached with one (20261106000000).';
 
 COMMENT ON FUNCTION artifact_ask_counts(uuid, jsonb) IS
     'The population of one ask for p_principal: __temper_ungated_artifact_ask_counts over its own resources_visible_to, built once (an empty set admits nothing), with p_principal as reader. Exact counts over the whole counted set: no read budget bounds them (20261106000000).';

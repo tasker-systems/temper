@@ -122,9 +122,9 @@ oversized: Array<OversizedArtifact>,
  * What the ask counted over its whole population, on the first page; `null` on every later
  * page. These are exact counts over the whole counted set: to count them, the first page
  * matches every governed artifact of the home, content included, and the read budget that
- * bounds the page's own rows does not bound that. They are read in a statement of their own beside the page's, so a commit landing between
- * the two can make `matched` differ from the rows by that commit; they describe the
- * population, not the page.
+ * bounds the page's own rows does not bound that. They are read in a statement of their own
+ * beside the page's, so a commit landing between the two can make `matched` differ from the
+ * rows by that commit; they describe the population, not the page.
  */
 population: ArtifactAskPopulation | null, 
 /**
@@ -178,7 +178,15 @@ export type JsonType = "null" | "boolean" | "integer" | "number" | "string" | "a
  * A matching artifact too large for a page's byte budget by itself, its content and the rest of its
  * row together: named, sized, and left to be read by id.
  */
-export type OversizedArtifact = { artifact_id: DataArtifactId, resource_id: ResourceId, content_bytes: bigint, };
+export type OversizedArtifact = { artifact_id: DataArtifactId, resource_id: ResourceId, 
+/**
+ * The artifact's stored `content_bytes`: its content's length in compact JSON as committed.
+ * The content a page or a read by id serves can be longer, because storage prints a number
+ * from 1e16 up to the 64-bit integer limits in full (`1e19`, four bytes committed, is served
+ * as twenty digits). A page measures what it would write, so an artifact can be named here
+ * though its `content_bytes` alone would fit a page.
+ */
+content_bytes: bigint, };
 
 /**
  * What the schema declares at one path. Each field is `None` when the schema leaves it

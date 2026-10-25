@@ -71,9 +71,9 @@ pub struct AskResponse {
     /// What the ask counted over its whole population, on the first page; `null` on every later
     /// page. These are exact counts over the whole counted set: to count them, the first page
     /// matches every governed artifact of the home, content included, and the read budget that
-    /// bounds the page's own rows does not bound that. They are read in a statement of their own beside the page's, so a commit landing between
-    /// the two can make `matched` differ from the rows by that commit; they describe the
-    /// population, not the page.
+    /// bounds the page's own rows does not bound that. They are read in a statement of their own
+    /// beside the page's, so a commit landing between the two can make `matched` differ from the
+    /// rows by that commit; they describe the population, not the page.
     // utoipa reads `Option` as "may be omitted"; the key is always written, `null` included, so
     // the published contract says required (the `located_at` rule in `query/hits.rs`).
     #[cfg_attr(feature = "web-api", schema(required = true))]
@@ -133,6 +133,11 @@ impl From<&ShapeIdentity> for AskedShape {
 pub struct OversizedArtifact {
     pub artifact_id: DataArtifactId,
     pub resource_id: ResourceId,
+    /// The artifact's stored `content_bytes`: its content's length in compact JSON as committed.
+    /// The content a page or a read by id serves can be longer, because storage prints a number
+    /// from 1e16 up to the 64-bit integer limits in full (`1e19`, committed as the five bytes `1e+19`, is served
+    /// as twenty digits). A page measures what it would write, so an artifact can be named here
+    /// though its `content_bytes` alone would fit a page.
     pub content_bytes: i64,
 }
 

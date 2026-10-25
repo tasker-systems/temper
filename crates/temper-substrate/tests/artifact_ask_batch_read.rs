@@ -465,8 +465,46 @@ async fn served_ids_through(
         .collect()
 }
 
+/// How a test calls the one body beside the ask: matched-only or every row, and the read budget and
+/// per-candidate charge, NULL where `None`.
+#[derive(Debug, Clone, Copy)]
+struct BodyCall {
+    matched_only: bool,
+    read_budget: Option<i64>,
+    read_charge: Option<i64>,
+}
+
+/// The rows the one body `function` — deployed or a variant — returns for one ask, from the start,
+/// called as `call` says, with the visible set and reader handed in; the database's error when it
+/// raises.
+async fn rows_through(
+    conn: &mut PgConnection,
+    function: &str,
+    visible: Option<Vec<Uuid>>,
+    reader: ProfileId,
+    ask: &Value,
+    call: BodyCall,
+) -> Result<BTreeSet<Uuid>, sqlx::Error> {
+    // `function` is one of this file's literals; every value is bound.
+    let sql = format!(
+        "SELECT artifact_id FROM {function}($1::uuid[], $2::uuid, $3::jsonb, NULL::timestamptz, \
+         NULL::uuid, 100::bigint, $4::boolean, $5::bigint, $6::bigint)"
+    );
+    let rows = sqlx::query_scalar::<_, Uuid>(&sql)
+        .bind(visible)
+        .bind(reader.uuid())
+        .bind(ask)
+        .bind(call.matched_only)
+        .bind(call.read_budget)
+        .bind(call.read_charge)
+        .fetch_all(&mut *conn)
+        .await?;
+    Ok(rows.into_iter().collect())
+}
+
 /// The matched rows the one body `function` — deployed or a variant — returns for one ask, from
-/// the start, as the page calls it (matched only), with the visible set and reader handed in.
+/// the start, as the page calls it (matched only, under a read budget no fixture reaches), with the
+/// visible set and reader handed in.
 async fn matched_through(
     conn: &mut PgConnection,
     function: &str,
@@ -474,20 +512,14 @@ async fn matched_through(
     reader: ProfileId,
     ask: &Value,
 ) -> BTreeSet<Uuid> {
-    // `function` is one of this file's literals; every value is bound.
-    let sql = format!(
-        "SELECT artifact_id FROM {function}($1::uuid[], $2::uuid, $3::jsonb, NULL::timestamptz, \
-         NULL::uuid, 100::bigint, true, NULL::bigint, NULL::bigint)"
-    );
-    sqlx::query_scalar::<_, Uuid>(&sql)
-        .bind(visible)
-        .bind(reader.uuid())
-        .bind(ask)
-        .fetch_all(&mut *conn)
+    let call = BodyCall {
+        matched_only: true,
+        read_budget: Some(bigint(ROOMY_READ)),
+        read_charge: Some(bigint(READ_CHARGE)),
+    };
+    rows_through(conn, function, visible, reader, ask, call)
         .await
         .unwrap()
-        .into_iter()
-        .collect()
 }
 
 /// A page variant named `name` that reads its rows through `pg_temp.{rows}` — a variant of the one
@@ -1045,6 +1077,97 @@ async fn the_batch_body_rechecks_the_shapes_home_for_the_reader(pool: PgPool) {
         .await,
         set(&[x]),
         "the bite: without the re-check the outsider reads under a shape it cannot read"
+    );
+}
+
+/// **A matched-only read with no read budget fails loudly; it never reads without bound.** The one
+/// body called matched-only with a NULL read budget, a NULL per-candidate charge, or both, raises.
+/// Called as the counted set calls it — every row, both NULL — it answers, and so does the counted
+/// set itself; the control, matched-only under a budget, answers too.
+///
+/// The bite, in the test: a body variant whose guard never fires (`IF p_matched_only IS NOT false`
+/// → `IF false`) answers the matched-only call with no budget, reading every candidate.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_matched_only_body_call_with_no_read_budget_raises(pool: PgPool) {
+    let w = world(&pool).await;
+    let on = resource(&pool, &w, "r1").await;
+    let x = commit(&pool, &w, on, &json!({ "unit": "ms" })).await;
+    let ask = bound(&unit_ms(w.shape));
+    let budget = Some(bigint(ROOMY_READ));
+    let charge = Some(bigint(READ_CHARGE));
+    let visible = || Some(vec![on]);
+
+    let mut conn = pool.acquire().await.unwrap();
+    assert_eq!(
+        matched_through(&mut conn, ROWS, visible(), w.owner, &ask).await,
+        set(&[x]),
+        "the control"
+    );
+    for (read_budget, read_charge) in [(None, charge), (budget, None), (None, None)] {
+        let call = BodyCall {
+            matched_only: true,
+            read_budget,
+            read_charge,
+        };
+        let raised = rows_through(&mut conn, ROWS, visible(), w.owner, &ask, call)
+            .await
+            .expect_err("a matched-only call with no read budget or charge raises");
+        assert!(
+            raised.to_string().contains("read budget"),
+            "{read_budget:?}, {read_charge:?}: {raised}"
+        );
+    }
+
+    let counted_set_call = BodyCall {
+        matched_only: false,
+        read_budget: None,
+        read_charge: None,
+    };
+    assert_eq!(
+        rows_through(&mut conn, ROWS, visible(), w.owner, &ask, counted_set_call)
+            .await
+            .expect("the counted set's call answers"),
+        set(&[x])
+    );
+    let population: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT artifact_id FROM __temper_ungated_artifact_ask_population($1, $2, $3)",
+    )
+    .bind(visible())
+    .bind(w.owner.uuid())
+    .bind(&ask)
+    .fetch_all(&mut *conn)
+    .await
+    .expect("the counted set answers");
+    assert_eq!(population, ids(&[x]));
+
+    variant(
+        &mut conn,
+        ROWS,
+        ROWS_NARGS,
+        ROWS_SIGNATURE,
+        "rows_unguarded",
+        "IF p_matched_only IS NOT false",
+        "IF false",
+    )
+    .await;
+    let unguarded = BodyCall {
+        matched_only: true,
+        read_budget: None,
+        read_charge: None,
+    };
+    assert_eq!(
+        rows_through(
+            &mut conn,
+            "pg_temp.rows_unguarded",
+            visible(),
+            w.owner,
+            &ask,
+            unguarded
+        )
+        .await
+        .expect("the bite: without the guard the call answers"),
+        set(&[x]),
+        "the bite: without the guard a matched-only call with no budget reads every candidate"
     );
 }
 

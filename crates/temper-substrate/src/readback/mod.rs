@@ -2859,16 +2859,50 @@ pub struct AskPageParams<'a> {
     pub read_charge: usize,
 }
 
-/// One page of the artifacts matching an ask, and where the next one starts.
+/// One page of the artifacts matching an ask, and where the next one starts, as the SQL decided
+/// it: each served row charged its `content_bytes` and metadata. That charge is an estimate of what
+/// the row writes, so the caller that writes the page holds it to the budget again on the bytes it
+/// writes (temper-services' `artifact_ask_read`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RetrievedAskPage {
     /// The examined rows that fit the page's budget, whole, in `(created, id)` order.
     pub artifacts: Vec<RetrievedArtifact>,
     /// The examined rows that do not fit the budget alone, in the same order, without content.
-    pub oversized: Vec<temper_core::types::artifact_ask::OversizedArtifact>,
+    pub oversized: Vec<RetrievedOversized>,
     /// The last row examined — a matching row, or the read frontier — when the set goes on past
     /// it; `None` when the page reaches the end. A page may serve nothing and still carry one.
     pub next: Option<ArtifactCursor>,
+}
+
+/// A matching row a page examined that does not fit its budget alone: named, sized and placed,
+/// without content. `created` places it among the page's served rows; the wire entry
+/// ([`RetrievedOversized::entry`]) does not carry it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetrievedOversized {
+    pub artifact_id: DataArtifactId,
+    pub resource_id: ResourceId,
+    /// The stored `content_bytes`.
+    pub content_bytes: i64,
+    pub created: DateTime<Utc>,
+}
+
+impl RetrievedOversized {
+    /// Where this row sits in the page's `(created, id)` order.
+    pub fn position(&self) -> ArtifactCursor {
+        ArtifactCursor {
+            created: self.created,
+            artifact_id: self.artifact_id,
+        }
+    }
+
+    /// The entry a page's `oversized` list writes for this row.
+    pub fn entry(&self) -> temper_core::types::artifact_ask::OversizedArtifact {
+        temper_core::types::artifact_ask::OversizedArtifact {
+            artifact_id: self.artifact_id,
+            resource_id: self.resource_id,
+            content_bytes: self.content_bytes,
+        }
+    }
 }
 
 /// The `artifacts_matching_ask` row: an `artifacts_for_resource` row's columns, plus whether it
@@ -2936,7 +2970,8 @@ impl AskPageRow {
 /// `limit` matching rows and the page budget), which of them are served with their content and
 /// which are oversized (not fitting the budget alone, carried without content), and the read
 /// frontier, when the read budget ended the scan first. Content past the budget never reaches this
-/// function. Here the examined rows are split into the two lists, and `next` is derived.
+/// function. Here the examined rows are split into the two lists, and `next` is derived. A served
+/// row's charge is an estimate of what it writes, not a measure of it (see [`RetrievedAskPage`]).
 ///
 /// **Three bounds, and the earliest ends the page:** the row limit, the page byte budget, and the
 /// read budget's frontier. `next` is the last row examined whenever the set goes on past it — a
@@ -2994,10 +3029,11 @@ fn ask_page_of(rows: Vec<AskPageRow>) -> Result<RetrievedAskPage> {
         if row.served {
             artifacts.push(row.into_artifact()?);
         } else if row.matched {
-            oversized.push(temper_core::types::artifact_ask::OversizedArtifact {
+            oversized.push(RetrievedOversized {
                 artifact_id: DataArtifactId::from(row.artifact_id),
                 resource_id: ResourceId::from(row.resource_id),
                 content_bytes: row.content_bytes,
+                created: row.created,
             });
         }
         // An examined row that did not match is the read frontier: the position the next page

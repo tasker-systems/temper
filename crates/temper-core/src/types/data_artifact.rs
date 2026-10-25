@@ -142,9 +142,10 @@ impl ArtifactCursor {
     /// Whether the store can hold this position: `created` is within Postgres's `timestamptz`
     /// range. A `DateTime<Utc>` reaches further back (to year -262,143), so a position read from a
     /// caller can name an instant no artifact was or could be created at, and binding it to the
-    /// keyset fails in the database rather than answering. The batch read's door refuses a
-    /// position this answers `false` for as a body it cannot read. The high end is past the latest
-    /// instant a `DateTime<Utc>` holds, so only the low end can refuse a position that was read.
+    /// keyset fails in the database rather than answering. The batch read refuses a position this
+    /// answers `false` for as a body it cannot read, at its door and again in its service read
+    /// before anything is read. The high end is past the latest instant a `DateTime<Utc>` holds,
+    /// so only the low end can refuse a position that was read.
     pub fn is_storable(&self) -> bool {
         (STORABLE_FROM_UNIX_SECONDS..STORABLE_UNTIL_UNIX_SECONDS)
             .contains(&self.created.timestamp())
