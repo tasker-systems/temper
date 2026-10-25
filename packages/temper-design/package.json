@@ -38,6 +38,14 @@
       "types": "./dist/highlight.d.ts",
       "default": "./dist/highlight.js"
     },
+    "./handoff": {
+      "types": "./dist/handoff.d.ts",
+      "default": "./dist/handoff.js"
+    },
+    "./ways-in": {
+      "types": "./dist/ways-in.d.ts",
+      "default": "./dist/ways-in.js"
+    },
     "./links": {
       "types": "./dist/links.d.ts",
       "default": "./dist/links.js"

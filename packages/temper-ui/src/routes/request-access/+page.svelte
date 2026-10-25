@@ -3,6 +3,7 @@
 	import { invalidateAll, goto } from '$app/navigation';
 	import { enhance } from '$app/forms';
 	import Wordmark from '$lib/components/Wordmark.svelte';
+	import { ARRIVAL } from '$lib/first-view';
 	import '../../marketing.css';
 	import type { PageData, ActionData } from './$types';
 
@@ -24,7 +25,7 @@
 
 	$effect(() => {
 		if (data.ownRequest?.status === 'approved') {
-			goto('/vault/all');
+			goto(ARRIVAL);
 		}
 	});
 
