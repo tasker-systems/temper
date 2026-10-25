@@ -43,8 +43,9 @@
 //!
 //! **Cost.** About ninety-five artifacts holding about 18 MB of content, sixteen walks and several
 //! hundred requests, each page asked twice (raw, and through the client). It runs for 34–41
-//! seconds locally, heavier than this suite's usual test, so `.config/nextest.toml` gives this
-//! binary a measured timeout override; [`WALK_BUDGET`] bounds it inside that. The suite gates its
+//! seconds locally and was measured at 77–140 seconds in CI, heavier than this suite's usual test,
+//! so `.config/nextest.toml` gives this binary a measured timeout override; [`WALK_BUDGET`] bounds
+//! it inside that. The suite gates its
 //! tests by what they need (`test-db`, `test-embed`), not by their weight, so this runs under
 //! `test-db` with the rest.
 
@@ -88,14 +89,14 @@ const RUST_CLIENT_CONTENT_DEPTH: usize = 124;
 const PAGE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// How long the test body may run, counted from the body's start, building the world included.
-/// The test runner kills this binary at 240 seconds (its override in `.config/nextest.toml`), and
+/// The test runner kills this binary at 300 seconds (its override in `.config/nextest.toml`), and
 /// every collected finding is lost with it. So once this is spent no further walk or page starts,
 /// and each one skipped is a finding. One page already in flight can still take [`PAGE_TIMEOUT`]
-/// twice (raw, and through the client), so the body ends by 210 seconds, inside the kill, however
+/// twice (raw, and through the client), so the body ends by 270 seconds, inside the kill, however
 /// much of the budget building the world takes, up to the whole of it. Everything before the body
 /// (process start, the harness creating the test database and applying the migrations) shares the
 /// 30 seconds the body leaves.
-const WALK_BUDGET: Duration = Duration::from_secs(180);
+const WALK_BUDGET: Duration = Duration::from_secs(240);
 
 /// The page limits the `tag`-present ask, the ask with no predicates and the long family are
 /// walked at: absent (the drain default), 1, a small limit that splits the corpus unevenly, and
