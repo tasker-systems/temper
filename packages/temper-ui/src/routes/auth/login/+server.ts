@@ -9,6 +9,7 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import { redirect } from '@sveltejs/kit';
+import { ARRIVAL } from '$lib/first-view';
 import { authorizeUrl } from '$lib/server/oidc';
 import { writePkce } from '$lib/server/session';
 import type { RequestHandler } from './$types';
@@ -19,7 +20,7 @@ function base64url(buf: Buffer): string {
 
 export const GET: RequestHandler = async ({ url, cookies, locals }) => {
 	// If already authenticated, send the user where they were headed.
-	const returnTo = url.searchParams.get('returnTo') ?? '/vault/all';
+	const returnTo = url.searchParams.get('returnTo') ?? ARRIVAL;
 	if (locals.user) {
 		throw redirect(303, returnTo);
 	}

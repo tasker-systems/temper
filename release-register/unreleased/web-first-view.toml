@@ -1,0 +1,16 @@
+title    = "The web's first view starts from the reader's own work"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["clients"]
+status   = "signal-only"
+body = '''
+On the web, `/vault` is now a first view instead of a redirect to the all-resources grid, and signing in, the sign-in callback and request-access all land there unless the reader was headed somewhere else. It shows the reader's latest handoff (their newest session, and the next steps it recorded, quoted as written and never summarised). It shows their standing ways in: goals, in progress and sessions, each bounded at 8, growing in place by 8, ending with its omission sentence, and saying it is ordered most recently updated first. And it shows the 5 most recently updated resources, which says it covers everything the reader can read, because the web has no signal yet for where a reader works. Each region reads, fails and gives up on its own. The sidebar gains a fixed **Home** entry at its head; on the collapsed rail ⌂ is Home and ≡ is All resources. Nothing in the nav moves with activity.
+
+The ways in are the reader's **own** work, read by ownership (`owner=@me`), and their words say "of yours": work a reader does on something someone else owns is not in them. Resume is deliberately absent until a read of what a reader changed exists.
+
+`@tasker-systems/temper-design` gains `./handoff` (`HANDOFF_LABEL`, `NEXT_BOUND`, and `nextSection`, moved unchanged from the desktop) and `./ways-in` (`WAYS_IN`, `WAY_IN_BOUND`, `WAY_IN_ORDER`). Each way in carries its name, its scope words and a filter that includes `owner: '@me'`. A surface importing `./ways-in` takes on the owner narrowing and the new scope words. That includes the desktop, whose manifest today lists everything visible, with the sessions scope "sessions, most recent first".
+
+Who observes it: a reader signing in to the web, or opening `/vault`; and a surface importing the package. Nothing on the HTTP, MCP or CLI surfaces changes.
+
+Release relevance: signal-only. Additive (a page, two modules) and behavioral (where arrival lands).
+'''

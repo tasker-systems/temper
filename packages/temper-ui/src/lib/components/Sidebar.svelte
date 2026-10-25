@@ -2,6 +2,7 @@
 	import { page } from '$app/stores';
 	import ContextNavGroup from './ContextNavGroup.svelte';
 	import ChromeMenu from './ChromeMenu.svelte';
+	import { ARRIVAL } from '$lib/first-view';
 	import { navContextsState } from '$lib/nav-groups';
 	import { parseGraphAddress } from '$lib/vault-url';
 	import { sidebarGroups } from '$lib/stores/sidebar.svelte';
@@ -40,7 +41,10 @@
 	let navState = $derived(navContextsState(contexts, teams, selfProfileId));
 
 	let pathname = $derived($page.url.pathname as string);
-	let isAllActive = $derived(pathname === '/vault/all' || pathname === '/vault');
+	// Home is the first view, where arrival lands; it holds a fixed place at the head of the nav,
+	// and nothing in the nav moves with the reader's activity.
+	let isHomeActive = $derived(pathname === ARRIVAL);
+	let isAllActive = $derived(pathname === '/vault/all');
 	// The UNADDRESSED graph door (`/graph/@me`), which is the whole footprint with no place
 	// named. A graph addressed at a place (`?in=ctx:@me/temper`) belongs to that context's own
 	// Graph sub-link, so exclude it here to keep exactly one nav item lit.
@@ -98,6 +102,16 @@
 	</div>
 	{#if collapsed}
 		<a
+			href={ARRIVAL}
+			class="block px-3 py-2 text-sm {isHomeActive
+				? 'text-tp-text'
+				: 'text-tp-text-muted hover:text-tp-text'} text-center"
+			title="Home"
+			aria-label="Home"
+		>
+			⌂
+		</a>
+		<a
 			href="/vault/all"
 			class="block px-3 py-2 text-sm {isAllActive
 				? 'text-tp-text'
@@ -105,7 +119,7 @@
 			title="All resources"
 			aria-label="All resources"
 		>
-			⌂
+			≡
 		</a>
 		<a
 			href="/graph/@me"
@@ -123,6 +137,17 @@
 			<div class="px-3 pt-2 pb-1 text-[10px] uppercase tracking-widest text-tp-text-subtle">
 				Vault
 			</div>
+			<a
+				href={ARRIVAL}
+				class="flex items-center gap-2 px-3 py-1.5 text-sm transition-colors
+				       {isHomeActive
+					? 'border-l-2 border-tp-accent bg-tp-accent-wash text-tp-text pl-[calc(0.75rem-2px)]'
+					: 'text-tp-text-muted hover:text-tp-text hover:bg-tp-accent-hover'}"
+			>
+				<span class="w-1.5 h-1.5 rounded-sm {isHomeActive ? 'bg-tp-accent' : 'bg-tp-text-faint'}"
+				></span>
+				Home
+			</a>
 			<a
 				href="/vault/all"
 				class="flex items-center gap-2 px-3 py-1.5 text-sm transition-colors

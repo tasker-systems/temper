@@ -8,7 +8,7 @@
  *
  * The load function requires a session (else → /auth/login) but does NOT
  * require system_access. If the user already has system access (e.g. they
- * navigate here directly after approval), bounce them to /vault/all.
+ * navigate here directly after approval), bounce them to the first view.
  *
  * Form actions:
  *   - default `submit` → POST /api/access/requests
@@ -16,6 +16,7 @@
  */
 
 import { fail, redirect } from '@sveltejs/kit';
+import { ARRIVAL } from '$lib/first-view';
 import { ApiError, apiDelete, apiGet, apiPost } from '$lib/server/api';
 import type { JoinRequest, PublicSystemSettings } from '$lib/types';
 import type { Actions, PageServerLoad } from './$types';
@@ -27,7 +28,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	}
 
 	if (locals.entitlements?.system_access) {
-		throw redirect(303, '/vault/all');
+		throw redirect(303, ARRIVAL);
 	}
 
 	const [ownRequest, settings] = await Promise.all([
