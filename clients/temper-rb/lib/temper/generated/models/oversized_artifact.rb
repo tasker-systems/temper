@@ -14,7 +14,7 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # A matching artifact too large for a page's byte budget by itself, its content and the rest of its row together: named, sized, and left to be read by id.
+  # A matching artifact too large for a page's byte budget by itself, its content and the rest of its row together, or too deeply nested for a page, its content more than 96 arrays or objects deep: named, sized, and left to be read by id. A page holds content to that depth so that every first-party client parses every page. A read by id writes the content less deeply, but a client's own nesting limit can refuse that read too when the content nests very deeply.
   class OversizedArtifact < ApiModelBase
     # A `kb_data_artifacts.id` value — one schema-boundable structured datum owned by a resource.
     attr_accessor :artifact_id

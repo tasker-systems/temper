@@ -1227,11 +1227,13 @@ pub enum DataArtifactAction {
     /// with `data-artifact schema show <shape-id>`). Send it whole with `--ask`, or build it with
     /// `--shape` and one `--where` per predicate; the two forms send the same document. The answer
     /// is `{shape, artifacts, oversized, population, ordered_by, next, amended_since}`, oldest
-    /// first. The first page's `population` counts read the whole population, outside the page's
-    /// read budget. To continue, run the same ask with `--after` set to the previous page's `next`,
-    /// passed back exactly; only `next: null` ends the answer, and a page may hold no artifacts yet
-    /// carry a `next` when it stopped on its read budget. An artifact in `oversized` is too
-    /// large for a page: read it whole with `data-artifact get <artifact-id>`.
+    /// first. To count the first page's `population`, the page reads the whole population, outside
+    /// its read budget. To continue, run the same ask with `--after` set to the previous page's
+    /// `next`, passed back exactly; only `next: null` ends the answer, and a page may hold no
+    /// artifacts yet carry a `next` when it stopped on its read budget. An artifact in `oversized`
+    /// is too large or too deeply nested for a page (content more than 96 arrays or objects deep),
+    /// and the page goes on: read it whole with `data-artifact get <artifact-id>`, though a
+    /// client's own nesting limit can refuse that read too when the content nests very deeply.
     ///
     /// This is an enumeration, and `data-artifact list` is addressed. An ask reads across every
     /// resource you can see in the shape's home, and like listing and search it leaves out a

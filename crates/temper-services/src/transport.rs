@@ -125,13 +125,23 @@ pub const VERCEL_RESPONSE_BODY_CAP_BYTES: usize = 4_500_000;
 /// measure: `content_bytes` is the content's compact length as committed, and a page serves it
 /// re-serialized from storage, which prints a number from 1e16 up to the 64-bit integer limits in
 /// full and is read back as an integer (`1e19`, committed as the five bytes `1e+19`, is served
-/// as twenty digits). So the service (`artifact_ask_read`) measures each served row as it writes it and walks the
-/// rows in order against this budget: a row longer than the budget alone moves to `oversized` in
-/// its place, and a row that fits alone but not in what is left ends the page, with `next` the
-/// last row kept, and opens the next page. `serde_json`'s `float_roundtrip`, which this crate and
-/// temper-client declare, makes a float parsed back from storage land on the value committed, so
-/// it is served as committed, and the MCP relay, which parses the page and writes it again, writes
-/// each float as the API did.
+/// as twenty digits). So the service (`artifact_ask_read`) measures each served row as it writes
+/// it and walks the rows in order against this budget: a row longer than the budget alone moves
+/// to `oversized` in its place, and a row that fits alone but not in what is left ends the page,
+/// with `next` the last row kept, and opens the next page. `serde_json`'s `float_roundtrip`,
+/// which this crate and temper-client declare, makes a float parsed back from storage land on the
+/// value committed, so it is served as committed, and the MCP relay, which parses the page and
+/// writes it again, writes each float as the API did.
+///
+/// **What a page holds before it is cut.** The service measures rows the SQL has already served,
+/// so it holds every served row, parsed, before it drops any. The charge caps what it holds: the
+/// rows the SQL serves are charged at most this budget, and an oversized row's content never
+/// leaves the SQL. So it is bounded, but by the charge, and at a larger factor than what is
+/// written. Storage sends a number in plain form, so `5e-324`, charged its 6 bytes, arrives as 326
+/// characters, and the text Postgres sends for a page can be tens of times its charge. Parsed, a
+/// `serde_json::Value` can be about 80 times its charged bytes: a one-key object, `{"a":0}`,
+/// charged 8 bytes, allocates a map node of several hundred. Both factors are estimates, from
+/// storage's printing and from the types' layout, not measurements.
 ///
 /// # 2,000,000 bytes, under [`VERCEL_RESPONSE_BODY_CAP_BYTES`] twice over
 ///
@@ -153,6 +163,23 @@ pub const ARTIFACT_ROW_FIXED_BYTES: usize = 1024;
 /// The most a batch-read page's envelope, or the MCP relay's around it, costs (see
 /// [`ARTIFACT_ASK_PAGE_BYTES`]).
 pub const ARTIFACT_PAGE_ENVELOPE_BYTES: usize = 1024;
+
+/// The deepest content a batch-read page serves. A served row whose content nests deeper is named
+/// in the page's `oversized` in its place, as a row too long for the page is, and the page goes on
+/// (`artifact_ask_read`). **Depth** counts each array or object level, with the content's root at
+/// 1: `{}` and `[]` are 1 deep, `{"a":[0]}` is 2, and a string or a number is 0.
+///
+/// # 96: the strictest first-party client's nesting limit, less the levels above the content
+///
+/// A page a client cannot parse fails for every reader of the ask through that client, and no
+/// `limit` or `next` steps past it. The strictest first-party client is the generated Ruby SDK
+/// (`clients/temper-rb`), which parses a body as `JSON.parse("[#{body}]")` and sets no
+/// `max_nesting`, so Ruby's default of 100 levels applies, and its `[ ]` takes one of them. An ask
+/// page puts three levels above each row's content: the `AskResponse` object, its `artifacts`
+/// array and the `ArtifactView` object. So content may nest 100 − 1 − 3 = 96 deep. serde_json,
+/// which temperkb-client and the MCP relay parse with, allows 127 levels, so a Rust client reads
+/// an ask page whose content nests up to 124 deep.
+pub const ARTIFACT_ASK_CONTENT_DEPTH: usize = 96;
 
 /// The most content one page of a batch read may read to find its rows, beside what it sends
 /// ([`ARTIFACT_ASK_PAGE_BYTES`]). The matcher reads a candidate's whole content to decide whether
@@ -318,9 +345,9 @@ mod tests {
     use super::*;
 
     /// **A full page of a batch read fits the response cap after the MCP relay escapes it**, by the
-    /// arithmetic on [`ARTIFACT_ASK_PAGE_BYTES`]: the budget charges every byte a row writes, so the
-    /// body is the budget and the envelope. Bite: the budget raised to 2,300,000, or the doubling
-    /// dropped from the sum.
+    /// arithmetic on [`ARTIFACT_ASK_PAGE_BYTES`]: the service holds every byte a row writes to the
+    /// budget, so the body is the budget and the envelope. Bite: the budget raised to 2,300,000, or
+    /// the doubling dropped from the sum.
     #[test]
     fn a_full_batch_page_fits_the_response_cap_after_the_relay_escapes_it() {
         let body = ARTIFACT_ASK_PAGE_BYTES + ARTIFACT_PAGE_ENVELOPE_BYTES;
@@ -394,6 +421,22 @@ mod tests {
         );
     }
 
+    /// Whether `sql` defines the page's function: `CREATE`, or `CREATE OR REPLACE`, `FUNCTION`,
+    /// and the name with or without its `public.` schema, read with every run of whitespace as one
+    /// space and none before the opening parenthesis.
+    fn defines_the_page(sql: &str) -> bool {
+        let words = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+        let words = words.replace(" (", "(");
+        let defines = |create: &str, schema: &str| {
+            words.contains(&format!(
+                "{create} FUNCTION {schema}artifacts_matching_ask("
+            ))
+        };
+        ["CREATE", "CREATE OR REPLACE"]
+            .iter()
+            .any(|create| defines(create, "") || defines(create, "public."))
+    }
+
     /// The fields of a row whose JSON string has one width whatever the row: the ids and the
     /// timestamp.
     const FIXED_WIDTH_STRINGS: [&str; 4] =
@@ -416,10 +459,12 @@ mod tests {
     /// as the latest migration that defines `artifacts_matching_ask` writes it. A string field
     /// added to `ArtifactView` later has to be named in the literal below to compile, and once
     /// serialized it is a string key in neither list, so this goes red until the SQL measures it
-    /// or it is declared fixed width; a later migration that redefines the page is the one read.
+    /// or it is declared fixed width; a later migration that redefines the page is the one read,
+    /// schema-qualified (`public.artifacts_matching_ask(`) or not, `OR REPLACE` or not.
     /// Bites: a sixth text field on `ArtifactView`; `"intent"` dropped from [`MEASURED_STRINGS`];
     /// the page's `to_json(d.intent)` term removed from the migration, or moved out of
-    /// `metadata_bytes` into another column.
+    /// `metadata_bytes` into another column; `|| defines(create, "public.")` dropped from
+    /// `defines_the_page`.
     #[test]
     fn every_string_a_row_writes_is_of_one_width_or_measured_by_the_page() {
         use temper_core::types::data_artifact::ArtifactView;
@@ -447,13 +492,20 @@ mod tests {
                 .with_timezone(&chrono::Utc),
             content: Some(content.clone()),
         };
+        for definition in [
+            "CREATE FUNCTION artifacts_matching_ask(",
+            "CREATE OR REPLACE FUNCTION artifacts_matching_ask (",
+            "CREATE FUNCTION public.artifacts_matching_ask(",
+            "CREATE OR REPLACE FUNCTION\n    public.artifacts_matching_ask(",
+        ] {
+            assert!(defines_the_page(definition), "{definition}");
+        }
+        assert!(!defines_the_page(
+            "SELECT * FROM artifacts_matching_ask(p, a)"
+        ));
         let page_sql = crate::MIGRATOR
             .iter()
-            .filter(|m| {
-                m.sql.contains("CREATE FUNCTION artifacts_matching_ask(")
-                    || m.sql
-                        .contains("CREATE OR REPLACE FUNCTION artifacts_matching_ask(")
-            })
+            .filter(|m| defines_the_page(&m.sql))
             .max_by_key(|m| m.version)
             .expect("a migration defines the page")
             .sql

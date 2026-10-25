@@ -184,9 +184,11 @@ once. A shape you cannot read is refused exactly as one that does not exist.
   a page can hold no artifacts and still carry a `next`. An empty page with a `next` means keep
   going, never "nothing matches". The position carries no authority: every page checks the ask
   again for you.
-- **`oversized` is fetched by id.** A page is also bounded in bytes. A matching artifact too large
-  for any page is named in `oversized`, in order, by id, resource and size, without its content;
-  read it whole by id. It does not end the page.
+- **`oversized` is fetched by id.** A page is also bounded in bytes, and in how deeply its content
+  nests, so that temper's own clients parse every page. A matching artifact too large for a page, or
+  whose content nests more than 96 arrays or objects deep, is named in `oversized`, in order, by
+  id, resource and size, without its content; read it whole by id. It does not end the page. A
+  client's own nesting limit can refuse even that read of content nested very deeply.
 - **`population` is on the first page only**: the ask's governed artifacts by shape state, and how
   many matched — the same counts `find-resources-with`'s trace gives. Later pages carry `null`.
   The counts are exact, so to make them the first page matches every governed artifact in the home;

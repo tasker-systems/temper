@@ -26,7 +26,7 @@ from pydantic_core import to_jsonable_python
 
 class OversizedArtifact(BaseModel):
     """
-    A matching artifact too large for a page's byte budget by itself, its content and the rest of its row together: named, sized, and left to be read by id.
+    A matching artifact too large for a page's byte budget by itself, its content and the rest of its row together, or too deeply nested for a page, its content more than 96 arrays or objects deep: named, sized, and left to be read by id. A page holds content to that depth so that every first-party client parses every page. A read by id writes the content less deeply, but a client's own nesting limit can refuse that read too when the content nests very deeply.
     """ # noqa: E501
     artifact_id: UUID = Field(description="A `kb_data_artifacts.id` value — one schema-boundable structured datum owned by a resource.")
     content_bytes: StrictInt = Field(description="The artifact's stored `content_bytes`: its content's length in compact JSON as committed. The content a page or a read by id serves can be longer, because storage prints a number from 1e16 up to the 64-bit integer limits in full (`1e19`, committed as the five bytes `1e+19`, is served as twenty digits). A page measures what it would write, so an artifact can be named here though its `content_bytes` alone would fit a page.")

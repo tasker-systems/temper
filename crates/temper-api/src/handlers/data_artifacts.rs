@@ -224,12 +224,15 @@ pub async fn get_by_id(
 ///
 /// Every page is bounded three ways, and the first bound reached ends it: by `limit` (absent: 50;
 /// at least 1 and at most 200), by a byte budget over what the page sends, and by a budget over
-/// what it may read to find its rows. A matching artifact too large for any page is named in
-/// `oversized`, in order, by id and size, and is read whole by id (`GET
-/// /api/data-artifacts/{artifact_id}`). When the read budget ends a page, `next` is the last
-/// artifact it read, matched or not, so a page can carry no artifacts and still a `next`: only
-/// `next: null` ends the enumeration. Continue by sending the same ask with `next` as `after`;
-/// every page validates the ask again for its caller, so the position carries no authority.
+/// what it may read to find its rows. A matching artifact too large for any page, or too deeply
+/// nested for one (content more than 96 arrays or objects deep, so that every first-party client
+/// parses every page), is named in `oversized`, in order, by id and size, and the page goes on.
+/// Read it whole by id (`GET /api/data-artifacts/{artifact_id}`); a client's own nesting limit can
+/// refuse that read too when the content nests very deeply. When the read budget ends a page,
+/// `next` is the last artifact it read, matched or not, so a page can carry no artifacts and still
+/// a `next`: only `next: null` ends the enumeration. Continue by sending the same ask with `next`
+/// as `after`; every page validates the ask again for its caller, so the position carries no
+/// authority.
 ///
 /// `population` counts the ask's whole governed population on the first page and is `null` after
 /// it. Those counts are exact, so the first page matches every governed artifact of the home to

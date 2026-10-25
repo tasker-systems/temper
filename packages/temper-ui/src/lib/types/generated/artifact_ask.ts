@@ -108,14 +108,15 @@ export type AskResponse = {
  */
 shape: AskedShape, 
 /**
- * The matching artifacts that fit this page's byte budget, each whole: `content` is the
- * stored content, absent for an artifact committed with no bytes. `resource_id` is
+ * The matching artifacts that fit this page's byte budget and depth, each whole: `content` is
+ * the stored content, absent for an artifact committed with no bytes. `resource_id` is
  * attribution, not a set.
  */
 artifacts: Array<ArtifactView>, 
 /**
- * Matching artifacts too large for any page's byte budget, in order among the rest, by id and
- * size and without content. Each is read whole by id (`GET /api/data-artifacts/{artifact_id}`).
+ * Matching artifacts too large for any page's byte budget, or too deeply nested for a page
+ * (content more than 96 arrays or objects deep), in order among the rest, by id and size and
+ * without content. Each is read whole by id (`GET /api/data-artifacts/{artifact_id}`).
  */
 oversized: Array<OversizedArtifact>, 
 /**
@@ -176,7 +177,10 @@ export type JsonType = "null" | "boolean" | "integer" | "number" | "string" | "a
 
 /**
  * A matching artifact too large for a page's byte budget by itself, its content and the rest of its
- * row together: named, sized, and left to be read by id.
+ * row together, or too deeply nested for a page, its content more than 96 arrays or objects deep:
+ * named, sized, and left to be read by id. A page holds content to that depth so that every
+ * first-party client parses every page. A read by id writes the content less deeply, but a
+ * client's own nesting limit can refuse that read too when the content nests very deeply.
  */
 export type OversizedArtifact = { artifact_id: DataArtifactId, resource_id: ResourceId, 
 /**

@@ -10,8 +10,8 @@
 //! the population on the first page alone, a continuation answering on the row its first page named
 //! after an amendment — and reading its states against the version now in force — readability
 //! re-decided on every page, unreadable answering as absent, an unstorable position refused before
-//! anything is read, served content measured against what was committed, and the page's byte
-//! budget held on what the page writes.
+//! anything is read, served content measured against what was committed, the page's byte
+//! budget held on what the page writes, and no page served that a first-party client cannot parse.
 
 use axum::http::StatusCode;
 use serde_json::json;
@@ -27,7 +27,10 @@ use temper_core::types::query::{ArtifactAskPopulation, PlanRefusal, RefusalReaso
 use temper_services::backend::artifact_ask_read::ask_page;
 use temper_services::backend::substrate_read::get_artifact;
 use temper_services::error::{ApiError, ApiResult};
-use temper_services::transport::{ARTIFACT_ASK_PAGE_BYTES, ARTIFACT_ROW_FIXED_BYTES};
+use temper_services::transport::{
+    ARTIFACT_ASK_CONTENT_DEPTH, ARTIFACT_ASK_PAGE_BYTES, ARTIFACT_PAGE_ENVELOPE_BYTES,
+    ARTIFACT_ROW_FIXED_BYTES, VERCEL_RESPONSE_BODY_CAP_BYTES,
+};
 use temper_substrate::ids::{ContextId, DataArtifactId, EntityId, ProfileId, ResourceId};
 use temper_substrate::payloads::{AnchorRef, ArtifactIntent, EnforcementMode, KindOwner};
 use temper_substrate::scenario::bootseed;
@@ -424,6 +427,25 @@ fn page_bytes(page: &AskResponse) -> usize {
         + page.oversized.len() * ARTIFACT_ROW_FIXED_BYTES
 }
 
+/// **The whole page fits the platform's response cap on both doors that answer it**: the API's
+/// body, the page written compactly as the route writes it, and the MCP tool's answer
+/// (`ask_result`), serialized, with the JSON-RPC envelope's allowance beside it.
+fn assert_fits_the_response_cap(page: &AskResponse) {
+    let body = serde_json::to_vec(page).expect("the page serializes").len();
+    assert!(
+        body <= VERCEL_RESPONSE_BODY_CAP_BYTES,
+        "the API body is {body} bytes"
+    );
+    let answered = temper_mcp::tools::data_artifacts::ask_result(page).expect("answered");
+    let relayed = serde_json::to_string(&answered)
+        .expect("the answer serializes")
+        .len();
+    assert!(
+        relayed + ARTIFACT_PAGE_ENVELOPE_BYTES <= VERCEL_RESPONSE_BODY_CAP_BYTES,
+        "the tool's answer is {relayed} bytes, before the JSON-RPC envelope"
+    );
+}
+
 /// A value's compact JSON length, as `content_bytes` counts it.
 fn compact_len(value: &serde_json::Value) -> i64 {
     i64::try_from(serde_json::to_string(value).unwrap().len()).unwrap()
@@ -535,7 +557,8 @@ fn plain_integers(count: usize, n: usize) -> serde_json::Value {
 /// in its place, and the rows after it are served.** A holds 100,000 copies of `1e19`: charged
 /// about 0.6 MB, it writes about 2.1 MB, past `ARTIFACT_ASK_PAGE_BYTES`; read whole by id, it shows
 /// both. B and C are small matches after it. The page serves B and C, names A in `oversized` with
-/// its stored `content_bytes`, and ends the enumeration, its rows as written within the budget.
+/// its stored `content_bytes`, and ends the enumeration, its rows as written within the budget and
+/// the whole page, on the API and through the MCP tool, within the response cap.
 ///
 /// Bite (perl, Rust): in `artifact_ask_read::read`, `within_budget(page, ARTIFACT_ASK_PAGE_BYTES)`
 /// → `within_budget(page, usize::MAX)` — the enforcement removed: A is served at 2.1 MB, and the
@@ -577,13 +600,15 @@ async fn a_row_served_longer_than_the_page_is_named_oversized_and_the_rows_after
     );
     assert_eq!(page.next, None);
     assert!(page_bytes(&page) <= ARTIFACT_ASK_PAGE_BYTES);
+    assert_fits_the_response_cap(&page);
 }
 
 /// **Two rows whose charges fit one page together but whose served lengths do not are two pages.**
 /// A and B each hold 60,000 copies of `1e19`: each is charged about 0.36 MB and writes about
 /// 1.26 MB, so together they fit a page as charged, and each fits one alone as written, but not
 /// both. The first page serves A and ends there, `next` at A; the second, continuing from it,
-/// serves B and ends the enumeration. Each page's rows as written are within the budget.
+/// serves B and ends the enumeration. Each page's rows as written are within the budget, and each
+/// whole page, on the API and through the MCP tool, within the response cap.
 ///
 /// Bite (perl, Rust): as for the oversized row above, `within_budget(page, ARTIFACT_ASK_PAGE_BYTES)`
 /// → `within_budget(page, usize::MAX)` — the first page serves both and answers `next: None`.
@@ -604,6 +629,7 @@ async fn two_rows_that_fit_a_page_as_charged_but_not_as_written_are_two_pages(po
     });
     assert_eq!(first.next, at_a, "`next` is A, the last row the page kept");
     assert!(page_bytes(&first) <= ARTIFACT_ASK_PAGE_BYTES);
+    assert_fits_the_response_cap(&first);
 
     let second = ask_page(&pool, w.owner, &request(w.shape, 50, first.next))
         .await
@@ -612,6 +638,7 @@ async fn two_rows_that_fit_a_page_as_charged_but_not_as_written_are_two_pages(po
     assert!(second.oversized.is_empty());
     assert_eq!(second.next, None);
     assert!(page_bytes(&second) <= ARTIFACT_ASK_PAGE_BYTES);
+    assert_fits_the_response_cap(&second);
 
     let (row_a, row_b) = (&first.artifacts[0], &second.artifacts[0]);
     assert!(
@@ -622,6 +649,76 @@ async fn two_rows_that_fit_a_page_as_charged_but_not_as_written_are_two_pages(po
         written_row(row_a) + written_row(row_b) > ARTIFACT_ASK_PAGE_BYTES,
         "the fixture: A and B do not fit one page as written"
     );
+}
+
+/// Content that matches the ask and nests exactly `levels` deep, as `ARTIFACT_ASK_CONTENT_DEPTH`
+/// counts it (`levels` at least 2): the root object, and a chain of arrays under `deep`.
+fn nested(count: usize, levels: usize) -> serde_json::Value {
+    let mut deep = json!([]);
+    for _ in 2..levels {
+        deep = serde_json::Value::Array(vec![deep]);
+    }
+    json!({ "unit": "ms", "count": count, "deep": deep })
+}
+
+/// **A row whose content nests deeper than a first-party client parses on an ask page is named
+/// in `oversized`, in its place, and the rows after it are served; a row nested exactly at
+/// the limit is served, and the page parses.** A nests `ARTIFACT_ASK_CONTENT_DEPTH` deep, B one
+/// level more, C 125 deep (past the 124 a Rust client parses on an ask page), and D is a small
+/// match after them. The page, written as the route writes it, reads back as an `AskResponse`
+/// through `serde_json::from_slice` with its default recursion limit. It serves A and D, and names
+/// B and C in `oversized` with their stored `content_bytes`; B and C are still read whole by id.
+/// The whole page fits the response cap on the API and through the MCP tool.
+///
+/// Bite (perl, Rust): in `artifact_ask_read::written`, `if bytes > budget || too_deep {` →
+/// `if bytes > budget {` — the depth check removed: B and C are served, and the page no longer
+/// parses, so the `from_slice` assertion, the first on the page, goes red.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_row_nested_past_what_a_client_parses_is_named_oversized_and_the_page_goes_on(
+    pool: PgPool,
+) {
+    let w = world(&pool).await;
+    let a = commit(&pool, &w, nested(0, ARTIFACT_ASK_CONTENT_DEPTH)).await;
+    let b = commit(&pool, &w, nested(1, ARTIFACT_ASK_CONTENT_DEPTH + 1)).await;
+    let c = commit(&pool, &w, nested(2, 125)).await;
+    let d = commit(&pool, &w, json!({ "unit": "ms", "count": 3 })).await;
+
+    let page = ask_page(&pool, w.owner, &request(w.shape, 50, None))
+        .await
+        .expect("the owner asks its own shape");
+    let body = serde_json::to_vec(&page).expect("the page serializes");
+    let parsed: AskResponse = serde_json::from_slice(&body)
+        .expect("the page parses with serde_json's default recursion limit");
+    assert_eq!(
+        served(&parsed),
+        served(&page),
+        "the page reads back as written"
+    );
+    assert_eq!(
+        served(&page),
+        [a.uuid(), d.uuid()],
+        "nested at the limit, A is served, and D after the rows named"
+    );
+
+    let mut oversized = Vec::new();
+    for id in [b, c] {
+        let whole = get_artifact(&pool, w.owner, id)
+            .await
+            .expect("read by id")
+            .expect("visible to its owner");
+        assert!(whole.content.is_some(), "read whole by id");
+        oversized.push(OversizedArtifact {
+            artifact_id: id,
+            resource_id: ResourceId::from(w.on),
+            content_bytes: whole.content_bytes,
+        });
+    }
+    assert_eq!(
+        page.oversized, oversized,
+        "B and C are named in their places, with their stored content_bytes"
+    );
+    assert_eq!(page.next, None);
+    assert_fits_the_response_cap(&page);
 }
 
 /// **An `after` the store cannot hold is refused by the service read itself, before it reads

@@ -604,7 +604,8 @@ Contexts are workspaces that group resources. The typical flow:
   paths) answers `{"artifacts": [...], "oversized": [...], "next": ... | null, ...}`. To continue,
   call it again with the same `ask` and `next` passed back unchanged as `after`. Only a `null`
   `next` ends the answer: a page that stopped on its read budget can hold no artifacts and still
-  carry a `next`, so keep going. An artifact in `oversized` is too large for a page; read it whole
-  with `get_data_artifact`.
+  carry a `next`, so keep going. An artifact in `oversized` is too large or too deeply nested for
+  a page (content more than 96 arrays or objects deep); read it whole with `get_data_artifact`,
+  though a client's own nesting limit can refuse that read too when the content nests very deeply.
 - **Access control is automatic** — you only see resources and contexts your
   authenticated profile has access to. No need to handle permissions.
