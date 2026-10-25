@@ -197,7 +197,9 @@ once. A shape you cannot read is refused exactly as one that does not exist.
   nests, so that temper's own clients parse every page. A matching artifact too large for a page, or
   whose content nests more than 96 arrays or objects deep, is named in `oversized`, in order, by
   id, resource and size, without its content; read it whole by id. It does not end the page. A
-  client's own nesting limit can refuse even that read of content nested very deeply.
+  client's own nesting limit can refuse even that read of content nested very deeply, and on the
+  hosted deployment the read is refused when the content, as storage serves it, is longer than the
+  platform's response cap (storage prints some numbers longer than they were committed).
 - **`population` is on the first page only**: the ask's governed artifacts by shape state, and how
   many matched — the same counts `find-resources-with`'s trace gives. Later pages carry `null`.
   The counts are exact, so to make them the first page matches every governed artifact in the home;

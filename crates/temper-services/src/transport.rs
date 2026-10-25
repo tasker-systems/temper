@@ -140,7 +140,7 @@ pub const VERCEL_RESPONSE_BODY_CAP_BYTES: usize = 4_500_000;
 /// written. Storage sends a number in plain form, so `5e-324`, charged its 6 bytes, arrives as 326
 /// characters, and the text Postgres sends for a page can be tens of times its charge. Parsed, a
 /// `serde_json::Value` can be about 80 times its charged bytes: a one-key object, `{"a":0}`,
-/// charged 8 bytes, allocates a map node of several hundred. Both factors are estimates, from
+/// charged 7 bytes, allocates a map node of several hundred. Both factors are estimates, from
 /// storage's printing and from the types' layout, not measurements.
 ///
 /// # 2,000,000 bytes, under [`VERCEL_RESPONSE_BODY_CAP_BYTES`] twice over
@@ -163,23 +163,6 @@ pub const ARTIFACT_ROW_FIXED_BYTES: usize = 1024;
 /// The most a batch-read page's envelope, or the MCP relay's around it, costs (see
 /// [`ARTIFACT_ASK_PAGE_BYTES`]).
 pub const ARTIFACT_PAGE_ENVELOPE_BYTES: usize = 1024;
-
-/// The deepest content a batch-read page serves. A served row whose content nests deeper is named
-/// in the page's `oversized` in its place, as a row too long for the page is, and the page goes on
-/// (`artifact_ask_read`). **Depth** counts each array or object level, with the content's root at
-/// 1: `{}` and `[]` are 1 deep, `{"a":[0]}` is 2, and a string or a number is 0.
-///
-/// # 96: the strictest first-party client's nesting limit, less the levels above the content
-///
-/// A page a client cannot parse fails for every reader of the ask through that client, and no
-/// `limit` or `next` steps past it. The strictest first-party client is the generated Ruby SDK
-/// (`clients/temper-rb`), which parses a body as `JSON.parse("[#{body}]")` and sets no
-/// `max_nesting`, so Ruby's default of 100 levels applies, and its `[ ]` takes one of them. An ask
-/// page puts three levels above each row's content: the `AskResponse` object, its `artifacts`
-/// array and the `ArtifactView` object. So content may nest 100 − 1 − 3 = 96 deep. serde_json,
-/// which temperkb-client and the MCP relay parse with, allows 127 levels, so a Rust client reads
-/// an ask page whose content nests up to 124 deep.
-pub const ARTIFACT_ASK_CONTENT_DEPTH: usize = 96;
 
 /// The most content one page of a batch read may read to find its rows, beside what it sends
 /// ([`ARTIFACT_ASK_PAGE_BYTES`]). The matcher reads a candidate's whole content to decide whether
@@ -422,17 +405,18 @@ mod tests {
     }
 
     /// Whether `sql` defines the page's function: `CREATE`, or `CREATE OR REPLACE`, `FUNCTION`,
-    /// and the name with or without its `public.` schema, read with every run of whitespace as one
-    /// space and none before the opening parenthesis.
+    /// and the name with or without its `public.` schema, read case-insensitively with the quotes
+    /// around a quoted name dropped, every run of whitespace as one space, and none before the
+    /// opening parenthesis.
     fn defines_the_page(sql: &str) -> bool {
         let words = sql.split_whitespace().collect::<Vec<_>>().join(" ");
-        let words = words.replace(" (", "(");
+        let words = words.to_lowercase().replace('"', "").replace(" (", "(");
         let defines = |create: &str, schema: &str| {
             words.contains(&format!(
-                "{create} FUNCTION {schema}artifacts_matching_ask("
+                "{create} function {schema}artifacts_matching_ask("
             ))
         };
-        ["CREATE", "CREATE OR REPLACE"]
+        ["create", "create or replace"]
             .iter()
             .any(|create| defines(create, "") || defines(create, "public."))
     }
@@ -460,11 +444,11 @@ mod tests {
     /// added to `ArtifactView` later has to be named in the literal below to compile, and once
     /// serialized it is a string key in neither list, so this goes red until the SQL measures it
     /// or it is declared fixed width; a later migration that redefines the page is the one read,
-    /// schema-qualified (`public.artifacts_matching_ask(`) or not, `OR REPLACE` or not.
-    /// Bites: a sixth text field on `ArtifactView`; `"intent"` dropped from [`MEASURED_STRINGS`];
-    /// the page's `to_json(d.intent)` term removed from the migration, or moved out of
-    /// `metadata_bytes` into another column; `|| defines(create, "public.")` dropped from
-    /// `defines_the_page`.
+    /// schema-qualified (`public.artifacts_matching_ask(`) or not, `OR REPLACE` or not, in any
+    /// case, quoted or not. Bites: a sixth text field on `ArtifactView`; `"intent"` dropped from
+    /// [`MEASURED_STRINGS`]; the page's `to_json(d.intent)` term removed from the migration, or
+    /// moved out of `metadata_bytes` into another column; `|| defines(create, "public.")` dropped
+    /// from `defines_the_page`; `.to_lowercase()` or `.replace('"', "")` dropped from it.
     #[test]
     fn every_string_a_row_writes_is_of_one_width_or_measured_by_the_page() {
         use temper_core::types::data_artifact::ArtifactView;
@@ -497,6 +481,8 @@ mod tests {
             "CREATE OR REPLACE FUNCTION artifacts_matching_ask (",
             "CREATE FUNCTION public.artifacts_matching_ask(",
             "CREATE OR REPLACE FUNCTION\n    public.artifacts_matching_ask(",
+            "create or replace function artifacts_matching_ask(",
+            "CREATE FUNCTION \"public\".\"artifacts_matching_ask\"(",
         ] {
             assert!(defines_the_page(definition), "{definition}");
         }

@@ -10,27 +10,34 @@
 //! moves on) only while its test of what a page can carry is right, and that test is a list of the
 //! causes found so far: a row too long for a page, a number storage prints longer than it was
 //! committed, content nested past a client's parse limit. So this test names no cause. It commits
-//! a hostile corpus through the real commit door, walks the ask to `next: null` at four limits (no
+//! a hostile corpus through the real commit door, walks four asks of it (`tag` present, no
+//! predicates, a `contains` and a `compare` over `tag`) to `next: null` at four limits (no
 //! `limit`, 1, 7 and `MAX_ARTIFACT_PAGE_ROWS`), and asserts on every page what a stall breaks:
 //!
 //! 1. **it parses**, through `DataArtifactsClient::ask` (serde_json at its default limits, as the
 //!    MCP relay and the CLI parse) and from the raw body's bytes as an `AskResponse`, and it nests
 //!    within the generated Ruby client's limit, a stated constant because Ruby cannot run here;
-//! 2. **it fits** `VERCEL_RESPONSE_BODY_CAP_BYTES`, and the body bound the MCP relay's re-encoding
-//!    is sized for (`ARTIFACT_ASK_PAGE_BYTES` + `ARTIFACT_PAGE_ENVELOPE_BYTES`);
+//! 2. **it fits** `VERCEL_RESPONSE_BODY_CAP_BYTES` on both doors that answer it: the API's body,
+//!    and the MCP tool's answer (`temper_mcp::tools::data_artifacts::ask_result`, serialized, with
+//!    the JSON-RPC envelope's allowance); and the body is within the bound that answer is sized
+//!    for (`ARTIFACT_ASK_PAGE_BYTES` + `ARTIFACT_PAGE_ENVELOPE_BYTES`);
 //! 3. **the walk completes**: `next: null` within one page per row of the family and one more, each
 //!    `next` past the last, and every matching artifact exactly once, served or named in
 //!    `oversized` as the corpus expects it, and nothing else;
 //! 4. **served content is whole**: what was committed, value for value, so a number storage
 //!    reprints (a float from 1e16 up to the 64-bit integer limits, served as an integer) compares
-//!    by value, not by text.
+//!    by value, not by text;
+//! 5. **it answers in time**: each read of a page within [`PAGE_TIMEOUT`], so a slow page is a
+//!    finding naming its walk and page, not a run the test runner kills with every finding lost.
 //!
 //! The read budget is a constant the test cannot shrink, so the corpus opens with three artifacts
 //! whose read charge spends it, and every walk that may examine three rows a page must stop its
-//! first page on them, at the read frontier. Every failure is collected, naming the walk, the page
-//! and the item, and all of them are reported together.
+//! first page on them, at the read frontier. The probes the corpus offers the doors (U+0000, the
+//! deepest content, the longest family name) are each recorded with their answer; a refusal that is
+//! a fault (a 5xx) is a finding. Every failure is collected, naming the walk, the page and the
+//! item, and all of them are reported together, with every probe's answer.
 //!
-//! **Cost.** About ninety artifacts holding about 15 MB of content, twelve walks and about 500
+//! **Cost.** About ninety artifacts holding about 18 MB of content, twenty walks and about 600
 //! requests, each page asked twice (raw, and through the client). It is expected to run for tens
 //! of seconds, heavier than this suite's usual test. The suite gates its tests by what they need
 //! (`test-db`, `test-embed`), not by their weight, so this runs under `test-db` with the rest.
@@ -38,21 +45,22 @@
 mod common;
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
-use temper_core::types::artifact_ask::AskResponse;
+use temper_core::error::DATA_ARTIFACT_REFUSAL_CODE;
+use temper_core::types::artifact_ask::{reference, ArtifactPredicate, AskResponse};
 use temper_core::types::data_artifact::{
-    ArtifactCommitRequest, ArtifactCursor, MAX_ARTIFACT_PAGE_ROWS,
+    ArtifactCommitRequest, ArtifactCursor, ARTIFACT_ASK_CONTENT_DEPTH, MAX_ARTIFACT_PAGE_ROWS,
 };
 use temper_core::types::data_artifact_shape::{EnforcementMode, ShapeDeclareRequest};
 use temper_core::types::ids::DataArtifactId;
 use temper_services::transport::{
-    ARTIFACT_ASK_CONTENT_DEPTH, ARTIFACT_ASK_PAGE_BYTES, ARTIFACT_ASK_READ_BYTES,
-    ARTIFACT_PAGE_ENVELOPE_BYTES, ARTIFACT_READ_CANDIDATE_BYTES, ARTIFACT_ROW_FIXED_BYTES,
-    VERCEL_RESPONSE_BODY_CAP_BYTES,
+    ARTIFACT_ASK_PAGE_BYTES, ARTIFACT_ASK_READ_BYTES, ARTIFACT_PAGE_ENVELOPE_BYTES,
+    ARTIFACT_READ_CANDIDATE_BYTES, ARTIFACT_ROW_FIXED_BYTES, VERCEL_RESPONSE_BODY_CAP_BYTES,
 };
 use temper_workflow::operations::{Surface, SURFACE_HEADER};
 use temper_workflow::types::resource::ResourceCreateRequest;
@@ -60,9 +68,20 @@ use uuid::Uuid;
 
 /// The nesting limit of the strictest first-party client, the generated Ruby SDK: Ruby's default
 /// `max_nesting`, which `clients/temper-rb` does not override, counting the `[ ]` it parses a body
-/// inside (see `ARTIFACT_ASK_CONTENT_DEPTH` in temper-services). Ruby's parser cannot run in a Rust
-/// test, so a page is held to it here as a stated constant.
+/// inside (see `ARTIFACT_ASK_CONTENT_DEPTH`). Ruby's parser cannot run in a Rust test, so a page is
+/// held to it here as a stated constant.
 const RUBY_MAX_NESTING: usize = 100;
+
+/// The deepest content a Rust client reads on an ask page: serde_json's 127 levels, less the three
+/// an ask page puts above each row's content (see `ARTIFACT_ASK_CONTENT_DEPTH`). The deepest
+/// content the commit door admits must be past it, or no item here breaks that parse.
+const RUST_CLIENT_CONTENT_DEPTH: usize = 124;
+
+/// How long each read of a page may take: the raw request, and the client's. The walk's first form
+/// ran in about 23 seconds locally over about 500 requests, under 50 milliseconds a request on
+/// average; this allows a page hundreds of times that, and still leaves the test runner's
+/// 120-second kill room to report it.
+const PAGE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The page limits each ask is walked at: absent (the drain default), 1, a small limit that splits
 /// the corpus unevenly, and the ceiling.
@@ -91,6 +110,15 @@ const PAIR_COPIES: usize = 70_000;
 /// Each straddling artifact's text: under half a page, so two fit one page and a third does not fit
 /// what they leave.
 const STRADDLE_CHARS: usize = ARTIFACT_ASK_PAGE_BYTES * 45 / 100;
+
+/// The `"` and `\` pairs in the artifact the MCP relay escapes most. Each character is written as
+/// two bytes, and the relay, escaping the page into one JSON string, writes each as four, so its
+/// answer for this artifact is about twice the page's body: within the cap once, past it twice.
+const QUOTE_PAIRS: usize = 450_000;
+
+/// The zeros in the artifact the MCP relay's answer would grow most if it were pretty-printed: each
+/// is two bytes written compactly, and pretty-printed it gains a line break and its indentation.
+const ZEROS: usize = 700_000;
 
 /// The run of small artifacts that carry the asked path.
 const TINY_ROWS: usize = 30;
@@ -167,7 +195,7 @@ impl Family {
         app: &common::E2eTestApp,
         kind: &str,
         entry: Entry,
-    ) -> Result<CommittedRow, String> {
+    ) -> Result<CommittedRow, Refused> {
         let row = commit(app, kind, &entry).await?;
         for folded in &entry.supersedes {
             if let Some(&i) = self.index.get(folded) {
@@ -216,6 +244,63 @@ impl Entry {
             content,
             supersedes: Vec::new(),
             expect,
+        }
+    }
+}
+
+/// A door's refusal: its status and its body.
+#[derive(Debug)]
+struct Refused {
+    status: u16,
+    body: Vec<u8>,
+}
+
+impl Refused {
+    /// The error body's `code`, when the body is temper's error envelope.
+    fn code(&self) -> Option<String> {
+        let body: Value = serde_json::from_slice(&self.body).ok()?;
+        body.get("error")?.get("code")?.as_str().map(str::to_string)
+    }
+
+    /// A refusal the door answered for the caller's request (a 4xx), not a fault (a 5xx).
+    fn is_the_callers(&self) -> bool {
+        (400..500).contains(&self.status)
+    }
+}
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.status, excerpt(&self.body))
+    }
+}
+
+/// What each probe offered to a door was answered, in order, and the findings among them.
+#[derive(Debug, Default)]
+struct Probes {
+    /// Every probe and its answer, for the failure message.
+    answers: Vec<String>,
+    findings: Vec<String>,
+}
+
+impl Probes {
+    /// Record what `probe` was answered.
+    fn record<T>(&mut self, probe: &str, answer: &Result<T, Refused>) {
+        self.answers.push(match answer {
+            Ok(_) => format!("{probe}: admitted"),
+            Err(refused) => format!("{probe}: refused {refused}"),
+        });
+    }
+
+    /// Record what `probe` was answered, and a finding when it was refused by a fault: a door
+    /// refuses what it will not take with a 4xx, so a 5xx is the server failing, not refusing.
+    fn record_refusal<T>(&mut self, probe: &str, answer: &Result<T, Refused>) {
+        self.record(probe, answer);
+        if let Err(refused) = answer {
+            if !refused.is_the_callers() {
+                self.findings.push(format!(
+                    "{probe}: answered {refused}, a fault, not a refusal"
+                ));
+            }
         }
     }
 }
@@ -276,12 +361,12 @@ fn excerpt(body: &[u8]) -> String {
 /// raw. The door answers with the content, which a client reading the answer whole cannot parse
 /// once the content nests past its limit, so only the row's id, position and size are read, by a
 /// reader that skips every other field without nesting into it (serde_json skips an unread field
-/// iteratively). On a refusal, the status and the start of the body.
+/// iteratively). On a refusal, the status and the body.
 async fn commit(
     app: &common::E2eTestApp,
     kind: &str,
     entry: &Entry,
-) -> Result<CommittedRow, String> {
+) -> Result<CommittedRow, Refused> {
     let request = ArtifactCommitRequest {
         kind: kind.to_string(),
         kind_owner: None,
@@ -299,35 +384,41 @@ async fn commit(
     let path = format!("/api/resources/{}/artifacts", entry.resource);
     let (status, body) = post(app, &path, &request).await;
     if !(200..300).contains(&status) {
-        return Err(format!("{status}: {}", excerpt(&body)));
+        return Err(Refused { status, body });
     }
     let committed: Committed = serde_json::from_slice(&body)
         .unwrap_or_else(|e| panic!("the commit door's answer names the row ({e})"));
     Ok(committed.artifact)
 }
 
-/// Declare an advisory shape for `kind` in the context, declaring the asked path `tag` with no
-/// constraint, so content of any form commits under it.
-async fn declare(app: &common::E2eTestApp, context: Uuid, kind: &str) -> Result<Uuid, String> {
-    app.client
-        .data_artifacts()
-        .declare_shape(
-            context,
-            &ShapeDeclareRequest {
-                kind: kind.to_string(),
-                kind_owner: None,
-                schema: json!({
-                    "$schema": "https://json-schema.org/draft/2020-12/schema",
-                    "type": "object",
-                    "properties": { "tag": {} }
-                }),
-                enforcement: EnforcementMode::Advisory,
-                act: Default::default(),
-            },
-        )
-        .await
-        .map(|declared| declared.shape_id.uuid())
-        .map_err(|e| e.to_string())
+/// The shape door's answer, read for the shape's id only.
+#[derive(Debug, Deserialize)]
+struct Declared {
+    shape_id: Uuid,
+}
+
+/// Declare an advisory shape for `kind` in the context through the real shape door
+/// (`POST /api/contexts/{id}/shapes`), raw, declaring the asked path `tag` with no constraint, so
+/// content of any form commits under it. On a refusal, the status and the body.
+async fn declare(app: &common::E2eTestApp, context: Uuid, kind: &str) -> Result<Uuid, Refused> {
+    let request = ShapeDeclareRequest {
+        kind: kind.to_string(),
+        kind_owner: None,
+        schema: json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": { "tag": {} }
+        }),
+        enforcement: EnforcementMode::Advisory,
+        act: Default::default(),
+    };
+    let (status, body) = post(app, &format!("/api/contexts/{context}/shapes"), &request).await;
+    if !(200..300).contains(&status) {
+        return Err(Refused { status, body });
+    }
+    let declared: Declared = serde_json::from_slice(&body)
+        .unwrap_or_else(|e| panic!("the shape door's answer names the shape ({e})"));
+    Ok(declared.shape_id)
 }
 
 /// `{"tag": tag, "payload": payload}`: an object carrying the asked path.
@@ -465,6 +556,7 @@ struct World {
     trio: Vec<Uuid>,
     trio_end: ArtifactCursor,
     long: LongFamily,
+    probes: Probes,
 }
 
 async fn world(pool: PgPool) -> World {
@@ -581,6 +673,43 @@ async fn world(pool: PgPool) -> World {
         Expect::Oversized,
     );
     family.put(&app, KIND, one_past).await;
+
+    // The MCP relay escapes a page into one JSON string: what it doubles, and what pretty-printing
+    // would grow.
+    let quotes = with_tag("quotes", json!("\"\\".repeat(QUOTE_PAIRS)));
+    let relayed_once = serde_json::to_string(&serde_json::to_string(&quotes).expect("serializes"))
+        .expect("serializes")
+        .len();
+    let row = family
+        .put(
+            &app,
+            KIND,
+            Entry::member("quotes", one, quotes, Expect::Served),
+        )
+        .await;
+    assert!(
+        row.content_bytes() + 4 * ARTIFACT_ROW_FIXED_BYTES <= ARTIFACT_ASK_PAGE_BYTES
+            && relayed_once + ARTIFACT_PAGE_ENVELOPE_BYTES <= VERCEL_RESPONSE_BODY_CAP_BYTES
+            && 2 * relayed_once > VERCEL_RESPONSE_BODY_CAP_BYTES,
+        "the fixture: the quotes fit a page, and escaped as the relay escapes its text they fit \
+         the platform's response cap once and not twice"
+    );
+    let zeros = with_tag("zeros", json!(vec![0; ZEROS]));
+    let pretty = serde_json::to_string_pretty(&zeros).expect("serializes");
+    let relayed_pretty = serde_json::to_string(&pretty).expect("serializes").len();
+    let row = family
+        .put(
+            &app,
+            KIND,
+            Entry::member("zeros", two, zeros, Expect::Served),
+        )
+        .await;
+    assert!(
+        row.content_bytes() + 4 * ARTIFACT_ROW_FIXED_BYTES <= ARTIFACT_ASK_PAGE_BYTES
+            && relayed_pretty > VERCEL_RESPONSE_BODY_CAP_BYTES,
+        "the fixture: the zeros fit a page, and pretty-printed and escaped as the relay escapes \
+         its text, they alone are past the platform's response cap"
+    );
 
     // Size: what storage serves can outgrow what was charged.
     let past = family
@@ -699,18 +828,42 @@ async fn world(pool: PgPool) -> World {
     };
     family.put(&app, KIND, folds).await;
 
-    // Probes: in the corpus if the commit door admits them, absent if it refuses them.
+    // Probes: in the corpus if the commit door admits them, absent if it refuses them, and each
+    // answer recorded. Postgres stores no U+0000, so the commit door refuses it by name, before
+    // anything is stored: a 400 under the data-artifact refusal code, never a 500.
+    let mut probes = Probes::default();
     let nul_in_text = with_tag("nul-in-text", json!("a\u{0}b"));
     let nul_in_key = json!({ "tag": "nul-in-key", "k\u{0}": 1 });
-    for (label, content) in [("nul-in-text", nul_in_text), ("nul-in-key", nul_in_key)] {
-        let _admitted_or_not = family
+    let nul_in_kind = format!("{KIND}\u{0}");
+    for (label, kind, content) in [
+        ("nul-in-text", KIND, nul_in_text),
+        ("nul-in-key", KIND, nul_in_key),
+        (
+            "nul-in-kind",
+            nul_in_kind.as_str(),
+            json!({ "tag": "nul-in-kind" }),
+        ),
+    ] {
+        let answer = family
             .try_put(
                 &app,
-                KIND,
+                kind,
                 Entry::member(label, one, content, Expect::Served),
             )
             .await;
+        probes.record(label, &answer);
+        let refused_by_name = answer.as_ref().is_err_and(|refused| {
+            refused.status == 400 && refused.code().as_deref() == Some(DATA_ARTIFACT_REFUSAL_CODE)
+        });
+        if !refused_by_name {
+            probes.findings.push(format!(
+                "{label}: not refused as a 400 under {DATA_ARTIFACT_REFUSAL_CODE}"
+            ));
+        }
     }
+    // The deepest content the commit door admits, found from above; past the depth a Rust client
+    // reads on an ask page, so it is the corpus's one item that breaks that parse when served.
+    let mut deepest = None;
     for depth in (ARTIFACT_ASK_CONTENT_DEPTH + 2..=DEEPEST_PROBED).rev() {
         let entry = Entry::member(
             format!("deepest-admitted ({depth} deep)"),
@@ -718,12 +871,21 @@ async fn world(pool: PgPool) -> World {
             nested(depth),
             Expect::Oversized,
         );
-        if family.try_put(&app, KIND, entry).await.is_ok() {
+        let answer = family.try_put(&app, KIND, entry).await;
+        probes.record_refusal(&format!("content {depth} deep"), &answer);
+        if answer.is_ok() {
+            deepest = Some(depth);
             break;
         }
     }
+    if deepest.is_none_or(|depth| depth <= RUST_CLIENT_CONTENT_DEPTH) {
+        probes.findings.push(format!(
+            "the deepest content the commit door admitted is {deepest:?} deep, not past the \
+             {RUST_CLIENT_CONTENT_DEPTH} a Rust client reads on an ask page"
+        ));
+    }
 
-    let long = long_family(&app, *context.id, two).await;
+    let long = long_family(&app, *context.id, two, &mut probes).await;
     World {
         app,
         shape,
@@ -731,17 +893,30 @@ async fn world(pool: PgPool) -> World {
         trio,
         trio_end: trio_end.expect("three read-spending artifacts"),
         long,
+        probes,
     }
 }
 
 /// The longest name in [`LONG_FAMILY_CHARS`] the shape door and the commit door both admit, with
 /// four small artifacts and one without content committed under it. Where a page puts its rows
 /// follows from the name: a row writes it once, as a JSON string, beside small content and fixed
-/// fields within [`ARTIFACT_ROW_FIXED_BYTES`].
-async fn long_family(app: &common::E2eTestApp, context: Uuid, resource: Uuid) -> LongFamily {
+/// fields within [`ARTIFACT_ROW_FIXED_BYTES`]. Each door's answer to each length is recorded in
+/// `probes`, but not held to a 4xx: the doors set no length of their own for a family name, so a
+/// longer name's refusal is recorded as they give it.
+async fn long_family(
+    app: &common::E2eTestApp,
+    context: Uuid,
+    resource: Uuid,
+    probes: &mut Probes,
+) -> LongFamily {
     for chars in LONG_FAMILY_CHARS {
         let kind = "\u{1}".repeat(chars);
-        let Ok(shape) = declare(app, context, &kind).await else {
+        let declared = declare(app, context, &kind).await;
+        probes.record(
+            &format!("a shape for a {chars}-character family"),
+            &declared,
+        );
+        let Ok(shape) = declared else {
             continue;
         };
         let written = serde_json::to_string(&kind)
@@ -756,7 +931,12 @@ async fn long_family(app: &common::E2eTestApp, context: Uuid, resource: Uuid) ->
         };
         let mut family = Family::default();
         let first = Entry::member("long-family-0", resource, json!({ "tag": 0 }), expect);
-        if family.try_put(app, &kind, first).await.is_err() {
+        let committed = family.try_put(app, &kind, first).await;
+        probes.record(
+            &format!("a commit to a {chars}-character family"),
+            &committed,
+        );
+        if committed.is_err() {
             continue;
         }
         for n in 1..4 {
@@ -788,20 +968,35 @@ impl Findings {
         self.0.push(finding);
     }
 
-    /// Fail with every finding, the first hundred in full.
-    fn assert_none(&self) {
+    /// Fail with every finding, the first hundred in full, and every probe's answer.
+    fn assert_none(&self, probes: &[String]) {
         let shown: Vec<&str> = self.0.iter().take(100).map(String::as_str).collect();
         assert!(
             self.0.is_empty(),
-            "{} finding(s) on the hostile corpus:\n{}",
+            "{} finding(s) on the hostile corpus:\n{}\n\nthe probes were answered:\n{}",
             self.0.len(),
-            shown.join("\n")
+            shown.join("\n"),
+            probes.join("\n")
         );
     }
 }
 
 /// Which corpus items an ask matches.
-type Matches = fn(&Item) -> bool;
+type Matches<'a> = &'a dyn Fn(&Item) -> bool;
+
+/// What an ask with `predicates` matches among the corpus items, by the reference evaluator
+/// (`temper_core::types::artifact_ask::reference`, the oracle the ask's SQL is held to): a live
+/// item of an intent an ask admits whose content satisfies every predicate. The evaluator orders
+/// strings through the comparator it is given, bytewise here; the walks' `compare` bound is a
+/// number, so the type guard keeps every string out of the comparison and the database's
+/// collation never enters.
+fn by_reference(predicates: &Value) -> impl Fn(&Item) -> bool {
+    let predicates: Vec<ArtifactPredicate> =
+        serde_json::from_value(predicates.clone()).expect("the walk's predicates parse");
+    move |item: &Item| {
+        item.whole && reference::matches(&predicates, &item.content, &|a: &str, b: &str| a.cmp(b))
+    }
+}
 
 /// One walk: an ask, a limit, and the family whose artifacts it should see.
 struct Walk<'a> {
@@ -809,7 +1004,7 @@ struct Walk<'a> {
     ask: &'a Value,
     limit: Option<u32>,
     family: &'a Family,
-    matches: Matches,
+    matches: Matches<'a>,
 }
 
 /// What one page of a walk held: the ids it served and named, and where it said to continue.
@@ -838,16 +1033,21 @@ fn request(ask: &Value, limit: Option<u32>, after: Option<ArtifactCursor>) -> Va
 }
 
 /// Ask for one page twice, raw and through `DataArtifactsClient::ask`, and hold it to what every
-/// page must be: answered, within the platform's response cap and the body the MCP relay is sized
-/// for, parsed from its bytes as an `AskResponse`, nested within the Ruby client's limit, and read
-/// alike by the client. `None` when the walk cannot go on from it.
+/// page must be: answered within [`PAGE_TIMEOUT`], within the platform's response cap as the API
+/// sends it and as the MCP tool answers it, and within the body that answer is sized for, parsed
+/// from its bytes as an `AskResponse`, nested within the Ruby client's limit, and read alike by the
+/// client. `None` when the walk cannot go on from it.
 async fn read_page(
     app: &common::E2eTestApp,
     request: &Value,
     at: &str,
     findings: &mut Findings,
 ) -> Option<AskResponse> {
-    let (status, body) = post(app, "/api/data-artifacts/ask", request).await;
+    let asked = post(app, "/api/data-artifacts/ask", request);
+    let Ok((status, body)) = tokio::time::timeout(PAGE_TIMEOUT, asked).await else {
+        findings.note(format!("{at}: no answer within {PAGE_TIMEOUT:?}"));
+        return None;
+    };
     if status != 200 {
         findings.note(format!("{at}: answered {status}: {}", excerpt(&body)));
         return None;
@@ -876,6 +1076,21 @@ async fn read_page(
             return None;
         }
     };
+    match temper_mcp::tools::data_artifacts::ask_result(&raw) {
+        Ok(answer) => {
+            let relayed = serde_json::to_string(&answer)
+                .expect("a tool answer serializes")
+                .len();
+            if relayed + ARTIFACT_PAGE_ENVELOPE_BYTES > VERCEL_RESPONSE_BODY_CAP_BYTES {
+                findings.note(format!(
+                    "{at}: the MCP tool's answer is {relayed} bytes, past the platform's response \
+                     cap of {VERCEL_RESPONSE_BODY_CAP_BYTES} with the JSON-RPC envelope's \
+                     {ARTIFACT_PAGE_ENVELOPE_BYTES}"
+                ));
+            }
+        }
+        Err(e) => findings.note(format!("{at}: the MCP tool cannot answer the page: {e:?}")),
+    }
     let written = serde_json::to_value(&raw).expect("a page serializes");
     let as_ruby_parses = nesting(&written) + 1;
     if as_ruby_parses > RUBY_MAX_NESTING {
@@ -884,7 +1099,15 @@ async fn read_page(
              {RUBY_MAX_NESTING}"
         ));
     }
-    match app.client.data_artifacts().ask(request).await {
+    let artifacts = app.client.data_artifacts();
+    let read = artifacts.ask(request);
+    let Ok(read) = tokio::time::timeout(PAGE_TIMEOUT, read).await else {
+        findings.note(format!(
+            "{at}: DataArtifactsClient::ask had no answer within {PAGE_TIMEOUT:?}"
+        ));
+        return None;
+    };
+    match read {
         Ok(page) if serde_json::to_value(&page).expect("a page serializes") == written => {}
         Ok(_) => findings.note(format!(
             "{at}: the client read a page other than the raw body"
@@ -1088,14 +1311,19 @@ fn shown(limit: Option<u32>) -> String {
 }
 
 /// **Every walk of a hostile corpus ends, and every page parses, fits and serves whole content.**
-/// The hostile family is asked two ways — `tag` present, which its non-object, untagged,
-/// content-less, pinned and folded artifacts must not answer, and with no predicates, which every
-/// live member and current artifact answers, content-less ones included — and the long family with
-/// no predicates; each at every limit in [`LIMITS`]. A walk that may examine three rows a page
-/// (no limit, 7, the ceiling) stops its first page on the read frontier: the three read-spending
-/// artifacts named oversized, nothing served, and `next` at the third, though the row limit left
-/// room and the page had spent three entries' worth of its budget on a page whose next row is
-/// small. So only the read budget can have ended it.
+/// The hostile family is asked four ways — `tag` present, which its non-object, untagged,
+/// content-less, pinned and folded artifacts must not answer; with no predicates, which every
+/// live member and current artifact answers, content-less ones included; `tag` containing `"t"`,
+/// `null` or `{}`, and `tag` at least 0, which only some of the tiny artifacts answer, their `tag`
+/// taking every JSON type, so a matcher arm that could raise on one would show — and the long
+/// family with no predicates; each at every limit in [`LIMITS`]. What the `contains` and `compare`
+/// asks match is the reference evaluator's answer ([`by_reference`]). A walk that may examine three
+/// rows a page (no limit, 7, the ceiling) stops its first page on the read frontier: of the three
+/// read-spending artifacts, the ones its ask matches named oversized, nothing served, and `next`
+/// at the third, though the row limit left room and the page had spent at most three entries'
+/// worth of its budget on a page whose next row is small. So only the read budget can have ended
+/// it. The probes' answers are held too: U+0000 refused by name, a door's refusal never a fault,
+/// and the deepest content admitted past what a Rust client reads on a page.
 ///
 /// Bites, each red through this test's own findings:
 /// - the depth check removed (in `artifact_ask_read::written`, `if bytes > budget || too_deep`
@@ -1107,18 +1335,42 @@ fn shown(limit: Option<u32>) -> String {
 ///   `served-past-the-page` is served, and its page is past the platform's response cap;
 /// - `next` from `examined` alone (in temper-substrate's `readback::ask_page_of`,
 ///   `!r.examined || r.frontier` becomes `!r.examined`): the first page, stopped on the read
-///   frontier, answers `next: null`, so the walk ends there and every later artifact is missed.
+///   frontier, answers `next: null`, so the walk ends there and every later artifact is missed;
+/// - the MCP tool's answer pretty-printed (in temper-mcp's `tools::data_artifacts::ask_result`,
+///   `serde_json::to_string(page)` becomes `serde_json::to_string_pretty(page)`): every page
+///   serving `zeros` answers past the platform's response cap through the tool;
+/// - the commit door's U+0000 check removed (in `DbBackend::commit_data_artifact`, the
+///   `unstorable_nul` check): the three U+0000 probes answer 500, "not refused as a 400".
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn every_walk_of_a_hostile_corpus_ends_and_every_page_parses_fits_and_is_whole(pool: PgPool) {
     let w = world(pool).await;
     let mut findings = Findings::default();
-    let tag_ask = json!({ "shape": w.shape, "predicates": [
-        { "path": ["tag"], "op": { "op": "has_key" } }
-    ] });
+    for finding in &w.probes.findings {
+        findings.note(format!("probe {finding}"));
+    }
+    let ask_with = |predicates: &Value| json!({ "shape": w.shape, "predicates": predicates });
+    let tag_ask = ask_with(&json!([{ "path": ["tag"], "op": { "op": "has_key" } }]));
     let whole_ask = json!({ "shape": w.shape });
-    let asks: [(&str, &Value, Matches); 2] = [
-        ("`tag` present", &tag_ask, |item: &Item| item.tagged),
-        ("no predicates", &whole_ask, |item: &Item| item.whole),
+    let contains = json!([
+        { "path": ["tag"], "op": { "op": "contains", "values": ["t", null, {}] } }
+    ]);
+    let compare = json!([
+        { "path": ["tag"], "op": { "op": "compare", "direction": "gte", "value": 0 } }
+    ]);
+    let (contains_ask, compare_ask) = (ask_with(&contains), ask_with(&compare));
+    let tagged = |item: &Item| item.tagged;
+    let whole = |item: &Item| item.whole;
+    let contained = by_reference(&contains);
+    let compared = by_reference(&compare);
+    let asks: [(&str, &Value, Matches<'_>); 4] = [
+        ("`tag` present", &tag_ask, &tagged),
+        ("no predicates", &whole_ask, &whole),
+        (
+            "`tag` contains \"t\", null or {}",
+            &contains_ask,
+            &contained,
+        ),
+        ("`tag` at least 0", &compare_ask, &compared),
     ];
     for (ask_name, ask, matches) in asks {
         for limit in LIMITS {
@@ -1131,10 +1383,16 @@ async fn every_walk_of_a_hostile_corpus_ends_and_every_page_parses_fits_and_is_w
             };
             let pages = walk_to_the_end(&w.app, &walk_of, &mut findings).await;
             if limit.is_none_or(|limit| limit >= 3) {
+                let named: Vec<Uuid> = w
+                    .trio
+                    .iter()
+                    .copied()
+                    .filter(|id| w.family.get(*id).is_some_and(matches))
+                    .collect();
                 let first = pages.first();
                 let on_the_frontier = first.is_some_and(|page| {
                     page.served.is_empty()
-                        && page.oversized == w.trio
+                        && page.oversized == named
                         && page.next == Some(w.trio_end)
                 });
                 if !on_the_frontier {
@@ -1158,9 +1416,9 @@ async fn every_walk_of_a_hostile_corpus_ends_and_every_page_parses_fits_and_is_w
             ask: &long_ask,
             limit,
             family: &w.long.family,
-            matches: |item: &Item| item.whole,
+            matches: &whole,
         };
         walk_to_the_end(&w.app, &walk_of, &mut findings).await;
     }
-    findings.assert_none();
+    findings.assert_none(&w.probes.answers);
 }

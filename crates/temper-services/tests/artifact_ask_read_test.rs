@@ -20,7 +20,7 @@ use temper_core::types::artifact_ask::{
     ArtifactAsk, ArtifactPredicate, AskOrder, AskRequest, AskResponse, OversizedArtifact,
     ShapeSuccessor,
 };
-use temper_core::types::data_artifact::{ArtifactCursor, ArtifactView};
+use temper_core::types::data_artifact::{ArtifactCursor, ArtifactView, ARTIFACT_ASK_CONTENT_DEPTH};
 use temper_core::types::ids::ShapeId;
 use temper_core::types::query::filter::PropertyOp;
 use temper_core::types::query::{ArtifactAskPopulation, PlanRefusal, RefusalReason};
@@ -28,8 +28,7 @@ use temper_services::backend::artifact_ask_read::ask_page;
 use temper_services::backend::substrate_read::get_artifact;
 use temper_services::error::{ApiError, ApiResult};
 use temper_services::transport::{
-    ARTIFACT_ASK_CONTENT_DEPTH, ARTIFACT_ASK_PAGE_BYTES, ARTIFACT_PAGE_ENVELOPE_BYTES,
-    ARTIFACT_ROW_FIXED_BYTES, VERCEL_RESPONSE_BODY_CAP_BYTES,
+    ARTIFACT_ASK_PAGE_BYTES, ARTIFACT_ROW_FIXED_BYTES, VERCEL_RESPONSE_BODY_CAP_BYTES,
 };
 use temper_substrate::ids::{ContextId, DataArtifactId, EntityId, ProfileId, ResourceId};
 use temper_substrate::payloads::{AnchorRef, ArtifactIntent, EnforcementMode, KindOwner};
@@ -427,22 +426,15 @@ fn page_bytes(page: &AskResponse) -> usize {
         + page.oversized.len() * ARTIFACT_ROW_FIXED_BYTES
 }
 
-/// **The whole page fits the platform's response cap on both doors that answer it**: the API's
-/// body, the page written compactly as the route writes it, and the MCP tool's answer
-/// (`ask_result`), serialized, with the JSON-RPC envelope's allowance beside it.
+/// **The whole page fits the platform's response cap as the API answers it**: the page written
+/// compactly, as the route writes it. The MCP relay's answer is measured against the same cap by
+/// the adversarial walk in the e2e suite (`data_artifact_ask_walk_e2e.rs`), whose pages are the
+/// ones the relay's escaping grows most.
 fn assert_fits_the_response_cap(page: &AskResponse) {
     let body = serde_json::to_vec(page).expect("the page serializes").len();
     assert!(
         body <= VERCEL_RESPONSE_BODY_CAP_BYTES,
         "the API body is {body} bytes"
-    );
-    let answered = temper_mcp::tools::data_artifacts::ask_result(page).expect("answered");
-    let relayed = serde_json::to_string(&answered)
-        .expect("the answer serializes")
-        .len();
-    assert!(
-        relayed + ARTIFACT_PAGE_ENVELOPE_BYTES <= VERCEL_RESPONSE_BODY_CAP_BYTES,
-        "the tool's answer is {relayed} bytes, before the JSON-RPC envelope"
     );
 }
 
@@ -558,7 +550,7 @@ fn plain_integers(count: usize, n: usize) -> serde_json::Value {
 /// about 0.6 MB, it writes about 2.1 MB, past `ARTIFACT_ASK_PAGE_BYTES`; read whole by id, it shows
 /// both. B and C are small matches after it. The page serves B and C, names A in `oversized` with
 /// its stored `content_bytes`, and ends the enumeration, its rows as written within the budget and
-/// the whole page, on the API and through the MCP tool, within the response cap.
+/// the whole page, as the API writes it, within the response cap.
 ///
 /// Bite (perl, Rust): in `artifact_ask_read::read`, `within_budget(page, ARTIFACT_ASK_PAGE_BYTES)`
 /// → `within_budget(page, usize::MAX)` — the enforcement removed: A is served at 2.1 MB, and the
@@ -608,7 +600,7 @@ async fn a_row_served_longer_than_the_page_is_named_oversized_and_the_rows_after
 /// 1.26 MB, so together they fit a page as charged, and each fits one alone as written, but not
 /// both. The first page serves A and ends there, `next` at A; the second, continuing from it,
 /// serves B and ends the enumeration. Each page's rows as written are within the budget, and each
-/// whole page, on the API and through the MCP tool, within the response cap.
+/// whole page, as the API writes it, within the response cap.
 ///
 /// Bite (perl, Rust): as for the oversized row above, `within_budget(page, ARTIFACT_ASK_PAGE_BYTES)`
 /// → `within_budget(page, usize::MAX)` — the first page serves both and answers `next: None`.
@@ -668,7 +660,7 @@ fn nested(count: usize, levels: usize) -> serde_json::Value {
 /// match after them. The page, written as the route writes it, reads back as an `AskResponse`
 /// through `serde_json::from_slice` with its default recursion limit. It serves A and D, and names
 /// B and C in `oversized` with their stored `content_bytes`; B and C are still read whole by id.
-/// The whole page fits the response cap on the API and through the MCP tool.
+/// The whole page, as the API writes it, fits the response cap.
 ///
 /// Bite (perl, Rust): in `artifact_ask_read::written`, `if bytes > budget || too_deep {` →
 /// `if bytes > budget {` — the depth check removed: B and C are served, and the page no longer

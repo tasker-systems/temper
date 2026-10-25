@@ -67,7 +67,9 @@ pub struct AskResponse {
     pub artifacts: Vec<ArtifactView>,
     /// Matching artifacts too large for any page's byte budget, or too deeply nested for a page
     /// (content more than 96 arrays or objects deep), in order among the rest, by id and size and
-    /// without content. Each is read whole by id (`GET /api/data-artifacts/{artifact_id}`).
+    /// without content. Each is read whole by id (`GET /api/data-artifacts/{artifact_id}`); on the
+    /// hosted deployment that read is refused too when the content, as storage serves it, is
+    /// longer than the platform's response cap (see `OversizedArtifact`).
     pub oversized: Vec<OversizedArtifact>,
     /// What the ask counted over its whole population, on the first page; `null` on every later
     /// page. These are exact counts over the whole counted set: to count them, the first page
@@ -128,7 +130,11 @@ impl From<&ShapeIdentity> for AskedShape {
 /// row together, or too deeply nested for a page, its content more than 96 arrays or objects deep:
 /// named, sized, and left to be read by id. A page holds content to that depth so that every
 /// first-party client parses every page. A read by id writes the content less deeply, but a
-/// client's own nesting limit can refuse that read too when the content nests very deeply.
+/// client's own nesting limit can refuse that read too when the content nests very deeply. And a
+/// read by id is not held to a page's byte budget: on the hosted deployment it is refused when the
+/// content, as storage serves it, is longer than the platform's response cap, which content
+/// committed within the request cap can reach, because storage prints some numbers longer than
+/// they were committed (see `content_bytes`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]

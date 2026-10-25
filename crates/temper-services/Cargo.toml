@@ -107,8 +107,3 @@ opentelemetry = "0.33"
 serde_yaml = "0.9"
 wiremock = "0.6"
 trybuild = "1"
-# `artifact_ask_read_test` measures a real batch-read page as the MCP tool answers it
-# (`temper_mcp::tools::data_artifacts::ask_result`) against the response cap. The tool layer does
-# not depend on this crate, so this adds no cycle; and the page comes only from this crate's
-# database tests, which the MCP server's crate, holding no database, cannot run.
-temperkb-mcp.workspace = true

@@ -110,6 +110,27 @@ pub const MAX_ARTIFACT_PAGE_ROWS: u32 = 200;
 /// Well under [`MAX_ARTIFACT_PAGE_ROWS`] because each row carries its content whole.
 pub const ARTIFACT_DRAIN_PAGE_ROWS: u32 = 50;
 
+/// The deepest content a batch-read page serves. A served row whose content nests deeper is named
+/// in the page's `oversized` in its place, as a row too long for the page is, and the page goes on
+/// (temper-services' `artifact_ask_read`). **Depth** counts each array or object level, with the
+/// content's root at 1: `{}` and `[]` are 1 deep, `{"a":[0]}` is 2, and a string or a number is 0.
+///
+/// The batch read's docs (`OversizedArtifact`, `AskResponse.oversized`, the route, the MCP tool,
+/// the CLI's help and the skill) state this value in the phrase "more than 96 arrays or objects
+/// deep"; a test reads the published texts for it, so change them together.
+///
+/// # 96: the strictest first-party client's nesting limit, less the levels above the content
+///
+/// A page a client cannot parse fails for every reader of the ask through that client, and no
+/// `limit` or `next` steps past it. The strictest first-party client is the generated Ruby SDK
+/// (`clients/temper-rb`), which parses a body as `JSON.parse("[#{body}]")` and sets no
+/// `max_nesting`, so Ruby's default of 100 levels applies, and its `[ ]` takes one of them. An ask
+/// page puts three levels above each row's content: the `AskResponse` object, its `artifacts`
+/// array and the `ArtifactView` object. So content may nest 100 − 1 − 3 = 96 deep. serde_json,
+/// which temperkb-client and the MCP relay parse with, allows 127 levels, so a Rust client reads
+/// an ask page whose content nests up to 124 deep.
+pub const ARTIFACT_ASK_CONTENT_DEPTH: usize = 96;
+
 /// A position in the `(created, id)` keyset order that `artifacts_for_resource` returns rows in.
 ///
 /// It carries position and no authority: each page re-runs the read gate for the asker, so a
@@ -288,6 +309,50 @@ pub struct ArtifactCommitRequest {
     /// Per-act correlation + authorship flags. Flattened into the request body.
     #[serde(flatten)]
     pub act: ActInput,
+}
+
+/// Whether a JSON value holds U+0000 anywhere: in a string, or in an object key, at any depth of
+/// arrays and objects. `jsonb` cannot store the character, so no stored artifact or shape holds
+/// it, and binding a value that does is a database error rather than a refusal. An ask refuses a
+/// predicate value that holds one (`unstorable_value`); a commit or a shape declaration is refused
+/// through [`unstorable_nul`]. Recursive to the value's depth, which the JSON parser that read it
+/// has bounded.
+pub fn holds_nul(value: &serde_json::Value) -> bool {
+    use serde_json::Value;
+    match value {
+        Value::String(s) => s.contains('\0'),
+        Value::Array(elements) => elements.iter().any(holds_nul),
+        Value::Object(members) => members
+            .iter()
+            .any(|(key, member)| key.contains('\0') || holds_nul(member)),
+        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+    }
+}
+
+/// The refusal for a write that would store U+0000: a commit whose `kind` or `content` holds it, or
+/// a shape declaration whose `kind` or `schema` does. It names each field that holds one as the
+/// request names it (`value_field` is `"content"` or `"schema"`), and never quotes the value.
+/// `None` when neither does. The doors run it before anything is stored, so such a write is
+/// refused by name, as `DATA_ARTIFACT_REFUSAL`, rather than failing in the database.
+pub fn unstorable_nul(kind: &str, value_field: &str, value: &serde_json::Value) -> Option<String> {
+    let fields: Vec<String> = [
+        ("kind", kind.contains('\0')),
+        (value_field, holds_nul(value)),
+    ]
+    .into_iter()
+    .filter(|&(_, holds)| holds)
+    .map(|(field, _)| format!("`{field}`"))
+    .collect();
+    let (named, verb) = match fields.as_slice() {
+        [] => return None,
+        [one] => (one.clone(), "holds"),
+        _ => (fields.join(" and "), "hold"),
+    };
+    Some(format!(
+        "{named} {verb} the character U+0000 (NUL), which the database cannot store, so no \
+         artifact or shape can hold it; remove it, from every string and object key, and send \
+         the request again"
+    ))
 }
 
 /// Response body for `POST /api/resources/{id}/artifacts` — the committed artifact's ID
@@ -490,5 +555,114 @@ mod tests {
             more["next"],
             serde_json::to_value(cursor()).expect("cursor serializes")
         );
+    }
+
+    /// **U+0000 is found wherever a stored value can carry it, and a write is refused by the field
+    /// that holds it, never by its value**: in a string, in an array of arrays, in a nested
+    /// object's key, and in a string inside an object inside an array; not in a value whose only
+    /// control character is U+0001. The refusal names `content`, `kind`, or both, and quotes
+    /// nothing. Bites: `key.contains('\0') ||` dropped from `holds_nul` (the nested key is
+    /// missed); the `kind` term dropped from `unstorable_nul` (the family name is admitted).
+    #[test]
+    fn a_nul_is_refused_by_the_field_that_holds_it() {
+        use serde_json::json;
+        for value in [
+            json!("a\u{0}b"),
+            json!([[1, ["\u{0}"]]]),
+            json!({ "a": { "k\u{0}": 1 } }),
+            json!([{ "b": ["x", { "c": "\u{0}" }] }]),
+        ] {
+            assert!(holds_nul(&value), "{value}");
+        }
+        let clean = json!({ "a": ["b\u{1}", 1, null, true, { "c\u{1}": {} }] });
+        assert!(!holds_nul(&clean));
+        assert_eq!(unstorable_nul("family", "content", &clean), None);
+
+        let content = json!({ "secret\u{0}key": "secret value" });
+        let said = unstorable_nul("family", "content", &content).expect("content refused");
+        assert!(said.starts_with("`content` holds "), "{said}");
+        assert!(
+            !said.contains("secret"),
+            "the value is never quoted: {said}"
+        );
+        let said = unstorable_nul("fam\u{0}ily", "content", &clean).expect("kind refused");
+        assert!(said.starts_with("`kind` holds "), "{said}");
+        assert!(!said.contains("fam"), "the name is never quoted: {said}");
+        let said = unstorable_nul("fam\u{0}ily", "schema", &content).expect("both refused");
+        assert!(said.starts_with("`kind` and `schema` hold "), "{said}");
+    }
+
+    /// Every number `text` states in the phrase "more than N arrays or objects deep", with every
+    /// run of whitespace read as one space.
+    fn depths_stated(text: &str) -> Vec<String> {
+        let words: Vec<&str> = text.split_whitespace().collect();
+        words
+            .windows(7)
+            .filter(|w| w[..2] == ["more", "than"] && w[3..6] == ["arrays", "or", "objects"])
+            .filter(|w| w[6].starts_with("deep"))
+            .map(|w| w[2].to_string())
+            .collect()
+    }
+
+    /// Every string in a JSON document, read as one text.
+    fn strings_of(document: &serde_json::Value) -> String {
+        let mut text = String::new();
+        let mut stack = vec![document];
+        while let Some(value) = stack.pop() {
+            match value {
+                serde_json::Value::String(s) => {
+                    text.push_str(s);
+                    text.push('\n');
+                }
+                serde_json::Value::Array(items) => stack.extend(items),
+                serde_json::Value::Object(map) => stack.extend(map.values()),
+                _ => {}
+            }
+        }
+        text
+    }
+
+    /// **Every published text that states the batch read's content depth states
+    /// [`ARTIFACT_ASK_CONTENT_DEPTH`]**: the committed `openapi.json` (from `OversizedArtifact`,
+    /// `AskResponse.oversized` and the route's doc), the MCP tool declarations
+    /// (`crates/temper-mcp/src/declarations/tools_list.json`), and the skill's template
+    /// (`crates/temper-cli/templates/shared/data-artifacts.md`). Each states it at least once, in
+    /// the phrase "more than N arrays or objects deep", and never another N, so the constant
+    /// cannot move without the texts an agent decides by. Read at test time, as temper-client's
+    /// registry test reads `openapi.json`, so the published crate references no file outside its
+    /// package. Bites: the constant lowered to 95; one text's 96 edited to 95.
+    #[test]
+    fn every_published_text_states_the_content_depth() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let read = |path: &str| {
+            let path = root.join(path);
+            std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+        };
+        let json = |path: &str| {
+            let document: serde_json::Value =
+                serde_json::from_str(&read(path)).unwrap_or_else(|e| panic!("{path} parses: {e}"));
+            strings_of(&document)
+        };
+        let texts = [
+            ("openapi.json", json("openapi.json")),
+            (
+                "tools_list.json",
+                json("crates/temper-mcp/src/declarations/tools_list.json"),
+            ),
+            (
+                "the skill template",
+                read("crates/temper-cli/templates/shared/data-artifacts.md"),
+            ),
+        ];
+        let limit = ARTIFACT_ASK_CONTENT_DEPTH.to_string();
+        for (name, text) in texts {
+            let stated = depths_stated(&text);
+            assert!(!stated.is_empty(), "{name} states the content depth");
+            assert!(
+                stated.iter().all(|n| *n == limit),
+                "{name} states {stated:?}; the constant is {limit}"
+            );
+        }
     }
 }

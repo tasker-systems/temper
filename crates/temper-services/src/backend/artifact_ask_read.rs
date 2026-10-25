@@ -31,15 +31,15 @@ use crate::backend::substrate_read::artifact_view;
 use crate::error::{ApiError, ApiResult};
 use crate::services::shape_loader;
 use crate::transport::{
-    ARTIFACT_ASK_CONTENT_DEPTH, ARTIFACT_ASK_PAGE_BYTES, ARTIFACT_ASK_READ_BYTES,
-    ARTIFACT_READ_CANDIDATE_BYTES, ARTIFACT_ROW_FIXED_BYTES,
+    ARTIFACT_ASK_PAGE_BYTES, ARTIFACT_ASK_READ_BYTES, ARTIFACT_READ_CANDIDATE_BYTES,
+    ARTIFACT_ROW_FIXED_BYTES,
 };
 use temper_core::error::TemperError;
 use temper_core::types::artifact_ask::{
     AskOrder, AskRequest, AskResponse, AskSession, AskedShape, OversizedArtifact, ShapeContext,
     ShapeSuccessor, ValidatedAsk,
 };
-use temper_core::types::data_artifact::{ArtifactCursor, ArtifactView};
+use temper_core::types::data_artifact::{ArtifactCursor, ArtifactView, ARTIFACT_ASK_CONTENT_DEPTH};
 use temper_core::types::ids::ProfileId;
 use temper_substrate::readback;
 

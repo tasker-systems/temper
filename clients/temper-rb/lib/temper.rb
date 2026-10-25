@@ -29,6 +29,7 @@ end
 # generated file opens with the compact form `module Temper::Generated`.
 require 'temper/generated'
 require 'temper/compat'
+require 'temper/wire_time'
 require 'temper/version'
 require 'temper/errors'
 require 'temper/validate'

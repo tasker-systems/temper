@@ -6372,7 +6372,6 @@ dependencies = [
  "temper-substrate",
  "temperkb-auth",
  "temperkb-core",
- "temperkb-mcp",
  "temperkb-principal",
  "temperkb-telemetry",
  "temperkb-workflow",
