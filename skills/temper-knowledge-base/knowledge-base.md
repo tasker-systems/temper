@@ -607,8 +607,9 @@ Contexts are workspaces that group resources. The typical flow:
   carry a `next`, so keep going. An artifact in `oversized` is too large or too deeply nested for
   a page (content more than 96 arrays or objects deep); read it whole with `get_data_artifact`,
   though a client's own nesting limit can refuse that read too when the content nests very deeply,
-  and on the hosted deployment that read is refused when the content, as storage serves it, is
-  longer than the platform's response cap (storage prints some numbers longer than they were
-  committed).
+  and on the hosted deployment that read is refused when the response carrying the artifact is
+  longer than the platform's response cap. `get_data_artifact` answers the artifact as storage
+  serves it (storage prints some numbers longer than they were committed), as compact JSON
+  escaped into one text block, which can be up to about twice that size.
 - **Access control is automatic** — you only see resources and contexts your
   authenticated profile has access to. No need to handle permissions.

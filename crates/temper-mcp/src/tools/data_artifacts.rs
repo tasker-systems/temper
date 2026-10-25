@@ -157,14 +157,14 @@ pub async fn list_artifacts(
     // last page): a tool result has no header to put it in. Without `limit`, the unchanged
     // answer: drain the bounded list a page at a time and answer the bare array of every
     // artifact.
-    let json = match request {
+    match request {
         Some(request) => {
             let page = client
                 .data_artifacts()
                 .list_page(resource_id, &params, request)
                 .await
                 .across_auth(|e| map_err(e, "list_data_artifacts"))?;
-            serde_json::to_string_pretty(&page)
+            compact_result("list_data_artifacts", &page)
         }
         None => {
             let every = client
@@ -172,13 +172,9 @@ pub async fn list_artifacts(
                 .list_all(resource_id, &params)
                 .await
                 .across_auth(|e| map_err(e, "list_data_artifacts"))?;
-            serde_json::to_string_pretty(&every)
+            compact_result("list_data_artifacts", &every)
         }
     }
-    .map_err(|e| rmcp::ErrorData::internal_error(format!("list_data_artifacts: {e}"), None))?;
-    Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(json),
-    ]))
 }
 
 pub async fn get_artifact(
@@ -202,10 +198,7 @@ pub async fn get_artifact(
             other => map_err(other, "get_data_artifact"),
         })?;
 
-    let json = serde_json::to_string_pretty(&artifact).unwrap_or_else(|_| "{}".to_string());
-    Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(json),
-    ]))
+    compact_result("get_data_artifact", &artifact)
 }
 
 /// MCP input for `ask_data_artifacts`: one batch-read request, relayed unread.
@@ -251,10 +244,22 @@ pub async fn ask_artifacts(
 /// most doubles it, while pretty-printing adds indentation per nesting level that no byte budget
 /// bounds, and a second copy would double it again.
 pub fn ask_result(page: &AskResponse) -> Result<CallToolResult, rmcp::ErrorData> {
-    let body = serde_json::to_string(page)
-        .map_err(|e| rmcp::ErrorData::internal_error(format!("ask_data_artifacts: {e}"), None))?;
+    compact_result("ask_data_artifacts", page)
+}
+
+/// A read's answer as every read tool here gives it (`list_data_artifacts`, `get_data_artifact`,
+/// `ask_data_artifacts`): **compact JSON**, as one text block. The relay escapes the block into its
+/// response, which at most about doubles compact JSON, so an answer here stays within about twice
+/// what the API serves for the same value. Pretty-printing would add a line break and indentation
+/// for every array element and object member, which nothing bounds.
+fn compact_result<T: serde::Serialize>(
+    tool: &str,
+    value: &T,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let text = serde_json::to_string(value)
+        .map_err(|e| rmcp::ErrorData::internal_error(format!("{tool}: {e}"), None))?;
     Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(body),
+        rmcp::model::ContentBlock::text(text),
     ]))
 }
 

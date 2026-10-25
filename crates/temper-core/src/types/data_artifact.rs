@@ -115,9 +115,12 @@ pub const ARTIFACT_DRAIN_PAGE_ROWS: u32 = 50;
 /// (temper-services' `artifact_ask_read`). **Depth** counts each array or object level, with the
 /// content's root at 1: `{}` and `[]` are 1 deep, `{"a":[0]}` is 2, and a string or a number is 0.
 ///
-/// The batch read's docs (`OversizedArtifact`, `AskResponse.oversized`, the route, the MCP tool,
-/// the CLI's help and the skill) state this value in the phrase "more than 96 arrays or objects
-/// deep"; a test reads the published texts for it, so change them together.
+/// The batch read's docs state this value in the phrase "more than 96 arrays or objects deep", so
+/// change them together. A test reads it in each text they are published in: `openapi.json` (from
+/// `OversizedArtifact`, `AskResponse.oversized` and the route's doc), the MCP tool declarations,
+/// the CLI reference (from the CLI's help), the skill template, and the MCP skill's hand-written
+/// tool reference. The SDKs, the TypeScript types and the MCP skill's projection of the template
+/// are generated from those, under their own drift gates.
 ///
 /// # 96: the strictest first-party client's nesting limit, less the levels above the content
 ///
@@ -335,23 +338,20 @@ pub fn holds_nul(value: &serde_json::Value) -> bool {
 /// `None` when neither does. The doors run it before anything is stored, so such a write is
 /// refused by name, as `DATA_ARTIFACT_REFUSAL`, rather than failing in the database.
 pub fn unstorable_nul(kind: &str, value_field: &str, value: &serde_json::Value) -> Option<String> {
-    let fields: Vec<String> = [
-        ("kind", kind.contains('\0')),
-        (value_field, holds_nul(value)),
-    ]
-    .into_iter()
-    .filter(|&(_, holds)| holds)
-    .map(|(field, _)| format!("`{field}`"))
-    .collect();
-    let (named, verb) = match fields.as_slice() {
-        [] => return None,
-        [one] => (one.clone(), "holds"),
-        _ => (fields.join(" and "), "hold"),
+    // A family name is neither a string value nor an object key, so each field gets its remedy.
+    let in_value = || format!("every string and object key in `{value_field}`");
+    let (named, remedy) = match (kind.contains('\0'), holds_nul(value)) {
+        (false, false) => return None,
+        (true, false) => ("`kind` holds".to_string(), "`kind`".to_string()),
+        (false, true) => (format!("`{value_field}` holds"), in_value()),
+        (true, true) => (
+            format!("`kind` and `{value_field}` hold"),
+            format!("`kind`, and from {}", in_value()),
+        ),
     };
     Some(format!(
-        "{named} {verb} the character U+0000 (NUL), which the database cannot store, so no \
-         artifact or shape can hold it; remove it, from every string and object key, and send \
-         the request again"
+        "{named} the character U+0000 (NUL), which the database cannot store, so no artifact or \
+         shape can hold it; remove it from {remedy}, and send the request again"
     ))
 }
 
@@ -561,8 +561,9 @@ mod tests {
     /// that holds it, never by its value**: in a string, in an array of arrays, in a nested
     /// object's key, and in a string inside an object inside an array; not in a value whose only
     /// control character is U+0001. The refusal names `content`, `kind`, or both, and quotes
-    /// nothing. Bites: `key.contains('\0') ||` dropped from `holds_nul` (the nested key is
-    /// missed); the `kind` term dropped from `unstorable_nul` (the family name is admitted).
+    /// nothing, and a refused `kind` is told to remove it from `kind`, not from a string or a key.
+    /// Bites: `key.contains('\0') ||` dropped from `holds_nul` (the nested key is missed);
+    /// `kind.contains('\0')` replaced by `false` in `unstorable_nul` (the family name is admitted).
     #[test]
     fn a_nul_is_refused_by_the_field_that_holds_it() {
         use serde_json::json;
@@ -588,6 +589,10 @@ mod tests {
         let said = unstorable_nul("fam\u{0}ily", "content", &clean).expect("kind refused");
         assert!(said.starts_with("`kind` holds "), "{said}");
         assert!(!said.contains("fam"), "the name is never quoted: {said}");
+        assert!(
+            said.contains("remove it from `kind`,") && !said.contains("object key"),
+            "a name is neither a string value nor an object key: {said}"
+        );
         let said = unstorable_nul("fam\u{0}ily", "schema", &content).expect("both refused");
         assert!(said.starts_with("`kind` and `schema` hold "), "{said}");
     }
@@ -625,12 +630,15 @@ mod tests {
     /// **Every published text that states the batch read's content depth states
     /// [`ARTIFACT_ASK_CONTENT_DEPTH`]**: the committed `openapi.json` (from `OversizedArtifact`,
     /// `AskResponse.oversized` and the route's doc), the MCP tool declarations
-    /// (`crates/temper-mcp/src/declarations/tools_list.json`), and the skill's template
-    /// (`crates/temper-cli/templates/shared/data-artifacts.md`). Each states it at least once, in
-    /// the phrase "more than N arrays or objects deep", and never another N, so the constant
-    /// cannot move without the texts an agent decides by. Read at test time, as temper-client's
-    /// registry test reads `openapi.json`, so the published crate references no file outside its
-    /// package. Bites: the constant lowered to 95; one text's 96 edited to 95.
+    /// (`crates/temper-mcp/src/declarations/tools_list.json`), the CLI reference
+    /// (`docs/reference/cli/data-artifact.md`, from the CLI's help), the skill's template
+    /// (`crates/temper-cli/templates/shared/data-artifacts.md`), and the MCP skill's tool reference
+    /// (`skills/temper-knowledge-base/knowledge-base.md`, which no generator derives). Each states
+    /// it at least once, in the phrase "more than N arrays or objects deep", and never another N,
+    /// so the constant cannot move without the texts an agent decides by. Read at test time, as
+    /// temper-client's registry test reads `openapi.json`, so the published crate references no
+    /// file outside its package. Bites: the constant lowered to 95; one text's 96 edited to 95
+    /// (`knowledge-base.md`'s, or the CLI reference's, among them).
     #[test]
     fn every_published_text_states_the_content_depth() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -651,8 +659,16 @@ mod tests {
                 json("crates/temper-mcp/src/declarations/tools_list.json"),
             ),
             (
+                "the CLI reference",
+                read("docs/reference/cli/data-artifact.md"),
+            ),
+            (
                 "the skill template",
                 read("crates/temper-cli/templates/shared/data-artifacts.md"),
+            ),
+            (
+                "the MCP skill's tool reference",
+                read("skills/temper-knowledge-base/knowledge-base.md"),
             ),
         ];
         let limit = ARTIFACT_ASK_CONTENT_DEPTH.to_string();

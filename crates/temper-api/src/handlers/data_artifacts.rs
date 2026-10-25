@@ -229,12 +229,12 @@ pub async fn get_by_id(
 /// parses every page), is named in `oversized`, in order, by id and size, and the page goes on.
 /// Read it whole by id (`GET /api/data-artifacts/{artifact_id}`); a client's own nesting limit can
 /// refuse that read too when the content nests very deeply, and on the hosted deployment it is
-/// refused when the content, as storage serves it, is longer than the platform's response cap
-/// (storage prints some numbers longer than they were committed). When the read budget ends a
-/// page, `next` is the last artifact it read, matched or not, so a page can carry no artifacts and
-/// still a `next`: only `next: null` ends the enumeration. Continue by sending the same ask with
-/// `next` as `after`; every page validates the ask again for its caller, so the position carries
-/// no authority.
+/// refused when the response carrying the artifact, with its content as storage serves it, is
+/// longer than the platform's response cap (storage prints some numbers longer than they were
+/// committed). When the read budget ends a page, `next` is the last artifact it read, matched or
+/// not, so a page can carry no artifacts and still a `next`: only `next: null` ends the
+/// enumeration. Continue by sending the same ask with `next` as `after`; every page validates the
+/// ask again for its caller, so the position carries no authority.
 ///
 /// `population` counts the ask's whole governed population on the first page and is `null` after
 /// it. Those counts are exact, so the first page matches every governed artifact of the home to
@@ -335,6 +335,16 @@ where
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Committed artifact", body = ArtifactCommitResponse),
+        (
+            status = 400,
+            description = "Under `DATA_ARTIFACT_REFUSAL`, the write is declined, the message \
+                saying why: `kind` or `content` holds U+0000, which is refused before the resource \
+                is checked, so whatever the caller's standing on it; an enforcing shape refuses the \
+                content; or the store declines the write in its own vocabulary. Under \
+                `BAD_REQUEST`, the `intent` is not `current`, `member` or `pinned`, or the act's \
+                authorship fields come without `confidence` or past their length bounds.",
+            body = ErrorBody,
+        ),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "No write standing on the owning resource", body = ErrorBody),
         (status = 404, description = "Resource not found or not visible", body = ErrorBody),

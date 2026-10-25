@@ -10,9 +10,10 @@
 //! moves on) only while its test of what a page can carry is right, and that test is a list of the
 //! causes found so far: a row too long for a page, a number storage prints longer than it was
 //! committed, content nested past a client's parse limit. So this test names no cause. It commits
-//! a hostile corpus through the real commit door, walks four asks of it (`tag` present, no
-//! predicates, a `contains` and a `compare` over `tag`) to `next: null` at four limits (no
-//! `limit`, 1, 7 and `MAX_ARTIFACT_PAGE_ROWS`), and asserts on every page what a stall breaks:
+//! a hostile corpus through the real commit door, walks four asks of it to `next: null` (`tag`
+//! present and no predicates at four limits: no `limit`, 1, 7 and `MAX_ARTIFACT_PAGE_ROWS`; a
+//! `contains` and a `compare` over `tag` at two: no `limit` and 1), and asserts on every page what
+//! a stall breaks:
 //!
 //! 1. **it parses**, through `DataArtifactsClient::ask` (serde_json at its default limits, as the
 //!    MCP relay and the CLI parse) and from the raw body's bytes as an `AskResponse`, and it nests
@@ -27,25 +28,30 @@
 //! 4. **served content is whole**: what was committed, value for value, so a number storage
 //!    reprints (a float from 1e16 up to the 64-bit integer limits, served as an integer) compares
 //!    by value, not by text;
-//! 5. **it answers in time**: each read of a page within [`PAGE_TIMEOUT`], so a slow page is a
-//!    finding naming its walk and page, not a run the test runner kills with every finding lost.
+//! 5. **it answers in time**: each read of a page within [`PAGE_TIMEOUT`], and the walks within
+//!    [`WALK_BUDGET`]. Once a page has timed out or the budget is spent, no further walk or page
+//!    starts, and each one skipped is a finding, so a slow run reports what it found rather than
+//!    being killed by the test runner with every finding lost.
 //!
 //! The read budget is a constant the test cannot shrink, so the corpus opens with three artifacts
 //! whose read charge spends it, and every walk that may examine three rows a page must stop its
 //! first page on them, at the read frontier. The probes the corpus offers the doors (U+0000, the
-//! deepest content, the longest family name) are each recorded with their answer; a refusal that is
-//! a fault (a 5xx) is a finding. Every failure is collected, naming the walk, the page and the
-//! item, and all of them are reported together, with every probe's answer.
+//! deepest content, the longest family name) are each recorded with their answer. The U+0000
+//! probes must be refused by name, and the deepest probe's refusals must not be faults (a 5xx);
+//! the long family's answers are recorded, not held. Every failure is collected, naming the walk,
+//! the page and the item, and all of them are reported together, with every probe's answer.
 //!
-//! **Cost.** About ninety artifacts holding about 18 MB of content, twenty walks and about 600
-//! requests, each page asked twice (raw, and through the client). It is expected to run for tens
-//! of seconds, heavier than this suite's usual test. The suite gates its tests by what they need
-//! (`test-db`, `test-embed`), not by their weight, so this runs under `test-db` with the rest.
+//! **Cost.** About ninety-five artifacts holding about 18 MB of content, sixteen walks and a little
+//! under 600 requests, each page asked twice (raw, and through the client). It runs for 34–41
+//! seconds locally, heavier than this suite's usual test, so `.config/nextest.toml` gives this
+//! binary a measured timeout override; [`WALK_BUDGET`] bounds it inside that. The suite gates its
+//! tests by what they need (`test-db`, `test-embed`), not by their weight, so this runs under
+//! `test-db` with the rest.
 
 mod common;
 
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -77,15 +83,28 @@ const RUBY_MAX_NESTING: usize = 100;
 /// content the commit door admits must be past it, or no item here breaks that parse.
 const RUST_CLIENT_CONTENT_DEPTH: usize = 124;
 
-/// How long each read of a page may take: the raw request, and the client's. The walk's first form
-/// ran in about 23 seconds locally over about 500 requests, under 50 milliseconds a request on
-/// average; this allows a page hundreds of times that, and still leaves the test runner's
-/// 120-second kill room to report it.
+/// How long each read of a page may take: the raw request, and the client's. A request takes tens
+/// of milliseconds locally on average; this allows a page hundreds of times that.
 const PAGE_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// The page limits each ask is walked at: absent (the drain default), 1, a small limit that splits
-/// the corpus unevenly, and the ceiling.
+/// How long the walks may run, counted from the first. The test runner kills this binary at 240
+/// seconds (its override in `.config/nextest.toml`), and every collected finding is lost with it.
+/// So once this is spent no further walk or page starts, and each one skipped is a finding. One
+/// page already in flight can still take [`PAGE_TIMEOUT`] twice (raw, and through the client), so
+/// the run ends before the kill while building the world before the first walk takes under thirty
+/// seconds.
+const WALK_BUDGET: Duration = Duration::from_secs(180);
+
+/// The page limits the `tag`-present ask, the ask with no predicates and the long family are
+/// walked at: absent (the drain default), 1, a small limit that splits the corpus unevenly, and
+/// the ceiling.
 const LIMITS: [Option<u32>; 4] = [None, Some(1), Some(7), Some(MAX_ARTIFACT_PAGE_ROWS)];
+
+/// The page limits the `contains` and `compare` asks are walked at: absent, whose first page stops
+/// on the read frontier, and 1, which puts a page boundary after every row. Each walk reads the
+/// whole corpus whatever its limit, and these asks match only a few small rows, so further limits
+/// would cost whole reads of the corpus to split those few rows differently.
+const MATCHER_LIMITS: [Option<u32>; 2] = [None, Some(1)];
 
 /// The hostile family's bare name.
 const KIND: &str = "hostile";
@@ -122,6 +141,9 @@ const ZEROS: usize = 700_000;
 
 /// The run of small artifacts that carry the asked path.
 const TINY_ROWS: usize = 30;
+
+/// The label prefix of the small artifacts whose `tag` is a value at an extreme.
+const EXTREME_TAG: &str = "extreme-tag-";
 
 /// The run of artifacts committed with no content.
 const CONTENTLESS_ROWS: usize = 20;
@@ -783,6 +805,31 @@ async fn world(pool: PgPool) -> World {
         family.put(&app, KIND, entry).await;
     }
 
+    // Small rows whose `tag` is a value at an extreme: numbers past `bigint`, or that storage
+    // prints longer than they were committed, negative zero, and an array as deep as a page holds
+    // under the tag. `compare` (at least 0) admits the four numbers and `contains` none of the
+    // five, so a matcher arm that faults on a value it reads, not only on a type, stops a walk.
+    let mut deep_tag = json!([]);
+    for _ in 2..ARTIFACT_ASK_CONTENT_DEPTH {
+        deep_tag = json!([deep_tag]);
+    }
+    let extremes = [
+        ("1e19", json!(1e19)),
+        ("u64-max", json!(u64::MAX)),
+        ("f64-max", json!(f64::MAX)),
+        ("negative-zero", json!(-0.0)),
+        ("deep-array", deep_tag),
+    ];
+    for (n, (label, tag)) in extremes.into_iter().enumerate() {
+        let entry = Entry::member(
+            format!("{EXTREME_TAG}{label}"),
+            resources[n % 2],
+            json!({ "tag": tag, "n": TINY_ROWS + n }),
+            Expect::Served,
+        );
+        family.put(&app, KIND, entry).await;
+    }
+
     // A run of artifacts with no content: matched by the ask with no predicates only.
     for n in 0..CONTENTLESS_ROWS {
         let entry = Entry::member(
@@ -981,6 +1028,35 @@ impl Findings {
     }
 }
 
+/// Whether a walk or a page may still start: not once [`WALK_BUDGET`] is spent, and not once a
+/// page has timed out, since a server that slow is likely to be as slow for the next.
+#[derive(Debug)]
+struct Clock {
+    deadline: Instant,
+    timed_out: bool,
+}
+
+impl Clock {
+    /// A clock whose budget starts now.
+    fn starting_now() -> Clock {
+        Clock {
+            deadline: Instant::now() + WALK_BUDGET,
+            timed_out: false,
+        }
+    }
+
+    /// Why nothing more may start, or `None` while it may.
+    fn spent(&self) -> Option<&'static str> {
+        if self.timed_out {
+            Some("a page has timed out")
+        } else if Instant::now() >= self.deadline {
+            Some("the test's time budget is spent")
+        } else {
+            None
+        }
+    }
+}
+
 /// Which corpus items an ask matches.
 type Matches<'a> = &'a dyn Fn(&Item) -> bool;
 
@@ -1036,16 +1112,18 @@ fn request(ask: &Value, limit: Option<u32>, after: Option<ArtifactCursor>) -> Va
 /// page must be: answered within [`PAGE_TIMEOUT`], within the platform's response cap as the API
 /// sends it and as the MCP tool answers it, and within the body that answer is sized for, parsed
 /// from its bytes as an `AskResponse`, nested within the Ruby client's limit, and read alike by the
-/// client. `None` when the walk cannot go on from it.
+/// client. `None` when the walk cannot go on from it; a timeout also stops `clock`.
 async fn read_page(
     app: &common::E2eTestApp,
     request: &Value,
     at: &str,
+    clock: &mut Clock,
     findings: &mut Findings,
 ) -> Option<AskResponse> {
     let asked = post(app, "/api/data-artifacts/ask", request);
     let Ok((status, body)) = tokio::time::timeout(PAGE_TIMEOUT, asked).await else {
         findings.note(format!("{at}: no answer within {PAGE_TIMEOUT:?}"));
+        clock.timed_out = true;
         return None;
     };
     if status != 200 {
@@ -1105,6 +1183,7 @@ async fn read_page(
         findings.note(format!(
             "{at}: DataArtifactsClient::ask had no answer within {PAGE_TIMEOUT:?}"
         ));
+        clock.timed_out = true;
         return None;
     };
     match read {
@@ -1222,12 +1301,18 @@ fn same_value(served: &Value, committed: &Value) -> bool {
 
 /// Walk `walk.ask` from its first page to `next: null`, holding every page to what a page must be
 /// and every row to the corpus, then hold the walk to the corpus: every artifact the ask matches
-/// exactly once. The pages seen, in order.
+/// exactly once. The pages seen, in order; `None`, and a finding, when `clock` lets the walk not
+/// start. A page `clock` lets not start is a finding too, and stops the walk.
 async fn walk_to_the_end(
     app: &common::E2eTestApp,
     walk: &Walk<'_>,
+    clock: &mut Clock,
     findings: &mut Findings,
-) -> Vec<PageSeen> {
+) -> Option<Vec<PageSeen>> {
+    if let Some(reason) = clock.spent() {
+        findings.note(format!("walk `{}`: not run: {reason}", walk.name));
+        return None;
+    }
     let max_pages = walk.family.rows() + 1;
     let mut seen: HashMap<Uuid, usize> = HashMap::new();
     let mut pages: Vec<PageSeen> = Vec::new();
@@ -1246,8 +1331,12 @@ async fn walk_to_the_end(
             ));
             break false;
         }
+        if let Some(reason) = clock.spent() {
+            findings.note(format!("{at}: not read: {reason}"));
+            break false;
+        }
         let body = request(walk.ask, walk.limit, after);
-        let Some(page) = read_page(app, &body, &at, findings).await else {
+        let Some(page) = read_page(app, &body, &at, clock, findings).await else {
             break false;
         };
         check_rows(&at, &page, walk, &mut seen, findings);
@@ -1302,7 +1391,7 @@ async fn walk_to_the_end(
             expected.len()
         ));
     }
-    pages
+    Some(pages)
 }
 
 /// A limit as a walk's name shows it.
@@ -1314,16 +1403,20 @@ fn shown(limit: Option<u32>) -> String {
 /// The hostile family is asked four ways — `tag` present, which its non-object, untagged,
 /// content-less, pinned and folded artifacts must not answer; with no predicates, which every
 /// live member and current artifact answers, content-less ones included; `tag` containing `"t"`,
-/// `null` or `{}`, and `tag` at least 0, which only some of the tiny artifacts answer, their `tag`
-/// taking every JSON type, so a matcher arm that could raise on one would show — and the long
-/// family with no predicates; each at every limit in [`LIMITS`]. What the `contains` and `compare`
-/// asks match is the reference evaluator's answer ([`by_reference`]). A walk that may examine three
-/// rows a page (no limit, 7, the ceiling) stops its first page on the read frontier: of the three
-/// read-spending artifacts, the ones its ask matches named oversized, nothing served, and `next`
-/// at the third, though the row limit left room and the page had spent at most three entries'
-/// worth of its budget on a page whose next row is small. So only the read budget can have ended
-/// it. The probes' answers are held too: U+0000 refused by name, a door's refusal never a fault,
-/// and the deepest content admitted past what a Rust client reads on a page.
+/// `null` or `{}`, and `tag` at least 0, which only some of the small artifacts answer, their `tag`
+/// taking every JSON type and some a value at an extreme (`1e19`, `u64::MAX`, `f64::MAX`, `-0.0`,
+/// an array as deep as a page holds), so a matcher arm that could raise on a type or on a value
+/// would show — and the long family with no predicates. The `contains` and `compare` asks are
+/// walked at every limit in [`MATCHER_LIMITS`], the rest at every limit in [`LIMITS`], all within
+/// [`WALK_BUDGET`]. What the `contains` and `compare` asks match is the reference evaluator's
+/// answer ([`by_reference`]). A walk that may examine three rows a page (no limit, 7, the ceiling)
+/// stops its first page on the read frontier: of the three read-spending artifacts, the ones its
+/// ask matches named oversized, nothing served, and `next` at the third, though the row limit left
+/// room and the page had spent at most three entries' worth of its budget on a page whose next
+/// row is small. So only the read budget can have ended it. The probes' answers are held too, but
+/// for the long family's, which are recorded only: U+0000 refused by name, the deepest probe's
+/// refusals never a fault, and the deepest content admitted past what a Rust client reads on a
+/// page.
 ///
 /// Bites, each red through this test's own findings:
 /// - the depth check removed (in `artifact_ask_read::written`, `if bytes > budget || too_deep`
@@ -1336,9 +1429,10 @@ fn shown(limit: Option<u32>) -> String {
 /// - `next` from `examined` alone (in temper-substrate's `readback::ask_page_of`,
 ///   `!r.examined || r.frontier` becomes `!r.examined`): the first page, stopped on the read
 ///   frontier, answers `next: null`, so the walk ends there and every later artifact is missed;
-/// - the MCP tool's answer pretty-printed (in temper-mcp's `tools::data_artifacts::ask_result`,
-///   `serde_json::to_string(page)` becomes `serde_json::to_string_pretty(page)`): every page
-///   serving `zeros` answers past the platform's response cap through the tool;
+/// - the MCP tool's answer pretty-printed (in temper-mcp's `tools::data_artifacts::compact_result`,
+///   which `ask_result` answers through, `serde_json::to_string(value)` becomes
+///   `serde_json::to_string_pretty(value)`): every page serving `zeros` answers past the
+///   platform's response cap through the tool;
 /// - the commit door's U+0000 check removed (in `DbBackend::commit_data_artifact`, the
 ///   `unstorable_nul` check): the three U+0000 probes answer 500, "not refused as a 400".
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
@@ -1362,18 +1456,33 @@ async fn every_walk_of_a_hostile_corpus_ends_and_every_page_parses_fits_and_is_w
     let whole = |item: &Item| item.whole;
     let contained = by_reference(&contains);
     let compared = by_reference(&compare);
-    let asks: [(&str, &Value, Matches<'_>); 4] = [
-        ("`tag` present", &tag_ask, &tagged),
-        ("no predicates", &whole_ask, &whole),
+    let extremes: Vec<&Item> = w
+        .family
+        .items
+        .iter()
+        .filter(|item| item.label.starts_with(EXTREME_TAG))
+        .collect();
+    assert!(
+        extremes.len() == 5
+            && extremes.iter().filter(|&&item| compared(item)).count() == 4
+            && !extremes.iter().any(|&item| contained(item)),
+        "the fixture: `compare` admits the four extreme numbers, and `contains` none of the five \
+         extreme tags"
+    );
+    let asks: [(&str, &Value, Matches<'_>, &[Option<u32>]); 4] = [
+        ("`tag` present", &tag_ask, &tagged, &LIMITS),
+        ("no predicates", &whole_ask, &whole, &LIMITS),
         (
             "`tag` contains \"t\", null or {}",
             &contains_ask,
             &contained,
+            &MATCHER_LIMITS,
         ),
-        ("`tag` at least 0", &compare_ask, &compared),
+        ("`tag` at least 0", &compare_ask, &compared, &MATCHER_LIMITS),
     ];
-    for (ask_name, ask, matches) in asks {
-        for limit in LIMITS {
+    let mut clock = Clock::starting_now();
+    for (ask_name, ask, matches, limits) in asks {
+        for &limit in limits {
             let walk_of = Walk {
                 name: format!("{ask_name}, limit {}", shown(limit)),
                 ask,
@@ -1381,7 +1490,10 @@ async fn every_walk_of_a_hostile_corpus_ends_and_every_page_parses_fits_and_is_w
                 family: &w.family,
                 matches,
             };
-            let pages = walk_to_the_end(&w.app, &walk_of, &mut findings).await;
+            let walked = walk_to_the_end(&w.app, &walk_of, &mut clock, &mut findings).await;
+            let Some(pages) = walked else {
+                continue;
+            };
             if limit.is_none_or(|limit| limit >= 3) {
                 let named: Vec<Uuid> = w
                     .trio
@@ -1418,7 +1530,7 @@ async fn every_walk_of_a_hostile_corpus_ends_and_every_page_parses_fits_and_is_w
             family: &w.long.family,
             matches: &whole,
         };
-        walk_to_the_end(&w.app, &walk_of, &mut findings).await;
+        walk_to_the_end(&w.app, &walk_of, &mut clock, &mut findings).await;
     }
     findings.assert_none(&w.probes.answers);
 }

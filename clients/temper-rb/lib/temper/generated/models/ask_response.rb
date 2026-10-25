@@ -28,7 +28,7 @@ module Temper::Generated
     # The order rows arrive in. Enumeration order, never rank.
     attr_accessor :ordered_by
 
-    # Matching artifacts too large for any page's byte budget, or too deeply nested for a page (content more than 96 arrays or objects deep), in order among the rest, by id and size and without content. Each is read whole by id (`GET /api/data-artifacts/{artifact_id}`); on the hosted deployment that read is refused too when the content, as storage serves it, is longer than the platform's response cap (see `OversizedArtifact`).
+    # Matching artifacts too large for any page's byte budget, or too deeply nested for a page (content more than 96 arrays or objects deep), in order among the rest, by id and size and without content. Each is read whole by id (`GET /api/data-artifacts/{artifact_id}`); on the hosted deployment that read is refused too when the response carrying the artifact, with its content as storage serves it, is longer than the platform's response cap (see `OversizedArtifact`).
     attr_accessor :oversized
 
     # What the ask counted over its whole population, on the first page; `null` on every later page. These are exact counts over the whole counted set: to count them, the first page matches every governed artifact of the home, content included, and the read budget that bounds the page's own rows does not bound that. They are read in a statement of their own beside the page's, so a commit landing between the two can make `matched` differ from the rows by that commit; they describe the population, not the page.

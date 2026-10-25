@@ -63,8 +63,8 @@ fn charge(r: &ArtifactView) -> usize {
 /// zeros (the content pretty-printing inflates most), every one a long backslashed family name;
 /// plus a full envelope. The page is within the budget as the SQL charges it, its API body within
 /// the budget and the envelope, and the tool's whole `CallToolResult`, serialized, within the cap.
-/// Bite: `to_string_pretty` in `ask_result` — the array rows' indentation alone carries it past the
-/// cap.
+/// Bite: `to_string_pretty` in `compact_result`, which `ask_result` answers through — the array
+/// rows' indentation alone carries it past the cap.
 #[test]
 fn the_worst_page_the_budget_admits_fits_the_response_cap_as_the_tool_sends_it() {
     let rows = usize::try_from(MAX_ARTIFACT_PAGE_ROWS).expect("fits");

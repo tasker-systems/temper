@@ -136,8 +136,8 @@ fn page() -> AskResponse {
 /// that field included, and answers one page. The result is one text block, no structured content,
 /// with no newline in it (the content's own newline travels escaped), and it reads back as the
 /// page. Bites: the tool deserializing `AskRequest` itself (the field is dropped before the relay,
-/// or the call refused at the edge), `to_string_pretty` in `ask_result`, or the page also sent as
-/// structured content.
+/// or the call refused at the edge), `to_string_pretty` in `compact_result` (which `ask_result`
+/// answers through), or the page also sent as structured content.
 #[tokio::test]
 async fn the_tool_relays_the_ask_unread_and_answers_the_page_once_compactly() {
     let page = page();

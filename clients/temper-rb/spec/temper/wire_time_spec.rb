@@ -58,9 +58,21 @@ RSpec.describe Temper::WireTime do
     expect(a_request(:get, url).with(query: hash_including('after_created' => created))).to have_been_made.once
   end
 
-  it 'writes a Time or DateTime at any depth, and leaves everything else as it is' do
+  it 'stamps a Time or a DateTime, and leaves everything else as it is' do
     at = Time.parse(created)
-    expect(described_class.written({ a: [at, { b: at.to_datetime }], c: 'x', d: 1, e: nil }))
-      .to eq({ a: [created, { b: '2026-10-25T09:58:12.123456+00:00' }], c: 'x', d: 1, e: nil })
+    expect(described_class.stamp(at)).to eq(created)
+    expect(described_class.stamp(at.to_datetime)).to eq('2026-10-25T09:58:12.123456+00:00')
+    holding = { a: [at] }
+    ['x', 1, nil, holding].each { |other| expect(described_class.stamp(other)).to equal(other) }
+  end
+
+  # A `Time` in free-form JSON is no declared timestamp: the body is exactly the one the generated
+  # core writes without this patch, so the content a caller commits is stored, and hashed, as it was.
+  it 'leaves a Time in free-form content to the json gem' do
+    at = Time.parse(created)
+    [at, { observed_at: at, readings: [at, { at: at }] }].each do |content|
+      request = Temper::Generated::ArtifactCommitRequest.new(kind: 'measurement', intent: 'current', content: content)
+      expect(Temper.api_client.object_to_http_body(request)).to eq(request.to_hash.to_json)
+    end
   end
 end

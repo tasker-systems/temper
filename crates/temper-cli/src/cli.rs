@@ -1234,9 +1234,9 @@ pub enum DataArtifactAction {
     /// is too large or too deeply nested for a page (content more than 96 arrays or objects deep),
     /// and the page goes on: read it whole with `data-artifact get <artifact-id>`, though a
     /// client's own nesting limit can refuse that read too when the content nests very deeply, and
-    /// on the hosted deployment that read is refused when the content, as storage serves it, is
-    /// longer than the platform's response cap (storage prints some numbers longer than they were
-    /// committed).
+    /// on the hosted deployment that read is refused when the response carrying the artifact, with
+    /// its content as storage serves it, is longer than the platform's response cap (storage
+    /// prints some numbers longer than they were committed).
     ///
     /// This is an enumeration, and `data-artifact list` is addressed. An ask reads across every
     /// resource you can see in the shape's home, and like listing and search it leaves out a
