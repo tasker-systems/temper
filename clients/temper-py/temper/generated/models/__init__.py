@@ -133,6 +133,7 @@ from temper.generated.models.confidence_band import ConfidenceBand
 from temper.generated.models.connection_credential import ConnectionCredential
 from temper.generated.models.connection_subscription import ConnectionSubscription
 from temper.generated.models.content_response import ContentResponse
+from temper.generated.models.context_activity import ContextActivity
 from temper.generated.models.context_create_request import ContextCreateRequest
 from temper.generated.models.context_owner_ref import ContextOwnerRef
 from temper.generated.models.context_owner_ref_one_of import ContextOwnerRefOneOf

@@ -9,8 +9,9 @@ use temper_core::types::api::{
     SearchReason, SearchResponse, SearchResultRow, SearchScope, SearchScopeInfo, WideArm, WideHit,
 };
 use temper_core::types::context::{
-    ContextRowWithCounts, ReassignContextOutcome, ReassignContextRequest, RenameContextOutcome,
-    RenameContextRequest, ShareContextOutcome, ShareContextRequest, UnshareContextOutcome,
+    ContextActivity, ContextRowWithCounts, ReassignContextOutcome, ReassignContextRequest,
+    RenameContextOutcome, RenameContextRequest, ShareContextOutcome, ShareContextRequest,
+    UnshareContextOutcome,
 };
 use temper_services::error::{ErrorBody, ErrorDetail};
 use temper_workflow::types::resource::{
@@ -45,6 +46,7 @@ const API_VERSION: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../
         ContentResponse,
         DeleteResponse,
         ContextRowWithCounts,
+        ContextActivity,
         ReassignContextRequest,
         ReassignContextOutcome,
         RenameContextRequest,
@@ -196,6 +198,7 @@ const API_VERSION: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../
         (name = "Facets", description = "Typed facet property writes (facet_set)"),
         (name = "Relationships", description = "Knowledge-graph relationship writes (assert/retype/reweight/fold)"),
         (name = "Contexts", description = "Contexts — named homes for resources, and who they are shared with"),
+        (name = "Me", description = "Reads about the calling profile's own work, named for nothing but the caller"),
         (name = "Cognitive Maps", description = "Cognitive maps — genesis, reads (shape, metrics, analytics), content reconcile, materialize, team binding, and grants"),
         (name = "Graph", description = "Knowledge graph traversal"),
         (name = "Schema", description = "Document-type schemas — the vocabularies each kind of work carries, and the recognized conventions of the open metadata tier"),

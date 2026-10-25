@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT a.context_id AS \"context_id!: ContextId\",\n               a.changed_at AS \"last_changed_at!\"\n          FROM contexts_changed_by($1) a\n         ORDER BY a.changed_at DESC, a.context_id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "context_id!: ContextId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "last_changed_at!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "a240490c51d865d448c7ddea0ad170cde034bb530fb4456029f23333a6c011d8"
+}

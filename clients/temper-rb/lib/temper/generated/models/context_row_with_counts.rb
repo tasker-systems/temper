@@ -28,9 +28,6 @@ module Temper::Generated
 
     attr_accessor :kb_owner_table
 
-    # When the reading principal last changed anything in this context — themselves, or an agent writing under their profile — or `None` when they never have. Their own changes only: a teammate's, or a machine client's, never set it. Unlike `updated`, which the contexts read synthesizes from `created`, this is a real activity time. Always `None` on the retired-contexts read: it is computed through the caller's read predicate, which admits no retired context.
-    attr_accessor :last_changed_by_you
-
     attr_accessor :name
 
     # The already-sigil'd owner addressable: `@<handle>` for profiles, `+<team-slug>` for teams. Together with `slug`, forms the full decorated context ref `{owner_ref}/{slug}`.
@@ -54,7 +51,6 @@ module Temper::Generated
         :'id' => :'id',
         :'kb_owner_id' => :'kb_owner_id',
         :'kb_owner_table' => :'kb_owner_table',
-        :'last_changed_by_you' => :'last_changed_by_you',
         :'name' => :'name',
         :'owner_ref' => :'owner_ref',
         :'resource_count' => :'resource_count',
@@ -82,7 +78,6 @@ module Temper::Generated
         :'id' => :'String',
         :'kb_owner_id' => :'String',
         :'kb_owner_table' => :'String',
-        :'last_changed_by_you' => :'Time',
         :'name' => :'String',
         :'owner_ref' => :'String',
         :'resource_count' => :'Integer',
@@ -95,7 +90,6 @@ module Temper::Generated
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
-        :'last_changed_by_you',
       ])
     end
 
@@ -143,10 +137,6 @@ module Temper::Generated
         self.kb_owner_table = attributes[:'kb_owner_table']
       else
         self.kb_owner_table = nil
-      end
-
-      if attributes.key?(:'last_changed_by_you')
-        self.last_changed_by_you = attributes[:'last_changed_by_you']
       end
 
       if attributes.key?(:'name')
@@ -376,7 +366,6 @@ module Temper::Generated
           id == o.id &&
           kb_owner_id == o.kb_owner_id &&
           kb_owner_table == o.kb_owner_table &&
-          last_changed_by_you == o.last_changed_by_you &&
           name == o.name &&
           owner_ref == o.owner_ref &&
           resource_count == o.resource_count &&
@@ -394,7 +383,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [can_write, created, id, kb_owner_id, kb_owner_table, last_changed_by_you, name, owner_ref, resource_count, retired, slug, updated].hash
+      [can_write, created, id, kb_owner_id, kb_owner_table, name, owner_ref, resource_count, retired, slug, updated].hash
     end
 
     # Builds the object from hash

@@ -18,6 +18,7 @@ temper/generated/api/ingest_api.py
 temper/generated/api/invitations_api.py
 temper/generated/api/invocations_api.py
 temper/generated/api/machine_clients_api.py
+temper/generated/api/me_api.py
 temper/generated/api/meta_api.py
 temper/generated/api/profile_api.py
 temper/generated/api/query_api.py
@@ -155,6 +156,7 @@ temper/generated/models/confidence_band.py
 temper/generated/models/connection_credential.py
 temper/generated/models/connection_subscription.py
 temper/generated/models/content_response.py
+temper/generated/models/context_activity.py
 temper/generated/models/context_create_request.py
 temper/generated/models/context_owner_ref.py
 temper/generated/models/context_owner_ref_one_of.py

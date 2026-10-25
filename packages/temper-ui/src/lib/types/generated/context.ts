@@ -2,6 +2,23 @@
 import type { ContextId } from "./ContextId";
 
 /**
+ * When the reading principal last changed something in one context — themselves, or an agent
+ * writing under their profile. One row per context they changed something in and can still read;
+ * `GET /api/me/context-activity`.
+ *
+ * Their own authored changes only: a teammate's, a machine client's, and an event the system
+ * computes (a region materialization stamped with a writer's emitter) never set it. A row's absence
+ * says nothing about the context: the caller cannot read it, or never changed anything there.
+ * A profile-scoped read of its own rather than a field of the contexts list, so the list every page
+ * loads does not pay for a scan of the caller's whole history.
+ */
+export type ContextActivity = { context_id: ContextId, 
+/**
+ * The time of the caller's latest authored change produced in this context.
+ */
+last_changed_at: string, };
+
+/**
  * Response of `GET /api/contexts/resolve` — a context ref resolved to its id, for the caller.
  *
  * Deliberately just the id: a caller that holds a ref (`@me/<slug>`, `@<handle>/<slug>`,
@@ -97,16 +114,7 @@ can_write: boolean,
  * (`list_retired_administered`, `get_retired_administered`) — and is never re-derived any
  * other way, e.g. never inverted in Rust after the fact.
  */
-retired: boolean, 
-/**
- * When the reading principal last changed anything in this context — themselves, or an agent
- * writing under their profile — or `None` when they never have. Their own changes only: a
- * teammate's, or a machine client's, never set it. Unlike `updated`, which the contexts read
- * synthesizes from `created`, this is a real activity time. Always `None` on the
- * retired-contexts read: it is computed through the caller's read predicate, which admits no
- * retired context.
- */
-last_changed_by_you: string | null, };
+retired: boolean, };
 
 /**
  * An explicit context read-grant that survives the ownership flip — inherited residual reach.

@@ -122,12 +122,13 @@ doc_type_name: string | null, owner: string | null,
  * event the caller's profile emitted, so this and the trail cannot disagree. A machine client
  * is its own profile, and its changes are not the caller's.
  *
- * **Only `"@me"`.** Any other value is a `400`: naming someone else would make this a read of
+ * **Only `"@me"`.** Any other non-empty value is a `400`: naming someone else would make this a read of
  * another principal's activity, which no door offers. Composes with every other filter as one
  * more AND, under the same visibility join, so a resource the caller changed and can no longer
- * read is absent from the rows and from every count.
+ * read is absent from the rows and from every count. An empty value is no filter, as for
+ * `tags` and `ids`.
  */
-changed_by: string | null, q: string | null, stage: string | null, 
+changed_by?: string | null, q: string | null, stage: string | null, 
 /**
  * Goal-status filter (goal only): matches `temper-status` via the
  * `kb_resource_workflow_props` pivot, exactly as `stage` does. Validated against the

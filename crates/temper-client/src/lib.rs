@@ -26,6 +26,7 @@ pub mod invocations;
 pub mod login;
 mod login_page;
 pub mod machine;
+pub mod me;
 pub(crate) mod ops;
 pub mod profile;
 pub mod query;
@@ -257,6 +258,11 @@ impl TemperClient {
     /// Context CRUD sub-client.
     pub fn contexts(&self) -> contexts::ContextClient<'_> {
         contexts::ContextClient::new(&self.http)
+    }
+
+    /// Reads about the caller's own work (`/api/me/...`).
+    pub fn me(&self) -> me::MeClient<'_> {
+        me::MeClient::new(&self.http)
     }
 
     /// Admin / system-settings sub-client (settings, promote, request review).

@@ -99,13 +99,26 @@ pub struct ContextRowWithCounts {
     /// (`list_retired_administered`, `get_retired_administered`) — and is never re-derived any
     /// other way, e.g. never inverted in Rust after the fact.
     pub retired: bool,
-    /// When the reading principal last changed anything in this context — themselves, or an agent
-    /// writing under their profile — or `None` when they never have. Their own changes only: a
-    /// teammate's, or a machine client's, never set it. Unlike `updated`, which the contexts read
-    /// synthesizes from `created`, this is a real activity time. Always `None` on the
-    /// retired-contexts read: it is computed through the caller's read predicate, which admits no
-    /// retired context.
-    pub last_changed_by_you: Option<DateTime<Utc>>,
+}
+
+/// When the reading principal last changed something in one context — themselves, or an agent
+/// writing under their profile. One row per context they changed something in and can still read;
+/// `GET /api/me/context-activity`.
+///
+/// Their own authored changes only: a teammate's, a machine client's, and an event the system
+/// computes (a region materialization stamped with a writer's emitter) never set it. A row's absence
+/// says nothing about the context: the caller cannot read it, or never changed anything there.
+/// A profile-scoped read of its own rather than a field of the contexts list, so the list every page
+/// loads does not pay for a scan of the caller's whole history.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "context.ts"))]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct ContextActivity {
+    pub context_id: ContextId,
+    /// The time of the caller's latest authored change produced in this context.
+    pub last_changed_at: DateTime<Utc>,
 }
 
 /// Request body for POST /api/contexts.

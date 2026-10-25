@@ -31,11 +31,34 @@ use temper_core::types::team::TeamRole;
 use temper_workflow::operations::sluggify;
 
 pub use temper_core::types::context::{
-    ContextCreateRequest, ContextRow, ContextRowWithCounts, InheritedReadGrant, InheritedShare,
-    ReassignContextOutcome, ReassignContextRequest, RenameContextOutcome, RenameContextRequest,
-    RestoreContextOutcome, RetireContextOutcome, ShareContextOutcome, ShareContextRequest,
-    UnshareContextOutcome,
+    ContextActivity, ContextCreateRequest, ContextRow, ContextRowWithCounts, InheritedReadGrant,
+    InheritedShare, ReassignContextOutcome, ReassignContextRequest, RenameContextOutcome,
+    RenameContextRequest, RestoreContextOutcome, RetireContextOutcome, ShareContextOutcome,
+    ShareContextRequest, UnshareContextOutcome,
 };
+
+/// When the profile last changed something in each context they can read — one row per context
+/// they ever changed something in, newest first. `GET /api/me/context-activity`.
+///
+/// Read through `contexts_changed_by` (20261106000000), which aggregates the profile's own authored
+/// changes per context and then gates once by `contexts_readable_by`; a context the profile cannot
+/// read, or a retired one, has no row. A read of its own, not a column of [`list_visible`], because
+/// it scans the profile's whole history and the contexts list is read on every page load.
+pub async fn activity_of(pool: &PgPool, profile_id: ProfileId) -> ApiResult<Vec<ContextActivity>> {
+    let rows = sqlx::query_as!(
+        ContextActivity,
+        r#"
+        SELECT a.context_id AS "context_id!: ContextId",
+               a.changed_at AS "last_changed_at!"
+          FROM contexts_changed_by($1) a
+         ORDER BY a.changed_at DESC, a.context_id
+        "#,
+        *profile_id
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
 
 /// List all contexts visible to the profile (owned + team-shared), with resource counts.
 pub async fn list_visible(
@@ -74,14 +97,6 @@ pub async fn list_visible(
     // A correlated scalar subquery rather than a join, so the statement stays one row per
     // context with no GROUP BY to hold in step with the select list.
     //
-    // `last_changed_by_you` is the caller's own latest change produced in each context, from
-    // `contexts_changed_by` (20261106000000), which reads the same definition of "your change" the
-    // list door's `changed_by` does. It is gated inside by `context_readable_by_profile`, and the
-    // WHERE gates the row as well, so a context the caller cannot read carries neither. One join
-    // rather than a per-row subquery, so the caller's events are read once, not once per context;
-    // a context they never changed is NULL. On the retired read it is always NULL: the read
-    // predicate admits no retired context, the same per-caller truth `resource_count` tells there.
-    //
     // Kept out of the SQL literal on purpose: sqlx keys the .sqlx cache on the whole query
     // TEXT, comments included, so a prose correction inside the literal orphans the cache
     // entry and forces a regenerate. Reasoning about the query as a whole belongs here,
@@ -113,10 +128,8 @@ pub async fn list_visible(
                   FROM kb_resource_homes rh
                   JOIN resources_visible_to($1) v ON v.resource_id = rh.resource_id
                   JOIN kb_resources r ON r.id = rh.resource_id AND r.is_active
-                 WHERE rh.anchor_table = 'kb_contexts' AND rh.anchor_id = c.id) AS "resource_count!",
-               mine.changed_at AS last_changed_by_you
+                 WHERE rh.anchor_table = 'kb_contexts' AND rh.anchor_id = c.id) AS "resource_count!"
           FROM kb_contexts c
-          LEFT JOIN contexts_changed_by($1) mine ON mine.context_id = c.id
          WHERE context_visible_to($1, c.id)
          ORDER BY c.name
         "#,
@@ -801,10 +814,8 @@ pub async fn list_retired_administered(
                   FROM kb_resource_homes rh
                   JOIN resources_visible_to($1) v ON v.resource_id = rh.resource_id
                   JOIN kb_resources r ON r.id = rh.resource_id AND r.is_active
-                 WHERE rh.anchor_table = 'kb_contexts' AND rh.anchor_id = c.id) AS "resource_count!",
-               mine.changed_at AS last_changed_by_you
+                 WHERE rh.anchor_table = 'kb_contexts' AND rh.anchor_id = c.id) AS "resource_count!"
           FROM kb_contexts c
-          LEFT JOIN contexts_changed_by($1) mine ON mine.context_id = c.id
          WHERE NOT c.is_active
            AND ( $3
                  OR (c.owner_table = 'kb_profiles' AND c.owner_id = $1)

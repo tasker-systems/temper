@@ -17,6 +17,7 @@ lib/temper/generated/api/ingest_api.rb
 lib/temper/generated/api/invitations_api.rb
 lib/temper/generated/api/invocations_api.rb
 lib/temper/generated/api/machine_clients_api.rb
+lib/temper/generated/api/me_api.rb
 lib/temper/generated/api/meta_api.rb
 lib/temper/generated/api/profile_api.rb
 lib/temper/generated/api/query_api.rb
@@ -153,6 +154,7 @@ lib/temper/generated/models/confidence_band.rb
 lib/temper/generated/models/connection_credential.rb
 lib/temper/generated/models/connection_subscription.rb
 lib/temper/generated/models/content_response.rb
+lib/temper/generated/models/context_activity.rb
 lib/temper/generated/models/context_create_request.rb
 lib/temper/generated/models/context_owner_ref.rb
 lib/temper/generated/models/context_owner_ref_one_of.rb

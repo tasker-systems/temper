@@ -27,7 +27,6 @@
 			// Retirement is an admin-axis concept; these nav fixtures are read-axis rows,
 			// which can never be retired. Required by `ContextRowWithCounts` all the same.
 			retired: false,
-			last_changed_by_you: null,
 		};
 	}
 

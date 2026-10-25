@@ -2421,6 +2421,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/me/context-activity": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /** When you last changed something in each context you can read */
+        get: operations["list_my_context_activity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/profile": {
         parameters: {
             query?: never;
@@ -5581,6 +5601,25 @@ export interface components {
             open_meta?: unknown;
             resource_id: components["schemas"]["ResourceId"];
         };
+        /**
+         * @description When the reading principal last changed something in one context — themselves, or an agent
+         *     writing under their profile. One row per context they changed something in and can still read;
+         *     `GET /api/me/context-activity`.
+         *
+         *     Their own authored changes only: a teammate's, a machine client's, and an event the system
+         *     computes (a region materialization stamped with a writer's emitter) never set it. A row's absence
+         *     says nothing about the context: the caller cannot read it, or never changed anything there.
+         *     A profile-scoped read of its own rather than a field of the contexts list, so the list every page
+         *     loads does not pay for a scan of the caller's whole history.
+         */
+        ContextActivity: {
+            context_id: components["schemas"]["ContextId"];
+            /**
+             * Format: date-time
+             * @description The time of the caller's latest authored change produced in this context.
+             */
+            last_changed_at: string;
+        };
         /** @description Request body for POST /api/contexts. */
         ContextCreateRequest: {
             name: string;
@@ -5702,16 +5741,6 @@ export interface components {
             /** Format: uuid */
             kb_owner_id: string;
             kb_owner_table: string;
-            /**
-             * Format: date-time
-             * @description When the reading principal last changed anything in this context — themselves, or an agent
-             *     writing under their profile — or `None` when they never have. Their own changes only: a
-             *     teammate's, or a machine client's, never set it. Unlike `updated`, which the contexts read
-             *     synthesizes from `created`, this is a real activity time. Always `None` on the
-             *     retired-contexts read: it is computed through the caller's read predicate, which admits no
-             *     retired context.
-             */
-            last_changed_by_you?: string | null;
             name: string;
             /**
              * @description The already-sigil'd owner addressable: `@<handle>` for profiles, `+<team-slug>` for teams.
@@ -17767,6 +17796,29 @@ export interface operations {
             };
         };
     };
+    list_my_context_activity: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One row per context you changed something in and can still read, the time of your latest authored change there, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContextActivity"][];
+                };
+            };
+        };
+    };
     get_profile: {
         parameters: {
             query?: never;
@@ -18487,10 +18539,11 @@ export interface operations {
                  *     event the caller's profile emitted, so this and the trail cannot disagree. A machine client
                  *     is its own profile, and its changes are not the caller's.
                  *
-                 *     **Only `"@me"`.** Any other value is a `400`: naming someone else would make this a read of
+                 *     **Only `"@me"`.** Any other non-empty value is a `400`: naming someone else would make this a read of
                  *     another principal's activity, which no door offers. Composes with every other filter as one
                  *     more AND, under the same visibility join, so a resource the caller changed and can no longer
-                 *     read is absent from the rows and from every count.
+                 *     read is absent from the rows and from every count. An empty value is no filter, as for
+                 *     `tags` and `ids`.
                  */
                 changed_by?: string | null;
                 q?: string | null;
