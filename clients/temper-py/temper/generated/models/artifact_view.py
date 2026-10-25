@@ -41,7 +41,7 @@ class ArtifactView(BaseModel):
     kind_owner_table: StrictStr = Field(description="`\"kb_profiles\"` or `\"kb_teams\"` — the namespace half of the family name.")
     precedence: Union[StrictFloat, StrictInt]
     resource_id: UUID = Field(description="A `kb_resources.id` value.")
-    shape_state: StrictStr = Field(description="`\"never_declared\"` today; will carry conformance verdicts when the shape registry lands.")
+    shape_state: StrictStr = Field(description="Conformance to the shape in force for the artifact's family in its home, by the staleness triple (shape id, shape version, content hash): `\"never_declared\"` when no shape is in force, else `\"declared_satisfied\"`, `\"declared_not_satisfied\"`, or `\"declared_not_yet_checked\"` when no verdict matches the triple (`_data_artifact_shape_state`, `20260822000020`; a batch read's rows carry the same state, computed set-based).")
     __properties: ClassVar[List[str]] = ["artifact_id", "artifact_kind", "content", "content_bytes", "content_hash", "created", "intent", "is_folded", "kind_owner_id", "kind_owner_table", "precedence", "resource_id", "shape_state"]
 
     model_config = ConfigDict(

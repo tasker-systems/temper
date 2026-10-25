@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT declared_satisfied       AS \"declared_satisfied!\",\n                  declared_not_satisfied   AS \"declared_not_satisfied!\",\n                  declared_not_yet_checked AS \"declared_not_yet_checked!\",\n                  matched                  AS \"matched!\"\n             FROM artifact_ask_counts($1, $2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "declared_satisfied!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "declared_not_satisfied!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "declared_not_yet_checked!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "matched!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "7a0882b27f7bffd67f7b86bb69d3585c73e39799ebe288f1527b6f70108924ed"
+}

@@ -47,10 +47,15 @@ from temper.generated.models.artifact_ask_population import ArtifactAskPopulatio
 from temper.generated.models.artifact_ask_trace import ArtifactAskTrace
 from temper.generated.models.artifact_commit_request import ArtifactCommitRequest
 from temper.generated.models.artifact_commit_response import ArtifactCommitResponse
+from temper.generated.models.artifact_cursor import ArtifactCursor
 from temper.generated.models.artifact_predicate import ArtifactPredicate
 from temper.generated.models.artifact_view import ArtifactView
 from temper.generated.models.ask_operator import AskOperator
+from temper.generated.models.ask_order import AskOrder
+from temper.generated.models.ask_request import AskRequest
+from temper.generated.models.ask_response import AskResponse
 from temper.generated.models.askable_path import AskablePath
+from temper.generated.models.asked_shape import AskedShape
 from temper.generated.models.assert_relationship_request import AssertRelationshipRequest
 from temper.generated.models.atlas_edge import AtlasEdge
 from temper.generated.models.atlas_entry import AtlasEntry
@@ -282,6 +287,7 @@ from temper.generated.models.orphan_node import OrphanNode
 from temper.generated.models.other_author_edge import OtherAuthorEdge
 from temper.generated.models.other_author_edge_property import OtherAuthorEdgeProperty
 from temper.generated.models.outcome_declaration import OutcomeDeclaration
+from temper.generated.models.oversized_artifact import OversizedArtifact
 from temper.generated.models.path_facts import PathFacts
 from temper.generated.models.pending_invitation_counts import PendingInvitationCounts
 from temper.generated.models.plan_refusal import PlanRefusal

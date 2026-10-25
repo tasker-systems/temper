@@ -5,6 +5,7 @@ use uuid::Uuid;
 use crate::error::{ClientError, Result};
 use crate::http::HttpClient;
 use crate::ops;
+use temper_core::types::artifact_ask::AskResponse;
 use temper_core::types::data_artifact::{
     ArtifactCommitRequest, ArtifactCommitResponse, ArtifactCursor, ArtifactListParams,
     ArtifactPage, ArtifactPageRequest, ArtifactView, ARTIFACT_DRAIN_PAGE_ROWS,
@@ -250,6 +251,24 @@ impl<'a> DataArtifactsClient<'a> {
         let op = &ops::GET_ARTIFACT_BY_ID;
         let path = op.path(&[&artifact_id])?;
         let req = self.http.request(op, &path);
+        self.http
+            .send_json(&op.method(), &path, req, token.as_deref())
+            .await
+    }
+
+    /// One page of the artifacts one ask matches (`POST /api/data-artifacts/ask`).
+    ///
+    /// The request is usually an [`AskRequest`](temper_core::types::artifact_ask::AskRequest), and
+    /// may be any value that serializes to one's JSON: the MCP edge relays the asks it is handed
+    /// without reading them, so the server alone decides whether a body is readable, and one it
+    /// cannot read comes back as [`ClientError::UnreadablePlan`]. Transport only: nothing here
+    /// validates the ask or follows `next`. An ask the server will not answer comes back as
+    /// [`ClientError::PlanRefused`], carrying every refusal — the ask's and the request's — at once.
+    pub async fn ask<P: serde::Serialize + ?Sized>(&self, request: &P) -> Result<AskResponse> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::ASK_DATA_ARTIFACTS;
+        let path = op.path(&[])?;
+        let req = self.http.request(op, &path).json(request);
         self.http
             .send_json(&op.method(), &path, req, token.as_deref())
             .await

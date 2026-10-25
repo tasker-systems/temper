@@ -91,10 +91,15 @@ __all__ = [
     "ArtifactAskTrace",
     "ArtifactCommitRequest",
     "ArtifactCommitResponse",
+    "ArtifactCursor",
     "ArtifactPredicate",
     "ArtifactView",
     "AskOperator",
+    "AskOrder",
+    "AskRequest",
+    "AskResponse",
     "AskablePath",
+    "AskedShape",
     "AssertRelationshipRequest",
     "AtlasEdge",
     "AtlasEntry",
@@ -326,6 +331,7 @@ __all__ = [
     "OtherAuthorEdge",
     "OtherAuthorEdgeProperty",
     "OutcomeDeclaration",
+    "OversizedArtifact",
     "PathFacts",
     "PendingInvitationCounts",
     "PlanRefusal",
@@ -598,10 +604,15 @@ from temper.generated.models.artifact_ask_population import ArtifactAskPopulatio
 from temper.generated.models.artifact_ask_trace import ArtifactAskTrace as ArtifactAskTrace
 from temper.generated.models.artifact_commit_request import ArtifactCommitRequest as ArtifactCommitRequest
 from temper.generated.models.artifact_commit_response import ArtifactCommitResponse as ArtifactCommitResponse
+from temper.generated.models.artifact_cursor import ArtifactCursor as ArtifactCursor
 from temper.generated.models.artifact_predicate import ArtifactPredicate as ArtifactPredicate
 from temper.generated.models.artifact_view import ArtifactView as ArtifactView
 from temper.generated.models.ask_operator import AskOperator as AskOperator
+from temper.generated.models.ask_order import AskOrder as AskOrder
+from temper.generated.models.ask_request import AskRequest as AskRequest
+from temper.generated.models.ask_response import AskResponse as AskResponse
 from temper.generated.models.askable_path import AskablePath as AskablePath
+from temper.generated.models.asked_shape import AskedShape as AskedShape
 from temper.generated.models.assert_relationship_request import AssertRelationshipRequest as AssertRelationshipRequest
 from temper.generated.models.atlas_edge import AtlasEdge as AtlasEdge
 from temper.generated.models.atlas_entry import AtlasEntry as AtlasEntry
@@ -833,6 +844,7 @@ from temper.generated.models.orphan_node import OrphanNode as OrphanNode
 from temper.generated.models.other_author_edge import OtherAuthorEdge as OtherAuthorEdge
 from temper.generated.models.other_author_edge_property import OtherAuthorEdgeProperty as OtherAuthorEdgeProperty
 from temper.generated.models.outcome_declaration import OutcomeDeclaration as OutcomeDeclaration
+from temper.generated.models.oversized_artifact import OversizedArtifact as OversizedArtifact
 from temper.generated.models.path_facts import PathFacts as PathFacts
 from temper.generated.models.pending_invitation_counts import PendingInvitationCounts as PendingInvitationCounts
 from temper.generated.models.plan_refusal import PlanRefusal as PlanRefusal

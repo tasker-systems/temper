@@ -11,22 +11,25 @@
 //! array and the `{artifacts, next}` envelope, that the paging refusals are the route's own words
 //! and are spoken before anything is relayed, and that `next` passed back as `after` walks every
 //! artifact exactly once in both orders, across a page boundary that falls between two artifacts
-//! sharing one `created`.
+//! sharing one `created`. The stand-in also answers `GET /api/data-artifacts/{artifact_id}`, so
+//! that `get_data_artifact`'s answer is read beside the list's: both are compact JSON.
 
 use std::sync::{Arc, Mutex};
 
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, SecondsFormat, Utc};
 use rmcp::model::{CallToolResult, ErrorCode};
 use serde_json::{json, Value};
 use temper_core::types::data_artifact::{
-    ArtifactListParams, ArtifactPageRefusal, ArtifactView, ARTIFACT_DRAIN_PAGE_ROWS,
-    MAX_ARTIFACT_PAGE_ROWS,
+    ArtifactCursor, ArtifactListParams, ArtifactPage, ArtifactPageRefusal, ArtifactView,
+    ARTIFACT_DRAIN_PAGE_ROWS, MAX_ARTIFACT_PAGE_ROWS,
 };
 use temper_core::types::ids::{DataArtifactId, ResourceId};
 use temper_core::types::resource::SortOrder;
-use temper_mcp::tools::data_artifacts::{list_artifacts, ListArtifactsInput};
+use temper_mcp::tools::data_artifacts::{
+    get_artifact, list_artifacts, GetArtifactInput, ListArtifactsInput,
+};
 use temper_mcp::{BlobDoor, IdentitySeam, OutgoingIdentity, RelayConfig, TemperMcpService};
 use temper_workflow::operations::Surface;
 use uuid::Uuid;
@@ -97,6 +100,22 @@ async fn answer(
     ([(axum::http::header::LINK, link)], axum::Json(page)).into_response()
 }
 
+/// `GET /api/data-artifacts/{artifact_id}`: the row with that id, as the flat read answers it, or
+/// 404.
+async fn answer_one(
+    State(stand_in): State<Arc<StandIn>>,
+    Path(artifact_id): Path<Uuid>,
+) -> Response {
+    match stand_in
+        .rows
+        .iter()
+        .find(|row| row.artifact_id.uuid() == artifact_id)
+    {
+        Some(row) => axum::Json(row.clone()).into_response(),
+        None => axum::http::StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
 /// Serve `rows` on a loopback listener; answers the stand-in (to read back what it was asked) and
 /// its base URL.
 async fn stand_in(rows: Vec<ArtifactView>) -> (Arc<StandIn>, String) {
@@ -107,6 +126,10 @@ async fn stand_in(rows: Vec<ArtifactView>) -> (Arc<StandIn>, String) {
     });
     let app = axum::Router::new()
         .route("/api/resources/{id}/artifacts", axum::routing::get(answer))
+        .route(
+            "/api/data-artifacts/{artifact_id}",
+            axum::routing::get(answer_one),
+        )
         .with_state(stand_in.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -464,4 +487,76 @@ async fn walking_next_descending_visits_every_artifact_once() {
     let (visited, pages) = walk(&svc, Some("desc")).await;
     assert_eq!(visited, expected_ids(SortOrder::Desc));
     assert_eq!(pages, 3);
+}
+
+/// Every read answers compact JSON, as `ask_data_artifacts` does: one text block, with no line
+/// break, holding exactly the value's compact serialization. The relay escapes that block into
+/// its response, so pretty-printing, which adds a line break and indentation for every element
+/// and member, could put an artifact the API serves within the platform's response cap past it
+/// here. FAILS IF `get_data_artifact`, or either form of `list_data_artifacts`, answers
+/// `to_string_pretty`.
+#[tokio::test]
+async fn every_read_answers_compact_json() {
+    let rows = vec![artifact(0, 100), artifact(1, 200), artifact(2, 300)];
+    let (_, base) = stand_in(rows.clone()).await;
+    let svc = relaying_to(&base);
+    let resource = RESOURCE.to_string();
+
+    let got = get_artifact(
+        &svc,
+        &empty_parts(),
+        GetArtifactInput {
+            artifact_id: rows[1].artifact_id.uuid().to_string(),
+        },
+    )
+    .await
+    .expect("the read answers");
+    let page = list_artifacts(
+        &svc,
+        &empty_parts(),
+        input(json!({ "resource_id": resource, "limit": 2 })),
+    )
+    .await
+    .expect("the page answers");
+    let every = list_artifacts(
+        &svc,
+        &empty_parts(),
+        input(json!({ "resource_id": resource })),
+    )
+    .await
+    .expect("the list answers");
+
+    let first_page = ArtifactPage {
+        artifacts: rows[..2].to_vec(),
+        next: Some(ArtifactCursor {
+            created: rows[1].created,
+            artifact_id: rows[1].artifact_id,
+        }),
+    };
+    let reads = [
+        ("get_data_artifact", got, serde_json::to_string(&rows[1])),
+        (
+            "list_data_artifacts with limit",
+            page,
+            serde_json::to_string(&first_page),
+        ),
+        (
+            "list_data_artifacts without limit",
+            every,
+            serde_json::to_string(&rows),
+        ),
+    ];
+    for (read, result, compact) in reads {
+        assert_eq!(result.content.len(), 1, "{read}: one text block");
+        let text = &result.content[0].as_text().expect("a text block").text;
+        assert!(
+            !text.contains('\n'),
+            "{read}: compact, never pretty-printed: {text}"
+        );
+        assert_eq!(
+            text,
+            &compact.expect("serializes"),
+            "{read}: the value's compact JSON, exactly"
+        );
+    }
 }

@@ -13,6 +13,7 @@ Commands:
   list    List data artifacts owned by a resource
   show    Show a single data artifact by ID
   get     Read a single data artifact by its own id — the flat read, no owning-resource address needed (`GET /api/data-artifacts/{id}`)
+  ask     Ask one shape's artifacts what they hold, and print the matching artifacts, whole, one bounded page at a time (`POST /api/data-artifacts/ask`)
   commit  Commit one data artifact to a resource
   schema  Declare and inspect data-artifact shapes (the schema registry)
   help    Print this message or the help of the given subcommand(s)
@@ -125,6 +126,49 @@ Options:
 
       --color <COLOR>
           Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### `temper data-artifact ask`
+
+```text
+Ask one shape's artifacts what they hold, and print the matching artifacts, whole, one bounded page at a time (`POST /api/data-artifacts/ask`)
+
+The ask names a shape by id and predicates over the paths that shape declares (read them with `data-artifact schema show <shape-id>`). Send it whole with `--ask`, or build it with `--shape` and one `--where` per predicate; the two forms send the same document. The answer is `{shape, artifacts, oversized, population, ordered_by, next, amended_since}`, oldest first. To count the first page's `population`, the page reads the whole population, outside its read budget. To continue, run the same ask with `--after` set to the previous page's `next`, passed back exactly; only `next: null` ends the answer, and a page may hold no artifacts yet carry a `next` when it stopped on its read budget. An artifact in `oversized` is too large or too deeply nested for a page (content more than 96 arrays or objects deep), and the page goes on: read it whole with `data-artifact get <artifact-id>`, though a client's own nesting limit can refuse that read too when the content nests very deeply, and on the hosted deployment that read is refused when the response carrying the artifact, with its content as storage serves it, is longer than the platform's response cap (storage prints some numbers longer than they were committed).
+
+This is an enumeration, and `data-artifact list` is addressed. An ask reads across every resource you can see in the shape's home, and like listing and search it leaves out a resource still ingesting, or one whose ingest ended without finishing. `list <resource>` names one resource and answers its artifacts even then. To find the resources that own matching artifacts rather than the artifacts, use `temper query` with `find-resources-with`.
+
+Usage: temper data-artifact ask [OPTIONS]
+
+Options:
+      --ask <ASK>
+          The ask as JSON — `{"shape": "<id>", "predicates": [...], ...}` — inline, `@<path>` to read a file, or `-` to read stdin. Not with --shape or --where
+
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --shape <SHAPE>
+          The shape to ask, by id: the ask's `shape`, with no other field but the predicates --where gives
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --where <PREDICATE>
+          One predicate as JSON, `{"path": ["unit"], "op": {"op": "contains", "values": ["ms"]}}` — a path of object keys and an operator (`has_key`, `contains`, `compare`). Repeatable; the predicates AND. Requires --shape
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+      --limit <LIMIT>
+          How many matching artifacts the page examines, 1 to 200 (default 50). Out of range is refused, never clamped
+
+      --after <AFTER>
+          Continue after this position: the previous page's `next`, as JSON (`{"created": "...", "artifact_id": "..."}`), passed back exactly with the same ask
 
   -h, --help
           Print help (see a summary with '-h')

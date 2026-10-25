@@ -1,18 +1,22 @@
-//! `temper data-artifact list/show/commit` — CLI surface for data artifact reads and writes.
+//! `temper data-artifact list/show/get/ask/commit` — CLI surface for data artifact reads and
+//! writes.
 //!
 //! The `schema` subgroup (`schema list/show/declare`) reaches the shape registry — the
 //! enforcement surface that governs artifact families within a context home.
 
 use crate::actions::body_source;
+use crate::actions::query as query_actions;
 use crate::actions::runtime;
 use crate::format::OutputFormat;
 use crate::output;
+use temper_client::error::ClientError;
+use temper_core::types::artifact_ask::{ArtifactAsk, ArtifactPredicate, AskRequest};
 use temper_core::types::data_artifact::{
-    ArtifactCommitRequest, ArtifactListParams, ArtifactPage, ArtifactPageRefusal,
+    ArtifactCommitRequest, ArtifactCursor, ArtifactListParams, ArtifactPage, ArtifactPageRefusal,
     ArtifactPageRequest, KindOwnerInput, MAX_ARTIFACT_PAGE_ROWS,
 };
 use temper_core::types::data_artifact_shape::{EnforcementMode, ShapeDeclareRequest, ShapeView};
-use temper_core::types::ids::DataArtifactId;
+use temper_core::types::ids::{DataArtifactId, ShapeId};
 use temper_core::types::resource::SortOrder;
 use temper_workflow::operations::parse_ref;
 
@@ -272,6 +276,135 @@ pub fn get_by_id(artifact_ref: &str, fmt: OutputFormat) -> crate::error::Result<
     })?;
 
     let rendered = crate::format::render(&artifact, fmt)?;
+    output::plain(rendered);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// ask — the batch read of one artifact ask
+// ---------------------------------------------------------------------------
+
+/// The flags of one `temper data-artifact ask`, as parsed.
+pub struct AskParams<'a> {
+    /// `--ask`: the whole ask, as inline JSON, `@<path>` or `-`.
+    pub ask: Option<&'a str>,
+    /// `--shape`: the ask's shape, when the ask is built from flags.
+    pub shape: Option<&'a str>,
+    /// `--where`, each one predicate as JSON.
+    pub predicates: &'a [String],
+    pub limit: Option<u32>,
+    /// `--after`: the previous page's `next`, as JSON.
+    pub after: Option<&'a str>,
+    pub stdin_is_tty: bool,
+    pub format: OutputFormat,
+}
+
+/// The request these flags send. **A transport, not a composer** (as `temper query` is): `--ask`
+/// is the ask whole, and `--shape` with `--where` builds the same document — the shape, and one
+/// `ArtifactPredicate` per `--where`, nothing else said — so the two forms send one request. Each
+/// piece is parsed here, before any round trip, so a malformed one is named as the caller's; whether
+/// the ask can be answered is the server's to say, and nothing is validated here. clap refuses
+/// `--ask` beside `--shape` or `--where`, and either missing.
+fn ask_request(params: &AskParams<'_>) -> crate::error::Result<AskRequest> {
+    let ask =
+        match (params.ask, params.shape) {
+            (Some(source), None) if params.predicates.is_empty() => {
+                parse_ask(&ask_source(source, params.stdin_is_tty)?)?
+            }
+            (None, Some(shape)) => ArtifactAsk {
+                shape: ShapeId::from(uuid::Uuid::from(parse_ref(shape)?)),
+                predicates: params
+                    .predicates
+                    .iter()
+                    .map(String::as_str)
+                    .map(parse_predicate)
+                    .collect::<crate::error::Result<_>>()?,
+                intent: Vec::new(),
+                include_folded: false,
+                shape_states: Vec::new(),
+            },
+            _ => return Err(crate::error::TemperError::Project(
+                "ask takes one form: the ask whole with --ask, or built with --shape and --where"
+                    .to_string(),
+            )),
+        };
+    let after = params.after.map(parse_cursor).transpose()?;
+    Ok(AskRequest {
+        ask,
+        limit: params.limit,
+        after,
+    })
+}
+
+/// `--ask`'s text: read from a file for `@<path>`, from stdin for `-`, and otherwise the flag's
+/// own value, inline. No JSON document starts with `@` or is a bare `-`, so the forms cannot be
+/// confused.
+fn ask_source(flag: &str, stdin_is_tty: bool) -> crate::error::Result<String> {
+    if flag != "-" && !flag.starts_with('@') {
+        return Ok(flag.to_string());
+    }
+    body_source::resolve_body_source(
+        Some(flag),
+        stdin_is_tty,
+        std::io::stdin(),
+        body_source::stdin_has_input_within,
+    )?
+    .ok_or_else(|| {
+        crate::error::TemperError::Project(
+            "no ask supplied — pass it inline, as `--ask @<path>`, or as `--ask -`".to_string(),
+        )
+    })
+}
+
+fn parse_ask(raw: &str) -> crate::error::Result<ArtifactAsk> {
+    serde_json::from_str(raw).map_err(|e| {
+        crate::error::TemperError::Project(format!("--ask is not a valid artifact ask: {e}"))
+    })
+}
+
+fn parse_predicate(raw: &str) -> crate::error::Result<ArtifactPredicate> {
+    serde_json::from_str(raw).map_err(|e| {
+        crate::error::TemperError::Project(format!(
+            "--where is not a predicate (`{{\"path\": [...], \"op\": {{...}}}}`): {e}"
+        ))
+    })
+}
+
+fn parse_cursor(raw: &str) -> crate::error::Result<ArtifactCursor> {
+    serde_json::from_str(raw).map_err(|e| {
+        crate::error::TemperError::Project(format!(
+            "--after is not a position (the previous page's `next`, \
+             `{{\"created\": ..., \"artifact_id\": ...}}`): {e}"
+        ))
+    })
+}
+
+/// `temper data-artifact ask` — one page of the artifacts an ask matches, printed whole in the
+/// resolved format (JSON with a non-TTY stdout).
+///
+/// **A refused ask exits non-zero**, as a refused plan does: the refusals travel as
+/// [`crate::error::TemperError::PlanRefused`] ([`query_actions::ask_refused`]), so at a terminal
+/// the message names every refusal, and under the JSON format the one error payload on stdout
+/// carries them in `details.refusals`, each with its `reason` and `teaches`. Neither says "plan".
+pub fn ask(params: AskParams<'_>) -> crate::error::Result<()> {
+    let request = ask_request(&params)?;
+    let page = runtime::with_client(move |client| {
+        Box::pin(async move {
+            match client.data_artifacts().ask(&request).await {
+                Ok(page) => Ok(page),
+                Err(ClientError::PlanRefused { refusals }) => {
+                    Err(query_actions::ask_refused(refusals))
+                }
+                Err(ClientError::UnreadablePlan { message }) => {
+                    Err(crate::error::TemperError::BadRequest(format!(
+                        "the ask could not be read: {message}"
+                    )))
+                }
+                Err(other) => Err(runtime::client_err_to_temper(other)),
+            }
+        })
+    })?;
+    let rendered = crate::format::render(&page, params.format)?;
     output::plain(rendered);
     Ok(())
 }
@@ -749,6 +882,70 @@ mod tests {
         })
         .expect("the ceiling is in range");
         assert!(matches!(ask, ListAsk::Page(r) if r.limit == MAX_ARTIFACT_PAGE_ROWS));
+    }
+
+    const SHAPE: &str = "019e84ab-26ba-7560-9d34-c60d74a9fbe2";
+
+    fn ask_params<'a>(
+        ask: Option<&'a str>,
+        shape: Option<&'a str>,
+        predicates: &'a [String],
+    ) -> AskParams<'a> {
+        AskParams {
+            ask,
+            shape,
+            predicates,
+            limit: Some(7),
+            after: Some(
+                r#"{"created": "2026-10-19T12:30:45.123456789Z", "artifact_id": "00000000-0000-0000-0123-456789abcdef"}"#,
+            ),
+            stdin_is_tty: true,
+            format: OutputFormat::Json,
+        }
+    }
+
+    /// **`--shape` and `--where` send the document `--ask` sends**: the same shape, the same
+    /// predicates in order, nothing else said, and the same paging. Bites: the sugar dropping or
+    /// reordering a `--where`, or saying something the ask did not (a default `intent`).
+    #[test]
+    fn the_sugar_builds_the_document_the_ask_sends() {
+        let unit = r#"{"path": ["unit"], "op": {"op": "contains", "values": ["ms"]}}"#;
+        let count = r#"{"path": ["count"], "op": {"op": "has_key"}}"#;
+        let whole = format!(r#"{{"shape": "{SHAPE}", "predicates": [{unit}, {count}]}}"#);
+        let from_ask = ask_request(&ask_params(Some(&whole), None, &[])).expect("--ask reads");
+        let wheres = [unit.to_string(), count.to_string()];
+        let from_flags =
+            ask_request(&ask_params(None, Some(SHAPE), &wheres)).expect("the flags read");
+        assert_eq!(from_flags, from_ask);
+        assert_eq!(from_ask.ask.predicates.len(), 2);
+        assert_eq!(from_ask.limit, Some(7));
+        assert_eq!(
+            from_ask.after.map(|c| c.created),
+            Some(created()),
+            "--after reads back as the exact position"
+        );
+        assert_eq!(
+            serde_json::to_value(&from_flags).expect("serializes"),
+            serde_json::to_value(&from_ask).expect("serializes"),
+            "one wire document"
+        );
+    }
+
+    /// A `--where` that is not a predicate, an `--ask` that is not an ask, and both forms at once
+    /// (a caller past clap) are the caller's errors, before any round trip. Bite: an unparsed
+    /// `--where` passed through as a string.
+    #[test]
+    fn a_malformed_piece_is_named_before_any_round_trip() {
+        let not_a_predicate = ["{\"path\": \"unit\"}".to_string()];
+        let err = ask_request(&ask_params(None, Some(SHAPE), &not_a_predicate))
+            .expect_err("a path is a list of keys");
+        assert!(err.to_string().contains("--where"), "{err}");
+        let err = ask_request(&ask_params(Some("{\"shape\": 7}"), None, &[]))
+            .expect_err("a shape is an id");
+        assert!(err.to_string().contains("--ask"), "{err}");
+        let both =
+            ask_request(&ask_params(Some("{}"), Some(SHAPE), &[])).expect_err("one form at a time");
+        assert!(both.to_string().contains("one form"), "{both}");
     }
 
     /// `--counts` is the unpaged counts read. FAILS IF counts is routed through the page path.

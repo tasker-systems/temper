@@ -510,6 +510,28 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 DataArtifactAction::Get { artifact } => {
                     temper_cli::commands::data_artifact::get_by_id(&artifact, output_format)
                 }
+                DataArtifactAction::Ask {
+                    ask,
+                    shape,
+                    predicates,
+                    limit,
+                    after,
+                } => {
+                    // Resolved at the call site, as `query`'s is, so `--ask -` is testable
+                    // without a terminal.
+                    use std::io::IsTerminal;
+                    temper_cli::commands::data_artifact::ask(
+                        temper_cli::commands::data_artifact::AskParams {
+                            ask: ask.as_deref(),
+                            shape: shape.as_deref(),
+                            predicates: &predicates,
+                            limit,
+                            after: after.as_deref(),
+                            stdin_is_tty: std::io::stdin().is_terminal(),
+                            format: output_format,
+                        },
+                    )
+                }
                 DataArtifactAction::Commit {
                     r#ref,
                     kind,

@@ -423,3 +423,95 @@ async fn list_page_sends_the_order_it_was_asked_for() {
         .expect("a desc request matches the stub");
     assert_eq!(page.artifacts.len(), 1);
 }
+
+/// One batch-read page with one artifact, the shape and a continuation: what the stand-in answers.
+fn ask_page(resource: Uuid) -> serde_json::Value {
+    serde_json::json!({
+        "shape": {
+            "shape_id": Uuid::now_v7(),
+            "shape_version": 1,
+            "home_anchor_table": "kb_contexts",
+            "home_anchor_id": Uuid::now_v7()
+        },
+        "artifacts": [serde_json::to_value(artifact(resource, 1)).expect("serializes")],
+        "oversized": [],
+        "population": {
+            "declared_satisfied": 1,
+            "declared_not_satisfied": 0,
+            "declared_not_yet_checked": 0,
+            "matched": 1
+        },
+        "ordered_by": "created",
+        "next": { "created": "2026-10-24T09:15:30.123456Z", "artifact_id": Uuid::now_v7() },
+        "amended_since": null
+    })
+}
+
+/// **`ask` POSTs the body it is handed, unread, and reads the page back as an `AskResponse`.** The
+/// body carries a field no `AskRequest` declares, which a client that parsed it first could not
+/// send; the stand-in matches the body exactly and answers one page, which round-trips. Bites: the
+/// method deserializing its input as `AskRequest` (the extra field is dropped and the body matcher
+/// misses), or a field of `AskResponse` the page does not round-trip.
+#[tokio::test]
+async fn ask_sends_the_body_unread_and_reads_the_page() {
+    use wiremock::matchers::body_json;
+
+    let server = MockServer::start().await;
+    let body = serde_json::json!({
+        "ask": { "shape": Uuid::now_v7(), "predicates": [
+            { "path": ["unit"], "op": { "op": "contains", "values": ["ms"] } }
+        ] },
+        "limit": 3,
+        "not_a_field": true
+    });
+    let page = ask_page(Uuid::now_v7());
+    Mock::given(method("POST"))
+        .and(path("/api/data-artifacts/ask"))
+        .and(body_json(&body))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&page))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let answer = test_client(&server.uri())
+        .data_artifacts()
+        .ask(&body)
+        .await
+        .expect("the page reads");
+    assert_eq!(serde_json::to_value(&answer).expect("serializes"), page);
+}
+
+/// **A refused ask arrives as every refusal at once, `teaches` intact**, through the `PLAN_REFUSED`
+/// arm the composition door already uses. Bite: the 400 read as a bare `Server` error.
+#[tokio::test]
+async fn a_refused_ask_arrives_as_every_refusal_with_its_teaching() {
+    let server = MockServer::start().await;
+    let refusals = serde_json::json!([
+        { "reason": "value_outside_shape", "detail": "a value lies outside the shape",
+          "teaches": { "non_closure": "stored content is not closed by its shape" } },
+        { "reason": "page_limit_out_of_range", "detail": "`limit` must be at least 1" }
+    ]);
+    Mock::given(method("POST"))
+        .and(path("/api/data-artifacts/ask"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "error": {
+                "code": temper_core::error::PLAN_REFUSED_CODE,
+                "message": "Plan refused: 2 refusal(s)",
+                "details": { "refusals": refusals }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let err = test_client(&server.uri())
+        .data_artifacts()
+        .ask(&serde_json::json!({ "ask": { "shape": Uuid::now_v7() }, "limit": 0 }))
+        .await
+        .expect_err("refused");
+    match err {
+        ClientError::PlanRefused { refusals: got } => {
+            assert_eq!(serde_json::to_value(&got).expect("serializes"), refusals);
+        }
+        other => panic!("expected PlanRefused, got {other:?}"),
+    }
+}

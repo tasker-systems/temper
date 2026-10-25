@@ -1,14 +1,16 @@
-use axum::extract::{Path, Query, State};
+use axum::extract::{FromRequest, Path, Query, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue};
 use axum::Json;
 use uuid::Uuid;
 
 use crate::middleware::auth::AnyPrincipal;
 use crate::middleware::surface::RequestSurface;
+use temper_core::types::artifact_ask::{AskRequest, AskResponse};
 use temper_core::types::data_artifact::{
     ArtifactCommitRequest, ArtifactCommitResponse, ArtifactCursor, ArtifactListParams, ArtifactView,
 };
 use temper_core::types::ids::{DataArtifactId, ProfileId, ResourceId};
+use temper_services::backend::artifact_ask_read;
 use temper_services::backend::substrate_read::ArtifactPageFilter;
 use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
@@ -212,6 +214,110 @@ pub async fn get_by_id(
     Ok(Json(artifact))
 }
 
+/// Read the artifacts one ask matches, whole
+///
+/// The body is one ask — a shape by id and predicates over the paths that shape declares — with
+/// an optional `limit` and the previous page's `next` as `after`. The answer is the artifacts the
+/// ask matches among those you can see, each whole (`content` is the stored content, absent for an
+/// artifact committed with no bytes), in `(created, artifact_id)` order, oldest first. POST,
+/// because the ask is a document rather than a query string.
+///
+/// Every page is bounded three ways, and the first bound reached ends it: by `limit` (absent: 50;
+/// at least 1 and at most 200), by a byte budget over what the page sends, and by a budget over
+/// what it may read to find its rows. A matching artifact too large for any page, or too deeply
+/// nested for one (content more than 96 arrays or objects deep, so that every first-party client
+/// parses every page), is named in `oversized`, in order, by id and size, and the page goes on.
+/// Read it whole by id (`GET /api/data-artifacts/{artifact_id}`); a client's own nesting limit can
+/// refuse that read too when the content nests very deeply, and on the hosted deployment it is
+/// refused when the response carrying the artifact, with its content as storage serves it, is
+/// longer than the platform's response cap (storage prints some numbers longer than they were
+/// committed). When the read budget ends a page, `next` is the last artifact it read, matched or
+/// not, so a page can carry no artifacts and still a `next`: only `next: null` ends the
+/// enumeration. Continue by sending the same ask with `next` as `after`; every page validates the
+/// ask again for its caller, so the position carries no authority.
+///
+/// `population` counts the ask's whole governed population on the first page and is `null` after
+/// it. Those counts are exact, so the first page matches every governed artifact of the home to
+/// make them; the read budget bounds the page's rows, not the counts. A continuation is validated
+/// against the shape version the first page named, but its rows' `shape_state`, and any
+/// `shape_states` narrowing, are read against the version now in force: when `amended_since`
+/// appears, an ask narrowed by `shape_states` should start again from a first page asking that
+/// version. A first page (no `after`) naming a superseded version is refused `shape_superseded`.
+///
+/// This is an enumeration: an artifact on a resource still ingesting, or one an operator ended, is
+/// not in it, though `GET /api/resources/{id}/artifacts` addressed to that resource lists it. It
+/// never returns resources, and it is not a stage of `/api/query`. A `GET` to this path is answered
+/// by the caller checks before the route: `401` without credentials, `403` without system access,
+/// and `405` to a caller with both.
+#[utoipa::path(
+    post,
+    operation_id = "ask_data_artifacts",
+    path = "/api/data-artifacts/ask",
+    tag = "Data Artifacts",
+    request_body = AskRequest,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "One page of the matching artifacts, whole, in `(created, artifact_id)` order, with where to continue (`next`; only `null` ends the enumeration, and a page can carry no artifacts and still a `next`)", body = AskResponse),
+        (
+            status = 400,
+            description = "Two codes. `PLAN_REFUSED`: the ask will not be answered, with every \
+                refusal at once in `error.details.refusals` — the ask's own (each naming its reason \
+                and, where it has one, a `teaches` carrying the shape's vocabulary) and the \
+                request's (`page_limit_out_of_range`, `property_value_budget_exceeded`), none with a \
+                stage. A shape you cannot read is refused exactly as one that does not exist \
+                (`shape_not_askable`). `UNREADABLE_PLAN`, with no `details`: the body is not JSON.",
+            body = ErrorBody,
+        ),
+        (
+            status = 422,
+            description = "The body is not an ask this door can read — a value of the wrong type, \
+                a field it does not declare, an `after` missing half its position, or an `after` \
+                whose `created` is outside the instants an artifact can be created at — under the \
+                code `UNREADABLE_PLAN`, the message naming what failed and repeating at most 1024 \
+                bytes of it. A non-JSON content type answers `415` under the same code.",
+            body = ErrorBody,
+        ),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "System access required", body = ErrorBody),
+    )
+)]
+// Thin: the read path is `artifact_ask_read::ask_page`, which loads the shape for this principal,
+// validates the ask and the request together, and reads the page. Its refusals arrive here as
+// `ApiError::PlanRefused` and are rendered unchanged.
+pub async fn ask(
+    State(state): State<AppState>,
+    auth: AnyPrincipal,
+    AskBody(request): AskBody,
+) -> ApiResult<Json<AskResponse>> {
+    let principal = ProfileId::from(auth.0.profile().id);
+    let response = artifact_ask_read::ask_page(&state.pool, principal, &request).await?;
+    Ok(Json(response))
+}
+
+/// The batch read's body, read as `Json` reads it, but every rejection — malformed JSON, a value
+/// of the wrong type, an unknown field, an `after` missing half its position — answered as a typed
+/// `ApiError::UnreadablePlan` rather than axum's plain-text rejection, and never quoting the body
+/// back whole (`super::query::read_unread_body`). An `after` the store cannot hold
+/// (`ArtifactCursor::is_storable`) is refused the same way, as a position no page can continue
+/// from, by the service's own check (`artifact_ask_read::refuse_unstorable_position`), which the
+/// service read runs again. The MCP edge relays the ask unread, so this is where it is read, once,
+/// for both doors.
+#[derive(Debug)]
+pub struct AskBody(pub AskRequest);
+
+impl<S> FromRequest<S> for AskBody
+where
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        let request: AskRequest = super::query::read_unread_body(req, state).await?;
+        artifact_ask_read::refuse_unstorable_position(&request)?;
+        Ok(Self(request))
+    }
+}
+
 /// Commit one data artifact to a resource
 ///
 /// The content payload is JSON, hashed and stored verbatim. The hash is the proof —
@@ -229,6 +335,16 @@ pub async fn get_by_id(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Committed artifact", body = ArtifactCommitResponse),
+        (
+            status = 400,
+            description = "Under `DATA_ARTIFACT_REFUSAL`, the write is declined, the message \
+                saying why: `kind` or `content` holds U+0000, which is refused before the resource \
+                is checked, so whatever the caller's standing on it; an enforcing shape refuses the \
+                content; or the store declines the write in its own vocabulary. Under \
+                `BAD_REQUEST`, the `intent` is not `current`, `member` or `pinned`, or the act's \
+                authorship fields come without `confidence` or past their length bounds.",
+            body = ErrorBody,
+        ),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "No write standing on the owning resource", body = ErrorBody),
         (status = 404, description = "Resource not found or not visible", body = ErrorBody),

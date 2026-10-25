@@ -230,7 +230,7 @@ fn every_population_was_asked_for(
 ///
 /// **After the seal, what the session taught is remembered.** Each path teaching it made — one
 /// enumeration of a shape's vocabulary, for a path refusal on a shape whose teaching the context
-/// did not carry — is handed to `shape_loader::remember_path_teachings`, whether the plan was
+/// did not carry — is handed to `shape_loader::remember_session`, whether the plan was
 /// admitted or refused, so a later request refusing a path on that shape is taught from memory and
 /// enumerates nothing.
 pub async fn prepare(
@@ -245,9 +245,7 @@ pub async fn prepare(
         vocabularies_enumerated = session.vocabularies_enumerated(),
         "query ask session"
     );
-    #[cfg(feature = "test-db")]
-    shape_loader::test_support::record_path_teachings(shapes, session.taught().cloned());
-    shape_loader::remember_path_teachings(shapes, session.taught().cloned());
+    shape_loader::remember_session(shapes, &session);
     prepared
 }
 

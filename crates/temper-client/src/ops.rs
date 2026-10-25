@@ -260,6 +260,7 @@ registry! {
         SHARE_TEAM = Post "/api/contexts/{id}/teams" => "share_team";
         UNSHARE_TEAM = Delete "/api/contexts/{id}/teams/{team_id}" => "unshare_team";
         RESOLVE_CONTEXT = Get "/api/contexts/resolve" => "resolve_context";
+        ASK_DATA_ARTIFACTS = Post "/api/data-artifacts/ask" => "ask_data_artifacts";
         GET_ARTIFACT_BY_ID = Get "/api/data-artifacts/{artifact_id}" => "get_artifact_by_id";
         ADMIN_REEMBED = Post "/api/embed/admin/reembed" => "admin_reembed";
         CURSOR = Get "/api/events/{kb_context_id}/cursor" => "cursor";

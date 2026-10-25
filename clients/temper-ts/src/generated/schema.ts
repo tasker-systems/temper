@@ -1826,6 +1826,61 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/data-artifacts/ask": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read the artifacts one ask matches, whole
+         * @description The body is one ask — a shape by id and predicates over the paths that shape declares — with
+         *     an optional `limit` and the previous page's `next` as `after`. The answer is the artifacts the
+         *     ask matches among those you can see, each whole (`content` is the stored content, absent for an
+         *     artifact committed with no bytes), in `(created, artifact_id)` order, oldest first. POST,
+         *     because the ask is a document rather than a query string.
+         *
+         *     Every page is bounded three ways, and the first bound reached ends it: by `limit` (absent: 50;
+         *     at least 1 and at most 200), by a byte budget over what the page sends, and by a budget over
+         *     what it may read to find its rows. A matching artifact too large for any page, or too deeply
+         *     nested for one (content more than 96 arrays or objects deep, so that every first-party client
+         *     parses every page), is named in `oversized`, in order, by id and size, and the page goes on.
+         *     Read it whole by id (`GET /api/data-artifacts/{artifact_id}`); a client's own nesting limit can
+         *     refuse that read too when the content nests very deeply, and on the hosted deployment it is
+         *     refused when the response carrying the artifact, with its content as storage serves it, is
+         *     longer than the platform's response cap (storage prints some numbers longer than they were
+         *     committed). When the read budget ends a page, `next` is the last artifact it read, matched or
+         *     not, so a page can carry no artifacts and still a `next`: only `next: null` ends the
+         *     enumeration. Continue by sending the same ask with `next` as `after`; every page validates the
+         *     ask again for its caller, so the position carries no authority.
+         *
+         *     `population` counts the ask's whole governed population on the first page and is `null` after
+         *     it. Those counts are exact, so the first page matches every governed artifact of the home to
+         *     make them; the read budget bounds the page's rows, not the counts. A continuation is validated
+         *     against the shape version the first page named, but its rows' `shape_state`, and any
+         *     `shape_states` narrowing, are read against the version now in force: when `amended_since`
+         *     appears, an ask narrowed by `shape_states` should start again from a first page asking that
+         *     version. A first page (no `after`) naming a superseded version is refused `shape_superseded`.
+         *
+         *     This is an enumeration: an artifact on a resource still ingesting, or one an operator ended, is
+         *     not in it, though `GET /api/resources/{id}/artifacts` addressed to that resource lists it. It
+         *     never returns resources, and it is not a stage of `/api/query`. A `GET` to this path is answered
+         *     by the caller checks before the route: `401` without credentials, `403` without system access,
+         *     and `405` to a caller with both.
+         */
+        post: operations["ask_data_artifacts"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/data-artifacts/{artifact_id}": {
         parameters: {
             query?: never;
@@ -4127,6 +4182,23 @@ export interface components {
             artifact_id: components["schemas"]["DataArtifactId"];
         };
         /**
+         * @description A position in the `(created, id)` keyset order that `artifacts_for_resource` returns rows in.
+         *
+         *     It carries position and no authority: each page re-runs the read gate for the asker, so a
+         *     cursor handed to another principal, or replayed after access is revoked, reveals nothing
+         *     the read would not. That is why it is a legible object and not an opaque token, and needs
+         *     no decoder in any SDK. Every bounded artifact read continues with this one type.
+         */
+        ArtifactCursor: {
+            /** @description The `artifact_id` of the last artifact on the previous page; breaks ties on `created`. */
+            artifact_id: components["schemas"]["DataArtifactId"];
+            /**
+             * Format: date-time
+             * @description The `created` of the last artifact on the previous page.
+             */
+            created: string;
+        };
+        /**
          * @description One predicate: a path of object-key segments into the content, and an operator from the closed
          *     `PropertyOp` set — reused, not copied (§3.2). There is no `eq`, regex, prefix or text-search
          *     operator, so a resemblance-shaped question has no way to be written down.
@@ -4149,7 +4221,7 @@ export interface components {
         ArtifactView: {
             artifact_id: components["schemas"]["DataArtifactId"];
             artifact_kind: string;
-            /** @description The content payload. `null` when the artifact was committed with no bytes. */
+            /** @description The content payload. Absent, not `null`, when the artifact was committed with no bytes. */
             content?: unknown;
             /** Format: int64 */
             content_bytes: number;
@@ -4166,7 +4238,13 @@ export interface components {
             /** Format: double */
             precedence: number;
             resource_id: components["schemas"]["ResourceId"];
-            /** @description `"never_declared"` today; will carry conformance verdicts when the shape registry lands. */
+            /**
+             * @description Conformance to the shape in force for the artifact's family in its home, by the staleness
+             *     triple (shape id, shape version, content hash): `"never_declared"` when no shape is in
+             *     force, else `"declared_satisfied"`, `"declared_not_satisfied"`, or
+             *     `"declared_not_yet_checked"` when no verdict matches the triple (`_data_artifact_shape_state`,
+             *     `20260822000020`; a batch read's rows carry the same state, computed set-based).
+             */
             shape_state: string;
         };
         /**
@@ -4176,6 +4254,66 @@ export interface components {
          */
         AskOperator: "has_key" | "contains" | "compare";
         /**
+         * @description The order a batch read returns rows in: `created`, oldest first, ties broken by artifact id.
+         *     The one order v0 serves; closed, so a reader can match it exhaustively.
+         * @enum {string}
+         */
+        AskOrder: "created";
+        /**
+         * @description One page of a batch read: the ask, re-sent whole on every page, and where to continue.
+         *
+         *     **The continuation carries position, never authority** (§7.3): every page runs the ask's
+         *     validation again for the asker, so a cursor handed to another principal, or replayed after
+         *     access is revoked, reveals nothing a first page would not.
+         *
+         *     **Strict at its own top level**, like [`ArtifactAsk`]: an unknown field beside `ask`, `limit`
+         *     and `after` is a body that cannot be read, never a field that silently changes nothing.
+         *     `after` is one [`ArtifactCursor`] object, so half a position is a body that cannot be read
+         *     either; the cursor itself reads only its two fields and ignores any other, because it is also a
+         *     response type that a client must read from a newer server.
+         */
+        AskRequest: {
+            after?: components["schemas"]["ArtifactCursor"] | null;
+            /** @description The question, against its governing shape. */
+            ask: components["schemas"]["ArtifactAsk"];
+            /**
+             * Format: int32
+             * @description How many matching artifacts this page examines — served and oversized alike. At least 1
+             *     and at most `MAX_ARTIFACT_PAGE_ROWS`, which is 200; a value outside that range is refused
+             *     (`page_limit_out_of_range`), never clamped. Absent: `ARTIFACT_DRAIN_PAGE_ROWS`, which is
+             *     50.
+             */
+            limit?: number | null;
+        };
+        /** @description One page of the artifacts matching an ask, in `(created, artifact_id)` order, oldest first. */
+        AskResponse: {
+            amended_since: components["schemas"]["ShapeSuccessor"] | null;
+            /**
+             * @description The matching artifacts that fit this page's byte budget and depth, each whole: `content` is
+             *     the stored content, absent for an artifact committed with no bytes. `resource_id` is
+             *     attribution, not a set.
+             */
+            artifacts: components["schemas"]["ArtifactView"][];
+            next: components["schemas"]["ArtifactCursor"] | null;
+            /** @description The order rows arrive in. Enumeration order, never rank. */
+            ordered_by: components["schemas"]["AskOrder"];
+            /**
+             * @description Matching artifacts too large for any page's byte budget, or too deeply nested for a page
+             *     (content more than 96 arrays or objects deep), in order among the rest, by id and size and
+             *     without content. Each is read whole by id (`GET /api/data-artifacts/{artifact_id}`); on the
+             *     hosted deployment that read is refused too when the response carrying the artifact, with
+             *     its content as storage serves it, is longer than the platform's response cap (see
+             *     `OversizedArtifact`).
+             */
+            oversized: components["schemas"]["OversizedArtifact"][];
+            population: components["schemas"]["ArtifactAskPopulation"] | null;
+            /**
+             * @description The shape version this page was validated against: on the first page the version the ask
+             *     named, and on every later page that same version, even once amended (see `amended_since`).
+             */
+            shape: components["schemas"]["AskedShape"];
+        };
+        /**
          * @description One askable path: its segments, what the schema declares there, and the operators feasible at
          *     it (spec §2.5).
          */
@@ -4183,6 +4321,16 @@ export interface components {
             facts: components["schemas"]["PathFacts"];
             operators: components["schemas"]["AskOperator"][];
             path: string[];
+        };
+        /** @description The shape version a batch page was validated against, and the home its population ranges over. */
+        AskedShape: {
+            /** Format: uuid */
+            home_anchor_id: string;
+            /** @description `"kb_contexts"` or `"kb_cogmaps"`. */
+            home_anchor_table: string;
+            shape_id: components["schemas"]["ShapeId"];
+            /** Format: int32 */
+            shape_version: number;
         };
         /** @description Request body for `POST /api/relationships`. */
         AssertRelationshipRequest: components["schemas"]["ActInput"] & {
@@ -8014,6 +8162,30 @@ export interface components {
             returns: components["schemas"]["ReturnSpec"][];
         };
         /**
+         * @description A matching artifact too large for a page's byte budget by itself, its content and the rest of its
+         *     row together, or too deeply nested for a page, its content more than 96 arrays or objects deep:
+         *     named, sized, and left to be read by id. A page holds content to that depth so that every
+         *     first-party client parses every page. A read by id writes the content less deeply, but a
+         *     client's own nesting limit can refuse that read too when the content nests very deeply. And a
+         *     read by id is not held to a page's byte budget: on the hosted deployment it is refused when the
+         *     response carrying the artifact, with its content as storage serves it, is longer than the
+         *     platform's response cap, which content committed within the request cap can reach, because
+         *     storage prints some numbers longer than they were committed (see `content_bytes`).
+         */
+        OversizedArtifact: {
+            artifact_id: components["schemas"]["DataArtifactId"];
+            /**
+             * Format: int64
+             * @description The artifact's stored `content_bytes`: its content's length in compact JSON as committed.
+             *     The content a page or a read by id serves can be longer, because storage prints a number
+             *     from 1e16 up to the 64-bit integer limits in full (`1e19`, committed as the five bytes
+             *     `1e+19`, is served as twenty digits). A page measures what it would write, so an artifact
+             *     can be named here though its `content_bytes` alone would fit a page.
+             */
+            content_bytes: number;
+            resource_id: components["schemas"]["ResourceId"];
+        };
+        /**
          * @description What the schema declares at one path. Each field is `None` when the schema leaves it
          *     unconstrained, so an absent field never reads as "nothing is admitted".
          */
@@ -8828,7 +9000,7 @@ export interface components {
          *     change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,
          *     matched exhaustively.
          */
-        RefusalReason: "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "intention_budget_exceeded" | "too_many_filter_values" | "duplicate_set_member" | "malformed_embedding" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | "property_value_too_large" | "property_value_budget_exceeded" | "filter_string_too_long" | "list_too_long" | "text_budget_exceeded" | "shape_not_askable" | "shape_superseded" | "shape_schema_uncompilable" | "empty_artifact_path" | "path_outside_shape" | "operator_outside_shape" | "value_outside_shape" | "unknown_artifact_intent" | "unknown_shape_state" | "ask_scope_conflict" | "unstorable_value" | string;
+        RefusalReason: "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "intention_budget_exceeded" | "too_many_filter_values" | "duplicate_set_member" | "malformed_embedding" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | "property_value_too_large" | "property_value_budget_exceeded" | "filter_string_too_long" | "list_too_long" | "text_budget_exceeded" | "shape_not_askable" | "shape_superseded" | "shape_schema_uncompilable" | "empty_artifact_path" | "path_outside_shape" | "operator_outside_shape" | "value_outside_shape" | "unknown_artifact_intent" | "unknown_shape_state" | "ask_scope_conflict" | "unstorable_value" | "page_limit_out_of_range" | string;
         /**
          * @description What a refusal teaches, as data an agent reads without parsing English (spec §3.5).
          *
@@ -16319,6 +16491,69 @@ export interface operations {
             };
         };
     };
+    ask_data_artifacts: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AskRequest"];
+            };
+        };
+        responses: {
+            /** @description One page of the matching artifacts, whole, in `(created, artifact_id)` order, with where to continue (`next`; only `null` ends the enumeration, and a page can carry no artifacts and still a `next`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AskResponse"];
+                };
+            };
+            /** @description Two codes. `PLAN_REFUSED`: the ask will not be answered, with every refusal at once in `error.details.refusals` — the ask's own (each naming its reason and, where it has one, a `teaches` carrying the shape's vocabulary) and the request's (`page_limit_out_of_range`, `property_value_budget_exceeded`), none with a stage. A shape you cannot read is refused exactly as one that does not exist (`shape_not_askable`). `UNREADABLE_PLAN`, with no `details`: the body is not JSON. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description System access required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The body is not an ask this door can read — a value of the wrong type, a field it does not declare, an `after` missing half its position, or an `after` whose `created` is outside the instants an artifact can be created at — under the code `UNREADABLE_PLAN`, the message naming what failed and repeating at most 1024 bytes of it. A non-JSON content type answers `415` under the same code. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     get_artifact_by_id: {
         parameters: {
             query?: never;
@@ -19090,6 +19325,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ArtifactCommitResponse"];
+                };
+            };
+            /** @description Under `DATA_ARTIFACT_REFUSAL`, the write is declined, the message saying why: `kind` or `content` holds U+0000, which is refused before the resource is checked, so whatever the caller's standing on it; an enforcing shape refuses the content; or the store declines the write in its own vocabulary. Under `BAD_REQUEST`, the `intent` is not `current`, `member` or `pinned`, or the act's authorship fields come without `confidence` or past their length bounds. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
                 };
             };
             /** @description Unauthorized */

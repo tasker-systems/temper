@@ -1226,6 +1226,52 @@ pub enum DataArtifactAction {
         /// Artifact ref: a UUID or the decorated `slug-<uuid>` form
         artifact: String,
     },
+    /// Ask one shape's artifacts what they hold, and print the matching artifacts, whole, one
+    /// bounded page at a time (`POST /api/data-artifacts/ask`)
+    ///
+    /// The ask names a shape by id and predicates over the paths that shape declares (read them
+    /// with `data-artifact schema show <shape-id>`). Send it whole with `--ask`, or build it with
+    /// `--shape` and one `--where` per predicate; the two forms send the same document. The answer
+    /// is `{shape, artifacts, oversized, population, ordered_by, next, amended_since}`, oldest
+    /// first. To count the first page's `population`, the page reads the whole population, outside
+    /// its read budget. To continue, run the same ask with `--after` set to the previous page's
+    /// `next`, passed back exactly; only `next: null` ends the answer, and a page may hold no
+    /// artifacts yet carry a `next` when it stopped on its read budget. An artifact in `oversized`
+    /// is too large or too deeply nested for a page (content more than 96 arrays or objects deep),
+    /// and the page goes on: read it whole with `data-artifact get <artifact-id>`, though a
+    /// client's own nesting limit can refuse that read too when the content nests very deeply, and
+    /// on the hosted deployment that read is refused when the response carrying the artifact, with
+    /// its content as storage serves it, is longer than the platform's response cap (storage
+    /// prints some numbers longer than they were committed).
+    ///
+    /// This is an enumeration, and `data-artifact list` is addressed. An ask reads across every
+    /// resource you can see in the shape's home, and like listing and search it leaves out a
+    /// resource still ingesting, or one whose ingest ended without finishing. `list <resource>`
+    /// names one resource and answers its artifacts even then. To find the resources that own
+    /// matching artifacts rather than the artifacts, use `temper query` with `find-resources-with`.
+    Ask {
+        /// The ask as JSON — `{"shape": "<id>", "predicates": [...], ...}` — inline, `@<path>` to
+        /// read a file, or `-` to read stdin. Not with --shape or --where.
+        #[arg(long, conflicts_with_all = ["shape", "predicates"], required_unless_present = "shape")]
+        ask: Option<String>,
+        /// The shape to ask, by id: the ask's `shape`, with no other field but the predicates
+        /// --where gives.
+        #[arg(long)]
+        shape: Option<String>,
+        /// One predicate as JSON, `{"path": ["unit"], "op": {"op": "contains", "values": ["ms"]}}`
+        /// — a path of object keys and an operator (`has_key`, `contains`, `compare`). Repeatable;
+        /// the predicates AND. Requires --shape.
+        #[arg(long = "where", value_name = "PREDICATE", requires = "shape")]
+        predicates: Vec<String>,
+        /// How many matching artifacts the page examines, 1 to 200 (default 50). Out of range is
+        /// refused, never clamped.
+        #[arg(long)]
+        limit: Option<u32>,
+        /// Continue after this position: the previous page's `next`, as JSON
+        /// (`{"created": "...", "artifact_id": "..."}`), passed back exactly with the same ask.
+        #[arg(long)]
+        after: Option<String>,
+    },
     /// Commit one data artifact to a resource
     Commit {
         /// Resource ref: a UUID or the decorated `slug-<uuid>` form
@@ -4134,5 +4180,104 @@ mod data_artifact_list_tests {
             );
         }
         assert!(Cli::try_parse_from(["temper", "data-artifact", "list", R, "--counts"]).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod data_artifact_ask_tests {
+    use super::*;
+    use clap::Parser;
+
+    const SHAPE: &str = "019e84ab-26ba-7560-9d34-c60d74a9fbe2";
+    const ASK: &str = r#"{"shape": "019e84ab-26ba-7560-9d34-c60d74a9fbe2"}"#;
+    const WHERE: &str = r#"{"path": ["unit"], "op": {"op": "has_key"}}"#;
+
+    fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
+        let argv = ["temper", "data-artifact", "ask"]
+            .iter()
+            .chain(args)
+            .copied();
+        Cli::try_parse_from(argv)
+    }
+
+    /// **`--ask` beside `--shape` or `--where` is a usage error, and so is neither**: one form of
+    /// the ask per run, refused by clap before anything is read or sent. Bites: the
+    /// `conflicts_with_all` dropped from `--ask`, or `required_unless_present` from it.
+    #[test]
+    fn a_mixed_or_missing_ask_is_a_usage_error() {
+        for mixed in [
+            vec!["--ask", ASK, "--shape", SHAPE],
+            vec!["--ask", ASK, "--shape", SHAPE, "--where", WHERE],
+        ] {
+            let err = parse(&mixed)
+                .err()
+                .unwrap_or_else(|| panic!("{mixed:?} parsed"));
+            assert_eq!(
+                err.kind(),
+                clap::error::ErrorKind::ArgumentConflict,
+                "{mixed:?}"
+            );
+        }
+        let missing = parse(&[]).err().expect("no ask is refused");
+        assert_eq!(
+            missing.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+        assert!(
+            parse(&["--ask", ASK, "--where", WHERE]).is_err(),
+            "--where beside --ask is refused"
+        );
+        assert!(
+            parse(&["--where", WHERE]).is_err(),
+            "--where without --shape is refused"
+        );
+    }
+
+    /// Each form parses on its own, `--where` repeating, and the paging flags beside either.
+    /// Bite: `--where` no longer repeatable, or `--after` dropped.
+    #[test]
+    fn each_form_parses_with_its_paging() {
+        let after = r#"{"created": "2026-10-24T09:15:30Z", "artifact_id": "019e84ab-26ba-7560-9d34-c60d74a9fbe3"}"#;
+        match parse(&["--ask", ASK, "--limit", "3", "--after", after])
+            .expect("--ask parses")
+            .command
+        {
+            Commands::DataArtifact {
+                action:
+                    DataArtifactAction::Ask {
+                        ask,
+                        shape,
+                        predicates,
+                        limit,
+                        after: given,
+                    },
+            } => {
+                assert_eq!(ask.as_deref(), Some(ASK));
+                assert_eq!(shape, None);
+                assert!(predicates.is_empty());
+                assert_eq!(limit, Some(3));
+                assert_eq!(given.as_deref(), Some(after));
+            }
+            _ => panic!("expected data-artifact ask"),
+        }
+        match parse(&["--shape", SHAPE, "--where", WHERE, "--where", WHERE])
+            .expect("--shape with --where parses")
+            .command
+        {
+            Commands::DataArtifact {
+                action:
+                    DataArtifactAction::Ask {
+                        ask,
+                        shape,
+                        predicates,
+                        ..
+                    },
+            } => {
+                assert_eq!(ask, None);
+                assert_eq!(shape.as_deref(), Some(SHAPE));
+                assert_eq!(predicates, vec![WHERE.to_string(), WHERE.to_string()]);
+            }
+            _ => panic!("expected data-artifact ask"),
+        }
     }
 }

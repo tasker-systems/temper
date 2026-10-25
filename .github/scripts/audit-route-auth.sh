@@ -508,6 +508,7 @@ handlers::data_artifact_shapes::declare_shape
 handlers::data_artifact_shapes::get_shape
 handlers::data_artifact_shapes::list_cogmap_shapes
 handlers::data_artifact_shapes::list_shapes
+handlers::data_artifacts::ask
 handlers::data_artifacts::commit
 handlers::data_artifacts::get
 handlers::data_artifacts::get_by_id

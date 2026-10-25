@@ -66,9 +66,10 @@ pub enum ApiError {
     /// code is what lets a client know a body carries refusals without sniffing `details`.
     #[error("Plan refused: {} refusal(s)", .refusals.len())]
     PlanRefused { refusals: Vec<PlanRefusal> },
-    /// A composition body the door could not read, under the distinct code
-    /// [`temper_core::error::UNREADABLE_PLAN_CODE`] and the reader's own status. The message is
-    /// the producer's to bound: it carries serde's account of what failed, which can quote the
+    /// A body the door could not read — a composition (`/api/query`) or an artifact ask
+    /// (`/api/data-artifacts/ask`), the two bodies a client may relay unread — under the distinct
+    /// code [`temper_core::error::UNREADABLE_PLAN_CODE`] and the reader's own status. The message
+    /// is the producer's to bound: it carries serde's account of what failed, which can quote the
     /// caller's input.
     #[error("{message}")]
     UnreadablePlan { status: StatusCode, message: String },

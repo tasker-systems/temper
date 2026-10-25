@@ -4,6 +4,7 @@
 //! dispatch one command through it. Reads go through the [`substrate_read`] dispatcher (the substrate
 //! read path); writes compose `temper_substrate::writes` and fire through the event ledger.
 
+pub mod artifact_ask_read;
 mod db_backend;
 pub mod query_read;
 pub mod region_clocks;
