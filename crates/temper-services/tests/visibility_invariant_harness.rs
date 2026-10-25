@@ -2345,7 +2345,7 @@ async fn the_harness_bites_a_blob_gate_restatement(pool: PgPool) -> sqlx::Result
 /// leaks a tombstoned or unreachable row, and a gate too narrow drops one the profile can read.
 ///
 /// Bite: dropping the `resources_visible_to` join from `resources_changed_by`, or the
-/// `context_readable_by_profile` test from `contexts_changed_by`, makes this report.
+/// `contexts_readable_by` join from `contexts_changed_by`, makes this report.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn the_change_readers_answer_exactly_their_visible_sets(pool: PgPool) -> sqlx::Result<()> {
     let seed = harness_seed();

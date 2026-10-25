@@ -203,9 +203,11 @@ pub struct ResourceListParams {
     pub doc_type_name: Option<String>,
     pub owner: Option<String>,
     /// `"@me"`: only resources the caller changed — themselves, or an agent writing under their
-    /// profile, on any surface. A change counts when the resource's own element trail holds an
-    /// event the caller's profile emitted, so this and the trail cannot disagree. A machine client
-    /// is its own profile, and its changes are not the caller's.
+    /// profile, on any surface. A change counts when it reaches the resource through its element
+    /// trail's arms (names it, owns a property of it, names one of its blocks) and is an AUTHORED
+    /// event the caller's profile emitted: events the system computes, such as a region
+    /// materialization stamped with a writer's emitter, never count. A machine client is its own
+    /// profile, and its changes are not the caller's.
     ///
     /// **Only `"@me"`.** Any other non-empty value is a `400`: naming someone else would make this a read of
     /// another principal's activity, which no door offers. Composes with every other filter as one

@@ -1,7 +1,8 @@
 -- What a reader changed: the resources their own profile changed, and the contexts they changed
 -- something in, each at the time of their latest change there. Read by the list door's
--- `changed_by=@me` filter and `changed_by_me` sort, and by the contexts read's
--- `last_changed_by_you`, so "your change" has one definition on every door that answers it.
+-- `changed_by=@me` filter and `changed_by_me` sort, and by `GET /api/me/context-activity`
+-- (`context_service::activity_of`), so "your change" has one definition on every door that
+-- answers it.
 --
 -- What a later edit must not break:
 --   1. THE READER IS THE EMITTER'S PROFILE. An event is the reader's when its emitter entity
@@ -19,9 +20,11 @@
 --      writes is stamped with whoever wrote first. Counting it would move a reader's "last
 --      changed" with no act of theirs. `changed_by_filter_test.rs` partitions every domain type
 --      into authored or computed, so a new type is classified before it is counted or dropped.
---   3. THE SAME RESOURCES A TRAIL NAMES. A resource counts when its element trail holds one of
---      these events, through the trail's three arms: the event names the resource, owns a
---      property of it, or names one of its blocks.
+--   3. THE TRAIL'S ARMS, OVER AUTHORED EVENTS. A resource counts when its element trail holds one
+--      of these events, through the trail's three arms: the event names the resource, owns a
+--      property of it, or names one of its blocks. The trail itself also shows the computed types
+--      excluded above; none of their payloads carries those ids today, so the two name the same
+--      resources, but that rests on the payload shapes, not on the filters agreeing.
 --   4. GATED WHERE THEY ANSWER, ONCE. `resources_changed_by` aggregates per resource, then joins
 --      `resources_visible_to(p_profile)` once; `contexts_changed_by` aggregates per context, then
 --      joins `contexts_readable_by(p_profile)` once — which floors on `is_active`, so a retired
@@ -105,5 +108,5 @@ COMMENT ON FUNCTION contexts_changed_by(uuid) IS
 SELECT declare_migration(
     20261106000000,
     'additive',
-    'New functions _profile_change_events(uuid), resources_changed_by(uuid) and contexts_changed_by(uuid): a profile''s own anchored, authored domain events, and the resources and contexts they changed with the latest time of each, gated by the profile''s read predicates. Read by the list door''s changed_by filter and sort and by the contexts read''s last_changed_by_you. No existing object is altered or replaced, and no parameter carries a DEFAULT; a deployed binary that does not call them is unaffected.'
+    'New functions _profile_change_events(uuid), resources_changed_by(uuid) and contexts_changed_by(uuid): a profile''s own anchored, authored domain events, and the resources and contexts they changed with the latest time of each, gated by the profile''s read predicates. Read by the list door''s changed_by filter and sort and by GET /api/me/context-activity. No existing object is altered or replaced, and no parameter carries a DEFAULT; a deployed binary that does not call them is unaffected.'
 );

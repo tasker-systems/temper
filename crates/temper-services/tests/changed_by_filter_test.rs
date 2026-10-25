@@ -822,15 +822,24 @@ async fn a_retired_context_has_no_activity_row(pool: PgPool) {
 }
 
 /// `_profile_change_events` is ungated, and its two gated readers are its only callers. Derived from
-/// `pg_proc` and from the Rust sources, so a third caller fails here — the guard the
+/// `pg_proc` (every schema, functions and procedures), `pg_views` and the Rust sources, so a third
+/// caller fails here — the guard the
 /// verdict-handed fragments get from `audit-ungated-fragments.sh`, which cannot see this name.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn the_ungated_events_helper_has_exactly_its_two_gated_callers(pool: PgPool) {
+    // Every schema, functions and procedures alike, plus every view. `_` is a LIKE wildcard, so the
+    // name is escaped to match only itself.
     let sql_callers: Vec<String> = sqlx::query_scalar(
-        "SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace \
-          WHERE n.nspname = 'public' AND p.prokind = 'f' \
+        "SELECT n.nspname || '.' || p.proname FROM pg_proc p \
+           JOIN pg_namespace n ON n.oid = p.pronamespace \
+          WHERE p.prokind IN ('f', 'p') \
+            AND n.nspname NOT IN ('pg_catalog', 'information_schema') \
             AND p.proname <> '_profile_change_events' \
-            AND pg_get_functiondef(p.oid) LIKE '%_profile_change_events(%' \
+            AND pg_get_functiondef(p.oid) LIKE '%\\_profile\\_change\\_events(%' \
+         UNION ALL \
+         SELECT schemaname || '.' || viewname FROM pg_views \
+          WHERE schemaname NOT IN ('pg_catalog', 'information_schema') \
+            AND definition LIKE '%\\_profile\\_change\\_events(%' \
           ORDER BY 1",
     )
     .fetch_all(&pool)
@@ -838,7 +847,7 @@ async fn the_ungated_events_helper_has_exactly_its_two_gated_callers(pool: PgPoo
     .expect("scan pg_proc");
     assert_eq!(
         sql_callers,
-        vec!["contexts_changed_by", "resources_changed_by"]
+        vec!["public.contexts_changed_by", "public.resources_changed_by"]
     );
 
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
