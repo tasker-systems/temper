@@ -148,14 +148,17 @@ pub enum ClientError {
     #[error("the plan was refused:{}", render_refusals(.refusals))]
     PlanRefused { refusals: Vec<PlanRefusal> },
 
-    /// The server could not read the body as a composition — malformed JSON, a value of the wrong
-    /// type, a name outside a closed vocabulary — so there is no plan and no refusal list. A
-    /// **caller** error, like [`Self::PlanRefused`], and the message is the server's own account of
-    /// what failed (bounded by the server).
+    /// The server could not read the body — a composition (`/api/query`) or an artifact ask
+    /// (`/api/data-artifacts/ask`): malformed JSON, a value of the wrong type, a name outside a
+    /// closed vocabulary, or an ask's position the store cannot hold — so there is nothing to
+    /// answer and no refusal list. A **caller** error, like [`Self::PlanRefused`], and the message
+    /// is the server's own account of what failed (bounded by the server). The `Display` text says
+    /// "plan" for both bodies, as [`Self::PlanRefused`]'s does, because the wire code is shared.
     ///
     /// Discriminated by the wire `code` being [`temper_core::error::UNREADABLE_PLAN_CODE`], at any
-    /// status the reader chose. A caller that sends plans it never parsed — the MCP edge relays
-    /// them unread — depends on this to report the server's sentence rather than a server fault.
+    /// status the reader chose. A caller that sends bodies it never parsed — the MCP edge relays
+    /// plans and asks unread — depends on this to report the server's sentence rather than a
+    /// server fault.
     #[error("the plan could not be read: {message}")]
     UnreadablePlan { message: String },
 

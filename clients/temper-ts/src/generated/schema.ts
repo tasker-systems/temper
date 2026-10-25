@@ -1846,16 +1846,28 @@ export interface paths {
          *     artifact committed with no bytes), in `(created, artifact_id)` order, oldest first. POST,
          *     because the ask is a document rather than a query string.
          *
-         *     Every page is bounded twice: by `limit` (absent: 50; at least 1 and at most 200), and by a
-         *     byte budget over the whole page. A matching artifact too large for any page is named in
+         *     Every page is bounded three ways, and the first bound reached ends it: by `limit` (absent: 50;
+         *     at least 1 and at most 200), by a byte budget over what the page sends, and by a budget over
+         *     what it may read to find its rows. A matching artifact too large for any page is named in
          *     `oversized`, in order, by id and size, and is read whole by id (`GET
-         *     /api/data-artifacts/{artifact_id}`). `population` counts the ask's whole governed population on
-         *     the first page and is `null` after it. Continue by sending the same ask with `next` as `after`;
+         *     /api/data-artifacts/{artifact_id}`). When the read budget ends a page, `next` is the last
+         *     artifact it read, matched or not, so a page can carry no artifacts and still a `next`: only
+         *     `next: null` ends the enumeration. Continue by sending the same ask with `next` as `after`;
          *     every page validates the ask again for its caller, so the position carries no authority.
+         *
+         *     `population` counts the ask's whole governed population on the first page and is `null` after
+         *     it. Those counts are exact, so the first page matches every governed artifact of the home to
+         *     make them; the read budget bounds the page's rows, not the counts. A continuation is validated
+         *     against the shape version the first page named, but its rows' `shape_state`, and any
+         *     `shape_states` narrowing, are read against the version now in force: when `amended_since`
+         *     appears, an ask narrowed by `shape_states` should start again from a first page asking that
+         *     version. A first page (no `after`) naming a superseded version is refused `shape_superseded`.
          *
          *     This is an enumeration: an artifact on a resource still ingesting, or one an operator ended, is
          *     not in it, though `GET /api/resources/{id}/artifacts` addressed to that resource lists it. It
-         *     never returns resources, and it is not a stage of `/api/query`.
+         *     never returns resources, and it is not a stage of `/api/query`. A `GET` to this path is answered
+         *     by the caller checks before the route: `401` without credentials, `403` without system access,
+         *     and `405` to a caller with both.
          */
         post: operations["ask_data_artifacts"];
         delete?: never;
@@ -4204,7 +4216,7 @@ export interface components {
         ArtifactView: {
             artifact_id: components["schemas"]["DataArtifactId"];
             artifact_kind: string;
-            /** @description The content payload. `null` when the artifact was committed with no bytes. */
+            /** @description The content payload. Absent, not `null`, when the artifact was committed with no bytes. */
             content?: unknown;
             /** Format: int64 */
             content_bytes: number;
@@ -4249,9 +4261,11 @@ export interface components {
          *     validation again for the asker, so a cursor handed to another principal, or replayed after
          *     access is revoked, reveals nothing a first page would not.
          *
-         *     **Strict**, like [`ArtifactAsk`]: an unknown field is a body that cannot be read, never a field
-         *     that silently changes nothing. `after` is one [`ArtifactCursor`] object, so half a position is
-         *     a body that cannot be read either.
+         *     **Strict at its own top level**, like [`ArtifactAsk`]: an unknown field beside `ask`, `limit`
+         *     and `after` is a body that cannot be read, never a field that silently changes nothing.
+         *     `after` is one [`ArtifactCursor`] object, so half a position is a body that cannot be read
+         *     either; the cursor itself reads only its two fields and ignores any other, because it is also a
+         *     response type that a client must read from a newer server.
          */
         AskRequest: {
             after?: components["schemas"]["ArtifactCursor"] | null;
@@ -4268,14 +4282,14 @@ export interface components {
         };
         /** @description One page of the artifacts matching an ask, in `(created, artifact_id)` order, oldest first. */
         AskResponse: {
-            amended_since?: components["schemas"]["ShapeSuccessor"] | null;
+            amended_since: components["schemas"]["ShapeSuccessor"] | null;
             /**
              * @description The matching artifacts that fit this page's byte budget, each whole: `content` is the
              *     stored content, absent for an artifact committed with no bytes. `resource_id` is
              *     attribution, not a set.
              */
             artifacts: components["schemas"]["ArtifactView"][];
-            next?: components["schemas"]["ArtifactCursor"] | null;
+            next: components["schemas"]["ArtifactCursor"] | null;
             /** @description The order rows arrive in. Enumeration order, never rank. */
             ordered_by: components["schemas"]["AskOrder"];
             /**
@@ -4283,7 +4297,7 @@ export interface components {
              *     size and without content. Each is read whole by id (`GET /api/data-artifacts/{artifact_id}`).
              */
             oversized: components["schemas"]["OversizedArtifact"][];
-            population?: components["schemas"]["ArtifactAskPopulation"] | null;
+            population: components["schemas"]["ArtifactAskPopulation"] | null;
             /**
              * @description The shape version this page was validated against: on the first page the version the ask
              *     named, and on every later page that same version, even once amended (see `amended_since`).
@@ -16470,7 +16484,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description One page of the matching artifacts, whole, in `(created, artifact_id)` order, with where to continue (`next`, `null` on the last page) */
+            /** @description One page of the matching artifacts, whole, in `(created, artifact_id)` order, with where to continue (`next`; only `null` ends the enumeration, and a page can carry no artifacts and still a `next`) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -16506,7 +16520,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The body is not an ask this door can read — a value of the wrong type, a field it does not declare, or an `after` missing half its position — under the code `UNREADABLE_PLAN`, the message naming what failed and repeating at most 1024 bytes of it. A non-JSON content type answers `415` under the same code. */
+            /** @description The body is not an ask this door can read — a value of the wrong type, a field it does not declare, an `after` missing half its position, or an `after` whose `created` is outside the instants an artifact can be created at — under the code `UNREADABLE_PLAN`, the message naming what failed and repeating at most 1024 bytes of it. A non-JSON content type answers `415` under the same code. */
             422: {
                 headers: {
                     [name: string]: unknown;

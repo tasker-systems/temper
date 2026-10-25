@@ -79,10 +79,13 @@ const POPULATION_SIGNATURE: &str = "(p_visible_ids uuid[], p_reader uuid, p_ask 
 /// The counted set's body (`20261106000000`): the counted set delegates to it, so a conjunct is cut
 /// here and read through a delegating variant of the counted set (`population_variant`).
 const ROWS: &str = "__temper_ungated_artifact_ask_rows";
+const ROWS_NARGS: i16 = 9;
 const ROWS_SIGNATURE: &str = "(p_visible_ids uuid[], p_reader uuid, p_ask jsonb, \
-     p_after_created timestamptz, p_after_id uuid, p_limit bigint, p_matched_only boolean) \
+     p_after_created timestamptz, p_after_id uuid, p_limit bigint, p_matched_only boolean, \
+     p_read_budget bigint, p_read_charge bigint) \
      RETURNS TABLE (artifact_id uuid, resource_id uuid, shape_id uuid, shape_version int, \
-     shape_state text, matched boolean, created timestamptz, content_bytes bigint)";
+     shape_state text, matched boolean, created timestamptz, content_bytes bigint, \
+     frontier boolean)";
 
 const GOVERNED_IN: &str = "__temper_ungated_governed_artifacts_in";
 const GOVERNED_IN_SIGNATURE: &str = "(p_visible_ids uuid[], p_home_anchor_table text, \
@@ -399,7 +402,7 @@ fn artifacts_of(rows: &[Counted]) -> BTreeSet<Uuid> {
 /// lives in that one body, so this is where a counted-set bite is cut.
 async fn population_variant(conn: &mut PgConnection, name: &str, cut: &str, with: &str) {
     let rows = format!("{name}_rows");
-    variant(conn, ROWS, 7, ROWS_SIGNATURE, &rows, cut, with).await;
+    variant(conn, ROWS, ROWS_NARGS, ROWS_SIGNATURE, &rows, cut, with).await;
     variant(
         conn,
         POPULATION,

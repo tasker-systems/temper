@@ -121,7 +121,7 @@ intent: string, precedence: number, content_hash: string, content_bytes: bigint,
  */
 shape_state: string, is_folded: boolean, created: string, 
 /**
- * The content payload. `null` when the artifact was committed with no bytes.
+ * The content payload. Absent, not `null`, when the artifact was committed with no bytes.
  */
 content?: JsonValue | null, };
 

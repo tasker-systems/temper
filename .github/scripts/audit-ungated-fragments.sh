@@ -274,11 +274,12 @@ PREFIX='__temper_ungated_'
 #     principal alone; it never assembles an id set.
 #   RESIDUE: unchanged and accepted.
 #
-#   THE BODY TAKES A POSITION, A LIMIT AND MATCHED-ONLY, and those are the thing to check: all three
-#   are narrowings applied after governance and the conjuncts, never an id source. Its EXECUTE text
-#   is still constant with every value in `USING`. A later edit that moved a conjunct out of this
-#   body into a caller, or computed the page from the governance relations directly, is the shape
-#   to refuse.
+#   THE BODY TAKES A POSITION, A LIMIT, MATCHED-ONLY AND A READ BUDGET, and those are the thing to
+#   check: all four are narrowings applied after governance and the conjuncts, never an id source.
+#   The read budget's frontier row is a governed, visible row the body read, returned unmatched
+#   only to carry its position. Its EXECUTE text is still constant with every value in `USING`. A
+#   later edit that moved a conjunct out of this body into a caller, or computed the page from the
+#   governance relations directly, is the shape to refuse.
 read -r -d '' SQL_BASELINE <<'EOF' || true
 __temper_ungated_artifact_ask_counts
 __temper_ungated_artifact_ask_population

@@ -179,16 +179,25 @@ once. A shape you cannot read is refused exactly as one that does not exist.
   in `(created, artifact_id)` order — enumeration order, never rank (`ordered_by: "created"`). The
   answer is `{shape, artifacts, oversized, population, ordered_by, next, amended_since}`.
 - **Continue with `next`.** Send the same ask again with the page's `next` as `after`, unchanged.
-  `next` is `null` on the last page, so a page with a `next` is not the whole answer. The position
-  carries no authority: every page checks the ask again for you.
+  Only `next: null` ends the enumeration. A page also stops once it has read as much as one page
+  may read to find its matches, and then `next` is the last artifact it read, matched or not — so
+  a page can hold no artifacts and still carry a `next`. An empty page with a `next` means keep
+  going, never "nothing matches". The position carries no authority: every page checks the ask
+  again for you.
 - **`oversized` is fetched by id.** A page is also bounded in bytes. A matching artifact too large
   for any page is named in `oversized`, in order, by id, resource and size, without its content;
   read it whole by id. It does not end the page.
 - **`population` is on the first page only**: the ask's governed artifacts by shape state, and how
   many matched — the same counts `find-resources-with`'s trace gives. Later pages carry `null`.
-- **`amended_since`.** If the shape is amended between your pages, later pages keep answering
+  The counts are exact, so to make them the first page matches every governed artifact in the home;
+  only the page's own rows are bounded by what a page may read.
+- **`amended_since`.** If the shape is amended between your pages, later pages are still validated
   against the version your first page named, and `amended_since` names the version now in force.
-  A new ask naming the folded version is refused `shape_superseded`, teaching its successor.
+  But each row's `shape_state`, and any `shape_states` you narrowed by, are read against the
+  version now in force, which reconciliation may not have checked yet: a narrowed ask can find
+  nothing on the pages after an amendment. When `amended_since` appears and you narrowed by
+  `shape_states`, start again from a first page, asking the version it names. A first page (no
+  `after`) naming the folded version is refused `shape_superseded`, teaching its successor.
 - **An artifact with no content** is returned only by an ask with no predicates, and is served
   without a `content` field.
 - **The enumeration floor.** Listing a resource's artifacts is an *addressed* read: it names one

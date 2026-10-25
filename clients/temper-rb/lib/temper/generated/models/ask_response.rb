@@ -16,13 +16,13 @@ require 'time'
 module Temper::Generated
   # One page of the artifacts matching an ask, in `(created, artifact_id)` order, oldest first.
   class AskResponse < ApiModelBase
-    # The version of the shape's lineage now in force, when the version this enumeration was validated against has been amended since its first page; `null` otherwise. Later pages keep answering against the version the first page named.
+    # The version of the shape's lineage now in force, when the version this enumeration was validated against has been amended since its first page; `null` otherwise. A continuation is validated against the version the first page named, but each row's `shape_state`, and any `shape_states` narrowing, are read against the version now in force, whose verdicts reconciliation may not yet have written. So an ask narrowed by `shape_states` should start again from a first page, asking the version `amended_since` names, when it appears.
     attr_accessor :amended_since
 
     # The matching artifacts that fit this page's byte budget, each whole: `content` is the stored content, absent for an artifact committed with no bytes. `resource_id` is attribution, not a set.
     attr_accessor :artifacts
 
-    # Where to continue, or `null` when this page is the last. Pass it back unchanged as the next request's `after`, with the same ask.
+    # Where to continue, or `null` when the enumeration is over. Pass it back unchanged as the next request's `after`, with the same ask. Only `null` ends an enumeration: a page also stops when it has read as much as one page may read, and then `next` is the last artifact it read, matched or not, so a page can carry no artifacts and still a `next`.
     attr_accessor :_next
 
     # The order rows arrive in. Enumeration order, never rank.
@@ -31,7 +31,7 @@ module Temper::Generated
     # Matching artifacts too large for any page's byte budget, in order among the rest, by id and size and without content. Each is read whole by id (`GET /api/data-artifacts/{artifact_id}`).
     attr_accessor :oversized
 
-    # What the ask counted over its whole population, on the first page; `null` on every later page.
+    # What the ask counted over its whole population, on the first page; `null` on every later page. These are exact counts over the whole counted set: to count them, the first page matches every governed artifact of the home, content included, and the read budget that bounds the page's own rows does not bound that. They are read in a statement of their own beside the page's, so a commit landing between the two can make `matched` differ from the rows by that commit; they describe the population, not the page.
     attr_accessor :population
 
     # The shape version this page was validated against: on the first page the version the ask named, and on every later page that same version, even once amended (see `amended_since`).
@@ -122,6 +122,8 @@ module Temper::Generated
 
       if attributes.key?(:'amended_since')
         self.amended_since = attributes[:'amended_since']
+      else
+        self.amended_since = nil
       end
 
       if attributes.key?(:'artifacts')
@@ -134,6 +136,8 @@ module Temper::Generated
 
       if attributes.key?(:'_next')
         self._next = attributes[:'_next']
+      else
+        self._next = nil
       end
 
       if attributes.key?(:'ordered_by')
@@ -152,6 +156,8 @@ module Temper::Generated
 
       if attributes.key?(:'population')
         self.population = attributes[:'population']
+      else
+        self.population = nil
       end
 
       if attributes.key?(:'shape')

@@ -1228,7 +1228,8 @@ pub enum DataArtifactAction {
     /// `--shape` and one `--where` per predicate; the two forms send the same document. The answer
     /// is `{shape, artifacts, oversized, population, ordered_by, next, amended_since}`, oldest
     /// first. To continue, run the same ask with `--after` set to the previous page's `next`,
-    /// passed back exactly; `next` is `null` on the last page. An artifact in `oversized` is too
+    /// passed back exactly; only `next: null` ends the answer, and a page may hold no artifacts yet
+    /// carry a `next` when it stopped on its read budget. An artifact in `oversized` is too
     /// large for a page: read it whole with `data-artifact get <artifact-id>`.
     ///
     /// This is an enumeration, and `data-artifact list` is addressed. An ask reads across every

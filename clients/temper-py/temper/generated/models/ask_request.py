@@ -28,7 +28,7 @@ from pydantic_core import to_jsonable_python
 
 class AskRequest(BaseModel):
     """
-    One page of a batch read: the ask, re-sent whole on every page, and where to continue.  **The continuation carries position, never authority** (§7.3): every page runs the ask's validation again for the asker, so a cursor handed to another principal, or replayed after access is revoked, reveals nothing a first page would not.  **Strict**, like [`ArtifactAsk`]: an unknown field is a body that cannot be read, never a field that silently changes nothing. `after` is one [`ArtifactCursor`] object, so half a position is a body that cannot be read either.
+    One page of a batch read: the ask, re-sent whole on every page, and where to continue.  **The continuation carries position, never authority** (§7.3): every page runs the ask's validation again for the asker, so a cursor handed to another principal, or replayed after access is revoked, reveals nothing a first page would not.  **Strict at its own top level**, like [`ArtifactAsk`]: an unknown field beside `ask`, `limit` and `after` is a body that cannot be read, never a field that silently changes nothing. `after` is one [`ArtifactCursor`] object, so half a position is a body that cannot be read either; the cursor itself reads only its two fields and ignores any other, because it is also a response type that a client must read from a newer server.
     """ # noqa: E501
     after: Optional[ArtifactCursor] = Field(default=None, description="Continue after this position: the previous page's `next`, unchanged, with the same ask. Absent: the first page.")
     ask: ArtifactAsk = Field(description="The question, against its governing shape.")

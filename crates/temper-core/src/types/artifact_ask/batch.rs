@@ -23,9 +23,11 @@ use crate::types::query::{ArtifactAskPopulation, PlanRefusal, RefusalReason};
 /// validation again for the asker, so a cursor handed to another principal, or replayed after
 /// access is revoked, reveals nothing a first page would not.
 ///
-/// **Strict**, like [`ArtifactAsk`]: an unknown field is a body that cannot be read, never a field
-/// that silently changes nothing. `after` is one [`ArtifactCursor`] object, so half a position is
-/// a body that cannot be read either.
+/// **Strict at its own top level**, like [`ArtifactAsk`]: an unknown field beside `ask`, `limit`
+/// and `after` is a body that cannot be read, never a field that silently changes nothing.
+/// `after` is one [`ArtifactCursor`] object, so half a position is a body that cannot be read
+/// either; the cursor itself reads only its two fields and ignores any other, because it is also a
+/// response type that a client must read from a newer server.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -40,10 +42,12 @@ pub struct AskRequest {
     /// (`page_limit_out_of_range`), never clamped. Absent: `ARTIFACT_DRAIN_PAGE_ROWS`, which is
     /// 50.
     #[serde(default)]
+    #[cfg_attr(feature = "typescript", ts(optional))]
     pub limit: Option<u32>,
     /// Continue after this position: the previous page's `next`, unchanged, with the same ask.
     /// Absent: the first page.
     #[serde(default)]
+    #[cfg_attr(feature = "typescript", ts(optional))]
     pub after: Option<ArtifactCursor>,
 }
 
@@ -65,16 +69,32 @@ pub struct AskResponse {
     /// size and without content. Each is read whole by id (`GET /api/data-artifacts/{artifact_id}`).
     pub oversized: Vec<OversizedArtifact>,
     /// What the ask counted over its whole population, on the first page; `null` on every later
-    /// page.
+    /// page. These are exact counts over the whole counted set: to count them, the first page
+    /// matches every governed artifact of the home, content included, and the read budget that
+    /// bounds the page's own rows does not bound that. They are read in a statement of their own beside the page's, so a commit landing between
+    /// the two can make `matched` differ from the rows by that commit; they describe the
+    /// population, not the page.
+    // utoipa reads `Option` as "may be omitted"; the key is always written, `null` included, so
+    // the published contract says required (the `located_at` rule in `query/hits.rs`).
+    #[cfg_attr(feature = "web-api", schema(required = true))]
     pub population: Option<ArtifactAskPopulation>,
     /// The order rows arrive in. Enumeration order, never rank.
     pub ordered_by: AskOrder,
-    /// Where to continue, or `null` when this page is the last. Pass it back unchanged as the next
-    /// request's `after`, with the same ask.
+    /// Where to continue, or `null` when the enumeration is over. Pass it back unchanged as the
+    /// next request's `after`, with the same ask. Only `null` ends an enumeration: a page also
+    /// stops when it has read as much as one page may read, and then `next` is the last artifact it
+    /// read, matched or not, so a page can carry no artifacts and still a `next`.
+    // Always written, `null` included: required in the published contract, as `population`.
+    #[cfg_attr(feature = "web-api", schema(required = true))]
     pub next: Option<ArtifactCursor>,
     /// The version of the shape's lineage now in force, when the version this enumeration was
-    /// validated against has been amended since its first page; `null` otherwise. Later pages keep
-    /// answering against the version the first page named.
+    /// validated against has been amended since its first page; `null` otherwise. A continuation
+    /// is validated against the version the first page named, but each row's `shape_state`, and
+    /// any `shape_states` narrowing, are read against the version now in force, whose verdicts
+    /// reconciliation may not yet have written. So an ask narrowed by `shape_states` should start
+    /// again from a first page, asking the version `amended_since` names, when it appears.
+    // Always written, `null` included: required in the published contract, as `population`.
+    #[cfg_attr(feature = "web-api", schema(required = true))]
     pub amended_since: Option<ShapeSuccessor>,
 }
 
@@ -322,7 +342,9 @@ mod tests {
 
     /// **`next`, `population` and `amended_since` are on every page, `null` when there is nothing to
     /// say; the order is named.** A reader tells the last page from an answer that lost its
-    /// continuation. Bites: `skip_serializing_if` on any of the three, or `ordered_by` renamed.
+    /// continuation. Each key must be present and `null`, so a key left out fails. Bites:
+    /// `#[serde(skip_serializing_if = "Option::is_none")]` on any of the three (its key is then
+    /// absent), or `ordered_by` renamed.
     #[test]
     fn the_response_names_every_continuation_field_and_its_order() {
         let shape = ShapeIdentity {
@@ -345,7 +367,10 @@ mod tests {
         })
         .unwrap();
         for key in ["population", "next", "amended_since"] {
-            assert!(last[key].is_null(), "{key} in {last}");
+            assert!(
+                last.get(key).is_some_and(serde_json::Value::is_null),
+                "{key} present and null in {last}"
+            );
         }
         assert_eq!(last["ordered_by"], json!("created"));
         assert_eq!(

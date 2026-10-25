@@ -24,7 +24,10 @@ use sqlx::PgPool;
 use crate::backend::substrate_read::artifact_view;
 use crate::error::{ApiError, ApiResult};
 use crate::services::shape_loader;
-use crate::transport::{ARTIFACT_ASK_PAGE_BYTES, ARTIFACT_ROW_FIXED_BYTES};
+use crate::transport::{
+    ARTIFACT_ASK_PAGE_BYTES, ARTIFACT_ASK_READ_BYTES, ARTIFACT_READ_CANDIDATE_BYTES,
+    ARTIFACT_ROW_FIXED_BYTES,
+};
 use temper_core::error::TemperError;
 use temper_core::types::artifact_ask::{
     AskOrder, AskRequest, AskResponse, AskSession, AskedShape, ShapeContext, ShapeSuccessor,
@@ -104,6 +107,8 @@ async fn read(
             limit: request.rows(),
             page_budget: ARTIFACT_ASK_PAGE_BYTES,
             row_bytes: ARTIFACT_ROW_FIXED_BYTES,
+            read_budget: ARTIFACT_ASK_READ_BYTES,
+            read_charge: ARTIFACT_READ_CANDIDATE_BYTES,
         },
     )
     .await

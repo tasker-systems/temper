@@ -115,13 +115,22 @@ pub const VERCEL_RESPONSE_BODY_CAP_BYTES: usize = 4_500_000;
 /// `content_bytes` and its metadata; a matching row that does not is named in the page's
 /// `oversized` list without its content and charged [`ARTIFACT_ROW_FIXED_BYTES`]; a row that fits
 /// alone but not in what is left ends the page, and the next page starts with it. The charge is
-/// made in SQL (`artifacts_matching_ask`, migration `20261106000000`).
+/// made in SQL (`artifacts_matching_ask`, migration `20261106000000`). The row limit and the read
+/// budget ([`ARTIFACT_ASK_READ_BYTES`]) can end a page too; the earliest of the three does.
 ///
 /// # 2,000,000 bytes, under [`VERCEL_RESPONSE_BODY_CAP_BYTES`] twice over
 ///
 /// **Every byte a row writes is charged.** `content_bytes` is the length of the committed content
-/// in compact JSON, and a page serves that same value compactly re-serialized from storage. A row's
-/// metadata is each of its text fields (the family's namespace table and name, `intent`,
+/// in compact JSON, and a page serves that same value compactly re-serialized from storage. That
+/// equality holds for numbers only because every crate that parses served content parses a float
+/// back to the value it was written from: `jsonb` prints a number in plain notation (`1e300` as 301
+/// digits), and only `serde_json`'s `float_roundtrip` feature, which this crate and temper-client
+/// declare (and `jsonschema` enables in every binary that links it), guarantees that parse is
+/// exact, so the float is written back in its shortest form. `serde_json`'s `arbitrary_precision`
+/// must stay off for the same reason: with it, the plain expansion itself would be written back.
+/// `served_floats_are_as_long_as_their_content_bytes` (temper-services' `artifact_ask_read_test`)
+/// commits floats through storage and measures what is served. A row's metadata is each of its
+/// text fields (the family's namespace table and name, `intent`,
 /// `content_hash`, `shape_state`) at the length of the JSON string the page writes for it —
 /// quotes and escapes included, so a family name of any length is paid for on every row — plus
 /// [`ARTIFACT_ROW_FIXED_BYTES`] for everything else the row writes: its keys and punctuation, ids,
@@ -146,6 +155,42 @@ pub const ARTIFACT_ROW_FIXED_BYTES: usize = 1024;
 /// The most a batch-read page's envelope, or the MCP relay's around it, costs (see
 /// [`ARTIFACT_ASK_PAGE_BYTES`]).
 pub const ARTIFACT_PAGE_ENVELOPE_BYTES: usize = 1024;
+
+/// The most one page of a batch read may read to find its rows, beside what it sends
+/// ([`ARTIFACT_ASK_PAGE_BYTES`]). The matcher reads a candidate's whole content to decide whether
+/// it matches, so a sparse ask, or a run of oversized matches, would otherwise read every remaining
+/// artifact of the home to fill one page. Each candidate after the position is charged its
+/// `content_bytes` and [`ARTIFACT_READ_CANDIDATE_BYTES`]; a candidate is read only while the charge
+/// before it is under this budget, so the first is always read and a page always moves forward.
+/// When the budget ends the read first, the page's `next` is the last candidate read, matched or
+/// not, so a page can carry no artifacts and still go on. The charge is made in SQL
+/// (`__temper_ungated_artifact_ask_rows`, migration `20261106000000`).
+///
+/// The first page's population is not under this budget: it is the ask's exact counts over the
+/// whole counted set, which a read budget could only make approximate.
+///
+/// # 8,000,000 bytes: four page budgets
+///
+/// **A full page is always readable.** The rows a full page serves carry at most
+/// [`ARTIFACT_ASK_PAGE_BYTES`] of content, and `MAX_ARTIFACT_PAGE_ROWS` (200) candidates at
+/// [`ARTIFACT_READ_CANDIDATE_BYTES`] each add 819,200, so a page whose candidates all match is never
+/// stopped by this budget before it is full: 2,819,200 is under 8,000,000. The rest is room for the
+/// candidates a sparse ask reads and does not match before a page is cut short.
+///
+/// **The worst a page reads.** Reading stops at the first candidate whose charge before it reaches
+/// the budget, so one page reads under the budget plus one candidate's content. An artifact's
+/// content arrives in a commit body under the gated 25 MiB limit (`GATED_MAX_BODY_BYTES`,
+/// temper-api's `routes/mod.rs`), so a page's matcher reads under 8,000,000 + 26,214,400 =
+/// 34,214,400 bytes of content, over at most 8,000,000 / 4,096 + 1 = 1,954 candidates (integer
+/// division). Serving re-reads the content of the rows it serves, at most
+/// [`ARTIFACT_ASK_PAGE_BYTES`] more.
+pub const ARTIFACT_ASK_READ_BYTES: usize = 8_000_000;
+
+/// What every candidate a batch-read page reads is charged beside its `content_bytes` (see
+/// [`ARTIFACT_ASK_READ_BYTES`]): the fixed cost of reading one — its lookup and its match — in the
+/// budget's own unit, so a run of candidates with little or no content is bounded by count as well
+/// as by bytes. 4,096 bytes, the order of one heap page.
+pub const ARTIFACT_READ_CANDIDATE_BYTES: usize = 4_096;
 
 /// The default request-body ceiling, in **decompressed** bytes, for a door that declares none.
 ///
@@ -342,6 +387,130 @@ mod tests {
         assert!(
             entry < ARTIFACT_ROW_FIXED_BYTES,
             "an entry writes {entry} bytes"
+        );
+    }
+
+    /// The fields of a row whose JSON string has one width whatever the row: the ids and the
+    /// timestamp.
+    const FIXED_WIDTH_STRINGS: [&str; 4] =
+        ["artifact_id", "resource_id", "kind_owner_id", "created"];
+
+    /// The text fields the page's SQL measures on every row it serves.
+    const MEASURED_STRINGS: [&str; 5] = [
+        "kind_owner_table",
+        "artifact_kind",
+        "intent",
+        "content_hash",
+        "shape_state",
+    ];
+
+    /// **Every string a row writes is either of one width or measured by the page's charge**, and
+    /// with every text field long the rest of the row still fits [`ARTIFACT_ROW_FIXED_BYTES`]. The
+    /// row is serialized and read back as an object: every key whose value is a string must be one
+    /// of [`FIXED_WIDTH_STRINGS`] or one of [`MEASURED_STRINGS`], and each measured one must appear
+    /// in the page's charge (`octet_length(to_json(<alias>.<field>)::text)`) in the migration that
+    /// defines `artifacts_matching_ask`. A string field added to `ArtifactView` later has to be
+    /// named in the literal below to compile, and once serialized it is a string key in neither
+    /// list, so this goes red until the SQL measures it or it is declared fixed width. Bites: a
+    /// sixth text field on `ArtifactView`; `"intent"` dropped from [`MEASURED_STRINGS`]; or the
+    /// page's `to_json(d.intent)` term removed from the migration.
+    #[test]
+    fn every_string_a_row_writes_is_of_one_width_or_measured_by_the_page() {
+        use temper_core::types::data_artifact::ArtifactView;
+        use temper_core::types::ids::{DataArtifactId, ResourceId};
+
+        // A quote, a backslash, a C0 control and a character outside the BMP, so the written
+        // length is not the byte length.
+        let long = "\"\\x\u{1}\u{1F600}".repeat(512);
+        let id = uuid::Uuid::max();
+        let content = serde_json::Value::from(0);
+        let row = ArtifactView {
+            artifact_id: DataArtifactId::from(id),
+            resource_id: ResourceId::from(id),
+            kind_owner_table: long.clone(),
+            kind_owner_id: id,
+            artifact_kind: long.clone(),
+            intent: long.clone(),
+            precedence: -f64::MIN_POSITIVE,
+            content_hash: long.clone(),
+            content_bytes: i64::MIN,
+            shape_state: long.clone(),
+            is_folded: false,
+            created: chrono::DateTime::parse_from_rfc3339("2026-10-24T09:15:30.123456789Z")
+                .expect("literal parses")
+                .with_timezone(&chrono::Utc),
+            content: Some(content.clone()),
+        };
+        let page_sql = crate::MIGRATOR
+            .iter()
+            .find(|m| m.version == 20_261_106_000_000)
+            .expect("the migration that defines the page")
+            .sql
+            .clone();
+
+        let object = serde_json::to_value(&row).expect("a row serializes");
+        let object = object.as_object().expect("a row is an object");
+        let mut text = 0;
+        for (key, value) in object {
+            let Some(s) = value.as_str() else { continue };
+            if FIXED_WIDTH_STRINGS.contains(&key.as_str()) {
+                continue;
+            }
+            assert!(
+                MEASURED_STRINGS.contains(&key.as_str()),
+                "`{key}` is a string a row writes that the page's charge does not measure"
+            );
+            assert!(
+                page_sql.contains(&format!(".{key})::text)")),
+                "the page's charge measures `{key}`"
+            );
+            text += written(s);
+        }
+        assert_eq!(
+            text,
+            MEASURED_STRINGS.len() * written(&long),
+            "every measured field is on the row"
+        );
+        let whole = serde_json::to_string(&row).expect("a row serializes").len();
+        let content_len = serde_json::to_string(&content).expect("serializes").len();
+        // One more byte for the comma that separates it from the next row.
+        let fixed = whole - content_len - text + 1;
+        assert!(
+            fixed <= ARTIFACT_ROW_FIXED_BYTES,
+            "a row writes {fixed} bytes beside its content and text"
+        );
+    }
+
+    /// The gated commit body limit an artifact's content arrives under (`GATED_MAX_BODY_BYTES`,
+    /// temper-api's `routes/mod.rs`, which this crate cannot name).
+    const COMMIT_BODY_LIMIT_BYTES: usize = 25 * 1024 * 1024;
+
+    /// **The read budget reads a full page, and bounds the worst page by the figures its doc
+    /// states.** A page of `MAX_ARTIFACT_PAGE_ROWS` matching rows carrying the whole page budget of
+    /// content is read within the budget; the worst read is the budget and one artifact at the
+    /// commit limit; the candidates one page reads are the budget over the per-candidate charge,
+    /// plus the first. Bites: the read budget lowered below 2,819,200, or the per-candidate charge
+    /// changed without its doc.
+    #[test]
+    fn the_read_budget_reads_a_full_page_and_bounds_the_worst_one() {
+        let rows = usize::try_from(temper_core::types::data_artifact::MAX_ARTIFACT_PAGE_ROWS)
+            .expect("fits");
+        let full_page = ARTIFACT_ASK_PAGE_BYTES + rows * ARTIFACT_READ_CANDIDATE_BYTES;
+        assert_eq!(
+            full_page, 2_819_200,
+            "the figure the read budget's doc states"
+        );
+        // At least the page budget, with every row's read charge beside it.
+        assert!(full_page <= ARTIFACT_ASK_READ_BYTES);
+        assert_eq!(
+            ARTIFACT_ASK_READ_BYTES + COMMIT_BODY_LIMIT_BYTES,
+            34_214_400,
+            "the worst content one page reads, as its doc states"
+        );
+        assert_eq!(
+            ARTIFACT_ASK_READ_BYTES / ARTIFACT_READ_CANDIDATE_BYTES + 1,
+            1_954,
+            "the most candidates one page reads, as its doc states"
         );
     }
 

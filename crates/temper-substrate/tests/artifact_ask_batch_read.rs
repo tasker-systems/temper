@@ -2,9 +2,9 @@
 //! **Matching artifacts are obtainable whole, in bounded pages** (spec
 //! `temper-artifacts:specs/2026-10-19-asking-artifacts-by-what-they-are-design.md` §6, §7), against a
 //! real database. Migration `20261106000000` moves the counted set's body into
-//! `__temper_ungated_artifact_ask_rows`, which also takes a keyset position, a row limit and
-//! matched-only, and adds the gated page `artifacts_matching_ask` and the gated population
-//! `artifact_ask_counts`; this file is the SQL's witness, read through `readback`'s
+//! `__temper_ungated_artifact_ask_rows`, which also takes a keyset position, a row limit,
+//! matched-only and a read budget, and adds the gated page `artifacts_matching_ask` and the gated
+//! population `artifact_ask_counts`; this file is the SQL's witness, read through `readback`'s
 //! `artifacts_matching_ask` where the production read is what is asserted.
 //!
 //! **The asks are bound as the batch read binds them** — `ValidatedAsk::bind`, never the caller's
@@ -18,7 +18,9 @@
 //!
 //! **What a page reads.** A plan witness counts the content rows one limited page reads from a home
 //! of hundreds of matching artifacts (`pg_stat_xact_user_tables`), and the variant that sorts after
-//! matching reads the whole home.
+//! matching reads the whole home. Under a read budget the same count is bounded by the budget over
+//! the per-candidate charge, for a sparse ask and for a run of oversized matches, and the page
+//! says where to go on — the read frontier — however few rows it serves.
 
 mod common;
 
@@ -55,19 +57,33 @@ const ROOMY: usize = 1_000_000;
 /// passes `ARTIFACT_ROW_FIXED_BYTES`).
 const ROW_BYTES: usize = 64;
 
+/// The read budget these tests pass where reading is not what they witness: far past anything a
+/// fixture holds, so no page here stops on it unless a test says so.
+const ROOMY_READ: usize = 1_000_000_000;
+
+/// What these tests charge each candidate a page reads beside its content (the production door
+/// passes `ARTIFACT_READ_CANDIDATE_BYTES`).
+const READ_CHARGE: usize = 1_000;
+
 const ROWS: &str = "__temper_ungated_artifact_ask_rows";
+const ROWS_NARGS: i16 = 9;
 const ROWS_SIGNATURE: &str = "(p_visible_ids uuid[], p_reader uuid, p_ask jsonb, \
-     p_after_created timestamptz, p_after_id uuid, p_limit bigint, p_matched_only boolean) \
+     p_after_created timestamptz, p_after_id uuid, p_limit bigint, p_matched_only boolean, \
+     p_read_budget bigint, p_read_charge bigint) \
      RETURNS TABLE (artifact_id uuid, resource_id uuid, shape_id uuid, shape_version int, \
-     shape_state text, matched boolean, created timestamptz, content_bytes bigint)";
+     shape_state text, matched boolean, created timestamptz, content_bytes bigint, \
+     frontier boolean)";
 
 const PAGE: &str = "artifacts_matching_ask";
+const PAGE_NARGS: i16 = 9;
 const PAGE_SIGNATURE: &str = "(p_principal uuid, p_ask jsonb, p_after_created timestamptz, \
-     p_after_id uuid, p_limit bigint, p_page_budget bigint, p_row_bytes bigint) \
+     p_after_id uuid, p_limit bigint, p_page_budget bigint, p_row_bytes bigint, \
+     p_read_budget bigint, p_read_charge bigint) \
      RETURNS TABLE (artifact_id uuid, resource_id uuid, kind_owner_table varchar, \
      kind_owner_id uuid, artifact_kind text, intent text, precedence double precision, \
      content_hash text, content_bytes bigint, shape_state text, is_folded boolean, \
-     created timestamptz, examined boolean, served boolean, content jsonb)";
+     created timestamptz, matched boolean, frontier boolean, examined boolean, served boolean, \
+     content jsonb)";
 
 const POPULATION: &str = "__temper_ungated_artifact_ask_population";
 const POPULATION_SIGNATURE: &str = "(p_visible_ids uuid[], p_reader uuid, p_ask jsonb) \
@@ -278,7 +294,16 @@ fn bound(ask: &ArtifactAsk) -> Value {
         .bind()
 }
 
-/// One page through the production read, `readback::artifacts_matching_ask`.
+/// What one page may spend: its row limit, its byte budget, and its read budget.
+#[derive(Debug, Clone, Copy)]
+struct Budgets {
+    limit: u32,
+    page: usize,
+    read: usize,
+}
+
+/// One page through the production read, `readback::artifacts_matching_ask`, under a read budget
+/// no fixture reaches ([`ROOMY_READ`]).
 async fn page(
     pool: &PgPool,
     principal: ProfileId,
@@ -287,19 +312,63 @@ async fn page(
     limit: u32,
     page_budget: usize,
 ) -> RetrievedAskPage {
+    let budgets = Budgets {
+        limit,
+        page: page_budget,
+        read: ROOMY_READ,
+    };
+    page_within(pool, principal, ask, after, budgets).await
+}
+
+/// One page through the production read under `budgets`, each candidate charged
+/// [`READ_CHARGE`] beside its content.
+async fn page_within(
+    pool: &PgPool,
+    principal: ProfileId,
+    ask: &ArtifactAsk,
+    after: Option<ArtifactCursor>,
+    budgets: Budgets,
+) -> RetrievedAskPage {
     readback::artifacts_matching_ask(
         pool,
         AskPageParams {
             principal,
             ask: &bound(ask),
             after,
-            limit,
-            page_budget,
+            limit: budgets.limit,
+            page_budget: budgets.page,
             row_bytes: ROW_BYTES,
+            read_budget: budgets.read,
+            read_charge: READ_CHARGE,
         },
     )
     .await
     .expect("the page reads")
+}
+
+/// Every page of one ask from the start under `budgets`, until `next` is `None`; at most
+/// `max_pages` pages, so a walk that never ends fails here.
+async fn walk(
+    pool: &PgPool,
+    principal: ProfileId,
+    ask: &ArtifactAsk,
+    budgets: Budgets,
+    max_pages: usize,
+) -> Vec<RetrievedAskPage> {
+    let mut pages = Vec::new();
+    let mut after = None;
+    loop {
+        let p = page_within(pool, principal, ask, after, budgets).await;
+        after = p.next;
+        pages.push(p);
+        if after.is_none() {
+            return pages;
+        }
+        assert!(
+            pages.len() < max_pages,
+            "the walk ends within {max_pages} pages"
+        );
+    }
 }
 
 fn served(page: &RetrievedAskPage) -> Vec<Uuid> {
@@ -329,6 +398,24 @@ fn row_bytes() -> i64 {
     i64::try_from(ROW_BYTES).expect("fits")
 }
 
+/// `bytes` as the page function binds a budget.
+fn bigint(bytes: usize) -> i64 {
+    i64::try_from(bytes).expect("fits")
+}
+
+/// Where `id` sits in the keyset order: its `created` and its id.
+async fn position_of(pool: &PgPool, id: DataArtifactId) -> ArtifactCursor {
+    let created = sqlx::query_scalar("SELECT created FROM kb_data_artifacts WHERE id = $1")
+        .bind(id.uuid())
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    ArtifactCursor {
+        created,
+        artifact_id: id,
+    }
+}
+
 fn position(a: &RetrievedArtifact) -> ArtifactCursor {
     ArtifactCursor {
         created: a.created,
@@ -349,7 +436,8 @@ async fn served_through(
     // `function` is one of this file's literals; every value is bound.
     let sql = format!(
         "SELECT artifact_id, content FROM {function}($1::uuid, $2::jsonb, NULL::timestamptz, \
-         NULL::uuid, $3::bigint, $4::bigint, $5::bigint) WHERE served ORDER BY created, artifact_id"
+         NULL::uuid, $3::bigint, $4::bigint, $5::bigint, $6::bigint, $7::bigint) WHERE served \
+         ORDER BY created, artifact_id"
     );
     sqlx::query_as::<_, (Uuid, Option<Value>)>(&sql)
         .bind(principal.uuid())
@@ -357,6 +445,8 @@ async fn served_through(
         .bind(limit)
         .bind(page_budget)
         .bind(row_bytes())
+        .bind(bigint(ROOMY_READ))
+        .bind(bigint(READ_CHARGE))
         .fetch_all(&mut *conn)
         .await
         .unwrap()
@@ -387,7 +477,7 @@ async fn matched_through(
     // `function` is one of this file's literals; every value is bound.
     let sql = format!(
         "SELECT artifact_id FROM {function}($1::uuid[], $2::uuid, $3::jsonb, NULL::timestamptz, \
-         NULL::uuid, 100::bigint, true)"
+         NULL::uuid, 100::bigint, true, NULL::bigint, NULL::bigint)"
     );
     sqlx::query_scalar::<_, Uuid>(&sql)
         .bind(visible)
@@ -406,7 +496,7 @@ async fn page_over(conn: &mut PgConnection, name: &str, rows: &str) {
     variant(
         conn,
         PAGE,
-        7,
+        PAGE_NARGS,
         PAGE_SIGNATURE,
         name,
         &format!("{ROWS}("),
@@ -459,7 +549,7 @@ async fn a_matching_artifact_is_served_whole_across_two_owning_resources(pool: P
     variant(
         &mut conn,
         PAGE,
-        7,
+        PAGE_NARGS,
         PAGE_SIGNATURE,
         "page_one_key",
         "(SELECT c.content FROM",
@@ -643,7 +733,7 @@ async fn an_oversized_row_is_named_in_order_and_a_row_past_the_remainder_ends_th
     variant(
         &mut conn,
         PAGE,
-        7,
+        PAGE_NARGS,
         PAGE_SIGNATURE,
         "page_oversized_counts",
         "ELSE p_row_bytes END AS charge",
@@ -667,7 +757,7 @@ async fn an_oversized_row_is_named_in_order_and_a_row_past_the_remainder_ends_th
     variant(
         &mut conn,
         PAGE,
-        7,
+        PAGE_NARGS,
         PAGE_SIGNATURE,
         "page_past_budget",
         "b.n <= p_limit AND b.spent <= p_page_budget AS examined",
@@ -757,7 +847,7 @@ async fn a_long_family_name_is_charged_on_every_row_and_the_page_ends_at_the_bud
     variant(
         &mut conn,
         PAGE,
-        7,
+        PAGE_NARGS,
         PAGE_SIGNATURE,
         "page_content_only",
         "AS metadata_bytes",
@@ -884,7 +974,7 @@ async fn the_batch_body_admits_only_the_visible_set_it_is_handed(pool: PgPool) {
     variant(
         &mut conn,
         ROWS,
-        7,
+        ROWS_NARGS,
         ROWS_SIGNATURE,
         "rows_ungated",
         "__temper_ungated_governed_artifact_states_in(",
@@ -937,7 +1027,7 @@ async fn the_batch_body_rechecks_the_shapes_home_for_the_reader(pool: PgPool) {
     variant(
         &mut conn,
         ROWS,
-        7,
+        ROWS_NARGS,
         ROWS_SIGNATURE,
         "rows_without_home_check",
         "anchor_readable_by_profile(p_reader,",
@@ -1010,7 +1100,7 @@ async fn a_deactivated_or_ingesting_resource_is_outside_the_batch(pool: PgPool) 
     variant(
         &mut conn,
         ROWS,
-        7,
+        ROWS_NARGS,
         ROWS_SIGNATURE,
         "rows_without_floor",
         "JOIN kb_resources_live lv ON lv.id = g.resource_id",
@@ -1074,7 +1164,7 @@ async fn the_asks_intent_narrows_the_batch(pool: PgPool) {
     variant(
         &mut conn,
         ROWS,
-        7,
+        ROWS_NARGS,
         ROWS_SIGNATURE,
         "rows_any_intent",
         "$7->'intent' @> jsonb_build_array(a.intent)",
@@ -1120,7 +1210,7 @@ async fn the_asks_verdict_states_narrow_the_batch(pool: PgPool) {
     variant(
         &mut conn,
         ROWS,
-        7,
+        ROWS_NARGS,
         ROWS_SIGNATURE,
         "rows_any_state",
         "$7->'shape_states' @> jsonb_build_array(o.shape_state)",
@@ -1224,7 +1314,7 @@ async fn the_population_counts_range_over_the_verdict_through_the_one_body(pool:
     variant(
         &mut conn,
         ROWS,
-        7,
+        ROWS_NARGS,
         ROWS_SIGNATURE,
         "rows_ungated",
         "__temper_ungated_governed_artifact_states_in(",
@@ -1291,14 +1381,29 @@ async fn rows_read(conn: &mut PgConnection, relation: &str) -> i64 {
     .unwrap()
 }
 
-/// One limited page through the page `function`, and the content and artifact rows it read,
-/// measured inside one transaction around that call alone (rolled back): `(served, content rows,
-/// artifact rows)`.
-async fn limited_page_reads(
-    pool: &PgPool,
-    function: &str,
+/// One call of a page function — the deployed one or a variant — from the start of the set.
+#[derive(Debug, Clone, Copy)]
+struct Probe<'a> {
+    function: &'a str,
     principal: ProfileId,
-    ask: &Value,
+    ask: &'a Value,
+    budgets: Budgets,
+}
+
+/// The production budgets a limited page passes, with a read budget no fixture here reaches.
+const LIMITED: Budgets = Budgets {
+    limit: LIMIT,
+    page: 2_000_000,
+    read: ROOMY_READ,
+};
+
+/// One page through `probe`, after the `variants` it reads through are created, and the content
+/// and artifact rows it read, measured inside one transaction around that call alone (rolled back):
+/// `(served, content rows, artifact rows)`. Each variant is `(name, varied, signature, cut, nargs,
+/// with)`, as [`variant`] takes them.
+async fn page_reads(
+    pool: &PgPool,
+    probe: Probe<'_>,
     variants: &[(&str, &str, &str, &str, i16, &str)],
 ) -> (i64, i64, i64) {
     let mut tx = pool.begin().await.unwrap();
@@ -1309,13 +1414,18 @@ async fn limited_page_reads(
     let artifacts_before = rows_read(&mut tx, "kb_data_artifacts").await;
     // `function` is one of this file's literals; every value is bound.
     let served: i64 = sqlx::query_scalar(&format!(
-        "SELECT count(*) FILTER (WHERE served) FROM {function}($1::uuid, $2::jsonb, \
-         NULL::timestamptz, NULL::uuid, $3::bigint, 2000000::bigint, $4::bigint)"
+        "SELECT count(*) FILTER (WHERE served) FROM {}($1::uuid, $2::jsonb, \
+         NULL::timestamptz, NULL::uuid, $3::bigint, $4::bigint, $5::bigint, $6::bigint, \
+         $7::bigint)",
+        probe.function
     ))
-    .bind(principal.uuid())
-    .bind(ask)
-    .bind(i64::from(LIMIT))
+    .bind(probe.principal.uuid())
+    .bind(probe.ask)
+    .bind(i64::from(probe.budgets.limit))
+    .bind(bigint(probe.budgets.page))
     .bind(row_bytes())
+    .bind(bigint(probe.budgets.read))
+    .bind(bigint(READ_CHARGE))
     .fetch_one(&mut *tx)
     .await
     .unwrap();
@@ -1331,14 +1441,16 @@ async fn limited_page_reads(
 /// [`LIMIT`] serves `LIMIT` and reads at most [`CONTENT_READ_BOUND`] rows of
 /// `kb_data_artifact_content` (`pg_stat_xact_user_tables`, so the body's `EXECUTE` is seen), and at
 /// least one, so the bound cannot pass by measuring nothing. The ask carries a predicate, so the
-/// matcher must read content to answer.
+/// matcher must read content to answer. The read budget is one no fixture reaches, so what stops
+/// the page is its limit.
 ///
 /// `kb_data_artifacts` is read for every governed row — the order is taken on cheap columns before
 /// any is matched — and the test reports that count beside the bound rather than bounding it.
 ///
-/// The bite, in the test: the body with its own `ORDER BY a.created, a.id` removed, so the page's
-/// order is taken after matching (a body that matches before it sorts), read by the page — it reads
-/// content for the whole home and goes past the bound.
+/// The bite, in the test: the body's top-level order taken on `matched` first (`ORDER BY
+/// o.created, o.artifact_id` → `ORDER BY m.matched, o.created, o.artifact_id`), a body that sorts
+/// after it matches: the sort needs every row's `matched` before the limit can stop it, so the page
+/// reads content for the whole home and goes past the bound.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn a_limited_page_reads_content_only_for_the_rows_it_examines(pool: PgPool) {
     let w = world(&pool).await;
@@ -1383,7 +1495,13 @@ async fn a_limited_page_reads_content_only_for_the_rows_it_examines(pool: PgPool
         "the home holds this many matches"
     );
 
-    let (served, content, artifacts) = limited_page_reads(&pool, PAGE, w.owner, &ask, &[]).await;
+    let probe = Probe {
+        function: PAGE,
+        principal: w.owner,
+        ask: &ask,
+        budgets: LIMITED,
+    };
+    let (served, content, artifacts) = page_reads(&pool, probe, &[]).await;
     assert_eq!(served, i64::from(LIMIT));
     assert!(content > 0, "the count sees the page's content reads");
     assert!(
@@ -1393,33 +1511,647 @@ async fn a_limited_page_reads_content_only_for_the_rows_it_examines(pool: PgPool
         LARGE_HOME + 1
     );
 
-    let (_, bitten, _) = limited_page_reads(
+    let (_, bitten, _) = page_reads(
         &pool,
-        "pg_temp.page_matching_first",
-        w.owner,
-        &ask,
+        Probe {
+            function: "pg_temp.page_sorting_after_matching",
+            ..probe
+        },
         &[
             (
-                "rows_matching_first",
+                "rows_sorting_after_matching",
                 ROWS,
                 ROWS_SIGNATURE,
-                "ORDER BY a.created, a.id",
-                7,
-                "",
+                "ORDER BY o.created, o.artifact_id",
+                ROWS_NARGS,
+                "ORDER BY m.matched, o.created, o.artifact_id",
             ),
             (
-                "page_matching_first",
+                "page_sorting_after_matching",
                 PAGE,
                 PAGE_SIGNATURE,
                 "__temper_ungated_artifact_ask_rows(",
-                7,
-                "pg_temp.rows_matching_first(",
+                PAGE_NARGS,
+                "pg_temp.rows_sorting_after_matching(",
             ),
         ],
     )
     .await;
     assert!(
         bitten > CONTENT_READ_BOUND,
-        "the bite: a body that matches before it sorts read only {bitten} content rows"
+        "the bite: a body that sorts after it matches read only {bitten} content rows"
+    );
+}
+
+// ── The read budget: what one page may read to find its rows ────────────────────────────────────
+
+/// The body with its read budget ignored — every candidate read, as if the budget were absent —
+/// and a page reading through it: the variants a read-budget bite creates.
+const IGNORING_THE_READ_BUDGET: [(&str, &str, &str, &str, i16, &str); 2] = [
+    (
+        "rows_reading_everything",
+        ROWS,
+        ROWS_SIGNATURE,
+        "WHERE ($12 IS NULL OR o.read_before < $12)",
+        ROWS_NARGS,
+        "WHERE true",
+    ),
+    (
+        "page_reading_everything",
+        PAGE,
+        PAGE_SIGNATURE,
+        "__temper_ungated_artifact_ask_rows(",
+        PAGE_NARGS,
+        "pg_temp.rows_reading_everything(",
+    ),
+];
+
+/// The candidates one page may read under `read`: each costs at least [`READ_CHARGE`], and a
+/// candidate is read only while the charge before it is under the budget, so `read / READ_CHARGE`
+/// candidates, and the first.
+fn candidates_within(read: usize) -> i64 {
+    bigint(read / READ_CHARGE + 1)
+}
+
+/// **A sparse ask over a large home reads a bounded number of candidates per page, says where to
+/// go on, and a walk serves every match once, in order.** Forty artifacts in one home, three of
+/// them matching (the 8th, 24th and 39th). Under a read budget of `4.5 × READ_CHARGE`, one page
+/// reads content for at most [`candidates_within`] = 5 candidates (`kb_data_artifact_content`
+/// rows, as the limited-page witness counts them) and at least one. The first five candidates
+/// hold no match, so the first page serves nothing and still carries a `next`: the fifth
+/// candidate, the last it read. Walking `next` to `None` serves the three, once each, in order.
+///
+/// The bite, in the test: the body with its read budget ignored ([`IGNORING_THE_READ_BUDGET`]),
+/// read by the page — the first page reads every candidate of the home, past the bound.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_sparse_ask_reads_a_bounded_page_and_a_walk_serves_every_match_once(pool: PgPool) {
+    let w = world(&pool).await;
+    let on = resource(&pool, &w, "sparse").await;
+    let mut made = Vec::new();
+    let mut matches = Vec::new();
+    for i in 0..40 {
+        let unit = if [7, 23, 38].contains(&i) { "ms" } else { "s" };
+        let id = commit(&pool, &w, on, &json!({ "unit": unit, "count": i })).await;
+        if unit == "ms" {
+            matches.push(id);
+        }
+        made.push(id);
+    }
+    let ask = unit_ms(w.shape);
+    let read = 4 * READ_CHARGE + READ_CHARGE / 2;
+    let budgets = Budgets {
+        limit: 10,
+        page: ROOMY,
+        read,
+    };
+
+    let first = page_within(&pool, w.owner, &ask, None, budgets).await;
+    assert!(first.artifacts.is_empty() && first.oversized.is_empty());
+    assert_eq!(
+        first.next,
+        Some(position_of(&pool, made[4]).await),
+        "no match among the first five read, and `next` is the last read: the page goes on"
+    );
+
+    let bind = bound(&ask);
+    let probe = Probe {
+        function: PAGE,
+        principal: w.owner,
+        ask: &bind,
+        budgets,
+    };
+    let (_, content, _) = page_reads(&pool, probe, &[]).await;
+    assert!(content > 0, "the count sees the page's content reads");
+    assert!(
+        content <= candidates_within(read),
+        "one page read {content} content rows under a budget of {} candidates",
+        candidates_within(read)
+    );
+
+    let pages = walk(&pool, w.owner, &ask, budgets, made.len()).await;
+    let read_through: Vec<Uuid> = pages.iter().flat_map(served).collect();
+    assert_eq!(read_through, ids(&matches), "every match once, in order");
+    assert!(pages.iter().all(|p| p.oversized.is_empty()));
+
+    let (_, bitten, _) = page_reads(
+        &pool,
+        Probe {
+            function: "pg_temp.page_reading_everything",
+            ..probe
+        },
+        &IGNORING_THE_READ_BUDGET,
+    )
+    .await;
+    assert!(
+        bitten > candidates_within(read),
+        "the bite: a body ignoring its read budget read only {bitten} content rows"
+    );
+}
+
+/// **A run of oversized matches is read one at a time: a page reads the first and stops at it.**
+/// Five matching artifacts of 3,000 content bytes each, under a page budget of 1,000 (so each is
+/// oversized) and a read budget of 2,000 (under one of them). The first page reads the first,
+/// names it in `oversized`, and ends there — it is the read frontier, and `next` — reading content
+/// for that one candidate alone. A walk names all five in `oversized`, once each, in order, and
+/// serves nothing.
+///
+/// The bite, in the test: the body with its read budget ignored ([`IGNORING_THE_READ_BUDGET`]),
+/// read by the page — the first page reads all five.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn oversized_matches_past_the_read_budget_are_read_one_page_at_a_time(pool: PgPool) {
+    let w = world(&pool).await;
+    let on = resource(&pool, &w, "oversized-run").await;
+    let mut made = Vec::new();
+    for _ in 0..5 {
+        made.push(commit(&pool, &w, on, &sized(3_000)).await);
+    }
+    let ask = unit_ms(w.shape);
+    let budgets = Budgets {
+        limit: 10,
+        page: 1_000,
+        read: 2_000,
+    };
+
+    let first = page_within(&pool, w.owner, &ask, None, budgets).await;
+    assert!(first.artifacts.is_empty());
+    assert_eq!(
+        oversized(&first),
+        ids(&made[..1]),
+        "the first, and no other"
+    );
+    assert_eq!(first.next, Some(position_of(&pool, made[0]).await));
+
+    let bind = bound(&ask);
+    let probe = Probe {
+        function: PAGE,
+        principal: w.owner,
+        ask: &bind,
+        budgets,
+    };
+    let (_, content, _) = page_reads(&pool, probe, &[]).await;
+    assert_eq!(content, 1, "one candidate's content read");
+
+    let pages = walk(&pool, w.owner, &ask, budgets, made.len() + 1).await;
+    let named: Vec<Uuid> = pages.iter().flat_map(oversized).collect();
+    assert_eq!(named, ids(&made), "every oversized match once, in order");
+    assert!(pages.iter().all(|p| p.artifacts.is_empty()));
+
+    let (_, bitten, _) = page_reads(
+        &pool,
+        Probe {
+            function: "pg_temp.page_reading_everything",
+            ..probe
+        },
+        &IGNORING_THE_READ_BUDGET,
+    )
+    .await;
+    assert_eq!(
+        bitten, 5,
+        "the bite: a body ignoring its read budget reads all five"
+    );
+}
+
+/// One row of a page function's answer: the artifact, whether it was examined, served, and the
+/// read frontier.
+type PageRow = (Uuid, bool, bool, bool);
+
+/// The rows a page function — the deployed one or a variant — answers for one ask from the start.
+async fn page_rows_through(
+    conn: &mut PgConnection,
+    function: &str,
+    principal: ProfileId,
+    ask: &Value,
+    budgets: Budgets,
+) -> Vec<PageRow> {
+    // `function` is one of this file's literals; every value is bound.
+    let sql = format!(
+        "SELECT artifact_id, examined, served, frontier FROM {function}($1::uuid, $2::jsonb, \
+         NULL::timestamptz, NULL::uuid, $3::bigint, $4::bigint, $5::bigint, $6::bigint, \
+         $7::bigint) ORDER BY created, artifact_id"
+    );
+    sqlx::query_as::<_, PageRow>(&sql)
+        .bind(principal.uuid())
+        .bind(ask)
+        .bind(i64::from(budgets.limit))
+        .bind(bigint(budgets.page))
+        .bind(row_bytes())
+        .bind(bigint(budgets.read))
+        .bind(bigint(READ_CHARGE))
+        .fetch_all(&mut *conn)
+        .await
+        .unwrap()
+}
+
+/// **The read frontier never counts against `limit` and is never served.** M1 matches, N1 and N2
+/// do not, M2 matches. With a page of one and a read budget of 1.5 candidates, the first page
+/// reads M1 and N1 and stops: it serves M1 alone, and `next` is N1 — the frontier, examined though
+/// the page's one matching row is spent, because only matching rows count toward the limit, and
+/// served nowhere. The next page serves M2 and is the last.
+///
+/// Bites, in the test:
+/// - **the frontier counted as a match** (`count(*) FILTER (WHERE m.matched) OVER ordered AS n` →
+///   `count(*) OVER ordered AS n`): N1 is past the limit, unexamined, so the page would continue
+///   from M1 and read N1 again.
+/// - **the frontier served** (`e.examined AND e.matched AND e.fits AS served` → `e.examined AND
+///   e.fits AS served`): N1 is served, though it matches nothing.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_read_frontier_never_counts_against_the_limit_and_is_never_served(pool: PgPool) {
+    let w = world(&pool).await;
+    let on = resource(&pool, &w, "frontier").await;
+    let m1 = commit(&pool, &w, on, &json!({ "unit": "ms" })).await;
+    let n1 = commit(&pool, &w, on, &json!({ "unit": "s" })).await;
+    commit(&pool, &w, on, &json!({ "unit": "s" })).await;
+    let m2 = commit(&pool, &w, on, &json!({ "unit": "ms" })).await;
+    let ask = unit_ms(w.shape);
+    let budgets = Budgets {
+        limit: 1,
+        page: ROOMY,
+        read: READ_CHARGE + READ_CHARGE / 2,
+    };
+
+    let first = page_within(&pool, w.owner, &ask, None, budgets).await;
+    assert_eq!(served(&first), ids(&[m1]));
+    assert!(
+        first.oversized.is_empty(),
+        "the frontier is never oversized"
+    );
+    assert_eq!(
+        first.next,
+        Some(position_of(&pool, n1).await),
+        "the frontier is examined beside a full page, and is where the next page starts"
+    );
+    let second = page_within(&pool, w.owner, &ask, first.next, budgets).await;
+    assert_eq!(served(&second), ids(&[m2]));
+    assert_eq!(second.next, None);
+
+    let bind = bound(&ask);
+    let mut conn = pool.acquire().await.unwrap();
+    let deployed = page_rows_through(&mut conn, PAGE, w.owner, &bind, budgets).await;
+    assert_eq!(
+        deployed,
+        [
+            (m1.uuid(), true, true, false),
+            (n1.uuid(), true, false, true)
+        ],
+        "M1 served; N1 the frontier, examined and not served"
+    );
+
+    variant(
+        &mut conn,
+        PAGE,
+        PAGE_NARGS,
+        PAGE_SIGNATURE,
+        "page_counting_the_frontier",
+        "count(*) FILTER (WHERE m.matched) OVER ordered AS n",
+        "count(*) OVER ordered AS n",
+    )
+    .await;
+    let counted = page_rows_through(
+        &mut conn,
+        "pg_temp.page_counting_the_frontier",
+        w.owner,
+        &bind,
+        budgets,
+    )
+    .await;
+    assert_eq!(
+        counted[1],
+        (n1.uuid(), false, false, true),
+        "the bite: counted as a match, the frontier is past the limit"
+    );
+
+    variant(
+        &mut conn,
+        PAGE,
+        PAGE_NARGS,
+        PAGE_SIGNATURE,
+        "page_serving_the_frontier",
+        "e.examined AND e.matched AND e.fits AS served",
+        "e.examined AND e.fits AS served",
+    )
+    .await;
+    let serving = page_rows_through(
+        &mut conn,
+        "pg_temp.page_serving_the_frontier",
+        w.owner,
+        &bind,
+        budgets,
+    )
+    .await;
+    assert_eq!(
+        serving[1],
+        (n1.uuid(), true, true, true),
+        "the bite: the frontier is served"
+    );
+}
+
+// ── The page's edges, measured ──────────────────────────────────────────────────────────────────
+
+/// **A family name full of escapes is charged exactly as the page writes it.** The name carries a
+/// quote, a backslash, a C0 control and a character outside the BMP, sixteen times over, so its
+/// JSON string is longer than its bytes. Every row's metadata `M` is this file's own serde
+/// reckoning ([`one_metadata_charge`]); with each row costing `13 + M`, a budget of exactly three
+/// rows serves three, and one byte less serves two. So the SQL's charge (`to_json(..)::text`) and
+/// serde's written length are equal, not merely close: one byte over or under on any row moves a
+/// page.
+///
+/// The bite, in the test: the page charging the family name's raw bytes
+/// (`octet_length(to_json(d.artifact_kind)::text)` → `octet_length(d.artifact_kind)`) — under-
+/// counted, three rows fit one byte less than three rows' budget.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_escaped_family_name_is_charged_exactly_as_the_page_writes_it(pool: PgPool) {
+    let family = "a \"quoted\" \\ name\u{1}\u{1F600}".repeat(16);
+    let mut w = undeclared_world_of(&pool, &family).await;
+    w.shape = declare(&pool, &w, &shape_schema()).await;
+    let on = resource(&pool, &w, "escaped-family").await;
+    let mut made = Vec::new();
+    for _ in 0..5 {
+        made.push(commit(&pool, &w, on, &json!({ "unit": "ms" })).await);
+    }
+    let ask = unit_ms(w.shape);
+    let roomy = page(&pool, w.owner, &ask, None, 10, ROOMY).await;
+    assert_eq!(served(&roomy), ids(&made), "the fixture: all five fit");
+    assert_eq!(
+        roomy.artifacts[0].artifact_kind, family,
+        "the name as stored"
+    );
+    let m = one_metadata_charge(&roomy);
+    assert!(
+        m > ROW_BYTES + family.len(),
+        "the written name is longer than its bytes: {m}"
+    );
+    let three = 3 * (13 + m);
+
+    let exact = page(&pool, w.owner, &ask, None, 10, three).await;
+    assert_eq!(
+        served(&exact),
+        ids(&made[..3]),
+        "three rows fit three rows' budget"
+    );
+    let under = page(&pool, w.owner, &ask, None, 10, three - 1).await;
+    assert_eq!(served(&under), ids(&made[..2]), "and not one byte less");
+
+    let mut conn = pool.acquire().await.unwrap();
+    variant(
+        &mut conn,
+        PAGE,
+        PAGE_NARGS,
+        PAGE_SIGNATURE,
+        "page_raw_family_name",
+        "octet_length(to_json(d.artifact_kind)::text)",
+        "octet_length(d.artifact_kind)",
+    )
+    .await;
+    let raw = served_through(
+        &mut conn,
+        "pg_temp.page_raw_family_name",
+        w.owner,
+        &bound(&ask),
+        10,
+        bigint(three - 1),
+    )
+    .await;
+    assert_eq!(
+        raw.len(),
+        3,
+        "the bite: charged its raw bytes, the name is under-counted"
+    );
+}
+
+/// **`limit` counts oversized rows: a page whose limit is reached by an oversized row ends at
+/// it.** A (30 bytes), B (10,000, oversized under a 1,000 budget), C (30), at two a page: the first
+/// page serves A, names B, and stops — `next` is B — and the second serves C.
+///
+/// The bite, in the test: the page numbering only the rows that fit (`count(*) FILTER (WHERE
+/// m.matched) OVER ordered AS n` → `count(*) FILTER (WHERE m.matched AND m.fits) OVER ordered AS
+/// n`): C is within the limit too, and the first page serves A and C.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_limit_counts_an_oversized_row(pool: PgPool) {
+    let w = world(&pool).await;
+    let on = resource(&pool, &w, "limited-by-oversized").await;
+    let a = commit(&pool, &w, on, &sized(30)).await;
+    let b = commit(&pool, &w, on, &sized(10_000)).await;
+    let c = commit(&pool, &w, on, &sized(30)).await;
+    let ask = unit_ms(w.shape);
+
+    let first = page(&pool, w.owner, &ask, None, 2, 1_000).await;
+    assert_eq!(served(&first), ids(&[a]));
+    assert_eq!(oversized(&first), ids(&[b]));
+    assert_eq!(
+        first.next,
+        Some(position_of(&pool, b).await),
+        "B spends the limit"
+    );
+    let second = page(&pool, w.owner, &ask, first.next, 2, 1_000).await;
+    assert_eq!(served(&second), ids(&[c]));
+    assert_eq!(second.next, None);
+
+    let mut conn = pool.acquire().await.unwrap();
+    variant(
+        &mut conn,
+        PAGE,
+        PAGE_NARGS,
+        PAGE_SIGNATURE,
+        "page_counting_fitting_rows",
+        "count(*) FILTER (WHERE m.matched) OVER ordered AS n",
+        "count(*) FILTER (WHERE m.matched AND m.fits) OVER ordered AS n",
+    )
+    .await;
+    let counted: Vec<Uuid> = served_through(
+        &mut conn,
+        "pg_temp.page_counting_fitting_rows",
+        w.owner,
+        &bound(&ask),
+        2,
+        1_000,
+    )
+    .await
+    .into_iter()
+    .map(|(id, _)| id)
+    .collect();
+    assert_eq!(
+        counted,
+        ids(&[a, c]),
+        "the bite: the oversized row spends nothing of the limit"
+    );
+}
+
+/// **Four matches at two a page are exactly two pages, and the second is the last** — never an
+/// extra empty page. The read budget is one no fixture reaches, so no frontier moves `next`.
+///
+/// Bite (perl, Rust): in `readback::ask_page_of`, `.any(|r| !r.examined || r.frontier)` →
+/// `.any(|r| r.examined)` — `next` from "a row was examined" rather than "a row is left": the
+/// second page carries a `next`, and a third, empty page follows.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_exact_multiple_of_the_limit_is_that_many_pages(pool: PgPool) {
+    let w = world(&pool).await;
+    let on = resource(&pool, &w, "exact-multiple").await;
+    let mut made = Vec::new();
+    for i in 0..4 {
+        made.push(commit(&pool, &w, on, &json!({ "unit": "ms", "count": i })).await);
+    }
+    let budgets = Budgets {
+        limit: 2,
+        page: ROOMY,
+        read: ROOMY_READ,
+    };
+    let pages = walk(&pool, w.owner, &unit_ms(w.shape), budgets, 4).await;
+    assert_eq!(
+        pages.iter().map(|p| p.artifacts.len()).collect::<Vec<_>>(),
+        [2, 2],
+        "two pages, the second the last"
+    );
+    let read: Vec<Uuid> = pages.iter().flat_map(served).collect();
+    assert_eq!(read, ids(&made));
+}
+
+// ── §6.1's remaining batch rows: live artifacts, erased families ────────────────────────────────
+
+/// Commit one artifact of the world's family to `on`, superseding `supersedes`.
+async fn commit_superseding(
+    pool: &PgPool,
+    w: &World,
+    on: Uuid,
+    content: &Value,
+    supersedes: &[DataArtifactId],
+) -> DataArtifactId {
+    writes::commit_data_artifact(
+        pool,
+        CommitDataArtifactParams {
+            resource: ResourceId::from(on),
+            kind: &w.family.1,
+            kind_owner: Some(w.family.0),
+            intent: ArtifactIntent::Member,
+            precedence: 0.0,
+            content,
+            supersedes,
+            emitter: w.emitter,
+        },
+    )
+    .await
+    .unwrap()
+}
+
+/// The governance relation with `cut` removed, read through its states form and the one body by a
+/// page: the variants are named `{name}_governed`, `{name}_states`, `{name}_rows` and `name`.
+async fn page_over_governance(conn: &mut PgConnection, name: &str, cut: &str) {
+    let governed = format!("{name}_governed");
+    let states = format!("{name}_states");
+    let rows = format!("{name}_rows");
+    variant(
+        conn,
+        GOVERNED_IN,
+        6,
+        GOVERNED_IN_SIGNATURE,
+        &governed,
+        cut,
+        "",
+    )
+    .await;
+    variant(
+        conn,
+        STATES_IN,
+        6,
+        STATES_IN_SIGNATURE,
+        &states,
+        "__temper_ungated_governed_artifacts_in(",
+        &format!("pg_temp.{governed}("),
+    )
+    .await;
+    variant(
+        conn,
+        ROWS,
+        ROWS_NARGS,
+        ROWS_SIGNATURE,
+        &rows,
+        "__temper_ungated_governed_artifact_states_in(",
+        &format!("pg_temp.{states}("),
+    )
+    .await;
+    page_over(conn, name, &rows).await;
+}
+
+/// **A superseded artifact is not in the batch: live artifacts only.** X1 matches and is served,
+/// until a commit supersedes it with X2, which does not match; then the page serves nothing. The
+/// fold is the only thing that changed, so the governance relation's live-only conjunct is what
+/// excludes X1.
+///
+/// The bite, in the test: that conjunct cut (`AND NOT a.is_folded`), read through the states form
+/// and the one body by a page — the page serves the folded X1.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_superseded_artifact_is_not_in_the_batch(pool: PgPool) {
+    let w = world(&pool).await;
+    let on = resource(&pool, &w, "superseded").await;
+    let x1 = commit(&pool, &w, on, &json!({ "unit": "ms" })).await;
+    let ask = bound(&unit_ms(w.shape));
+    let mut conn = pool.acquire().await.unwrap();
+    assert_eq!(
+        served_ids_through(&mut conn, PAGE, w.owner, &ask).await,
+        set(&[x1]),
+        "the control: served while live"
+    );
+
+    commit_superseding(&pool, &w, on, &json!({ "unit": "s" }), &[x1]).await;
+    let folded: bool = sqlx::query_scalar("SELECT is_folded FROM kb_data_artifacts WHERE id = $1")
+        .bind(x1.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(folded, "the fixture: X1 is folded");
+    assert!(served_ids_through(&mut conn, PAGE, w.owner, &ask)
+        .await
+        .is_empty());
+
+    page_over_governance(&mut conn, "page_with_folded", "AND NOT a.is_folded").await;
+    assert_eq!(
+        served_ids_through(&mut conn, "pg_temp.page_with_folded", w.owner, &ask).await,
+        set(&[x1]),
+        "the bite: without the live-only conjunct the folded artifact is served"
+    );
+}
+
+/// **An erased resource's artifact, renamed out of its family, is not in the batch.** Erasure
+/// renames every artifact's family to `erased:<asserted_by_event_id>` (`20261008100000`, step 9f)
+/// beside setting `is_active = false`; this fixture applies the rename alone, so the resource stays
+/// live and visible. R's artifact is served before the rename and not after, so the governance
+/// relation's family match is what excludes it.
+///
+/// The bite, in the test: that match cut (`AND a.artifact_kind    = p_artifact_kind`), read through
+/// the states form and the one body by a page — the page serves the renamed artifact.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_erased_family_is_not_in_the_batch(pool: PgPool) {
+    let w = world(&pool).await;
+    let on = resource(&pool, &w, "renamed").await;
+    let x = commit(&pool, &w, on, &json!({ "unit": "ms" })).await;
+    let ask = bound(&unit_ms(w.shape));
+    let mut conn = pool.acquire().await.unwrap();
+    assert_eq!(
+        served_ids_through(&mut conn, PAGE, w.owner, &ask).await,
+        set(&[x]),
+        "the control: served before the rename"
+    );
+
+    sqlx::query(
+        "UPDATE kb_data_artifacts SET artifact_kind = 'erased:' || asserted_by_event_id::text \
+          WHERE id = $1",
+    )
+    .bind(x.uuid())
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(served_ids_through(&mut conn, PAGE, w.owner, &ask)
+        .await
+        .is_empty());
+
+    page_over_governance(
+        &mut conn,
+        "page_any_family",
+        "AND a.artifact_kind    = p_artifact_kind",
+    )
+    .await;
+    assert_eq!(
+        served_ids_through(&mut conn, "pg_temp.page_any_family", w.owner, &ask).await,
+        set(&[x]),
+        "the bite: without the family match the renamed artifact is served"
     );
 }

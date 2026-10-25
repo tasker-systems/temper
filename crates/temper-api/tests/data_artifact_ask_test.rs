@@ -218,10 +218,74 @@ async fn an_unreadable_body_is_a_typed_refusal(pool: PgPool) {
     }
 }
 
-/// **A `GET` to the batch read's path is answered `405` by its POST-only route** — the static
-/// segment is matched ahead of the flat read's `{artifact_id}`, so it is not read as a malformed
-/// artifact id. Pinned whatever axum does, because the spec's §7.1 parenthesis says otherwise. The
-/// control: the flat read beside it answers a `GET` for an artifact by id.
+/// **An `after` naming an instant the store cannot hold is a body this door cannot read, never a
+/// server fault.** Postgres's `timestamptz` starts at 4714-11-24 00:00:00 BC (UTC), and a caller's
+/// position is read as a `DateTime<Utc>`, which reaches back to year -262,143: the instant one
+/// microsecond before the start is refused `422` under `UNREADABLE_PLAN` with a bounded message,
+/// and the start itself, the control, is answered. At the high end the latest instant a
+/// `DateTime<Utc>` holds is answered — it is inside `timestamptz`'s range — and one past it is not
+/// a position at all, refused the same way by the reader. Bite: the `is_storable` check removed
+/// from `AskBody::from_request` — the low case reaches the database and answers `500`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_after_the_store_cannot_hold_is_unreadable_and_never_a_fault(pool: PgPool) {
+    let w = world(pool).await;
+    let after = |created: &str| {
+        json!({
+            "ask": { "shape": w.shape },
+            "after": { "created": created, "artifact_id": Uuid::nil() },
+        })
+    };
+
+    for (what, created) in [
+        ("the first instant the store holds", "-4713-11-24T00:00:00Z"),
+        (
+            "the latest instant a position can be read at",
+            "+262142-12-31T23:59:59.999999Z",
+        ),
+    ] {
+        let (status, body) = ask(&w, &after(created)).await;
+        assert_eq!(status, StatusCode::OK, "{what}, the control: {body}");
+        assert_eq!(body["next"], Value::Null, "{what}: {body}");
+    }
+
+    for (what, created) in [
+        (
+            "one microsecond before the store's first instant",
+            "-4713-11-23T23:59:59.999999Z",
+        ),
+        (
+            "a year past what a position can be read at",
+            "+262143-01-01T00:00:00Z",
+        ),
+    ] {
+        let (status, body) = ask(&w, &after(created)).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{what}: {body}");
+        assert_eq!(
+            body["error"]["code"],
+            temper_core::error::UNREADABLE_PLAN_CODE,
+            "{what}: {body}"
+        );
+        assert!(
+            body["error"].get("details").is_none_or(Value::is_null),
+            "{what}: {body}"
+        );
+        let message = body["error"]["message"].as_str().expect("a message");
+        assert!(
+            message.len() <= 1024 + 64,
+            "{what}: {} bytes",
+            message.len()
+        );
+    }
+}
+
+/// **A `GET` to the batch read's path is answered `405` by its POST-only route, to a caller who
+/// passes the route's checks** — the static segment is matched ahead of the flat read's
+/// `{artifact_id}`, so it is not read as a malformed artifact id. Pinned whatever axum does,
+/// because the spec's §7.1 parenthesis says otherwise. **The same `GET` without credentials is
+/// answered `401`**: the gated tier's checks wrap the route, its method fallback included, so they
+/// answer first. The control: the flat read beside it answers a `GET` for an artifact by id.
+/// Bites: a `GET` route registered on the path (no `405`), or the gated tier's layers applied
+/// with `route_layer` (the unauthenticated `GET` meets the fallback first: `405`, not `401`).
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_get_to_the_ask_path_meets_the_post_only_route(pool: PgPool) {
     let w = world(pool).await;
@@ -236,15 +300,28 @@ async fn a_get_to_the_ask_path_meets_the_post_only_route(pool: PgPool) {
     let resp = get(ASK.to_string()).await.expect("GET the ask path");
     assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
 
+    let anonymous = w
+        .app
+        .client
+        .get(w.app.url(ASK))
+        .send()
+        .await
+        .expect("GET the ask path without credentials");
+    assert_eq!(
+        anonymous.status(),
+        StatusCode::UNAUTHORIZED,
+        "without credentials the caller check answers before the route"
+    );
+
     let flat = get(format!("/api/data-artifacts/{}", w.with_sentinel))
         .await
         .expect("GET the flat read");
     assert_eq!(flat.status(), StatusCode::OK, "the control");
 }
 
-/// **An artifact committed with no content is served without a `content` field** (Pete,
-/// 2026-10-24: absent, not `null` — `ArtifactView`'s own rule, which `list` and `show` share), and
-/// one with content carries it whole. An ask with no predicates returns both. Bite: the batch read
+/// **An artifact committed with no content is served without a `content` field** — absent, not
+/// `null`: `ArtifactView`'s own rule, which `list` and `show` share — and one with content carries
+/// it whole. An ask with no predicates returns both. Bite: the batch read
 /// serializing `content` as `null` (`skip_serializing_if` dropped from `ArtifactView.content`).
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_contentless_artifact_is_served_without_content(pool: PgPool) {
@@ -268,9 +345,12 @@ async fn a_contentless_artifact_is_served_without_content(pool: PgPool) {
     );
 }
 
-/// The search corpus and the embedding tables, as one comparable digest: the FTS index's rows and
-/// their vectors, and the chunk tables' rows and embeddings.
-async fn corpus_digest(pool: &PgPool) -> (i64, String, i64, i64, i64) {
+/// One comparable digest of what search reads: `kb_resource_search_index`'s rows and an md5 of
+/// their full-text vectors (`tsvector`), `kb_chunks`' rows, how many carry an embedding and an md5
+/// of the embedding values themselves, and `kb_chunk_content`'s rows. It does not cover the
+/// context and cognitive-map tables (`kb_contexts`, `kb_cogmaps.telos_centroid`), which no
+/// artifact read reaches either.
+async fn corpus_digest(pool: &PgPool) -> (i64, String, i64, i64, String, i64) {
     sqlx::query_as(
         "SELECT (SELECT count(*) FROM kb_resource_search_index),
                 (SELECT md5(COALESCE(string_agg(resource_id::text || ':' || search_vector::text,
@@ -278,6 +358,9 @@ async fn corpus_digest(pool: &PgPool) -> (i64, String, i64, i64, i64) {
                    FROM kb_resource_search_index),
                 (SELECT count(*) FROM kb_chunks),
                 (SELECT count(*) FROM kb_chunks WHERE embedding IS NOT NULL),
+                (SELECT md5(COALESCE(string_agg(id::text || ':' || embedding::text,
+                                                ',' ORDER BY id), ''))
+                   FROM kb_chunks WHERE embedding IS NOT NULL),
                 (SELECT count(*) FROM kb_chunk_content)",
     )
     .fetch_one(pool)

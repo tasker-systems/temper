@@ -30,7 +30,10 @@ axum = "0.8"
 tower = { version = "0.5", features = ["util"] }
 tokio = { version = "1", features = ["rt", "macros", "sync", "net"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `float_roundtrip`: a batch-read page's byte budget charges each artifact its committed length,
+# and a caller that parses a page and writes it again — the MCP relay does — must land each float
+# on the value it was written from (`temper_services::transport::ARTIFACT_ASK_PAGE_BYTES`).
+serde_json = { version = "1", features = ["float_roundtrip"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v7", "serde"] }
 thiserror = "2"

@@ -38,7 +38,7 @@ pub struct ArtifactView {
     pub shape_state: String,
     pub is_folded: bool,
     pub created: DateTime<Utc>,
-    /// The content payload. `null` when the artifact was committed with no bytes.
+    /// The content payload. Absent, not `null`, when the artifact was committed with no bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<serde_json::Value>,
 }
@@ -128,6 +128,27 @@ pub struct ArtifactCursor {
     pub created: DateTime<Utc>,
     /// The `artifact_id` of the last artifact on the previous page; breaks ties on `created`.
     pub artifact_id: DataArtifactId,
+}
+
+/// The first instant Postgres's `timestamptz` holds, 4714-11-24 00:00:00 BC in UTC, as Unix
+/// seconds: Julian day 0, 2,440,588 days before the Unix epoch.
+const STORABLE_FROM_UNIX_SECONDS: i64 = -210_866_803_200;
+
+/// The first instant past what `timestamptz` holds, 294277-01-01 00:00:00 in UTC, as Unix seconds:
+/// Julian day 109,203,528.
+const STORABLE_UNTIL_UNIX_SECONDS: i64 = 9_224_318_016_000;
+
+impl ArtifactCursor {
+    /// Whether the store can hold this position: `created` is within Postgres's `timestamptz`
+    /// range. A `DateTime<Utc>` reaches further back (to year -262,143), so a position read from a
+    /// caller can name an instant no artifact was or could be created at, and binding it to the
+    /// keyset fails in the database rather than answering. The batch read's door refuses a
+    /// position this answers `false` for as a body it cannot read. The high end is past the latest
+    /// instant a `DateTime<Utc>` holds, so only the low end can refuse a position that was read.
+    pub fn is_storable(&self) -> bool {
+        (STORABLE_FROM_UNIX_SECONDS..STORABLE_UNTIL_UNIX_SECONDS)
+            .contains(&self.created.timestamp())
+    }
 }
 
 /// One bounded page of artifacts, in `(created, id)` order in the requested direction.
@@ -301,6 +322,33 @@ mod tests {
             after_id: after.map(|c| c.artifact_id.uuid()),
             ..Default::default()
         }
+    }
+
+    /// A cursor at `instant`, read as a caller's body is read (`FromStr`, which takes a signed
+    /// year of any width).
+    fn at(instant: &str) -> ArtifactCursor {
+        ArtifactCursor {
+            created: instant.parse::<DateTime<Utc>>().expect("literal parses"),
+            ..cursor()
+        }
+    }
+
+    /// **A position is storable exactly within `timestamptz`'s range**: the first instant it holds
+    /// is, the instant before it is not, and the latest instant a `DateTime<Utc>` holds is. Bites:
+    /// the low bound one day later (the first instant refused), or the range made inclusive at
+    /// both ends with the low bound one second early (the instant before admitted).
+    #[test]
+    fn a_position_is_storable_within_the_stores_instants() {
+        assert!(
+            at("-4713-11-24T00:00:00Z").is_storable(),
+            "the first instant held"
+        );
+        assert!(
+            !at("-4713-11-23T23:59:59.999999Z").is_storable(),
+            "the instant before it"
+        );
+        assert!(at("+262142-12-31T23:59:59.999999Z").is_storable());
+        assert!(cursor().is_storable());
     }
 
     #[test]

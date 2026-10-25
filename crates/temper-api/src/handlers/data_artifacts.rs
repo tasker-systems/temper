@@ -1,5 +1,5 @@
 use axum::extract::{FromRequest, Path, Query, Request, State};
-use axum::http::{header, HeaderMap, HeaderValue};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::Json;
 use uuid::Uuid;
 
@@ -222,16 +222,28 @@ pub async fn get_by_id(
 /// artifact committed with no bytes), in `(created, artifact_id)` order, oldest first. POST,
 /// because the ask is a document rather than a query string.
 ///
-/// Every page is bounded twice: by `limit` (absent: 50; at least 1 and at most 200), and by a
-/// byte budget over the whole page. A matching artifact too large for any page is named in
+/// Every page is bounded three ways, and the first bound reached ends it: by `limit` (absent: 50;
+/// at least 1 and at most 200), by a byte budget over what the page sends, and by a budget over
+/// what it may read to find its rows. A matching artifact too large for any page is named in
 /// `oversized`, in order, by id and size, and is read whole by id (`GET
-/// /api/data-artifacts/{artifact_id}`). `population` counts the ask's whole governed population on
-/// the first page and is `null` after it. Continue by sending the same ask with `next` as `after`;
+/// /api/data-artifacts/{artifact_id}`). When the read budget ends a page, `next` is the last
+/// artifact it read, matched or not, so a page can carry no artifacts and still a `next`: only
+/// `next: null` ends the enumeration. Continue by sending the same ask with `next` as `after`;
 /// every page validates the ask again for its caller, so the position carries no authority.
+///
+/// `population` counts the ask's whole governed population on the first page and is `null` after
+/// it. Those counts are exact, so the first page matches every governed artifact of the home to
+/// make them; the read budget bounds the page's rows, not the counts. A continuation is validated
+/// against the shape version the first page named, but its rows' `shape_state`, and any
+/// `shape_states` narrowing, are read against the version now in force: when `amended_since`
+/// appears, an ask narrowed by `shape_states` should start again from a first page asking that
+/// version. A first page (no `after`) naming a superseded version is refused `shape_superseded`.
 ///
 /// This is an enumeration: an artifact on a resource still ingesting, or one an operator ended, is
 /// not in it, though `GET /api/resources/{id}/artifacts` addressed to that resource lists it. It
-/// never returns resources, and it is not a stage of `/api/query`.
+/// never returns resources, and it is not a stage of `/api/query`. A `GET` to this path is answered
+/// by the caller checks before the route: `401` without credentials, `403` without system access,
+/// and `405` to a caller with both.
 #[utoipa::path(
     post,
     operation_id = "ask_data_artifacts",
@@ -240,7 +252,7 @@ pub async fn get_by_id(
     request_body = AskRequest,
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "One page of the matching artifacts, whole, in `(created, artifact_id)` order, with where to continue (`next`, `null` on the last page)", body = AskResponse),
+        (status = 200, description = "One page of the matching artifacts, whole, in `(created, artifact_id)` order, with where to continue (`next`; only `null` ends the enumeration, and a page can carry no artifacts and still a `next`)", body = AskResponse),
         (
             status = 400,
             description = "Two codes. `PLAN_REFUSED`: the ask will not be answered, with every \
@@ -254,7 +266,8 @@ pub async fn get_by_id(
         (
             status = 422,
             description = "The body is not an ask this door can read — a value of the wrong type, \
-                a field it does not declare, or an `after` missing half its position — under the \
+                a field it does not declare, an `after` missing half its position, or an `after` \
+                whose `created` is outside the instants an artifact can be created at — under the \
                 code `UNREADABLE_PLAN`, the message naming what failed and repeating at most 1024 \
                 bytes of it. A non-JSON content type answers `415` under the same code.",
             body = ErrorBody,
@@ -279,10 +292,16 @@ pub async fn ask(
 /// The batch read's body, read as `Json` reads it, but every rejection — malformed JSON, a value
 /// of the wrong type, an unknown field, an `after` missing half its position — answered as a typed
 /// `ApiError::UnreadablePlan` rather than axum's plain-text rejection, and never quoting the body
-/// back whole (`super::query::read_unread_body`). The MCP edge relays the ask unread, so this is
-/// where it is read, once, for both doors.
+/// back whole (`super::query::read_unread_body`). An `after` the store cannot hold
+/// (`ArtifactCursor::is_storable`) is refused the same way, as a position no page can continue
+/// from. The MCP edge relays the ask unread, so this is where it is read, once, for both doors.
 #[derive(Debug)]
 pub struct AskBody(pub AskRequest);
+
+/// What a caller is told when its `after` names an instant the store cannot hold. Fixed, so it
+/// quotes nothing back.
+const UNSTORABLE_POSITION: &str = "`after.created` is outside the instants an artifact can be \
+    created at (4714-11-24 BC to 294276 AD, UTC), so it is not a position any page returned";
 
 impl<S> FromRequest<S> for AskBody
 where
@@ -291,7 +310,14 @@ where
     type Rejection = ApiError;
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        super::query::read_unread_body(req, state).await.map(Self)
+        let request: AskRequest = super::query::read_unread_body(req, state).await?;
+        if request.after.is_some_and(|after| !after.is_storable()) {
+            return Err(ApiError::UnreadablePlan {
+                status: StatusCode::UNPROCESSABLE_ENTITY,
+                message: UNSTORABLE_POSITION.to_string(),
+            });
+        }
+        Ok(Self(request))
     }
 }
 

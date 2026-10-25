@@ -37,7 +37,10 @@ tokio = { version = "1", features = ["sync", "rt", "time"] }
 # (`transport::apply_base_layers`) — so neither surface can be assembled without them.
 tower-http = { version = "0.7", features = ["cors", "decompression-gzip", "set-header"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `float_roundtrip`: served artifact content is parsed back from storage, which prints a float in
+# plain notation, and a batch-read page's byte budget charges each artifact its committed length,
+# so the parse must land on the float it was written from (`transport::ARTIFACT_ASK_PAGE_BYTES`).
+serde_json = { version = "1", features = ["float_roundtrip"] }
 jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 # The blob provider client's streaming read (D6) bridges reqwest's byte stream to the

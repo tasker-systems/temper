@@ -8,7 +8,9 @@
 //! The SQL's own witnesses, the page's edges and the deny direction conjunct by conjunct, are
 //! `temper-substrate`'s `artifact_ask_batch_read.rs`; this file holds what only the service shows:
 //! the population on the first page alone, a continuation answering on the row its first page named
-//! after an amendment, and readability re-decided on every page, unreadable answering as absent.
+//! after an amendment — and reading its states against the version now in force — readability
+//! re-decided on every page, unreadable answering as absent, and served content as long as the
+//! budget charged it.
 
 use serde_json::json;
 use sqlx::PgPool;
@@ -147,6 +149,16 @@ async fn commit(pool: &PgPool, w: &World, content: serde_json::Value) -> DataArt
 
 /// `unit` contains `"ms"`, of `shape`, one page of `limit` after `after`.
 fn request(shape: Uuid, limit: u32, after: Option<ArtifactCursor>) -> AskRequest {
+    request_in(shape, vec![], limit, after)
+}
+
+/// [`request`], narrowed to `shape_states`.
+fn request_in(
+    shape: Uuid,
+    shape_states: Vec<String>,
+    limit: u32,
+    after: Option<ArtifactCursor>,
+) -> AskRequest {
     AskRequest {
         ask: ArtifactAsk {
             shape: ShapeId::from(shape),
@@ -158,7 +170,7 @@ fn request(shape: Uuid, limit: u32, after: Option<ArtifactCursor>) -> AskRequest
             }],
             intent: vec![],
             include_folded: false,
-            shape_states: vec![],
+            shape_states,
         },
         limit: Some(limit),
         after,
@@ -310,6 +322,151 @@ async fn a_page_after_an_amendment_answers_on_the_pinned_row(pool: PgPool) {
         Some(successor),
         "the refusal teaches the version now in force"
     );
+}
+
+/// **A continuation narrowed by `shape_states` reads its states against the version now in force,
+/// not the one its first page named.** Three matches, all `declared_satisfied` against the asked
+/// version; page one, narrowed to `declared_satisfied`, serves two. The shape is then amended, and
+/// no verdict exists for the new version yet. Page two is validated against the asked row and says
+/// so (`amended_since`), but its one remaining row reads `declared_not_yet_checked` against the
+/// version in force, so the narrowed ask matches nothing: no artifacts and `next: None`. The
+/// control, the same continuation with every state admitted, serves that row and shows its state.
+/// This pins today's behaviour, which the `amended_since` doc teaches: a narrowed ask restarts on
+/// `amended_since`. The read budget plays no part here — three small rows are far inside it.
+///
+/// Bite (perl, Rust): in `artifact_ask_read::read`, `amended_since,` → `amended_since: None,` in
+/// the response — page two no longer says the version moved, and its assertion goes red.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_narrowed_continuation_reads_its_states_against_the_version_now_in_force(pool: PgPool) {
+    let w = world(&pool).await;
+    let mut matches = Vec::new();
+    for i in 0..3 {
+        matches.push(
+            commit(&pool, &w, json!({ "unit": "ms", "count": i }))
+                .await
+                .uuid(),
+        );
+    }
+    let satisfied = || vec!["declared_satisfied".to_string()];
+    let first = ask_page(&pool, w.owner, &request_in(w.shape, satisfied(), 2, None))
+        .await
+        .expect("page one");
+    assert_eq!(served(&first), matches[..2]);
+    assert!(first.next.is_some(), "a third match remains");
+
+    let amended = declare(&pool, &w, true).await;
+    let successor = ShapeSuccessor {
+        shape_id: ShapeId::from(amended),
+        shape_version: 2,
+    };
+
+    let second = ask_page(
+        &pool,
+        w.owner,
+        &request_in(w.shape, satisfied(), 2, first.next),
+    )
+    .await
+    .expect("a narrowed continuation answers");
+    assert_eq!(second.amended_since, Some(successor));
+    assert_eq!(second.shape.shape_id, ShapeId::from(w.shape));
+    assert!(
+        second.artifacts.is_empty() && second.oversized.is_empty(),
+        "against the version in force the remaining row is unchecked, and the narrowed ask \
+         matches nothing: {:?}",
+        served(&second)
+    );
+    assert_eq!(second.next, None);
+
+    let every_state = ask_page(&pool, w.owner, &request(w.shape, 2, first.next))
+        .await
+        .expect("the control");
+    assert_eq!(served(&every_state), matches[2..]);
+    assert_eq!(
+        every_state.artifacts[0].shape_state, "declared_not_yet_checked",
+        "the row's state is read against the version now in force"
+    );
+}
+
+/// The JSON-string length of one text field, as a page writes it and the page's SQL charges it.
+fn written(text: &str) -> usize {
+    serde_json::to_string(text)
+        .expect("a string serializes")
+        .len()
+}
+
+/// **Served content is as long as its `content_bytes`, floats included, and a served row is
+/// within what the page charged for it.** Storage prints a number in plain notation (`1e300` as
+/// 301 digits), so each float here is committed, stored, read back and written again: large and
+/// small exponents, the extremes of `f64`, a subnormal, and long mantissas. Each served row's
+/// content, compactly serialized, is exactly its `content_bytes`; the whole row is within its
+/// charge (`content_bytes`, each text field's written length and `ARTIFACT_ROW_FIXED_BYTES`); and
+/// the page's rows together are within `ARTIFACT_ASK_PAGE_BYTES`.
+///
+/// The bite cannot be a perl edit: the length holds because `serde_json`'s `float_roundtrip`
+/// makes the parse back from storage exact, and that feature reaches every build also through
+/// `jsonschema`, which enables it unconditionally, so dropping it from temper-services and
+/// temper-client changes nothing. To see it red, build with every edge to `float_roundtrip` cut
+/// (a `[patch.crates-io]` `jsonschema` whose `serde_json` dependency omits it): without it the
+/// parse of a long plain expansion is best effort and may land a unit in the last place away,
+/// which is then written back in up to 17 significant digits, and the length assertion goes red
+/// on that value.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn served_floats_are_as_long_as_their_content_bytes(pool: PgPool) {
+    use temper_services::transport::{ARTIFACT_ASK_PAGE_BYTES, ARTIFACT_ROW_FIXED_BYTES};
+
+    let w = world(&pool).await;
+    let floats = [
+        1e300,
+        1e-300,
+        f64::MAX,
+        f64::MIN_POSITIVE,
+        5e-324,
+        f64::MIN,
+        0.1 + 0.2,
+        1.0 / 3.0,
+        123_456_789.0 / 7.0,
+        -9.876_543_210_987_654e-200,
+        2.225_073_858_507_201e-308,
+        std::f64::consts::PI * 1e250,
+        std::f64::consts::E * 1e-250,
+    ];
+    let mut committed = Vec::new();
+    for (i, x) in floats.iter().enumerate() {
+        let content = json!({ "unit": "ms", "count": i, "x": x, "xs": [x, -x, x / 3.0] });
+        committed.push((commit(&pool, &w, content.clone()).await.uuid(), content));
+    }
+
+    let page = ask_page(&pool, w.owner, &request(w.shape, 50, None))
+        .await
+        .expect("the owner asks its own shape");
+    assert_eq!(
+        page.artifacts
+            .iter()
+            .map(|a| (a.artifact_id.uuid(), a.content.clone().expect("content")))
+            .collect::<Vec<_>>(),
+        committed,
+        "every float served as committed"
+    );
+    let mut rows = 0;
+    for a in &page.artifacts {
+        let content = a.content.as_ref().expect("content");
+        assert_eq!(
+            i64::try_from(serde_json::to_string(content).unwrap().len()).unwrap(),
+            a.content_bytes,
+            "served at its committed length: {content}"
+        );
+        let charge = usize::try_from(a.content_bytes).unwrap()
+            + written(&a.kind_owner_table)
+            + written(&a.artifact_kind)
+            + written(&a.intent)
+            + written(&a.content_hash)
+            + written(&a.shape_state)
+            + ARTIFACT_ROW_FIXED_BYTES;
+        let row = serde_json::to_string(a).unwrap().len();
+        assert!(row <= charge, "a row of {row} bytes charged {charge}");
+        rows += row;
+    }
+    assert!(rows <= ARTIFACT_ASK_PAGE_BYTES);
 }
 
 /// **Unreadable is refused exactly as absent is, on every page.** An outsider asking the owner's

@@ -152,8 +152,10 @@ pub struct PinnedLoad {
 /// steps 1 and 3 on that row **even when it is folded**, and step 2 skipped, so an amendment
 /// between pages never strands an enumeration on `shape_superseded`. The row stays readable by id
 /// after folding (`shape_by_id`, `20260822000030`), and step 1 re-decides that readability on every
-/// page. A first page goes through [`load_one`], so a fresh ask naming a folded id is still refused
-/// `shape_superseded` and taught its successor.
+/// page. A first page (no `after`) goes through [`load_one`], so it is still refused
+/// `shape_superseded` naming a folded id, and taught its successor. Any `after` makes a request a
+/// continuation, so that refusal is advice to a first page, never a boundary: the position carries
+/// no authority either way.
 ///
 /// # Errors
 /// A database fault, never a refusal.
