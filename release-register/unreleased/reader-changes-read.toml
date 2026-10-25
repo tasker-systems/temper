@@ -1,7 +1,7 @@
 title    = "A reader can list the work they changed, most recent first, and read when they last changed something in each context"
 pr       = "self"
 classes  = ["additive", "behavioral"]
-surfaces = ["http", "clients", "schema"]
+surfaces = ["http", "clients", "cli-stdout", "schema"]
 status   = "signal-only"
 body = '''
 `GET /api/resources` gains `changed_by` and the sort field `changed_by_me`.
@@ -14,7 +14,7 @@ body = '''
 - `sort=changed_by_me` orders by the caller's own latest change to each resource, not by the resource's `updated`.
 - An empty `changed_by` is no filter, as for `tags` and `ids`. Any other value except `@me` is a `400`, because naming another principal would make this a read of their activity. `sort=changed_by_me` without `changed_by=@me` is a `400`, because the rows would have no such time.
 
-New route `GET /api/me/context-activity` (`list_my_context_activity`, tag `Me`): one `ContextActivity { context_id, last_changed_at }` per context the caller changed something in and can still read, newest first. Only the caller's own authored changes set it, and a retired context has no row. It is a profile-scoped read of its own, rather than a field of `GET /api/contexts`, so the contexts list every page loads does not pay for a scan of the caller's history. `GET /api/contexts` is unchanged. `temperkb-client` gains `me().context_activity()`.
+New route `GET /api/me/context-activity` (`list_my_context_activity`, tag `Me`): one `ContextActivity { context_id, last_changed_at }` per context the caller changed something in and can still read, newest first. Only the caller's own authored changes set it, and a retired context has no row. It is a profile-scoped read of its own, rather than a field of `GET /api/contexts`, so the contexts list every page loads does not pay for a scan of the caller's history. `GET /api/contexts` is unchanged. `temperkb-client` gains `me().context_activity()`, and the CLI gains `temper context activity`, which prints each row with the context's `ref` and `name` beside its id and time.
 
 Both are read through new SQL functions in migration `20261106000000_reader_changes.sql` (additive):
 - `resources_changed_by(uuid)` and `contexts_changed_by(uuid)`, each gated by the profile's own read predicate;
@@ -22,7 +22,7 @@ Both are read through new SQL functions in migration `20261106000000_reader_chan
 
 Reading either answer records nothing.
 
-Who observes it: HTTP callers, `temperkb-client`, and the three SDKs. Their list parameters and sort enum grow, and they gain the new route. A request that sends neither parameter is unchanged. The CLI and MCP do not expose `changed_by` yet.
+Who observes it: HTTP callers, `temperkb-client`, the CLI (`temper context activity`), and the three SDKs. Their list parameters and sort enum grow, and they gain the new route. A request that sends neither parameter is unchanged. The CLI's `resource list` and MCP do not expose `changed_by` yet.
 
 Release relevance: signal-only. Additive (a query parameter, an enum value, a route and its row type, three functions) and behavioral (a new read of the caller's own activity).
 '''

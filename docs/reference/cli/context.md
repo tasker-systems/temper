@@ -14,6 +14,7 @@ Commands:
   unsubscribe        Unsubscribe from a context locally (drops it from the local pull set). Local config only — no server effect
   create             Create a new context on the server
   list               List the contexts you can see on the server (with owner ref + resource counts)
+  activity           When you last changed something in each context you can read, newest first. Only your own authored changes count: an agent writing under your profile counts, a machine client or a teammate does not, and nothing the system computes does
   share              Share a context into a team's read-reach. Requires that you administer the context (own it, or manage its owning team) AND manage the target team (owner/maintainer), OR that you are an instance administrator. The context ref is a UUID or the `@handle/slug` / `+team-slug/slug` form (from `context list`); `@me` shorthand is not accepted
   unshare            Unshare a context from a team (same authority as `share`)
   transfer           Transfer a context's ownership to a team — the single path to shared authorship (read-sharing stays `share`; writing into a context requires team ownership)
@@ -100,6 +101,21 @@ Usage: temper context list [OPTIONS]
 
 Options:
       --retired            List retired contexts you ADMINISTER, instead of the contexts you can read. A retired context is invisible to the read path by construction (that is what retirement means), so this is a different axis, not a filter over the same rows — you see a retired context here only if you could have retired it yourself
+      --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
+      --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+      --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+      --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+  -h, --help               Print help
+```
+
+### `temper context activity`
+
+```text
+When you last changed something in each context you can read, newest first. Only your own authored changes count: an agent writing under your profile counts, a machine client or a teammate does not, and nothing the system computes does
+
+Usage: temper context activity [OPTIONS]
+
+Options:
       --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
       --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
       --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1

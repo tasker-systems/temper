@@ -177,6 +177,43 @@ pub async fn list(
     Ok(())
 }
 
+/// When you last changed something in each context you can read, newest first: one row per
+/// context you ever changed something in, as `{ref, name, context_id, last_changed_at}`. Only
+/// your own authored changes set it (`GET /api/me/context-activity`); the `ref` and `name` come
+/// from the same visible set `context list` reads, so every row is addressable as printed.
+pub async fn activity(
+    client: &temper_client::TemperClient,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let activity = client
+        .me()
+        .context_activity()
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+    let contexts = client
+        .contexts()
+        .list()
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+
+    let rows: Vec<serde_json::Value> = activity
+        .iter()
+        .map(|a| {
+            let place = contexts.iter().find(|c| c.id == a.context_id);
+            serde_json::json!({
+                "ref": place.map(|c| format!("{}/{}", c.owner_ref, c.slug)),
+                "name": place.map(|c| c.name.as_str()),
+                "context_id": a.context_id,
+                "last_changed_at": a.last_changed_at,
+            })
+        })
+        .collect();
+
+    let rendered = crate::format::render(&serde_json::Value::Array(rows), fmt)?;
+    println!("{rendered}");
+    Ok(())
+}
+
 /// Resolve a context ref (a bare UUID, or the `@handle/slug` / `+team-slug/slug` form that
 /// `context list` renders) to its context id. `@me` shorthand is NOT resolved here — an operator
 /// sharing a context addresses it by the concrete owner shown in the list (or by UUID).
