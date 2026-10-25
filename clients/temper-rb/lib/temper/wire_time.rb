@@ -53,8 +53,9 @@ module Temper
     end
 
     # Each field of `model_class` that `written` holds: stamped where the class declares it a
-    # timestamp, and entered by its declared type (`stamp_slot`). The block gives the caller's
-    # value for an attribute, which for a model is the attribute and for a hash is its entry.
+    # timestamp, and entered by its declared type (`stamp_slot`). The block gives the value to
+    # enter: for a model, the attribute; for a hash, its written entry (the caller's own is not
+    # kept).
     def self.stamp_fields(model_class, written)
       model_class.openapi_types.each do |attr, type|
         key = written_key(model_class, attr, written)
@@ -65,20 +66,16 @@ module Temper
       end
     end
 
-    # A slot declared `type`, holding the caller's `value` and written as `written`. A model is
-    # entered as itself. A hash is entered when the slot declares a model, so a part a caller writes
-    # as a hash (`after: { created: …, artifact_id: … }`, the idiom the SDK's own surfaces use) is
-    # stamped as its model would be. An array is entered element by element. A slot declared
-    # free-form (`Object`) is never entered, whatever it holds, a generated model included.
+    # A slot declared `type`, holding the caller's `value` and written as `written`. It is entered
+    # only by what it declares: a slot declaring a generated model is entered as that model, and an
+    # array slot (`Array<…>`) element by element. Anything else (a scalar, a free-form `Object`, a
+    # map such as `Hash<String, Object>`) is never entered, whatever it holds, a generated model
+    # included, so free-form JSON is written exactly as the generated core writes it.
     def self.stamp_slot(type, value, written)
-      return if type.to_s == 'Object'
-
-      if value.class.respond_to?(:openapi_types)
-        stamp_declared(value, written)
+      if (model_class = declared_model(type))
+        stamp_model(model_class, value, written)
       elsif value.is_a?(Array) && written.is_a?(Array)
         stamp_elements(type, value, written)
-      elsif value.is_a?(Hash) && written.is_a?(Hash)
-        stamp_hash(type, written)
       end
     end
 
@@ -88,11 +85,17 @@ module Temper
       value.compact.zip(written) { |v, w| stamp_slot(element, v, w) } if element
     end
 
-    # A hash in a slot that declares a model, entered as that model's fields; any other hash (a
-    # free-form `Object`, a map) is left whole.
-    def self.stamp_hash(type, written)
-      model_class = declared_model(type)
-      stamp_fields(model_class, written) { |_attr, key| written[key] } if model_class
+    # A slot declaring `model_class`: a model instance is entered as itself, and a hash the caller
+    # wrote in its place (`after: { created: …, artifact_id: … }`, the idiom the SDK's own surfaces
+    # use) as that model's fields.
+    def self.stamp_model(model_class, value, written)
+      return unless written.is_a?(Hash)
+
+      if value.class.respond_to?(:openapi_types)
+        stamp_declared(value, written)
+      elsif value.is_a?(Hash)
+        stamp_fields(model_class, written) { |_attr, key| written[key] }
+      end
     end
 
     # The generated model class `type` names, or nil when it names none (a scalar, `Object`, a map).
