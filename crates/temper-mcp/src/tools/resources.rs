@@ -20,6 +20,7 @@ use temper_client::TemperClient;
 use temper_core::types::authorship::ActInput;
 use temper_core::types::ids::ResourceId;
 use temper_core::types::provenance::ProvenanceSource;
+use temper_core::types::query::id_set::MAX_ID_SET_IDS;
 use temper_core::types::resource_view::{ResourceSection, ResourceView, SectionSet};
 #[cfg(test)]
 use temper_core::types::workflow_job::EmbeddingStatus;
@@ -224,6 +225,12 @@ pub struct ListResourcesInput {
     /// is the union across the maps. Mutually exclusive with `context_ref`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cogmap: Option<Vec<String>>,
+    /// List these resources by id (UUID or decorated refs), at most 256. Returns the ones you can
+    /// see and nothing else: an id that does not exist, is deleted, is not visible to you, or is
+    /// an unfinished upload is simply absent from the rows. Composes with every other filter.
+    /// With `ids`, the page holds at least as many rows as ids, past the usual 200.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ids: Option<Vec<String>>,
     /// Max results (default 50, max 200).
     pub limit: Option<i64>,
     /// Pagination offset.
@@ -849,6 +856,38 @@ pub async fn resource_lineage(
     ]))
 }
 
+/// Resolve the `ids` refs (trailing-UUID-only) into the CSV the list params carry. A malformed
+/// ref, or more than the id-set bound the server enforces, is refused before the round-trip.
+fn ids_csv(refs: Option<&[String]>) -> Result<Option<String>, rmcp::ErrorData> {
+    let Some(refs) = refs.filter(|r| !r.is_empty()) else {
+        return Ok(None);
+    };
+    if refs.len() > MAX_ID_SET_IDS {
+        return Err(rmcp::ErrorData::invalid_params(
+            format!(
+                "`ids` may carry at most {MAX_ID_SET_IDS} ids; this carries {}",
+                refs.len()
+            ),
+            None,
+        ));
+    }
+    let mut ids = Vec::with_capacity(refs.len());
+    for r in refs {
+        let id = temper_workflow::operations::parse_ref(r).map_err(|e| {
+            rmcp::ErrorData::invalid_params(format!("bad resource ref {r:?}: {e}"), None)
+        })?;
+        ids.push(id.0.to_string());
+    }
+    Ok(Some(ids.join(",")))
+}
+
+/// The page limit a list call sends: 50 by default, clamped at 200 — and never fewer than the
+/// number of ids asked for, so a by-id read is not truncated by the page.
+fn list_limit(limit: Option<i64>, ids: usize) -> Option<i64> {
+    let paged = limit.unwrap_or(50).min(200);
+    Some(paged.max(ids as i64))
+}
+
 pub async fn list_resources(
     svc: &TemperMcpService,
     parts: &http::request::Parts,
@@ -889,6 +928,9 @@ pub async fn list_resources(
         _ => None,
     };
 
+    let ids = ids_csv(input.ids.as_deref())?;
+    let id_count = input.ids.as_deref().map_or(0, <[String]>::len);
+
     // Join the tag list into the CSV the list params carry (same transport constraint as
     // `cogmap_ids`). A tag containing a comma is refused rather than split: over this wire it
     // would silently become two tags and return a narrower set than asked for. Case folding and
@@ -920,7 +962,8 @@ pub async fn list_resources(
             tags,
             goal,
             cogmap_ids,
-            limit: input.limit.or(Some(50)).map(|l| l.min(200)),
+            ids,
+            limit: list_limit(input.limit, id_count),
             offset: input.offset,
             // Ask for the open tier and the derived embedding readiness on every row. The incumbent
             // response carried both on the list surface (the open tier fetched per id, which is what
@@ -1699,6 +1742,7 @@ mod fields_projection_tests {
             tags: None,
             goal: None,
             cogmap: None,
+            ids: None,
             limit: None,
             offset: None,
             fields: Some(vec!["managed_meta".to_string()]),
@@ -1744,6 +1788,37 @@ mod fields_projection_tests {
         // And no doc_type_name is required alongside it — tags are not doc-type-scoped, which
         // is what lets one call enumerate an axis that spans 14 doc types.
         assert_eq!(input.doc_type_name, None);
+    }
+
+    /// `ids` resolves each ref to its trailing UUID, refuses a malformed ref and a set over the
+    /// id-set bound, and is `None` when absent or empty.
+    #[test]
+    fn ids_csv_resolves_refs_and_refuses_over_the_bound() {
+        assert_eq!(ids_csv(None).unwrap(), None);
+        assert_eq!(ids_csv(Some(&[])).unwrap(), None);
+        let (u1, u2) = (uuid::Uuid::now_v7(), uuid::Uuid::now_v7());
+        let refs = vec![format!("a-note-{u1}"), u2.to_string()];
+        assert_eq!(
+            ids_csv(Some(&refs)).unwrap().as_deref(),
+            Some(format!("{u1},{u2}").as_str())
+        );
+        assert!(ids_csv(Some(&["junk".to_string()])).is_err());
+        let over = vec![uuid::Uuid::nil().to_string(); MAX_ID_SET_IDS + 1];
+        assert!(ids_csv(Some(&over)).is_err());
+    }
+
+    /// The page limit: 50 by default and clamped at 200 — but a by-id read holds at least as
+    /// many rows as ids, past the clamp, so 256 ids are never truncated.
+    #[test]
+    fn list_limit_holds_every_asked_id() {
+        assert_eq!(list_limit(None, 0), Some(50));
+        assert_eq!(list_limit(Some(500), 0), Some(200));
+        assert_eq!(
+            list_limit(None, MAX_ID_SET_IDS),
+            Some(MAX_ID_SET_IDS as i64)
+        );
+        assert_eq!(list_limit(Some(10), 30), Some(30));
+        assert_eq!(list_limit(Some(100), 30), Some(100));
     }
 
     #[test]

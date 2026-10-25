@@ -32,7 +32,7 @@ packages/temper-design/
 ├── brand/                   # the threaded-t mark and wordmark, in currentColor
 ├── preview/index.html       # every role and the foundational components, both themes
 ├── scripts/themes.sh        # build · check · contrast · --self-check
-├── src/                     # the shared modules: markdown, sanitize, highlight, region, omission, theme, vocabulary, graph
+├── src/                     # the shared modules: markdown, sanitize, links, highlight, region, omission, theme, vocabulary, graph
 ├── dist/                    # their compiled output (committed; see "The shared modules")
 ├── toolchain/               # the toolchain majors every surface builds on, and their check
 └── tests/fixtures/broken/   # themes the check must refuse
@@ -73,7 +73,8 @@ What a consumer imports:
 | `@tasker-systems/temper-design/contract/graph.css` | the `graph-edge` recipe: a graph line, its heads and its cross, coloured by the stroke role `./graph` decides |
 | `@tasker-systems/temper-design/contract/markdown.css` | the `md-body` recipe: how a rendered document reads — headings, links, lists, code, tables, refusals |
 | `@tasker-systems/temper-design/markdown` | markdown → HTML with highlighted fences, bounded; DOM-free |
-| `@tasker-systems/temper-design/sanitize` | the one sanitizer pass for that HTML; needs a DOM |
+| `@tasker-systems/temper-design/sanitize` | the one sanitizer pass for that HTML; needs a DOM. Given a body's link answers, it rewrites every `./<uuid>` link: the held title when temper resolved it, inert when temper answered there is nothing you can see, and marked but still followable when nothing was verified |
+| `@tasker-systems/temper-design/links` | body links: the exact `./<uuid>` matcher, `extractVaultLinks` (bounded, DOM-free, total — run before render to resolve the ids), the answer types, the cap and the hover words |
 | `@tasker-systems/temper-design/highlight` | the one highlight.js registration, for direct code viewers |
 | `@tasker-systems/temper-design/region` | the four region states' words, markers and ARIA roles |
 | `@tasker-systems/temper-design/omission` | the omission sentence a bounded view ends with — counted (`omissionSentence`), uncounted (`uncountedSentence`: a read that reports only whether more exist, a cursor page, or nothing), drawn (`drawnSentence`: a read ranked from a bounded draw, which says what it drew from and never "all"), or a graph read (`graphSentence`) |

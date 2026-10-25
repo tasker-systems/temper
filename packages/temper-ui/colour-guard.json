@@ -1,6 +1,7 @@
 {
 	"paths": [
 		"src/recipes.css",
+		"../temper-design/contract/markdown.css",
 		"src/routes/+layout.svelte",
 		"src/routes/(app)",
 		"src/lib/components/Sidebar.svelte",

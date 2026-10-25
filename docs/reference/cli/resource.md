@@ -161,6 +161,8 @@ Options:
           Scope to resources homed in one or more cognitive maps (UUID or decorated ref). Repeatable — `--cogmap A --cogmap B` lists resources homed in either. Mutually exclusive with --context
       --color <COLOR>
           Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+      --ids <IDS>
+          List these resources by id (UUID or decorated ref; comma-separated or repeated), at most 256. Returns the ones you can see and nothing else: an id that does not exist, is deleted, is not visible to you, or is an unfinished upload is simply absent from the rows. Raises the page size to at least the number of ids
       --limit <LIMIT>
           Page size (default 20). A DEFAULT, not a cap: whatever you pass is honoured unchanged, and there is no server-side clamp. The response always carries `total` (the full match count), `returned`, and `truncated`, so a capped page is self-evident. Conflicts with --all
       --all

@@ -10,6 +10,7 @@ import { mayChangeResource } from '$lib/authority';
 import { editableKind, revisedValue } from '$lib/descriptions';
 import { parseRef } from '$lib/ref';
 import { ApiError, apiGet, apiGetWithHeaders, apiPatch } from '$lib/server/api';
+import { resolveBodyLinks } from '$lib/server/body-links';
 import { bounded } from '$lib/server/bounded';
 import { readResourceConnections, readTrail } from '$lib/server/graph-reads';
 import type { ContentResponse, DocTypeDescription, ResourceView } from '$lib/types';
@@ -137,6 +138,14 @@ export const load: PageServerLoad = async ({ locals, params, parent, url }) => {
 		apiGet<ContentResponse>(`/api/resources/${id}/content`, accessToken).then((r) => r.markdown),
 		'document',
 	);
+	// The body's links are a second phase: the document paints at once with them inert, and they
+	// settle in place when this answers. It never rejects — a link read that fails or outruns its
+	// bound answers nothing and the links render unchecked — and a failed document answers no
+	// links, so nothing here is an unsubscribed rejection.
+	const links = content.then(
+		(markdown) => resolveBodyLinks(markdown, accessToken),
+		() => [],
+	);
 	const trail = bounded(readTrail(accessToken, 'node', id), 'history');
 	const connections = bounded(readResourceConnections(accessToken, id), 'connections');
 	// Folded artifacts are INCLUDED, deliberately: whether an artifact is live is often the
@@ -190,7 +199,7 @@ export const load: PageServerLoad = async ({ locals, params, parent, url }) => {
 		? await readStateVocabulary(resource.doc_type_name, accessToken)
 		: null;
 
-	return { resource, content, trail, connections, artifacts, mayChange, stateVocabulary };
+	return { resource, content, links, trail, connections, artifacts, mayChange, stateVocabulary };
 };
 
 export const actions: Actions = {

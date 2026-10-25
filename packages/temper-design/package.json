@@ -38,6 +38,10 @@
       "types": "./dist/highlight.d.ts",
       "default": "./dist/highlight.js"
     },
+    "./links": {
+      "types": "./dist/links.d.ts",
+      "default": "./dist/links.js"
+    },
     "./region": {
       "types": "./dist/region.d.ts",
       "default": "./dist/region.js"
