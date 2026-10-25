@@ -1850,6 +1850,11 @@ const ENROLLED: &[&str] = &[
     "graph_visible_degree_ranking",
     "graph_traverse_scoped",
     "graph_traverse_cogmap_scoped",
+    // resources_changed_by / contexts_changed_by: exactly the profile's visible set, over a world
+    // in which every profile changed everything — driven by
+    // `the_change_readers_answer_exactly_their_visible_sets`.
+    "resources_changed_by",
+    "contexts_changed_by",
     // search doors (wrappers over the gated query_* machines)
     "search_exact",
     "search_wide",
@@ -2329,5 +2334,129 @@ async fn the_harness_bites_a_blob_gate_restatement(pool: PgPool) -> sqlx::Result
         "after restore the blob invariant did not come back green: {restored:?}"
     );
 
+    Ok(())
+}
+
+/// `resources_changed_by` and `contexts_changed_by` answer "what did this profile change" and must
+/// name nothing the profile cannot read. The generated world holds no event any of its profiles
+/// emitted, so a subset check over it alone would pass vacuously. Every world profile is therefore
+/// given an emitter, and one change naming every world resource and one change in every world
+/// context. Then each reader must answer **exactly** that profile's visible set: a gate too wide
+/// leaks a tombstoned or unreachable row, and a gate too narrow drops one the profile can read.
+///
+/// Bite: dropping the `resources_visible_to` join from `resources_changed_by`, or the
+/// `context_readable_by_profile` test from `contexts_changed_by`, makes this report.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_change_readers_answer_exactly_their_visible_sets(pool: PgPool) -> sqlx::Result<()> {
+    let seed = harness_seed();
+    let w = insert_world(&pool, &Plan::generate(seed)).await?;
+
+    let changed: Uuid =
+        sqlx::query_scalar("SELECT id FROM kb_event_types WHERE name = 'resource_updated'")
+            .fetch_one(&pool)
+            .await?;
+    for &profile in &w.profiles {
+        let entity: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_entities (profile_id, name) VALUES ($1, 'harness@web') RETURNING id",
+        )
+        .bind(profile)
+        .fetch_one(&pool)
+        .await?;
+        for &resource in &w.resources {
+            sqlx::query(
+                "INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, \
+                                        producing_anchor_id, payload) \
+                 VALUES ($1, $2, 'kb_contexts', $3, jsonb_build_object('resource_id', $4::uuid))",
+            )
+            .bind(changed)
+            .bind(entity)
+            .bind(w.contexts[0])
+            .bind(resource)
+            .execute(&pool)
+            .await?;
+        }
+        for &context in &w.contexts {
+            sqlx::query(
+                "INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, \
+                                        producing_anchor_id) \
+                 VALUES ($1, $2, 'kb_contexts', $3)",
+            )
+            .bind(changed)
+            .bind(entity)
+            .bind(context)
+            .execute(&pool)
+            .await?;
+        }
+    }
+
+    let mut violations = Vec::new();
+    let mut nonempty = 0;
+    let mut narrowed = 0;
+    for (p_idx, &profile) in w.profiles.iter().enumerate() {
+        let who = PROFILE_HANDLES[p_idx];
+        let visible: Vec<Uuid> = scalar_set(
+            &pool,
+            "SELECT resource_id FROM resources_visible_to($1) ORDER BY 1",
+            profile,
+        )
+        .await?
+        .into_iter()
+        .filter(|r| w.resources.contains(r))
+        .collect();
+        let changed_resources = scalar_set(
+            &pool,
+            "SELECT resource_id FROM resources_changed_by($1) ORDER BY 1",
+            profile,
+        )
+        .await?;
+        if changed_resources != visible {
+            violations.push(format!(
+                "I8.resources: resources_changed_by[{who}] = {changed_resources:?}, but the \
+                 visible world resources are {visible:?}"
+            ));
+        }
+        nonempty += usize::from(!changed_resources.is_empty());
+        narrowed += usize::from(visible.len() < w.resources.len());
+
+        let readable: Vec<Uuid> = scalar_set(
+            &pool,
+            "SELECT context_id FROM contexts_readable_by($1) ORDER BY 1",
+            profile,
+        )
+        .await?
+        .into_iter()
+        .filter(|c| w.contexts.contains(c))
+        .collect();
+        let changed_contexts = scalar_set(
+            &pool,
+            "SELECT context_id FROM contexts_changed_by($1) ORDER BY 1",
+            profile,
+        )
+        .await?;
+        if changed_contexts != readable {
+            violations.push(format!(
+                "I8.contexts: contexts_changed_by[{who}] = {changed_contexts:?}, but the \
+                 readable world contexts are {readable:?}"
+            ));
+        }
+    }
+    // Anti-vacuity: some profile reads some changed resource, and some profile's visible set is
+    // narrower than the whole world, so a missing gate would have something to leak.
+    assert!(
+        nonempty > 0,
+        "anti-vacuity: no profile reads any changed resource"
+    );
+    assert!(
+        narrowed > 0,
+        "anti-vacuity: every profile reads every world resource"
+    );
+    assert!(
+        violations.is_empty(),
+        "{} change-reader violation(s) over seed {}:\n  - {}\n\n{}",
+        violations.len(),
+        seed,
+        violations.join("\n  - "),
+        w.render()
+    );
     Ok(())
 }
