@@ -38,6 +38,7 @@ vi.mock('$lib/server/graph-reads', () => ({
 }));
 
 const { load, actions } = await import('./+page.server');
+const { LINK_READ_BUDGET_MS } = await import('$lib/server/body-links');
 
 /**
  * The `(app)` layout's data, which this load reads through `parent()` for the authority union.
@@ -94,7 +95,66 @@ describe('the resource page does not block on its fill', () => {
 		expect(data.trail).toBeInstanceOf(Promise);
 		expect(data.connections).toBeInstanceOf(Promise);
 		expect(data.content).toBeInstanceOf(Promise);
+		expect(data.links).toBeInstanceOf(Promise);
 		expect(data.artifacts).toBeInstanceOf(Promise);
+	});
+});
+
+describe("the body's links", () => {
+	const ID = '019d4add-f49d-7c43-a87d-dda470e5dd9c';
+	const BODY = `See [typed](./${ID}).`;
+	const answering = (
+		links: () => Promise<unknown>,
+		content = () => Promise.resolve({ markdown: BODY }),
+	) =>
+		apiGet.mockImplementation((path: string) => {
+			if (path.endsWith('/content')) return content();
+			if (path.startsWith('/api/resources?')) return links();
+			return Promise.resolve({ id: 'r1', title: 'A resource', kb_context_id: CTX });
+		});
+
+	it('the document does not wait on them: it settles while the link read is still out', async () => {
+		answering(() => new Promise(() => {}));
+		const data = await run();
+		await expect(data.content).resolves.toBe(BODY);
+		expect(data.links).toBeInstanceOf(Promise);
+	});
+
+	it('answer in their own read, after the document', async () => {
+		answering(() =>
+			Promise.resolve({ rows: [{ id: ID, title: 'Held' }], truncated: false, total: 1 }),
+		);
+		const data = await run();
+		await expect(data.links).resolves.toEqual([[ID, { state: 'resolved', title: 'Held' }]]);
+	});
+
+	it('a link read that never settles answers nothing at the page bound, never rejecting', async () => {
+		vi.useFakeTimers();
+		try {
+			answering(() => new Promise(() => {}));
+			const data = await run();
+			const settled = expect(data.links).resolves.toEqual([]);
+			await vi.advanceTimersByTimeAsync(LINK_READ_BUDGET_MS);
+			await settled;
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('a failed link read answers nothing', async () => {
+		answering(() => Promise.reject(new Error('list down')));
+		const data = await run();
+		await expect(data.links).resolves.toEqual([]);
+	});
+
+	it('a failed document read answers no links, and leaves no unhandled rejection', async () => {
+		answering(
+			() => Promise.resolve({ rows: [], truncated: false }),
+			() => Promise.reject(new Error('content down')),
+		);
+		const data = await run();
+		await expect(data.links).resolves.toEqual([]);
+		await expect(data.content).rejects.toThrow();
 	});
 });
 

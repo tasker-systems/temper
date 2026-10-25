@@ -49,6 +49,8 @@
 //
 // • `<template>` is removed with its content, which a query of the document never reaches.
 import DOMPurify from 'dompurify';
+import { ABSENT_WORDS, type LinkTable, UNCHECKED_WORDS, vaultLinkId } from './links.js';
+import { regionWords } from './region.js';
 
 const keepClass = (value: string): boolean =>
 	value === 'hljs' ||
@@ -108,7 +110,100 @@ function withheldMedia(
 	return withheld(words, src, media.ownerDocument);
 }
 
-export function sanitizeMarkdownHtml(dirty: string): string {
+/**
+ * How a body's vault links render: the answers temper gave and the surface's own resource
+ * address, or `'pending'` while the body is still arriving (a streamed reply), when links are
+ * inert typed text and say nothing yet.
+ */
+export type BodyLinks = { table: LinkTable; hrefFor: (id: string) => string } | 'pending';
+
+// Each state takes its marker from the region vocabulary, as `empty` and `failed` keep apart there:
+// absent is temper saying there is nothing you can see; unchecked is nothing verified either way.
+const ABSENT_MARKER = regionWords('empty', 'link').marker;
+const UNCHECKED_MARKER = regionWords('failed', 'link').marker;
+
+const XHTML = 'http://www.w3.org/1999/xhtml';
+const XLINK = 'http://www.w3.org/1999/xlink';
+
+/**
+ * A state's words as text only a screen reader announces (the recipe hides it visually). The
+ * hover `title` is not reliably announced and the marker glyph is hidden from assistive tech, so
+ * without this a dead or unverified link would sound like a working one.
+ */
+function said(words: string, doc: Document): HTMLSpanElement {
+	const span = doc.createElement('span');
+	span.className = 'md-ref-said';
+	span.textContent = `, ${words.charAt(0).toLowerCase()}${words.slice(1)}`;
+	return span;
+}
+
+function marker(glyph: string, doc: Document): HTMLSpanElement {
+	const span = doc.createElement('span');
+	span.className = 'md-ref-marker';
+	span.setAttribute('aria-hidden', 'true');
+	span.textContent = `${glyph}\u2009`;
+	return span;
+}
+
+/**
+ * Rewrite every vault link from the answers. After sanitizing, so the classes and words it sets
+ * are the pass's own: `md-ref-*` is not in {@link keepClass}, so an author's copy is already gone,
+ * and nothing here reads an authored attribute but the href. Every vault anchor is rebuilt — an
+ * authored href is never left live:
+ *
+ * - **resolved** — the held title, as text, at the surface's address.
+ * - **absent** — inert: the link's own content in a span, with one sentence for gone and not
+ *   visible.
+ * - **unchecked** (no answer, or no table) — still followable, since the destination does its own
+ *   read and following grants nothing; marked, with the link's own content, at the surface's
+ *   address.
+ * - **pending** — the link's own content in place, inert and unmarked.
+ *
+ * **An anchor in foreign content (SVG) is always typed text**, whatever its answer, and by
+ * `xlink:href` as well as `href`. Putting an HTML element inside a drawing makes the serialized
+ * string parse back into a different DOM than the one DOMPurify approved — a `<span>` closes the
+ * `<svg>` on reparse — and the sanitizer's guarantee holds only for the DOM it saw. Text cannot
+ * break out, and leaves no authored href live.
+ */
+function rewriteVaultLinks(fragment: DocumentFragment, links: BodyLinks | undefined): void {
+	const doc = fragment.ownerDocument;
+	for (const a of fragment.querySelectorAll('a')) {
+		const id = vaultLinkId(a.getAttribute('href') ?? a.getAttributeNS(XLINK, 'href') ?? '');
+		if (!id) continue;
+		if (a.namespaceURI !== XHTML) {
+			a.replaceWith(doc.createTextNode(a.textContent ?? ''));
+			continue;
+		}
+		// The link's own content, already sanitized above: an inline `code`, an embedded image, a
+		// withheld note. Moved, not flattened to text, so nothing in it disappears without a word.
+		const content = [...a.childNodes];
+		if (links === 'pending') {
+			a.replaceWith(...content);
+			continue;
+		}
+		const answer = links?.table.get(id);
+		if (answer?.state === 'absent') {
+			const span = doc.createElement('span');
+			span.className = 'md-ref-absent';
+			span.title = ABSENT_WORDS;
+			span.append(marker(ABSENT_MARKER, doc), ...content, said(ABSENT_WORDS, doc));
+			a.replaceWith(span);
+			continue;
+		}
+		const rebuilt = doc.createElement('a');
+		rebuilt.setAttribute('href', links ? links.hrefFor(id) : `./${id}`);
+		if (answer?.state === 'resolved') {
+			rebuilt.textContent = answer.title;
+		} else {
+			rebuilt.className = 'md-ref-unchecked';
+			rebuilt.title = UNCHECKED_WORDS;
+			rebuilt.append(marker(UNCHECKED_MARKER, doc), ...content, said(UNCHECKED_WORDS, doc));
+		}
+		a.replaceWith(rebuilt);
+	}
+}
+
+export function sanitizeMarkdownHtml(dirty: string, links?: BodyLinks): string {
 	const fragment = purify.sanitize(dirty, { ...SANITIZE_CONFIG, RETURN_DOM_FRAGMENT: true });
 	for (const img of fragment.querySelectorAll('img')) {
 		if (!embedded(img.getAttribute('src'))) img.replaceWith(withheldImage(img));
@@ -120,6 +215,7 @@ export function sanitizeMarkdownHtml(dirty: string): string {
 	for (const input of fragment.querySelectorAll('input')) {
 		if (input.getAttribute('type') !== 'checkbox') input.remove();
 	}
+	rewriteVaultLinks(fragment, links);
 	// The holder comes from the fragment's own inert document, not the live one: adopting the
 	// fragment into a live document would run its elements' steps before `{@html}` does.
 	const holder = fragment.ownerDocument.createElement('div');

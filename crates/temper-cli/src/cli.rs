@@ -647,6 +647,12 @@ pub enum ResourceAction {
         /// exclusive with --context.
         #[arg(long = "cogmap")]
         cogmap: Vec<String>,
+        /// List these resources by id (UUID or decorated ref; comma-separated or repeated),
+        /// at most 256. Returns the ones you can see and nothing else: an id that does not
+        /// exist, is deleted, is not visible to you, or is an unfinished upload is simply
+        /// absent from the rows. Raises the page size to at least the number of ids.
+        #[arg(long = "ids", value_delimiter = ',')]
+        ids: Vec<String>,
         /// Page size (default 20). A DEFAULT, not a cap: whatever you pass is honoured
         /// unchanged, and there is no server-side clamp. The response always carries
         /// `total` (the full match count), `returned`, and `truncated`, so a capped page

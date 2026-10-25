@@ -11,12 +11,30 @@
 	import { graphHref } from '$lib/vault-url';
 	import { docTypeTint } from '$lib/graph/palette';
 	import { regionStateFor } from '$lib/region';
+	import type { LinkResolution } from '@tasker-systems/temper-design/links';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	// One --hue on the root carries the doc type's slot to the masthead, chips, toggles and rail.
 	// A doc type bound nowhere paints in the neutral — no branching needed.
 	let tint = $derived(docTypeTint(data.resource.doc_type_name));
+
+	// The body's links are a second phase: the body paints with them inert ('pending') and the one
+	// renderer settles them in place when the load's link read answers. Held here rather than in
+	// an `{#await}` so the renderer is never remounted — a remount would blank the body while its
+	// sanitizer gate reloaded. `data.links` never rejects; an unanswered read settles to `[]`, which
+	// renders every link unchecked.
+	let bodyLinks: [string, LinkResolution][] | 'pending' = $state('pending');
+	$effect(() => {
+		let current = true;
+		bodyLinks = 'pending';
+		data.links.then((answered) => {
+			if (current) bodyLinks = answered;
+		});
+		return () => {
+			current = false;
+		};
+	});
 
 	// `stateVocabulary` is `null` both when the reader may not change this resource and when
 	// the read that says which states its kind carries did not answer — `mergeProperties` offers
@@ -95,7 +113,7 @@
 				{#if markdown.trim() === ''}
 					<RegionState state="empty" label="document" />
 				{:else}
-					<MarkdownRenderer {markdown} />
+					<MarkdownRenderer {markdown} links={bodyLinks} />
 				{/if}
 			{:catch error}
 				<RegionState state={regionStateFor(error)} label="document" />

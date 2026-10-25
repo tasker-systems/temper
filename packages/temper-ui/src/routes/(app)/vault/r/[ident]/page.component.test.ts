@@ -121,7 +121,7 @@ const connectionsOf = (
 type Fill = Partial<
 	Pick<
 		PageData,
-		'content' | 'trail' | 'connections' | 'artifacts' | 'mayChange' | 'stateVocabulary'
+		'content' | 'links' | 'trail' | 'connections' | 'artifacts' | 'mayChange' | 'stateVocabulary'
 	>
 >;
 
@@ -151,6 +151,7 @@ const data = (fill: Fill = {}): PageData =>
 	({
 		resource: RESOURCE,
 		content: fill.content ?? Promise.resolve('# A body\n\nWith a paragraph in it.'),
+		links: fill.links ?? Promise.resolve([]),
 		trail: fill.trail ?? Promise.resolve(trailOf(2)),
 		connections: fill.connections ?? Promise.resolve(connectionsOf([edge(1)])),
 		// The default is the shape the overwhelming majority of resources arrive in — owning no
@@ -252,6 +253,35 @@ describe('C1: the scaffold does not depend on the fill', () => {
 		expect(container.querySelectorAll('[data-testid="region-arriving"]')).toHaveLength(
 			REGIONS.length,
 		);
+	});
+});
+
+describe("the body's links settle after the body paints", () => {
+	const ID = '019d4add-f49d-7c43-a87d-dda470e5dd9c';
+
+	it('reads as typed, inert text while the link read is out, then settles in place', async () => {
+		let answer!: (links: [string, { state: 'resolved'; title: string }][]) => void;
+		const links = new Promise<[string, { state: 'resolved'; title: string }][]>((r) => {
+			answer = r;
+		});
+		const { container } = render(Page, {
+			props: {
+				data: data({ content: Promise.resolve(`See [typed](./${ID}).`), links }),
+				form: null,
+			},
+		});
+		await vi.waitFor(() =>
+			expect(container.querySelector('.md-body')?.textContent).toContain('typed'),
+		);
+		const body = container.querySelector('.md-body');
+		expect(body?.querySelector('a')).toBeNull();
+
+		answer([[ID, { state: 'resolved', title: 'Held title' }]]);
+		await vi.waitFor(() =>
+			expect(container.querySelector('.md-body a')?.textContent).toBe('Held title'),
+		);
+		// Settled in the same body, not a remounted one.
+		expect(container.querySelector('.md-body')).toBe(body);
 	});
 });
 

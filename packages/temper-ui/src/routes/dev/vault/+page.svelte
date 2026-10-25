@@ -40,6 +40,12 @@
 				'A fixture body, so the document region has something to render — including a fenced',
 				'block or two, because the markdown renderer highlights the languages it knows.',
 				'',
+				'It cites three resources, one in each state a body link can read as: one temper',
+				'[resolved](./00000000-0000-7000-8000-00000000000a) (this shows its held title), one',
+				'[temper answered there is nothing to see](./00000000-0000-7000-8000-00000000000b), and one',
+				'[nobody checked](./00000000-0000-7000-8000-00000000000c), inside a sentence that wraps, so',
+				'a mark that moved the prose would show here.',
+				'',
 				'```json',
 				'{',
 				'  "route": "/api/resources",',
@@ -63,6 +69,17 @@
 				'Hab SoSlI’ Quch!',
 				'```'
 			].join('\n')
+		),
+		// The second phase: answered after a beat, so the links read inert first and settle in place.
+		links: new Promise((settle) =>
+			setTimeout(
+				() =>
+					settle([
+						['00000000-0000-7000-8000-00000000000a', { state: 'resolved', title: 'Edge latency baseline' }],
+						['00000000-0000-7000-8000-00000000000b', { state: 'absent' }]
+					]),
+				1200
+			)
 		),
 		trail: Promise.resolve(trail),
 		// The page reads the bounded connections read, not the bare edge list it once took.

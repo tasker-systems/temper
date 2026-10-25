@@ -45,6 +45,7 @@ use temper_core::types::invocation::{
     Disposition, InvocationActRow, InvocationSummary, InvocationView,
 };
 use temper_core::types::provenance::BlockProvenanceRow;
+use temper_core::types::query::id_set::MAX_ID_SET_IDS;
 use temper_core::types::resource_view::{ResourceSection, ResourceView, SectionSet};
 use temper_core::types::workflow_job::EmbeddingStatus;
 use temper_substrate::readback;
@@ -194,6 +195,36 @@ async fn filtered_visible_page(
                 .collect::<ApiResult<Vec<_>>>()?,
         ),
         _ => None,
+    };
+    // Resource scope: the same CSV shape as `cogmap_ids`, bounded like an id set on the query door.
+    // The cap refusal names the field and never its values. What the ids do NOT match is not
+    // reported anywhere: the predicate below sits under the visibility join and the completeness
+    // predicate like every other filter, so an invisible, deleted, unfinished or nonexistent id
+    // leaves no trace in the page.
+    let ids: Option<Vec<Uuid>> = match params.ids.as_deref() {
+        Some(csv) => {
+            let pieces: Vec<&str> = csv
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .collect();
+            if pieces.len() > MAX_ID_SET_IDS {
+                return Err(ApiError::BadRequest(format!(
+                    "`ids` may carry at most {MAX_ID_SET_IDS} ids; this carries {}",
+                    pieces.len()
+                )));
+            }
+            let parsed = pieces
+                .into_iter()
+                .map(|s| {
+                    Uuid::parse_str(s).map_err(|e| {
+                        ApiError::BadRequest(format!("invalid resource id {s:?}: {e}"))
+                    })
+                })
+                .collect::<ApiResult<Vec<_>>>()?;
+            (!parsed.is_empty()).then_some(parsed)
+        }
+        None => None,
     };
     // `context_ref` and a cogmap scope name two different homes — reject the pair server-side, exactly
     // as `resolve_search_anchor` does for search. The CLI/MCP already guard it; this closes the raw-HTTP
@@ -367,6 +398,10 @@ async fn filtered_visible_page(
                       SELECT 1 FROM kb_data_artifacts da WHERE da.resource_id = r.id))
                  OR (NOT $10 AND NOT EXISTS (
                       SELECT 1 FROM kb_data_artifacts da WHERE da.resource_id = r.id)))
+            -- Resource scope. Under the visibility join and the completeness predicate like every
+            -- filter here, so an id the caller cannot see, or an unfinished upload, is simply not
+            -- a row — never a separate signal.
+            AND ($11::uuid[] IS NULL OR r.id = ANY($11))
           ORDER BY {sort_col} {dir}, r.id ASC",
         sort_col = sort_column_sql(sort),
     );
@@ -374,11 +409,11 @@ async fn filtered_visible_page(
     // The goal filter matches the live `advances`→goal edge minted by the create/update
     // projection — same `edge_kind`='leads_to' and label (`GOAL_EDGE_LABEL`). They must agree.
     //
-    // The binds are POSITIONAL: this sequence is `$1..$10` in order, and nothing checks the
+    // The binds are POSITIONAL: this sequence is `$1..$11` in order, and nothing checks the
     // correspondence at compile time — a bind dropped or added out of order silently applies one
     // caller's filter as another's. Read it against the WHERE clause above, one for one:
     // $1 profile_id, $2 context_id, $3 owner_self, $4 owner_handle, $5 q, $6 goal,
-    // $7 GOAL_EDGE_LABEL, $8 cogmap_ids, $9 tag_filter, $10 has_artifacts.
+    // $7 GOAL_EDGE_LABEL, $8 cogmap_ids, $9 tag_filter, $10 has_artifacts, $11 ids.
     let rows = sqlx::query(&sql)
         .bind(profile_id)
         .bind(context_id)
@@ -390,6 +425,7 @@ async fn filtered_visible_page(
         .bind(cogmap_ids)
         .bind(tag_filter.as_deref())
         .bind(params.has_artifacts)
+        .bind(ids)
         .fetch_all(pool)
         .await
         .map_err(api_err)?;

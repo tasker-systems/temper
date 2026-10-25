@@ -32,7 +32,7 @@ packages/temper-design/
 ├── brand/                   # the threaded-t mark and wordmark, in currentColor
 ├── preview/index.html       # every role and the foundational components, both themes
 ├── scripts/themes.sh        # build · check · contrast · --self-check
-├── src/                     # the shared modules: markdown, sanitize, highlight, region, omission, theme, vocabulary, graph
+├── src/                     # the shared modules: markdown, sanitize, links, highlight, region, omission, handoff, ways-in, theme, vocabulary, graph
 ├── dist/                    # their compiled output (committed; see "The shared modules")
 ├── toolchain/               # the toolchain majors every surface builds on, and their check
 └── tests/fixtures/broken/   # themes the check must refuse
@@ -73,10 +73,13 @@ What a consumer imports:
 | `@tasker-systems/temper-design/contract/graph.css` | the `graph-edge` recipe: a graph line, its heads and its cross, coloured by the stroke role `./graph` decides |
 | `@tasker-systems/temper-design/contract/markdown.css` | the `md-body` recipe: how a rendered document reads — headings, links, lists, code, tables, refusals |
 | `@tasker-systems/temper-design/markdown` | markdown → HTML with highlighted fences, bounded; DOM-free |
-| `@tasker-systems/temper-design/sanitize` | the one sanitizer pass for that HTML; needs a DOM |
+| `@tasker-systems/temper-design/sanitize` | the one sanitizer pass for that HTML; needs a DOM. Given a body's link answers, it rewrites every `./<uuid>` link: the held title when temper resolved it, inert when temper answered there is nothing you can see, and marked but still followable when nothing was verified |
+| `@tasker-systems/temper-design/links` | body links: the exact `./<uuid>` matcher, `extractVaultLinks` (bounded, DOM-free, total — run before render to resolve the ids), the answer types, the cap and the hover words |
 | `@tasker-systems/temper-design/highlight` | the one highlight.js registration, for direct code viewers |
 | `@tasker-systems/temper-design/region` | the four region states' words, markers and ARIA roles |
 | `@tasker-systems/temper-design/omission` | the omission sentence a bounded view ends with — counted (`omissionSentence`), uncounted (`uncountedSentence`: a read that reports only whether more exist, a cursor page, or nothing), drawn (`drawnSentence`: a read ranked from a bounded draw, which says what it drew from and never "all"), or a graph read (`graphSentence`) |
+| `@tasker-systems/temper-design/handoff` | the latest handoff: its name, and `nextSection`, which quotes the next steps a session recorded as written, bounded, and `null` when it recorded none — never a summary |
+| `@tasker-systems/temper-design/ways-in` | the standing ways into the work both surfaces offer on arrival (active goals, in-progress tasks, sessions): each one's name, scope and filter, their bound, and the order they are read in |
 | `@tasker-systems/temper-design/theme` | the theme model: a reader's preference (follow the system within a family, or one theme) resolved against `themes.json` |
 | `@tasker-systems/temper-design/vocabulary` | bound vocabularies: core's doc type → slot binding, `tintFor` (a doc type's slot, or the neutral), and `bindingsFrom`, which refuses a binding to anything but a slot |
 | `@tasker-systems/temper-design/graph` | the graph's geometry and edge grammar: `settle` (deterministic; unconnected nodes listed, not placed; one line per pair; radial only when the input holds both core and ring), `placeCaptions`, `edgeGeometry` (lines end at the marks' rims, heads as shapes), and `stroke`/`pairStroke`/`pairEnds` (role, dash, width over weights in (0, 1], heads, the contradicts cross). A surface supplies its plane and its caption room |
@@ -117,7 +120,7 @@ the check's harness.
 
 `src/` holds what both surfaces render through, so a rendered body, a region's state and a
 bounded view's omission read the same on each: one sanitizer policy (what one surface strips
-or refuses, the other does not render), one set of region words, one omission sentence, one graph geometry. They
+or refuses, the other does not render), one set of region words, one omission sentence, one graph geometry, one set of ways in. They
 compile with `tsc` into `dist/`, which is committed — bun copies a `file:` dependency rather
 than building it — and CI rebuilds it and fails when it is stale.
 

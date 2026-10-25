@@ -1118,6 +1118,7 @@ async fn cloud_list_returns_remote_only_resources(pool: sqlx::PgPool) {
                     tag: &[],
                     context: Some("@me/myapp"),
                     cogmap: &[],
+                    ids: &[],
                     limit: Some(20),
                     all: false,
                     offset: None,

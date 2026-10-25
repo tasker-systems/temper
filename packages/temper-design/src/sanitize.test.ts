@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
+import { ABSENT_WORDS, type LinkResolution, UNCHECKED_WORDS } from './links.js';
 import { prepareMarkdown } from './markdown.js';
 import { sanitizeMarkdownHtml, WITHHELD_IMAGE, WITHHELD_MEDIA } from './sanitize.js';
 
@@ -190,5 +191,177 @@ describe('sanitizeMarkdownHtml: no fetch channel survives', () => {
 		for (const gone of ['<form', '<button', '<input', 'action=', '/api/delete']) {
 			expect(container.innerHTML).not.toContain(gone);
 		}
+	});
+});
+
+describe('sanitizeMarkdownHtml — body links', () => {
+	const ID = '019d4add-f49d-7c43-a87d-dda470e5dd9c';
+	const OTHER = '01a16e2a-570d-77fa-9ca5-a905fe467e9a';
+	const hrefFor = (id: string) => `/r/${id}`;
+
+	function withLinks(
+		markdown: string,
+		entries: [string, LinkResolution][] | 'pending' | undefined,
+	): HTMLElement {
+		const links =
+			entries === 'pending' || entries === undefined
+				? entries
+				: { table: new Map(entries), hrefFor };
+		const container = document.createElement('div');
+		container.innerHTML = sanitizeMarkdownHtml(prepareMarkdown(markdown), links);
+		return container;
+	}
+
+	it('a resolved link reads as the held title and follows the surface address', () => {
+		const c = withLinks(`See [old hint](./${ID}).`, [[ID, { state: 'resolved', title: 'Held' }]]);
+		const a = c.querySelector('a');
+		expect(a?.textContent).toBe('Held');
+		expect(a?.getAttribute('href')).toBe(`/r/${ID}`);
+		expect(a?.hasAttribute('title')).toBe(false);
+		expect(c.innerHTML).not.toContain('old hint');
+	});
+
+	it('an absent link is inert and carries one sentence for gone and not visible alike', () => {
+		const gone = withLinks(`[typed](./${ID})`, [[ID, { state: 'absent' }]]);
+		expect(gone.querySelector('a')).toBeNull();
+		const span = gone.querySelector('.md-ref-absent');
+		expect(span?.textContent).toContain('typed');
+		expect(span?.getAttribute('title')).toBe(ABSENT_WORDS);
+		// Whatever made it absent, the reader sees the same thing.
+		const privateOne = withLinks(`[typed](./${OTHER})`, [[OTHER, { state: 'absent' }]]);
+		expect(privateOne.innerHTML).toBe(gone.innerHTML);
+	});
+
+	it('an unchecked link stays followable, marked, at the surface address', () => {
+		for (const c of [
+			withLinks(`[typed](./${ID}/)`, []),
+			withLinks(`[typed](./${ID})`, undefined),
+		]) {
+			const a = c.querySelector('a');
+			expect(a?.classList.contains('md-ref-unchecked')).toBe(true);
+			expect(a?.getAttribute('title')).toBe(UNCHECKED_WORDS);
+			expect(a?.textContent).toContain('typed');
+		}
+		const unchecked = withLinks(`[t](./${ID})`, []);
+		expect(unchecked.querySelector('a')?.getAttribute('href')).toBe(`/r/${ID}`);
+		expect(unchecked.querySelector('.md-ref-absent')).toBeNull();
+	});
+
+	// A tooltip is not reliably announced, and the marker glyph is hidden from assistive tech, so
+	// each state's words are also in the link's own text, for screen readers only.
+	it('absent and unchecked say their words to a screen reader, not only on hover', () => {
+		const absent = withLinks(`[typed](./${ID})`, [[ID, { state: 'absent' }]]);
+		const unchecked = withLinks(`[typed](./${ID})`, []);
+		const said = (c: HTMLElement, sel: string) =>
+			c.querySelector(`${sel} .md-ref-said`)?.textContent ?? '';
+		expect(said(absent, '.md-ref-absent').toLowerCase()).toContain(ABSENT_WORDS.toLowerCase());
+		expect(said(unchecked, 'a.md-ref-unchecked').toLowerCase()).toContain(
+			UNCHECKED_WORDS.toLowerCase(),
+		);
+		// A resolved link says nothing extra, and an author cannot forge the spoken words.
+		const resolved = withLinks(`[t](./${ID})`, [[ID, { state: 'resolved', title: 'Held' }]]);
+		expect(resolved.querySelector('.md-ref-said')).toBeNull();
+		const forged = withLinks('<span class="md-ref-said">not found</span>', []);
+		expect(forged.innerHTML).not.toContain('md-ref-said');
+	});
+
+	it('absent and unchecked do not share a mark', () => {
+		const absent = withLinks(`[t](./${ID})`, [[ID, { state: 'absent' }]]);
+		const unchecked = withLinks(`[t](./${ID})`, []);
+		expect(absent.querySelector('.md-ref-marker')?.textContent).not.toBe(
+			unchecked.querySelector('.md-ref-marker')?.textContent,
+		);
+	});
+
+	it('authored state cannot forge a resolved link', () => {
+		const forged = withLinks(
+			`<a href="./${ID}" class="md-ref-unchecked md-ref" data-ref-state="resolved" title="Held">Held</a> and [plain](./${OTHER})`,
+			[[OTHER, { state: 'resolved', title: 'Other' }]],
+		);
+		const a = forged.querySelector(`a[href="/r/${ID}"]`);
+		// The raw-HTML anchor was never in the table, so it is unchecked, with the pass's own
+		// class and words — not the author's.
+		expect(a?.getAttribute('class')).toBe('md-ref-unchecked');
+		expect(a?.getAttribute('title')).toBe(UNCHECKED_WORDS);
+		expect(forged.innerHTML).not.toContain('class="md-ref"');
+		expect(forged.innerHTML).not.toContain(`href="./${ID}"`);
+	});
+
+	it('an author cannot paint the marks on content temper never checked', () => {
+		const c = withLinks(
+			'<span class="md-ref-absent">x</span> <a href="https://example.com" class="md-ref-unchecked">y</a> <span class="md-ref-marker">z</span>',
+			[],
+		);
+		expect(c.innerHTML).not.toContain('md-ref');
+	});
+
+	it("an unanswered link keeps the link's own inline content, marked", () => {
+		const c = withLinks(
+			`[\`code\` ref](./${ID}) [![pic](data:image/png;base64,iVBORw0KGgo=)](./${OTHER})`,
+			[[OTHER, { state: 'absent' }]],
+		);
+		const unchecked = c.querySelector('a.md-ref-unchecked');
+		expect(unchecked?.querySelector('code')?.textContent).toBe('code');
+		expect(c.querySelector('.md-ref-absent img')).not.toBeNull();
+	});
+
+	it('a held title is text, never markup', () => {
+		const c = withLinks(`[t](./${ID})`, [
+			[ID, { state: 'resolved', title: '<img src=x onerror=alert(1)> **b**' }],
+		]);
+		expect(c.querySelector('img')).toBeNull();
+		expect(c.querySelector('a')?.textContent).toBe('<img src=x onerror=alert(1)> **b**');
+	});
+
+	it('every link to one id settles the same', () => {
+		const c = withLinks(`[a](./${ID}) [b](./${ID}) [c](./${ID.toUpperCase()})`, [
+			[ID, { state: 'resolved', title: 'Held' }],
+		]);
+		const anchors = [...c.querySelectorAll('a')];
+		expect(anchors).toHaveLength(3);
+		for (const a of anchors) expect(a.textContent).toBe('Held');
+	});
+
+	it('pending renders inert typed text with no state', () => {
+		const c = withLinks(`[typed](./${ID})`, 'pending');
+		expect(c.querySelector('a')).toBeNull();
+		expect(c.textContent).toContain('typed');
+		expect(c.innerHTML).not.toContain('md-ref');
+		expect(c.querySelector('[title]')).toBeNull();
+	});
+
+	// An SVG anchor is foreign content: putting an HTML span there makes the serialized string
+	// parse back into a different DOM than the one the sanitizer approved (the span closes the
+	// <svg> on reparse). So a vault-shaped SVG anchor, by `href` or `xlink:href`, becomes its typed
+	// text — inert, in place, with no HTML element inside the drawing.
+	for (const [label, attr] of [
+		['href', 'href'],
+		['xlink:href', 'xlink:href'],
+	] as const) {
+		for (const [state, entries] of [
+			['absent', [[ID, { state: 'absent' }]]],
+			['unchecked', []],
+			['resolved', [[ID, { state: 'resolved', title: 'Held' }]]],
+		] as const) {
+			it(`an SVG anchor by ${label}, ${state}, becomes inert text and reparses to the same DOM`, () => {
+				const html = `<svg><a ${attr}="./${ID}">typed</a><title>t</title></svg>`;
+				const c = withLinks(html, entries as unknown as [string, LinkResolution][]);
+				const reparsed = document.createElement('div');
+				reparsed.innerHTML = c.innerHTML;
+				expect(reparsed.innerHTML).toBe(c.innerHTML);
+				expect(c.querySelector('svg')?.textContent).toContain('typed');
+				expect(c.querySelector('svg a')).toBeNull();
+				expect(c.querySelector('svg span')).toBeNull();
+			});
+		}
+	}
+
+	it('leaves non-vault links exactly as they were', () => {
+		const md = '[web](https://example.com) [here](#anchor) [rel](./notes.md)';
+		const without = document.createElement('div');
+		without.innerHTML = sanitizeMarkdownHtml(prepareMarkdown(md));
+		expect(withLinks(md, [[ID, { state: 'resolved', title: 'Held' }]]).innerHTML).toBe(
+			without.innerHTML,
+		);
 	});
 });
