@@ -269,6 +269,24 @@ describe('sanitizeMarkdownHtml — body links', () => {
 		expect(forged.innerHTML).not.toContain(`href="./${ID}"`);
 	});
 
+	it('an author cannot paint the marks on content temper never checked', () => {
+		const c = withLinks(
+			'<span class="md-ref-absent">x</span> <a href="https://example.com" class="md-ref-unchecked">y</a> <span class="md-ref-marker">z</span>',
+			[],
+		);
+		expect(c.innerHTML).not.toContain('md-ref');
+	});
+
+	it("an unanswered link keeps the link's own inline content, marked", () => {
+		const c = withLinks(
+			`[\`code\` ref](./${ID}) [![pic](data:image/png;base64,iVBORw0KGgo=)](./${OTHER})`,
+			[[OTHER, { state: 'absent' }]],
+		);
+		const unchecked = c.querySelector('a.md-ref-unchecked');
+		expect(unchecked?.querySelector('code')?.textContent).toBe('code');
+		expect(c.querySelector('.md-ref-absent img')).not.toBeNull();
+	});
+
 	it('a held title is text, never markup', () => {
 		const c = withLinks(`[t](./${ID})`, [
 			[ID, { state: 'resolved', title: '<img src=x onerror=alert(1)> **b**' }],

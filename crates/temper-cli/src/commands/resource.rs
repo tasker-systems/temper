@@ -1435,6 +1435,12 @@ fn list_api_params(
         (Some(l), n) if n > 0 => Some(l.max(n as i64)),
         (limit, _) => limit,
     };
+    // `--page` counts in the page size actually sent, so a raised by-id page is never overlapped.
+    let page_size = if params.ids.is_empty() {
+        params.limit
+    } else {
+        limit.map(|l| l as usize)
+    };
     // Resolve --goal ref → goal resource id (trailing-UUID-only); the server filters on the live
     // `advances`→goal edge. An unparseable ref is a hard error (never a silent drop).
     let goal = params
@@ -1455,7 +1461,7 @@ fn list_api_params(
         sort,
         order,
         limit,
-        offset: Some(resolve_list_offset(params.page, params.offset, params.limit) as i64),
+        offset: Some(resolve_list_offset(params.page, params.offset, page_size) as i64),
         // One envelope either way — the section is what varies, not the row type. Rendered
         // through `SectionSet::to_csv` rather than from a `contains` check per section, so a
         // section added to the vocabulary rides the wire instead of being silently dropped.
@@ -3234,6 +3240,19 @@ mod list_helpers_tests {
         params.all = true;
         let api = list_api_params(&params, &no_sections()).unwrap();
         assert_eq!(api.limit, None, "--all stays uncapped");
+    }
+
+    /// `--page` counts in the page size actually sent: with `--ids` raising it to the id count,
+    /// page 2 starts after the raised page, never inside it.
+    #[test]
+    fn ids_pages_count_in_the_raised_limit() {
+        let refs: Vec<String> = (0..25).map(|_| uuid::Uuid::now_v7().to_string()).collect();
+        let mut params = list_params(&[], &[]);
+        params.ids = &refs;
+        params.page = Some(2);
+        let api = list_api_params(&params, &no_sections()).unwrap();
+        assert_eq!(api.limit, Some(25));
+        assert_eq!(api.offset, Some(25), "page 2 begins after the 25-row page");
     }
 
     /// Asking for a section changes the `sections` param and **nothing else** — the page

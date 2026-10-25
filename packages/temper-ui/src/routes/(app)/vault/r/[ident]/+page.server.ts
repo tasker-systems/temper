@@ -134,15 +134,17 @@ export const load: PageServerLoad = async ({ locals, params, parent, url }) => {
 	// not the `{:catch}` that renders the failure, and having one does not give you the other.
 	// The gap it closes is real in two places here — between these lines and SvelteKit subscribing
 	// in order to serialize, and on the 404 path below, which abandons all three.
-	// The body's links are answered INSIDE the document read, so the body arrives with them and
-	// first paints settled — a link never changes under the reader. `resolveBodyLinks` never
-	// rejects: links it could not check render unchecked, and the document region stays whole.
 	const content = bounded(
-		apiGet<ContentResponse>(`/api/resources/${id}/content`, accessToken).then(async (r) => ({
-			markdown: r.markdown,
-			links: await resolveBodyLinks(r.markdown, accessToken),
-		})),
+		apiGet<ContentResponse>(`/api/resources/${id}/content`, accessToken).then((r) => r.markdown),
 		'document',
+	);
+	// The body's links are a second phase: the document paints at once with them inert, and they
+	// settle in place when this answers. It never rejects — a link read that fails or outruns its
+	// bound answers nothing and the links render unchecked — and a failed document answers no
+	// links, so nothing here is an unsubscribed rejection.
+	const links = content.then(
+		(markdown) => resolveBodyLinks(markdown, accessToken),
+		() => [],
 	);
 	const trail = bounded(readTrail(accessToken, 'node', id), 'history');
 	const connections = bounded(readResourceConnections(accessToken, id), 'connections');
@@ -197,7 +199,7 @@ export const load: PageServerLoad = async ({ locals, params, parent, url }) => {
 		? await readStateVocabulary(resource.doc_type_name, accessToken)
 		: null;
 
-	return { resource, content, trail, connections, artifacts, mayChange, stateVocabulary };
+	return { resource, content, links, trail, connections, artifacts, mayChange, stateVocabulary };
 };
 
 export const actions: Actions = {

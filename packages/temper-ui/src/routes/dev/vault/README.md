@@ -17,8 +17,9 @@ Auth0, so authenticated UI is otherwise observable only in production, post-merg
      NOTHING and the page reads exactly as a resource that owns no artifacts always has.
    - The body cites three resources, one per link state: **resolved** shows the held title as a
      plain link; **absent** (temper answered there is nothing to see) is inert, in `empty`'s
-     colour; **unchecked** (no answer) stays a link, dashed and in `failed`'s colour. None moves
-     the wrapped sentence around it. Look in both appearances.
+     colour; **unchecked** (no answer) stays a link, dashed and in `failed`'s colour. The answers arrive
+     after a beat, so for the first second all three read as inert typed text, then settle in
+     place. Look in both appearances.
 2. **Governed families** — one advisory and one enforcing (amber, v3) family; schema opens on
    click. On the real context page this renders below the list, and renders nothing for a context
    that declares no families.

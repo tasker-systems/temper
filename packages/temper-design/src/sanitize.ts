@@ -140,10 +140,12 @@ function marker(glyph: string, doc: Document): HTMLSpanElement {
  * authored href is never left live:
  *
  * - **resolved** — the held title, as text, at the surface's address.
- * - **absent** — inert: the typed text in a span, with one sentence for gone and not visible.
+ * - **absent** — inert: the link's own content in a span, with one sentence for gone and not
+ *   visible.
  * - **unchecked** (no answer, or no table) — still followable, since the destination does its own
- *   read and following grants nothing; marked, with the typed text, at the surface's address.
- * - **pending** — inert typed text, unmarked.
+ *   read and following grants nothing; marked, with the link's own content, at the surface's
+ *   address.
+ * - **pending** — the link's own content in place, inert and unmarked.
  *
  * **An anchor in foreign content (SVG) is always typed text**, whatever its answer, and by
  * `xlink:href` as well as `href`. Putting an HTML element inside a drawing makes the serialized
@@ -156,9 +158,15 @@ function rewriteVaultLinks(fragment: DocumentFragment, links: BodyLinks | undefi
 	for (const a of fragment.querySelectorAll('a')) {
 		const id = vaultLinkId(a.getAttribute('href') ?? a.getAttributeNS(XLINK, 'href') ?? '');
 		if (!id) continue;
-		const typed = a.textContent ?? '';
-		if (links === 'pending' || a.namespaceURI !== XHTML) {
-			a.replaceWith(doc.createTextNode(typed));
+		if (a.namespaceURI !== XHTML) {
+			a.replaceWith(doc.createTextNode(a.textContent ?? ''));
+			continue;
+		}
+		// The link's own content, already sanitized above: an inline `code`, an embedded image, a
+		// withheld note. Moved, not flattened to text, so nothing in it disappears without a word.
+		const content = [...a.childNodes];
+		if (links === 'pending') {
+			a.replaceWith(...content);
 			continue;
 		}
 		const answer = links?.table.get(id);
@@ -166,7 +174,7 @@ function rewriteVaultLinks(fragment: DocumentFragment, links: BodyLinks | undefi
 			const span = doc.createElement('span');
 			span.className = 'md-ref-absent';
 			span.title = ABSENT_WORDS;
-			span.append(marker(ABSENT_MARKER, doc), typed);
+			span.append(marker(ABSENT_MARKER, doc), ...content);
 			a.replaceWith(span);
 			continue;
 		}
@@ -177,7 +185,7 @@ function rewriteVaultLinks(fragment: DocumentFragment, links: BodyLinks | undefi
 		} else {
 			rebuilt.className = 'md-ref-unchecked';
 			rebuilt.title = UNCHECKED_WORDS;
-			rebuilt.append(marker(UNCHECKED_MARKER, doc), typed);
+			rebuilt.append(marker(UNCHECKED_MARKER, doc), ...content);
 		}
 		a.replaceWith(rebuilt);
 	}

@@ -10,9 +10,11 @@
 		/**
 		 * What temper answered for the body's `./<uuid>` links, as the page's load read them. An
 		 * id with no answer — or every id, when this is absent — renders unchecked: marked, and
-		 * still followable to its resource page, whose own read answers.
+		 * still followable to its resource page, whose own read answers. `'pending'` while the
+		 * answers are still out: the links read as their typed text, inert and unmarked, and
+		 * settle in place when the answers land.
 		 */
-		links?: [string, LinkResolution][];
+		links?: [string, LinkResolution][] | 'pending';
 	}
 
 	let { markdown, links = [] }: Props = $props();
@@ -31,10 +33,11 @@
 	}
 
 	let parsed = $derived(prepareMarkdown(markdown));
-	let bodyLinks: BodyLinks = $derived({
-		table: new Map(links),
-		hrefFor: (id: string) => resourceHref({ id }),
-	});
+	let bodyLinks: BodyLinks = $derived(
+		links === 'pending'
+			? 'pending'
+			: { table: new Map(links), hrefFor: (id: string) => resourceHref({ id }) },
+	);
 
 	// How the body reads is the contract's `md-body` recipe (`contract/markdown.css`, imported in
 	// app.css), shared with the desktop; this component paints nothing of its own.

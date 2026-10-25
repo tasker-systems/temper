@@ -157,7 +157,8 @@ tags?: string | null,
  */
 cogmap_ids?: string | null, 
 /**
- * Resource scope: a comma-separated list of resource UUIDs, at most `MAX_ID_SET_IDS` of them.
+ * Resource scope: a comma-separated list of resource UUIDs, at most 256 of them (the id-set
+ * bound, `MAX_ID_SET_IDS`).
  * Returns the caller's visible resources among them and nothing else — an id that does not
  * exist, was deleted, is not visible, or names an unfinished upload is simply absent from the
  * rows, with no other trace in the response. Rows are the list's own, with no body. A CSV for the same transport reason as `cogmap_ids`; `None`/empty = no

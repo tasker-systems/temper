@@ -10925,7 +10925,7 @@
           {
             "name": "ids",
             "in": "query",
-            "description": "Resource scope: a comma-separated list of resource UUIDs, at most `MAX_ID_SET_IDS` of them.\nReturns the caller's visible resources among them and nothing else — an id that does not\nexist, was deleted, is not visible, or names an unfinished upload is simply absent from the\nrows, with no other trace in the response. Rows are the list's own, with no body. A CSV for the same transport reason as `cogmap_ids`; `None`/empty = no\nfilter. Composes with every other filter as one more AND.",
+            "description": "Resource scope: a comma-separated list of resource UUIDs, at most 256 of them (the id-set\nbound, `MAX_ID_SET_IDS`).\nReturns the caller's visible resources among them and nothing else — an id that does not\nexist, was deleted, is not visible, or names an unfinished upload is simply absent from the\nrows, with no other trace in the response. Rows are the list's own, with no body. A CSV for the same transport reason as `cogmap_ids`; `None`/empty = no\nfilter. Composes with every other filter as one more AND.",
             "required": false,
             "schema": {
               "type": [

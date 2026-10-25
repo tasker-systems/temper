@@ -7,7 +7,7 @@ vi.mock('$lib/server/api', () => ({
 	apiGet: (...a: unknown[]) => apiGet(...a),
 }));
 
-const { resolveBodyLinks } = await import('./body-links');
+const { LINK_READ_BUDGET_MS, resolveBodyLinks } = await import('./body-links');
 
 const A = '019d4add-f49d-7c43-a87d-dda470e5dd9c';
 const B = '01a16e2a-570d-77fa-9ca5-a905fe467e9a';
@@ -59,6 +59,23 @@ describe('resolveBodyLinks', () => {
 
 	it('a failed read answers nothing, and never rejects', async () => {
 		apiGet.mockRejectedValue(new Error('upstream down'));
+		await expect(resolveBodyLinks(BODY, 'tok')).resolves.toEqual([]);
+	});
+
+	it('a read that never settles answers nothing once its budget runs out, so it cannot stall the document', async () => {
+		vi.useFakeTimers();
+		try {
+			apiGet.mockReturnValue(new Promise(() => {}));
+			const answer = resolveBodyLinks(BODY, 'tok');
+			await vi.advanceTimersByTimeAsync(LINK_READ_BUDGET_MS);
+			await expect(answer).resolves.toEqual([]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('a malformed answer answers nothing, and never rejects', async () => {
+		apiGet.mockResolvedValue({ truncated: false });
 		await expect(resolveBodyLinks(BODY, 'tok')).resolves.toEqual([]);
 	});
 
