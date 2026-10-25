@@ -294,6 +294,32 @@ describe('sanitizeMarkdownHtml — body links', () => {
 		expect(c.querySelector('[title]')).toBeNull();
 	});
 
+	// An SVG anchor is foreign content: putting an HTML span there makes the serialized string
+	// parse back into a different DOM than the one the sanitizer approved (the span closes the
+	// <svg> on reparse). So a vault-shaped SVG anchor, by `href` or `xlink:href`, becomes its typed
+	// text — inert, in place, with no HTML element inside the drawing.
+	for (const [label, attr] of [
+		['href', 'href'],
+		['xlink:href', 'xlink:href'],
+	] as const) {
+		for (const [state, entries] of [
+			['absent', [[ID, { state: 'absent' }]]],
+			['unchecked', []],
+			['resolved', [[ID, { state: 'resolved', title: 'Held' }]]],
+		] as const) {
+			it(`an SVG anchor by ${label}, ${state}, becomes inert text and reparses to the same DOM`, () => {
+				const html = `<svg><a ${attr}="./${ID}">typed</a><title>t</title></svg>`;
+				const c = withLinks(html, entries as unknown as [string, LinkResolution][]);
+				const reparsed = document.createElement('div');
+				reparsed.innerHTML = c.innerHTML;
+				expect(reparsed.innerHTML).toBe(c.innerHTML);
+				expect(c.querySelector('svg')?.textContent).toContain('typed');
+				expect(c.querySelector('svg a')).toBeNull();
+				expect(c.querySelector('svg span')).toBeNull();
+			});
+		}
+	}
+
 	it('leaves non-vault links exactly as they were', () => {
 		const md = '[web](https://example.com) [here](#anchor) [rel](./notes.md)';
 		const without = document.createElement('div');

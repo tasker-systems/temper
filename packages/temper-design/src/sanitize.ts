@@ -122,6 +122,9 @@ export type BodyLinks = { table: LinkTable; hrefFor: (id: string) => string } | 
 const ABSENT_MARKER = regionWords('empty', 'link').marker;
 const UNCHECKED_MARKER = regionWords('failed', 'link').marker;
 
+const XHTML = 'http://www.w3.org/1999/xhtml';
+const XLINK = 'http://www.w3.org/1999/xlink';
+
 function marker(glyph: string, doc: Document): HTMLSpanElement {
 	const span = doc.createElement('span');
 	span.className = 'md-ref-marker';
@@ -141,14 +144,20 @@ function marker(glyph: string, doc: Document): HTMLSpanElement {
  * - **unchecked** (no answer, or no table) — still followable, since the destination does its own
  *   read and following grants nothing; marked, with the typed text, at the surface's address.
  * - **pending** — inert typed text, unmarked.
+ *
+ * **An anchor in foreign content (SVG) is always typed text**, whatever its answer, and by
+ * `xlink:href` as well as `href`. Putting an HTML element inside a drawing makes the serialized
+ * string parse back into a different DOM than the one DOMPurify approved — a `<span>` closes the
+ * `<svg>` on reparse — and the sanitizer's guarantee holds only for the DOM it saw. Text cannot
+ * break out, and leaves no authored href live.
  */
 function rewriteVaultLinks(fragment: DocumentFragment, links: BodyLinks | undefined): void {
 	const doc = fragment.ownerDocument;
-	for (const a of fragment.querySelectorAll('a[href]')) {
-		const id = vaultLinkId(a.getAttribute('href') ?? '');
+	for (const a of fragment.querySelectorAll('a')) {
+		const id = vaultLinkId(a.getAttribute('href') ?? a.getAttributeNS(XLINK, 'href') ?? '');
 		if (!id) continue;
 		const typed = a.textContent ?? '';
-		if (links === 'pending') {
+		if (links === 'pending' || a.namespaceURI !== XHTML) {
 			a.replaceWith(doc.createTextNode(typed));
 			continue;
 		}
