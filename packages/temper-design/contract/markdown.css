@@ -231,6 +231,31 @@
   content: '⊘ ';
 }
 
+/* ── Body links temper did not vouch for ──────────────────────────── */
+
+/* Set by the sanitize pass (`sanitize`), never by an author: `md-ref-*` is not admitted from
+   authored HTML. A resolved link is a plain link and takes no class. The two marks keep apart what
+   the region vocabulary keeps apart, on more than colour — each carries its own marker glyph and
+   its own edge:
+     absent     temper answered, and there is nothing you can see — `empty`'s register; not a link
+     unchecked  nothing was verified — `failed`'s register; still a link, since following it grants
+                nothing and the destination does its own read
+   Neither changes the text box: colour, an inline glyph and the link's existing bottom edge only —
+   no padding, border box or line height — so a mark never moves the prose it sits in. */
+.md-body .md-ref-absent {
+  color: var(--tp-region-empty);
+}
+
+.md-body a.md-ref-unchecked {
+  color: var(--tp-region-failed);
+  border-bottom-style: dashed;
+  border-bottom-color: var(--tp-region-failed);
+}
+
+.md-body .md-ref-marker {
+  font-family: var(--tp-font-doing);
+}
+
 /* ── Images ───────────────────────────────────────────────────────── */
 
 .md-body img {
