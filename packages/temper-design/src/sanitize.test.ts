@@ -247,6 +247,24 @@ describe('sanitizeMarkdownHtml — body links', () => {
 		expect(unchecked.querySelector('.md-ref-absent')).toBeNull();
 	});
 
+	// A tooltip is not reliably announced, and the marker glyph is hidden from assistive tech, so
+	// each state's words are also in the link's own text, for screen readers only.
+	it('absent and unchecked say their words to a screen reader, not only on hover', () => {
+		const absent = withLinks(`[typed](./${ID})`, [[ID, { state: 'absent' }]]);
+		const unchecked = withLinks(`[typed](./${ID})`, []);
+		const said = (c: HTMLElement, sel: string) =>
+			c.querySelector(`${sel} .md-ref-said`)?.textContent ?? '';
+		expect(said(absent, '.md-ref-absent').toLowerCase()).toContain(ABSENT_WORDS.toLowerCase());
+		expect(said(unchecked, 'a.md-ref-unchecked').toLowerCase()).toContain(
+			UNCHECKED_WORDS.toLowerCase(),
+		);
+		// A resolved link says nothing extra, and an author cannot forge the spoken words.
+		const resolved = withLinks(`[t](./${ID})`, [[ID, { state: 'resolved', title: 'Held' }]]);
+		expect(resolved.querySelector('.md-ref-said')).toBeNull();
+		const forged = withLinks('<span class="md-ref-said">not found</span>', []);
+		expect(forged.innerHTML).not.toContain('md-ref-said');
+	});
+
 	it('absent and unchecked do not share a mark', () => {
 		const absent = withLinks(`[t](./${ID})`, [[ID, { state: 'absent' }]]);
 		const unchecked = withLinks(`[t](./${ID})`, []);

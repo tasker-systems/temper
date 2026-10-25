@@ -105,6 +105,17 @@ const ABSENT_MARKER = regionWords('empty', 'link').marker;
 const UNCHECKED_MARKER = regionWords('failed', 'link').marker;
 const XHTML = 'http://www.w3.org/1999/xhtml';
 const XLINK = 'http://www.w3.org/1999/xlink';
+/**
+ * A state's words as text only a screen reader announces (the recipe hides it visually). The
+ * hover `title` is not reliably announced and the marker glyph is hidden from assistive tech, so
+ * without this a dead or unverified link would sound like a working one.
+ */
+function said(words, doc) {
+    const span = doc.createElement('span');
+    span.className = 'md-ref-said';
+    span.textContent = `, ${words.charAt(0).toLowerCase()}${words.slice(1)}`;
+    return span;
+}
 function marker(glyph, doc) {
     const span = doc.createElement('span');
     span.className = 'md-ref-marker';
@@ -154,7 +165,7 @@ function rewriteVaultLinks(fragment, links) {
             const span = doc.createElement('span');
             span.className = 'md-ref-absent';
             span.title = ABSENT_WORDS;
-            span.append(marker(ABSENT_MARKER, doc), ...content);
+            span.append(marker(ABSENT_MARKER, doc), ...content, said(ABSENT_WORDS, doc));
             a.replaceWith(span);
             continue;
         }
@@ -166,7 +177,7 @@ function rewriteVaultLinks(fragment, links) {
         else {
             rebuilt.className = 'md-ref-unchecked';
             rebuilt.title = UNCHECKED_WORDS;
-            rebuilt.append(marker(UNCHECKED_MARKER, doc), ...content);
+            rebuilt.append(marker(UNCHECKED_MARKER, doc), ...content, said(UNCHECKED_WORDS, doc));
         }
         a.replaceWith(rebuilt);
     }
