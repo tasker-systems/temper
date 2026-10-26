@@ -4,6 +4,7 @@ import type { ContextActivity, ContextRowWithCounts } from '$lib/types';
 import { makeRow } from '../test/fixtures';
 import {
 	ARRIVAL,
+	openingOf,
 	PLACES_BOUND,
 	placesInUse,
 	recentPath,
@@ -141,5 +142,45 @@ describe('resume', () => {
 	it('fails, rather than falling back to `updated`, when the row has no change time', () => {
 		expect(() => resumeOf([makeRow({ updated: '2026-10-26T12:00:00Z' })])).toThrow();
 		expect(() => resumeOf([makeRow({ changed_by_me_at: null })])).toThrow();
+	});
+});
+
+describe('the opening resume shows', () => {
+	it('is the first prose, past the headings the body starts with, up to the next heading', () => {
+		expect(
+			openingOf('# A task\n\n## Problem\n\nThe return.\n\nIt says when.\n\n## Done\nx'),
+		).toEqual({
+			markdown: 'The return.\n\nIt says when.',
+			truncated: true,
+		});
+	});
+
+	it('is quoted whole, and says nothing continues, when the body is only that', () => {
+		expect(openingOf('Just this.\n')).toEqual({ markdown: 'Just this.', truncated: false });
+	});
+
+	it('is nothing for a body with no prose, never a stand-in', () => {
+		expect(openingOf('')).toBeNull();
+		expect(openingOf('# Title\n\n## Empty\n')).toBeNull();
+	});
+
+	it('keeps whole blocks while they fit, so the markdown stays well formed', () => {
+		const block = 'word '.repeat(30).trim();
+		const got = openingOf(`${block}\n\n**${block}**\n\n${block}`, 400);
+		expect(got).toEqual({ markdown: `${block}\n\n**${block}**`, truncated: true });
+	});
+
+	it('cuts only a first block longer than the bound, at a word', () => {
+		const got = openingOf('word '.repeat(200), 100);
+		expect(got?.truncated).toBe(true);
+		expect(got?.markdown.length).toBeLessThanOrEqual(101);
+		expect(got?.markdown).toMatch(/word…$/);
+	});
+
+	it('reads a heading inside a fence as code, not as the end of the opening', () => {
+		expect(openingOf('Run:\n```\n# not a heading\n\nstill code\n```\n## Next\nx')).toEqual({
+			markdown: 'Run:\n```\n# not a heading\n\nstill code\n```',
+			truncated: true,
+		});
 	});
 });

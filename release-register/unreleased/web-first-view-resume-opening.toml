@@ -1,0 +1,14 @@
+title    = "The web's first view leads with resume and the opening of the work, and no longer shows the latest handoff"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["clients"]
+status   = "signal-only"
+body = '''
+On the web, `/vault` no longer shows the latest handoff (the reader's newest session and its quoted next steps), and makes no session read for it. Seen in a browser, it told a reader nothing: handoffs are written by agents for the next agent.
+
+Resume now leads the page, full width, and under the link and "you changed" time it renders the opening of that work: its first prose, past the headings the body starts with, up to the next heading, kept as whole markdown blocks within 400 characters (a longer first block is cut at a word), and "… continues in the <type>" when there is more. It is a second read, `GET /api/resources/{id}/content`, with its own bound starting when the return arrives; a failed body read fails the opening alone and the link still shows. A body with no prose shows no opening and nothing in its place.
+
+Who observes it: a reader opening `/vault` on the web. `@tasker-systems/temper-design/handoff` is unchanged and still exported. Nothing on the HTTP, MCP or CLI surfaces changes.
+
+Release relevance: signal-only.
+'''
