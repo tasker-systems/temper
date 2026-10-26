@@ -314,6 +314,7 @@ mod tests {
             is_active: true,
             created: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch"),
             updated: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch"),
+            changed_by_me_at: None,
             body_hash: None,
             ingest_state: Some(IngestState::Complete),
             ingest_ended: None,

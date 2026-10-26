@@ -213,6 +213,14 @@
           ],
           "description": "Do the bytes read back exactly, or only approximately? `Option` purely for\nversion skew, as with `ingest_state`."
         },
+        "changed_by_me_at": {
+          "description": "When the caller last changed this resource themselves. Present only on a row read with\n`changed_by=@me`, the same time `sort=changed_by_me` orders by; absent on every other read.\n\nNot `updated`, which can be a teammate's later change: this counts only the caller's own\nauthored events on the resource, so it never reports another principal's activity.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "cogmap_id": {
           "description": "Set when the resource is homed in a cognitive map. Mutually exclusive with\nthe `context_*` fields.",
           "format": "uuid",

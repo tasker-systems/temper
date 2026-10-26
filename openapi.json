@@ -26203,6 +26203,14 @@
               }
             ]
           },
+          "changed_by_me_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the caller last changed this resource themselves. Present only on a row read with\n`changed_by=@me`, the same time `sort=changed_by_me` orders by; absent on every other read.\n\nNot `updated`, which can be a teammate's later change: this counts only the caller's own\nauthored events on the resource, so it never reports another principal's activity."
+          },
           "cogmap_id": {
             "type": [
               "string",

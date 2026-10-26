@@ -22,6 +22,9 @@ module Temper::Generated
     # Do the bytes read back exactly, or only approximately? `Option` purely for version skew, as with `ingest_state`.
     attr_accessor :body_storage
 
+    # When the caller last changed this resource themselves. Present only on a row read with `changed_by=@me`, the same time `sort=changed_by_me` orders by; absent on every other read.  Not `updated`, which can be a teammate's later change: this counts only the caller's own authored events on the resource, so it never reports another principal's activity.
+    attr_accessor :changed_by_me_at
+
     # Set when the resource is homed in a cognitive map. Mutually exclusive with the `context_*` fields.
     attr_accessor :cogmap_id
 
@@ -113,6 +116,7 @@ module Temper::Generated
       {
         :'body_hash' => :'body_hash',
         :'body_storage' => :'body_storage',
+        :'changed_by_me_at' => :'changed_by_me_at',
         :'cogmap_id' => :'cogmap_id',
         :'cogmap_name' => :'cogmap_name',
         :'content' => :'content',
@@ -155,6 +159,7 @@ module Temper::Generated
       {
         :'body_hash' => :'String',
         :'body_storage' => :'BodyStorage',
+        :'changed_by_me_at' => :'Time',
         :'cogmap_id' => :'String',
         :'cogmap_name' => :'String',
         :'content' => :'String',
@@ -187,6 +192,7 @@ module Temper::Generated
       Set.new([
         :'body_hash',
         :'body_storage',
+        :'changed_by_me_at',
         :'cogmap_id',
         :'cogmap_name',
         :'content',
@@ -224,6 +230,10 @@ module Temper::Generated
 
       if attributes.key?(:'body_storage')
         self.body_storage = attributes[:'body_storage']
+      end
+
+      if attributes.key?(:'changed_by_me_at')
+        self.changed_by_me_at = attributes[:'changed_by_me_at']
       end
 
       if attributes.key?(:'cogmap_id')
@@ -532,6 +542,7 @@ module Temper::Generated
       self.class == o.class &&
           body_hash == o.body_hash &&
           body_storage == o.body_storage &&
+          changed_by_me_at == o.changed_by_me_at &&
           cogmap_id == o.cogmap_id &&
           cogmap_name == o.cogmap_name &&
           content == o.content &&
@@ -567,7 +578,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [body_hash, body_storage, cogmap_id, cogmap_name, content, context_name, context_owner_ref, context_ref, context_slug, created, doc_type_name, embedding_status, id, ingest_ended, ingest_state, is_active, kb_context_id, managed_meta, open_meta, origin_uri, originator_profile_id, owner_handle, owner_profile_id, ref, title, updated].hash
+      [body_hash, body_storage, changed_by_me_at, cogmap_id, cogmap_name, content, context_name, context_owner_ref, context_ref, context_slug, created, doc_type_name, embedding_status, id, ingest_ended, ingest_state, is_active, kb_context_id, managed_meta, open_meta, origin_uri, originator_profile_id, owner_handle, owner_profile_id, ref, title, updated].hash
     end
 
     # Builds the object from hash

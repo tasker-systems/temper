@@ -91,6 +91,14 @@ cogmap_id?: string | null,
  */
 cogmap_name?: string | null, doc_type_name: string, owner_handle: string, owner_profile_id: ProfileId, originator_profile_id: ProfileId, is_active: boolean, created: string, updated: string, 
 /**
+ * When the caller last changed this resource themselves. Present only on a row read with
+ * `changed_by=@me`, the same time `sort=changed_by_me` orders by; absent on every other read.
+ *
+ * Not `updated`, which can be a teammate's later change: this counts only the caller's own
+ * authored events on the resource, so it never reports another principal's activity.
+ */
+changed_by_me_at?: string | null, 
+/**
  * SHA-256 hash of the resource body, from `kb_resource_manifests`. `None` when no
  * manifest row exists.
  */

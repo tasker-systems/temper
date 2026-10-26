@@ -1,0 +1,14 @@
+title    = "A list read narrowed to the caller's own changes says when the caller last changed each row"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["http", "mcp", "clients"]
+status   = "signal-only"
+body = '''
+`ResourceView` gains an optional `changed_by_me_at`. On `GET /api/resources?changed_by=@me` each row carries the caller's own latest change to that resource. That is the time `sort=changed_by_me` already ordered by, read from the same `resources_changed_by` answer the filter joins, so it costs no extra statement. It is never `updated`, which can be a teammate's later change.
+- On every other read the field is absent from the wire: a list without `changed_by`, `show`, search, and the query door's rows.
+- A list without the filter runs the same SQL as before. The column is selected only when the `mine` CTE is emitted.
+
+Who observes it: HTTP callers of the list door with `changed_by=@me`, and the three generated SDKs (one new optional field on the `ResourceView` model). MCP's `ResourceView` schema gains the optional key, but no MCP tool sends `changed_by` yet, so MCP never carries a value. The CLI's stdout does not print it. temper-ui's generated type gains the optional field, and nothing reads it yet.
+
+User-visible: not yet. The web's Resume will show it, behind the release gate on the desktop's matching read. Release relevance: additive (one optional response field).
+'''

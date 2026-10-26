@@ -452,6 +452,7 @@ mod tests {
             is_active: true,
             created: chrono::Utc::now(),
             updated: chrono::Utc::now(),
+            changed_by_me_at: None,
             context_name: Some("temper".to_string()),
             doc_type_name: "task".to_string(),
             owner_handle: "@me".to_string(),
