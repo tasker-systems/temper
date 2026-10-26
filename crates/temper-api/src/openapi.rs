@@ -173,6 +173,14 @@ const API_VERSION: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../
         // these are only ever reached transitively through `SlackDisconnectResponse`.
         temper_core::types::slack::SlackDisconnectedPrincipal,
         temper_core::types::slack::IdpRevocation,
+        // The batch read of one artifact ask. `AskRequest` and `AskResponse` are its bodies;
+        // the other three are reached only through `AskResponse`, and are registered by name so the
+        // SDKs carry each as its own type.
+        temper_core::types::artifact_ask::AskRequest,
+        temper_core::types::artifact_ask::AskResponse,
+        temper_core::types::artifact_ask::AskedShape,
+        temper_core::types::artifact_ask::OversizedArtifact,
+        temper_core::types::artifact_ask::AskOrder,
         temper_core::types::data_artifact_shape::ShapeView,
         temper_core::types::data_artifact_shape::ShapeDeclareRequest,
         temper_core::types::data_artifact_shape::EnforcementMode,

@@ -1883,7 +1883,15 @@ const CONSUMES: &[&str] = &[
     "anchor_region_metrics",
     "anchor_shape",
     "anchor_staleness",
+    // artifact_ask_counts / artifacts_matching_ask — the batch read of an artifact ask
+    // (20261106000000). Each builds resources_visible_to(p_principal) once, COALESCEd to an empty
+    // array, and hands it with the principal to the ungated counted-set body, which applies every
+    // other conjunct (the anchor_readable_by_profile home re-check among them); neither restates a
+    // rule. Their deny direction, conjunct by conjunct, is temper-substrate's
+    // artifact_ask_batch_read.rs.
+    "artifact_ask_counts",
     "artifact_by_id",
+    "artifacts_matching_ask",
     "audit_drift_sweep",
     "cogmap_analytics",
     "cogmap_foundations",

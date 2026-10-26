@@ -99,7 +99,8 @@ async fn every_tool_says_whether_it_writes() {
         "update_resource",
         "update_resource_meta",
     ];
-    const READ_ONLY: [&str; 21] = [
+    const READ_ONLY: [&str; 22] = [
+        "ask_data_artifacts",
         "blob_read",
         "cogmap_list",
         "cogmap_read",

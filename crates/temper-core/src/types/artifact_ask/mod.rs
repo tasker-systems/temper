@@ -13,13 +13,16 @@
 //! - [`session`] — [`AskSession`], the one way an ask is validated: one request's asks against one
 //!   [`ShapeContext`], each shape's walk built once and one work budget for them all, and each
 //!   shape's [`PathTeaching`] made once — or taken from the context, where a caller remembered it;
-//! - [`mod@reference`] — the Rust reference evaluator the SQL is differential-tested against.
+//! - [`mod@reference`] — the Rust reference evaluator the SQL is differential-tested against;
+//! - [`batch`] — the batch read's wire ([`AskRequest`], [`AskResponse`]) and the refusals a page
+//!   earns without its shape.
 //!
 //! **Two halves, one seam** (§2.4). The loader in `temper-services` holds the pool, the principal
 //! and the `jsonschema` compiler, and turns each named [`ShapeId`] into a [`ShapeLoad`]. Everything
 //! after that is here, so the composable arm's gate and seal and the batch read share one
 //! definition of what can be asked.
 
+pub mod batch;
 pub mod reference;
 pub mod session;
 pub mod validate;
@@ -34,6 +37,7 @@ use crate::types::ids::ShapeId;
 use crate::types::query::filter::property_value_bytes;
 use crate::types::query::PropertyOp;
 
+pub use batch::{AskOrder, AskRequest, AskResponse, AskedShape, OversizedArtifact};
 pub use reference::matches;
 pub use session::AskSession;
 pub use validate::{
@@ -131,9 +135,14 @@ impl ArtifactAsk {
     }
 }
 
-/// A shape the loader read, found live, and compiled with the no-fetch compiler — so the walk sees
-/// a schema that compiled (decision P4: *the loader decided compilability*). Nothing here
-/// compiles it.
+/// A shape the loader read through the gated by-id read and compiled with the no-fetch compiler —
+/// so the walk sees a schema that compiled (decision P4: *the loader decided compilability*).
+/// Nothing here compiles it.
+///
+/// **Live, unless it is a continuation's pinned row.** A first load (`shape_loader::load_one`)
+/// refuses a folded row `shape_superseded`, so what it loads is live. A batch read's later pages
+/// load the row their first page named (`shape_loader::load_one_pinned`) without that step, so the
+/// row they load may since have been folded by an amendment (spec §7.3).
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadedShape {
     pub shape_id: ShapeId,
@@ -232,14 +241,14 @@ pub struct ShapeSuccessor {
 /// 1–3 become refusals through [`ShapeLoad::loaded`]; [`AskSession::validate`] runs all four.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ShapeLoad {
+    /// Readable, and its schema compiles: live on a first load, and on a continuation's pinned load
+    /// possibly folded since (see [`LoadedShape`]).
     Loaded(LoadedShape),
     /// Absent, or not readable by the asker — one arm, so the two are identical by construction.
     NotAskable,
     /// Folded. `successor` is `None` when no live row holds the home and family (decision P16:
     /// unreachable today, since amendment is the only fold); the refusal then omits it.
-    Superseded {
-        successor: Option<ShapeSuccessor>,
-    },
+    Superseded { successor: Option<ShapeSuccessor> },
     /// The schema did not compile under the no-fetch compiler.
     Uncompilable,
     /// The schema is larger than the walk reads ([`walk::MAX_SCHEMA_BYTES`]), so it was never

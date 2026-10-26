@@ -124,7 +124,9 @@ class RefusalReason(BaseModel):
     # data type: str
     oneof_schema_48_validator: Optional[StrictStr] = Field(default=None, description="An artifact predicate value carries U+0000, in a string or an object key. No stored content can hold it — jsonb cannot represent the character — so the value could match nothing, and binding it would be a database error where a refusal belongs.")
     # data type: str
-    oneof_schema_49_validator: Optional[StrictStr] = Field(default=None, description="A reason outside the declared vocabulary.  `[corrected — 2026-08-09]` This said \"Never constructed by this crate — only by deserializing a producer newer than this consumer.\" **That was false at the time**: `validate` constructed it for twelve topology and vocabulary refusals, kebab-case, while every declared variant was snake_case — a client's vocabulary was two conventions at once. Found in review; recorded rather than repaired then, because promoting twelve strings to variants is a wire change and nothing consumed them yet — `/api/query` did not exist, so the change was free and the door was the moment it would stop being free.  `[promoted — 2026-08-12]` That moment arrived first: the twelve are now the variants above, and this crate no longer constructs `Other` for anything. What `Other` is FOR now is exactly what its original doc said — a reason from a producer newer than this consumer, one this binary has never been taught to name. Deserializing it never fails; `is_known` answers `false`; a caller degrades gracefully instead of losing the whole response to a parse error.")
+    oneof_schema_49_validator: Optional[StrictStr] = Field(default=None, description="A batch read's `limit` is 0, or above the page ceiling `MAX_ARTIFACT_PAGE_ROWS` (200). Refused, never clamped, with no stage, and beside the ask's own refusals: a caller asking for more than a page holds is told so rather than handed a short page it might read as the end. The detail names the body field.")
+    # data type: str
+    oneof_schema_50_validator: Optional[StrictStr] = Field(default=None, description="A reason outside the declared vocabulary.  `[corrected — 2026-08-09]` This said \"Never constructed by this crate — only by deserializing a producer newer than this consumer.\" **That was false at the time**: `validate` constructed it for twelve topology and vocabulary refusals, kebab-case, while every declared variant was snake_case — a client's vocabulary was two conventions at once. Found in review; recorded rather than repaired then, because promoting twelve strings to variants is a wire change and nothing consumed them yet — `/api/query` did not exist, so the change was free and the door was the moment it would stop being free.  `[promoted — 2026-08-12]` That moment arrived first: the twelve are now the variants above, and this crate no longer constructs `Other` for anything. What `Other` is FOR now is exactly what its original doc said — a reason from a producer newer than this consumer, one this binary has never been taught to name. Deserializing it never fails; `is_known` answers `false`; a caller degrades gracefully instead of losing the whole response to a parse error.")
     actual_instance: Optional[Union[str]] = None
     one_of_schemas: Set[str] = { "str" }
 
@@ -440,6 +442,12 @@ class RefusalReason(BaseModel):
         # validate data type: str
         try:
             instance.oneof_schema_49_validator = v
+            match += 1
+        except (ValidationError, ValueError) as e:
+            error_messages.append(str(e))
+        # validate data type: str
+        try:
+            instance.oneof_schema_50_validator = v
             match += 1
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
@@ -901,6 +909,15 @@ class RefusalReason(BaseModel):
             instance.oneof_schema_49_validator = json.loads(json_str)
             # assign value to actual_instance
             instance.actual_instance = instance.oneof_schema_49_validator
+            match += 1
+        except (ValidationError, ValueError) as e:
+            error_messages.append(str(e))
+        # deserialize data into str
+        try:
+            # validation
+            instance.oneof_schema_50_validator = json.loads(json_str)
+            # assign value to actual_instance
+            instance.actual_instance = instance.oneof_schema_50_validator
             match += 1
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))

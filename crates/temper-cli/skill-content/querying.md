@@ -110,6 +110,8 @@ searches inside them:
 }
 ```
 
+- **This answers resources, never artifacts.** To read the matching artifacts themselves, whole,
+  send the same ask to `temper data-artifact ask` (the data-artifacts guidance has it).
 - **Predicates in one ask hold of one artifact; separate asks may be met by different artifacts.**
   Split the two predicates above into two asks and a resource owning one artifact in milliseconds
   and another with a high `p99` is selected too.

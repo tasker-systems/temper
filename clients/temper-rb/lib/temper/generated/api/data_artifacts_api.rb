@@ -19,6 +19,81 @@ module Temper::Generated
     def initialize(api_client = ApiClient.default)
       @api_client = api_client
     end
+    # Read the artifacts one ask matches, whole
+    # The body is one ask — a shape by id and predicates over the paths that shape declares — with an optional `limit` and the previous page's `next` as `after`. The answer is the artifacts the ask matches among those you can see, each whole (`content` is the stored content, absent for an artifact committed with no bytes), in `(created, artifact_id)` order, oldest first. POST, because the ask is a document rather than a query string.  Every page is bounded three ways, and the first bound reached ends it: by `limit` (absent: 50; at least 1 and at most 200), by a byte budget over what the page sends, and by a budget over what it may read to find its rows. A matching artifact too large for any page, or too deeply nested for one (content more than 96 arrays or objects deep, so that every first-party client parses every page), is named in `oversized`, in order, by id and size, and the page goes on. Read it whole by id (`GET /api/data-artifacts/{artifact_id}`); a client's own nesting limit can refuse that read too when the content nests very deeply, and on the hosted deployment it is refused when the response carrying the artifact, with its content as storage serves it, is longer than the platform's response cap (storage prints some numbers longer than they were committed). When the read budget ends a page, `next` is the last artifact it read, matched or not, so a page can carry no artifacts and still a `next`: only `next: null` ends the enumeration. Continue by sending the same ask with `next` as `after`; every page validates the ask again for its caller, so the position carries no authority.  `population` counts the ask's whole governed population on the first page and is `null` after it. Those counts are exact, so the first page matches every governed artifact of the home to make them; the read budget bounds the page's rows, not the counts. A continuation is validated against the shape version the first page named, but its rows' `shape_state`, and any `shape_states` narrowing, are read against the version now in force: when `amended_since` appears, an ask narrowed by `shape_states` should start again from a first page asking that version. A first page (no `after`) naming a superseded version is refused `shape_superseded`.  This is an enumeration: an artifact on a resource still ingesting, or one an operator ended, is not in it, though `GET /api/resources/{id}/artifacts` addressed to that resource lists it. It never returns resources, and it is not a stage of `/api/query`. A `GET` to this path is answered by the caller checks before the route: `401` without credentials, `403` without system access, and `405` to a caller with both.
+    # @param ask_request [AskRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [AskResponse]
+    def ask_data_artifacts(ask_request, opts = {})
+      data, _status_code, _headers = ask_data_artifacts_with_http_info(ask_request, opts)
+      data
+    end
+
+    # Read the artifacts one ask matches, whole
+    # The body is one ask — a shape by id and predicates over the paths that shape declares — with an optional &#x60;limit&#x60; and the previous page&#39;s &#x60;next&#x60; as &#x60;after&#x60;. The answer is the artifacts the ask matches among those you can see, each whole (&#x60;content&#x60; is the stored content, absent for an artifact committed with no bytes), in &#x60;(created, artifact_id)&#x60; order, oldest first. POST, because the ask is a document rather than a query string.  Every page is bounded three ways, and the first bound reached ends it: by &#x60;limit&#x60; (absent: 50; at least 1 and at most 200), by a byte budget over what the page sends, and by a budget over what it may read to find its rows. A matching artifact too large for any page, or too deeply nested for one (content more than 96 arrays or objects deep, so that every first-party client parses every page), is named in &#x60;oversized&#x60;, in order, by id and size, and the page goes on. Read it whole by id (&#x60;GET /api/data-artifacts/{artifact_id}&#x60;); a client&#39;s own nesting limit can refuse that read too when the content nests very deeply, and on the hosted deployment it is refused when the response carrying the artifact, with its content as storage serves it, is longer than the platform&#39;s response cap (storage prints some numbers longer than they were committed). When the read budget ends a page, &#x60;next&#x60; is the last artifact it read, matched or not, so a page can carry no artifacts and still a &#x60;next&#x60;: only &#x60;next: null&#x60; ends the enumeration. Continue by sending the same ask with &#x60;next&#x60; as &#x60;after&#x60;; every page validates the ask again for its caller, so the position carries no authority.  &#x60;population&#x60; counts the ask&#39;s whole governed population on the first page and is &#x60;null&#x60; after it. Those counts are exact, so the first page matches every governed artifact of the home to make them; the read budget bounds the page&#39;s rows, not the counts. A continuation is validated against the shape version the first page named, but its rows&#39; &#x60;shape_state&#x60;, and any &#x60;shape_states&#x60; narrowing, are read against the version now in force: when &#x60;amended_since&#x60; appears, an ask narrowed by &#x60;shape_states&#x60; should start again from a first page asking that version. A first page (no &#x60;after&#x60;) naming a superseded version is refused &#x60;shape_superseded&#x60;.  This is an enumeration: an artifact on a resource still ingesting, or one an operator ended, is not in it, though &#x60;GET /api/resources/{id}/artifacts&#x60; addressed to that resource lists it. It never returns resources, and it is not a stage of &#x60;/api/query&#x60;. A &#x60;GET&#x60; to this path is answered by the caller checks before the route: &#x60;401&#x60; without credentials, &#x60;403&#x60; without system access, and &#x60;405&#x60; to a caller with both.
+    # @param ask_request [AskRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(AskResponse, Integer, Hash)>] AskResponse data, response status code and response headers
+    def ask_data_artifacts_with_http_info(ask_request, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: DataArtifactsApi.ask_data_artifacts ...'
+      end
+      # verify the required parameter 'ask_request' is set
+      if @api_client.config.client_side_validation && ask_request.nil?
+        fail ArgumentError, "Missing the required parameter 'ask_request' when calling DataArtifactsApi.ask_data_artifacts"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/data-artifacts/ask'
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      # HTTP header 'Content-Type'
+      content_type = @api_client.select_header_content_type(['application/json'])
+      if !content_type.nil?
+          header_params['Content-Type'] = content_type
+      end
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body] || @api_client.object_to_http_body(ask_request)
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'AskResponse'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"DataArtifactsApi.ask_data_artifacts",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:POST, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: DataArtifactsApi#ask_data_artifacts\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # Commit one data artifact to a resource
     # The content payload is JSON, hashed and stored verbatim. The hash is the proof — the ledger carries only the hash, never the bytes. Auth-gated: the caller must have write standing on the owning resource.
     # @param id [String] Resource ID (the artifact&#39;s owner)

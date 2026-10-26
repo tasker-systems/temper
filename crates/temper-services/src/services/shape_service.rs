@@ -19,6 +19,7 @@ use crate::error::{ApiError, ApiResult};
 use crate::services::shape_loader::{self, SchemaVerdict};
 use crate::services::workflow_job_service;
 use temper_core::types::artifact_ask::walk::MAX_SCHEMA_BYTES;
+use temper_core::types::data_artifact::unstorable_nul;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ContextId, EntityId, ProfileId, ShapeId};
 use temper_core::types::workflow_job::{AnchorJobPayload, DispatchType, Persona};
@@ -61,7 +62,9 @@ pub struct DeclareShapeServiceParams<'a> {
 /// sentence naming the bound; one within it that cannot be compiled (malformed, referring to a
 /// document that is never fetched, or with a pattern past `shape_schema::MAX_PATTERN_BYTES`) is
 /// refused with the no-fetch constructor's fixed sentence. Both are a `DataArtifactRefusal`, so
-/// a schema no ask could use is refused when it is declared rather than stored.
+/// a schema no ask could use is refused when it is declared rather than stored. Before either, a
+/// family name or a schema holding U+0000, which Postgres cannot store, is refused as one too,
+/// naming the field ([`unstorable_nul`]), where binding it would have failed in the database.
 ///
 /// After the declare succeeds, a reconcile job is enqueued on the anchor queue. The single-flight
 /// index collapses N declarations into one job — the second enqueue returns `None`, not an error.
@@ -71,7 +74,11 @@ pub async fn declare_shape(pool: &PgPool, p: DeclareShapeServiceParams<'_>) -> A
 
     // Auth before writes, and the schema judged before the write: the gate above answers a
     // stranger `Forbidden` whatever the schema says, so the refusals below teach only an author.
-    // Measured before compiled — a schema past the walk's byte bound is never compiled.
+    // A U+0000 no row can hold is refused first, by the field that holds it; then the schema is
+    // measured before it is compiled — a schema past the walk's byte bound is never compiled.
+    if let Some(refusal) = unstorable_nul(p.kind, "schema", p.schema) {
+        return Err(ApiError::DataArtifactRefusal(refusal));
+    }
     match shape_loader::judge(p.schema).await? {
         SchemaVerdict::Compiles => {}
         SchemaVerdict::Uncompilable => {

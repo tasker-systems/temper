@@ -257,9 +257,33 @@ PREFIX='__temper_ungated_'
 #   names no version. It never restates the counted set's conjuncts; every count is a FILTER over
 #   that function's rows. A later edit that counted artifacts here directly, or dropped the home
 #   check from the lookup, is the shape to refuse.
+#
+# REVIEWED 2026-10-24 (`__temper_ungated_artifact_ask_rows`, migration 20261106000000, the batch
+# read of asking data artifacts). The function-NAME set grows by one, the SQL-file set by one; the
+# relation watch does not move (the body reads only relations the counted set already read), and
+# neither does the Rust half — Rust names only the two gated functions the migration adds,
+# `artifacts_matching_ask` and `artifact_ask_counts`.
+#   VERDICT: the new body is the counted set's, moved: it takes `p_visible_ids` and passes it,
+#     unchanged, by `EXECUTE ... USING`, to `__temper_ungated_governed_artifact_states_in`, which
+#     joins it with `unnest`, so a NULL set admits nothing. Its callers hand it their own verdict:
+#     the counted set (now a one-statement delegation) passes its `p_visible_ids` through, and the
+#     two gated functions build `resources_visible_to(p_principal)` once, COALESCEd to
+#     ARRAY[]::uuid[], and pass the principal as the reader.
+#   EMITTER: no compiler arm emits the new body; `/api/query` still reaches it only through the
+#     counted set. The batch read's Rust calls the gated page and the gated counts with the
+#     principal alone; it never assembles an id set.
+#   RESIDUE: unchanged and accepted.
+#
+#   THE BODY TAKES A POSITION, A LIMIT, MATCHED-ONLY AND A READ BUDGET, and those are the thing to
+#   check: all four are narrowings applied after governance and the conjuncts, never an id source.
+#   The read budget's frontier row is a governed, visible row the body read, returned unmatched
+#   only to carry its position. Its EXECUTE text is still constant with every value in `USING`. A
+#   later edit that moved a conjunct out of this body into a caller, or computed the page from the
+#   governance relations directly, is the shape to refuse.
 read -r -d '' SQL_BASELINE <<'EOF' || true
 __temper_ungated_artifact_ask_counts
 __temper_ungated_artifact_ask_population
+__temper_ungated_artifact_ask_rows
 __temper_ungated_find_exact
 __temper_ungated_find_resources_with
 __temper_ungated_find_wide
@@ -617,6 +641,8 @@ sql_relations_current() {
 #   narrowing whose NULL narrows nothing, the opposite polarity from the verdict.
 # Reviewed 2026-10-23, migration 20261105000000: it DEFINES the counts function. The review is the
 #   SQL_BASELINE entry of the same date; this list moves for the same reason.
+# Reviewed 2026-10-24, migration 20261106000000: it DEFINES the counted set's body and re-points the
+#   counted set to delegate to it. The review is the SQL_BASELINE entry of the same date.
 read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260808000030_composable_find_family.sql
 20260810000010_anchor_readability_both_kinds.sql
@@ -636,6 +662,7 @@ read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20261103000000_artifact_ask_relations.sql
 20261104000000_find_resources_with_artifact_asks.sql
 20261105000000_artifact_ask_population_counts.sql
+20261106000000_artifact_ask_batch_read.sql
 EOF
 
 # ── THE RELATION WATCH — derived from what the cores READ, not what names them ──

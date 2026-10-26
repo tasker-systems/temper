@@ -113,6 +113,7 @@ const ADMITTED: &[(&str, &str)] = &[
     ("POST", "/api/contexts/{id}/rename"),       // handlers::contexts::rename
     ("POST", "/api/contexts/{id}/restore"),      // handlers::contexts::restore
     ("POST", "/api/contexts/{id}/shapes"),       // handlers::data_artifact_shapes::declare_shape
+    ("POST", "/api/data-artifacts/ask"),         // handlers::data_artifacts::ask
     ("POST", "/api/facets"),                     // handlers::facets::set_facet
     ("POST", "/api/ingest"),                     // handlers::ingest::create
     ("POST", "/api/invocations"),                // handlers::invocations::open

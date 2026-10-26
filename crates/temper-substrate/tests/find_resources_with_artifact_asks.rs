@@ -14,7 +14,9 @@
 //! removed in turn from a test-only variant of the deployed body — read from `pg_proc`, the one
 //! conjunct cut, created as a `pg_temp` function — and the fixture only that conjunct excludes comes
 //! back through the variant and stays out through the real function. Building the variant from
-//! the deployed body means the bite cannot drift from the code it bites. Visibility lives in the
+//! the deployed body means the bite cannot drift from the code it bites. The counted set delegates to
+//! one body, `__temper_ungated_artifact_ask_rows` (`20261106000000`), so a counted-set conjunct is
+//! cut there and read through a delegating variant of the counted set. Visibility lives in the
 //! governance relation beneath it, so its bite is a chain of such variants. The two other conjuncts
 //! that live there (live artifacts only, and the family an erasure renames away) are bitten by their
 //! fixture instead: the artifact counted before it was folded or renamed, and not after.
@@ -40,6 +42,8 @@
 mod common;
 
 use std::collections::BTreeSet;
+
+use common::function_variant::variant;
 
 use serde_json::{json, Value};
 use sqlx::{PgConnection, PgPool, Row};
@@ -71,6 +75,17 @@ const POPULATION: &str = "__temper_ungated_artifact_ask_population";
 const POPULATION_SIGNATURE: &str = "(p_visible_ids uuid[], p_reader uuid, p_ask jsonb) \
      RETURNS TABLE (artifact_id uuid, resource_id uuid, shape_id uuid, shape_version int, \
      shape_state text, matched boolean)";
+
+/// The counted set's body (`20261106000000`): the counted set delegates to it, so a conjunct is cut
+/// here and read through a delegating variant of the counted set (`population_variant`).
+const ROWS: &str = "__temper_ungated_artifact_ask_rows";
+const ROWS_NARGS: i16 = 9;
+const ROWS_SIGNATURE: &str = "(p_visible_ids uuid[], p_reader uuid, p_ask jsonb, \
+     p_after_created timestamptz, p_after_id uuid, p_limit bigint, p_matched_only boolean, \
+     p_read_budget bigint, p_read_charge bigint) \
+     RETURNS TABLE (artifact_id uuid, resource_id uuid, shape_id uuid, shape_version int, \
+     shape_state text, matched boolean, created timestamptz, content_bytes bigint, \
+     frontier boolean)";
 
 const GOVERNED_IN: &str = "__temper_ungated_governed_artifacts_in";
 const GOVERNED_IN_SIGNATURE: &str = "(p_visible_ids uuid[], p_home_anchor_table text, \
@@ -381,44 +396,23 @@ fn artifacts_of(rows: &[Counted]) -> BTreeSet<Uuid> {
     rows.iter().map(|(artifact, ..)| *artifact).collect()
 }
 
-/// A `pg_temp` copy of `function`'s deployed body (the overload with `nargs` arguments, in its own
-/// language) with the
-/// one occurrence of `cut` replaced by `with`, created on `conn` as `name`. The cut must occur
-/// exactly once, so a body that moved under this test fails here, by name, rather than biting
-/// nothing.
-async fn variant(
-    conn: &mut PgConnection,
-    function: &str,
-    nargs: i16,
-    signature: &str,
-    name: &str,
-    cut: &str,
-    with: &str,
-) {
-    let (body, language): (String, String) = sqlx::query_as(
-        "SELECT p.prosrc, l.lanname::text FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang \
-          WHERE p.proname = $1 AND p.pronargs = $2",
+/// A `pg_temp` variant of the counted set named `name`, with `cut` replaced by `with` in the body it
+/// delegates to (`__temper_ungated_artifact_ask_rows`): that body's variant is created as
+/// `{name}_rows`, and the counted set's as `name`, calling it. Every conjunct the counted set applies
+/// lives in that one body, so this is where a counted-set bite is cut.
+async fn population_variant(conn: &mut PgConnection, name: &str, cut: &str, with: &str) {
+    let rows = format!("{name}_rows");
+    variant(conn, ROWS, ROWS_NARGS, ROWS_SIGNATURE, &rows, cut, with).await;
+    variant(
+        conn,
+        POPULATION,
+        3,
+        POPULATION_SIGNATURE,
+        name,
+        &format!("{ROWS}("),
+        &format!("pg_temp.{rows}("),
     )
-    .bind(function)
-    .bind(nargs)
-    .fetch_one(&mut *conn)
-    .await
-    .unwrap();
-    assert_eq!(
-        body.matches(cut).count(),
-        1,
-        "`{cut}` must appear exactly once in {function}'s deployed body:\n{body}"
-    );
-    let edited = body.replacen(cut, with, 1);
-    // `name` and `signature` are this file's literals; the language and the body are the deployed
-    // function's, the body edited here.
-    sqlx::query(&format!(
-        "CREATE FUNCTION pg_temp.{name}{signature} LANGUAGE {language} STABLE \
-         AS $variant${edited}$variant$"
-    ))
-    .execute(&mut *conn)
-    .await
-    .unwrap();
+    .await;
 }
 
 // ── H4: the asks narrow to the resources owning matching data ───────────────────────────────────
@@ -647,11 +641,8 @@ async fn owner_visibility_admits_only_the_verdict_and_null_admits_nothing(pool: 
         "pg_temp.governed_without_visibility(",
     )
     .await;
-    variant(
+    population_variant(
         &mut conn,
-        POPULATION,
-        3,
-        POPULATION_SIGNATURE,
         "population_without_visibility",
         "__temper_ungated_governed_artifact_states_in(",
         "pg_temp.states_without_visibility(",
@@ -706,11 +697,8 @@ async fn the_shapes_home_must_be_readable_to_the_reader(pool: PgPool) {
     );
 
     let mut conn = pool.acquire().await.unwrap();
-    variant(
+    population_variant(
         &mut conn,
-        POPULATION,
-        3,
-        POPULATION_SIGNATURE,
         "population_without_home_check",
         "anchor_readable_by_profile(p_reader,",
         "true OR anchor_readable_by_profile(p_reader,",
@@ -810,11 +798,8 @@ async fn an_erased_resource_is_excluded_by_is_active_and_by_the_family_rename(po
     );
 
     let mut conn = pool.acquire().await.unwrap();
-    variant(
+    population_variant(
         &mut conn,
-        POPULATION,
-        3,
-        POPULATION_SIGNATURE,
         "population_without_floor",
         "JOIN kb_resources_live lv ON lv.id = g.resource_id",
         "",
@@ -873,11 +858,8 @@ async fn a_resource_still_ingesting_is_not_counted(pool: PgPool) {
     );
 
     let mut conn = pool.acquire().await.unwrap();
-    variant(
+    population_variant(
         &mut conn,
-        POPULATION,
-        3,
-        POPULATION_SIGNATURE,
         "population_without_floor",
         "JOIN kb_resources_live lv ON lv.id = g.resource_id",
         "",
@@ -1517,11 +1499,8 @@ async fn unverdicted_content_still_matches_and_is_counted_as_not_yet_checked(poo
         "JOIN kb_data_artifact_verdicts v",
     )
     .await;
-    variant(
+    population_variant(
         &mut conn,
-        POPULATION,
-        3,
-        POPULATION_SIGNATURE,
         "population_by_verdict",
         "__temper_ungated_governed_artifact_states_in(",
         "pg_temp.states_by_verdict(",
@@ -1617,11 +1596,8 @@ async fn a_narrowed_ask_leaves_the_rows_it_excluded_counted(pool: PgPool) {
     );
 
     let mut conn = pool.acquire().await.unwrap();
-    variant(
+    population_variant(
         &mut conn,
-        POPULATION,
-        3,
-        POPULATION_SIGNATURE,
         "population_state_filtered",
         "WHERE jsonb_typeof($7->'intent') = 'array'",
         "WHERE $7->'shape_states' @> jsonb_build_array(g.shape_state) \
@@ -1702,11 +1678,8 @@ async fn the_counts_range_over_the_callers_verdict_and_a_null_verdict_counts_not
         "pg_temp.governed_ungated(",
     )
     .await;
-    variant(
+    population_variant(
         &mut conn,
-        POPULATION,
-        3,
-        POPULATION_SIGNATURE,
         "population_ungated",
         "__temper_ungated_governed_artifact_states_in(",
         "pg_temp.states_ungated(",
@@ -2019,11 +1992,8 @@ async fn the_counts_inherit_the_floor_and_the_home_check_from_the_counted_set(po
     );
 
     let mut conn = pool.acquire().await.unwrap();
-    variant(
+    population_variant(
         &mut conn,
-        POPULATION,
-        3,
-        POPULATION_SIGNATURE,
         "population_without_floor",
         "JOIN kb_resources_live lv ON lv.id = g.resource_id",
         "",
@@ -2052,11 +2022,8 @@ async fn the_counts_inherit_the_floor_and_the_home_check_from_the_counted_set(po
         "the bite: without the floor the deactivated resource is counted"
     );
 
-    variant(
+    population_variant(
         &mut conn,
-        POPULATION,
-        3,
-        POPULATION_SIGNATURE,
         "population_without_home_check",
         "anchor_readable_by_profile(p_reader,",
         "true OR anchor_readable_by_profile(p_reader,",

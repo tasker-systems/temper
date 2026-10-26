@@ -23,6 +23,8 @@ from uuid import UUID
 from temper.generated.models.artifact_commit_request import ArtifactCommitRequest
 from temper.generated.models.artifact_commit_response import ArtifactCommitResponse
 from temper.generated.models.artifact_view import ArtifactView
+from temper.generated.models.ask_request import AskRequest
+from temper.generated.models.ask_response import AskResponse
 
 from temper.generated.api_client import ApiClient, RequestSerialized
 from temper.generated.api_response import ApiResponse
@@ -40,6 +42,307 @@ class DataArtifactsApi:
         if api_client is None:
             api_client = ApiClient.get_default()
         self.api_client = api_client
+
+
+    @validate_call
+    def ask_data_artifacts(
+        self,
+        ask_request: AskRequest,
+        x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
+        _request_timeout: Union[
+            None,
+            Annotated[StrictFloat, Field(gt=0)],
+            Tuple[
+                Annotated[StrictFloat, Field(gt=0)],
+                Annotated[StrictFloat, Field(gt=0)]
+            ]
+        ] = None,
+        _request_auth: Optional[Dict[StrictStr, Any]] = None,
+        _content_type: Optional[StrictStr] = None,
+        _headers: Optional[Dict[StrictStr, Any]] = None,
+        _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
+    ) -> AskResponse:
+        """Read the artifacts one ask matches, whole
+
+        The body is one ask — a shape by id and predicates over the paths that shape declares — with an optional `limit` and the previous page's `next` as `after`. The answer is the artifacts the ask matches among those you can see, each whole (`content` is the stored content, absent for an artifact committed with no bytes), in `(created, artifact_id)` order, oldest first. POST, because the ask is a document rather than a query string.  Every page is bounded three ways, and the first bound reached ends it: by `limit` (absent: 50; at least 1 and at most 200), by a byte budget over what the page sends, and by a budget over what it may read to find its rows. A matching artifact too large for any page, or too deeply nested for one (content more than 96 arrays or objects deep, so that every first-party client parses every page), is named in `oversized`, in order, by id and size, and the page goes on. Read it whole by id (`GET /api/data-artifacts/{artifact_id}`); a client's own nesting limit can refuse that read too when the content nests very deeply, and on the hosted deployment it is refused when the response carrying the artifact, with its content as storage serves it, is longer than the platform's response cap (storage prints some numbers longer than they were committed). When the read budget ends a page, `next` is the last artifact it read, matched or not, so a page can carry no artifacts and still a `next`: only `next: null` ends the enumeration. Continue by sending the same ask with `next` as `after`; every page validates the ask again for its caller, so the position carries no authority.  `population` counts the ask's whole governed population on the first page and is `null` after it. Those counts are exact, so the first page matches every governed artifact of the home to make them; the read budget bounds the page's rows, not the counts. A continuation is validated against the shape version the first page named, but its rows' `shape_state`, and any `shape_states` narrowing, are read against the version now in force: when `amended_since` appears, an ask narrowed by `shape_states` should start again from a first page asking that version. A first page (no `after`) naming a superseded version is refused `shape_superseded`.  This is an enumeration: an artifact on a resource still ingesting, or one an operator ended, is not in it, though `GET /api/resources/{id}/artifacts` addressed to that resource lists it. It never returns resources, and it is not a stage of `/api/query`. A `GET` to this path is answered by the caller checks before the route: `401` without credentials, `403` without system access, and `405` to a caller with both.
+
+        :param ask_request: (required)
+        :type ask_request: AskRequest
+        :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+        :type x_temper_surface: str
+        :param _request_timeout: timeout setting for this request. If one
+                                 number provided, it will be total request
+                                 timeout. It can also be a pair (tuple) of
+                                 (connection, read) timeouts.
+        :type _request_timeout: int, tuple(int, int), optional
+        :param _request_auth: set to override the auth_settings for an a single
+                              request; this effectively ignores the
+                              authentication in the spec for a single request.
+        :type _request_auth: dict, optional
+        :param _content_type: force content-type for the request.
+        :type _content_type: str, Optional
+        :param _headers: set to override the headers for a single
+                         request; this effectively ignores the headers
+                         in the spec for a single request.
+        :type _headers: dict, optional
+        :param _host_index: set to override the host_index for a single
+                            request; this effectively ignores the host_index
+                            in the spec for a single request.
+        :type _host_index: int, optional
+        :return: Returns the result object.
+        """ # noqa: E501
+
+        _param = self._ask_data_artifacts_serialize(
+            ask_request=ask_request,
+            x_temper_surface=x_temper_surface,
+            _request_auth=_request_auth,
+            _content_type=_content_type,
+            _headers=_headers,
+            _host_index=_host_index
+        )
+
+        _response_types_map: Dict[str, Optional[str]] = {
+            '200': "AskResponse",
+            '400': "ErrorBody",
+            '401': "ErrorBody",
+            '403': "ErrorBody",
+            '422': "ErrorBody",
+        }
+        response_data = self.api_client.call_api(
+            *_param,
+            _request_timeout=_request_timeout
+        )
+        response_data.read()
+        return self.api_client.response_deserialize(
+            response_data=response_data,
+            response_types_map=_response_types_map,
+        ).data
+
+
+    @validate_call
+    def ask_data_artifacts_with_http_info(
+        self,
+        ask_request: AskRequest,
+        x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
+        _request_timeout: Union[
+            None,
+            Annotated[StrictFloat, Field(gt=0)],
+            Tuple[
+                Annotated[StrictFloat, Field(gt=0)],
+                Annotated[StrictFloat, Field(gt=0)]
+            ]
+        ] = None,
+        _request_auth: Optional[Dict[StrictStr, Any]] = None,
+        _content_type: Optional[StrictStr] = None,
+        _headers: Optional[Dict[StrictStr, Any]] = None,
+        _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
+    ) -> ApiResponse[AskResponse]:
+        """Read the artifacts one ask matches, whole
+
+        The body is one ask — a shape by id and predicates over the paths that shape declares — with an optional `limit` and the previous page's `next` as `after`. The answer is the artifacts the ask matches among those you can see, each whole (`content` is the stored content, absent for an artifact committed with no bytes), in `(created, artifact_id)` order, oldest first. POST, because the ask is a document rather than a query string.  Every page is bounded three ways, and the first bound reached ends it: by `limit` (absent: 50; at least 1 and at most 200), by a byte budget over what the page sends, and by a budget over what it may read to find its rows. A matching artifact too large for any page, or too deeply nested for one (content more than 96 arrays or objects deep, so that every first-party client parses every page), is named in `oversized`, in order, by id and size, and the page goes on. Read it whole by id (`GET /api/data-artifacts/{artifact_id}`); a client's own nesting limit can refuse that read too when the content nests very deeply, and on the hosted deployment it is refused when the response carrying the artifact, with its content as storage serves it, is longer than the platform's response cap (storage prints some numbers longer than they were committed). When the read budget ends a page, `next` is the last artifact it read, matched or not, so a page can carry no artifacts and still a `next`: only `next: null` ends the enumeration. Continue by sending the same ask with `next` as `after`; every page validates the ask again for its caller, so the position carries no authority.  `population` counts the ask's whole governed population on the first page and is `null` after it. Those counts are exact, so the first page matches every governed artifact of the home to make them; the read budget bounds the page's rows, not the counts. A continuation is validated against the shape version the first page named, but its rows' `shape_state`, and any `shape_states` narrowing, are read against the version now in force: when `amended_since` appears, an ask narrowed by `shape_states` should start again from a first page asking that version. A first page (no `after`) naming a superseded version is refused `shape_superseded`.  This is an enumeration: an artifact on a resource still ingesting, or one an operator ended, is not in it, though `GET /api/resources/{id}/artifacts` addressed to that resource lists it. It never returns resources, and it is not a stage of `/api/query`. A `GET` to this path is answered by the caller checks before the route: `401` without credentials, `403` without system access, and `405` to a caller with both.
+
+        :param ask_request: (required)
+        :type ask_request: AskRequest
+        :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+        :type x_temper_surface: str
+        :param _request_timeout: timeout setting for this request. If one
+                                 number provided, it will be total request
+                                 timeout. It can also be a pair (tuple) of
+                                 (connection, read) timeouts.
+        :type _request_timeout: int, tuple(int, int), optional
+        :param _request_auth: set to override the auth_settings for an a single
+                              request; this effectively ignores the
+                              authentication in the spec for a single request.
+        :type _request_auth: dict, optional
+        :param _content_type: force content-type for the request.
+        :type _content_type: str, Optional
+        :param _headers: set to override the headers for a single
+                         request; this effectively ignores the headers
+                         in the spec for a single request.
+        :type _headers: dict, optional
+        :param _host_index: set to override the host_index for a single
+                            request; this effectively ignores the host_index
+                            in the spec for a single request.
+        :type _host_index: int, optional
+        :return: Returns the result object.
+        """ # noqa: E501
+
+        _param = self._ask_data_artifacts_serialize(
+            ask_request=ask_request,
+            x_temper_surface=x_temper_surface,
+            _request_auth=_request_auth,
+            _content_type=_content_type,
+            _headers=_headers,
+            _host_index=_host_index
+        )
+
+        _response_types_map: Dict[str, Optional[str]] = {
+            '200': "AskResponse",
+            '400': "ErrorBody",
+            '401': "ErrorBody",
+            '403': "ErrorBody",
+            '422': "ErrorBody",
+        }
+        response_data = self.api_client.call_api(
+            *_param,
+            _request_timeout=_request_timeout
+        )
+        response_data.read()
+        return self.api_client.response_deserialize(
+            response_data=response_data,
+            response_types_map=_response_types_map,
+        )
+
+
+    @validate_call
+    def ask_data_artifacts_without_preload_content(
+        self,
+        ask_request: AskRequest,
+        x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
+        _request_timeout: Union[
+            None,
+            Annotated[StrictFloat, Field(gt=0)],
+            Tuple[
+                Annotated[StrictFloat, Field(gt=0)],
+                Annotated[StrictFloat, Field(gt=0)]
+            ]
+        ] = None,
+        _request_auth: Optional[Dict[StrictStr, Any]] = None,
+        _content_type: Optional[StrictStr] = None,
+        _headers: Optional[Dict[StrictStr, Any]] = None,
+        _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
+    ) -> RESTResponseType:
+        """Read the artifacts one ask matches, whole
+
+        The body is one ask — a shape by id and predicates over the paths that shape declares — with an optional `limit` and the previous page's `next` as `after`. The answer is the artifacts the ask matches among those you can see, each whole (`content` is the stored content, absent for an artifact committed with no bytes), in `(created, artifact_id)` order, oldest first. POST, because the ask is a document rather than a query string.  Every page is bounded three ways, and the first bound reached ends it: by `limit` (absent: 50; at least 1 and at most 200), by a byte budget over what the page sends, and by a budget over what it may read to find its rows. A matching artifact too large for any page, or too deeply nested for one (content more than 96 arrays or objects deep, so that every first-party client parses every page), is named in `oversized`, in order, by id and size, and the page goes on. Read it whole by id (`GET /api/data-artifacts/{artifact_id}`); a client's own nesting limit can refuse that read too when the content nests very deeply, and on the hosted deployment it is refused when the response carrying the artifact, with its content as storage serves it, is longer than the platform's response cap (storage prints some numbers longer than they were committed). When the read budget ends a page, `next` is the last artifact it read, matched or not, so a page can carry no artifacts and still a `next`: only `next: null` ends the enumeration. Continue by sending the same ask with `next` as `after`; every page validates the ask again for its caller, so the position carries no authority.  `population` counts the ask's whole governed population on the first page and is `null` after it. Those counts are exact, so the first page matches every governed artifact of the home to make them; the read budget bounds the page's rows, not the counts. A continuation is validated against the shape version the first page named, but its rows' `shape_state`, and any `shape_states` narrowing, are read against the version now in force: when `amended_since` appears, an ask narrowed by `shape_states` should start again from a first page asking that version. A first page (no `after`) naming a superseded version is refused `shape_superseded`.  This is an enumeration: an artifact on a resource still ingesting, or one an operator ended, is not in it, though `GET /api/resources/{id}/artifacts` addressed to that resource lists it. It never returns resources, and it is not a stage of `/api/query`. A `GET` to this path is answered by the caller checks before the route: `401` without credentials, `403` without system access, and `405` to a caller with both.
+
+        :param ask_request: (required)
+        :type ask_request: AskRequest
+        :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+        :type x_temper_surface: str
+        :param _request_timeout: timeout setting for this request. If one
+                                 number provided, it will be total request
+                                 timeout. It can also be a pair (tuple) of
+                                 (connection, read) timeouts.
+        :type _request_timeout: int, tuple(int, int), optional
+        :param _request_auth: set to override the auth_settings for an a single
+                              request; this effectively ignores the
+                              authentication in the spec for a single request.
+        :type _request_auth: dict, optional
+        :param _content_type: force content-type for the request.
+        :type _content_type: str, Optional
+        :param _headers: set to override the headers for a single
+                         request; this effectively ignores the headers
+                         in the spec for a single request.
+        :type _headers: dict, optional
+        :param _host_index: set to override the host_index for a single
+                            request; this effectively ignores the host_index
+                            in the spec for a single request.
+        :type _host_index: int, optional
+        :return: Returns the result object.
+        """ # noqa: E501
+
+        _param = self._ask_data_artifacts_serialize(
+            ask_request=ask_request,
+            x_temper_surface=x_temper_surface,
+            _request_auth=_request_auth,
+            _content_type=_content_type,
+            _headers=_headers,
+            _host_index=_host_index
+        )
+
+        _response_types_map: Dict[str, Optional[str]] = {
+            '200': "AskResponse",
+            '400': "ErrorBody",
+            '401': "ErrorBody",
+            '403': "ErrorBody",
+            '422': "ErrorBody",
+        }
+        response_data = self.api_client.call_api(
+            *_param,
+            _request_timeout=_request_timeout
+        )
+        return response_data.response
+
+
+    def _ask_data_artifacts_serialize(
+        self,
+        ask_request,
+        x_temper_surface,
+        _request_auth,
+        _content_type,
+        _headers,
+        _host_index,
+    ) -> RequestSerialized:
+
+        _host = None
+
+        _collection_formats: Dict[str, str] = {
+        }
+
+        _path_params: Dict[str, str] = {}
+        _query_params: List[Tuple[str, str]] = []
+        _header_params: Dict[str, Optional[str]] = _headers or {}
+        _form_params: List[Tuple[str, str]] = []
+        _files: Dict[
+            str, Union[str, bytes, List[str], List[bytes], List[Tuple[str, bytes]]]
+        ] = {}
+        _body_params: Optional[bytes] = None
+
+        # process the path parameters
+        # process the query parameters
+        # process the header parameters
+        if x_temper_surface is not None:
+            _header_params['X-Temper-Surface'] = x_temper_surface
+        # process the form parameters
+        # process the body parameter
+        if ask_request is not None:
+            _body_params = ask_request
+
+
+        # set the HTTP header `Accept`
+        if 'Accept' not in _header_params:
+            _header_params['Accept'] = self.api_client.select_header_accept(
+                [
+                    'application/json'
+                ]
+            )
+
+        # set the HTTP header `Content-Type`
+        if _content_type:
+            _header_params['Content-Type'] = _content_type
+        else:
+            _default_content_type = (
+                self.api_client.select_header_content_type(
+                    [
+                        'application/json'
+                    ]
+                )
+            )
+            if _default_content_type is not None:
+                _header_params['Content-Type'] = _default_content_type
+
+        # authentication setting
+        _auth_settings: List[str] = [
+            'bearer_auth'
+        ]
+
+        return self.api_client.param_serialize(
+            method='POST',
+            resource_path='/api/data-artifacts/ask',
+            path_params=_path_params,
+            query_params=_query_params,
+            header_params=_header_params,
+            body=_body_params,
+            post_params=_form_params,
+            files=_files,
+            auth_settings=_auth_settings,
+            collection_formats=_collection_formats,
+            _host=_host,
+            _request_auth=_request_auth
+        )
+
+
 
 
     @validate_call
@@ -105,6 +408,7 @@ class DataArtifactsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ArtifactCommitResponse",
+            '400': "ErrorBody",
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
@@ -184,6 +488,7 @@ class DataArtifactsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ArtifactCommitResponse",
+            '400': "ErrorBody",
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
@@ -263,6 +568,7 @@ class DataArtifactsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ArtifactCommitResponse",
+            '400': "ErrorBody",
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",

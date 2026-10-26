@@ -1,8 +1,8 @@
 //! One request's asks, validated against one [`ShapeContext`] — the walk of each shape built once,
 //! and one work budget for every ask (spec §2.4, §3.3).
 //!
-//! A request can carry many asks: a composition's stages each carry an artifact filter, its gate
-//! and its seal both validate, and a batch read takes several. Validated one at a time, each ask
+//! A request can carry many asks: a composition's stages each carry an artifact filter, and its
+//! gate and its seal both validate them (a batch read carries one). Validated one at a time, each ask
 //! would rebuild its shape's walk, re-walk paths another ask already named, re-enumerate the
 //! vocabulary it teaches, and spend a budget of its own — so the request's cost would grow with
 //! how many asks it carries, which no single ask's bound holds. An [`AskSession`] holds what a
@@ -25,7 +25,8 @@ use crate::types::query::PlanRefusal;
 ///
 /// Begun with [`ShapeContext::session`]; [`AskSession::validate`] is the only way an ask becomes a
 /// [`ValidatedAsk`]. **One session per request, held for all of it:** a composition's gate and its
-/// seal validate through the same session, and so does every ask of a batch read. A second session
+/// seal validate through the same session, and a batch read validates its one ask through one,
+/// on every page. A second session
 /// over the same context builds every walk again and starts a fresh budget, which is exactly the
 /// multiplication a session exists to prevent.
 ///

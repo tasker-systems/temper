@@ -23,11 +23,12 @@ pub const FORBIDDEN_DETAIL_CODE: &str = "FORBIDDEN_DETAIL";
 /// `[decided — 2026-08-13, Pete]` The spec (§B) authorized "its own code" and named no string.
 pub const PLAN_REFUSED_CODE: &str = "PLAN_REFUSED";
 
-/// The wire `error.code` a composition body the server could not read travels under — malformed
-/// JSON, a value of the wrong type, an unknown `with` section, a body past the door's own limit. The
-/// status is the reader's own (`400`, `413`, `415` or `422`); the message names what failed and
-/// repeats at most a typo's worth of what the caller sent. A platform that refuses a large body
-/// before the door reads it answers without this code.
+/// The wire `error.code` a body the server could not read travels under — a composition at
+/// `/api/query` or an artifact ask at `/api/data-artifacts/ask`: malformed JSON, a value of the
+/// wrong type, an unknown field or `with` section, a body past the door's own limit. The status is
+/// the reader's own (`400`, `413`, `415` or `422`); the message names what failed and repeats at
+/// most a typo's worth of what the caller sent. A platform that refuses a large body before the
+/// door reads it answers without this code.
 ///
 /// **Not [`PLAN_REFUSED_CODE`].** A refused plan parsed and failed `validate`, and carries every
 /// refusal at once; an unreadable one has no plan to collect refusals for. **Not `BAD_REQUEST`**

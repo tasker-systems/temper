@@ -68,10 +68,15 @@ lib/temper/generated/models/artifact_ask_population.rb
 lib/temper/generated/models/artifact_ask_trace.rb
 lib/temper/generated/models/artifact_commit_request.rb
 lib/temper/generated/models/artifact_commit_response.rb
+lib/temper/generated/models/artifact_cursor.rb
 lib/temper/generated/models/artifact_predicate.rb
 lib/temper/generated/models/artifact_view.rb
 lib/temper/generated/models/ask_operator.rb
+lib/temper/generated/models/ask_order.rb
+lib/temper/generated/models/ask_request.rb
+lib/temper/generated/models/ask_response.rb
 lib/temper/generated/models/askable_path.rb
+lib/temper/generated/models/asked_shape.rb
 lib/temper/generated/models/assert_relationship_request.rb
 lib/temper/generated/models/atlas_edge.rb
 lib/temper/generated/models/atlas_entry.rb
@@ -304,6 +309,7 @@ lib/temper/generated/models/orphan_node.rb
 lib/temper/generated/models/other_author_edge.rb
 lib/temper/generated/models/other_author_edge_property.rb
 lib/temper/generated/models/outcome_declaration.rb
+lib/temper/generated/models/oversized_artifact.rb
 lib/temper/generated/models/path_facts.rb
 lib/temper/generated/models/pending_invitation_counts.rb
 lib/temper/generated/models/plan_refusal.rb

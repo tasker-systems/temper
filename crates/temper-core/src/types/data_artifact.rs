@@ -30,11 +30,15 @@ pub struct ArtifactView {
     pub precedence: f64,
     pub content_hash: String,
     pub content_bytes: i64,
-    /// `"never_declared"` today; will carry conformance verdicts when the shape registry lands.
+    /// Conformance to the shape in force for the artifact's family in its home, by the staleness
+    /// triple (shape id, shape version, content hash): `"never_declared"` when no shape is in
+    /// force, else `"declared_satisfied"`, `"declared_not_satisfied"`, or
+    /// `"declared_not_yet_checked"` when no verdict matches the triple (`_data_artifact_shape_state`,
+    /// `20260822000020`; a batch read's rows carry the same state, computed set-based).
     pub shape_state: String,
     pub is_folded: bool,
     pub created: DateTime<Utc>,
-    /// The content payload. `null` when the artifact was committed with no bytes.
+    /// The content payload. Absent, not `null`, when the artifact was committed with no bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<serde_json::Value>,
 }
@@ -106,6 +110,30 @@ pub const MAX_ARTIFACT_PAGE_ROWS: u32 = 200;
 /// Well under [`MAX_ARTIFACT_PAGE_ROWS`] because each row carries its content whole.
 pub const ARTIFACT_DRAIN_PAGE_ROWS: u32 = 50;
 
+/// The deepest content a batch-read page serves. A served row whose content nests deeper is named
+/// in the page's `oversized` in its place, as a row too long for the page is, and the page goes on
+/// (temper-services' `artifact_ask_read`). **Depth** counts each array or object level, with the
+/// content's root at 1: `{}` and `[]` are 1 deep, `{"a":[0]}` is 2, and a string or a number is 0.
+///
+/// The batch read's docs state this value in the phrase "more than 96 arrays or objects deep", so
+/// change them together. A test reads it in each text they are published in: `openapi.json` (from
+/// `OversizedArtifact`, `AskResponse.oversized` and the route's doc), the MCP tool declarations,
+/// the CLI reference (from the CLI's help), the skill template, and the MCP skill's hand-written
+/// tool reference. The SDKs, the TypeScript types and the MCP skill's projection of the template
+/// are generated from those, under their own drift gates.
+///
+/// # 96: the strictest first-party client's nesting limit, less the levels above the content
+///
+/// A page a client cannot parse fails for every reader of the ask through that client, and no
+/// `limit` or `next` steps past it. The strictest first-party client is the generated Ruby SDK
+/// (`clients/temper-rb`), which parses a body as `JSON.parse("[#{body}]")` and sets no
+/// `max_nesting`, so Ruby's default of 100 levels applies, and its `[ ]` takes one of them. An ask
+/// page puts three levels above each row's content: the `AskResponse` object, its `artifacts`
+/// array and the `ArtifactView` object. So content may nest 100 − 1 − 3 = 96 deep. serde_json,
+/// which temperkb-client and the MCP relay parse with, allows 127 levels, so a Rust client reads
+/// an ask page whose content nests up to 124 deep.
+pub const ARTIFACT_ASK_CONTENT_DEPTH: usize = 96;
+
 /// A position in the `(created, id)` keyset order that `artifacts_for_resource` returns rows in.
 ///
 /// It carries position and no authority: each page re-runs the read gate for the asker, so a
@@ -124,6 +152,28 @@ pub struct ArtifactCursor {
     pub created: DateTime<Utc>,
     /// The `artifact_id` of the last artifact on the previous page; breaks ties on `created`.
     pub artifact_id: DataArtifactId,
+}
+
+/// The first instant Postgres's `timestamptz` holds, 4714-11-24 00:00:00 BC in UTC, as Unix
+/// seconds: Julian day 0, 2,440,588 days before the Unix epoch.
+const STORABLE_FROM_UNIX_SECONDS: i64 = -210_866_803_200;
+
+/// The first instant past what `timestamptz` holds, 294277-01-01 00:00:00 in UTC, as Unix seconds:
+/// Julian day 109,203,528.
+const STORABLE_UNTIL_UNIX_SECONDS: i64 = 9_224_318_016_000;
+
+impl ArtifactCursor {
+    /// Whether the store can hold this position: `created` is within Postgres's `timestamptz`
+    /// range. A `DateTime<Utc>` reaches further back (to year -262,143), so a position read from a
+    /// caller can name an instant no artifact was or could be created at, and binding it to the
+    /// keyset fails in the database rather than answering. The batch read refuses a position this
+    /// answers `false` for as a body it cannot read, at its door and again in its service read
+    /// before anything is read. The high end is past the latest instant a `DateTime<Utc>` holds,
+    /// so only the low end can refuse a position that was read.
+    pub fn is_storable(&self) -> bool {
+        (STORABLE_FROM_UNIX_SECONDS..STORABLE_UNTIL_UNIX_SECONDS)
+            .contains(&self.created.timestamp())
+    }
 }
 
 /// One bounded page of artifacts, in `(created, id)` order in the requested direction.
@@ -264,6 +314,47 @@ pub struct ArtifactCommitRequest {
     pub act: ActInput,
 }
 
+/// Whether a JSON value holds U+0000 anywhere: in a string, or in an object key, at any depth of
+/// arrays and objects. `jsonb` cannot store the character, so no stored artifact or shape holds
+/// it, and binding a value that does is a database error rather than a refusal. An ask refuses a
+/// predicate value that holds one (`unstorable_value`); a commit or a shape declaration is refused
+/// through [`unstorable_nul`]. Recursive to the value's depth, which the JSON parser that read it
+/// has bounded.
+pub fn holds_nul(value: &serde_json::Value) -> bool {
+    use serde_json::Value;
+    match value {
+        Value::String(s) => s.contains('\0'),
+        Value::Array(elements) => elements.iter().any(holds_nul),
+        Value::Object(members) => members
+            .iter()
+            .any(|(key, member)| key.contains('\0') || holds_nul(member)),
+        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+    }
+}
+
+/// The refusal for a write that would store U+0000: a commit whose `kind` or `content` holds it, or
+/// a shape declaration whose `kind` or `schema` does. It names each field that holds one as the
+/// request names it (`value_field` is `"content"` or `"schema"`), and never quotes the value.
+/// `None` when neither does. The doors run it before anything is stored, so such a write is
+/// refused by name, as `DATA_ARTIFACT_REFUSAL`, rather than failing in the database.
+pub fn unstorable_nul(kind: &str, value_field: &str, value: &serde_json::Value) -> Option<String> {
+    // A family name is neither a string value nor an object key, so each field gets its remedy.
+    let in_value = || format!("every string and object key in `{value_field}`");
+    let (named, remedy) = match (kind.contains('\0'), holds_nul(value)) {
+        (false, false) => return None,
+        (true, false) => ("`kind` holds".to_string(), "`kind`".to_string()),
+        (false, true) => (format!("`{value_field}` holds"), in_value()),
+        (true, true) => (
+            format!("`kind` and `{value_field}` hold"),
+            format!("`kind`, and from {}", in_value()),
+        ),
+    };
+    Some(format!(
+        "{named} the character U+0000 (NUL), which the database cannot store, so no artifact or \
+         shape can hold it; remove it from {remedy}, and send the request again"
+    ))
+}
+
 /// Response body for `POST /api/resources/{id}/artifacts` — the committed artifact's ID
 /// and its full readback view.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -297,6 +388,33 @@ mod tests {
             after_id: after.map(|c| c.artifact_id.uuid()),
             ..Default::default()
         }
+    }
+
+    /// A cursor at `instant`, read as a caller's body is read (`FromStr`, which takes a signed
+    /// year of any width).
+    fn at(instant: &str) -> ArtifactCursor {
+        ArtifactCursor {
+            created: instant.parse::<DateTime<Utc>>().expect("literal parses"),
+            ..cursor()
+        }
+    }
+
+    /// **A position is storable exactly within `timestamptz`'s range**: the first instant it holds
+    /// is, the instant before it is not, and the latest instant a `DateTime<Utc>` holds is. Bites:
+    /// the low bound one day later (the first instant refused), or the range made inclusive at
+    /// both ends with the low bound one second early (the instant before admitted).
+    #[test]
+    fn a_position_is_storable_within_the_stores_instants() {
+        assert!(
+            at("-4713-11-24T00:00:00Z").is_storable(),
+            "the first instant held"
+        );
+        assert!(
+            !at("-4713-11-23T23:59:59.999999Z").is_storable(),
+            "the instant before it"
+        );
+        assert!(at("+262142-12-31T23:59:59.999999Z").is_storable());
+        assert!(cursor().is_storable());
     }
 
     #[test]
@@ -437,5 +555,130 @@ mod tests {
             more["next"],
             serde_json::to_value(cursor()).expect("cursor serializes")
         );
+    }
+
+    /// **U+0000 is found wherever a stored value can carry it, and a write is refused by the field
+    /// that holds it, never by its value**: in a string, in an array of arrays, in a nested
+    /// object's key, and in a string inside an object inside an array; not in a value whose only
+    /// control character is U+0001. The refusal names `content`, `kind`, or both, and quotes
+    /// nothing, and a refused `kind` is told to remove it from `kind`, not from a string or a key.
+    /// Bites: `key.contains('\0') ||` dropped from `holds_nul` (the nested key is missed);
+    /// `kind.contains('\0')` replaced by `false` in `unstorable_nul` (the family name is admitted).
+    #[test]
+    fn a_nul_is_refused_by_the_field_that_holds_it() {
+        use serde_json::json;
+        for value in [
+            json!("a\u{0}b"),
+            json!([[1, ["\u{0}"]]]),
+            json!({ "a": { "k\u{0}": 1 } }),
+            json!([{ "b": ["x", { "c": "\u{0}" }] }]),
+        ] {
+            assert!(holds_nul(&value), "{value}");
+        }
+        let clean = json!({ "a": ["b\u{1}", 1, null, true, { "c\u{1}": {} }] });
+        assert!(!holds_nul(&clean));
+        assert_eq!(unstorable_nul("family", "content", &clean), None);
+
+        let content = json!({ "secret\u{0}key": "secret value" });
+        let said = unstorable_nul("family", "content", &content).expect("content refused");
+        assert!(said.starts_with("`content` holds "), "{said}");
+        assert!(
+            !said.contains("secret"),
+            "the value is never quoted: {said}"
+        );
+        let said = unstorable_nul("fam\u{0}ily", "content", &clean).expect("kind refused");
+        assert!(said.starts_with("`kind` holds "), "{said}");
+        assert!(!said.contains("fam"), "the name is never quoted: {said}");
+        assert!(
+            said.contains("remove it from `kind`,") && !said.contains("object key"),
+            "a name is neither a string value nor an object key: {said}"
+        );
+        let said = unstorable_nul("fam\u{0}ily", "schema", &content).expect("both refused");
+        assert!(said.starts_with("`kind` and `schema` hold "), "{said}");
+    }
+
+    /// Every number `text` states in the phrase "more than N arrays or objects deep", with every
+    /// run of whitespace read as one space.
+    fn depths_stated(text: &str) -> Vec<String> {
+        let words: Vec<&str> = text.split_whitespace().collect();
+        words
+            .windows(7)
+            .filter(|w| w[..2] == ["more", "than"] && w[3..6] == ["arrays", "or", "objects"])
+            .filter(|w| w[6].starts_with("deep"))
+            .map(|w| w[2].to_string())
+            .collect()
+    }
+
+    /// Every string in a JSON document, read as one text.
+    fn strings_of(document: &serde_json::Value) -> String {
+        let mut text = String::new();
+        let mut stack = vec![document];
+        while let Some(value) = stack.pop() {
+            match value {
+                serde_json::Value::String(s) => {
+                    text.push_str(s);
+                    text.push('\n');
+                }
+                serde_json::Value::Array(items) => stack.extend(items),
+                serde_json::Value::Object(map) => stack.extend(map.values()),
+                _ => {}
+            }
+        }
+        text
+    }
+
+    /// **Every published text that states the batch read's content depth states
+    /// [`ARTIFACT_ASK_CONTENT_DEPTH`]**: the committed `openapi.json` (from `OversizedArtifact`,
+    /// `AskResponse.oversized` and the route's doc), the MCP tool declarations
+    /// (`crates/temper-mcp/src/declarations/tools_list.json`), the CLI reference
+    /// (`docs/reference/cli/data-artifact.md`, from the CLI's help), the skill's template
+    /// (`crates/temper-cli/templates/shared/data-artifacts.md`), and the MCP skill's tool reference
+    /// (`skills/temper-knowledge-base/knowledge-base.md`, which no generator derives). Each states
+    /// it at least once, in the phrase "more than N arrays or objects deep", and never another N,
+    /// so the constant cannot move without the texts an agent decides by. Read at test time, as
+    /// temper-client's registry test reads `openapi.json`, so the published crate references no
+    /// file outside its package. Bites: the constant lowered to 95; one text's 96 edited to 95
+    /// (`knowledge-base.md`'s, or the CLI reference's, among them).
+    #[test]
+    fn every_published_text_states_the_content_depth() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let read = |path: &str| {
+            let path = root.join(path);
+            std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+        };
+        let json = |path: &str| {
+            let document: serde_json::Value =
+                serde_json::from_str(&read(path)).unwrap_or_else(|e| panic!("{path} parses: {e}"));
+            strings_of(&document)
+        };
+        let texts = [
+            ("openapi.json", json("openapi.json")),
+            (
+                "tools_list.json",
+                json("crates/temper-mcp/src/declarations/tools_list.json"),
+            ),
+            (
+                "the CLI reference",
+                read("docs/reference/cli/data-artifact.md"),
+            ),
+            (
+                "the skill template",
+                read("crates/temper-cli/templates/shared/data-artifacts.md"),
+            ),
+            (
+                "the MCP skill's tool reference",
+                read("skills/temper-knowledge-base/knowledge-base.md"),
+            ),
+        ];
+        let limit = ARTIFACT_ASK_CONTENT_DEPTH.to_string();
+        for (name, text) in texts {
+            let stated = depths_stated(&text);
+            assert!(!stated.is_empty(), "{name} states the content depth");
+            assert!(
+                stated.iter().all(|n| *n == limit),
+                "{name} states {stated:?}; the constant is {limit}"
+            );
+        }
     }
 }

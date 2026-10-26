@@ -135,9 +135,20 @@ pub async fn run_query(client: &TemperClient, composition: &Composition) -> Resu
 /// experience `validate`'s *"every refusal, not the first"* rule exists to prevent, and the rule
 /// only reaches them if the last hop renders the whole list.
 pub fn render_refusals(refusals: &[PlanRefusal]) -> String {
+    render_refusal_list("the plan will not run", refusals)
+}
+
+/// Every refusal of an artifact ask as one message: [`render_refusals`]' form, naming the ask.
+/// `temper data-artifact ask` sends an ask, not a plan, and its caller is told so.
+pub fn render_ask_refusals(refusals: &[PlanRefusal]) -> String {
+    render_refusal_list("the ask will not be answered", refusals)
+}
+
+/// `head`, the count, and every refusal on its own line.
+fn render_refusal_list(head: &str, refusals: &[PlanRefusal]) -> String {
     let lines: Vec<String> = refusals.iter().map(render_refusal_line).collect();
     format!(
-        "the plan will not run ({} refusal(s)):\n  {}",
+        "{head} ({} refusal(s)):\n  {}",
         refusals.len(),
         lines.join("\n  ")
     )
@@ -152,6 +163,16 @@ pub fn render_refusals(refusals: &[PlanRefusal]) -> String {
 pub fn refused(refusals: Vec<PlanRefusal>) -> TemperError {
     TemperError::PlanRefused {
         message: render_refusals(&refusals),
+        refusals,
+    }
+}
+
+/// A refused artifact ask as the error `temper data-artifact ask` exits with: [`refused`]'s
+/// carrier, so under the JSON format the error payload's `details.refusals` carries each refusal's
+/// `reason` and `teaches`, with the text [`render_ask_refusals`] prints.
+pub fn ask_refused(refusals: Vec<PlanRefusal>) -> TemperError {
+    TemperError::PlanRefused {
+        message: render_ask_refusals(&refusals),
         refusals,
     }
 }
@@ -202,6 +223,26 @@ mod tests {
                 refusals: kept,
             } => {
                 assert_eq!(message, text, "the displayed text is render_refusals'");
+                assert_eq!(kept, refusals, "the list is kept whole");
+            }
+            other => panic!("expected PlanRefused, got {other:?}"),
+        }
+    }
+
+    /// **A refused ask keeps its list, and its text names the ask, never a plan**: under the JSON
+    /// format the list is the payload's `details`. Bites: `ask_refused` built with
+    /// `render_refusals`, or without the list.
+    #[test]
+    fn a_refused_ask_keeps_its_list_and_names_the_ask() {
+        let refusals = vec![refusal(None, "`limit` must be at least 1")];
+        match ask_refused(refusals.clone()) {
+            TemperError::PlanRefused {
+                message,
+                refusals: kept,
+            } => {
+                assert_eq!(message, render_ask_refusals(&refusals));
+                assert!(message.starts_with("the ask will not be answered (1 refusal(s))"));
+                assert!(!message.contains("plan"), "{message}");
                 assert_eq!(kept, refusals, "the list is kept whole");
             }
             other => panic!("expected PlanRefused, got {other:?}"),

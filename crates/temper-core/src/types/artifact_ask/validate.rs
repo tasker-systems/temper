@@ -31,6 +31,7 @@ use super::{
     ArtifactAsk, ArtifactPredicate, LoadedShape, ShapeHome, ShapeIdentity, ShapeLoad,
     ShapeSuccessor, ARTIFACT_INTENTS, ASKABLE_SHAPE_STATES, DEFAULT_ARTIFACT_INTENTS,
 };
+use crate::types::data_artifact::holds_nul;
 use crate::types::ids::ShapeId;
 use crate::types::query::filter::{
     json_string_bytes, property_value_bytes, property_value_nodes, PropertyOp,
@@ -756,20 +757,6 @@ fn well_formed(predicates: &[ArtifactPredicate], errs: &mut Vec<PlanRefusal>) ->
     (0..predicates.len())
         .map(|i| !faulted.iter().any(|f| f.contains(&i)))
         .collect()
-}
-
-/// Whether a value carries U+0000 anywhere — in a string, or in an object key, at any depth. jsonb
-/// cannot store it, so no artifact holds such a value, and binding one is a database error rather
-/// than a refusal. Depth is the parsed value's, which the JSON parser has already bounded.
-fn holds_nul(value: &Value) -> bool {
-    match value {
-        Value::String(s) => s.contains('\0'),
-        Value::Array(elements) => elements.iter().any(holds_nul),
-        Value::Object(members) => members
-            .iter()
-            .any(|(key, member)| key.contains('\0') || holds_nul(member)),
-        Value::Null | Value::Bool(_) | Value::Number(_) => false,
-    }
 }
 
 /// Why a declared path refuses a predicate (§3.4, the "Refused as" column), or that checking it

@@ -700,3 +700,159 @@ async fn an_uncompilable_schema_is_refused_at_declare_over_the_cli(pool: PgPool)
     );
     assert_eq!(probe.connections(), 0, "the declare must not fetch");
 }
+
+// ── U+0000: refused by name at the doors that would store it ────────────────────────────────
+//
+// Postgres stores no U+0000: a `jsonb` bind refuses it in a string or a key, and a `text` bind
+// refuses it outright. A commit or a declare carrying one reached the database and answered 500.
+// Both doors now refuse it first, as a typed refusal naming the field. The MCP tools and the CLI
+// relay the request to these routes, so the API door is where it is witnessed. Each value hides
+// the word `secret` beside its NUL, so a refusal that quoted the value would show it.
+
+/// Every artifact on `resource`, folded ones included: the witness that a refused commit stored
+/// nothing.
+async fn artifacts_on(app: &common::E2eTestApp, resource: uuid::Uuid) -> usize {
+    app.client
+        .data_artifacts()
+        .list_all(
+            resource,
+            &ArtifactListParams {
+                include_folded: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("list the resource's artifacts")
+        .len()
+}
+
+/// **A commit whose content or family name holds U+0000 is refused by name, as a 400 under
+/// `DATA_ARTIFACT_REFUSAL_CODE`, and stores nothing; a commit without it is stored.** U+0000 in a
+/// content string, in a content key inside an array, and in the family name: each arrives as
+/// `ClientError::DataArtifactRefusal` (the client's variant for exactly that status and code),
+/// naming `content` or `kind` and quoting none of the value. The control holds U+0001, which
+/// Postgres stores.
+///
+/// Bite: in `DbBackend::commit_data_artifact`, the `unstorable_nul` check removed — each commit
+/// answers 500 again, and the typed match panics on the first.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_nul_in_a_commit_is_refused_by_name_and_stores_nothing(pool: PgPool) {
+    let app = common::setup(pool).await;
+    let (_context, resource_id) = context_with_resource(&app, "e2e-nul-commit").await;
+    let request = |kind: &str, content: serde_json::Value| ArtifactCommitRequest {
+        kind: kind.to_string(),
+        kind_owner: None,
+        intent: "member".to_string(),
+        precedence: 0.0,
+        content,
+        supersedes: Vec::new(),
+        act: Default::default(),
+    };
+
+    for (field, kind, content) in [
+        ("content", "measurement", json!({ "value": "a\u{0}secret" })),
+        (
+            "content",
+            "measurement",
+            json!({ "rows": [{ "k\u{0}secret": 1 }] }),
+        ),
+        ("kind", "measure\u{0}secret", json!({ "value": "fine" })),
+    ] {
+        let err = app
+            .client
+            .data_artifacts()
+            .commit(resource_id, &request(kind, content))
+            .await
+            .expect_err("a commit holding U+0000 must refuse");
+        let refusal = match err {
+            ClientError::DataArtifactRefusal { message } => message,
+            other => panic!("U+0000 in `{field}` must arrive as a typed 400, not as {other}"),
+        };
+        assert!(
+            refusal.starts_with(&format!("`{field}` holds the character U+0000")),
+            "the refusal names `{field}`, got: {refusal}"
+        );
+        assert!(
+            !refusal.contains("secret"),
+            "the refusal quotes nothing of the value, got: {refusal}"
+        );
+    }
+    assert_eq!(
+        artifacts_on(&app, resource_id).await,
+        0,
+        "a refused commit stores nothing"
+    );
+
+    app.client
+        .data_artifacts()
+        .commit(
+            resource_id,
+            &request("measurement", json!({ "value": "a\u{1}b" })),
+        )
+        .await
+        .expect("the same commit without U+0000 is stored");
+    assert_eq!(artifacts_on(&app, resource_id).await, 1);
+}
+
+/// **A shape whose schema or family name holds U+0000 is refused by name, as a 400 under
+/// `DATA_ARTIFACT_REFUSAL_CODE`, and writes no shape row; a declare without it is stored.**
+/// U+0000 in a schema key, in a schema string, and in the family name, each refused naming
+/// `schema` or `kind` and quoting none of the value; the control declares the same family with a
+/// clean schema.
+///
+/// Bite: in `shape_service::declare_shape`, the `unstorable_nul` check removed — each declare
+/// answers 500 again, and the typed match panics on the first.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_nul_in_a_shape_is_refused_by_name_and_writes_nothing(pool: PgPool) {
+    let app = common::setup(pool).await;
+    let (context_id, _resource) = context_with_resource(&app, "e2e-nul-shape").await;
+    let rows_before = shape_row_count(&app).await;
+    let request = |kind: &str, schema: serde_json::Value| ShapeDeclareRequest {
+        kind: kind.to_string(),
+        kind_owner: None,
+        schema,
+        enforcement: EnforcementMode::Advisory,
+        act: Default::default(),
+    };
+
+    for (field, kind, schema) in [
+        (
+            "schema",
+            "measurement",
+            json!({ "type": "object", "properties": { "k\u{0}secret": {} } }),
+        ),
+        ("schema", "measurement", json!({ "const": "a\u{0}secret" })),
+        ("kind", "measure\u{0}secret", string_schema()),
+    ] {
+        let err = app
+            .client
+            .data_artifacts()
+            .declare_shape(context_id, &request(kind, schema))
+            .await
+            .expect_err("a declare holding U+0000 must refuse");
+        let refusal = match err {
+            ClientError::DataArtifactRefusal { message } => message,
+            other => panic!("U+0000 in `{field}` must arrive as a typed 400, not as {other}"),
+        };
+        assert!(
+            refusal.starts_with(&format!("`{field}` holds the character U+0000")),
+            "the refusal names `{field}`, got: {refusal}"
+        );
+        assert!(
+            !refusal.contains("secret"),
+            "the refusal quotes nothing of the value, got: {refusal}"
+        );
+    }
+    assert_eq!(
+        shape_row_count(&app).await,
+        rows_before,
+        "a refused declare writes no shape row"
+    );
+
+    app.client
+        .data_artifacts()
+        .declare_shape(context_id, &request("measurement", string_schema()))
+        .await
+        .expect("the same declare without U+0000 is stored");
+    assert_eq!(shape_row_count(&app).await, rows_before + 1);
+}

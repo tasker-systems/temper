@@ -1,0 +1,832 @@
+#![cfg(feature = "test-db")]
+
+//! **The batch read, through its service** — the shape loaded for the principal on every page, the
+//! ask validated through one session, the page and the first page's population read from the
+//! validated bind — against a real database (spec `2026-10-19-asking-artifacts-by-what-they-are`
+//! §7.2, §7.3, §3.5).
+//!
+//! The SQL's own witnesses, the page's edges and the deny direction conjunct by conjunct, are
+//! `temper-substrate`'s `artifact_ask_batch_read.rs`; this file holds what only the service shows:
+//! the population on the first page alone, a continuation answering on the row its first page named
+//! after an amendment — and reading its states against the version now in force — readability
+//! re-decided on every page, unreadable answering as absent, an unstorable position refused before
+//! anything is read, served content measured against what was committed, the page's byte
+//! budget held on what the page writes, and no page served that a first-party client cannot parse.
+
+use axum::http::StatusCode;
+use serde_json::json;
+use sqlx::PgPool;
+use temper_core::types::artifact_ask::{
+    ArtifactAsk, ArtifactPredicate, AskOrder, AskRequest, AskResponse, OversizedArtifact,
+    ShapeSuccessor,
+};
+use temper_core::types::data_artifact::{ArtifactCursor, ArtifactView, ARTIFACT_ASK_CONTENT_DEPTH};
+use temper_core::types::ids::ShapeId;
+use temper_core::types::query::filter::PropertyOp;
+use temper_core::types::query::{ArtifactAskPopulation, PlanRefusal, RefusalReason};
+use temper_services::backend::artifact_ask_read::ask_page;
+use temper_services::backend::substrate_read::get_artifact;
+use temper_services::error::{ApiError, ApiResult};
+use temper_services::transport::{
+    ARTIFACT_ASK_PAGE_BYTES, ARTIFACT_ROW_FIXED_BYTES, VERCEL_RESPONSE_BODY_CAP_BYTES,
+};
+use temper_substrate::ids::{ContextId, DataArtifactId, EntityId, ProfileId, ResourceId};
+use temper_substrate::payloads::{AnchorRef, ArtifactIntent, EnforcementMode, KindOwner};
+use temper_substrate::scenario::bootseed;
+use temper_substrate::writes::{self, CommitDataArtifactParams, CreateParams, DeclareShapeParams};
+use uuid::Uuid;
+
+const MEASUREMENT: &str = "measurement";
+
+async fn system_actor(pool: &PgPool) -> (ProfileId, EntityId) {
+    let profile: Uuid = sqlx::query_scalar("SELECT id FROM kb_profiles WHERE handle='system'")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let entity: Uuid =
+        sqlx::query_scalar("SELECT id FROM kb_entities WHERE profile_id=$1 AND name='system'")
+            .bind(profile)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    (ProfileId::from(profile), EntityId::from(entity))
+}
+
+fn schema(with_p99: bool) -> serde_json::Value {
+    let mut properties = json!({ "unit": { "type": "string" }, "count": { "type": "integer" } });
+    if with_p99 {
+        properties["p99"] = json!({ "type": "number" });
+    }
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": properties
+    })
+}
+
+/// One context home owned by the system profile, its `measurement` shape declared, and one
+/// resource holding the family's artifacts.
+struct World {
+    owner: ProfileId,
+    emitter: EntityId,
+    home: AnchorRef,
+    shape: Uuid,
+    on: Uuid,
+}
+
+async fn declare(pool: &PgPool, w: &World, with_p99: bool) -> Uuid {
+    writes::declare_shape(
+        pool,
+        DeclareShapeParams {
+            home: w.home,
+            kind: MEASUREMENT,
+            kind_owner: Some(KindOwner::Profile(w.owner.uuid())),
+            schema: &schema(with_p99),
+            enforcement: EnforcementMode::Advisory,
+            emitter: w.emitter,
+        },
+    )
+    .await
+    .unwrap()
+    .uuid()
+}
+
+async fn world(pool: &PgPool) -> World {
+    bootseed::seed_system(pool).await.unwrap();
+    let (owner, emitter) = system_actor(pool).await;
+    let context: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+         VALUES ('kb_profiles', $1, 'asked', 'asked') RETURNING id",
+    )
+    .bind(owner.uuid())
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let home = AnchorRef::context(ContextId::from(context));
+    let origin = "test://artifact-ask-read/holder";
+    let on = writes::create_resource_deferred_with(
+        pool,
+        CreateParams {
+            idempotency_key: None,
+            sources: vec![],
+            title: "holder",
+            origin_uri: origin,
+            body: "measurements",
+            doc_type: "research",
+            home,
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: None,
+        },
+        temper_substrate::events::EventContext::default(),
+    )
+    .await
+    .unwrap()
+    .uuid();
+    let mut w = World {
+        owner,
+        emitter,
+        home,
+        shape: Uuid::nil(),
+        on,
+    };
+    w.shape = declare(pool, &w, false).await;
+    w
+}
+
+async fn commit(pool: &PgPool, w: &World, content: serde_json::Value) -> DataArtifactId {
+    writes::commit_data_artifact(
+        pool,
+        CommitDataArtifactParams {
+            resource: ResourceId::from(w.on),
+            kind: MEASUREMENT,
+            kind_owner: Some(KindOwner::Profile(w.owner.uuid())),
+            intent: ArtifactIntent::Member,
+            precedence: 0.0,
+            content: &content,
+            supersedes: &[],
+            emitter: w.emitter,
+        },
+    )
+    .await
+    .unwrap()
+}
+
+/// `unit` contains `"ms"`, of `shape`, one page of `limit` after `after`.
+fn request(shape: Uuid, limit: u32, after: Option<ArtifactCursor>) -> AskRequest {
+    request_in(shape, vec![], limit, after)
+}
+
+/// [`request`], narrowed to `shape_states`.
+fn request_in(
+    shape: Uuid,
+    shape_states: Vec<String>,
+    limit: u32,
+    after: Option<ArtifactCursor>,
+) -> AskRequest {
+    AskRequest {
+        ask: ArtifactAsk {
+            shape: ShapeId::from(shape),
+            predicates: vec![ArtifactPredicate {
+                path: vec!["unit".to_string()],
+                op: PropertyOp::Contains {
+                    values: vec![json!("ms")],
+                },
+            }],
+            intent: vec![],
+            include_folded: false,
+            shape_states,
+        },
+        limit: Some(limit),
+        after,
+    }
+}
+
+fn served(page: &AskResponse) -> Vec<Uuid> {
+    page.artifacts
+        .iter()
+        .map(|a| a.artifact_id.uuid())
+        .collect()
+}
+
+fn refusals(answer: ApiResult<AskResponse>) -> Vec<PlanRefusal> {
+    match answer {
+        Err(ApiError::PlanRefused { refusals }) => refusals,
+        Err(other) => panic!("expected refusals, got {other:?}"),
+        Ok(page) => panic!("expected refusals, got a page of {:?}", served(&page)),
+    }
+}
+
+/// **Five matches at two a page: three pages, the population on the first alone, each artifact
+/// whole.** The first page carries what the ask counted (five matched of six governed) and the later
+/// ones `None`; the rows come in order, once each, with their content as committed; every page names
+/// the asked shape and the order; `next` is `None` on the last page only.
+///
+/// Bite (perl, Rust): in `artifact_ask_read::read`, `None => Some(` → `_ => Some(`: the later pages
+/// carry the population too, and the second assertion goes red.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_first_page_carries_the_population_and_later_pages_do_not(pool: PgPool) {
+    let w = world(&pool).await;
+    let mut matches = Vec::new();
+    for i in 0..5 {
+        let content = json!({ "unit": "ms", "count": i });
+        matches.push((commit(&pool, &w, content.clone()).await.uuid(), content));
+        if i == 1 {
+            commit(&pool, &w, json!({ "unit": "s" })).await;
+        }
+    }
+
+    let mut pages = Vec::new();
+    let mut after = None;
+    loop {
+        let page = ask_page(&pool, w.owner, &request(w.shape, 2, after))
+            .await
+            .expect("the owner asks its own shape");
+        after = page.next;
+        pages.push(page);
+        if after.is_none() || pages.len() > 5 {
+            break;
+        }
+    }
+    assert_eq!(
+        pages.iter().map(|p| p.artifacts.len()).collect::<Vec<_>>(),
+        [2, 2, 1]
+    );
+    assert_eq!(
+        pages
+            .iter()
+            .map(|p| p.population.is_some())
+            .collect::<Vec<_>>(),
+        [true, false, false],
+        "the population on the first page alone"
+    );
+    assert_eq!(
+        pages[0].population,
+        Some(ArtifactAskPopulation {
+            declared_satisfied: 6,
+            declared_not_satisfied: 0,
+            declared_not_yet_checked: 0,
+            matched: 5,
+        })
+    );
+    let read: Vec<(Uuid, serde_json::Value)> = pages
+        .iter()
+        .flat_map(|p| &p.artifacts)
+        .map(|a| (a.artifact_id.uuid(), a.content.clone().expect("content")))
+        .collect();
+    assert_eq!(read, matches, "every match once, in order, whole");
+    for page in &pages {
+        assert_eq!(page.shape.shape_id, ShapeId::from(w.shape));
+        assert_eq!(page.ordered_by, AskOrder::Created);
+        assert_eq!(page.amended_since, None);
+        assert!(page.oversized.is_empty());
+        assert!(page
+            .artifacts
+            .iter()
+            .all(|a| a.shape_state == "declared_satisfied"));
+    }
+}
+
+/// **A shape amended between pages: the next page answers on the row the first named, and says
+/// what is now in force; a fresh ask naming the folded row is refused and taught the successor**
+/// (spec §7.3, P17). Three matches, a page of two, then the shape is amended (a new id at version
+/// 2, the asked row folded — both asserted). Page two continues against the asked row: the third
+/// match, `shape` still the asked row, `amended_since` the new one. A first page naming the folded
+/// row is refused `shape_superseded` alone, teaching the same successor.
+///
+/// Bite (perl, Rust): in `artifact_ask_read::load`, the `Some(_) =>` arm loading through
+/// `shape_loader::load_one` like a first page — page two is then refused `shape_superseded`, and the
+/// continuation assertion goes red.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_page_after_an_amendment_answers_on_the_pinned_row(pool: PgPool) {
+    let w = world(&pool).await;
+    let mut matches = Vec::new();
+    for i in 0..3 {
+        matches.push(
+            commit(&pool, &w, json!({ "unit": "ms", "count": i }))
+                .await
+                .uuid(),
+        );
+    }
+    let first = ask_page(&pool, w.owner, &request(w.shape, 2, None))
+        .await
+        .expect("page one");
+    assert_eq!(served(&first), matches[..2]);
+    assert_eq!(first.amended_since, None);
+
+    let amended = declare(&pool, &w, true).await;
+    assert_ne!(amended, w.shape, "an amendment mints a new id");
+    let folded: bool =
+        sqlx::query_scalar("SELECT is_folded FROM kb_data_artifact_shapes WHERE id = $1")
+            .bind(w.shape)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(folded, "the asked row is folded");
+    let successor = ShapeSuccessor {
+        shape_id: ShapeId::from(amended),
+        shape_version: 2,
+    };
+
+    let second = ask_page(&pool, w.owner, &request(w.shape, 2, first.next))
+        .await
+        .expect("a continuation answers on the row its first page named");
+    assert_eq!(served(&second), matches[2..]);
+    assert_eq!(second.shape.shape_id, ShapeId::from(w.shape));
+    assert_eq!(second.amended_since, Some(successor));
+    assert_eq!(second.population, None);
+    assert_eq!(second.next, None);
+
+    let fresh = refusals(ask_page(&pool, w.owner, &request(w.shape, 2, None)).await);
+    assert_eq!(
+        fresh.iter().map(|r| r.reason.clone()).collect::<Vec<_>>(),
+        [RefusalReason::ShapeSuperseded]
+    );
+    assert_eq!(
+        fresh[0].teaches.as_ref().and_then(|t| t.successor),
+        Some(successor),
+        "the refusal teaches the version now in force"
+    );
+}
+
+/// **A continuation narrowed by `shape_states` reads its states against the version now in force,
+/// not the one its first page named.** Three matches, all `declared_satisfied` against the asked
+/// version; page one, narrowed to `declared_satisfied`, serves two. The shape is then amended, and
+/// no verdict exists for the new version yet. Page two is validated against the asked row and says
+/// so (`amended_since`), but its one remaining row reads `declared_not_yet_checked` against the
+/// version in force, so the narrowed ask matches nothing: no artifacts and `next: None`. The
+/// control, the same continuation with every state admitted, serves that row and shows its state.
+/// This pins today's behaviour, which the `amended_since` doc teaches: a narrowed ask restarts on
+/// `amended_since`. The read budget plays no part here — three small rows are far inside it.
+///
+/// Bite (perl, Rust): in `artifact_ask_read::read`, `amended_since,` → `amended_since: None,` in
+/// the response — page two no longer says the version moved, and its assertion goes red.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_narrowed_continuation_reads_its_states_against_the_version_now_in_force(pool: PgPool) {
+    let w = world(&pool).await;
+    let mut matches = Vec::new();
+    for i in 0..3 {
+        matches.push(
+            commit(&pool, &w, json!({ "unit": "ms", "count": i }))
+                .await
+                .uuid(),
+        );
+    }
+    let satisfied = || vec!["declared_satisfied".to_string()];
+    let first = ask_page(&pool, w.owner, &request_in(w.shape, satisfied(), 2, None))
+        .await
+        .expect("page one");
+    assert_eq!(served(&first), matches[..2]);
+    assert!(first.next.is_some(), "a third match remains");
+
+    let amended = declare(&pool, &w, true).await;
+    let successor = ShapeSuccessor {
+        shape_id: ShapeId::from(amended),
+        shape_version: 2,
+    };
+
+    let second = ask_page(
+        &pool,
+        w.owner,
+        &request_in(w.shape, satisfied(), 2, first.next),
+    )
+    .await
+    .expect("a narrowed continuation answers");
+    assert_eq!(second.amended_since, Some(successor));
+    assert_eq!(second.shape.shape_id, ShapeId::from(w.shape));
+    assert!(
+        second.artifacts.is_empty() && second.oversized.is_empty(),
+        "against the version in force the remaining row is unchecked, and the narrowed ask \
+         matches nothing: {:?}",
+        served(&second)
+    );
+    assert_eq!(second.next, None);
+
+    let every_state = ask_page(&pool, w.owner, &request(w.shape, 2, first.next))
+        .await
+        .expect("the control");
+    assert_eq!(served(&every_state), matches[2..]);
+    assert_eq!(
+        every_state.artifacts[0].shape_state, "declared_not_yet_checked",
+        "the row's state is read against the version now in force"
+    );
+}
+
+/// The JSON-string length of one text field, as a page writes it and the page's SQL charges it.
+fn written(text: &str) -> usize {
+    serde_json::to_string(text)
+        .expect("a string serializes")
+        .len()
+}
+
+/// What the page's SQL charges a served row: its `content_bytes`, each text field as the page
+/// writes it, and `ARTIFACT_ROW_FIXED_BYTES` for the rest.
+fn sql_charge(a: &ArtifactView) -> usize {
+    usize::try_from(a.content_bytes).unwrap()
+        + written(&a.kind_owner_table)
+        + written(&a.artifact_kind)
+        + written(&a.intent)
+        + written(&a.content_hash)
+        + written(&a.shape_state)
+        + ARTIFACT_ROW_FIXED_BYTES
+}
+
+/// What a served row adds to a page as written: its compact JSON and the comma after it.
+fn written_row(a: &ArtifactView) -> usize {
+    serde_json::to_string(a).expect("a row serializes").len() + 1
+}
+
+/// What a page's rows write, measured as the service holds them to the budget: each served row as
+/// written, and each oversized entry at `ARTIFACT_ROW_FIXED_BYTES`, which bounds the entry with its
+/// comma (`transport`'s `the_fixed_row_charge_covers_every_byte_but_content_and_text`).
+fn page_bytes(page: &AskResponse) -> usize {
+    page.artifacts.iter().map(written_row).sum::<usize>()
+        + page.oversized.len() * ARTIFACT_ROW_FIXED_BYTES
+}
+
+/// **The whole page fits the platform's response cap as the API answers it**: the page written
+/// compactly, as the route writes it. The MCP relay's answer is measured against the same cap by
+/// the adversarial walk in the e2e suite (`data_artifact_ask_walk_e2e.rs`), whose pages are the
+/// ones the relay's escaping grows most.
+fn assert_fits_the_response_cap(page: &AskResponse) {
+    let body = serde_json::to_vec(page).expect("the page serializes").len();
+    assert!(
+        body <= VERCEL_RESPONSE_BODY_CAP_BYTES,
+        "the API body is {body} bytes"
+    );
+}
+
+/// A value's compact JSON length, as `content_bytes` counts it.
+fn compact_len(value: &serde_json::Value) -> i64 {
+    i64::try_from(serde_json::to_string(value).unwrap().len()).unwrap()
+}
+
+/// **A served number is as long as it was committed, except where storage prints it as a 64-bit
+/// integer, and there it is longer by exactly the digits storage writes.** Storage prints a number
+/// in plain notation. Outside 1e16 up to the 64-bit integer limits it is read back as a float and
+/// written in its shortest form: large and small exponents, the extremes of `f64`, a subnormal and
+/// long mantissas, each also negated and divided, are served as committed, at their
+/// `content_bytes`, and each row within the SQL's charge for it. Inside that range a float
+/// committed in exponent form is stored as an integer and read back as one: `1e16`, `1e19`,
+/// `-1e18` and `1.8e19` are each served as the integer, longer than committed by the bytes pinned
+/// here, while `content_bytes` stays the committed length. Either way the page's rows, as
+/// written, are within `ARTIFACT_ASK_PAGE_BYTES`.
+///
+/// The bite for the first kind cannot be a perl edit: it holds because `serde_json`'s
+/// `float_roundtrip` makes the parse back from storage exact, and that feature reaches every build
+/// also through `jsonschema`, which enables it unconditionally, so dropping it from temper-services
+/// and temper-client changes nothing. To see it red, build with every edge to `float_roundtrip` cut
+/// (a `[patch.crates-io]` `jsonschema` whose `serde_json` dependency omits it): without it the parse
+/// of a long plain expansion is best effort and may land a unit in the last place away, which is
+/// then written back in up to 17 significant digits. The second kind is storage's own printing,
+/// which the page holds to its budget as written:
+/// `a_row_served_longer_than_the_page_is_named_oversized_and_the_rows_after_it_are_served`.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_served_number_keeps_its_committed_length_unless_storage_prints_it_as_an_integer(
+    pool: PgPool,
+) {
+    let w = world(&pool).await;
+    let floats = [
+        1e300,
+        1e-300,
+        f64::MAX,
+        f64::MIN_POSITIVE,
+        5e-324,
+        f64::MIN,
+        0.1 + 0.2,
+        1.0 / 3.0,
+        123_456_789.0 / 7.0,
+        -9.876_543_210_987_654e-200,
+        2.225_073_858_507_201e-308,
+        std::f64::consts::PI * 1e250,
+        std::f64::consts::E * 1e-250,
+    ];
+    let mut kept = Vec::new();
+    for (i, x) in floats.iter().enumerate() {
+        let content = json!({ "unit": "ms", "count": i, "x": x, "xs": [x, -x, x / 3.0] });
+        kept.push((commit(&pool, &w, content.clone()).await.uuid(), content));
+    }
+    // Each float as committed, the integer storage prints it as, and the bytes that adds.
+    let printed_whole = [
+        (1e16, json!(10_000_000_000_000_000_u64), 12_i64),
+        (1e19, json!(10_000_000_000_000_000_000_u64), 15),
+        (-1e18, json!(-1_000_000_000_000_000_000_i64), 14),
+        (1.8e19, json!(18_000_000_000_000_000_000_u64), 13),
+    ];
+    let mut grown = Vec::new();
+    for (i, (x, whole, more)) in printed_whole.iter().enumerate() {
+        let content = json!({ "unit": "ms", "count": i, "x": x });
+        let mut as_served = content.clone();
+        as_served["x"] = whole.clone();
+        let id = commit(&pool, &w, content.clone()).await.uuid();
+        grown.push((id, content, as_served, *more));
+    }
+
+    let page = ask_page(&pool, w.owner, &request(w.shape, 50, None))
+        .await
+        .expect("the owner asks its own shape");
+    assert_eq!(page.artifacts.len(), kept.len() + grown.len());
+    let (outside, inside) = page.artifacts.split_at(kept.len());
+    for (a, (id, committed)) in outside.iter().zip(&kept) {
+        assert_eq!(a.artifact_id.uuid(), *id);
+        let content = a.content.as_ref().expect("content");
+        assert_eq!(content, committed, "served as committed");
+        assert_eq!(
+            compact_len(content),
+            a.content_bytes,
+            "served at its committed length: {content}"
+        );
+        let (row, charge) = (written_row(a), sql_charge(a));
+        assert!(row <= charge, "a row of {row} bytes charged {charge}");
+    }
+    for (a, (id, committed, as_served, more)) in inside.iter().zip(&grown) {
+        assert_eq!(a.artifact_id.uuid(), *id);
+        let content = a.content.as_ref().expect("content");
+        assert_eq!(content, as_served, "stored and read back as an integer");
+        assert_eq!(
+            a.content_bytes,
+            compact_len(committed),
+            "charged as committed"
+        );
+        assert_eq!(
+            compact_len(content),
+            a.content_bytes + more,
+            "served {more} bytes longer than committed: {content}"
+        );
+    }
+    assert!(page_bytes(&page) <= ARTIFACT_ASK_PAGE_BYTES);
+}
+
+/// Content holding `n` copies of `1e19`, which a commit writes as five bytes each (`1e+19`) and a
+/// page serves as twenty: an artifact whose charge is about a quarter of what it writes.
+fn plain_integers(count: usize, n: usize) -> serde_json::Value {
+    json!({ "unit": "ms", "count": count, "xs": vec![1e19_f64; n] })
+}
+
+/// **A row whose charge fits the page but whose served length does not is named in `oversized`,
+/// in its place, and the rows after it are served.** A holds 100,000 copies of `1e19`: charged
+/// about 0.6 MB, it writes about 2.1 MB, past `ARTIFACT_ASK_PAGE_BYTES`; read whole by id, it shows
+/// both. B and C are small matches after it. The page serves B and C, names A in `oversized` with
+/// its stored `content_bytes`, and ends the enumeration, its rows as written within the budget and
+/// the whole page, as the API writes it, within the response cap.
+///
+/// Bite (perl, Rust): in `artifact_ask_read::read`, `within_budget(page, ARTIFACT_ASK_PAGE_BYTES)`
+/// → `within_budget(page, usize::MAX)` — the enforcement removed: A is served at 2.1 MB, and the
+/// first assertion on the page goes red.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_row_served_longer_than_the_page_is_named_oversized_and_the_rows_after_it_are_served(
+    pool: PgPool,
+) {
+    let w = world(&pool).await;
+    let a = commit(&pool, &w, plain_integers(0, 100_000)).await;
+    let b = commit(&pool, &w, json!({ "unit": "ms", "count": 1 })).await;
+    let c = commit(&pool, &w, json!({ "unit": "ms", "count": 2 })).await;
+
+    let whole = get_artifact(&pool, w.owner, a)
+        .await
+        .expect("A reads by id")
+        .expect("A is visible to its owner");
+    assert!(
+        sql_charge(&whole) <= ARTIFACT_ASK_PAGE_BYTES,
+        "the fixture: A's charge fits a page alone"
+    );
+    assert!(
+        written_row(&whole) > ARTIFACT_ASK_PAGE_BYTES,
+        "the fixture: A as written does not"
+    );
+
+    let page = ask_page(&pool, w.owner, &request(w.shape, 50, None))
+        .await
+        .expect("the owner asks its own shape");
+    assert_eq!(served(&page), [b.uuid(), c.uuid()]);
+    assert_eq!(
+        page.oversized,
+        [OversizedArtifact {
+            artifact_id: a,
+            resource_id: ResourceId::from(w.on),
+            content_bytes: whole.content_bytes,
+        }],
+        "A is named in its place, with its stored content_bytes"
+    );
+    assert_eq!(page.next, None);
+    assert!(page_bytes(&page) <= ARTIFACT_ASK_PAGE_BYTES);
+    assert_fits_the_response_cap(&page);
+}
+
+/// **Two rows whose charges fit one page together but whose served lengths do not are two pages.**
+/// A and B each hold 60,000 copies of `1e19`: each is charged about 0.36 MB and writes about
+/// 1.26 MB, so together they fit a page as charged, and each fits one alone as written, but not
+/// both. The first page serves A and ends there, `next` at A; the second, continuing from it,
+/// serves B and ends the enumeration. Each page's rows as written are within the budget, and each
+/// whole page, as the API writes it, within the response cap.
+///
+/// Bite (perl, Rust): as for the oversized row above, `within_budget(page, ARTIFACT_ASK_PAGE_BYTES)`
+/// → `within_budget(page, usize::MAX)` — the first page serves both and answers `next: None`.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn two_rows_that_fit_a_page_as_charged_but_not_as_written_are_two_pages(pool: PgPool) {
+    let w = world(&pool).await;
+    let a = commit(&pool, &w, plain_integers(0, 60_000)).await;
+    let b = commit(&pool, &w, plain_integers(1, 60_000)).await;
+
+    let first = ask_page(&pool, w.owner, &request(w.shape, 50, None))
+        .await
+        .expect("page one");
+    assert_eq!(served(&first), [a.uuid()], "the page ends after A");
+    assert!(first.oversized.is_empty());
+    let at_a = first.artifacts.first().map(|row| ArtifactCursor {
+        created: row.created,
+        artifact_id: row.artifact_id,
+    });
+    assert_eq!(first.next, at_a, "`next` is A, the last row the page kept");
+    assert!(page_bytes(&first) <= ARTIFACT_ASK_PAGE_BYTES);
+    assert_fits_the_response_cap(&first);
+
+    let second = ask_page(&pool, w.owner, &request(w.shape, 50, first.next))
+        .await
+        .expect("page two");
+    assert_eq!(served(&second), [b.uuid()], "B opens the next page");
+    assert!(second.oversized.is_empty());
+    assert_eq!(second.next, None);
+    assert!(page_bytes(&second) <= ARTIFACT_ASK_PAGE_BYTES);
+    assert_fits_the_response_cap(&second);
+
+    let (row_a, row_b) = (&first.artifacts[0], &second.artifacts[0]);
+    assert!(
+        sql_charge(row_a) + sql_charge(row_b) <= ARTIFACT_ASK_PAGE_BYTES,
+        "the fixture: A and B fit one page as charged"
+    );
+    assert!(
+        written_row(row_a) + written_row(row_b) > ARTIFACT_ASK_PAGE_BYTES,
+        "the fixture: A and B do not fit one page as written"
+    );
+}
+
+/// Content that matches the ask and nests exactly `levels` deep, as `ARTIFACT_ASK_CONTENT_DEPTH`
+/// counts it (`levels` at least 2): the root object, and a chain of arrays under `deep`.
+fn nested(count: usize, levels: usize) -> serde_json::Value {
+    let mut deep = json!([]);
+    for _ in 2..levels {
+        deep = serde_json::Value::Array(vec![deep]);
+    }
+    json!({ "unit": "ms", "count": count, "deep": deep })
+}
+
+/// **A row whose content nests deeper than a first-party client parses on an ask page is named
+/// in `oversized`, in its place, and the rows after it are served; a row nested exactly at
+/// the limit is served, and the page parses.** A nests `ARTIFACT_ASK_CONTENT_DEPTH` deep, B one
+/// level more, C 125 deep (past the 124 a Rust client parses on an ask page), and D is a small
+/// match after them. The page, written as the route writes it, reads back as an `AskResponse`
+/// through `serde_json::from_slice` with its default recursion limit. It serves A and D, and names
+/// B and C in `oversized` with their stored `content_bytes`; B and C are still read whole by id.
+/// The whole page, as the API writes it, fits the response cap.
+///
+/// Bite (perl, Rust): in `artifact_ask_read::written`, `if bytes > budget || too_deep {` →
+/// `if bytes > budget {` — the depth check removed: B and C are served, and the page no longer
+/// parses, so the `from_slice` assertion, the first on the page, goes red.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_row_nested_past_what_a_client_parses_is_named_oversized_and_the_page_goes_on(
+    pool: PgPool,
+) {
+    let w = world(&pool).await;
+    let a = commit(&pool, &w, nested(0, ARTIFACT_ASK_CONTENT_DEPTH)).await;
+    let b = commit(&pool, &w, nested(1, ARTIFACT_ASK_CONTENT_DEPTH + 1)).await;
+    let c = commit(&pool, &w, nested(2, 125)).await;
+    let d = commit(&pool, &w, json!({ "unit": "ms", "count": 3 })).await;
+
+    let page = ask_page(&pool, w.owner, &request(w.shape, 50, None))
+        .await
+        .expect("the owner asks its own shape");
+    let body = serde_json::to_vec(&page).expect("the page serializes");
+    let parsed: AskResponse = serde_json::from_slice(&body)
+        .expect("the page parses with serde_json's default recursion limit");
+    assert_eq!(
+        served(&parsed),
+        served(&page),
+        "the page reads back as written"
+    );
+    assert_eq!(
+        served(&page),
+        [a.uuid(), d.uuid()],
+        "nested at the limit, A is served, and D after the rows named"
+    );
+
+    let mut oversized = Vec::new();
+    for id in [b, c] {
+        let whole = get_artifact(&pool, w.owner, id)
+            .await
+            .expect("read by id")
+            .expect("visible to its owner");
+        assert!(whole.content.is_some(), "read whole by id");
+        oversized.push(OversizedArtifact {
+            artifact_id: id,
+            resource_id: ResourceId::from(w.on),
+            content_bytes: whole.content_bytes,
+        });
+    }
+    assert_eq!(
+        page.oversized, oversized,
+        "B and C are named in their places, with their stored content_bytes"
+    );
+    assert_eq!(page.next, None);
+    assert_fits_the_response_cap(&page);
+}
+
+/// **An `after` the store cannot hold is refused by the service read itself, before it reads
+/// anything**, with the refusal the API door gives: `ApiError::UnreadablePlan`, status `422`. The
+/// instant one microsecond before `timestamptz`'s first is refused; the first itself, the
+/// control, is a position like any other. Both are read as a caller's body reads them.
+///
+/// Bite (perl, Rust): in `artifact_ask_read::ask_page`, the line
+/// `refuse_unstorable_position(request)?;` removed — the position reaches the database, which
+/// refuses to bind it, and the answer is a fault, not `UnreadablePlan`.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_unstorable_after_is_refused_by_the_service_read(pool: PgPool) {
+    let w = world(&pool).await;
+    let at = |created: &str| -> Option<ArtifactCursor> {
+        Some(
+            serde_json::from_value(json!({ "created": created, "artifact_id": Uuid::nil() }))
+                .expect("a cursor reads"),
+        )
+    };
+    match ask_page(
+        &pool,
+        w.owner,
+        &request(w.shape, 1, at("-4713-11-23T23:59:59.999999Z")),
+    )
+    .await
+    {
+        Err(ApiError::UnreadablePlan { status, .. }) => {
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        }
+        other => panic!("expected an unreadable position, got {other:?}"),
+    }
+    ask_page(
+        &pool,
+        w.owner,
+        &request(w.shape, 1, at("-4713-11-24T00:00:00Z")),
+    )
+    .await
+    .expect("the first instant the store holds is a position");
+}
+
+/// **Unreadable is refused exactly as absent is, on every page.** An outsider asking the owner's
+/// shape and anyone asking an id that names no shape get equal refusal lists (`shape_not_askable`
+/// alone, same detail). A reader granted the home reads page one; once the grant is revoked, page
+/// two — the same ask, the same continuation — is refused exactly as an absent shape is: the
+/// continuation carried position, never authority.
+///
+/// Bite (perl, Rust): in `shape_loader::load_one_pinned`, the unreadable arm's
+/// `load: ShapeLoad::NotAskable,` → `load: ShapeLoad::Uncompilable,`: the revoked page is refused
+/// `shape_schema_uncompilable`, which an absent shape is not, and the last assertion goes red.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_unreadable_shape_is_refused_as_an_absent_one_on_every_page(pool: PgPool) {
+    let w = world(&pool).await;
+    for i in 0..2 {
+        commit(&pool, &w, json!({ "unit": "ms", "count": i })).await;
+    }
+    let absent = Uuid::now_v7();
+    let profile = |handle: &'static str| {
+        let pool = pool.clone();
+        async move {
+            let id: Uuid = sqlx::query_scalar(
+                "INSERT INTO kb_profiles (handle, display_name) VALUES ($1, $1) RETURNING id",
+            )
+            .bind(handle)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            ProfileId::from(id)
+        }
+    };
+    let outsider = profile("batch-read-outsider").await;
+    let reader = profile("batch-read-reader").await;
+
+    let as_absent = refusals(ask_page(&pool, w.owner, &request(absent, 1, None)).await);
+    assert_eq!(
+        as_absent
+            .iter()
+            .map(|r| r.reason.clone())
+            .collect::<Vec<_>>(),
+        [RefusalReason::ShapeNotAskable]
+    );
+    assert_eq!(
+        refusals(ask_page(&pool, outsider, &request(w.shape, 1, None)).await),
+        as_absent,
+        "an unreadable shape is refused as an absent one"
+    );
+
+    sqlx::query(
+        "INSERT INTO kb_access_grants \
+             (subject_table, subject_id, principal_table, principal_id, can_read, \
+              granted_by_profile_id) \
+         VALUES ('kb_contexts', $1, 'kb_profiles', $2, true, $3)",
+    )
+    .bind(w.home.id)
+    .bind(reader.uuid())
+    .bind(w.owner.uuid())
+    .execute(&pool)
+    .await
+    .expect("grant read on the home");
+    let first = ask_page(&pool, reader, &request(w.shape, 1, None))
+        .await
+        .expect("the reader reads the home");
+    assert_eq!(first.artifacts.len(), 1);
+    assert!(first.next.is_some(), "a second page remains");
+
+    sqlx::query(
+        "DELETE FROM kb_access_grants \
+          WHERE subject_table = 'kb_contexts' AND subject_id = $1 AND principal_id = $2",
+    )
+    .bind(w.home.id)
+    .bind(reader.uuid())
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        refusals(ask_page(&pool, reader, &request(w.shape, 1, first.next)).await),
+        as_absent,
+        "after revocation the continuation is refused as an absent shape is"
+    );
+}

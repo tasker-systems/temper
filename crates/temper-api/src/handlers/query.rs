@@ -163,13 +163,26 @@ where
     type Rejection = ApiError;
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        match Json::<Composition>::from_request(req, state).await {
-            Ok(Json(composition)) => Ok(Self(composition)),
-            Err(rejection) => Err(ApiError::UnreadablePlan {
-                status: rejection.status(),
-                message: bounded_rejection_text(rejection.body_text()),
-            }),
-        }
+        read_unread_body(req, state).await.map(Self)
+    }
+}
+
+/// A JSON body of type `T`, read as `Json` reads it, with every rejection answered as
+/// [`ApiError::UnreadablePlan`]: the reader's own status, under the code `UNREADABLE_PLAN`, and
+/// [`bounded_rejection_text`]'s account of what failed. The one reader behind every door whose body
+/// a client may relay unread — [`CompositionBody`] here, and the batch read's `AskBody`
+/// (`super::data_artifacts`) — so no such door answers in axum's plain-text rejection.
+pub(crate) async fn read_unread_body<T, S>(req: Request, state: &S) -> Result<T, ApiError>
+where
+    T: serde::de::DeserializeOwned,
+    S: Send + Sync,
+{
+    match Json::<T>::from_request(req, state).await {
+        Ok(Json(body)) => Ok(body),
+        Err(rejection) => Err(ApiError::UnreadablePlan {
+            status: rejection.status(),
+            message: bounded_rejection_text(rejection.body_text()),
+        }),
     }
 }
 

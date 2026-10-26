@@ -12,7 +12,7 @@ sessions, research, or wants to look up / store information across conversations
 
 ## The Tool Surface (read/write separable)
 
-The census: **41 advertised tools — 20 reads, 21 writes — plus a conditional
+The census: **42 advertised tools — 21 reads, 21 writes — plus a conditional
 blob pair (2)**. The authority is the server's own `tools/list` reply (the
 `tool_router()`); when this file and that list disagree, the list wins and this
 file is wrong.
@@ -23,12 +23,12 @@ with a discriminator (`action`, `view`, or `target`). Read and write are
 separable — a consumer gating on "read-only" can grant the read tools without
 drilling into action parameters.
 
-**Reads (20):** `search`, `run_query`, `get_resource`, `list_resources`,
+**Reads (21):** `search`, `run_query`, `get_resource`, `list_resources`,
 `resource_lineage`, `element_trail`, `get_block`, `get_block_provenance`,
 `cogmap_read`, `cogmap_list`, `context_read`, `describe_schema`,
 `invocation_read`, `facets_read`, `steward_ingest_delta`,
-`list_data_artifacts`, `get_data_artifact`, `list_data_artifact_shapes`,
-`get_data_artifact_shape`, `invitation_read`
+`list_data_artifacts`, `get_data_artifact`, `ask_data_artifacts`,
+`list_data_artifact_shapes`, `get_data_artifact_shape`, `invitation_read`
 
 **Writes (21):** `create_resource`, `update_resource`, `update_resource_meta`,
 `delete_resource`, `annotate_resource`, `resource_reblock`, `relationship`, `facet_set`,
@@ -600,5 +600,16 @@ Contexts are workspaces that group resources. The typical flow:
   unchanged as `after`, and the same filters and `order`. `next` is `null` on the last page; a
   page with a `next` is not the whole list. Without `limit` it answers every artifact as a bare
   array, an unbounded default that is retiring.
+- **`ask_data_artifacts` answers in pages too** — one ask (a shape and predicates over its
+  paths) answers `{"artifacts": [...], "oversized": [...], "next": ... | null, ...}`. To continue,
+  call it again with the same `ask` and `next` passed back unchanged as `after`. Only a `null`
+  `next` ends the answer: a page that stopped on its read budget can hold no artifacts and still
+  carry a `next`, so keep going. An artifact in `oversized` is too large or too deeply nested for
+  a page (content more than 96 arrays or objects deep); read it whole with `get_data_artifact`,
+  though a client's own nesting limit can refuse that read too when the content nests very deeply,
+  and on the hosted deployment that read is refused when the response carrying the artifact is
+  longer than the platform's response cap. `get_data_artifact` answers the artifact as storage
+  serves it (storage prints some numbers longer than they were committed), as compact JSON
+  escaped into one text block, which can be up to about twice that size.
 - **Access control is automatic** — you only see resources and contexts your
   authenticated profile has access to. No need to handle permissions.
