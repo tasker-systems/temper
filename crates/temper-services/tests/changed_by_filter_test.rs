@@ -319,6 +319,9 @@ async fn each_row_carries_the_readers_own_change_time_and_only_under_the_filter(
     // A teammate's later change moves `second`'s `updated` past anything the reader did, so the
     // two times differ there, and a row that showed `updated` would claim the teammate's change.
     retitle(&backend(&pool, teammate), second, "second, by the teammate").await;
+    // A resource the reader can read and never changed, so the unfiltered list below holds a row
+    // the filter would not admit.
+    let untouched = create(&backend(&pool, teammate), shared, "untouched").await;
 
     let truth: Vec<(Uuid, chrono::DateTime<chrono::Utc>)> =
         sqlx::query_as("SELECT resource_id, changed_at FROM resources_changed_by($1)")
@@ -351,8 +354,8 @@ async fn each_row_carries_the_readers_own_change_time_and_only_under_the_filter(
         .await
         .expect("list")
         .rows;
-    // Every resource the reader can see, which is more than the two they changed.
-    assert!(plain.len() >= 2);
+    assert!(plain.iter().any(|row| Uuid::from(row.id) == second));
+    assert!(plain.iter().any(|row| Uuid::from(row.id) == untouched));
     for row in &plain {
         assert_eq!(row.changed_by_me_at, None);
         let json = serde_json::to_value(row).expect("serialize");
@@ -361,6 +364,44 @@ async fn each_row_carries_the_readers_own_change_time_and_only_under_the_filter(
             "a read without the filter is unchanged on the wire: {json}"
         );
     }
+}
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_cut_page_carries_each_rows_own_time_not_its_neighbours(pool: PgPool) {
+    let reader = seed_profile(&pool, "reader").await;
+    let context = seed_own_context(&pool, reader, "mine").await;
+    let r = backend(&pool, reader);
+    for slug in ["one", "two", "three"] {
+        create(&r, context, slug).await;
+    }
+
+    let truth: Vec<(Uuid, chrono::DateTime<chrono::Utc>)> =
+        sqlx::query_as("SELECT resource_id, changed_at FROM resources_changed_by($1)")
+            .bind(reader)
+            .fetch_all(&pool)
+            .await
+            .expect("resources_changed_by");
+    let order = changed(&pool, reader).await;
+    assert_eq!(order.len(), 3);
+
+    // The middle row alone: a time taken by position from the uncut set, or cut before the
+    // offset, would be another row's.
+    let page = list(
+        &pool,
+        reader,
+        ResourceListParams {
+            offset: Some(1),
+            limit: Some(1),
+            ..mine()
+        },
+    )
+    .await
+    .expect("list");
+    assert_eq!(page.rows.len(), 1);
+    let row = &page.rows[0];
+    assert_eq!(Uuid::from(row.id), order[1]);
+    assert_eq!(row.changed_by_me_at, at(&truth, order[1]));
+    assert_ne!(row.changed_by_me_at, at(&truth, order[0]));
 }
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
@@ -418,28 +459,49 @@ async fn agrees_with_every_visible_resources_element_trail(pool: PgPool) {
             .await
             .expect("entities");
 
-    let mut by_trail = Vec::new();
+    // Each resource the trail shows the reader changing, with the latest such event's time. Every
+    // event here is an authored type, so the trail's own events are the whole change set.
+    let mut by_trail: Vec<(Uuid, chrono::DateTime<chrono::Utc>)> = Vec::new();
     for id in [a, b, c] {
         let trail =
             event_service::element_trail(&pool, ProfileId::from(reader), ElementKind::Node, id)
                 .await
                 .expect("trail");
-        if trail
+        let latest = trail
             .events
             .iter()
-            .any(|e| reader_entities.contains(&e.actor_entity_id))
-        {
-            by_trail.push(id);
+            .filter(|e| reader_entities.contains(&e.actor_entity_id))
+            .map(|e| {
+                chrono::DateTime::parse_from_rfc3339(&e.occurred_at)
+                    .expect("trail time")
+                    .with_timezone(&chrono::Utc)
+            })
+            .max();
+        if let Some(at) = latest {
+            by_trail.push((id, at));
         }
     }
-    let mut by_filter = changed(&pool, reader).await;
+    let mut by_filter: Vec<(Uuid, chrono::DateTime<chrono::Utc>)> = list(&pool, reader, mine())
+        .await
+        .expect("list")
+        .rows
+        .into_iter()
+        .map(|r| {
+            (
+                r.id.into(),
+                r.changed_by_me_at.expect("time under the filter"),
+            )
+        })
+        .collect();
     by_filter.sort();
     by_trail.sort();
+    // The time as well as the set: the returned time must be one the reader could read off the
+    // trail, never later than anything it shows them.
     assert_eq!(
         by_filter, by_trail,
-        "the filter and the trail must name the same resources"
+        "the filter and the trail must name the same resources, at the same times"
     );
-    assert!(!by_filter.contains(&c));
+    assert!(!by_filter.iter().any(|(id, _)| *id == c));
 }
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
