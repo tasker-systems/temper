@@ -1,7 +1,7 @@
 <script lang="ts">
 	/**
-	 * The first view (`$lib/first-view`): the reader's latest handoff, their standing ways in, and
-	 * what was recently updated. Each region renders its own read's state — arriving, failed, given
+	 * The first view (`$lib/first-view`): the reader's latest handoff, the places they work in, their
+	 * standing ways in, and what was recently updated. Each region renders its own read's state — arriving, failed, given
 	 * up, empty — so one list's failure never reads as another's absence, and every list ends with
 	 * the shared omission sentence and the order it is read in.
 	 */
@@ -11,10 +11,18 @@
 	import { WAY_IN_BOUND, WAY_IN_ORDER } from '@tasker-systems/temper-design/ways-in';
 	import RegionState from '$lib/components/RegionState.svelte';
 	import ResourceLink from '$lib/components/ResourceLink.svelte';
-	import { type FirstViewList, RECENT_SCOPE, WAY_IN_MAX, wayInMoreHref } from '$lib/first-view';
+	import {
+		type FirstViewList,
+		PLACES_ORDER,
+		PLACES_SCOPE,
+		RECENT_SCOPE,
+		WAY_IN_MAX,
+		wayInMoreHref,
+	} from '$lib/first-view';
 	import { relativeTime } from '$lib/graph/relativeTime';
 	import { regionStateFor } from '$lib/region';
 	import type { ResourceView } from '$lib/types';
+	import { contextHref } from '$lib/vault-url';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -101,6 +109,47 @@
 
 	<!-- Resume — the work you last changed — belongs beside the handoff. It is not drawn until a
 	     read of what the reader changed exists; see `$lib/first-view`. -->
+
+	<!-- Ordered by the reader's own changes, and only here: the nav's places keep their order. The
+	     list is drawn once per load, so it never moves under a reader using it. -->
+	<section aria-labelledby="places-heading" data-testid="places">
+		<h2 id="places-heading" class="mb-2 text-[10px] uppercase tracking-widest text-tp-text-subtle">
+			places you work in
+		</h2>
+		{#await data.places}
+			<RegionState state="arriving" label={PLACES_SCOPE} />
+		{:then places}
+			{#if places.total === 0}
+				<RegionState
+					state="empty"
+					label={PLACES_SCOPE}
+					detail="Places where you, or an agent working as you, change something appear here."
+				/>
+			{:else}
+				<ul class="divide-y divide-tp-rule">
+					{#each places.rows as { context, lastChangedAt } (context.id)}
+						<li class="flex items-baseline justify-between gap-3 py-1.5 min-w-0">
+							<a
+								href={contextHref(context.owner_ref, context.slug)}
+								class="truncate text-sm text-tp-text hover:text-tp-accent"
+							>
+								{context.name}
+							</a>
+							<span class="flex-none text-[10px] text-tp-text-subtle" data-testid="place-changed">
+								you changed {relativeTime(lastChangedAt)}
+							</span>
+						</li>
+					{/each}
+				</ul>
+				<p class="mt-2 text-xs text-tp-text-subtle" data-testid="omission">
+					{omissionSentence(places.total, places.rows.length, PLACES_SCOPE)}
+					<span>Ordered {PLACES_ORDER}.</span>
+				</p>
+			{/if}
+		{:catch error}
+			<RegionState state={regionStateFor(error)} label={PLACES_SCOPE} />
+		{/await}
+	</section>
 
 	<section aria-label="Ways in" class="grid gap-6 md:grid-cols-3">
 		{#each data.ways as { way, shown, list } (way.id)}

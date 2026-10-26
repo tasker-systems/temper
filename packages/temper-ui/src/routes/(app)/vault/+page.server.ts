@@ -3,13 +3,16 @@ import { WAYS_IN } from '@tasker-systems/temper-design/ways-in';
 import {
 	type FirstViewList,
 	handoffPath,
+	PLACES_SCOPE,
+	placesInUse,
+	placesPath,
 	recentPath,
 	wayInPath,
 	wayInShown,
 } from '$lib/first-view';
 import { apiGet } from '$lib/server/api';
 import { bounded, derive } from '$lib/server/bounded';
-import type { ContentResponse, ResourceListResponse } from '$lib/types';
+import type { ContentResponse, ContextActivity, ResourceListResponse } from '$lib/types';
 import type { PageServerLoad } from './$types';
 
 function listOf(response: ResourceListResponse): FirstViewList {
@@ -21,7 +24,7 @@ function listOf(response: ResourceListResponse): FirstViewList {
  * one slow or failed list never holds up or blanks another: each reaches the page as a promise
  * whose failure its own region names. `bounded` is also each one's server-side catch.
  */
-export const load: PageServerLoad = async ({ locals, url }) => {
+export const load: PageServerLoad = async ({ locals, parent, url }) => {
 	const accessToken = locals.accessToken!;
 
 	const session = bounded(
@@ -62,10 +65,18 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		};
 	});
 
+	// The layout has already read the contexts (null on a failed read), and they name the places;
+	// the activity read is the only new one. `parent()` resolves at once, so nothing waits on it.
+	const { contexts } = await parent();
+	const places = derive(
+		bounded(apiGet<ContextActivity[]>(placesPath(), accessToken), PLACES_SCOPE),
+		(activity) => placesInUse(activity, contexts),
+	);
+
 	const recent = bounded(
 		apiGet<ResourceListResponse>(recentPath(), accessToken).then(listOf),
 		'recently updated',
 	);
 
-	return { session, next, ways, recent };
+	return { session, next, places, ways, recent };
 };

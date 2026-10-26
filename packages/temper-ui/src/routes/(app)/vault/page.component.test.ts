@@ -4,7 +4,13 @@ import { WAY_IN_BOUND, WAY_IN_ORDER, WAYS_IN } from '@tasker-systems/temper-desi
 import { render } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { type FirstViewList, RECENT_SCOPE } from '$lib/first-view';
+import {
+	type FirstViewList,
+	PLACES_ORDER,
+	PLACES_SCOPE,
+	type PlacesList,
+	RECENT_SCOPE,
+} from '$lib/first-view';
 import { describeFailure, GaveUp, GIVE_UP_AFTER_MS } from '$lib/server/bounded';
 import { resetAppContext, setPage } from '../../../test/app-context';
 import { makeRow } from '../../../test/fixtures';
@@ -43,10 +49,23 @@ const list = (n: number, total = n, prefix = 'row'): FirstViewList => ({
 	total,
 });
 
+const places = (n: number, total = n): PlacesList => ({
+	rows: Array.from({ length: n }, (_, i) => ({
+		context: {
+			id: `0000000${i}-0000-7000-8000-00000000000c`,
+			name: `place ${i}`,
+			slug: `place-${i}`,
+			owner_ref: '+team',
+		} as unknown as PlacesList['rows'][number]['context'],
+		lastChangedAt: new Date(Date.now() - (i + 1) * 3_600_000).toISOString(),
+	})),
+	total,
+});
+
 const SESSION = makeRow({ id: '01a17104-f5db-7782-b326-70ce7109c2d5', title: 'The last session' });
 
 function dataWith(
-	over: Partial<Record<'session' | 'next' | 'recent', Promise<unknown>>> & {
+	over: Partial<Record<'session' | 'next' | 'recent' | 'places', Promise<unknown>>> & {
 		ways?: Promise<FirstViewList>[];
 	},
 ): PageData {
@@ -58,6 +77,7 @@ function dataWith(
 			truncated: false,
 		}),
 		recent: Promise.resolve(list(5, 40, 'recent')),
+		places: Promise.resolve(places(2)),
 		...over,
 		ways: WAYS_IN.map((way, i) => ({
 			way,
@@ -196,5 +216,37 @@ describe('recently updated', () => {
 		const region = getByTestId('recent');
 		expect(region.textContent).toContain(omissionSentence(40, 5, RECENT_SCOPE));
 		expect(region.textContent).toContain(`Ordered ${WAY_IN_ORDER}.`);
+	});
+});
+
+describe('the places nearest are the ones in use', () => {
+	it("lists them as the load ordered them, says by what, and dates each by the reader's change", async () => {
+		const { getByTestId } = await mount(dataWith({ places: Promise.resolve(places(2, 7)) }));
+		const region = getByTestId('places');
+		expect([...region.querySelectorAll('li a')].map((a) => a.getAttribute('href'))).toEqual([
+			'/vault/+team/place-0',
+			'/vault/+team/place-1',
+		]);
+		expect(region.querySelector('[data-testid="place-changed"]')?.textContent?.trim()).toBe(
+			'you changed 1h ago',
+		);
+		const foot = region.querySelector('[data-testid="omission"]')?.textContent;
+		expect(foot).toContain(omissionSentence(7, 2, PLACES_SCOPE));
+		expect(foot).toContain(`Ordered ${PLACES_ORDER}.`);
+	});
+
+	it('says the reader has changed nothing yet, rather than drawing an empty list', async () => {
+		const { getByTestId } = await mount(dataWith({ places: Promise.resolve(places(0)) }));
+		const region = getByTestId('places');
+		expect(region.querySelector('li')).toBeNull();
+		expect(region.textContent).toContain(PLACES_SCOPE);
+	});
+
+	it('fails alone: a failed places read names itself and leaves the other regions standing', async () => {
+		const { getByTestId } = await mount(dataWith({ places: broken() }));
+		expect(getByTestId('places').textContent).toContain(
+			'Places you changed something in unavailable',
+		);
+		expect(getByTestId('recent').querySelectorAll('li')).toHaveLength(5);
 	});
 });
