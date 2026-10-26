@@ -4,7 +4,14 @@ import { WAY_IN_BOUND, WAY_IN_ORDER, WAYS_IN } from '@tasker-systems/temper-desi
 import { render } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { type FirstViewList, PLACES_ORDER, PLACES_SCOPE, RECENT_SCOPE } from '$lib/first-view';
+import {
+	type FirstViewList,
+	PLACES_ORDER,
+	PLACES_SCOPE,
+	RECENT_SCOPE,
+	RESUME_LABEL,
+	type Resume,
+} from '$lib/first-view';
 import { describeFailure, GaveUp, GIVE_UP_AFTER_MS } from '$lib/server/bounded';
 import type { ContextActivity, ContextRowWithCounts } from '$lib/types';
 import { resetAppContext, setPage } from '../../../test/app-context';
@@ -69,7 +76,7 @@ const activityIn = (n: number): ContextActivity[] =>
 const SESSION = makeRow({ id: '01a17104-f5db-7782-b326-70ce7109c2d5', title: 'The last session' });
 
 function dataWith(
-	over: Partial<Record<'session' | 'next' | 'recent' | 'places', Promise<unknown>>> & {
+	over: Partial<Record<'session' | 'next' | 'resume' | 'recent' | 'places', Promise<unknown>>> & {
 		contexts?: ContextRowWithCounts[] | null;
 		ways?: Promise<FirstViewList>[];
 	},
@@ -81,6 +88,7 @@ function dataWith(
 			text: 'Ship the first view.',
 			truncated: false,
 		}),
+		resume: Promise.resolve(null),
 		recent: Promise.resolve(list(5, 40, 'recent')),
 		places: Promise.resolve(activityIn(2)),
 		contexts: contextsOf(2),
@@ -271,5 +279,48 @@ describe('the places nearest are the ones in use', () => {
 		const region = getByTestId('places');
 		expect(region.querySelector('[data-testid="region-failed"]')).not.toBeNull();
 		expect(region.querySelector('[data-testid="region-empty"]')).toBeNull();
+	});
+});
+
+describe('work resumes where it was left', () => {
+	const changedAt = new Date(Date.now() - 3 * 3_600_000).toISOString();
+	const LAST: Resume = {
+		resource: makeRow({
+			id: '01a17626-b8cf-74e0-9f36-d0ec473d7128',
+			title: 'The work I left',
+			doc_type_name: 'task',
+			// A teammate edited it since; that time must not be the one shown.
+			updated: new Date().toISOString(),
+			changed_by_me_at: changedAt,
+		}),
+		changedAt,
+	};
+
+	it('offers, beside the handoff, one step back to the work, with the time the reader changed it', async () => {
+		const { getByTestId, container } = await mount(dataWith({ resume: Promise.resolve(LAST) }));
+		const region = getByTestId('resume');
+		expect(region.querySelector('h2')?.textContent?.trim()).toBe(RESUME_LABEL);
+		const links = region.querySelectorAll('a');
+		expect(links).toHaveLength(1);
+		expect(links[0].getAttribute('href')).toBe(`/vault/r/${LAST.resource.id}`);
+		expect(links[0].textContent).toBe('The work I left');
+		expect(region.querySelector('[data-testid="resume-changed"]')?.textContent?.trim()).toBe(
+			'task · you changed 3h ago',
+		);
+		// Beside the handoff: the two share one row, the handoff first.
+		const row = container.querySelector('#handoff-heading')?.closest('section')?.parentElement;
+		expect(row?.contains(region)).toBe(true);
+	});
+
+	it('offers no return, and draws nothing in its place, when the reader has changed nothing', async () => {
+		const { queryByTestId, container } = await mount(dataWith({ resume: Promise.resolve(null) }));
+		expect(queryByTestId('resume')).toBeNull();
+		expect(container.textContent).not.toMatch(new RegExp(`\\b${RESUME_LABEL}\\b`, 'i'));
+	});
+
+	it('fails alone, keeping the handoff', async () => {
+		const { getByTestId, container } = await mount(dataWith({ resume: broken() }));
+		expect(getByTestId('resume').querySelector('[data-region="failed"]')).not.toBeNull();
+		expect(container.querySelector(`a[href="/vault/r/${SESSION.id}"]`)).not.toBeNull();
 	});
 });

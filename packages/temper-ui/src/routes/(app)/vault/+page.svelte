@@ -1,10 +1,12 @@
 <script lang="ts">
 	/**
-	 * The first view (`$lib/first-view`): the reader's latest handoff, the places they work in, their
+	 * The first view (`$lib/first-view`): the reader's latest handoff and, beside it, the work they
+	 * last changed; the places they work in, their
 	 * standing ways in, and what was recently updated. Each region renders its own read's state — arriving, failed, given
 	 * up, empty — so one list's failure never reads as another's absence, and every list ends with
 	 * the shared omission sentence and the order it is read in.
 	 */
+	import type { Snippet } from 'svelte';
 	import { page } from '$app/stores';
 	import { HANDOFF_LABEL } from '@tasker-systems/temper-design/handoff';
 	import { omissionSentence } from '@tasker-systems/temper-design/omission';
@@ -18,6 +20,7 @@
 		type PlacesList,
 		placesInUse,
 		RECENT_SCOPE,
+		RESUME_LABEL,
 		WAY_IN_MAX,
 		wayInMoreHref,
 	} from '$lib/first-view';
@@ -66,6 +69,20 @@
 	</ul>
 {/snippet}
 
+<!-- Resume's region: drawn only when it has something to say, see below. -->
+{#snippet resumeRegion(content: Snippet)}
+	<section
+		aria-labelledby="resume-heading"
+		data-testid="resume"
+		class="min-w-0 rounded border border-tp-rule bg-tp-surface p-4 md:w-80 md:flex-none"
+	>
+		<h2 id="resume-heading" class="mb-2 text-[10px] uppercase tracking-widest text-tp-text-subtle">
+			{RESUME_LABEL}
+		</h2>
+		{@render content()}
+	</section>
+{/snippet}
+
 {#snippet foot(list: { rows: unknown[]; total: number }, scope: string, order: string = WAY_IN_ORDER)}
 	<p class="mt-2 text-xs text-tp-text-subtle" data-testid="omission">
 		{omissionSentence(list.total, list.rows.length, scope)}
@@ -79,52 +96,76 @@
 		<p class="text-xs text-tp-text-subtle">Where your own work stands.</p>
 	</header>
 
-	<section aria-labelledby="handoff-heading" class="rounded border border-tp-rule bg-tp-surface p-4">
-		<h2 id="handoff-heading" class="mb-2 text-[10px] uppercase tracking-widest text-tp-text-subtle">
-			{handoffRegion}
-		</h2>
-		{#await data.session}
-			<RegionState state="arriving" label={handoffRegion} />
-		{:then session}
-			{#if session}
-				<!-- "Latest" is by last update, which is what the read orders by; the age says when. -->
-				<p class="mb-1 text-[10px] text-tp-text-subtle" data-testid="handoff-age">
-					session · updated {relativeTime(session.updated)}
-				</p>
-				<ResourceLink id={session.id} title={session.title} class="text-sm text-tp-text hover:text-tp-accent" />
-				{#await data.next}
-					<RegionState state="arriving" label="next steps" />
-				{:then next}
-					{#if next}
-						<figure class="mt-3" data-testid="next-steps">
-							<figcaption class="mb-1 text-[10px] uppercase tracking-widest text-tp-text-subtle">
-								excerpt · {next.heading}
-							</figcaption>
-							<blockquote class="whitespace-pre-line border-l-2 border-tp-accent-line pl-3 text-sm italic text-tp-text">
-								{next.text}
-							</blockquote>
-							{#if next.truncated}
-								<p class="mt-1 text-xs italic text-tp-text-subtle">… continues in the session.</p>
-							{/if}
-						</figure>
-					{/if}
-				{:catch error}
-					<RegionState state={regionStateFor(error)} label="next steps" />
-				{/await}
-			{:else}
-				<RegionState
-					state="empty"
-					label="sessions recorded yet"
-					detail="Sessions you record with an agent appear here, and their next steps with them."
-				/>
+	<div class="flex flex-col gap-4 md:flex-row">
+		<section aria-labelledby="handoff-heading" class="min-w-0 flex-1 rounded border border-tp-rule bg-tp-surface p-4">
+			<h2 id="handoff-heading" class="mb-2 text-[10px] uppercase tracking-widest text-tp-text-subtle">
+				{handoffRegion}
+			</h2>
+			{#await data.session}
+				<RegionState state="arriving" label={handoffRegion} />
+			{:then session}
+				{#if session}
+					<!-- "Latest" is by last update, which is what the read orders by; the age says when. -->
+					<p class="mb-1 text-[10px] text-tp-text-subtle" data-testid="handoff-age">
+						session · updated {relativeTime(session.updated)}
+					</p>
+					<ResourceLink id={session.id} title={session.title} class="text-sm text-tp-text hover:text-tp-accent" />
+					{#await data.next}
+						<RegionState state="arriving" label="next steps" />
+					{:then next}
+						{#if next}
+							<figure class="mt-3" data-testid="next-steps">
+								<figcaption class="mb-1 text-[10px] uppercase tracking-widest text-tp-text-subtle">
+									excerpt · {next.heading}
+								</figcaption>
+								<blockquote class="whitespace-pre-line border-l-2 border-tp-accent-line pl-3 text-sm italic text-tp-text">
+									{next.text}
+								</blockquote>
+								{#if next.truncated}
+									<p class="mt-1 text-xs italic text-tp-text-subtle">… continues in the session.</p>
+								{/if}
+							</figure>
+						{/if}
+					{:catch error}
+						<RegionState state={regionStateFor(error)} label="next steps" />
+					{/await}
+				{:else}
+					<RegionState
+						state="empty"
+						label="sessions recorded yet"
+						detail="Sessions you record with an agent appear here, and their next steps with them."
+					/>
+				{/if}
+			{:catch error}
+				<RegionState state={regionStateFor(error)} label={handoffRegion} />
+			{/await}
+		</section>
+
+		<!-- Resume: the work the reader last changed, and when they changed it — never `updated`, which a
+		     teammate's write moves. A reader who has changed nothing gets no region at all, so the
+		     handoff takes the row; only a read in flight or a failed one draws a state here. -->
+		{#snippet resumeArriving()}<RegionState state="arriving" label={RESUME_LABEL} />{/snippet}
+		{#await data.resume}
+			{@render resumeRegion(resumeArriving)}
+		{:then resume}
+			{#if resume}
+				{#snippet resumeShown()}
+					<p class="mb-1 text-[10px] text-tp-text-subtle" data-testid="resume-changed">
+						{resume.resource.doc_type_name} · you changed {relativeTime(resume.changedAt)}
+					</p>
+					<ResourceLink
+						id={resume.resource.id}
+						title={resume.resource.title}
+						class="text-sm text-tp-text hover:text-tp-accent"
+					/>
+				{/snippet}
+				{@render resumeRegion(resumeShown)}
 			{/if}
 		{:catch error}
-			<RegionState state={regionStateFor(error)} label={handoffRegion} />
+			{#snippet resumeFailed()}<RegionState state={regionStateFor(error)} label={RESUME_LABEL} />{/snippet}
+			{@render resumeRegion(resumeFailed)}
 		{/await}
-	</section>
-
-	<!-- Resume — the work you last changed — belongs beside the handoff. It is not drawn until a
-	     read of what the reader changed exists; see `$lib/first-view`. -->
+	</div>
 
 	<!-- Ordered by the reader's own changes, and only here: the nav's places keep their order. The
 	     list is read again whenever this page's load reruns, including when a way in grows, so a

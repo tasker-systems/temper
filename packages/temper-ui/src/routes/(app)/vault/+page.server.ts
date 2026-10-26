@@ -5,7 +5,10 @@ import {
 	handoffPath,
 	PLACES_SCOPE,
 	placesPath,
+	RESUME_LABEL,
 	recentPath,
+	resumeOf,
+	resumePath,
 	wayInPath,
 	wayInShown,
 } from '$lib/first-view';
@@ -52,6 +55,13 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				: null,
 	);
 
+	// What the reader last changed, read through the same door and order as the places' times, so
+	// "your last change" has one definition. Its own read: a failure fails resume alone.
+	const resume = bounded(
+		apiGet<ResourceListResponse>(resumePath(), accessToken).then((r) => resumeOf(r.rows)),
+		RESUME_LABEL,
+	);
+
 	const ways = WAYS_IN.map((way) => {
 		const shown = wayInShown(url.searchParams, way);
 		return {
@@ -75,5 +85,5 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		'recently updated',
 	);
 
-	return { session, next, places, ways, recent };
+	return { session, next, resume, places, ways, recent };
 };

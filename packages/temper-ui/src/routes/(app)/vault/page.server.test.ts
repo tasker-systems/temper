@@ -8,7 +8,7 @@
 // whole job is which reads it makes, and the paths are the witness.
 import { WAY_IN_BOUND, WAYS_IN, type WayIn } from '@tasker-systems/temper-design/ways-in';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { handoffPath, placesPath, recentPath, wayInPath } from '$lib/first-view';
+import { handoffPath, placesPath, recentPath, resumePath, wayInPath } from '$lib/first-view';
 
 const apiGet = vi.fn();
 vi.mock('$lib/server/api', () => ({ apiGet: (...a: unknown[]) => apiGet(...a) }));
@@ -22,6 +22,7 @@ const page = (rows: unknown[], total = rows.length) => ({ rows, total });
 type Loaded = {
 	session: Promise<unknown>;
 	next: Promise<unknown>;
+	resume: Promise<unknown>;
 	recent: Promise<unknown>;
 	places: Promise<unknown>;
 	ways: { way: WayIn; shown: number; list: Promise<unknown> }[];
@@ -57,6 +58,7 @@ function answer(by: Record<string, unknown>): void {
 const everyListEmpty = (): Record<string, unknown> => ({
 	[handoffPath()]: page([]),
 	[recentPath()]: page([]),
+	[resumePath()]: page([]),
 	[placesPath()]: [],
 	...Object.fromEntries(WAYS_IN.map((w) => [wayInPath(w, WAY_IN_BOUND), page([])])),
 });
@@ -69,10 +71,18 @@ describe('arrival starts from the work', () => {
 	it('renders a first view instead of sending the reader to the grid', async () => {
 		answer(everyListEmpty());
 		const data = await run();
-		expect(Object.keys(data).sort()).toEqual(['next', 'places', 'recent', 'session', 'ways']);
+		expect(Object.keys(data).sort()).toEqual([
+			'next',
+			'places',
+			'recent',
+			'resume',
+			'session',
+			'ways',
+		]);
 		await Promise.all([
 			data.session,
 			data.next,
+			data.resume,
 			data.recent,
 			data.places,
 			...data.ways.map((w) => w.list),
@@ -207,6 +217,35 @@ describe('the places nearest are the ones in use', () => {
 		answer({ ...everyListEmpty(), [placesPath()]: new Error('503') });
 		const data = await run();
 		await expect(data.places).rejects.toThrow('503');
+		expect(await data.recent).toEqual(page([]));
+	});
+});
+
+describe('work resumes where it was left', () => {
+	const CHANGED = {
+		id: '01a17626-b8cf-74e0-9f36-d0ec473d7128',
+		title: 'A task',
+		updated: '2026-10-26T12:00:00Z',
+		changed_by_me_at: '2026-10-20T08:00:00Z',
+	};
+
+	it('offers the resource the reader last changed, with the time of their change', async () => {
+		answer({ ...everyListEmpty(), [resumePath()]: page([CHANGED]) });
+		const data = await run();
+		expect(await data.resume).toEqual({ resource: CHANGED, changedAt: CHANGED.changed_by_me_at });
+	});
+
+	it('offers no return when the reader has changed nothing', async () => {
+		answer(everyListEmpty());
+		const data = await run();
+		expect(await data.resume).toBeNull();
+	});
+
+	it('fails resume alone when its read fails', async () => {
+		answer({ ...everyListEmpty(), [resumePath()]: new Error('503') });
+		const data = await run();
+		await expect(data.resume).rejects.toThrow('503');
+		expect(await data.session).toBeNull();
 		expect(await data.recent).toEqual(page([]));
 	});
 });

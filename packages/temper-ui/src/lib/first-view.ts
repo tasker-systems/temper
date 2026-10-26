@@ -14,10 +14,12 @@
  *   view's alone: the nav keeps its stable order (`no-nav-place-moves-with-activity`);
  * - **recently updated** — across everything the reader can read, and it says so.
  *
- * **Resume is not here, and nothing stands in its place.** It means the work the reader last
- * *changed*, and no read answers that yet; it lands beside the handoff when one does. A record of
- * what the reader opened, or the resources they own, would look like it and answer a different
- * question — both are ruled out.
+ * - **resume** — beside the handoff, the one resource the reader most recently changed, and when
+ *   they changed it (`work-resumes-where-it-was-left`). Both come from the list door narrowed to
+ *   the reader's own changes, so the time is theirs and never `updated`, which a teammate's write
+ *   moves. A reader who has changed nothing is offered no return, and nothing stands in its place.
+ *   A record of what the reader opened, or the resources they own, would look like it and answer a
+ *   different question — both are ruled out.
  *
  * Every list is read newest update first, and the page says so. The paths here are pure so a test
  * can pin exactly what each list asks the door for.
@@ -84,6 +86,40 @@ export function handoffPath(): string {
 		...NEWEST_FIRST,
 	});
 	return `/api/resources?${params}`;
+}
+
+/**
+ * The resource the reader most recently changed, by their own change time — the order the list door
+ * gives `sort=changed_by_me`, which it accepts only under `changed_by=@me`.
+ */
+export function resumePath(): string {
+	const params = new URLSearchParams({
+		changed_by: '@me',
+		sort: 'changed_by_me',
+		order: 'desc',
+		limit: '1',
+	});
+	return `/api/resources?${params}`;
+}
+
+/** What resume is called, in its heading and in every state of its region. */
+export const RESUME_LABEL = 'resume';
+
+/** The return resume offers: the resource, and when the reader last changed it. */
+export type Resume = { resource: ResourceView; changedAt: string };
+
+/**
+ * The return, from the first row of the resume read; `null` when the reader has changed nothing.
+ *
+ * A row without its change time is a broken read, not a return without a time: showing `updated`
+ * in its place would claim a recency the reader may not hold, and dropping the row would read as
+ * the reader having changed nothing. It fails the region instead.
+ */
+export function resumeOf(rows: ResourceView[]): Resume | null {
+	const resource = rows[0];
+	if (!resource) return null;
+	if (!resource.changed_by_me_at) throw new Error('the time of your change was not returned');
+	return { resource, changedAt: resource.changed_by_me_at };
 }
 
 /** Recently updated, across everything the reader can read. */
