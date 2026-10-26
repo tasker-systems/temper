@@ -4,7 +4,7 @@ classes  = ["additive"]
 surfaces = ["clients"]
 status   = "signal-only"
 body = '''
-On the web, the first view at `/vault` gains **resume**, beside the handoff: one link to the resource the reader most recently changed, themselves or through an agent working under their profile, and when they changed it ("task · you changed 3h ago"). The time is the reader's own change (`changed_by_me_at`), never `updated`, which a teammate's later write moves. It reads `GET /api/resources?changed_by=@me&sort=changed_by_me&order=desc&limit=1`, the same door and order the CLI and desktop can use, so "your last change" has one definition.
+On the web, the first view at `/vault` gains **resume**, beside the handoff: one link to the resource the reader most recently changed, themselves or through an agent working under their profile, and when they changed it ("task · you changed 3h ago"). The time is the reader's own change (`changed_by_me_at`), never `updated`, which a teammate's later write moves. It reads `GET /api/resources?changed_by=@me&sort=changed_by_me&order=desc&limit=1`. Its time and order count the same changes as the places' "you changed" times, so "your last change" means one thing on the page.
 
 A reader who has changed nothing gets no resume region and nothing in its place; the handoff takes the row. A failed read fails this region alone. A row that comes back without its change time fails the region rather than showing `updated` in its place.
 

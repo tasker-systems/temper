@@ -316,6 +316,11 @@ describe('work resumes where it was left', () => {
 		const { queryByTestId, container } = await mount(dataWith({ resume: Promise.resolve(null) }));
 		expect(queryByTestId('resume')).toBeNull();
 		expect(container.textContent).not.toMatch(new RegExp(`\\b${RESUME_LABEL}\\b`, 'i'));
+		// No stand-in under any name: the handoff is alone in its row, and with every other read
+		// answered, no region on the page draws a state.
+		const handoff = container.querySelector('#handoff-heading')?.closest('section');
+		expect(handoff?.parentElement?.children).toHaveLength(1);
+		expect(container.querySelectorAll('[data-region]')).toHaveLength(0);
 	});
 
 	it('fails alone, keeping the handoff', async () => {

@@ -55,8 +55,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				: null,
 	);
 
-	// What the reader last changed, read through the same door and order as the places' times, so
-	// "your last change" has one definition. Its own read: a failure fails resume alone.
+	// What the reader last changed. Its time and its order are the same changes the places' times
+	// count (`resources_changed_by` and `contexts_changed_by` share one definition), so "your last
+	// change" means one thing on this page. Its own read: a failure fails resume alone.
 	const resume = bounded(
 		apiGet<ResourceListResponse>(resumePath(), accessToken).then((r) => resumeOf(r.rows)),
 		RESUME_LABEL,

@@ -1,10 +1,10 @@
 <script lang="ts">
 	/**
 	 * The first view (`$lib/first-view`): the reader's latest handoff and, beside it, the work they
-	 * last changed; the places they work in, their
-	 * standing ways in, and what was recently updated. Each region renders its own read's state — arriving, failed, given
-	 * up, empty — so one list's failure never reads as another's absence, and every list ends with
-	 * the shared omission sentence and the order it is read in.
+	 * last changed; the places they work in, their standing ways in, and what was recently updated.
+	 * Each region renders its own read's state — arriving, failed, given up, empty — so one list's
+	 * failure never reads as another's absence, and every list ends with the shared omission
+	 * sentence and the order it is read in.
 	 */
 	import type { Snippet } from 'svelte';
 	import { page } from '$app/stores';
@@ -143,7 +143,10 @@
 
 		<!-- Resume: the work the reader last changed, and when they changed it — never `updated`, which a
 		     teammate's write moves. A reader who has changed nothing gets no region at all, so the
-		     handoff takes the row; only a read in flight or a failed one draws a state here. -->
+		     handoff takes the row; only a read in flight or a failed one draws a state here. The read
+		     in flight does draw one, and it vanishes for that reader: hiding it instead would make a
+		     slow read look like having changed nothing, and would shift the row for every reader who
+		     has a return, which is nearly all of them. -->
 		{#snippet resumeArriving()}<RegionState state="arriving" label={RESUME_LABEL} />{/snippet}
 		{#await data.resume}
 			{@render resumeRegion(resumeArriving)}

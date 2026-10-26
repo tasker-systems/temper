@@ -12,8 +12,7 @@
  * - **the places you work in** — the contexts the reader changed something in, ordered by their own
  *   latest change in each (`places-nearest-are-the-ones-in-use`). This ordering is the first
  *   view's alone: the nav keeps its stable order (`no-nav-place-moves-with-activity`);
- * - **recently updated** — across everything the reader can read, and it says so.
- *
+ * - **recently updated** — across everything the reader can read, and it says so;
  * - **resume** — beside the handoff, the one resource the reader most recently changed, and when
  *   they changed it (`work-resumes-where-it-was-left`). Both come from the list door narrowed to
  *   the reader's own changes, so the time is theirs and never `updated`, which a teammate's write
@@ -21,8 +20,9 @@
  *   A record of what the reader opened, or the resources they own, would look like it and answer a
  *   different question — both are ruled out.
  *
- * Every list is read newest update first, and the page says so. The paths here are pure so a test
- * can pin exactly what each list asks the door for.
+ * Every list says the order it is read in: the ways in and recently updated by newest update, the
+ * places and resume by the reader's own latest change. The paths here are pure so a test can pin
+ * exactly what each list asks the door for.
  */
 
 import { WAY_IN_BOUND, type WayIn } from '@tasker-systems/temper-design/ways-in';
