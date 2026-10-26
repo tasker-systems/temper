@@ -26,6 +26,7 @@ pub mod internal_saml;
 pub mod invitations;
 pub mod invocations;
 pub mod machine_clients;
+pub mod me;
 pub mod meta;
 pub mod profiles;
 pub mod query;

@@ -115,7 +115,22 @@ context_ref: string | null,
  * Unknown names are **not** rejected — an unrecognized doc type matches no row, as it always
  * has. See `ResourceFacets::doc_type` for the histogram that makes the reachable set visible.
  */
-doc_type_name: string | null, owner: string | null, q: string | null, stage: string | null, 
+doc_type_name: string | null, owner: string | null, 
+/**
+ * `"@me"`: only resources the caller changed — themselves, or an agent writing under their
+ * profile, on any surface. A change counts when it reaches the resource through its element
+ * trail's arms (names it, owns a property of it, names one of its blocks) and is an AUTHORED
+ * event the caller's profile emitted: events the system computes, such as a region
+ * materialization stamped with a writer's emitter, never count. A machine client is its own
+ * profile, and its changes are not the caller's.
+ *
+ * **Only `"@me"`.** Any other non-empty value is a `400`: naming someone else would make this a read of
+ * another principal's activity, which no door offers. Composes with every other filter as one
+ * more AND, under the same visibility join, so a resource the caller changed and can no longer
+ * read is absent from the rows and from every count. An empty value is no filter, as for
+ * `tags` and `ids`.
+ */
+changed_by?: string | null, q: string | null, stage: string | null, 
 /**
  * Goal-status filter (goal only): matches `temper-status` via the
  * `kb_resource_workflow_props` pivot, exactly as `stage` does. Validated against the
@@ -251,7 +266,7 @@ offset: bigint, };
 /**
  * Sort field for resource listing.
  */
-export type ResourceSortField = "updated" | "created" | "title" | "stage" | "seq" | "context_name" | "doc_type_name";
+export type ResourceSortField = "updated" | "created" | "title" | "stage" | "seq" | "context_name" | "doc_type_name" | "changed_by_me";
 
 /**
  * Request body for updating a resource.

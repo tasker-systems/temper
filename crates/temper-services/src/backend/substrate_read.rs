@@ -111,6 +111,9 @@ fn sort_column_sql(field: ResourceSortField) -> &'static str {
         ResourceSortField::Seq => "wp.seq::bigint",
         ResourceSortField::ContextName => "c.name",
         ResourceSortField::DocTypeName => "dt.property_value #>> '{}'",
+        // The `mine` CTE exists only when `changed_by = "@me"`, which `filtered_visible_page`
+        // requires for this sort, so every row it orders carries a time.
+        ResourceSortField::ChangedByMe => "mine.changed_at",
     }
 }
 
@@ -180,6 +183,31 @@ async fn filtered_visible_page(
         Some(h) if h != "@me" => Some(h),
         _ => None,
     };
+    // `changed_by`: the caller's own changes, and nobody else's. Another value would make this door
+    // a read of someone else's activity, so it is refused rather than matched. The sort by the
+    // caller's latest change is refused without it: a row the filter did not admit has no such time,
+    // and ordering by one would present an order the rows do not hold.
+    //
+    // An empty or whitespace-only value is no filter, as `tags`, `ids` and `doc_type_name` treat
+    // theirs: absent and empty must not mean two different things at one door. Anything else that
+    // is not exactly `@me` is refused, never trimmed into it.
+    let changed_by_self: Option<Uuid> = match params.changed_by.as_deref() {
+        None => None,
+        Some(s) if s.trim().is_empty() => None,
+        Some("@me") => Some(*profile_id),
+        Some(_) => {
+            return Err(ApiError::BadRequest(
+                "`changed_by` accepts only \"@me\": a caller may list their own changes, not another's"
+                    .into(),
+            ));
+        }
+    };
+    if matches!(params.sort, Some(ResourceSortField::ChangedByMe)) && changed_by_self.is_none() {
+        return Err(ApiError::BadRequest(
+            "sort `changed_by_me` needs `changed_by=@me`: only resources you changed carry that time"
+                .into(),
+        ));
+    }
     // Cognitive-map scope: a CSV of cogmap UUIDs (the list GET can't carry a Vec over the query
     // string). Parse to a `uuid[]`; the WHERE below filters on the resource's home anchor. A single
     // home per resource means this composes with `context_ref` only to the empty set (no resource is
@@ -308,8 +336,25 @@ async fn filtered_visible_page(
     // They come from the pivot view's LEFT JOIN, so a resource carrying no `temper-stage` /
     // `temper-status` yields NULL — which the passes below skip rather than counting under a
     // synthetic key.
+    // The caller's own changes, only when `changed_by=@me` asked for them. Emitted conditionally,
+    // not guarded by a `$12 IS NOT NULL` inside one shared text: these are cached prepared
+    // statements, and once Postgres switches one to a generic plan the guard becomes a join filter
+    // and the change set is re-derived once per outer row (measured: 22 s for a plain 10k-resource
+    // list). So a list without the filter runs exactly the SQL it ran before this filter existed,
+    // with eleven binds. With it, the change set is a top-level MATERIALIZED CTE, computed once
+    // whatever plan is chosen; `resources_changed_by` is gated inside by the caller's own predicate
+    // (20261107000000), and the visibility join below gates the row again.
+    // The inner JOIN is the narrowing: a resource the caller did not change has no `mine` row.
+    let (mine_cte, mine_join) = if changed_by_self.is_some() {
+        (
+            "WITH mine AS MATERIALIZED (SELECT * FROM resources_changed_by($12)) ",
+            "JOIN mine ON mine.resource_id = r.id",
+        )
+    } else {
+        ("", "")
+    };
     let sql = format!(
-        "SELECT r.id AS id, dt.property_value #>> '{{}}' AS doc_type_name,
+        "{mine_cte}SELECT r.id AS id, dt.property_value #>> '{{}}' AS doc_type_name,
                 wp.stage AS stage, wp.status AS status
            FROM kb_resources r
            JOIN resources_visible_to($1) v ON v.resource_id = r.id
@@ -321,6 +366,7 @@ async fn filtered_visible_page(
              ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
             AND dt.property_key = 'doc_type' AND NOT dt.is_folded
            LEFT JOIN kb_resource_workflow_props wp ON wp.resource_id = r.id
+           {mine_join}
           WHERE r.is_active
             -- An interrupted segmented ingest is NOT a document. It is excluded from list (and from
             -- search, by the same predicate carried inline in `search_exact` and `search_wide`)
@@ -413,8 +459,10 @@ async fn filtered_visible_page(
     // correspondence at compile time — a bind dropped or added out of order silently applies one
     // caller's filter as another's. Read it against the WHERE clause above, one for one:
     // $1 profile_id, $2 context_id, $3 owner_self, $4 owner_handle, $5 q, $6 goal,
-    // $7 GOAL_EDGE_LABEL, $8 cogmap_ids, $9 tag_filter, $10 has_artifacts, $11 ids.
-    let rows = sqlx::query(&sql)
+    // $7 GOAL_EDGE_LABEL, $8 cogmap_ids, $9 tag_filter, $10 has_artifacts, $11 ids,
+    // and $12 changed_by_self ONLY when `mine_cte` was emitted — the text above references $12
+    // exactly then, and a bind the statement does not declare is a protocol error.
+    let query = sqlx::query(&sql)
         .bind(profile_id)
         .bind(context_id)
         .bind(owner_self)
@@ -425,10 +473,12 @@ async fn filtered_visible_page(
         .bind(cogmap_ids)
         .bind(tag_filter.as_deref())
         .bind(params.has_artifacts)
-        .bind(ids)
-        .fetch_all(pool)
-        .await
-        .map_err(api_err)?;
+        .bind(ids);
+    let query = match changed_by_self {
+        Some(profile) => query.bind(profile),
+        None => query,
+    };
+    let rows = query.fetch_all(pool).await.map_err(api_err)?;
 
     // Decode once (see [`ScannedRow`]); the four passes below all read the same three columns.
     let scanned: Vec<ScannedRow> = rows

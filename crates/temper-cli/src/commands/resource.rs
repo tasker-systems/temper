@@ -1250,10 +1250,12 @@ fn parse_sort_arg(
 
     let order = match dir_str {
         None => match field {
-            // Time and sequence sort newest/highest-first by default.
-            ResourceSortField::Updated | ResourceSortField::Created | ResourceSortField::Seq => {
-                SortOrder::Desc
-            }
+            // Time and sequence sort newest/highest-first by default. `ChangedByMe` is not
+            // parsed above (the CLI has no `changed_by` flag), but it is a time too.
+            ResourceSortField::Updated
+            | ResourceSortField::Created
+            | ResourceSortField::Seq
+            | ResourceSortField::ChangedByMe => SortOrder::Desc,
             // Textual fields read most naturally in ascending (A→Z) order.
             ResourceSortField::Title
             | ResourceSortField::Stage

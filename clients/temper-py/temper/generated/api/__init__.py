@@ -19,6 +19,7 @@ from temper.generated.api.ingest_api import IngestApi
 from temper.generated.api.invitations_api import InvitationsApi
 from temper.generated.api.invocations_api import InvocationsApi
 from temper.generated.api.machine_clients_api import MachineClientsApi
+from temper.generated.api.me_api import MeApi
 from temper.generated.api.meta_api import MetaApi
 from temper.generated.api.profile_api import ProfileApi
 from temper.generated.api.query_api import QueryApi

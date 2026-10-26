@@ -542,6 +542,7 @@ handlers::invocations::close
 handlers::invocations::list
 handlers::invocations::open
 handlers::invocations::show
+handlers::me::context_activity
 handlers::meta::get_meta
 handlers::meta::update_meta
 handlers::profiles::get

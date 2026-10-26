@@ -560,3 +560,24 @@ pub async fn revoke(
     let outcome = access_service::revoke_capability(&state.pool, &auth.0, &req).await?;
     Ok(Json(outcome))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use temper_workflow::types::resource::{ResourceSortField, SortOrder};
+
+    /// The list route reads its parameters through `Query<ResourceListParams>`, which is
+    /// `serde_urlencoded` underneath: the new filter and sort arrive by these exact spellings.
+    #[test]
+    fn the_changes_filter_and_sort_arrive_through_the_query_string() {
+        let params: ResourceListParams =
+            serde_urlencoded::from_str("changed_by=%40me&sort=changed_by_me&order=asc")
+                .expect("the route's Query reads it");
+        assert_eq!(params.changed_by.as_deref(), Some("@me"));
+        assert!(matches!(params.sort, Some(ResourceSortField::ChangedByMe)));
+        assert_eq!(params.order, Some(SortOrder::Asc));
+
+        let without: ResourceListParams = serde_urlencoded::from_str("").expect("empty");
+        assert!(without.changed_by.is_none());
+    }
+}

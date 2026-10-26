@@ -1402,6 +1402,10 @@ pub enum ContextAction {
         #[arg(long)]
         retired: bool,
     },
+    /// When you last changed something in each context you can read, newest first. Only your
+    /// own authored changes count: an agent writing under your profile counts, a machine client
+    /// or a teammate does not, and nothing the system computes does.
+    Activity,
     /// Share a context into a team's read-reach. Requires that you administer the context
     /// (own it, or manage its owning team) AND manage the target team (owner/maintainer), OR
     /// that you are an instance administrator. The context ref is a UUID or the
