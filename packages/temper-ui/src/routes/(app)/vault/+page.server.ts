@@ -3,13 +3,15 @@ import { WAYS_IN } from '@tasker-systems/temper-design/ways-in';
 import {
 	type FirstViewList,
 	handoffPath,
+	PLACES_SCOPE,
+	placesPath,
 	recentPath,
 	wayInPath,
 	wayInShown,
 } from '$lib/first-view';
 import { apiGet } from '$lib/server/api';
 import { bounded, derive } from '$lib/server/bounded';
-import type { ContentResponse, ResourceListResponse } from '$lib/types';
+import type { ContentResponse, ContextActivity, ResourceListResponse } from '$lib/types';
 import type { PageServerLoad } from './$types';
 
 function listOf(response: ResourceListResponse): FirstViewList {
@@ -62,10 +64,16 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		};
 	});
 
+	// The reader's own latest change in each place. It carries no names: the page names each place
+	// from the contexts the layout already sent (`placesInUse`). Joining here would mean awaiting
+	// `parent()`, which holds every read below behind the layout's and, on a client-side rerun,
+	// re-runs the layout's reads too.
+	const places = bounded(apiGet<ContextActivity[]>(placesPath(), accessToken), PLACES_SCOPE);
+
 	const recent = bounded(
 		apiGet<ResourceListResponse>(recentPath(), accessToken).then(listOf),
 		'recently updated',
 	);
 
-	return { session, next, ways, recent };
+	return { session, next, places, ways, recent };
 };

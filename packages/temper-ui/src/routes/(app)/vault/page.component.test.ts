@@ -4,8 +4,9 @@ import { WAY_IN_BOUND, WAY_IN_ORDER, WAYS_IN } from '@tasker-systems/temper-desi
 import { render } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { type FirstViewList, RECENT_SCOPE } from '$lib/first-view';
+import { type FirstViewList, PLACES_ORDER, PLACES_SCOPE, RECENT_SCOPE } from '$lib/first-view';
 import { describeFailure, GaveUp, GIVE_UP_AFTER_MS } from '$lib/server/bounded';
+import type { ContextActivity, ContextRowWithCounts } from '$lib/types';
 import { resetAppContext, setPage } from '../../../test/app-context';
 import { makeRow } from '../../../test/fixtures';
 import Page from './+page.svelte';
@@ -43,10 +44,33 @@ const list = (n: number, total = n, prefix = 'row'): FirstViewList => ({
 	total,
 });
 
+const placeId = (i: number) => `0000000${i}-0000-7000-8000-00000000000c`;
+
+/** The places the layout read: named, in the nav's order. */
+const contextsOf = (n: number): ContextRowWithCounts[] =>
+	Array.from(
+		{ length: n },
+		(_, i) =>
+			({
+				id: placeId(i),
+				name: `place ${i}`,
+				slug: `place-${i}`,
+				owner_ref: '+team',
+			}) as unknown as ContextRowWithCounts,
+	);
+
+/** The reader's change in each of the first `n` places, place 0 most recently. */
+const activityIn = (n: number): ContextActivity[] =>
+	Array.from({ length: n }, (_, i) => ({
+		context_id: placeId(i),
+		last_changed_at: new Date(Date.now() - (i + 1) * 3_600_000).toISOString(),
+	})) as ContextActivity[];
+
 const SESSION = makeRow({ id: '01a17104-f5db-7782-b326-70ce7109c2d5', title: 'The last session' });
 
 function dataWith(
-	over: Partial<Record<'session' | 'next' | 'recent', Promise<unknown>>> & {
+	over: Partial<Record<'session' | 'next' | 'recent' | 'places', Promise<unknown>>> & {
+		contexts?: ContextRowWithCounts[] | null;
 		ways?: Promise<FirstViewList>[];
 	},
 ): PageData {
@@ -58,6 +82,8 @@ function dataWith(
 			truncated: false,
 		}),
 		recent: Promise.resolve(list(5, 40, 'recent')),
+		places: Promise.resolve(activityIn(2)),
+		contexts: contextsOf(2),
 		...over,
 		ways: WAYS_IN.map((way, i) => ({
 			way,
@@ -196,5 +222,54 @@ describe('recently updated', () => {
 		const region = getByTestId('recent');
 		expect(region.textContent).toContain(omissionSentence(40, 5, RECENT_SCOPE));
 		expect(region.textContent).toContain(`Ordered ${WAY_IN_ORDER}.`);
+	});
+});
+
+describe('the places nearest are the ones in use', () => {
+	it("names each from the layout's contexts, orders by the reader's change, and says by what", async () => {
+		// The layout's order is the nav's (place 0 … 6); the reader changed place 3 most recently.
+		const activity = activityIn(7).reverse();
+		activity[3] = { ...activity[3], last_changed_at: new Date().toISOString() };
+		const { getByTestId } = await mount(
+			dataWith({ places: Promise.resolve(activity), contexts: contextsOf(7) }),
+		);
+		const region = getByTestId('places');
+		expect([...region.querySelectorAll('li a')].map((a) => a.textContent?.trim())).toEqual([
+			'place 3',
+			'place 0',
+			'place 1',
+			'place 2',
+			'place 4',
+		]);
+		expect(region.querySelector('li a')?.getAttribute('href')).toBe('/vault/+team/place-3');
+		expect(region.querySelector('[data-testid="place-changed"]')?.textContent?.trim()).toBe(
+			'you changed just now',
+		);
+		const foot = region.querySelector('[data-testid="omission"]')?.textContent;
+		expect(foot).toContain(omissionSentence(7, 5, PLACES_SCOPE));
+		expect(foot).toContain(`Ordered ${PLACES_ORDER}.`);
+	});
+
+	it('says the reader has changed nothing yet, rather than drawing an empty list', async () => {
+		const { getByTestId } = await mount(dataWith({ places: Promise.resolve([]) }));
+		const region = getByTestId('places');
+		expect(region.querySelector('[data-testid="region-empty"]')).not.toBeNull();
+		expect(region.querySelector('ul')).toBeNull();
+		expect(region.querySelector('[data-testid="omission"]')).toBeNull();
+	});
+
+	it('fails alone: a failed places read names itself and leaves the other regions standing', async () => {
+		const { getByTestId } = await mount(dataWith({ places: broken() }));
+		expect(getByTestId('places').textContent).toContain(
+			'Places you changed something in unavailable',
+		);
+		expect(getByTestId('recent').querySelectorAll('li')).toHaveLength(5);
+	});
+
+	it('fails, rather than claiming none, when the layout could not read the places', async () => {
+		const { getByTestId } = await mount(dataWith({ contexts: null }));
+		const region = getByTestId('places');
+		expect(region.querySelector('[data-testid="region-failed"]')).not.toBeNull();
+		expect(region.querySelector('[data-testid="region-empty"]')).toBeNull();
 	});
 });

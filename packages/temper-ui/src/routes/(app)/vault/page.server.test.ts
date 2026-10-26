@@ -8,7 +8,7 @@
 // whole job is which reads it makes, and the paths are the witness.
 import { WAY_IN_BOUND, WAYS_IN, type WayIn } from '@tasker-systems/temper-design/ways-in';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { handoffPath, recentPath, wayInPath } from '$lib/first-view';
+import { handoffPath, placesPath, recentPath, wayInPath } from '$lib/first-view';
 
 const apiGet = vi.fn();
 vi.mock('$lib/server/api', () => ({ apiGet: (...a: unknown[]) => apiGet(...a) }));
@@ -23,12 +23,21 @@ type Loaded = {
 	session: Promise<unknown>;
 	next: Promise<unknown>;
 	recent: Promise<unknown>;
+	places: Promise<unknown>;
 	ways: { way: WayIn; shown: number; list: Promise<unknown> }[];
 };
 
-async function run(search = ''): Promise<Loaded> {
+const CONTEXT = {
+	id: '01a0d34e-032b-72b3-8c5d-da7bc3da6727',
+	name: 'core',
+	slug: 'core',
+	owner_ref: '+temper-dev',
+};
+
+async function run(search = '', contexts: unknown[] | null = [CONTEXT]): Promise<Loaded> {
 	const event = {
 		locals: { accessToken: 'tok' },
+		parent: async () => ({ contexts }),
 		url: new URL(`https://temper.test/vault${search}`),
 	} as unknown as Parameters<typeof load>[0];
 	return (await load(event)) as unknown as Loaded;
@@ -48,6 +57,7 @@ function answer(by: Record<string, unknown>): void {
 const everyListEmpty = (): Record<string, unknown> => ({
 	[handoffPath()]: page([]),
 	[recentPath()]: page([]),
+	[placesPath()]: [],
 	...Object.fromEntries(WAYS_IN.map((w) => [wayInPath(w, WAY_IN_BOUND), page([])])),
 });
 
@@ -59,8 +69,14 @@ describe('arrival starts from the work', () => {
 	it('renders a first view instead of sending the reader to the grid', async () => {
 		answer(everyListEmpty());
 		const data = await run();
-		expect(Object.keys(data).sort()).toEqual(['next', 'recent', 'session', 'ways']);
-		await Promise.all([data.session, data.next, data.recent, ...data.ways.map((w) => w.list)]);
+		expect(Object.keys(data).sort()).toEqual(['next', 'places', 'recent', 'session', 'ways']);
+		await Promise.all([
+			data.session,
+			data.next,
+			data.recent,
+			data.places,
+			...data.ways.map((w) => w.list),
+		]);
 	});
 
 	it("quotes the next steps of the reader's newest session, read from its body", async () => {
@@ -171,5 +187,26 @@ describe('the same ways in on both surfaces', () => {
 		await expect(data.ways[0].list).rejects.toThrow('503');
 		expect(data.ways[1].way).toBe(tasks);
 		expect(await data.ways[1].list).toEqual(page([]));
+	});
+});
+
+describe('the places nearest are the ones in use', () => {
+	it("reads the reader's own latest change in each place", async () => {
+		const activity = [
+			{
+				context_id: '01a0d34e-032b-72b3-8c5d-da7bc3da6727',
+				last_changed_at: '2026-10-25T00:00:00Z',
+			},
+		];
+		answer({ ...everyListEmpty(), [placesPath()]: activity });
+		const data = await run();
+		expect(await data.places).toEqual(activity);
+	});
+
+	it('fails the places alone when the activity cannot be read', async () => {
+		answer({ ...everyListEmpty(), [placesPath()]: new Error('503') });
+		const data = await run();
+		await expect(data.places).rejects.toThrow('503');
+		expect(await data.recent).toEqual(page([]));
 	});
 });
