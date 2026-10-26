@@ -63,9 +63,9 @@ describe('the places a reader works in', () => {
 			last_changed_at: at,
 		}) as ContextActivity;
 
-	it("orders by the reader's own latest change, not by the place's update or its name", () => {
-		// Place 1 was updated most recently (by anyone) and sorts first by name; the reader changed
-		// place 3 last. Only the reader's own time may decide.
+	it("orders by the reader's change time, not by the place's own `updated` or its name", () => {
+		// Place 1 has the newest `updated` and sorts first by name; the reader changed place 3 last.
+		// Which changes count as the reader's is the activity read's to decide, not this function's.
 		const contexts = [
 			place(1, '2026-10-25T12:00:00Z'),
 			place(2, '2026-10-01T00:00:00Z'),

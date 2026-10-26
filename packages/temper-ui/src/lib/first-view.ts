@@ -98,7 +98,7 @@ export function placesPath(): string {
 }
 
 /** How many places are shown — the same bound as recently updated. */
-export const PLACES_BOUND = 5;
+export const PLACES_BOUND = RECENT_BOUND;
 
 /** What the places list covers, as its omission sentence names it. */
 export const PLACES_SCOPE = 'places you changed something in';

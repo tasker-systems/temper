@@ -15,6 +15,8 @@
 		type FirstViewList,
 		PLACES_ORDER,
 		PLACES_SCOPE,
+		type PlacesList,
+		placesInUse,
 		RECENT_SCOPE,
 		WAY_IN_MAX,
 		wayInMoreHref,
@@ -26,6 +28,20 @@
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
+
+	/**
+	 * The places, named from the contexts the layout read. A failed contexts read (`null`) fails this
+	 * region through `placesInUse`, rather than leaving it to claim the reader changed nothing.
+	 *
+	 * `.then` makes a new promise, which nothing has subscribed to while the server renders the
+	 * pending state, so it carries its own catch, as `derive` in `$lib/server/bounded` does for a
+	 * load. The `{:catch}` below still sees the rejection.
+	 */
+	const places: Promise<PlacesList> = $derived.by(() => {
+		const joined = data.places.then((activity) => placesInUse(activity, data.contexts));
+		joined.catch(() => {});
+		return joined;
+	});
 
 	/** The handoff is the reader's own; every state of its region says so. */
 	const handoffRegion = `your ${HANDOFF_LABEL}`;
@@ -50,10 +66,10 @@
 	</ul>
 {/snippet}
 
-{#snippet foot(list: FirstViewList, scope: string)}
+{#snippet foot(list: { rows: unknown[]; total: number }, scope: string, order: string = WAY_IN_ORDER)}
 	<p class="mt-2 text-xs text-tp-text-subtle" data-testid="omission">
 		{omissionSentence(list.total, list.rows.length, scope)}
-		<span>Ordered {WAY_IN_ORDER}.</span>
+		<span>Ordered {order}.</span>
 	</p>
 {/snippet}
 
@@ -111,15 +127,16 @@
 	     read of what the reader changed exists; see `$lib/first-view`. -->
 
 	<!-- Ordered by the reader's own changes, and only here: the nav's places keep their order. The
-	     list is drawn once per load, so it never moves under a reader using it. -->
+	     list is read again whenever this page's load reruns, including when a way in grows, so a
+	     change made meanwhile can move a place. -->
 	<section aria-labelledby="places-heading" data-testid="places">
 		<h2 id="places-heading" class="mb-2 text-[10px] uppercase tracking-widest text-tp-text-subtle">
 			places you work in
 		</h2>
-		{#await data.places}
+		{#await places}
 			<RegionState state="arriving" label={PLACES_SCOPE} />
-		{:then places}
-			{#if places.total === 0}
+		{:then got}
+			{#if got.total === 0}
 				<RegionState
 					state="empty"
 					label={PLACES_SCOPE}
@@ -127,7 +144,7 @@
 				/>
 			{:else}
 				<ul class="divide-y divide-tp-rule">
-					{#each places.rows as { context, lastChangedAt } (context.id)}
+					{#each got.rows as { context, lastChangedAt } (context.id)}
 						<li class="flex items-baseline justify-between gap-3 py-1.5 min-w-0">
 							<a
 								href={contextHref(context.owner_ref, context.slug)}
@@ -141,10 +158,7 @@
 						</li>
 					{/each}
 				</ul>
-				<p class="mt-2 text-xs text-tp-text-subtle" data-testid="omission">
-					{omissionSentence(places.total, places.rows.length, PLACES_SCOPE)}
-					<span>Ordered {PLACES_ORDER}.</span>
-				</p>
+				{@render foot(got, PLACES_SCOPE, PLACES_ORDER)}
 			{/if}
 		{:catch error}
 			<RegionState state={regionStateFor(error)} label={PLACES_SCOPE} />

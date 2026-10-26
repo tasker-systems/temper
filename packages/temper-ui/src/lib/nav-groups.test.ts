@@ -170,3 +170,16 @@ describe('navContextsState — a failed teams read degrades labels, never places
 		expect(state.groups.flatMap((g) => g.contexts.map((c) => c.slug))).toEqual(['infra', 'papers']);
 	});
 });
+
+describe('navContextsState — the nav does not move with activity', () => {
+	it("keeps a group's places in the order the contexts read gives, whatever was updated last", () => {
+		const places = ['alpha', 'beta', 'gamma'].map((slug, i) => ({
+			...ctx(slug, '@me'),
+			// Newest last in name order: an order by recency would reverse the group.
+			updated: `2026-10-2${i}T00:00:00Z`,
+		}));
+		const state = navContextsState(places, [], SELF);
+		if (state.kind !== 'groups') throw new Error('expected groups');
+		expect(state.groups[0].contexts.map((c) => c.slug)).toEqual(['alpha', 'beta', 'gamma']);
+	});
+});

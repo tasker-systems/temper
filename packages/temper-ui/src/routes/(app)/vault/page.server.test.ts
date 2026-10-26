@@ -191,32 +191,22 @@ describe('the same ways in on both surfaces', () => {
 });
 
 describe('the places nearest are the ones in use', () => {
-	it("reads the reader's own change in each place, and names each from the layout's contexts", async () => {
-		answer({
-			...everyListEmpty(),
-			[placesPath()]: [{ context_id: CONTEXT.id, last_changed_at: '2026-10-25T00:00:00Z' }],
-		});
+	it("reads the reader's own latest change in each place", async () => {
+		const activity = [
+			{
+				context_id: '01a0d34e-032b-72b3-8c5d-da7bc3da6727',
+				last_changed_at: '2026-10-25T00:00:00Z',
+			},
+		];
+		answer({ ...everyListEmpty(), [placesPath()]: activity });
 		const data = await run();
-		expect(await data.places).toEqual({
-			rows: [{ context: CONTEXT, lastChangedAt: '2026-10-25T00:00:00Z' }],
-			total: 1,
-		});
+		expect(await data.places).toEqual(activity);
 	});
 
 	it('fails the places alone when the activity cannot be read', async () => {
 		answer({ ...everyListEmpty(), [placesPath()]: new Error('503') });
 		const data = await run();
 		await expect(data.places).rejects.toThrow('503');
-		expect(await data.recent).toEqual(page([]));
-	});
-
-	it('fails the places, rather than showing none, when the contexts were never read', async () => {
-		answer({
-			...everyListEmpty(),
-			[placesPath()]: [{ context_id: CONTEXT.id, last_changed_at: '2026-10-25T00:00:00Z' }],
-		});
-		const data = await run('', null);
-		await expect(data.places).rejects.toThrow();
 		expect(await data.recent).toEqual(page([]));
 	});
 });

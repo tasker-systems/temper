@@ -1,0 +1,16 @@
+title    = "The web's first view puts the places the reader works in first"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["clients"]
+status   = "signal-only"
+body = '''
+On the web, the first view at `/vault` gains **places you work in**: the contexts the reader changed something in, themselves or through an agent working under their profile, ordered by their own latest change in each, and saying so. It shows 5, ends with its omission sentence, and each row says when the reader last changed something there ("you changed 2h ago"), a time no teammate's write moves. It reads `GET /api/me/context-activity` and names each place from the contexts the layout already reads. A reader who has changed nothing is told so; a failed read fails this region alone; and when the layout could not read the contexts, the region fails rather than claiming the reader has none.
+
+Only the first view orders places by use. The nav keeps the order the contexts read gives it, and a new test pins that.
+
+The list is read again whenever the first view's load reruns, which includes growing a way in, so a change made meanwhile can move a place.
+
+Who observes it: a reader opening `/vault` on the web. Nothing on the HTTP, MCP or CLI surfaces changes.
+
+Release relevance: signal-only. Additive (a region on a page).
+'''

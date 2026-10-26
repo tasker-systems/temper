@@ -4,7 +4,6 @@ import {
 	type FirstViewList,
 	handoffPath,
 	PLACES_SCOPE,
-	placesInUse,
 	placesPath,
 	recentPath,
 	wayInPath,
@@ -24,7 +23,7 @@ function listOf(response: ResourceListResponse): FirstViewList {
  * one slow or failed list never holds up or blanks another: each reaches the page as a promise
  * whose failure its own region names. `bounded` is also each one's server-side catch.
  */
-export const load: PageServerLoad = async ({ locals, parent, url }) => {
+export const load: PageServerLoad = async ({ locals, url }) => {
 	const accessToken = locals.accessToken!;
 
 	const session = bounded(
@@ -65,13 +64,11 @@ export const load: PageServerLoad = async ({ locals, parent, url }) => {
 		};
 	});
 
-	// The layout has already read the contexts (null on a failed read), and they name the places;
-	// the activity read is the only new one. `parent()` resolves at once, so nothing waits on it.
-	const { contexts } = await parent();
-	const places = derive(
-		bounded(apiGet<ContextActivity[]>(placesPath(), accessToken), PLACES_SCOPE),
-		(activity) => placesInUse(activity, contexts),
-	);
+	// The reader's own latest change in each place. It carries no names: the page names each place
+	// from the contexts the layout already sent (`placesInUse`). Joining here would mean awaiting
+	// `parent()`, which holds every read below behind the layout's and, on a client-side rerun,
+	// re-runs the layout's reads too.
+	const places = bounded(apiGet<ContextActivity[]>(placesPath(), accessToken), PLACES_SCOPE);
 
 	const recent = bounded(
 		apiGet<ResourceListResponse>(recentPath(), accessToken).then(listOf),
