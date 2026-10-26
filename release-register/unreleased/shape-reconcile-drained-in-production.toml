@@ -6,14 +6,23 @@ status   = "signal-only"
 body = '''
 A new self-gated cron door, `GET|POST /api/shape/reconcile` on the `api/internal` function, runs
 every five minutes behind the existing dispatch secret and host pin, and stays out of the OpenAPI
-contract like the other cron doors. Each pass reaps expired leases, then claims the
-shape-reconcile jobs a declare or a rehome enqueued. It verdicts each anchor's backlog against
-the shape in force, in batches of at most 200 artifacts or 32 MB of content, under a 240 s
-deadline (`TEMPER_SHAPE_RECONCILE_DEADLINE_SECONDS` overrides it). An anchor the deadline cuts off
-keeps the verdicts it wrote, and its job is re-enqueued to resume. A shape that cannot be
-compiled gives no verdict; it is named in a warning and counted in the pass's summary. An
-artifact committed with `null` content is validated as `null`, as its commit was. Before this,
-the jobs were enqueued and nothing drained them.
+contract like the other cron doors. A `cap` below 1 is refused with `400`; one above 10 is clamped.
+Each pass reaps expired leases, then claims shape-reconcile jobs one anchor at a time, so a large
+anchor cannot hold the others' leases. It verdicts each anchor's backlog against the shape in
+force:
+
+- in batches of at most 200 artifacts and 32 MB of content, or one larger artifact alone;
+- with compiles and checks on the blocking pool, under the shape compile permits;
+- under a 240 s deadline checked after every artifact (`TEMPER_SHAPE_RECONCILE_DEADLINE_SECONDS`
+  overrides it). An anchor the deadline cuts off keeps the verdicts it wrote, and is re-enqueued to
+  resume.
+
+A verdict records at most 64 errors, with their messages masked so they never copy the artifact's
+content. An artifact whose verdict cannot be written is skipped and counted, and its anchor's job is
+left for the reaper. A shape that cannot be compiled gives no verdict; it is named in a warning and
+counted. An artifact committed with `null` content is validated as `null`, as its commit was. A
+completed anchor whose backlog is not empty (a declare, an amendment or a rehome that arrived while
+it ran) is queued again. Before this, the jobs were enqueued and nothing drained them.
 
 The behavioral change is in what reads report. Every read that carries a `shape_state` reports
 `declared_not_yet_checked` for such an artifact today. Once a pass has reached it, the same read

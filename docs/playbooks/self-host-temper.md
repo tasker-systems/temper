@@ -57,7 +57,7 @@ routes match in order:
 | Route | Function | What it is |
 |---|---|---|
 | `/mcp`, `/mcp/(.*)` | `api/mcp.rs` | The MCP server. |
-| `/api/embed/dispatch`, `/api/embed/warm`, `/api/region/dispatch`, `/api/slack/intents/reap`, `/api/as/reap`, `/api/internal-calls/health`, `/api/erasure/drain`, `/api/sensitivity/sweep` | `api/internal.rs` | Cron-driven work. **Not called by clients** — see below. |
+| `/api/embed/dispatch`, `/api/embed/warm`, `/api/region/dispatch`, `/api/slack/intents/reap`, `/api/as/reap`, `/api/internal-calls/health`, `/api/erasure/drain`, `/api/sensitivity/sweep`, `/api/shape/reconcile` | `api/internal.rs` | Cron-driven work. **Not called by clients** — see below. |
 | `/internal/(.*)` | `api/internal.rs` | Server-to-server, HMAC-gated (the SAML reconcile channel). |
 | `/oauth/token`, `/oauth/jwks`, `/oauth/authorize`, `/oauth/clients`, `/oauth/saml/{login,acs,metadata}`, `/.well-known/oauth-authorization-server` | `api/oauth/*.ts` | The authorization server. TypeScript, not Rust. |
 | `/oauth/(.*)`, `/.well-known/(.*)` | `api/mcp.rs` | Whatever the named OAuth routes above did not claim. |
@@ -70,7 +70,7 @@ committed `.sqlx/` cache rather than a live database.
 ### The drains are not optional
 
 `api/internal.rs` runs the background work, and **nothing invokes it unless the
-crons are configured**. `vercel.json` declares eleven:
+crons are configured**. `vercel.json` declares twelve:
 
 | Schedule | Path | What stalls without it |
 |---|---|---|
@@ -82,6 +82,7 @@ crons are configured**. `vercel.json` declares eleven:
 | every 15 minutes | `/api/internal-calls/health` | Reconcile-channel health: a fail-open internal call that never reached the instance produces no operator-visible signal. |
 | every minute | `/api/erasure/drain` | Erasure: deletion work is never processed off the request path. |
 | every 5 minutes | `/api/sensitivity/sweep` | Sensitivity sweep: personal data that lands in the corpus by accident is never found, and the digests of erased places are never expired. Scans nothing until you opt in with `SENSITIVITY_SWEEP_ENABLED` and enable detectors. |
+| every 5 minutes | `/api/shape/reconcile` | Shape reconciliation: an artifact committed before its family's shape was declared, or rehomed under another shape, never gains a verdict and reads `declared_not_yet_checked`. |
 
 On Vercel these doors answer only on the deployment's own generated URL, which is the host
 Vercel Cron calls (`VERCEL_URL`). Your public domain answers them `404`, so a cron pointed at the

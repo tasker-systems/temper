@@ -20,12 +20,14 @@ use temper_services::error::ApiResult;
 use temper_services::services::shape_service::{self, ShapeReconcileSummary};
 use temper_services::state::AppState;
 
+use crate::handlers::auditor::validate_cap;
 use crate::handlers::embed::require_dispatch_secret;
 
 /// Query params for the shape-reconcile drain.
 #[derive(Debug, Deserialize)]
 pub struct ShapeReconcileQuery {
-    /// Max anchors to claim per iteration. Omitted → the service default.
+    /// Max anchors to claim per iteration: at least 1, held to the service's ceiling. Omitted → the
+    /// service default.
     pub cap: Option<i32>,
 }
 
@@ -40,6 +42,9 @@ pub async fn dispatch(
 ) -> ApiResult<Json<ShapeReconcileSummary>> {
     // Fail-closed when unconfigured: no secret ⇒ endpoint disabled.
     require_dispatch_secret(&state, &headers, "shape reconcile")?;
+    // A `cap` below 1 is the caller's fault, refused as the auditor door refuses it; above the
+    // ceiling the service clamps it.
+    validate_cap(q.cap.map(i64::from))?;
 
     let summary = shape_service::dispatch_tick(&state.pool, q.cap).await?;
     tracing::info!(
@@ -48,8 +53,11 @@ pub async fn dispatch(
         deferred = summary.deferred,
         partial = summary.partial,
         failed = summary.failed,
+        requeued = summary.requeued,
         verdicts_written = summary.verdicts_written,
+        failed_artifacts = summary.failed_artifacts,
         uncompilable_shapes = summary.uncompilable_shapes,
+        batches_read = summary.batches_read,
         "shape reconcile pass complete"
     );
     Ok(Json(summary))

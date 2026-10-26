@@ -87,11 +87,15 @@ job, which A1 alone reports as a healthy queue.
 > such attribute at all. So this query aggregates over *ticks that found work*, which is the right
 > denominator, and a panel reading "no data" on a quiet drain is correct rather than broken.
 
-**A3 — Both drains side by side** `[blind]`
+**A3 — The drains side by side** `[blind]`
 
 ```traceql
-{ name =~ "(region|embed)_dispatch" } | max_over_time(span.backlog_depth) by (span:name)
+{ name =~ "(region|embed|shape_reconcile)_dispatch" } | max_over_time(span.backlog_depth) by (span:name)
 ```
+
+`shape_reconcile_dispatch`'s `backlog_depth` counts jobs, one per anchor, not artifacts. An
+anchor's unreconciled artifacts are on its `shape_reconcile_job` span as `backlog_remaining`, a
+probe that stops at 1,000; `backlog_remaining_capped` says when it stopped.
 
 The twins share a function and a wall-clock budget (`maxDuration: 300`). One starving the other is
 visible here and nowhere else.

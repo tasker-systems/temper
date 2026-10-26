@@ -672,6 +672,25 @@ async fn with_schema_off_the_executor<T: Send + 'static>(
     .map_err(|e| ApiError::Internal(format!("shape schema task failed: {e}")))
 }
 
+/// Run CPU-bound shape work that owns its inputs — a reconcile pass's compile, or its check of one
+/// artifact's content — on the blocking pool, holding a compile permit for as long as it runs: the
+/// same permits as [`with_schema_off_the_executor`], so background reconciliation and request-path
+/// compiles share one bound on how much shape work runs at once.
+pub(crate) async fn run_off_the_executor<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+) -> ApiResult<T> {
+    let permit = COMPILE_PERMITS
+        .acquire()
+        .await
+        .map_err(|e| ApiError::Internal(format!("shape compile permits closed: {e}")))?;
+    tokio::task::spawn_blocking(move || {
+        let _held = permit;
+        work()
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("shape schema task failed: {e}")))
+}
+
 /// What a test reads to see how often [`askable`] enumerated a compiling shape — every enumeration,
 /// whichever read asked for it — and how often a request's ask session made a shape's path
 /// teaching, each one an enumeration of its vocabulary.

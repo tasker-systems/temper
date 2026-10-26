@@ -53,7 +53,10 @@
 //! commit, reconcile and the shape loader all compile here). The bound is per regex: no schema
 //! that compiles carries a `pattern` or `patternProperties` regex past it.
 
-use jsonschema::{Draft, Retrieve, Uri, Validator};
+use jsonschema::{Draft, Retrieve, Uri};
+
+/// The compiled form of a shape's JSON Schema, as [`compile`] returns it.
+pub use jsonschema::Validator;
 use serde_json::Value;
 
 /// The schema cannot be compiled without a fetch, or cannot be compiled at all.
@@ -168,6 +171,58 @@ pub fn compile(schema: &Value) -> Result<Validator, ShapeSchemaUncompilable> {
         .map_err(|_| ShapeSchemaUncompilable)
 }
 
+/// What a verdict records of content checked against a shape: whether it satisfies the shape, and
+/// the reasons when it does not.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MaskedJudgement {
+    /// Whether the content satisfies every keyword of the shape.
+    pub satisfied: bool,
+    /// At most the requested number of errors, each `{ "path", "message" }`, with every message
+    /// masked so no part of the content is copied into it. When more errors exist than were
+    /// recorded, a last entry with an empty `path` says so. `None` when the content satisfies the
+    /// shape.
+    pub detail: Option<Value>,
+}
+
+/// The message a masked judgement records after its last error when the content has more.
+pub const FURTHER_ERRORS_NOT_RECORDED: &str = "further errors were not recorded";
+
+/// Check `content` against a compiled shape for a verdict written off the request path, recording
+/// at most `max_errors` errors.
+///
+/// Masked, because most of the validator's messages print the failing instance whole: recorded
+/// unmasked, one large artifact failing many keywords would copy its content into the verdict once
+/// per error. Bounded, because the validator reports every failing branch of an `allOf`, so the
+/// number of errors is the schema's to choose. The errors are taken lazily, so the ones past the
+/// bound are never computed beyond the one that shows they exist.
+#[must_use]
+pub fn judge_masked(validator: &Validator, content: &Value, max_errors: usize) -> MaskedJudgement {
+    let mut errors = validator.iter_errors(content);
+    let mut detail: Vec<Value> = errors
+        .by_ref()
+        .take(max_errors)
+        .map(|e| {
+            serde_json::json!({
+                "path": e.instance_path().to_string(),
+                "message": e.masked().to_string(),
+            })
+        })
+        .collect();
+    if detail.is_empty() {
+        return MaskedJudgement {
+            satisfied: true,
+            detail: None,
+        };
+    }
+    if errors.next().is_some() {
+        detail.push(serde_json::json!({ "path": "", "message": FURTHER_ERRORS_NOT_RECORDED }));
+    }
+    MaskedJudgement {
+        satisfied: false,
+        detail: Some(Value::Array(detail)),
+    }
+}
+
 /// What a test reads to see which schemas [`compile`] was run on — every call, from every caller,
 /// so a compile that skipped a bound is seen wherever it was written.
 #[cfg(feature = "test-support")]
@@ -201,5 +256,62 @@ pub mod test_support {
             .get(tag)
             .copied()
             .unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // FAILS IF: a recorded message prints the failing value, so a verdict copies content.
+    #[test]
+    fn a_masked_judgement_never_copies_the_content_into_its_messages() {
+        let validator = compile(&serde_json::json!({
+            "type": "object",
+            "properties": { "value": { "type": "string" } }
+        }))
+        .expect("the schema compiles");
+        let judged = judge_masked(&validator, &serde_json::json!({ "value": 987_654_321 }), 8);
+        assert!(!judged.satisfied);
+        let detail = judged
+            .detail
+            .expect("an unsatisfied judgement carries its reasons");
+        let text = detail.to_string();
+        assert!(
+            !text.contains("987654321"),
+            "the failing value is masked: {text}"
+        );
+        assert_eq!(detail[0]["path"], "/value");
+    }
+
+    // FAILS IF: every error is recorded however many the schema produces, or the cut is silent.
+    #[test]
+    fn a_masked_judgement_records_at_most_its_bound_and_says_when_it_stopped() {
+        let validator = compile(&serde_json::json!({
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+        }))
+        .expect("the schema compiles");
+        let content: serde_json::Map<String, Value> = (0..10)
+            .map(|i| (format!("k{i}"), serde_json::json!(i)))
+            .collect();
+        let judged = judge_masked(&validator, &Value::Object(content), 3);
+        let detail = judged.detail.expect("ten errors");
+        let entries = detail.as_array().expect("an array of errors");
+        assert_eq!(entries.len(), 4, "three errors and the marker: {detail}");
+        assert_eq!(entries[3]["message"], FURTHER_ERRORS_NOT_RECORDED);
+    }
+
+    // FAILS IF: satisfying content is judged unsatisfied, or carries a detail.
+    #[test]
+    fn a_masked_judgement_of_satisfying_content_has_no_detail() {
+        let validator = compile(&serde_json::json!({ "type": "object" })).expect("compiles");
+        assert_eq!(
+            judge_masked(&validator, &serde_json::json!({}), 8),
+            MaskedJudgement {
+                satisfied: true,
+                detail: None
+            }
+        );
     }
 }

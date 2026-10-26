@@ -47,8 +47,9 @@ pub enum JobOutcome {
     /// The invocation's wall-clock deadline was already spent when this job came up. Handed back
     /// untouched, **no work attempted**.
     Deferred,
-    /// Work was done but did not finish this claim's budget; re-enqueued to resume. Embed only — a
-    /// region tick has no partial state (see [`crate::services::region_service`]'s module doc).
+    /// Work was done but did not finish this claim's budget; re-enqueued to resume. Embed and shape
+    /// reconcile only — a region tick has no partial state (see
+    /// [`crate::services::region_service`]'s module doc).
     Partial,
     /// The unit of work errored. Left in-flight for the reaper.
     Failed,

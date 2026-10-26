@@ -1,0 +1,45 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT w.artifact_id     AS \"artifact_id!: Uuid\",\n               w.content_hash    AS \"content_hash!: String\",\n               w.shape_id        AS \"shape_id!: Uuid\",\n               w.shape_version   AS \"shape_version!: i32\"\n          FROM (SELECT b.*,\n                       row_number() OVER read_order AS n,\n                       sum(b.content_bytes) OVER read_order AS bytes_through\n                  FROM (SELECT a.id           AS artifact_id,\n                               a.content_hash,\n                               a.content_bytes,\n                               s.shape_id,\n                               s.shape_version\n                          FROM kb_data_artifacts a\n                         CROSS JOIN LATERAL _data_artifact_shape_in_force(\n                             a.resource_id, a.kind_owner_table, a.kind_owner_id, a.artifact_kind\n                         ) s\n                          JOIN kb_data_artifact_shapes sh ON sh.id = s.shape_id\n                           AND sh.home_anchor_table = $1\n                           AND sh.home_anchor_id    = $2\n                          JOIN kb_resources r ON r.id = a.resource_id\n                         WHERE NOT a.is_folded\n                           AND r.erased_at IS NULL\n                           AND a.id > $3\n                           AND NOT (s.shape_id = ANY($4))\n                           AND EXISTS (\n                               SELECT 1 FROM kb_resource_homes h\n                                WHERE h.resource_id  = a.resource_id\n                                  AND h.anchor_table = $1\n                                  AND h.anchor_id    = $2\n                           )\n                           AND NOT EXISTS (\n                               SELECT 1 FROM kb_data_artifact_verdicts v\n                                WHERE v.artifact_id   = a.id\n                                  AND v.shape_id      = s.shape_id\n                                  AND v.shape_version = s.shape_version\n                                  AND v.content_hash  = a.content_hash\n                           )\n                         ORDER BY a.id\n                         LIMIT $5) AS b\n                WINDOW read_order AS (ORDER BY b.artifact_id ROWS UNBOUNDED PRECEDING)) AS w\n         WHERE w.n = 1 OR w.bytes_through <= $6::bigint\n         ORDER BY w.artifact_id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "artifact_id!: Uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "content_hash!: String",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "shape_id!: Uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "shape_version!: i32",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Uuid",
+        "UuidArray",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "27cd0476c154c2da34386f63d0e952479b219993b5fef240be13adf2d8a2e21b"
+}
