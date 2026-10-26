@@ -577,6 +577,7 @@ mod tests {
             "/api/embed/dispatch",
             "/api/erasure/drain",
             "/api/sensitivity/sweep",
+            "/api/shape/reconcile",
         ] {
             assert!(
                 !spec.paths.paths.contains_key(absent),

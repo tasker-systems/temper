@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        DELETE FROM kb_shape_reconcile_set_aside x\n         USING kb_data_artifacts a\n         WHERE x.reason = $3\n           AND a.id = x.artifact_id\n           AND EXISTS (SELECT 1 FROM kb_resource_homes h\n                        WHERE h.resource_id = a.resource_id\n                          AND h.anchor_table = $1 AND h.anchor_id = $2)\n           AND EXISTS (SELECT 1 FROM kb_data_artifact_verdicts v\n                        WHERE v.artifact_id = x.artifact_id\n                          AND v.shape_id = x.shape_id\n                          AND v.shape_version = x.shape_version\n                          AND v.content_hash = x.content_hash)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "97d3d8d2d2336923ce0489e2c4b3ffe584f653e1941996a8667a6ee7d4c5107d"
+}

@@ -95,7 +95,9 @@ job, which A1 alone reports as a healthy queue.
 
 `shape_reconcile_dispatch`'s `backlog_depth` counts jobs, one per anchor, not artifacts. An
 anchor's unreconciled artifacts are on its `shape_reconcile_job` span as `backlog_remaining`, a
-probe that stops at 1,000; `backlog_remaining_capped` says when it stopped.
+probe that stops at 1,000; `backlog_remaining_capped` says when it stopped. Artifacts the drain
+set aside rather than verdicted are not backlog: they are counted on the job span as `set_aside`,
+and each row of `kb_shape_reconcile_set_aside` names its reason.
 
 The twins share a function and a wall-clock budget (`maxDuration: 300`). One starving the other is
 visible here and nowhere else.

@@ -156,14 +156,40 @@ pub const MAX_PATTERN_DFA_BYTES: usize = 40 << 10;
 /// defines, or one inside a value), has a `$ref` that leaves the document, or has a pattern that
 /// compiles past [`MAX_PATTERN_BYTES`].
 pub fn compile(schema: &Value) -> Result<Validator, ShapeSchemaUncompilable> {
+    compile_with(schema, None)
+}
+
+/// How many backtracking steps a pattern may take on one string when the reconcile drain checks
+/// content: the figure jsonschema's own documentation configures, a hundredth of fancy-regex's
+/// default. A match that would need more is not a verdict: [`judge_first`] reports it as
+/// [`FirstJudgement::PatternTooCostly`].
+pub const RECONCILE_BACKTRACK_LIMIT: usize = 10_000;
+
+/// [`compile`] for the reconcile drain: every bound [`compile`] applies, and each pattern held to
+/// [`RECONCILE_BACKTRACK_LIMIT`] per string. Only the drain uses it — a commit validates on its
+/// author's own request, and its patterns keep the engine's default.
+///
+/// # Errors
+/// As [`compile`].
+pub fn compile_for_reconcile(schema: &Value) -> Result<Validator, ShapeSchemaUncompilable> {
+    compile_with(schema, Some(RECONCILE_BACKTRACK_LIMIT))
+}
+
+fn compile_with(
+    schema: &Value,
+    backtrack_limit: Option<usize>,
+) -> Result<Validator, ShapeSchemaUncompilable> {
     #[cfg(feature = "test-support")]
     test_support::record(schema);
     if !names_only_standard_drafts(schema) {
         return Err(ShapeSchemaUncompilable);
     }
-    let patterns = jsonschema::PatternOptions::fancy_regex()
+    let mut patterns = jsonschema::PatternOptions::fancy_regex()
         .size_limit(MAX_PATTERN_BYTES)
         .dfa_size_limit(MAX_PATTERN_DFA_BYTES);
+    if let Some(limit) = backtrack_limit {
+        patterns = patterns.backtrack_limit(limit);
+    }
     jsonschema::options()
         .with_retriever(RefuseEveryUri)
         .with_pattern_options(patterns)
@@ -171,56 +197,57 @@ pub fn compile(schema: &Value) -> Result<Validator, ShapeSchemaUncompilable> {
         .map_err(|_| ShapeSchemaUncompilable)
 }
 
-/// What a verdict records of content checked against a shape: whether it satisfies the shape, and
-/// the reasons when it does not.
-#[derive(Debug, Clone, PartialEq)]
-pub struct MaskedJudgement {
-    /// Whether the content satisfies every keyword of the shape.
-    pub satisfied: bool,
-    /// At most the requested number of errors, each `{ "path", "message" }`, with every message
-    /// masked so no part of the content is copied into it. When more errors exist than were
-    /// recorded, a last entry with an empty `path` says so. `None` when the content satisfies the
-    /// shape.
-    pub detail: Option<Value>,
+/// How long a recorded path may be, in bytes. A path is made of the content's own keys, so its
+/// length is the content's to choose; past this it is cut at a character boundary.
+pub const MAX_RECORDED_PATH_BYTES: usize = 256;
+
+/// What the reconcile drain makes of one artifact's content checked against its shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FirstJudgement {
+    /// The content satisfies every keyword of the shape.
+    Satisfied,
+    /// The content fails the shape. Only the first failure is named, by its keyword and the path
+    /// to the failing value, cut to [`MAX_RECORDED_PATH_BYTES`]; never by a message, which can
+    /// carry content and schema text.
+    NotSatisfied { keyword: String, path: String },
+    /// A pattern needed more than [`RECONCILE_BACKTRACK_LIMIT`] steps on some string, or the
+    /// regex engine failed, before any keyword failed. Whether the content satisfies the shape is
+    /// not known, so this is not a verdict.
+    PatternTooCostly,
 }
 
-/// The message a masked judgement records after its last error when the content has more.
-pub const FURTHER_ERRORS_NOT_RECORDED: &str = "further errors were not recorded";
-
-/// Check `content` against a compiled shape for a verdict written off the request path, recording
-/// at most `max_errors` errors.
+/// Check `content` against a shape compiled by [`compile_for_reconcile`], stopping at the first
+/// failure.
 ///
-/// Masked, because most of the validator's messages print the failing instance whole: recorded
-/// unmasked, one large artifact failing many keywords would copy its content into the verdict once
-/// per error. Bounded, because the validator reports every failing branch of an `allOf`, so the
-/// number of errors is the schema's to choose. The errors are taken lazily, so the ones past the
-/// bound are never computed beyond the one that shows they exist.
+/// `validate` returns the first failing keyword without building the others' errors — unlike
+/// `iter_errors`, which builds every branch's errors before returning any.
 #[must_use]
-pub fn judge_masked(validator: &Validator, content: &Value, max_errors: usize) -> MaskedJudgement {
-    let mut errors = validator.iter_errors(content);
-    let mut detail: Vec<Value> = errors
-        .by_ref()
-        .take(max_errors)
-        .map(|e| {
-            serde_json::json!({
-                "path": e.instance_path().to_string(),
-                "message": e.masked().to_string(),
-            })
-        })
-        .collect();
-    if detail.is_empty() {
-        return MaskedJudgement {
-            satisfied: true,
-            detail: None,
-        };
+pub fn judge_first(validator: &Validator, content: &Value) -> FirstJudgement {
+    match validator.validate(content) {
+        Ok(()) => FirstJudgement::Satisfied,
+        Err(e) => match e.kind() {
+            jsonschema::error::ValidationErrorKind::BacktrackLimitExceeded { .. }
+            | jsonschema::error::ValidationErrorKind::RegexEngineFailure { .. } => {
+                FirstJudgement::PatternTooCostly
+            }
+            kind => FirstJudgement::NotSatisfied {
+                keyword: kind.keyword().to_owned(),
+                path: truncated(e.instance_path().to_string(), MAX_RECORDED_PATH_BYTES),
+            },
+        },
     }
-    if errors.next().is_some() {
-        detail.push(serde_json::json!({ "path": "", "message": FURTHER_ERRORS_NOT_RECORDED }));
+}
+
+/// `text` cut to at most `max` bytes, at a character boundary.
+fn truncated(mut text: String, max: usize) -> String {
+    if text.len() > max {
+        let mut cut = max;
+        while !text.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        text.truncate(cut);
     }
-    MaskedJudgement {
-        satisfied: false,
-        detail: Some(Value::Array(detail)),
-    }
+    text
 }
 
 /// What a test reads to see which schemas [`compile`] was run on — every call, from every caller,
@@ -263,55 +290,73 @@ pub mod test_support {
 mod tests {
     use super::*;
 
-    // FAILS IF: a recorded message prints the failing value, so a verdict copies content.
+    fn reconcile_validator(schema: Value) -> Validator {
+        compile_for_reconcile(&schema).expect("the schema compiles")
+    }
+
+    // FAILS IF: a failure is recorded with its message, which prints the failing value, or names
+    // a keyword other than the one that failed.
     #[test]
-    fn a_masked_judgement_never_copies_the_content_into_its_messages() {
-        let validator = compile(&serde_json::json!({
+    fn a_failure_is_named_by_keyword_and_path_and_never_by_its_message() {
+        let validator = reconcile_validator(serde_json::json!({
             "type": "object",
             "properties": { "value": { "type": "string" } }
-        }))
-        .expect("the schema compiles");
-        let judged = judge_masked(&validator, &serde_json::json!({ "value": 987_654_321 }), 8);
-        assert!(!judged.satisfied);
-        let detail = judged
-            .detail
-            .expect("an unsatisfied judgement carries its reasons");
-        let text = detail.to_string();
-        assert!(
-            !text.contains("987654321"),
-            "the failing value is masked: {text}"
-        );
-        assert_eq!(detail[0]["path"], "/value");
-    }
-
-    // FAILS IF: every error is recorded however many the schema produces, or the cut is silent.
-    #[test]
-    fn a_masked_judgement_records_at_most_its_bound_and_says_when_it_stopped() {
-        let validator = compile(&serde_json::json!({
-            "type": "object",
-            "additionalProperties": { "type": "string" }
-        }))
-        .expect("the schema compiles");
-        let content: serde_json::Map<String, Value> = (0..10)
-            .map(|i| (format!("k{i}"), serde_json::json!(i)))
-            .collect();
-        let judged = judge_masked(&validator, &Value::Object(content), 3);
-        let detail = judged.detail.expect("ten errors");
-        let entries = detail.as_array().expect("an array of errors");
-        assert_eq!(entries.len(), 4, "three errors and the marker: {detail}");
-        assert_eq!(entries[3]["message"], FURTHER_ERRORS_NOT_RECORDED);
-    }
-
-    // FAILS IF: satisfying content is judged unsatisfied, or carries a detail.
-    #[test]
-    fn a_masked_judgement_of_satisfying_content_has_no_detail() {
-        let validator = compile(&serde_json::json!({ "type": "object" })).expect("compiles");
+        }));
         assert_eq!(
-            judge_masked(&validator, &serde_json::json!({}), 8),
-            MaskedJudgement {
-                satisfied: true,
-                detail: None
+            judge_first(&validator, &serde_json::json!({ "value": 987_654_321 })),
+            FirstJudgement::NotSatisfied {
+                keyword: "type".to_owned(),
+                path: "/value".to_owned(),
             }
         );
+    }
+
+    // FAILS IF: a path made of long content keys is recorded whole.
+    #[test]
+    fn a_recorded_path_is_cut_to_its_bound() {
+        let key = "k".repeat(4 * MAX_RECORDED_PATH_BYTES);
+        let validator = reconcile_validator(serde_json::json!({
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+        }));
+        let FirstJudgement::NotSatisfied { path, .. } =
+            judge_first(&validator, &serde_json::json!({ key: 1 }))
+        else {
+            panic!("the content fails the shape");
+        };
+        assert_eq!(path.len(), MAX_RECORDED_PATH_BYTES);
+    }
+
+    // FAILS IF: a pattern that runs past the drain's backtrack limit is reported as content that
+    // does not match it — a verdict about content nobody finished checking.
+    #[test]
+    fn a_pattern_past_the_backtrack_limit_is_not_a_verdict() {
+        // A lookbehind is run by fancy-regex's backtracking engine at every position, so a long
+        // string with no match spends past the limit.
+        let validator = reconcile_validator(serde_json::json!({
+            "type": "string",
+            "pattern": "(?<=b)c"
+        }));
+        let content = Value::String("a".repeat(4 * RECONCILE_BACKTRACK_LIMIT));
+        assert_eq!(
+            judge_first(&validator, &content),
+            FirstJudgement::PatternTooCostly
+        );
+    }
+
+    // FAILS IF: satisfying content is judged otherwise.
+    #[test]
+    fn satisfying_content_is_satisfied() {
+        let validator = reconcile_validator(serde_json::json!({ "type": "object" }));
+        assert_eq!(
+            judge_first(&validator, &serde_json::json!({})),
+            FirstJudgement::Satisfied
+        );
+    }
+
+    // FAILS IF: a path is cut inside a multi-byte character.
+    #[test]
+    fn a_path_is_cut_at_a_character_boundary() {
+        assert_eq!(truncated("ééé".to_owned(), 3), "é");
     }
 }

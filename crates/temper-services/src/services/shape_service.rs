@@ -24,7 +24,7 @@ use crate::error::{ApiError, ApiResult};
 use crate::services::drain_span::{self, JobOutcome};
 use crate::services::shape_loader::{self, SchemaVerdict};
 use crate::services::workflow_job_service;
-use temper_core::types::artifact_ask::walk::MAX_SCHEMA_BYTES;
+use temper_core::types::artifact_ask::walk::{within_schema_bound, MAX_SCHEMA_BYTES};
 use temper_core::types::data_artifact::unstorable_nul;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ContextId, EntityId, ProfileId, ShapeId};
@@ -153,11 +153,12 @@ fn too_large() -> String {
 pub struct ShapeReconcileSummary {
     /// Jobs claimed this invocation.
     pub claimed: u32,
-    /// Anchors whose whole backlog was verdicted, and whose job was marked done.
+    /// Anchors whose whole backlog was settled, and whose job was marked done.
     pub completed: u32,
-    /// Jobs handed back untouched because the invocation's deadline was already spent.
+    /// Jobs handed back untouched: the invocation's deadline was already spent when they came up,
+    /// or their anchor had already run in this pass.
     pub deferred: u32,
-    /// Anchors whose backlog was partly verdicted when the deadline came; re-enqueued to resume.
+    /// Anchors whose backlog was partly settled when the deadline came; re-enqueued to resume.
     pub partial: u32,
     /// Jobs left in flight for the reaper to retry: the pass errored, or an artifact's verdict
     /// could not be written.
@@ -168,12 +169,14 @@ pub struct ShapeReconcileSummary {
     /// Verdicts written this invocation: the work product, which a tick that claimed nothing must
     /// not be mistaken for.
     pub verdicts_written: u64,
-    /// Artifacts whose verdict could not be written; each is named in a warning, and its anchor's
-    /// job is left in flight.
+    /// Artifacts set aside rather than verdicted (`kb_shape_reconcile_set_aside`): too costly to
+    /// check, under a shape too large or uncompilable, or a pattern past the backtrack limit.
+    pub set_aside: u32,
+    /// Checks found unfinished by an earlier, killed run, and set aside as `check_did_not_finish`.
+    pub interrupted_checks: u32,
+    /// Artifacts whose verdict or set-aside could not be written; each is named in a warning, and
+    /// its anchor's job is left in flight.
     pub failed_artifacts: u32,
-    /// Shapes in force found uncompilable this invocation, counted once per anchor pass. Their
-    /// artifacts get no verdict and stay `declared_not_yet_checked`; each is named in a warning.
-    pub uncompilable_shapes: u32,
     /// Backlog batches read this invocation.
     pub batches_read: u32,
 }
@@ -182,7 +185,7 @@ pub struct ShapeReconcileSummary {
 #[derive(Debug, Clone, Copy)]
 struct BatchBound {
     /// At most this many artifacts.
-    rows: i64,
+    rows: usize,
     /// At most this many bytes of content, by `content_bytes`, with one exception: the first
     /// artifact of a batch is always read, however large, so a batch always moves forward.
     bytes: i64,
@@ -195,21 +198,47 @@ const SHAPE_RECONCILE_BATCH: BatchBound = BatchBound {
     bytes: 32_000_000,
 };
 
-/// At most this many errors are recorded in one verdict's `detail`
-/// ([`shape_schema::judge_masked`]).
-const MAX_RECORDED_ERRORS: usize = 64;
+/// How many backlog artifacts one query reads, on cheap columns only. Selecting the backlog
+/// evaluates the shape in force for every artifact of the anchor after the cursor, whatever the
+/// `LIMIT`, so the drain selects a page this large once and cuts its batches from it, rather than
+/// selecting each batch.
+const BACKLOG_PAGE_ROWS: i64 = 10_000;
 
 /// How many backlog artifacts the probe after a pass counts before it stops. Past it, the job
 /// span's `backlog_remaining` is this number and `backlog_remaining_capped` is true: at least this
 /// many remain, not exactly this many.
 const BACKLOG_PROBE_ROWS: i64 = 1_000;
 
+/// The most one check may cost, as the shape's compact JSON size times the artifact's
+/// `content_bytes`. An artifact past it is set aside as `too_large_to_check`.
+///
+/// **Measured, task 01a15663, 2026-10-26** (release build, local, `judge_first` on content that
+/// satisfies the shape, so no check stops early): a check's time grows with schema bytes times
+/// content bytes. Fanned-out `allOf` branches cost about 1.3e-8 ms per byte² (44 KB of schema over
+/// 25 MB of content: 14.7 s), and fanned-out backtracking patterns about 2.4e-7 ms per byte² (3.7 KB
+/// over 1 MB: 0.9 s). An ordinary shape is far cheaper: 43 B over 25 MB took 1.4 ms. At this
+/// bound the pattern-heavy worst case is about 48 s on the measuring machine, inside the drain's
+/// deadline; a 5 KB shape still checks any committable artifact, and the largest shape
+/// (`MAX_SCHEMA_BYTES`) checks up to about 760 KB of content.
+const MAX_RECONCILE_CHECK_COST: u64 = 200_000_000_000;
+
+/// Checks costing more than this are marked `checking` before they run, so a run killed by one
+/// sets that artifact aside rather than retrying it. Cheaper checks — at most about 24 ms at the
+/// pattern-heavy rate above — cannot kill a run alone, and are not marked, which spares the
+/// ordinary artifact two writes.
+const MARK_CHECKS_COSTING_OVER: u64 = 100_000_000;
+
+/// How many artifacts in a row may fail to write before the pass gives up on the anchor. One
+/// failure is an artifact's; a run of them is the database's, and walking the rest of the backlog
+/// would only repeat it.
+const MAX_CONSECUTIVE_FAILED_ARTIFACTS: u32 = 8;
+
 /// Wall-clock ceiling for one drain invocation, in seconds: the region drain's, for its reason. It
 /// sits under the `api/internal` function's `maxDuration: 300`, so a pass that runs long still has
 /// room to hand its job back and return a summary rather than be killed mid-batch. The lease
 /// (`DEFAULT_SHAPE_RECONCILE_LEASE_SECONDS`) exceeds it, so a running pass never looks dead to the
-/// reaper. The deadline is checked after every artifact, so a pass overruns it by at most one
-/// artifact's check.
+/// reaper. It is checked after every artifact, so a pass overruns it by what one artifact costs:
+/// at most one check within [`MAX_RECONCILE_CHECK_COST`], and a batch's reads and writes.
 const DEFAULT_SHAPE_RECONCILE_DEADLINE_SECONDS: u64 = 240;
 
 /// Env override for the deadline above.
@@ -225,14 +254,16 @@ fn resolve_dispatch_deadline() -> std::time::Duration {
 }
 
 /// The claim size a pass uses: the caller's, held to `1..=MAX_SHAPE_RECONCILE_CAP`, or the
-/// default. The door refuses a `cap` below 1 before it reaches here.
+/// default. The door refuses a `cap` below 1 before it reaches here. A cap above 1 brings back the
+/// starvation [`DEFAULT_SHAPE_RECONCILE_CAP`] avoids; it is an operator's tool for draining a
+/// backlog of small anchors faster, never the cron's.
 fn resolve_cap(cap: Option<i32>) -> i32 {
     cap.unwrap_or(DEFAULT_SHAPE_RECONCILE_CAP)
         .clamp(1, MAX_SHAPE_RECONCILE_CAP)
 }
 
 /// Run one shape-reconcile drain pass: reap expired leases, then claim anchor-keyed jobs and
-/// verdict each anchor's backlog against the shape in force, in bounded batches, until the queue
+/// settle each anchor's backlog against the shape in force, in bounded batches, until the queue
 /// is empty or the deadline is spent.
 ///
 /// A pass that claims nothing writes nothing: assert on `verdicts_written`, not on `Ok`.
@@ -262,8 +293,9 @@ pub async fn dispatch_tick(pool: &PgPool, cap: Option<i32>) -> ApiResult<ShapeRe
         partial = tracing::field::Empty,
         requeued = tracing::field::Empty,
         verdicts_written = tracing::field::Empty,
+        set_aside = tracing::field::Empty,
+        interrupted_checks = tracing::field::Empty,
         failed_artifacts = tracing::field::Empty,
-        uncompilable_shapes = tracing::field::Empty,
         batches_read = tracing::field::Empty,
     )
 )]
@@ -292,11 +324,10 @@ async fn dispatch_tick_inner(
     }
 
     // The region drain's do-while: always one claim, then keep claiming until the queue is empty or
-    // the deadline is spent. A job is handed back (deferred or partial) only once the deadline is
-    // spent, and the loop ends there, so a handed-back job is never re-claimed by the pass that
-    // handed it back. A completed anchor queued again (`settle`) is the other way back into the
-    // queue; one this pass already ran is handed back untouched and ends the pass, so no anchor is
-    // run twice in one pass and a backlog the pass cannot clear can never spin it to the deadline.
+    // the deadline is spent. A job goes back into the queue in three ways, and none is run again by
+    // the pass that put it there: one handed back because the deadline is spent ends the loop; a
+    // completed anchor queued again (`settle`), when this pass claims it again, is handed back
+    // untouched and ends the loop; so a backlog the pass cannot clear can never spin it.
     let mut ran_this_pass: HashSet<Uuid> = HashSet::new();
     let mut ran_again = false;
     loop {
@@ -317,23 +348,14 @@ async fn dispatch_tick_inner(
         let waits = drain_span::read_queue_waits(pool, &ids).await?;
 
         for job in claimed {
-            if ran_again || !ran_this_pass.insert(job.anchor.uuid()) {
-                hand_back(pool, &job).await?;
-                summary.deferred += 1;
-                ran_again = true;
-                continue;
-            }
-            let past_deadline = start.elapsed() >= deadline;
+            let already_ran = ran_again || !ran_this_pass.insert(job.anchor.uuid());
+            ran_again |= already_ran;
             let ran = run_reconcile_job(
                 pool,
                 &job,
                 waits.get(&job.id).copied(),
-                past_deadline,
-                Pace {
-                    start,
-                    deadline,
-                    batch,
-                },
+                start.elapsed() >= deadline || already_ran,
+                Pace::production(start, deadline, batch),
             )
             .await?;
             match ran {
@@ -351,8 +373,9 @@ async fn dispatch_tick_inner(
                         Settled::LeftInFlight => summary.failed += 1,
                     }
                     summary.verdicts_written += pass.verdicts_written;
+                    summary.set_aside += pass.set_aside;
+                    summary.interrupted_checks += pass.interrupted_checks;
                     summary.failed_artifacts += pass.failed_artifacts;
-                    summary.uncompilable_shapes += pass.uncompilable.len() as u32;
                     summary.batches_read += pass.batches_read;
                 }
             }
@@ -370,18 +393,39 @@ async fn dispatch_tick_inner(
     span.record("partial", summary.partial);
     span.record("requeued", summary.requeued);
     span.record("verdicts_written", summary.verdicts_written);
+    span.record("set_aside", summary.set_aside);
+    span.record("interrupted_checks", summary.interrupted_checks);
     span.record("failed_artifacts", summary.failed_artifacts);
-    span.record("uncompilable_shapes", summary.uncompilable_shapes);
     span.record("batches_read", summary.batches_read);
     Ok(summary)
 }
 
-/// The pass's clock and batch, carried to each anchor.
+/// The pass's clock, batch and check bounds, carried to each anchor.
 #[derive(Debug, Clone, Copy)]
 struct Pace {
     start: std::time::Instant,
     deadline: std::time::Duration,
     batch: BatchBound,
+    /// [`MAX_RECONCILE_CHECK_COST`] in production.
+    max_check_cost: u64,
+    /// [`MARK_CHECKS_COSTING_OVER`] in production.
+    mark_checks_over: u64,
+}
+
+impl Pace {
+    fn production(
+        start: std::time::Instant,
+        deadline: std::time::Duration,
+        batch: BatchBound,
+    ) -> Self {
+        Pace {
+            start,
+            deadline,
+            batch,
+            max_check_cost: MAX_RECONCILE_CHECK_COST,
+            mark_checks_over: MARK_CHECKS_COSTING_OVER,
+        }
+    }
 }
 
 impl Pace {
@@ -405,7 +449,8 @@ enum Settled {
     Completed { requeued: bool },
     /// The deadline came first: done, and a successor queued to resume.
     HandedBack,
-    /// An artifact's verdict could not be written: left in flight for the reaper to retry.
+    /// The backlog was exhausted but an artifact's write failed: left in flight for the reaper to
+    /// retry, which finds only what is left.
     LeftInFlight,
 }
 
@@ -413,14 +458,46 @@ enum Settled {
 #[derive(Debug, Default)]
 struct AnchorPass {
     verdicts_written: u64,
+    set_aside: u32,
+    interrupted_checks: u32,
     failed_artifacts: u32,
-    /// The shapes in force found uncompilable, excluded from the rest of the pass and from the
-    /// probe after it.
-    uncompilable: Vec<Uuid>,
     batches_read: u32,
-    /// Whether the backlog was exhausted. False when the deadline came first: the verdicts
-    /// already written stand, and the re-enqueued job resumes from what is left.
+    /// Whether the backlog was exhausted. False when the deadline came first: what was settled
+    /// stands, and the re-enqueued job resumes from what is left.
     finished: bool,
+}
+
+/// Why the drain set an artifact aside rather than verdicting it: the `reason` vocabulary of
+/// `kb_shape_reconcile_set_aside` (20261108000000).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SetAside {
+    /// A check in flight. Not an outcome: removed once the check settles.
+    Checking,
+    /// A check an earlier run started and never finished, which is how a run killed mid-check
+    /// shows itself to the next pass.
+    CheckDidNotFinish,
+    /// The shape's size times the artifact's is past [`MAX_RECONCILE_CHECK_COST`].
+    TooLargeToCheck,
+    /// The shape is larger than [`MAX_SCHEMA_BYTES`], so it is never compiled.
+    SchemaTooLarge,
+    /// The shape does not compile ([`shape_schema::compile_for_reconcile`]).
+    SchemaUncompilable,
+    /// A pattern ran past the backtrack limit before any keyword failed
+    /// ([`shape_schema::FirstJudgement::PatternTooCostly`]).
+    PatternTooCostly,
+}
+
+impl SetAside {
+    fn as_str(self) -> &'static str {
+        match self {
+            SetAside::Checking => "checking",
+            SetAside::CheckDidNotFinish => "check_did_not_finish",
+            SetAside::TooLargeToCheck => "too_large_to_check",
+            SetAside::SchemaTooLarge => "schema_too_large",
+            SetAside::SchemaUncompilable => "schema_uncompilable",
+            SetAside::PatternTooCostly => "pattern_too_costly",
+        }
+    }
 }
 
 #[tracing::instrument(
@@ -433,6 +510,7 @@ struct AnchorPass {
         queue_wait_ms = tracing::field::Empty,
         outcome = tracing::field::Empty,
         verdicts_written = tracing::field::Empty,
+        set_aside = tracing::field::Empty,
         failed_artifacts = tracing::field::Empty,
         backlog_remaining = tracing::field::Empty,
         backlog_remaining_capped = tracing::field::Empty,
@@ -442,7 +520,7 @@ async fn run_reconcile_job(
     pool: &PgPool,
     job: &ClaimedAnchorJob,
     queue_wait_ms: Option<i64>,
-    past_deadline: bool,
+    hand_back_untouched: bool,
     pace: Pace,
 ) -> ApiResult<ReconcileJobResult> {
     let span = tracing::Span::current();
@@ -450,7 +528,7 @@ async fn run_reconcile_job(
         span.record("queue_wait_ms", wait);
     }
 
-    if past_deadline {
+    if hand_back_untouched {
         // Hand the job back untouched. Complete-then-re-enqueue rather than holding the lease, so
         // the reaper's attempt count stays clean — the region drain's reasoning.
         hand_back(pool, job).await?;
@@ -470,6 +548,7 @@ async fn run_reconcile_job(
                 },
             );
             span.record("verdicts_written", pass.verdicts_written);
+            span.record("set_aside", pass.set_aside);
             span.record("failed_artifacts", pass.failed_artifacts);
             Ok(ReconcileJobResult::Ran { pass, settled })
         }
@@ -481,6 +560,7 @@ async fn run_reconcile_job(
                 error = %e,
                 "shape reconciliation failed for one anchor; left in-flight for the reaper"
             );
+            record_backlog_remaining(pool, job.anchor).await;
             Ok(ReconcileJobResult::Failed)
         }
     }
@@ -488,55 +568,79 @@ async fn run_reconcile_job(
 
 /// Settle a job after its anchor ran a pass, and record on the job span how much backlog remains.
 ///
-/// - An artifact whose verdict could not be written leaves the job in flight, so the reaper
-///   retries it: the pass has already verdicted everything else it reached, and the retry finds
-///   only what is left.
-/// - A pass the deadline cut off hands the job back to resume.
-/// - A finished pass marks the job done, and then probes the backlog. The single-flight index
-///   covers `in_progress`, so a declare, an amendment or a rehome that arrived while the job ran
-///   coalesced into it, and its artifacts may sit behind the pass's cursor. Probed after the job
-///   is done, a backlog that is not empty is queued again, and a later enqueue cannot coalesce
-///   into the job just finished — the region drain's `requeue_if_erased_members` ordering.
-///   Uncompilable shapes are excluded from the probe, or they would re-queue every pass.
+/// - A pass the deadline cut off hands the job back to resume, failed artifacts or not: the next
+///   pass finds them again, and a hand-back costs no attempt.
+/// - A finished pass with an artifact whose write failed leaves the job in flight, so the reaper
+///   retries it: the pass has already settled everything else, and the retry finds only what is
+///   left.
+/// - A finished pass with no failure marks the job done, and then probes the backlog. The
+///   single-flight index covers `in_progress`, so a declare, an amendment or a rehome that arrived
+///   while the job ran coalesced into it, and its artifacts may sit behind the pass's cursor.
+///   Probed after the job is done, a backlog that is not empty is queued again, and a later enqueue
+///   cannot coalesce into the job just finished — the region drain's `requeue_if_erased_members`
+///   ordering. The probe and the requeue are best-effort, as that one is: the job is already done,
+///   and failing here would lose the summary of a pass that did its work. **Not atomic:** a run
+///   killed between the completion and the requeue loses the coalesced change until the next
+///   declare or rehome reaches the anchor, as [`hand_back`]'s two writes can.
 async fn settle(pool: &PgPool, job: &ClaimedAnchorJob, pass: &AnchorPass) -> ApiResult<Settled> {
     let persona = Persona::Shape.as_str();
     let dispatch = DispatchType::ShapeReconcile.as_str();
 
-    let settled = if pass.failed_artifacts > 0 {
-        Settled::LeftInFlight
-    } else if !pass.finished {
+    if !pass.finished {
         hand_back(pool, job).await?;
-        Settled::HandedBack
-    } else {
-        workflow_job_service::complete_anchor(pool, job.anchor, persona, dispatch).await?;
-        Settled::Completed { requeued: false }
-    };
-
-    let probe = BatchBound {
-        rows: BACKLOG_PROBE_ROWS + 1,
-        bytes: i64::MAX,
-    };
-    let remaining = backlog_batch(pool, job.anchor, Uuid::nil(), &pass.uncompilable, probe)
-        .await?
-        .len() as i64;
-    let span = tracing::Span::current();
-    span.record("backlog_remaining", remaining.min(BACKLOG_PROBE_ROWS));
-    span.record("backlog_remaining_capped", remaining > BACKLOG_PROBE_ROWS);
-
-    if settled == (Settled::Completed { requeued: false }) && remaining > 0 {
-        workflow_job_service::enqueue_anchor(
-            pool,
-            job.anchor,
-            persona,
-            dispatch,
-            AnchorJobPayload {
-                emitter: job.emitter,
-            },
-        )
-        .await?;
-        return Ok(Settled::Completed { requeued: true });
+        record_backlog_remaining(pool, job.anchor).await;
+        return Ok(Settled::HandedBack);
     }
-    Ok(settled)
+    if pass.failed_artifacts > 0 {
+        record_backlog_remaining(pool, job.anchor).await;
+        return Ok(Settled::LeftInFlight);
+    }
+    workflow_job_service::complete_anchor(pool, job.anchor, persona, dispatch).await?;
+    let Some(remaining) = record_backlog_remaining(pool, job.anchor).await else {
+        return Ok(Settled::Completed { requeued: false });
+    };
+    if remaining == 0 {
+        return Ok(Settled::Completed { requeued: false });
+    }
+    let requeued = workflow_job_service::enqueue_anchor(
+        pool,
+        job.anchor,
+        persona,
+        dispatch,
+        AnchorJobPayload {
+            emitter: job.emitter,
+        },
+    )
+    .await;
+    match requeued {
+        Ok(_) => Ok(Settled::Completed { requeued: true }),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "could not queue a completed anchor again for its remaining backlog; it waits for \
+                 the next declare or rehome to reach it"
+            );
+            Ok(Settled::Completed { requeued: false })
+        }
+    }
+}
+
+/// Probe how much backlog the anchor has left and record it on the current job span. Best-effort:
+/// `None`, with a warning, when the probe fails.
+async fn record_backlog_remaining(pool: &PgPool, anchor: HomeAnchor) -> Option<i64> {
+    match backlog_page(pool, anchor, Uuid::nil(), BACKLOG_PROBE_ROWS + 1).await {
+        Ok(rows) => {
+            let remaining = rows.len() as i64;
+            let span = tracing::Span::current();
+            span.record("backlog_remaining", remaining.min(BACKLOG_PROBE_ROWS));
+            span.record("backlog_remaining_capped", remaining > BACKLOG_PROBE_ROWS);
+            Some(remaining)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "could not probe the anchor's remaining backlog");
+            None
+        }
+    }
 }
 
 /// Mark the job done and enqueue its successor, so the next pass resumes the anchor.
@@ -561,230 +665,449 @@ async fn hand_back(pool: &PgPool, job: &ClaimedAnchorJob) -> ApiResult<()> {
     Ok(())
 }
 
-/// One backlog artifact, on cheap columns only: which artifact, under which shape.
+/// One backlog artifact, on cheap columns only: which artifact, how large, under which shape.
 #[derive(Debug)]
 struct Candidate {
     artifact_id: Uuid,
     content_hash: String,
+    content_bytes: i64,
     shape_id: Uuid,
     shape_version: i32,
 }
 
-/// The anchor's backlog after `after`, in artifact-id order, held to `batch`.
+/// The anchor's backlog after `after`, in artifact-id order, at most `limit` artifacts.
 ///
 /// The backlog is the live artifacts whose shape in force is homed at `anchor` and whose staleness
-/// triple `(shape_id, shape_version, content_hash)` matches no stored verdict, less the shapes in
-/// `skip`. An erased resource's artifacts are not backlog: the act empties their content but
-/// leaves them unfolded with their hash (D2 step 5), so a shape declared or amended after the act
-/// would select them, and the verdict writer refuses them (`_resource_write_guard`, D13).
+/// triple `(shape_id, shape_version, content_hash)` matches neither a stored verdict nor a set-aside
+/// (`kb_shape_reconcile_set_aside`). An erased resource's artifacts are not backlog: the act empties
+/// their content but leaves them unfolded with their hash (D2 step 5), so a shape declared or
+/// amended after the act would select them, and the verdict writer refuses them
+/// (`_resource_write_guard`, D13).
 ///
 /// Uses _data_artifact_shape_in_force (which calls _data_artifact_anchor and
 /// _data_artifact_kind_owner) rather than re-deriving the home — the cogmap tiebreak is
 /// load-bearing (20260820000020:186-188). The home-row EXISTS only narrows the scan to this
 /// anchor's resources: the shape in force is homed at the home `_data_artifact_anchor` picks,
 /// which is one of the resource's own, so no artifact the shape join admits is lost.
-///
-/// The row cap is applied first, so the window sums at most `batch.rows` rows. The byte cap is on
-/// the running total including each row, and admits the first row whatever its size, so a batch
-/// is a prefix of the backlog that always moves forward.
-async fn backlog_batch(
+async fn backlog_page(
     pool: &PgPool,
     anchor: HomeAnchor,
     after: Uuid,
-    skip: &[Uuid],
-    batch: BatchBound,
+    limit: i64,
 ) -> ApiResult<Vec<Candidate>> {
     let rows = sqlx::query_as!(
         Candidate,
         r#"
-        SELECT w.artifact_id     AS "artifact_id!: Uuid",
-               w.content_hash    AS "content_hash!: String",
-               w.shape_id        AS "shape_id!: Uuid",
-               w.shape_version   AS "shape_version!: i32"
-          FROM (SELECT b.*,
-                       row_number() OVER read_order AS n,
-                       sum(b.content_bytes) OVER read_order AS bytes_through
-                  FROM (SELECT a.id           AS artifact_id,
-                               a.content_hash,
-                               a.content_bytes,
-                               s.shape_id,
-                               s.shape_version
-                          FROM kb_data_artifacts a
-                         CROSS JOIN LATERAL _data_artifact_shape_in_force(
-                             a.resource_id, a.kind_owner_table, a.kind_owner_id, a.artifact_kind
-                         ) s
-                          JOIN kb_data_artifact_shapes sh ON sh.id = s.shape_id
-                           AND sh.home_anchor_table = $1
-                           AND sh.home_anchor_id    = $2
-                          JOIN kb_resources r ON r.id = a.resource_id
-                         WHERE NOT a.is_folded
-                           AND r.erased_at IS NULL
-                           AND a.id > $3
-                           AND NOT (s.shape_id = ANY($4))
-                           AND EXISTS (
-                               SELECT 1 FROM kb_resource_homes h
-                                WHERE h.resource_id  = a.resource_id
-                                  AND h.anchor_table = $1
-                                  AND h.anchor_id    = $2
-                           )
-                           AND NOT EXISTS (
-                               SELECT 1 FROM kb_data_artifact_verdicts v
-                                WHERE v.artifact_id   = a.id
-                                  AND v.shape_id      = s.shape_id
-                                  AND v.shape_version = s.shape_version
-                                  AND v.content_hash  = a.content_hash
-                           )
-                         ORDER BY a.id
-                         LIMIT $5) AS b
-                WINDOW read_order AS (ORDER BY b.artifact_id ROWS UNBOUNDED PRECEDING)) AS w
-         WHERE w.n = 1 OR w.bytes_through <= $6::bigint
-         ORDER BY w.artifact_id
+        SELECT a.id            AS "artifact_id!: Uuid",
+               a.content_hash  AS "content_hash!: String",
+               a.content_bytes AS "content_bytes!: i64",
+               s.shape_id      AS "shape_id!: Uuid",
+               s.shape_version AS "shape_version!: i32"
+          FROM kb_data_artifacts a
+         CROSS JOIN LATERAL _data_artifact_shape_in_force(
+             a.resource_id, a.kind_owner_table, a.kind_owner_id, a.artifact_kind
+         ) s
+          JOIN kb_data_artifact_shapes sh ON sh.id = s.shape_id
+           AND sh.home_anchor_table = $1
+           AND sh.home_anchor_id    = $2
+          JOIN kb_resources r ON r.id = a.resource_id
+         WHERE NOT a.is_folded
+           AND r.erased_at IS NULL
+           AND a.id > $3
+           AND EXISTS (
+               SELECT 1 FROM kb_resource_homes h
+                WHERE h.resource_id  = a.resource_id
+                  AND h.anchor_table = $1
+                  AND h.anchor_id    = $2
+           )
+           AND NOT EXISTS (
+               SELECT 1 FROM kb_data_artifact_verdicts v
+                WHERE v.artifact_id   = a.id
+                  AND v.shape_id      = s.shape_id
+                  AND v.shape_version = s.shape_version
+                  AND v.content_hash  = a.content_hash
+           )
+           AND NOT EXISTS (
+               SELECT 1 FROM kb_shape_reconcile_set_aside x
+                WHERE x.artifact_id   = a.id
+                  AND x.shape_id      = s.shape_id
+                  AND x.shape_version = s.shape_version
+                  AND x.content_hash  = a.content_hash
+           )
+         ORDER BY a.id
+         LIMIT $4
         "#,
         anchor.table(),
         anchor.uuid(),
         after,
-        skip,
-        batch.rows,
-        batch.bytes,
+        limit,
     )
     .fetch_all(pool)
     .await?;
     Ok(rows)
 }
 
-/// Verdict one anchor's backlog, a bounded batch at a time, until it is exhausted or the pass's
+/// How many of `page`'s leading artifacts the next batch takes: at most `bound.rows`, and as many
+/// as fit `bound.bytes` by `content_bytes` — but always the first, so a batch always moves forward.
+fn batch_len(page: &[Candidate], bound: BatchBound) -> usize {
+    let mut bytes: i64 = 0;
+    let mut taken = 0;
+    for c in page.iter().take(bound.rows.max(1)) {
+        bytes = bytes.saturating_add(c.content_bytes);
+        if taken > 0 && bytes > bound.bytes {
+            break;
+        }
+        taken += 1;
+    }
+    taken
+}
+
+/// What the pass knows about one shape version: ready to check, or set aside whole.
+enum ShapeCheck {
+    Ready {
+        validator: Arc<shape_schema::Validator>,
+        schema_bytes: u64,
+    },
+    Unjudgeable(SetAside),
+}
+
+/// Re-mark the anchor's `checking` set-asides `check_did_not_finish`. One job per anchor is in
+/// flight, so a `checking` row a pass finds for its own anchor was left by a run killed mid-check:
+/// that artifact is set aside, never checked again under the same triple, and costs one killed run.
+/// A row whose artifact gained its verdict before the run died is dropped instead.
+async fn recover_interrupted_checks(pool: &PgPool, anchor: HomeAnchor) -> ApiResult<u32> {
+    let mut tx = pool.begin().await?;
+    sqlx::query!(
+        r#"
+        DELETE FROM kb_shape_reconcile_set_aside x
+         USING kb_data_artifacts a
+         WHERE x.reason = $3
+           AND a.id = x.artifact_id
+           AND EXISTS (SELECT 1 FROM kb_resource_homes h
+                        WHERE h.resource_id = a.resource_id
+                          AND h.anchor_table = $1 AND h.anchor_id = $2)
+           AND EXISTS (SELECT 1 FROM kb_data_artifact_verdicts v
+                        WHERE v.artifact_id = x.artifact_id
+                          AND v.shape_id = x.shape_id
+                          AND v.shape_version = x.shape_version
+                          AND v.content_hash = x.content_hash)
+        "#,
+        anchor.table(),
+        anchor.uuid(),
+        SetAside::Checking.as_str(),
+    )
+    .execute(&mut *tx)
+    .await?;
+    let interrupted = sqlx::query_scalar!(
+        r#"
+        UPDATE kb_shape_reconcile_set_aside x
+           SET reason = $4, recorded_at = now()
+          FROM kb_data_artifacts a
+         WHERE x.reason = $3
+           AND a.id = x.artifact_id
+           AND EXISTS (SELECT 1 FROM kb_resource_homes h
+                        WHERE h.resource_id = a.resource_id
+                          AND h.anchor_table = $1 AND h.anchor_id = $2)
+        RETURNING x.artifact_id AS "artifact_id!: Uuid"
+        "#,
+        anchor.table(),
+        anchor.uuid(),
+        SetAside::Checking.as_str(),
+        SetAside::CheckDidNotFinish.as_str(),
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    for artifact_id in &interrupted {
+        tracing::warn!(
+            artifact_id = %artifact_id,
+            anchor = %anchor.uuid(),
+            "a shape check an earlier run started never finished; the artifact is set aside as \
+             check_did_not_finish and stays declared_not_yet_checked"
+        );
+    }
+    Ok(interrupted.len() as u32)
+}
+
+/// Settle one anchor's backlog, a bounded batch at a time, until it is exhausted or the pass's
 /// deadline is spent.
 ///
-/// The batches walk the backlog in artifact-id order from the start, so each moves forward even
-/// past artifacts left unverdicted. The deadline is checked after every artifact, so the first is
-/// always reached and a pass overruns the deadline by at most one artifact's check.
+/// A backlog page is selected once on cheap columns ([`backlog_page`]) and cut into batches
+/// ([`batch_len`]). Each artifact is verdicted or set aside, and the deadline is checked after every
+/// artifact, so the first is always reached.
 ///
-/// - **A shape that cannot be compiled** gives no verdict: its artifacts stay
-///   `declared_not_yet_checked`, it is named once in a warning and counted, and the rest of the pass
-///   excludes it (task 01a15661-8460-739d-9ed3-f1e8ccbf9b69).
-/// - **An artifact whose verdict cannot be written** is named in a warning and counted, and the pass
-///   goes on past it, so one such artifact never holds back the rest of its anchor.
+/// - **A shape is checked only within its bounds.** One larger than [`MAX_SCHEMA_BYTES`] is never
+///   compiled, and one that does not compile ([`shape_schema::compile_for_reconcile`]) is never
+///   used; each of its artifacts is set aside, and the shape is named once in a warning.
+/// - **An artifact is checked only within [`MAX_RECONCILE_CHECK_COST`]**; past it, it is set aside.
 /// - **Compiles and checks run on the blocking pool** under the shape compile permits
-///   ([`shape_loader::run_off_the_executor`]), not on the executor: a shape's author chooses what a
-///   check costs, and the drain is shared.
-/// - **A verdict records its errors masked and bounded** ([`shape_schema::judge_masked`]), so its
-///   `detail` never copies the artifact's content and its size is not the schema's to choose.
+///   ([`shape_loader::run_off_the_executor`]), not on the executor.
+/// - **A check that could kill a run is marked first** ([`MARK_CHECKS_COSTING_OVER`]), so a run
+///   killed by it sets it aside on the next pass ([`recover_interrupted_checks`]).
+/// - **A verdict names only the first failure**, by keyword and a cut path
+///   ([`shape_schema::judge_first`]): never a message, which can carry content and schema text.
+/// - **An artifact whose write fails** is named in a warning and counted, and the pass goes on past
+///   it; [`MAX_CONSECUTIVE_FAILED_ARTIFACTS`] in a row fail the anchor.
 async fn reconcile_one_anchor(
     pool: &PgPool,
     anchor: HomeAnchor,
     pace: Pace,
 ) -> ApiResult<AnchorPass> {
-    let mut pass = AnchorPass::default();
+    let mut pass = AnchorPass {
+        interrupted_checks: recover_interrupted_checks(pool, anchor).await?,
+        ..AnchorPass::default()
+    };
     let mut after = Uuid::nil();
-    let mut validators = HashMap::new();
+    let mut shapes: HashMap<(Uuid, i32), ShapeCheck> = HashMap::new();
+    let mut consecutive_failures = 0u32;
 
     loop {
-        let candidates = backlog_batch(pool, anchor, after, &pass.uncompilable, pace.batch).await?;
-        let Some(last) = candidates.last() else {
+        let page = backlog_page(pool, anchor, after, BACKLOG_PAGE_ROWS).await?;
+        let Some(last) = page.last() else {
             pass.finished = true;
             return Ok(pass);
         };
         after = last.artifact_id;
-        pass.batches_read += 1;
 
-        // The batch's content, read once. An artifact committed with JSON `null` content has no
-        // content row (20260820000020, `data_artifact_commit`), and the commit validated that
-        // `null` against the shape, so reconciliation does the same.
-        let ids: Vec<Uuid> = candidates.iter().map(|c| c.artifact_id).collect();
-        let mut contents: HashMap<Uuid, serde_json::Value> = sqlx::query!(
-            r#"
-            SELECT artifact_id AS "artifact_id!: Uuid",
-                   content     AS "content!: serde_json::Value"
-              FROM kb_data_artifact_content
-             WHERE artifact_id = ANY($1)
-            "#,
-            &ids[..],
-        )
-        .fetch_all(pool)
-        .await?
-        .into_iter()
-        .map(|r| (r.artifact_id, r.content))
-        .collect();
+        let mut rest = &page[..];
+        while !rest.is_empty() {
+            let (batch, tail) = rest.split_at(batch_len(rest, pace.batch));
+            rest = tail;
+            pass.batches_read += 1;
 
-        for c in candidates {
-            if pass.uncompilable.contains(&c.shape_id) {
-                continue;
+            for c in batch {
+                load_shape_check(pool, anchor, &mut shapes, c).await?;
             }
-            let key = (c.shape_id, c.shape_version);
-            if let Entry::Vacant(slot) = validators.entry(key) {
-                let schema = sqlx::query_scalar!(
-                    r#"SELECT schema AS "schema!: serde_json::Value"
-                         FROM kb_data_artifact_shapes WHERE id = $1"#,
-                    c.shape_id,
-                )
-                .fetch_one(pool)
-                .await?;
-                let compiled = shape_loader::run_off_the_executor(move || {
-                    shape_schema::compile(&schema).map(Arc::new)
-                })
-                .await?;
-                match compiled {
-                    Ok(validator) => {
-                        slot.insert(validator);
+            // Content is read only for the artifacts this batch will check.
+            let to_check: Vec<Uuid> = batch
+                .iter()
+                .filter(|c| check_cost(&shapes, c, pace.max_check_cost).is_some())
+                .map(|c| c.artifact_id)
+                .collect();
+            let mut contents: HashMap<Uuid, serde_json::Value> = sqlx::query!(
+                r#"
+                SELECT artifact_id AS "artifact_id!: Uuid",
+                       content     AS "content!: serde_json::Value"
+                  FROM kb_data_artifact_content
+                 WHERE artifact_id = ANY($1)
+                "#,
+                &to_check[..],
+            )
+            .fetch_all(pool)
+            .await?
+            .into_iter()
+            .map(|r| (r.artifact_id, r.content))
+            .collect();
+
+            for c in batch {
+                // An artifact committed with JSON `null` content has no content row
+                // (20260820000020, `data_artifact_commit`), and the commit validated that `null`
+                // against the shape, so reconciliation does the same.
+                let content = contents
+                    .remove(&c.artifact_id)
+                    .unwrap_or(serde_json::Value::Null);
+                match settle_artifact(pool, &shapes, c, content, pace).await {
+                    Ok(Outcome::Verdict) => {
+                        pass.verdicts_written += 1;
+                        consecutive_failures = 0;
                     }
-                    Err(ShapeSchemaUncompilable) => {
+                    Ok(Outcome::SetAside) => {
+                        pass.set_aside += 1;
+                        consecutive_failures = 0;
+                    }
+                    Err(e) => {
                         tracing::warn!(
-                            shape_id = %c.shape_id,
-                            shape_version = c.shape_version,
+                            error = %e,
+                            artifact_id = %c.artifact_id,
                             anchor = %anchor.uuid(),
-                            "shape reconciliation skipped a shape that cannot be compiled; its \
-                             artifacts stay declared_not_yet_checked"
+                            "shape reconciliation could not settle one artifact; the pass goes \
+                             on, and the anchor's job is left in flight for the reaper"
                         );
-                        pass.uncompilable.push(c.shape_id);
-                        continue;
+                        pass.failed_artifacts += 1;
+                        consecutive_failures += 1;
+                        if consecutive_failures >= MAX_CONSECUTIVE_FAILED_ARTIFACTS {
+                            return Err(ApiError::Internal(format!(
+                                "{consecutive_failures} artifacts in a row could not be settled"
+                            )));
+                        }
                     }
                 }
-            }
-            let validator = Arc::clone(&validators[&key]);
-            let content = contents
-                .remove(&c.artifact_id)
-                .unwrap_or(serde_json::Value::Null);
-            let artifact_id = c.artifact_id;
-            match verdict_one(pool, c, validator, content).await {
-                Ok(()) => pass.verdicts_written += 1,
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        artifact_id = %artifact_id,
-                        anchor = %anchor.uuid(),
-                        "shape reconciliation could not write one artifact's verdict; the pass \
-                         goes on, and the anchor's job is left in flight for the reaper"
-                    );
-                    pass.failed_artifacts += 1;
+                if pace.spent() {
+                    return Ok(pass);
                 }
-            }
-
-            if pace.spent() {
-                return Ok(pass);
             }
         }
     }
 }
 
-/// Check one artifact's content against its shape off the executor, and write the verdict.
-async fn verdict_one(
+/// Load what the pass needs to check `c`'s shape version, once per version.
+async fn load_shape_check(
     pool: &PgPool,
-    c: Candidate,
-    validator: Arc<shape_schema::Validator>,
-    content: serde_json::Value,
+    anchor: HomeAnchor,
+    shapes: &mut HashMap<(Uuid, i32), ShapeCheck>,
+    c: &Candidate,
 ) -> ApiResult<()> {
-    let judged = shape_loader::run_off_the_executor(move || {
-        shape_schema::judge_masked(&validator, &content, MAX_RECORDED_ERRORS)
-    })
+    let Entry::Vacant(slot) = shapes.entry((c.shape_id, c.shape_version)) else {
+        return Ok(());
+    };
+    let schema = sqlx::query_scalar!(
+        r#"SELECT schema AS "schema!: serde_json::Value"
+             FROM kb_data_artifact_shapes WHERE id = $1"#,
+        c.shape_id,
+    )
+    .fetch_one(pool)
     .await?;
-    sqlx::query!(
+    let check = if within_schema_bound(&schema) {
+        let schema_bytes = serde_json::to_vec(&schema).map_or(u64::MAX, |v| v.len() as u64);
+        let compiled = shape_loader::run_off_the_executor(move || {
+            shape_schema::compile_for_reconcile(&schema).map(Arc::new)
+        })
+        .await?;
+        match compiled {
+            Ok(validator) => ShapeCheck::Ready {
+                validator,
+                schema_bytes,
+            },
+            Err(ShapeSchemaUncompilable) => ShapeCheck::Unjudgeable(SetAside::SchemaUncompilable),
+        }
+    } else {
+        ShapeCheck::Unjudgeable(SetAside::SchemaTooLarge)
+    };
+    if let ShapeCheck::Unjudgeable(reason) = &check {
+        tracing::warn!(
+            shape_id = %c.shape_id,
+            shape_version = c.shape_version,
+            anchor = %anchor.uuid(),
+            reason = reason.as_str(),
+            "shape reconciliation sets aside every artifact of a shape it cannot check; they stay \
+             declared_not_yet_checked"
+        );
+    }
+    slot.insert(check);
+    Ok(())
+}
+
+/// What one check of `c` costs ([`MAX_RECONCILE_CHECK_COST`]'s unit), when the artifact is checked
+/// at all: `None` for an unjudgeable shape or a cost past the bound.
+fn check_cost(
+    shapes: &HashMap<(Uuid, i32), ShapeCheck>,
+    c: &Candidate,
+    max_check_cost: u64,
+) -> Option<u64> {
+    match shapes.get(&(c.shape_id, c.shape_version)) {
+        Some(ShapeCheck::Ready { schema_bytes, .. }) => {
+            let cost = schema_bytes.saturating_mul(c.content_bytes.max(1) as u64);
+            (cost <= max_check_cost).then_some(cost)
+        }
+        _ => None,
+    }
+}
+
+/// How one artifact was settled.
+enum Outcome {
+    Verdict,
+    SetAside,
+}
+
+/// Verdict `c`, or set it aside with the reason it cannot be verdicted.
+async fn settle_artifact(
+    pool: &PgPool,
+    shapes: &HashMap<(Uuid, i32), ShapeCheck>,
+    c: &Candidate,
+    content: serde_json::Value,
+    pace: Pace,
+) -> ApiResult<Outcome> {
+    let validator = match shapes.get(&(c.shape_id, c.shape_version)) {
+        Some(ShapeCheck::Ready { validator, .. }) => Arc::clone(validator),
+        Some(ShapeCheck::Unjudgeable(reason)) => {
+            write_set_aside(pool, c, *reason).await?;
+            return Ok(Outcome::SetAside);
+        }
+        None => {
+            return Err(ApiError::Internal(
+                "a backlog artifact's shape was not loaded".to_string(),
+            ))
+        }
+    };
+    let Some(cost) = check_cost(shapes, c, pace.max_check_cost) else {
+        write_set_aside(pool, c, SetAside::TooLargeToCheck).await?;
+        return Ok(Outcome::SetAside);
+    };
+    let marked = cost > pace.mark_checks_over;
+    if marked {
+        write_set_aside(pool, c, SetAside::Checking).await?;
+    }
+    let judged =
+        shape_loader::run_off_the_executor(move || shape_schema::judge_first(&validator, &content))
+            .await?;
+    let (satisfied, detail) = match judged {
+        shape_schema::FirstJudgement::Satisfied => (true, None),
+        shape_schema::FirstJudgement::NotSatisfied { keyword, path } => (
+            false,
+            Some(serde_json::json!([{ "keyword": keyword, "path": path }])),
+        ),
+        shape_schema::FirstJudgement::PatternTooCostly => {
+            write_set_aside(pool, c, SetAside::PatternTooCostly).await?;
+            return Ok(Outcome::SetAside);
+        }
+    };
+    let written = sqlx::query!(
         "SELECT data_artifact_verdict_upsert($1,$2,$3,$4,$5,$6)",
         c.artifact_id,
         c.shape_id,
         c.shape_version,
         c.content_hash,
-        judged.satisfied,
-        judged.detail,
+        satisfied,
+        detail,
+    )
+    .execute(pool)
+    .await;
+    if let Err(e) = written {
+        // The check finished; only the write failed. Clear the mark, best-effort, so the next pass
+        // retries the artifact rather than reading the mark as a run killed mid-check.
+        if marked {
+            let _ = sqlx::query!(
+                "DELETE FROM kb_shape_reconcile_set_aside WHERE artifact_id = $1 AND reason = $2",
+                c.artifact_id,
+                SetAside::Checking.as_str(),
+            )
+            .execute(pool)
+            .await;
+        }
+        return Err(e.into());
+    }
+    if marked {
+        sqlx::query!(
+            "DELETE FROM kb_shape_reconcile_set_aside WHERE artifact_id = $1 AND reason = $2",
+            c.artifact_id,
+            SetAside::Checking.as_str(),
+        )
+        .execute(pool)
+        .await?;
+    }
+    Ok(Outcome::Verdict)
+}
+
+/// Record that `c` is set aside under its current triple, for `reason`. One row per artifact: a
+/// newer set-aside replaces an older one.
+async fn write_set_aside(pool: &PgPool, c: &Candidate, reason: SetAside) -> ApiResult<()> {
+    sqlx::query!(
+        r#"
+        INSERT INTO kb_shape_reconcile_set_aside
+               (artifact_id, shape_id, shape_version, content_hash, reason)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (artifact_id) DO UPDATE
+           SET shape_id      = EXCLUDED.shape_id,
+               shape_version = EXCLUDED.shape_version,
+               content_hash  = EXCLUDED.content_hash,
+               reason        = EXCLUDED.reason,
+               recorded_at   = now()
+        "#,
+        c.artifact_id,
+        c.shape_id,
+        c.shape_version,
+        c.content_hash,
+        reason.as_str(),
     )
     .execute(pool)
     .await?;
@@ -1594,14 +1917,14 @@ mod tests {
         // A deadline spent as soon as the pass starts. The job was not past it when it came up
         // (`past_deadline` false), so the pass reaches its first artifact, and the deadline is
         // spent at the check after it.
-        let pace = Pace {
-            start: std::time::Instant::now(),
-            deadline: std::time::Duration::ZERO,
-            batch: BatchBound {
+        let pace = Pace::production(
+            std::time::Instant::now(),
+            std::time::Duration::ZERO,
+            BatchBound {
                 rows: 2,
                 bytes: i64::MAX,
             },
-        };
+        );
         let ran = run_reconcile_job(&pool, job, None, false, pace)
             .await
             .unwrap();
@@ -1699,11 +2022,7 @@ mod tests {
         let job = claimed.first().expect("the declare queued a job");
 
         // The pass verdicts the backlog against version 1.
-        let pace = Pace {
-            start: std::time::Instant::now(),
-            deadline: ROOMY,
-            batch: SHAPE_RECONCILE_BATCH,
-        };
+        let pace = Pace::production(std::time::Instant::now(), ROOMY, SHAPE_RECONCILE_BATCH);
         let pass = reconcile_one_anchor(&pool, job.anchor, pace).await.unwrap();
         assert_eq!(pass.verdicts_written, 2);
 
@@ -1768,9 +2087,15 @@ mod tests {
         .await
         .unwrap();
 
-        let summary = dispatch_tick_inner(&pool, None, ROOMY, SHAPE_RECONCILE_BATCH)
-            .await
-            .unwrap();
+        // A short deadline, so the spin this test exists to catch fails it in seconds.
+        let summary = dispatch_tick_inner(
+            &pool,
+            None,
+            std::time::Duration::from_secs(15),
+            SHAPE_RECONCILE_BATCH,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(summary.completed, 1, "the anchor ran once");
         assert_eq!(
@@ -1851,5 +2176,223 @@ mod tests {
             1,
             "the service holds even a caller past the door"
         );
+    }
+
+    /// The reason an artifact is set aside under, or `None`.
+    async fn set_aside_reason(pool: &PgPool, artifact: Uuid) -> Option<String> {
+        sqlx::query_scalar("SELECT reason FROM kb_shape_reconcile_set_aside WHERE artifact_id = $1")
+            .bind(artifact)
+            .fetch_optional(pool)
+            .await
+            .unwrap()
+    }
+
+    /// The world's declare job, claimed, as the drain would hold it.
+    async fn claimed_job(pool: &PgPool) -> ClaimedAnchorJob {
+        workflow_job_service::claim_anchor(
+            pool,
+            Persona::Shape.as_str(),
+            DispatchType::ShapeReconcile.as_str(),
+            1,
+            DEFAULT_SHAPE_RECONCILE_LEASE_SECONDS,
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the declare queued a job")
+    }
+
+    /// FAILS IF: an artifact whose check would cost past the bound is checked anyway, or is
+    /// verdicted, or is read again by the next pass.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn an_artifact_past_the_check_cost_bound_is_set_aside_not_verdicted(pool: PgPool) {
+        let w = seed_world(&pool, "costly-reconcile").await;
+        let artifacts = backlog_of(&pool, &w, 2).await;
+        let job = claimed_job(&pool).await;
+        let pace = Pace {
+            max_check_cost: 1,
+            ..Pace::production(std::time::Instant::now(), ROOMY, SHAPE_RECONCILE_BATCH)
+        };
+
+        let pass = reconcile_one_anchor(&pool, job.anchor, pace).await.unwrap();
+
+        assert!(pass.finished);
+        assert_eq!(
+            pass.verdicts_written, 0,
+            "nothing past the bound is verdicted"
+        );
+        assert_eq!(pass.set_aside, 2);
+        for artifact in &artifacts {
+            assert_eq!(
+                set_aside_reason(&pool, artifact.uuid()).await.as_deref(),
+                Some("too_large_to_check")
+            );
+        }
+        assert!(
+            backlog_page(&pool, job.anchor, Uuid::nil(), 10)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a set-aside artifact leaves the backlog"
+        );
+    }
+
+    /// FAILS IF: a pattern that runs past the drain's backtrack limit is verdicted as a failure to
+    /// match, rather than set aside as content nobody finished checking.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_pattern_past_the_backtrack_limit_sets_its_artifact_aside(pool: PgPool) {
+        let w = seed_world(&pool, "backtracking-reconcile").await;
+        let content =
+            serde_json::json!({ "value": "a".repeat(4 * shape_schema::RECONCILE_BACKTRACK_LIMIT) });
+        let (artifact, _) = commit_artifact(
+            &pool,
+            ResourceId::from(w.resource),
+            "measurement",
+            &content,
+            w.emitter,
+        )
+        .await;
+        declare_shape(
+            &pool,
+            DeclareShapeServiceParams {
+                home: AnchorRef::context(ContextId::from(w.context)),
+                kind: "measurement",
+                kind_owner: None,
+                schema: &serde_json::json!({
+                    "type": "object",
+                    "properties": { "value": { "type": "string", "pattern": "(?<=b)c" } }
+                }),
+                enforcement: EnforcementMode::Advisory,
+                principal: ProfileId::from(w.owner),
+                emitter: EntityId::from(w.emitter),
+            },
+        )
+        .await
+        .unwrap();
+
+        let summary = dispatch_tick(&pool, None).await.unwrap();
+
+        assert_eq!(summary.verdicts_written, 0);
+        assert_eq!(summary.set_aside, 1);
+        assert_eq!(
+            set_aside_reason(&pool, artifact.uuid()).await.as_deref(),
+            Some("pattern_too_costly")
+        );
+        assert_eq!(verdict_version(&pool, artifact).await, None);
+    }
+
+    /// FAILS IF: an artifact whose check a killed run left unfinished is checked again, or is set
+    /// aside without saying the check did not finish.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_check_a_killed_run_left_unfinished_is_set_aside_on_the_next_pass(pool: PgPool) {
+        let w = seed_world(&pool, "interrupted-reconcile").await;
+        backlog_of(&pool, &w, 2).await;
+        let anchor = HomeAnchor::Context(ContextId::from(w.context));
+        let page = backlog_page(&pool, anchor, Uuid::nil(), 10).await.unwrap();
+        let killed = &page[0];
+        // What a run killed mid-check leaves: the mark it wrote before the check.
+        write_set_aside(&pool, killed, SetAside::Checking)
+            .await
+            .unwrap();
+
+        let summary = dispatch_tick(&pool, None).await.unwrap();
+
+        assert_eq!(summary.interrupted_checks, 1);
+        assert_eq!(
+            summary.verdicts_written, 1,
+            "only the other artifact is checked"
+        );
+        assert_eq!(
+            set_aside_reason(&pool, killed.artifact_id).await.as_deref(),
+            Some("check_did_not_finish")
+        );
+        assert_eq!(
+            verdict_version(&pool, DataArtifactId::from(killed.artifact_id)).await,
+            None
+        );
+    }
+
+    /// FAILS IF: the mark a costly check writes before it runs outlives the verdict, so a check
+    /// that finished would read as one a killed run left unfinished.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_marked_check_leaves_no_mark_once_its_verdict_is_written(pool: PgPool) {
+        let w = seed_world(&pool, "marked-reconcile").await;
+        backlog_of(&pool, &w, 2).await;
+        let job = claimed_job(&pool).await;
+        let pace = Pace {
+            mark_checks_over: 0,
+            ..Pace::production(std::time::Instant::now(), ROOMY, SHAPE_RECONCILE_BATCH)
+        };
+
+        let pass = reconcile_one_anchor(&pool, job.anchor, pace).await.unwrap();
+
+        assert_eq!(pass.verdicts_written, 2);
+        let marks: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_shape_reconcile_set_aside")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            marks, 0,
+            "every mark is removed once its verdict is written"
+        );
+    }
+
+    /// FAILS IF: a shape past the schema bound is compiled, or its artifacts are verdicted.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn every_artifact_under_a_shape_past_the_schema_bound_is_set_aside(pool: PgPool) {
+        let w = seed_world(&pool, "oversized-schema-reconcile").await;
+        let artifacts = backlog_of(&pool, &w, 2).await;
+        // A stored shape larger than declare now admits, as one stored before the bound existed.
+        let mut huge = string_value_schema();
+        huge["$comment"] = serde_json::Value::String("x".repeat(MAX_SCHEMA_BYTES + 1));
+        sqlx::query(
+            "UPDATE kb_data_artifact_shapes SET schema = $1 \
+              WHERE home_anchor_id = $2 AND NOT is_folded",
+        )
+        .bind(&huge)
+        .bind(w.context)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let summary = dispatch_tick(&pool, None).await.unwrap();
+
+        assert_eq!(summary.verdicts_written, 0);
+        assert_eq!(summary.set_aside, 2);
+        for artifact in &artifacts {
+            assert_eq!(
+                set_aside_reason(&pool, artifact.uuid()).await.as_deref(),
+                Some("schema_too_large")
+            );
+        }
+    }
+
+    fn sized(bytes: &[i64]) -> Vec<Candidate> {
+        bytes
+            .iter()
+            .map(|&content_bytes| Candidate {
+                artifact_id: Uuid::now_v7(),
+                content_hash: String::new(),
+                content_bytes,
+                shape_id: Uuid::nil(),
+                shape_version: 1,
+            })
+            .collect()
+    }
+
+    /// FAILS IF: a batch takes an artifact that crosses its byte bound, stops at its row bound
+    /// late, or ever takes nothing from a page that is not empty.
+    #[test]
+    fn a_batch_is_the_longest_prefix_within_its_bounds_and_never_empty() {
+        let bound = |rows, bytes| BatchBound { rows, bytes };
+        assert_eq!(batch_len(&sized(&[10, 20, 10, 1]), bound(100, 40)), 3);
+        assert_eq!(
+            batch_len(&sized(&[50, 10]), bound(100, 40)),
+            1,
+            "the first always"
+        );
+        assert_eq!(batch_len(&sized(&[1, 1, 1, 1]), bound(2, 40)), 2);
+        assert_eq!(batch_len(&sized(&[]), bound(2, 40)), 0);
     }
 }

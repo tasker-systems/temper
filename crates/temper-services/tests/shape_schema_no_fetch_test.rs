@@ -273,8 +273,8 @@ async fn reconcile_over_a_stored_remote_ref_shape_writes_no_verdict_and_does_not
         "exactly one verdict: the sibling family's artifact"
     );
     assert_eq!(
-        summary.uncompilable_shapes, 1,
-        "the uncompilable shape is counted, not skipped silently"
+        summary.set_aside, 1,
+        "the uncompilable shape's artifact is set aside, not skipped silently"
     );
     assert_eq!(
         summary.completed, 1,
