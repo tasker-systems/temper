@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 
+use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
@@ -79,6 +80,9 @@ fn search_stage_err(stage: &str, e: impl std::fmt::Display) -> ApiError {
 /// the one that is not the truth.
 struct VisiblePage {
     page_ids: Vec<Uuid>,
+    /// The caller's own latest change to each page row, keyed by id. Filled only under
+    /// `changed_by=@me`, the one read that computes it; empty on every other list.
+    changed_by_me_at: HashMap<Uuid, DateTime<Utc>>,
     total: i64,
     facets: ResourceFacets,
     offset: i64,
@@ -96,6 +100,8 @@ struct ScannedRow {
     doc_type: Option<String>,
     stage: Option<String>,
     status: Option<String>,
+    /// `mine.changed_at`, read only when the `mine` CTE was emitted; `None` otherwise.
+    changed_at: Option<DateTime<Utc>>,
 }
 
 /// The ORDER BY column expression for a sort field. Enum-controlled (no caller string
@@ -345,17 +351,20 @@ async fn filtered_visible_page(
     // whatever plan is chosen; `resources_changed_by` is gated inside by the caller's own predicate
     // (20261107000000), and the visibility join below gates the row again.
     // The inner JOIN is the narrowing: a resource the caller did not change has no `mine` row.
-    let (mine_cte, mine_join) = if changed_by_self.is_some() {
+    // The time it selects is the one `sort=changed_by_me` orders by, so the row says the time its
+    // place in the order stands on.
+    let (mine_cte, mine_col, mine_join) = if changed_by_self.is_some() {
         (
             "WITH mine AS MATERIALIZED (SELECT * FROM resources_changed_by($12)) ",
+            ", mine.changed_at AS changed_at",
             "JOIN mine ON mine.resource_id = r.id",
         )
     } else {
-        ("", "")
+        ("", "", "")
     };
     let sql = format!(
         "{mine_cte}SELECT r.id AS id, dt.property_value #>> '{{}}' AS doc_type_name,
-                wp.stage AS stage, wp.status AS status
+                wp.stage AS stage, wp.status AS status{mine_col}
            FROM kb_resources r
            JOIN resources_visible_to($1) v ON v.resource_id = r.id
            JOIN kb_resource_homes h ON h.resource_id = r.id
@@ -488,6 +497,7 @@ async fn filtered_visible_page(
             doc_type: row.get("doc_type_name"),
             stage: row.get("stage"),
             status: row.get("status"),
+            changed_at: changed_by_self.map(|_| row.get("changed_at")),
         })
         .collect();
 
@@ -543,26 +553,31 @@ async fn filtered_visible_page(
 
     // The kept set: every predicate, in the SQL's ORDER BY order (a filter preserves order, so
     // pagination below is unaffected by where the filtering happens).
-    let all_ids: Vec<Uuid> = scanned
+    let kept: Vec<&ScannedRow> = scanned
         .iter()
         .filter(|r| doc_type_ok(r) && stage_ok(r) && status_ok(r))
-        .map(|r| r.id)
         .collect();
-    let total = all_ids.len() as i64;
+    let total = kept.len() as i64;
 
     let offset = params.offset.unwrap_or(0).max(0);
     let limit = params.limit.filter(|l| *l >= 0);
-    let page_ids: Vec<Uuid> = match limit {
-        Some(limit) => all_ids
+    let page: Vec<&ScannedRow> = match limit {
+        Some(limit) => kept
             .into_iter()
             .skip(offset as usize)
             .take(limit as usize)
             .collect(),
-        None => all_ids.into_iter().skip(offset as usize).collect(),
+        None => kept.into_iter().skip(offset as usize).collect(),
     };
+    let page_ids: Vec<Uuid> = page.iter().map(|r| r.id).collect();
+    let changed_by_me_at: HashMap<Uuid, DateTime<Utc>> = page
+        .iter()
+        .filter_map(|r| r.changed_at.map(|t| (r.id, t)))
+        .collect();
 
     Ok(VisiblePage {
         page_ids,
+        changed_by_me_at,
         total,
         facets,
         offset,
@@ -722,7 +737,8 @@ pub async fn list_views_select(
     for new_id in &page.page_ids {
         // An id absent from the batch means the row stopped being visible between the two
         // statements — a dropped row, not a fault. Same convention as the readback's own.
-        if let Some(view) = by_id.remove(new_id) {
+        if let Some(mut view) = by_id.remove(new_id) {
+            view.changed_by_me_at = page.changed_by_me_at.get(new_id).copied();
             views.push(view);
         }
     }

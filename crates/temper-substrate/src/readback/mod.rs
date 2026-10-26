@@ -2294,6 +2294,7 @@ pub async fn hit_identities(
                 is_active: row.is_active,
                 created: row.created,
                 updated: row.updated,
+                changed_by_me_at: None,
                 body_hash: row.body_hash,
                 ingest_state,
                 ingest_ended,

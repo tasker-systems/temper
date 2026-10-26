@@ -308,6 +308,62 @@ async fn orders_by_the_readers_own_latest_change(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn each_row_carries_the_readers_own_change_time_and_only_under_the_filter(pool: PgPool) {
+    let reader = seed_profile(&pool, "reader").await;
+    let teammate = seed_profile(&pool, "teammate").await;
+    let (_, shared) = seed_team_context(&pool, &[reader, teammate]).await;
+    let r = backend(&pool, reader);
+
+    create(&r, shared, "first").await;
+    let second = create(&r, shared, "second").await;
+    // A teammate's later change moves `second`'s `updated` past anything the reader did, so the
+    // two times differ there, and a row that showed `updated` would claim the teammate's change.
+    retitle(&backend(&pool, teammate), second, "second, by the teammate").await;
+
+    let truth: Vec<(Uuid, chrono::DateTime<chrono::Utc>)> =
+        sqlx::query_as("SELECT resource_id, changed_at FROM resources_changed_by($1)")
+            .bind(reader)
+            .fetch_all(&pool)
+            .await
+            .expect("resources_changed_by");
+
+    let rows = list(&pool, reader, mine()).await.expect("list").rows;
+    assert_eq!(rows.len(), 2);
+    for row in &rows {
+        let id: Uuid = row.id.into();
+        assert_eq!(
+            row.changed_by_me_at,
+            at(&truth, id),
+            "the row's time is the reader's own latest change to it"
+        );
+    }
+    let second_row = rows
+        .iter()
+        .find(|row| Uuid::from(row.id) == second)
+        .expect("second");
+    assert!(
+        second_row.changed_by_me_at.expect("time") < second_row.updated,
+        "the teammate's later change is not the reader's time"
+    );
+
+    // Without the filter there is no such time, and the field is absent from the wire.
+    let plain = list(&pool, reader, ResourceListParams::default())
+        .await
+        .expect("list")
+        .rows;
+    // Every resource the reader can see, which is more than the two they changed.
+    assert!(plain.len() >= 2);
+    for row in &plain {
+        assert_eq!(row.changed_by_me_at, None);
+        let json = serde_json::to_value(row).expect("serialize");
+        assert!(
+            json.get("changed_by_me_at").is_none(),
+            "a read without the filter is unchanged on the wire: {json}"
+        );
+    }
+}
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_change_the_reader_can_no_longer_read_is_absent_from_rows_and_total(pool: PgPool) {
     let reader = seed_profile(&pool, "reader").await;
     let teammate = seed_profile(&pool, "teammate").await;

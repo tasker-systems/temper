@@ -1209,6 +1209,7 @@ mod tests {
             is_active: true,
             created: chrono::Utc::now(),
             updated: chrono::Utc::now(),
+            changed_by_me_at: None,
             body_hash: None,
             ingest_state: Some(temper_core::types::resource::IngestState::Complete),
             ingest_ended: None,

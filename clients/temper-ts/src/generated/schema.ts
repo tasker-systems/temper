@@ -10045,6 +10045,15 @@ export interface components {
             body_hash?: string | null;
             body_storage?: components["schemas"]["BodyStorage"] | null;
             /**
+             * Format: date-time
+             * @description When the caller last changed this resource themselves. Present only on a row read with
+             *     `changed_by=@me`, the same time `sort=changed_by_me` orders by; absent on every other read.
+             *
+             *     Not `updated`, which can be a teammate's later change: this counts only the caller's own
+             *     authored events on the resource, so it never reports another principal's activity.
+             */
+            changed_by_me_at?: string | null;
+            /**
              * Format: uuid
              * @description Set when the resource is homed in a cognitive map. Mutually exclusive with
              *     the `context_*` fields.

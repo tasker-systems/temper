@@ -36,6 +36,7 @@ class ResourceView(BaseModel):
     """ # noqa: E501
     body_hash: Optional[StrictStr] = Field(default=None, description="SHA-256 hash of the resource body, from `kb_resource_manifests`. `None` when no manifest row exists.")
     body_storage: Optional[BodyStorage] = Field(default=None, description="Do the bytes read back exactly, or only approximately? `Option` purely for version skew, as with `ingest_state`.")
+    changed_by_me_at: Optional[datetime] = Field(default=None, description="When the caller last changed this resource themselves. Present only on a row read with `changed_by=@me`, the same time `sort=changed_by_me` orders by; absent on every other read.  Not `updated`, which can be a teammate's later change: this counts only the caller's own authored events on the resource, so it never reports another principal's activity.")
     cogmap_id: Optional[UUID] = Field(default=None, description="Set when the resource is homed in a cognitive map. Mutually exclusive with the `context_*` fields.")
     cogmap_name: Optional[StrictStr] = Field(default=None, description="Display name of the home cognitive map. `Some` iff `cogmap_id` is `Some`.")
     content: Optional[StrictStr] = Field(default=None, description="The reconstructed markdown body — the `body` section.  Absent means **not requested**, never \"empty body\". An empty body is `Some(String::new())`, which serializes as `\"\"`; the two are distinguishable on the wire and after a round-trip.")
@@ -60,7 +61,7 @@ class ResourceView(BaseModel):
     ref: StrictStr = Field(description="The decorated, self-resolving address: `sluggify(title)-<uuid>`.  Not a column — derived by [`ResourceView::with_derived_refs`] from `title` + `id`. Until this task it was injected render-time by the CLI alone (`temper-cli/src/commands/resource.rs`), so MCP callers never received one even though the shipped skill instructs agents to use it.")
     title: StrictStr
     updated: datetime
-    __properties: ClassVar[List[str]] = ["body_hash", "body_storage", "cogmap_id", "cogmap_name", "content", "context_name", "context_owner_ref", "context_ref", "context_slug", "created", "doc_type_name", "embedding_status", "id", "ingest_ended", "ingest_state", "is_active", "kb_context_id", "managed_meta", "open_meta", "origin_uri", "originator_profile_id", "owner_handle", "owner_profile_id", "ref", "title", "updated"]
+    __properties: ClassVar[List[str]] = ["body_hash", "body_storage", "changed_by_me_at", "cogmap_id", "cogmap_name", "content", "context_name", "context_owner_ref", "context_ref", "context_slug", "created", "doc_type_name", "embedding_status", "id", "ingest_ended", "ingest_state", "is_active", "kb_context_id", "managed_meta", "open_meta", "origin_uri", "originator_profile_id", "owner_handle", "owner_profile_id", "ref", "title", "updated"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -113,6 +114,11 @@ class ResourceView(BaseModel):
         # and model_fields_set contains the field
         if self.body_storage is None and "body_storage" in self.model_fields_set:
             _dict['body_storage'] = None
+
+        # set to None if changed_by_me_at (nullable) is None
+        # and model_fields_set contains the field
+        if self.changed_by_me_at is None and "changed_by_me_at" in self.model_fields_set:
+            _dict['changed_by_me_at'] = None
 
         # set to None if cogmap_id (nullable) is None
         # and model_fields_set contains the field
@@ -188,6 +194,7 @@ class ResourceView(BaseModel):
         _obj = cls.model_validate({
             "body_hash": obj.get("body_hash"),
             "body_storage": obj.get("body_storage"),
+            "changed_by_me_at": obj.get("changed_by_me_at"),
             "cogmap_id": obj.get("cogmap_id"),
             "cogmap_name": obj.get("cogmap_name"),
             "content": obj.get("content"),
