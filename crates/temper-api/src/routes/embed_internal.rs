@@ -11,6 +11,7 @@
 //!   (TMPR-56), and — since 2026-09-05 — for abandoned staged blob uploads, which ride
 //!   the same cron by ruling (task 01a0715d).
 //! - `/api/sensitivity/sweep` — the sensitivity sweep's five-minute tick (sensitivity-sweep spec D8).
+//! - `/api/shape/reconcile` — the shape-reconcile drain's five-minute tick (task 01a15663).
 //!
 //! NOTE: `embed::dispatch`'s `#[utoipa::path]` declares `get` only, but the route
 //! mounts BOTH GET and POST on the same handler. This plain `.route()` (rather than
@@ -90,6 +91,14 @@ pub(super) fn embed_internal_routes() -> Router<AppState> {
         .route(
             "/api/sensitivity/sweep",
             get(handlers::sensitivity_sweep::sweep).post(handlers::sensitivity_sweep::sweep),
+        )
+        // The shape-reconcile drain (task 01a15663): verdicts the artifacts a declare or a rehome
+        // left `declared_not_yet_checked`, in bounded batches under a deadline. Same self-gated
+        // posture and GET+POST shape as `dispatch`/`warm`. It belongs in this group for the 300s
+        // ceiling: its first passes drain the backlog that accumulated while nothing ran the job.
+        .route(
+            "/api/shape/reconcile",
+            get(handlers::shape_reconcile::dispatch).post(handlers::shape_reconcile::dispatch),
         )
 }
 

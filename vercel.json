@@ -20,7 +20,8 @@
     { "path": "/api/as/reap", "schedule": "17 3 * * *" },
     { "path": "/api/internal-calls/health", "schedule": "*/15 * * * *" },
     { "path": "/api/erasure/drain", "schedule": "* * * * *" },
-    { "path": "/api/sensitivity/sweep", "schedule": "*/5 * * * *" }
+    { "path": "/api/sensitivity/sweep", "schedule": "*/5 * * * *" },
+    { "path": "/api/shape/reconcile", "schedule": "*/5 * * * *" }
   ],
   "functions": {
     "api/axum.rs": { "memory": 3009, "maxDuration": 60 },
@@ -39,6 +40,7 @@
     { "src": "/api/internal-calls/health", "dest": "/api/internal" },
     { "src": "/api/erasure/drain", "dest": "/api/internal" },
     { "src": "/api/sensitivity/sweep", "dest": "/api/internal" },
+    { "src": "/api/shape/reconcile", "dest": "/api/internal" },
     { "src": "/internal/(.*)", "dest": "/api/internal" },
     { "src": "/.well-known/oauth-authorization-server", "dest": "/api/oauth/authorization-server" },
     { "src": "/.well-known/oauth-authorization-server/(?<issuer_path>.*)", "dest": "/api/oauth/authorization-server?issuer_path=$issuer_path" },

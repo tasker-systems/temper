@@ -12,17 +12,22 @@
 //! predicates, never restates them — the same two-arm branch `can_modify_resource` uses
 //! (`migrations/20260804000020:102-108`).
 
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
+
+use serde::Serialize;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
+use crate::services::drain_span::{self, JobOutcome};
 use crate::services::shape_loader::{self, SchemaVerdict};
 use crate::services::workflow_job_service;
 use temper_core::types::artifact_ask::walk::MAX_SCHEMA_BYTES;
 use temper_core::types::data_artifact::unstorable_nul;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ContextId, EntityId, ProfileId, ShapeId};
-use temper_core::types::workflow_job::{AnchorJobPayload, DispatchType, Persona};
+use temper_core::types::workflow_job::{AnchorJobPayload, ClaimedAnchorJob, DispatchType, Persona};
 use temper_substrate::payloads::{AnchorRef, EnforcementMode, KindOwner};
 use temper_substrate::shape_schema::{self, ShapeSchemaUncompilable};
 use temper_substrate::writes::{self, DataArtifactRefusal, DeclareShapeParams};
@@ -135,151 +140,482 @@ fn too_large() -> String {
     )
 }
 
-/// Run one shape-reconciliation pass: claim anchor-keyed jobs, verdict pre-existing artifacts by
-/// running `jsonschema` validation against the shape in force, complete each job. Returns the
-/// count of verdicts written.
+/// One shape-reconcile drain pass, as `api/internal`'s `/api/shape/reconcile` cron runs it.
+#[derive(Debug, Default, Serialize)]
+pub struct ShapeReconcileSummary {
+    /// Jobs claimed this invocation.
+    pub claimed: u32,
+    /// Anchors whose whole backlog was verdicted, and whose job was marked done.
+    pub completed: u32,
+    /// Jobs handed back untouched because the invocation's deadline was already spent.
+    pub deferred: u32,
+    /// Anchors whose backlog was partly verdicted when the deadline came; re-enqueued to resume.
+    pub partial: u32,
+    /// Jobs whose pass errored; left in-flight for the reaper to retry.
+    pub failed: u32,
+    /// Verdicts written this invocation: the work product, which a tick that claimed nothing must
+    /// not be mistaken for.
+    pub verdicts_written: u64,
+    /// Shapes in force found uncompilable this invocation, counted once per anchor pass. Their
+    /// artifacts get no verdict and stay `declared_not_yet_checked`; each is named in a warning.
+    pub uncompilable_shapes: u32,
+}
+
+/// What one backlog batch may hold, so an anchor's backlog is never read into memory whole.
+#[derive(Debug, Clone, Copy)]
+struct BatchBound {
+    /// At most this many artifacts.
+    rows: i64,
+    /// At most this many bytes of content, by `content_bytes`. The first artifact of a batch is
+    /// always read, however large, so a batch always moves forward.
+    bytes: i64,
+}
+
+/// The batch the production drain reads: a few hundred artifacts, or 32 MB of content, whichever
+/// comes first. An artifact commit is bounded by the 25 MiB gated body limit, so one artifact
+/// always fits a batch alone.
+const SHAPE_RECONCILE_BATCH: BatchBound = BatchBound {
+    rows: 200,
+    bytes: 32_000_000,
+};
+
+/// Wall-clock ceiling for one drain invocation, in seconds: the region drain's, for its reason. It
+/// sits under the `api/internal` function's `maxDuration: 300`, so a pass that runs long still has
+/// room to hand its job back and return a summary rather than be killed mid-batch. The lease
+/// (`DEFAULT_SHAPE_RECONCILE_LEASE_SECONDS`) exceeds it, so a running pass never looks dead to the
+/// reaper.
+const DEFAULT_SHAPE_RECONCILE_DEADLINE_SECONDS: u64 = 240;
+
+/// Env override for the deadline above.
+const SHAPE_RECONCILE_DEADLINE_ENV: &str = "TEMPER_SHAPE_RECONCILE_DEADLINE_SECONDS";
+
+fn resolve_dispatch_deadline() -> std::time::Duration {
+    let secs = std::env::var(SHAPE_RECONCILE_DEADLINE_ENV)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_SHAPE_RECONCILE_DEADLINE_SECONDS);
+    std::time::Duration::from_secs(secs)
+}
+
+/// Run one shape-reconcile drain pass: reap expired leases, then claim anchor-keyed jobs and
+/// verdict each anchor's backlog against the shape in force, in bounded batches, until the queue
+/// is empty or the deadline is spent.
 ///
-/// A tick that claims zero jobs must not be mistakable for a successful sweep — the caller should
-/// assert on verdicts written, not on the tick returning `Ok`. The returned count is the work
-/// product, not the claim count.
-pub async fn reconcile_anchor(pool: &PgPool, _anchor: HomeAnchor) -> ApiResult<usize> {
+/// A pass that claims nothing writes nothing: assert on `verdicts_written`, not on `Ok`.
+pub async fn dispatch_tick(pool: &PgPool, cap: Option<i32>) -> ApiResult<ShapeReconcileSummary> {
+    dispatch_tick_inner(
+        pool,
+        cap,
+        resolve_dispatch_deadline(),
+        SHAPE_RECONCILE_BATCH,
+    )
+    .await
+}
+
+/// [`dispatch_tick`] with the deadline and the batch injected, so tests can force the deferral and
+/// resumption paths deterministically (`Duration::ZERO` defers every claimed job) without seeding a
+/// production-sized backlog.
+#[tracing::instrument(
+    name = "shape_reconcile_dispatch",
+    skip_all,
+    fields(
+        backlog_depth = tracing::field::Empty,
+        oldest_pending_age_ms = tracing::field::Empty,
+        claimed = tracing::field::Empty,
+        completed = tracing::field::Empty,
+        deferred = tracing::field::Empty,
+        failed = tracing::field::Empty,
+        partial = tracing::field::Empty,
+        verdicts_written = tracing::field::Empty,
+        uncompilable_shapes = tracing::field::Empty,
+    )
+)]
+async fn dispatch_tick_inner(
+    pool: &PgPool,
+    cap: Option<i32>,
+    deadline: std::time::Duration,
+    batch: BatchBound,
+) -> ApiResult<ShapeReconcileSummary> {
     let persona = Persona::Shape.as_str();
     let dispatch = DispatchType::ShapeReconcile.as_str();
 
-    // Reap stale leases before claiming, mirroring the region and embed ticks.
+    // Reap stale leases before claiming, mirroring the region and embed drains.
     workflow_job_service::reap(pool, "shape reconcile lease expired").await?;
 
-    let claimed = workflow_job_service::claim_anchor(
-        pool,
-        persona,
-        dispatch,
-        DEFAULT_SHAPE_RECONCILE_CAP,
-        DEFAULT_SHAPE_RECONCILE_LEASE_SECONDS,
-    )
-    .await?;
+    let cap = cap.unwrap_or(DEFAULT_SHAPE_RECONCILE_CAP);
+    let mut summary = ShapeReconcileSummary::default();
+    let start = std::time::Instant::now();
 
-    if claimed.is_empty() {
-        return Ok(0);
+    // Before the first claim, for `drain_span::read_queue_depth`'s reason.
+    let span = tracing::Span::current();
+    let depth = drain_span::read_queue_depth(pool, persona, dispatch).await?;
+    span.record("backlog_depth", depth.backlog_depth);
+    if let Some(age) = depth.oldest_pending_age_ms {
+        span.record("oldest_pending_age_ms", age);
     }
 
-    let mut verdicts_written = 0usize;
-    for job in claimed {
-        match reconcile_one_anchor(pool, job.anchor).await {
-            Ok(count) => {
-                verdicts_written += count;
-                workflow_job_service::complete_anchor(pool, job.anchor, persona, dispatch).await?;
+    // The region drain's do-while: always one claim, then keep claiming until the queue is empty or
+    // the deadline is spent. A job is handed back (deferred or partial) only once the deadline is
+    // spent, and the loop ends there, so a handed-back job is never re-claimed by the pass that
+    // handed it back.
+    loop {
+        let claimed = workflow_job_service::claim_anchor(
+            pool,
+            persona,
+            dispatch,
+            cap,
+            DEFAULT_SHAPE_RECONCILE_LEASE_SECONDS,
+        )
+        .await?;
+        if claimed.is_empty() {
+            break;
+        }
+        summary.claimed += claimed.len() as u32;
+
+        let ids: Vec<Uuid> = claimed.iter().map(|j| j.id).collect();
+        let waits = drain_span::read_queue_waits(pool, &ids).await?;
+
+        for job in claimed {
+            let past_deadline = start.elapsed() >= deadline;
+            let ran = run_reconcile_job(
+                pool,
+                &job,
+                waits.get(&job.id).copied(),
+                past_deadline,
+                Pace {
+                    start,
+                    deadline,
+                    batch,
+                },
+            )
+            .await?;
+            match ran {
+                ReconcileJobResult::Deferred => summary.deferred += 1,
+                ReconcileJobResult::Failed => summary.failed += 1,
+                ReconcileJobResult::Ran(pass) => {
+                    if pass.finished {
+                        summary.completed += 1;
+                    } else {
+                        summary.partial += 1;
+                    }
+                    summary.verdicts_written += pass.verdicts_written;
+                    summary.uncompilable_shapes += pass.uncompilable_shapes;
+                }
             }
-            Err(e) => {
-                // Leave the job in_progress; the reaper retries it. One bad anchor never aborts
-                // the pass — same posture as the region drain.
-                tracing::warn!(
-                    error = %e,
-                    anchor = %job.anchor.uuid(),
-                    "shape reconciliation failed for one anchor; left in-flight for the reaper"
-                );
-            }
+        }
+
+        if start.elapsed() >= deadline {
+            break;
         }
     }
 
-    Ok(verdicts_written)
+    span.record("claimed", summary.claimed);
+    span.record("completed", summary.completed);
+    span.record("deferred", summary.deferred);
+    span.record("failed", summary.failed);
+    span.record("partial", summary.partial);
+    span.record("verdicts_written", summary.verdicts_written);
+    span.record("uncompilable_shapes", summary.uncompilable_shapes);
+    Ok(summary)
 }
 
-/// Reconcile all unchecked artifacts for one anchor: find artifacts whose shape in force is homed
-/// here and whose staleness triple does not match, validate each against the shape's JSON Schema,
-/// and upsert the verdict. Returns the count of verdicts written.
-async fn reconcile_one_anchor(pool: &PgPool, anchor: HomeAnchor) -> ApiResult<usize> {
-    // Find the backlog: live artifacts whose shape in force is homed in this anchor and whose
-    // staleness triple (shape_id, shape_version, content_hash) does not match any stored verdict.
-    //
-    // An erased resource's artifacts are not backlog. The act empties their content but leaves
-    // them unfolded with their hash (D2 step 5), so a shape declared or amended after the act
-    // would select them, and the verdict writer refuses them (`_resource_write_guard`, D13): one
-    // such artifact would fail the whole anchor on every retry.
-    //
-    // Uses _data_artifact_shape_in_force (which calls _data_artifact_anchor and
-    // _data_artifact_kind_owner) rather than re-deriving the home — the cogmap tiebreak is
-    // load-bearing (20260820000020:186-188).
-    let rows = sqlx::query!(
-        r#"
-        SELECT a.id              AS "artifact_id!: Uuid",
-               a.content_hash    AS "content_hash!: String",
-               c.content         AS "content!: serde_json::Value",
-               s.shape_id        AS "shape_id!: Uuid",
-               s.shape_version   AS "shape_version!: i32",
-               s.schema          AS "schema!: serde_json::Value"
-          FROM kb_data_artifacts a
-          LEFT JOIN kb_data_artifact_content c ON c.artifact_id = a.id
-          CROSS JOIN LATERAL _data_artifact_shape_in_force(
-              a.resource_id, a.kind_owner_table, a.kind_owner_id, a.artifact_kind
-          ) s
-          JOIN kb_data_artifact_shapes sh ON sh.id = s.shape_id
-            AND sh.home_anchor_table = $1
-            AND sh.home_anchor_id    = $2
-          JOIN kb_resources r ON r.id = a.resource_id
-         WHERE NOT a.is_folded
-           AND r.erased_at IS NULL
-           AND NOT EXISTS (
-               SELECT 1 FROM kb_data_artifact_verdicts v
-                WHERE v.artifact_id   = a.id
-                  AND v.shape_id      = s.shape_id
-                  AND v.shape_version = s.shape_version
-                  AND v.content_hash  = a.content_hash
-           )
-        "#,
-        anchor.table(),
-        anchor.uuid(),
+/// The pass's clock and batch, carried to each anchor.
+#[derive(Debug, Clone, Copy)]
+struct Pace {
+    start: std::time::Instant,
+    deadline: std::time::Duration,
+    batch: BatchBound,
+}
+
+impl Pace {
+    fn spent(&self) -> bool {
+        self.start.elapsed() >= self.deadline
+    }
+}
+
+/// What one claimed job did.
+#[derive(Debug)]
+enum ReconcileJobResult {
+    Deferred,
+    Ran(AnchorPass),
+    Failed,
+}
+
+/// What one anchor's pass did.
+#[derive(Debug, Default)]
+struct AnchorPass {
+    verdicts_written: u64,
+    uncompilable_shapes: u32,
+    /// Whether the backlog was exhausted. False when the deadline came first: the verdicts
+    /// already written stand, and the re-enqueued job resumes from what is left.
+    finished: bool,
+}
+
+#[tracing::instrument(
+    name = "shape_reconcile_job",
+    skip_all,
+    fields(
+        anchor_id = %job.anchor.uuid(),
+        anchor_kind = job.anchor.table(),
+        attempts = job.attempts,
+        queue_wait_ms = tracing::field::Empty,
+        outcome = tracing::field::Empty,
+        verdicts_written = tracing::field::Empty,
     )
-    .fetch_all(pool)
-    .await?;
+)]
+async fn run_reconcile_job(
+    pool: &PgPool,
+    job: &ClaimedAnchorJob,
+    queue_wait_ms: Option<i64>,
+    past_deadline: bool,
+    pace: Pace,
+) -> ApiResult<ReconcileJobResult> {
+    let span = tracing::Span::current();
+    if let Some(wait) = queue_wait_ms {
+        span.record("queue_wait_ms", wait);
+    }
+    let persona = Persona::Shape.as_str();
+    let dispatch = DispatchType::ShapeReconcile.as_str();
 
-    let mut count = 0usize;
-    for row in rows {
-        // A shape that cannot be compiled (stored before declare compiled, or by direct insert)
-        // gives no verdict: its artifacts stay `declared_not_yet_checked`, and one such shape does
-        // not fail the anchor's other artifacts (task 01a15661-8460-739d-9ed3-f1e8ccbf9b69).
-        let Ok(validator) = shape_schema::compile(&row.schema) else {
-            tracing::warn!(
-                shape_id = %row.shape_id,
-                artifact_id = %row.artifact_id,
-                "shape reconciliation skipped an artifact: its shape cannot be compiled"
-            );
-            continue;
-        };
-        let errors: Vec<_> = validator.iter_errors(&row.content).collect();
-        let satisfied = errors.is_empty();
-
-        let detail = if satisfied {
-            None
-        } else {
-            Some(serde_json::Value::Array(
-                errors
-                    .iter()
-                    .map(|e| {
-                        serde_json::json!({
-                            "path": e.instance_path().to_string(),
-                            "message": e.to_string(),
-                        })
-                    })
-                    .collect(),
-            ))
-        };
-
-        sqlx::query!(
-            "SELECT data_artifact_verdict_upsert($1,$2,$3,$4,$5,$6)",
-            row.artifact_id,
-            row.shape_id,
-            row.shape_version,
-            row.content_hash,
-            satisfied,
-            detail,
-        )
-        .execute(pool)
-        .await?;
-
-        count += 1;
+    if past_deadline {
+        // Hand the job back untouched. Complete-then-re-enqueue rather than holding the lease, so
+        // the reaper's attempt count stays clean — the region drain's reasoning.
+        hand_back(pool, job).await?;
+        span.record("outcome", JobOutcome::Deferred.as_str());
+        return Ok(ReconcileJobResult::Deferred);
     }
 
-    Ok(count)
+    match reconcile_one_anchor(pool, job.anchor, pace).await {
+        Ok(pass) => {
+            if pass.finished {
+                workflow_job_service::complete_anchor(pool, job.anchor, persona, dispatch).await?;
+                span.record("outcome", JobOutcome::Completed.as_str());
+            } else {
+                hand_back(pool, job).await?;
+                span.record("outcome", JobOutcome::Partial.as_str());
+            }
+            span.record("verdicts_written", pass.verdicts_written);
+            Ok(ReconcileJobResult::Ran(pass))
+        }
+        Err(e) => {
+            // Leave the job in_progress; the reaper retries it. One bad anchor never aborts the
+            // pass — the region drain's posture.
+            span.record("outcome", JobOutcome::Failed.as_str());
+            tracing::warn!(
+                error = %e,
+                "shape reconciliation failed for one anchor; left in-flight for the reaper"
+            );
+            Ok(ReconcileJobResult::Failed)
+        }
+    }
+}
+
+/// Mark the job done and enqueue its successor, so the next pass resumes the anchor.
+async fn hand_back(pool: &PgPool, job: &ClaimedAnchorJob) -> ApiResult<()> {
+    let persona = Persona::Shape.as_str();
+    let dispatch = DispatchType::ShapeReconcile.as_str();
+    workflow_job_service::complete_anchor(pool, job.anchor, persona, dispatch).await?;
+    workflow_job_service::enqueue_anchor(
+        pool,
+        job.anchor,
+        persona,
+        dispatch,
+        AnchorJobPayload {
+            emitter: job.emitter,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+/// Verdict one anchor's backlog, a bounded batch at a time, until it is exhausted or the pass's
+/// deadline is spent.
+///
+/// The backlog is the live artifacts whose shape in force is homed here and whose staleness triple
+/// `(shape_id, shape_version, content_hash)` matches no stored verdict. An erased resource's
+/// artifacts are not backlog: the act empties their content but leaves them unfolded with their
+/// hash (D2 step 5), so a shape declared or amended after the act would select them, and the
+/// verdict writer refuses them (`_resource_write_guard`, D13), which would fail the anchor on every
+/// retry.
+///
+/// The batches walk the backlog in artifact-id order from the start, so each moves forward even
+/// past artifacts left unverdicted. A shape that cannot be compiled gives no verdict: its artifacts
+/// stay `declared_not_yet_checked`, it is named once in a warning and counted, and later batches of
+/// the pass exclude it (task 01a15661-8460-739d-9ed3-f1e8ccbf9b69).
+async fn reconcile_one_anchor(
+    pool: &PgPool,
+    anchor: HomeAnchor,
+    pace: Pace,
+) -> ApiResult<AnchorPass> {
+    let mut pass = AnchorPass::default();
+    let mut after = Uuid::nil();
+    let mut uncompilable: Vec<Uuid> = Vec::new();
+    let mut validators = HashMap::new();
+
+    loop {
+        // The backlog's next batch, on cheap columns only: which artifacts, under which shape.
+        //
+        // Uses _data_artifact_shape_in_force (which calls _data_artifact_anchor and
+        // _data_artifact_kind_owner) rather than re-deriving the home — the cogmap tiebreak is
+        // load-bearing (20260820000020:186-188). The home-row EXISTS only narrows the scan to this
+        // anchor's resources: the shape in force is homed at the home `_data_artifact_anchor`
+        // picks, which is one of the resource's own, so no artifact the shape join admits is lost.
+        //
+        // The row cap is applied first and the byte cap over what it admits, so the window sums
+        // at most `batch.rows` rows; the first row always passes the byte cap.
+        let candidates = sqlx::query!(
+            r#"
+            SELECT w.artifact_id     AS "artifact_id!: Uuid",
+                   w.content_hash    AS "content_hash!: String",
+                   w.shape_id        AS "shape_id!: Uuid",
+                   w.shape_version   AS "shape_version!: i32"
+              FROM (SELECT b.*,
+                           (sum(b.content_bytes) OVER (ORDER BY b.artifact_id
+                                                       ROWS UNBOUNDED PRECEDING)
+                              - b.content_bytes)::bigint AS bytes_before
+                      FROM (SELECT a.id           AS artifact_id,
+                                   a.content_hash,
+                                   a.content_bytes,
+                                   s.shape_id,
+                                   s.shape_version
+                              FROM kb_data_artifacts a
+                             CROSS JOIN LATERAL _data_artifact_shape_in_force(
+                                 a.resource_id, a.kind_owner_table, a.kind_owner_id, a.artifact_kind
+                             ) s
+                              JOIN kb_data_artifact_shapes sh ON sh.id = s.shape_id
+                               AND sh.home_anchor_table = $1
+                               AND sh.home_anchor_id    = $2
+                              JOIN kb_resources r ON r.id = a.resource_id
+                             WHERE NOT a.is_folded
+                               AND r.erased_at IS NULL
+                               AND a.id > $3
+                               AND NOT (s.shape_id = ANY($4))
+                               AND EXISTS (
+                                   SELECT 1 FROM kb_resource_homes h
+                                    WHERE h.resource_id  = a.resource_id
+                                      AND h.anchor_table = $1
+                                      AND h.anchor_id    = $2
+                               )
+                               AND NOT EXISTS (
+                                   SELECT 1 FROM kb_data_artifact_verdicts v
+                                    WHERE v.artifact_id   = a.id
+                                      AND v.shape_id      = s.shape_id
+                                      AND v.shape_version = s.shape_version
+                                      AND v.content_hash  = a.content_hash
+                               )
+                             ORDER BY a.id
+                             LIMIT $5) AS b) AS w
+             WHERE w.bytes_before < $6::bigint
+             ORDER BY w.artifact_id
+            "#,
+            anchor.table(),
+            anchor.uuid(),
+            after,
+            &uncompilable[..],
+            pace.batch.rows,
+            pace.batch.bytes,
+        )
+        .fetch_all(pool)
+        .await?;
+
+        let Some(last) = candidates.last() else {
+            pass.finished = true;
+            return Ok(pass);
+        };
+        after = last.artifact_id;
+
+        // The batch's content, read once. An artifact committed with JSON `null` content has no
+        // content row (20260820000020, `data_artifact_commit`), and the commit validated that
+        // `null` against the shape, so reconciliation does the same.
+        let ids: Vec<Uuid> = candidates.iter().map(|c| c.artifact_id).collect();
+        let mut contents: HashMap<Uuid, serde_json::Value> = sqlx::query!(
+            r#"
+            SELECT artifact_id AS "artifact_id!: Uuid",
+                   content     AS "content!: serde_json::Value"
+              FROM kb_data_artifact_content
+             WHERE artifact_id = ANY($1)
+            "#,
+            &ids[..],
+        )
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(|r| (r.artifact_id, r.content))
+        .collect();
+
+        for c in candidates {
+            if uncompilable.contains(&c.shape_id) {
+                continue;
+            }
+            let key = (c.shape_id, c.shape_version);
+            if let Entry::Vacant(slot) = validators.entry(key) {
+                let schema = sqlx::query_scalar!(
+                    r#"SELECT schema AS "schema!: serde_json::Value"
+                         FROM kb_data_artifact_shapes WHERE id = $1"#,
+                    c.shape_id,
+                )
+                .fetch_one(pool)
+                .await?;
+                match shape_schema::compile(&schema) {
+                    Ok(validator) => {
+                        slot.insert(validator);
+                    }
+                    Err(ShapeSchemaUncompilable) => {
+                        tracing::warn!(
+                            shape_id = %c.shape_id,
+                            shape_version = c.shape_version,
+                            anchor = %anchor.uuid(),
+                            "shape reconciliation skipped a shape that cannot be compiled; its \
+                             artifacts stay declared_not_yet_checked"
+                        );
+                        uncompilable.push(c.shape_id);
+                        pass.uncompilable_shapes += 1;
+                        continue;
+                    }
+                }
+            }
+            let validator = &validators[&key];
+            let content = contents
+                .remove(&c.artifact_id)
+                .unwrap_or(serde_json::Value::Null);
+            let errors: Vec<_> = validator.iter_errors(&content).collect();
+            let satisfied = errors.is_empty();
+            let detail = if satisfied {
+                None
+            } else {
+                Some(serde_json::Value::Array(
+                    errors
+                        .iter()
+                        .map(|e| {
+                            serde_json::json!({
+                                "path": e.instance_path().to_string(),
+                                "message": e.to_string(),
+                            })
+                        })
+                        .collect(),
+                ))
+            };
+
+            sqlx::query!(
+                "SELECT data_artifact_verdict_upsert($1,$2,$3,$4,$5,$6)",
+                c.artifact_id,
+                c.shape_id,
+                c.shape_version,
+                c.content_hash,
+                satisfied,
+                detail,
+            )
+            .execute(pool)
+            .await?;
+
+            pass.verdicts_written += 1;
+        }
+
+        if pace.spent() {
+            return Ok(pass);
+        }
+    }
 }
 
 /// The authority gate: call `context_authorable_by_profile` / `cogmap_authorable_by_profile` for
@@ -650,9 +986,7 @@ mod tests {
         );
 
         // Run the reconciler — it should verdict the backlog.
-        let count = reconcile_anchor(&pool, HomeAnchor::Context(ContextId::from(w.context)))
-            .await
-            .unwrap();
+        let count = dispatch_tick(&pool, None).await.unwrap().verdicts_written;
 
         assert_eq!(
             count, 1,
@@ -691,9 +1025,7 @@ mod tests {
         );
 
         // Run the reconciler — it claims zero jobs and writes zero verdicts.
-        let count = reconcile_anchor(&pool, HomeAnchor::Context(ContextId::from(w.context)))
-            .await
-            .unwrap();
+        let count = dispatch_tick(&pool, None).await.unwrap().verdicts_written;
 
         assert_eq!(
             count, 0,
@@ -858,9 +1190,7 @@ mod tests {
         };
         declare(string_value_schema()).await;
         assert_eq!(
-            reconcile_anchor(&pool, HomeAnchor::Context(ContextId::from(w.context)))
-                .await
-                .unwrap(),
+            dispatch_tick(&pool, None).await.unwrap().verdicts_written,
             0,
             "the first declare's job finds an empty backlog"
         );
@@ -880,9 +1210,7 @@ mod tests {
         amended["properties"]["unit"] = serde_json::json!({ "type": "string" });
         declare(amended).await;
 
-        let written = reconcile_anchor(&pool, HomeAnchor::Context(ContextId::from(w.context)))
-            .await
-            .unwrap();
+        let written = dispatch_tick(&pool, None).await.unwrap().verdicts_written;
 
         assert_eq!(
             reconcile_job_statuses(&pool, w.context).await,
@@ -899,6 +1227,241 @@ mod tests {
             verdict_version(&pool, erased_artifact).await,
             erased_before,
             "the erased resource's artifact gains no verdict"
+        );
+    }
+
+    /// Declare the world's `measurement` shape over a backlog of `n` artifacts, one per resource,
+    /// committed before the declare. Returns the artifacts in commit order.
+    async fn backlog_of(pool: &PgPool, w: &World, n: usize) -> Vec<DataArtifactId> {
+        let home = AnchorRef::context(ContextId::from(w.context));
+        let content = serde_json::json!({"value": "42"});
+        let mut artifacts = Vec::with_capacity(n);
+        for i in 0..n {
+            let resource = make_resource(
+                pool,
+                ProfileId::from(w.owner),
+                EntityId::from(w.emitter),
+                home,
+                &format!("backlog-{i}"),
+            )
+            .await;
+            let (artifact, _) =
+                commit_artifact(pool, resource, "measurement", &content, w.emitter).await;
+            artifacts.push(artifact);
+        }
+        declare_shape(
+            pool,
+            DeclareShapeServiceParams {
+                home,
+                kind: "measurement",
+                kind_owner: None,
+                schema: &string_value_schema(),
+                enforcement: EnforcementMode::Advisory,
+                principal: ProfileId::from(w.owner),
+                emitter: EntityId::from(w.emitter),
+            },
+        )
+        .await
+        .unwrap();
+        artifacts
+    }
+
+    const ROOMY: std::time::Duration = std::time::Duration::from_secs(600);
+
+    /// FAILS IF: a pass reads one batch and stops, so a backlog larger than a batch is left
+    /// partly unverdicted with its job marked done.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_backlog_larger_than_a_batch_is_verdicted_across_batches(pool: PgPool) {
+        let w = seed_world(&pool, "batched-reconcile").await;
+        backlog_of(&pool, &w, 5).await;
+
+        let summary = dispatch_tick_inner(
+            &pool,
+            None,
+            ROOMY,
+            BatchBound {
+                rows: 2,
+                bytes: i64::MAX,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            summary.verdicts_written, 5,
+            "every artifact of the backlog is verdicted"
+        );
+        assert_eq!(summary.completed, 1, "the anchor's job completes");
+        assert_eq!(summary.partial, 0);
+        assert_eq!(
+            reconcile_job_statuses(&pool, w.context).await,
+            vec!["done".to_owned()]
+        );
+    }
+
+    /// FAILS IF: the byte bound admits no row when the first artifact alone is over it, so a batch
+    /// of large artifacts never moves forward.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_batch_always_admits_its_first_artifact_whatever_its_size(pool: PgPool) {
+        let w = seed_world(&pool, "byte-bounded-reconcile").await;
+        backlog_of(&pool, &w, 3).await;
+
+        let summary = dispatch_tick_inner(
+            &pool,
+            None,
+            ROOMY,
+            BatchBound {
+                rows: 100,
+                bytes: 1,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            summary.verdicts_written, 3,
+            "a one-byte budget reads one artifact a batch, and still reaches every artifact"
+        );
+        assert_eq!(summary.completed, 1);
+    }
+
+    /// FAILS IF: a job claimed after the deadline is spent is worked on anyway, or is dropped
+    /// rather than handed back for the next pass.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_spent_deadline_hands_every_claimed_job_back_untouched(pool: PgPool) {
+        let w = seed_world(&pool, "deferred-reconcile").await;
+        backlog_of(&pool, &w, 1).await;
+
+        let deferred = dispatch_tick_inner(
+            &pool,
+            None,
+            std::time::Duration::ZERO,
+            SHAPE_RECONCILE_BATCH,
+        )
+        .await
+        .unwrap();
+        assert_eq!(deferred.deferred, 1, "the one claimed job is handed back");
+        assert_eq!(
+            deferred.verdicts_written, 0,
+            "no work is attempted past the deadline"
+        );
+        assert_eq!(
+            reconcile_job_statuses(&pool, w.context).await,
+            vec!["done".to_owned(), "pending".to_owned()],
+            "the claimed job is done and its successor waits for the next pass"
+        );
+
+        let next = dispatch_tick(&pool, None).await.unwrap();
+        assert_eq!(
+            next.verdicts_written, 1,
+            "the next pass reconciles the anchor"
+        );
+        assert_eq!(next.completed, 1);
+    }
+
+    /// FAILS IF: an anchor cut off by the deadline mid-backlog loses the verdicts it wrote, or its
+    /// job is marked done with the rest of the backlog unreached.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn an_anchor_cut_off_mid_backlog_keeps_its_verdicts_and_resumes(pool: PgPool) {
+        let w = seed_world(&pool, "partial-reconcile").await;
+        backlog_of(&pool, &w, 5).await;
+
+        let claimed = workflow_job_service::claim_anchor(
+            &pool,
+            Persona::Shape.as_str(),
+            DispatchType::ShapeReconcile.as_str(),
+            1,
+            DEFAULT_SHAPE_RECONCILE_LEASE_SECONDS,
+        )
+        .await
+        .unwrap();
+        let job = claimed.first().expect("the declare queued a job");
+
+        // A clock already past its deadline when the pass starts: the first batch runs, and the
+        // deadline is spent at the check after it.
+        let pace = Pace {
+            start: std::time::Instant::now()
+                .checked_sub(std::time::Duration::from_secs(10))
+                .expect("an instant ten seconds ago"),
+            deadline: std::time::Duration::from_secs(5),
+            batch: BatchBound {
+                rows: 2,
+                bytes: i64::MAX,
+            },
+        };
+        let ran = run_reconcile_job(&pool, job, None, false, pace)
+            .await
+            .unwrap();
+        let ReconcileJobResult::Ran(pass) = ran else {
+            panic!("the job ran a pass: {ran:?}");
+        };
+        assert!(
+            !pass.finished,
+            "the deadline came before the backlog was exhausted"
+        );
+        assert_eq!(pass.verdicts_written, 2, "one batch was verdicted");
+        assert_eq!(
+            reconcile_job_statuses(&pool, w.context).await,
+            vec!["done".to_owned(), "pending".to_owned()],
+            "a partial anchor is handed back to resume"
+        );
+
+        let rest = dispatch_tick(&pool, None).await.unwrap();
+        assert_eq!(
+            rest.verdicts_written, 3,
+            "the next pass verdicts only what is left"
+        );
+        assert_eq!(rest.completed, 1);
+    }
+
+    /// FAILS IF: an artifact committed with `null` content, which has no content row, fails its
+    /// anchor's pass instead of being verdicted as the commit verdicted it.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn an_artifact_with_null_content_is_verdicted_not_failed(pool: PgPool) {
+        let w = seed_world(&pool, "null-content-reconcile").await;
+        let resource = ResourceId::from(w.resource);
+        let (artifact, _) = commit_artifact(
+            &pool,
+            resource,
+            "measurement",
+            &serde_json::Value::Null,
+            w.emitter,
+        )
+        .await;
+        let has_content_row: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM kb_data_artifact_content WHERE artifact_id = $1)",
+        )
+        .bind(artifact.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            !has_content_row,
+            "precondition: null content stores no content row"
+        );
+        declare_shape(
+            &pool,
+            DeclareShapeServiceParams {
+                home: AnchorRef::context(ContextId::from(w.context)),
+                kind: "measurement",
+                kind_owner: None,
+                schema: &string_value_schema(),
+                enforcement: EnforcementMode::Advisory,
+                principal: ProfileId::from(w.owner),
+                emitter: EntityId::from(w.emitter),
+            },
+        )
+        .await
+        .unwrap();
+
+        let summary = dispatch_tick(&pool, None).await.unwrap();
+
+        assert_eq!(summary.failed, 0, "the anchor's pass does not fail");
+        assert_eq!(summary.verdicts_written, 1);
+        assert_eq!(
+            read_shape_state(&pool, ProfileId::from(w.owner), resource).await,
+            Some(ShapeState::DeclaredNotSatisfied),
+            "null is validated against the shape as the commit validates it: an object is required"
         );
     }
 }
