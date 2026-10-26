@@ -1,11 +1,14 @@
 import { WAY_IN_BOUND, WAYS_IN } from '@tasker-systems/temper-design/ways-in';
 import { describe, expect, it } from 'vitest';
 import type { ContextActivity, ContextRowWithCounts } from '$lib/types';
+import { makeRow } from '../test/fixtures';
 import {
 	ARRIVAL,
 	PLACES_BOUND,
 	placesInUse,
 	recentPath,
+	resumeOf,
+	resumePath,
 	WAY_IN_MAX,
 	wayInMoreHref,
 	wayInShown,
@@ -109,5 +112,34 @@ describe('the places a reader works in', () => {
 
 	it('fails, rather than claiming none, when the places were never read', () => {
 		expect(() => placesInUse([changed(1, '2026-10-22T00:00:00Z')], null)).toThrow();
+	});
+});
+
+describe('resume', () => {
+	it("reads the reader's own changes, newest change of theirs first, one row", () => {
+		const params = new URL(resumePath(), 'https://x').searchParams;
+		expect(Object.fromEntries(params)).toEqual({
+			changed_by: '@me',
+			sort: 'changed_by_me',
+			order: 'desc',
+			limit: '1',
+		});
+	});
+
+	it("carries the reader's own change time, never the row's `updated`", () => {
+		const row = makeRow({
+			updated: '2026-10-26T12:00:00Z',
+			changed_by_me_at: '2026-10-20T08:00:00Z',
+		});
+		expect(resumeOf([row])).toEqual({ resource: row, changedAt: '2026-10-20T08:00:00Z' });
+	});
+
+	it('offers nothing when the reader has changed nothing', () => {
+		expect(resumeOf([])).toBeNull();
+	});
+
+	it('fails, rather than falling back to `updated`, when the row has no change time', () => {
+		expect(() => resumeOf([makeRow({ updated: '2026-10-26T12:00:00Z' })])).toThrow();
+		expect(() => resumeOf([makeRow({ changed_by_me_at: null })])).toThrow();
 	});
 });
