@@ -1,6 +1,6 @@
 //! "What did this reader change": the list door's `changed_by=@me` filter and `changed_by_me`
 //! sort, and `GET /api/me/context-activity` (`context_service::activity_of`) — both read through the one definition of
-//! "your change" in `20261106000000_reader_changes.sql`.
+//! "your change" in `20261107000000_reader_changes.sql`.
 //!
 //! The contract, each arm one test below:
 //!

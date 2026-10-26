@@ -40,7 +40,7 @@ pub use temper_core::types::context::{
 /// When the profile last changed something in each context they can read — one row per context
 /// they ever changed something in, newest first. `GET /api/me/context-activity`.
 ///
-/// Read through `contexts_changed_by` (20261106000000), which aggregates the profile's own authored
+/// Read through `contexts_changed_by` (20261107000000), which aggregates the profile's own authored
 /// changes per context and then gates once by `contexts_readable_by`; a context the profile cannot
 /// read, or a retired one, has no row. A read of its own, not a column of [`list_visible`], because
 /// it scans the profile's whole history and the contexts list is read on every page load.

@@ -16,7 +16,7 @@ body = '''
 
 New route `GET /api/me/context-activity` (`list_my_context_activity`, tag `Me`): one `ContextActivity { context_id, last_changed_at }` per context the caller changed something in and can still read, newest first. Only the caller's own authored changes set it, and a retired context has no row. It is a profile-scoped read of its own, rather than a field of `GET /api/contexts`, so the contexts list every page loads does not pay for a scan of the caller's history. `GET /api/contexts` is unchanged. `temperkb-client` gains `me().context_activity()`, and the CLI gains `temper context activity`, which prints each row with the context's `ref` and `name` beside its id and time.
 
-Both are read through new SQL functions in migration `20261106000000_reader_changes.sql` (additive):
+Both are read through new SQL functions in migration `20261107000000_reader_changes.sql` (additive):
 - `resources_changed_by(uuid)` and `contexts_changed_by(uuid)`, each gated by the profile's own read predicate;
 - a private events helper both of them read, so "your change" has one definition.
 

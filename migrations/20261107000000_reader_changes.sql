@@ -93,7 +93,7 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 COMMENT ON FUNCTION _profile_change_events(uuid) IS
-    'UNGATED, and private to resources_changed_by and contexts_changed_by: the anchored, authored domain events emitted by any entity of p_profile (never webhook_received; never the system-computed region_materialized, salience_refreshed or relationship_decayed; never an admin act on others'' work: blob_erased, context_erased, or any event sharing its correlation id and emitter with a resource_erased, principal_erased, resource_scrubbed or block_history_scrubbed record; never invocation_closed, delegated_launch, subscription_delivery_disposed or citation_audited), with the three resource ids the element trail matches on. The reader''s own changes, including those of agents acting under the profile, and never a machine client''s, which is its own profile. Not one of the verdict-handed ungated fragments (20260808000030): it is handed none. Call the gated readers instead. (20261106000000)';
+    'UNGATED, and private to resources_changed_by and contexts_changed_by: the anchored, authored domain events emitted by any entity of p_profile (never webhook_received; never the system-computed region_materialized, salience_refreshed or relationship_decayed; never an admin act on others'' work: blob_erased, context_erased, or any event sharing its correlation id and emitter with a resource_erased, principal_erased, resource_scrubbed or block_history_scrubbed record; never invocation_closed, delegated_launch, subscription_delivery_disposed or citation_audited), with the three resource ids the element trail matches on. The reader''s own changes, including those of agents acting under the profile, and never a machine client''s, which is its own profile. Not one of the verdict-handed ungated fragments (20260808000030): it is handed none. Call the gated readers instead. (20261107000000)';
 
 CREATE FUNCTION resources_changed_by(p_profile uuid)
 RETURNS TABLE (resource_id uuid, changed_at timestamptz)
@@ -120,7 +120,7 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 COMMENT ON FUNCTION resources_changed_by(uuid) IS
-    'Each resource p_profile changed and can still read, at the time of their latest change to it: the resources whose element trail holds one of _profile_change_events(p_profile), through the trail''s three arms (names the resource, owns a property of it, names one of its blocks), aggregated per resource and then gated once by resources_visible_to(p_profile). (20261106000000)';
+    'Each resource p_profile changed and can still read, at the time of their latest change to it: the resources whose element trail holds one of _profile_change_events(p_profile), through the trail''s three arms (names the resource, owns a property of it, names one of its blocks), aggregated per resource and then gated once by resources_visible_to(p_profile). (20261107000000)';
 
 CREATE FUNCTION contexts_changed_by(p_profile uuid)
 RETURNS TABLE (context_id uuid, changed_at timestamptz)
@@ -137,10 +137,10 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 COMMENT ON FUNCTION contexts_changed_by(uuid) IS
-    'Each context p_profile changed something in and can still read, at the time of their latest authored change produced there, from _profile_change_events(p_profile), aggregated per context and then gated once by contexts_readable_by(p_profile) — which admits no retired context, so a retired context carries no time. (20261106000000)';
+    'Each context p_profile changed something in and can still read, at the time of their latest authored change produced there, from _profile_change_events(p_profile), aggregated per context and then gated once by contexts_readable_by(p_profile) — which admits no retired context, so a retired context carries no time. (20261107000000)';
 
 SELECT declare_migration(
-    20261106000000,
+    20261107000000,
     'additive',
     'New functions _profile_change_events(uuid), resources_changed_by(uuid) and contexts_changed_by(uuid): a profile''s own anchored, authored domain events, and the resources and contexts they changed with the latest time of each, gated by the profile''s read predicates. Read by the list door''s changed_by filter and sort and by GET /api/me/context-activity. No existing object is altered or replaced, and no parameter carries a DEFAULT; a deployed binary that does not call them is unaffected.'
 );

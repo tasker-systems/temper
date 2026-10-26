@@ -343,7 +343,7 @@ async fn filtered_visible_page(
     // list). So a list without the filter runs exactly the SQL it ran before this filter existed,
     // with eleven binds. With it, the change set is a top-level MATERIALIZED CTE, computed once
     // whatever plan is chosen; `resources_changed_by` is gated inside by the caller's own predicate
-    // (20261106000000), and the visibility join below gates the row again.
+    // (20261107000000), and the visibility join below gates the row again.
     // The inner JOIN is the narrowing: a resource the caller did not change has no `mine` row.
     let (mine_cte, mine_join) = if changed_by_self.is_some() {
         (
