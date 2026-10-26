@@ -9,6 +9,7 @@
 import { WAY_IN_BOUND, WAYS_IN, type WayIn } from '@tasker-systems/temper-design/ways-in';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { placesPath, recentPath, resumePath, wayInPath } from '$lib/first-view';
+import { GaveUp, GIVE_UP_AFTER_MS } from '$lib/server/bounded';
 
 const apiGet = vi.fn();
 vi.mock('$lib/server/api', () => ({ apiGet: (...a: unknown[]) => apiGet(...a) }));
@@ -206,6 +207,32 @@ describe('work resumes where it was left', () => {
 		const data = await run();
 		await expect(data.resume).rejects.toThrow('503');
 		expect(await data.opening).toBeNull();
+	});
+
+	it('gives up on a body read that never answers, failing the opening alone', async () => {
+		vi.useFakeTimers();
+		try {
+			const content = `/api/resources/${CHANGED.id}/content`;
+			const reads: Record<string, unknown> = {
+				...everyListEmpty(),
+				[resumePath()]: page([CHANGED]),
+			};
+			apiGet.mockImplementation((path: string) =>
+				path === content ? new Promise(() => {}) : Promise.resolve(reads[path]),
+			);
+			const data = await run();
+			const opening = data.opening.then(
+				(v) => ({ ok: v }),
+				(e) => ({ failed: e }),
+			);
+			await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_MS + 100);
+			expect(await data.resume).toEqual({ resource: CHANGED, changedAt: CHANGED.changed_by_me_at });
+			const got = (await opening) as { failed?: unknown };
+			expect(got.failed).toBeInstanceOf(GaveUp);
+			expect(String((got.failed as Error).message)).toContain('opening');
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it('gives the body read its own bound, starting when the return arrives', async () => {

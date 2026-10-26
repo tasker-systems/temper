@@ -280,6 +280,19 @@ describe('work resumes where it was left', () => {
 		expect(opening.textContent).toContain('… continues in the task.');
 	});
 
+	it('says nothing continues when the opening is the whole of it', async () => {
+		const { getByTestId } = await mount(
+			dataWith({
+				resume: Promise.resolve(LAST),
+				opening: Promise.resolve({ markdown: 'All of it.', truncated: false }),
+			}),
+		);
+		const opening = getByTestId('resume-opening');
+		await waitFor(() => expect(opening.querySelector('.md-body')).not.toBeNull());
+		expect(opening.textContent).toContain('All of it.');
+		expect(opening.textContent).not.toContain('continues');
+	});
+
 	it('shows the return without an opening when the work has no prose', async () => {
 		const { getByTestId } = await mount(dataWith({ resume: Promise.resolve(LAST) }));
 		expect(getByTestId('resume').querySelector('[data-testid="resume-opening"]')).toBeNull();

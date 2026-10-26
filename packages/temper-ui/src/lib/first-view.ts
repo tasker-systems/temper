@@ -118,8 +118,12 @@ export const OPENING_BOUND = 400;
 /** The opening resume shows: whole blocks of the body as written, and whether more follows. */
 export type Opening = { markdown: string; truncated: boolean };
 
-const HEADING = /^#{1,6}\s/;
-const FENCE = /^\s*(```|~~~)/;
+/** An ATX heading, empty ones included, indented at most three spaces. */
+const HEADING = /^ {0,3}#{1,6}(\s|$)/;
+/** A setext underline: it makes the paragraph above it a heading. */
+const UNDERLINE = /^ {0,3}(=+|-+)\s*$/;
+/** A fence's marker. Only a run of the same character, at least as long, closes it. */
+const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 
 /**
  * The opening of a body: its first stretch of prose, past any headings it starts with, up to the
@@ -129,17 +133,36 @@ const FENCE = /^\s*(```|~~~)/;
  */
 export function openingOf(markdown: string, bound: number = OPENING_BOUND): Opening | null {
 	const lines = markdown.split(/\r?\n/);
-	let i = 0;
-	while (i < lines.length && (!lines[i].trim() || HEADING.test(lines[i]))) i++;
-
 	const blocks: string[][] = [];
 	let block: string[] = [];
-	let fence = false;
+	let fence: string | null = null;
+	let i = 0;
 	for (; i < lines.length; i++) {
 		const line = lines[i];
-		if (!fence && HEADING.test(line)) break;
-		if (FENCE.test(line)) fence = !fence;
-		if (!fence && !line.trim()) {
+		const marker = FENCE.exec(line);
+		if (fence) {
+			block.push(line);
+			const closes =
+				marker &&
+				marker[1][0] === fence[0] &&
+				marker[1].length >= fence.length &&
+				!line.slice(marker[0].length).trim();
+			if (closes) fence = null;
+			continue;
+		}
+		if (marker) {
+			fence = marker[1];
+			block.push(line);
+			continue;
+		}
+		const atx = HEADING.test(line);
+		if (atx || (block.length && UNDERLINE.test(line))) {
+			if (!atx) block = [];
+			// Headings the body starts with are skipped; the first one after its prose ends it.
+			if (blocks.length || block.length) break;
+			continue;
+		}
+		if (!line.trim()) {
 			if (block.length) blocks.push(block);
 			block = [];
 			continue;
@@ -148,12 +171,14 @@ export function openingOf(markdown: string, bound: number = OPENING_BOUND): Open
 	}
 	if (block.length) blocks.push(block);
 	if (!blocks.length) return null;
-	const rest = lines.slice(i).some((l) => l.trim());
+	const rest = lines.slice(i + 1).some((l) => l.trim() && !HEADING.test(l) && !UNDERLINE.test(l));
 
 	const first = blocks[0].join('\n');
 	if (first.length > bound) {
 		const cut = first.slice(0, bound);
-		const atWord = cut.slice(0, Math.max(cut.lastIndexOf(' '), bound - 40));
+		const atWord = cut
+			.slice(0, Math.max(cut.lastIndexOf(' '), bound - 40))
+			.replace(/[\uD800-\uDBFF]$/, '');
 		return { markdown: `${atWord.trimEnd()}…`, truncated: true };
 	}
 	const kept = [first];
