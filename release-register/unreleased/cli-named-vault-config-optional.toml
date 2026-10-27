@@ -1,0 +1,15 @@
+title    = "A named vault makes the CLI's config file optional"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["cli-stdout"]
+status   = "signal-only"
+body = '''
+Commands that resolve a vault no longer refuse when `~/.config/temper/config.toml` is absent and
+the vault is named with `--vault` or `TEMPER_VAULT`; the absent file reads as defaults. A file that
+exists but does not parse is still refused, and with no vault named the file is still required.
+The refusal's message now also names `--vault` / `TEMPER_VAULT`. Who observes: hosts configured
+only through the environment (cloud agent sessions with `TEMPER_AUTH`, `TEMPER_API_URL`,
+`TEMPER_VAULT`), which can now run vault-backed commands such as `warmup` without `temper init`;
+nothing changes for a machine with a config file. Release relevance: signal-only; no server or
+wire shape change.
+'''
