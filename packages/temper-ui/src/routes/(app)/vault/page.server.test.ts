@@ -8,21 +8,20 @@
 // whole job is which reads it makes, and the paths are the witness.
 import { WAY_IN_BOUND, WAYS_IN, type WayIn } from '@tasker-systems/temper-design/ways-in';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { handoffPath, placesPath, recentPath, resumePath, wayInPath } from '$lib/first-view';
+import { placesPath, recentPath, resumePath, wayInPath } from '$lib/first-view';
+import { GaveUp, GIVE_UP_AFTER_MS } from '$lib/server/bounded';
 
 const apiGet = vi.fn();
 vi.mock('$lib/server/api', () => ({ apiGet: (...a: unknown[]) => apiGet(...a) }));
 
 const { load } = await import('./+page.server');
 
-const SESSION = { id: '01a17104-f5db-7782-b326-70ce7109c2d5', title: 'A session' };
 const page = (rows: unknown[], total = rows.length) => ({ rows, total });
 
 /** What the load hands the page: every region a promise of its own. */
 type Loaded = {
-	session: Promise<unknown>;
-	next: Promise<unknown>;
 	resume: Promise<unknown>;
+	opening: Promise<unknown>;
 	recent: Promise<unknown>;
 	places: Promise<unknown>;
 	ways: { way: WayIn; shown: number; list: Promise<unknown> }[];
@@ -56,7 +55,6 @@ function answer(by: Record<string, unknown>): void {
 }
 
 const everyListEmpty = (): Record<string, unknown> => ({
-	[handoffPath()]: page([]),
 	[recentPath()]: page([]),
 	[resumePath()]: page([]),
 	[placesPath()]: [],
@@ -71,96 +69,23 @@ describe('arrival starts from the work', () => {
 	it('renders a first view instead of sending the reader to the grid', async () => {
 		answer(everyListEmpty());
 		const data = await run();
-		expect(Object.keys(data).sort()).toEqual([
-			'next',
-			'places',
-			'recent',
-			'resume',
-			'session',
-			'ways',
-		]);
+		expect(Object.keys(data).sort()).toEqual(['opening', 'places', 'recent', 'resume', 'ways']);
 		await Promise.all([
-			data.session,
-			data.next,
 			data.resume,
+			data.opening,
 			data.recent,
 			data.places,
 			...data.ways.map((w) => w.list),
 		]);
 	});
 
-	it("quotes the next steps of the reader's newest session, read from its body", async () => {
-		answer({
-			...everyListEmpty(),
-			[handoffPath()]: page([SESSION]),
-			[`/api/resources/${SESSION.id}/content`]: { markdown: '## Done\nx\n## Next Steps\nShip it.' },
-		});
-		const data = await run();
-		expect(await data.session).toEqual(SESSION);
-		expect(await data.next).toEqual({ heading: 'Next Steps', text: 'Ship it.', truncated: false });
-	});
-
-	it('quotes nothing, and reads no body, when the reader has no session', async () => {
+	// The latest handoff told a browsing reader nothing (handoffs are written by agents for the next
+	// agent), so the first view no longer reads one. Every read the load makes is a region's.
+	it('reads no session for a handoff', async () => {
 		answer(everyListEmpty());
-		const data = await run();
-		expect(await data.session).toBeNull();
-		expect(await data.next).toBeNull();
-	});
-
-	it('fails the next steps alone when the body cannot be read', async () => {
-		answer({
-			...everyListEmpty(),
-			[handoffPath()]: page([SESSION]),
-			[`/api/resources/${SESSION.id}/content`]: new Error('503'),
-		});
-		const data = await run();
-		expect(await data.session).toEqual(SESSION);
-		await expect(data.next).rejects.toThrow('503');
-		expect(await data.recent).toEqual(page([]));
-	});
-
-	it('gives the body read its own bound, starting when the session arrives', async () => {
-		vi.useFakeTimers();
-		try {
-			const answersAfter = <T>(ms: number, v: T) =>
-				new Promise<T>((r) => setTimeout(() => r(v), ms));
-			const content = `/api/resources/${SESSION.id}/content`;
-			const reads: Record<string, unknown> = { ...everyListEmpty() };
-			apiGet.mockImplementation((path: string) =>
-				path === handoffPath()
-					? answersAfter(7_500, page([SESSION]))
-					: path === content
-						? answersAfter(600, { markdown: '## Next\nGo.' })
-						: Promise.resolve(reads[path]),
-			);
-			const data = await run();
-			const next = data.next.then(
-				(v) => ({ ok: v }),
-				(e) => ({ failed: e }),
-			);
-			await vi.advanceTimersByTimeAsync(8_200);
-			expect(await next).toEqual({ ok: { heading: 'Next', text: 'Go.', truncated: false } });
-		} finally {
-			vi.useRealTimers();
-		}
-	});
-
-	it('reports a failed session once, as the handoff’s failure, not again as the next steps', async () => {
-		answer({ ...everyListEmpty(), [handoffPath()]: new Error('503') });
-		const data = await run();
-		await expect(data.session).rejects.toThrow('503');
-		expect(await data.next).toBeNull();
-	});
-
-	it('reads the handoff from the reader’s own sessions, newest update first', () => {
-		const params = new URL(handoffPath(), 'https://x').searchParams;
-		expect(Object.fromEntries(params)).toEqual({
-			doc_type_name: 'session',
-			owner: '@me',
-			limit: '1',
-			sort: 'updated',
-			order: 'desc',
-		});
+		await run();
+		const reads = apiGet.mock.calls.map(([path]) => path as string);
+		expect(reads.sort()).toEqual(Object.keys(everyListEmpty()).sort());
 	});
 });
 
@@ -245,7 +170,94 @@ describe('work resumes where it was left', () => {
 		answer({ ...everyListEmpty(), [resumePath()]: new Error('503') });
 		const data = await run();
 		await expect(data.resume).rejects.toThrow('503');
-		expect(await data.session).toBeNull();
 		expect(await data.recent).toEqual(page([]));
+	});
+
+	it('reads the opening of that work from its body', async () => {
+		answer({
+			...everyListEmpty(),
+			[resumePath()]: page([CHANGED]),
+			[`/api/resources/${CHANGED.id}/content`]: {
+				markdown: '# A task\n\nShip the return.\n\n## Done\nx',
+			},
+		});
+		const data = await run();
+		expect(await data.opening).toEqual({ markdown: 'Ship the return.', truncated: true });
+	});
+
+	it('reads no body when there is no return', async () => {
+		answer(everyListEmpty());
+		const data = await run();
+		expect(await data.opening).toBeNull();
+	});
+
+	it('fails the opening alone when the body cannot be read', async () => {
+		answer({
+			...everyListEmpty(),
+			[resumePath()]: page([CHANGED]),
+			[`/api/resources/${CHANGED.id}/content`]: new Error('503'),
+		});
+		const data = await run();
+		expect(await data.resume).toEqual({ resource: CHANGED, changedAt: CHANGED.changed_by_me_at });
+		await expect(data.opening).rejects.toThrow('503');
+	});
+
+	it('reports a failed resume once, as resume’s failure, not again as the opening', async () => {
+		answer({ ...everyListEmpty(), [resumePath()]: new Error('503') });
+		const data = await run();
+		await expect(data.resume).rejects.toThrow('503');
+		expect(await data.opening).toBeNull();
+	});
+
+	it('gives up on a body read that never answers, failing the opening alone', async () => {
+		vi.useFakeTimers();
+		try {
+			const content = `/api/resources/${CHANGED.id}/content`;
+			const reads: Record<string, unknown> = {
+				...everyListEmpty(),
+				[resumePath()]: page([CHANGED]),
+			};
+			apiGet.mockImplementation((path: string) =>
+				path === content ? new Promise(() => {}) : Promise.resolve(reads[path]),
+			);
+			const data = await run();
+			const opening = data.opening.then(
+				(v) => ({ ok: v }),
+				(e) => ({ failed: e }),
+			);
+			await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_MS + 100);
+			expect(await data.resume).toEqual({ resource: CHANGED, changedAt: CHANGED.changed_by_me_at });
+			const got = (await opening) as { failed?: unknown };
+			expect(got.failed).toBeInstanceOf(GaveUp);
+			expect(String((got.failed as Error).message)).toContain('opening');
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('gives the body read its own bound, starting when the return arrives', async () => {
+		vi.useFakeTimers();
+		try {
+			const answersAfter = <T>(ms: number, v: T) =>
+				new Promise<T>((r) => setTimeout(() => r(v), ms));
+			const content = `/api/resources/${CHANGED.id}/content`;
+			const reads: Record<string, unknown> = { ...everyListEmpty() };
+			apiGet.mockImplementation((path: string) =>
+				path === resumePath()
+					? answersAfter(7_500, page([CHANGED]))
+					: path === content
+						? answersAfter(600, { markdown: 'Go.' })
+						: Promise.resolve(reads[path]),
+			);
+			const data = await run();
+			const opening = data.opening.then(
+				(v) => ({ ok: v }),
+				(e) => ({ failed: e }),
+			);
+			await vi.advanceTimersByTimeAsync(8_200);
+			expect(await opening).toEqual({ ok: { markdown: 'Go.', truncated: false } });
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

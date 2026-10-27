@@ -1,8 +1,7 @@
-import { HANDOFF_LABEL, nextSection } from '@tasker-systems/temper-design/handoff';
 import { WAYS_IN } from '@tasker-systems/temper-design/ways-in';
 import {
 	type FirstViewList,
-	handoffPath,
+	openingOf,
 	PLACES_SCOPE,
 	placesPath,
 	RESUME_LABEL,
@@ -29,38 +28,31 @@ function listOf(response: ResourceListResponse): FirstViewList {
 export const load: PageServerLoad = async ({ locals, url }) => {
 	const accessToken = locals.accessToken!;
 
-	const session = bounded(
-		apiGet<ResourceListResponse>(handoffPath(), accessToken).then((r) => r.rows[0] ?? null),
-		HANDOFF_LABEL,
-	);
-	// The next steps are a second read, of the session's body, with its own bound that starts when
-	// the session arrives — never the remainder of the session read's. A reader with no session has
-	// none to quote, and a session with no "Next" heading quotes nothing: both are `null`, never a
-	// summary. A failed body read fails this region alone; the session itself still shows. A failed
-	// session read is the handoff region's failure, and this region is never drawn under it, so it
-	// answers `null` rather than reporting the same failure twice.
-	const next = derive(
-		session.then(
-			(s) => s,
-			() => null,
-		),
-		(s) =>
-			s
-				? bounded(
-						apiGet<ContentResponse>(`/api/resources/${s.id}/content`, accessToken).then((c) =>
-							nextSection(c.markdown),
-						),
-						'next steps',
-					)
-				: null,
-	);
-
 	// What the reader last changed. Its time and its order are the same changes the places' times
 	// count (`resources_changed_by` and `contexts_changed_by` share one definition), so "your last
 	// change" means one thing on this page. Its own read: a failure fails resume alone.
 	const resume = bounded(
 		apiGet<ResourceListResponse>(resumePath(), accessToken).then((r) => resumeOf(r.rows)),
 		RESUME_LABEL,
+	);
+	// The opening of that work is a second read, of its body, with its own bound that starts when
+	// the return arrives. A failed body read fails the opening alone: the return still shows. A
+	// failed or empty resume read has no opening to read, so this answers `null` rather than
+	// reporting the same failure twice.
+	const opening = derive(
+		resume.then(
+			(r) => r,
+			() => null,
+		),
+		(r) =>
+			r
+				? bounded(
+						apiGet<ContentResponse>(`/api/resources/${r.resource.id}/content`, accessToken).then(
+							(c) => openingOf(c.markdown),
+						),
+						'opening',
+					)
+				: null,
 	);
 
 	const ways = WAYS_IN.map((way) => {
@@ -86,5 +78,5 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		'recently updated',
 	);
 
-	return { session, next, resume, places, ways, recent };
+	return { resume, opening, places, ways, recent };
 };

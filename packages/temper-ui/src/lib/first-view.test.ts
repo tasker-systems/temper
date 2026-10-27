@@ -4,6 +4,7 @@ import type { ContextActivity, ContextRowWithCounts } from '$lib/types';
 import { makeRow } from '../test/fixtures';
 import {
 	ARRIVAL,
+	openingOf,
 	PLACES_BOUND,
 	placesInUse,
 	recentPath,
@@ -141,5 +142,78 @@ describe('resume', () => {
 	it('fails, rather than falling back to `updated`, when the row has no change time', () => {
 		expect(() => resumeOf([makeRow({ updated: '2026-10-26T12:00:00Z' })])).toThrow();
 		expect(() => resumeOf([makeRow({ changed_by_me_at: null })])).toThrow();
+	});
+});
+
+describe('the opening resume shows', () => {
+	it('is the first prose, past the headings the body starts with, up to the next heading', () => {
+		expect(
+			openingOf('# A task\n\n## Problem\n\nThe return.\n\nIt says when.\n\n## Done\nx'),
+		).toEqual({
+			markdown: 'The return.\n\nIt says when.',
+			truncated: true,
+		});
+	});
+
+	it('is quoted whole, and says nothing continues, when the body is only that', () => {
+		expect(openingOf('Just this.\n')).toEqual({ markdown: 'Just this.', truncated: false });
+	});
+
+	it('is nothing for a body with no prose, never a stand-in', () => {
+		expect(openingOf('')).toBeNull();
+		expect(openingOf('# Title\n\n## Empty\n')).toBeNull();
+	});
+
+	it('keeps whole blocks while they fit, so the markdown stays well formed', () => {
+		const block = 'word '.repeat(30).trim();
+		const got = openingOf(`${block}\n\n**${block}**\n\n${block}`, 400);
+		expect(got).toEqual({ markdown: `${block}\n\n**${block}**`, truncated: true });
+	});
+
+	it('cuts only a first block longer than the bound, at a word', () => {
+		// The bound lands inside a word, so a plain slice would end mid-word.
+		const got = openingOf('abcdefg '.repeat(100), 100);
+		expect(got?.truncated).toBe(true);
+		expect(got?.markdown).toMatch(/ abcdefg…$/);
+		expect(got?.markdown.length).toBeLessThan(101);
+	});
+
+	it('never ends a cut on half a character', () => {
+		const got = openingOf('😀'.repeat(100), 101);
+		expect(got?.markdown).toMatch(/^(😀)+…$/u);
+	});
+
+	it('says nothing continues when all that follows is an empty heading', () => {
+		expect(openingOf('Body.\n\n## Empty\n')).toEqual({ markdown: 'Body.', truncated: false });
+	});
+
+	it('skips the headings a body starts with in every form, and ends at one in every form', () => {
+		expect(openingOf('Title\n=====\n\nBody.\n\nSub\n---\n\nmore')).toEqual({
+			markdown: 'Body.',
+			truncated: true,
+		});
+		expect(openingOf('   ## Indented\n\nBody.')).toEqual({ markdown: 'Body.', truncated: false });
+		expect(openingOf('#\n\nBody.')).toEqual({ markdown: 'Body.', truncated: false });
+	});
+
+	it('closes a fence only with its own marker, at least as long', () => {
+		expect(openingOf('A\n~~~\n```\n# x\n~~~\n## Next\ny')?.markdown).toBe('A\n~~~\n```\n# x\n~~~');
+		expect(openingOf('A\n````\n```\n# x\n````\n## Next\ny')?.markdown).toBe(
+			'A\n````\n```\n# x\n````',
+		);
+	});
+
+	it('reads an indented code block as code, not as a fence', () => {
+		expect(openingOf('A\n\n    ```\n\n# H\nx')).toEqual({
+			markdown: 'A\n\n    ```',
+			truncated: true,
+		});
+	});
+
+	it('reads a heading inside a fence as code, not as the end of the opening', () => {
+		expect(openingOf('Run:\n```\n# not a heading\n\nstill code\n```\n## Next\nx')).toEqual({
+			markdown: 'Run:\n```\n# not a heading\n\nstill code\n```',
+			truncated: true,
+		});
 	});
 });
