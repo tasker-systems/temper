@@ -23,7 +23,11 @@ temperkb-auth.workspace = true
 # surfaces keep the default and are unchanged. Removing this optionality later
 # would be a breaking change; widening it is not.
 temperkb-telemetry = { workspace = true, optional = true }
-reqwest = { version = "0.12", features = ["json", "multipart", "rustls-tls", "cookies"], default-features = false }
+# Roots: the bundled webpki set (`rustls-tls`) plus the OS trust store
+# (`rustls-tls-native-roots`, which also honours SSL_CERT_FILE / SSL_CERT_DIR). The bundled
+# set alone rejects a TLS-intercepting egress proxy whose CA is installed system-wide — a
+# cloud agent session's proxy, or a corporate one — with `UnknownIssuer`.
+reqwest = { version = "0.12", features = ["json", "multipart", "rustls-tls", "rustls-tls-native-roots", "cookies"], default-features = false }
 # The in-process transport: prepared requests are driven through an assembled API router
 # (`Router::oneshot`) with no socket, so the per-route constraints at that router apply once.
 axum = "0.8"
