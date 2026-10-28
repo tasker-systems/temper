@@ -794,8 +794,8 @@ pub enum ShapeState {
     /// reached this artifact. The reader is told "not yet checked" rather than shown an empty
     /// verdict field — `unchecked-never-reads-as-checked` gets no purchase here.
     ///
-    /// It also means the shape in force cannot be compiled (malformed, or referring to a document
-    /// that is never fetched): the advisory commit is recorded without a verdict and the sweep
+    /// It also means the shape in force cannot be compiled (malformed, or not a field
+    /// tree): the advisory commit is recorded without a verdict and the sweep
     /// skips it, so the artifact stays here until a steward amends the shape.
     DeclaredNotYetChecked,
 }

@@ -59,8 +59,8 @@ pub struct DeclareShapeServiceParams<'a> {
 /// The schema is then judged, before any write, by the decision the loader and the by-id read
 /// share ([`shape_loader::judge`]), on the blocking pool under the same compile permits. A schema
 /// larger than the walk reads ([`MAX_SCHEMA_BYTES`]) is refused before it is compiled, with a
-/// sentence naming the bound; one within it that cannot be compiled (malformed, referring to a
-/// document that is never fetched, or with a pattern past `shape_schema::MAX_PATTERN_BYTES`) is
+/// sentence naming the bound; one within it that cannot be compiled (malformed, not a field
+/// tree, or with a pattern past `shape_schema::MAX_PATTERN_BYTES`) is
 /// refused with the no-fetch constructor's fixed sentence. Both are a `DataArtifactRefusal`, so
 /// a schema no ask could use is refused when it is declared rather than stored. Before either, a
 /// family name or a schema holding U+0000, which Postgres cannot store, is refused as one too,

@@ -148,7 +148,7 @@ async fn declaring_a_schema_that_needs_a_fetch_is_refused_and_writes_nothing(poo
         other => panic!("the refusal must be the typed data-artifact refusal, got {other:?}"),
     };
     assert!(
-        message.contains("cannot be compiled") && message.contains("never fetched"),
+        message.contains("cannot be compiled") && message.contains("field tree"),
         "the refusal must carry the fixed sentence, got: {message}"
     );
     assert!(

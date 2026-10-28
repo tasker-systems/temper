@@ -1078,15 +1078,15 @@ pub(crate) async fn project_property_unset(
 }
 
 /// The refusal for a commit into a family whose `enforcing` shape cannot be compiled, whether
-/// the schema is malformed or refers to a document that is never fetched. A fixed sentence true
+/// the schema is malformed or is not a field tree. A fixed sentence true
 /// of both causes: the compiler's text and any URI in the schema never reach the caller. Typed so
 /// the surfaces render it as the data-artifact refusal rather than the 500-class bridge.
 fn uncompilable_shape_refusal() -> anyhow::Error {
     anyhow::Error::new(crate::writes::DataArtifactRefusal {
         message: "data_artifact_commit: the enforcing shape in force for this family cannot be \
-                  compiled — it is not a valid JSON Schema, or it refers to a document that is \
-                  never fetched — so the content's conformance cannot be checked and the commit \
-                  is refused; a steward must amend the shape"
+                  compiled — it is not a field tree this server can compile — so the content's \
+                  conformance cannot be checked and the commit is refused; a steward must amend \
+                  the shape"
             .to_owned(),
     })
 }
@@ -1539,8 +1539,8 @@ pub async fn fire_with(
                         .as_deref()
                         .context("shape in force returned null enforcement despite CHECK")?;
                     // The family's rule is stated by the shape in force, not by the commit's
-                    // outcome: a shape that cannot be compiled (malformed, or referring to a
-                    // document that is never fetched) cannot be checked, so enforcing refuses and
+                    // outcome: a shape that cannot be compiled (malformed, or not a
+                    // field tree) cannot be checked, so enforcing refuses and
                     // advisory records the artifact unchecked (task 01a15661-8460-739d-9ed3-f1e8ccbf9b69). Neither arm
                     // carries the compiler's text.
                     match crate::shape_schema::compile(schema) {

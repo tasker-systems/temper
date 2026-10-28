@@ -6,57 +6,51 @@
 //! a shape could therefore make the server connect to an internal address, or read a local file,
 //! on every compile — and the compiler's error text can echo what came back.
 //!
-//! [`compile`] closes that, in two layers:
+//! **A shape is a field tree.** [`compile`] first holds the document to a small vocabulary — the
+//! keywords that describe one value's fields, their types and their bounds — in the positions a
+//! schema can sit (the root, each `properties` value, an `additionalProperties` schema, an `items`
+//! schema), and refuses every other keyword. With no `$ref`, `$defs` or combinator, nothing can make
+//! a value in a data position (`const`, `enum`, `default`, `examples`) into a schema, so the walk
+//! never descends into one; with the depth, `enum` and `pattern` bounded, the work of building the
+//! validator and of running it on content is bounded by the schema's own size (spec
+//! `2026-10-27-a-shape-is-a-field-tree-design`, §1 and §2). [`ShapeSchemaUncompilable`]'s sentence
+//! teaches the vocabulary.
 //!
-//! 1. **The retriever (the control that survives).** `compile` builds with a retriever that refuses
-//!    every URI, for `$ref` and `$schema` alike, so nothing is fetched and nothing remote is ever
-//!    read. A retriever holds under cargo feature unification: another crate in the graph enabling
-//!    a `jsonschema` resolver feature cannot widen what this compile does.
-//! 2. **No resolvers compiled in (defence in depth).** Every workspace `jsonschema` dependency
-//!    sets `default-features = false`, which drops the http and file resolvers and the TLS
-//!    provider from the binary. A feature switch-off alone may not hold — unification can turn the
-//!    features back on for a dependency that asks for them — which is why it is the second layer
-//!    and not the first (task `01a15661-8460-739d-9ed3-f1e8ccbf9b69`).
+//! The draft is not left to `jsonschema`'s detection: `$schema` is absent, or it appears only at
+//! the root and is exactly the bundled 2020-12 spelling (optionally ending in `#`). `$id` is also
+//! root-only. A subschema therefore cannot register a custom meta-schema, and no spelling of
+//! `$schema` can reach the retriever.
 //!
-//! **How each layer is bitten.** With the resolvers compiled out, dropping `.with_retriever(..)`
-//! alone no longer makes a witness connect, because the default retriever has nothing to call. To
-//! bite the retriever, re-enable the `resolve-http` and `resolve-file` features AND drop the
-//! retriever; the `shape_schema_no_fetch` witnesses then fail. Re-enabling the features while
-//! keeping the retriever fails nothing, which is the point of the retriever being the control. The
-//! tripwire (`audit-shape-schema-compile.sh`) stops a new default-options compile being written.
+//! Two layers still keep the compile from fetching, and both stay as defence in depth:
 //!
-//! Every server-side compile of a shape schema goes through here — commit, reconcile and declare
-//! today, and any later reader of a shape. The tripwire fails CI when another `jsonschema` entry
-//! point appears under `crates/*/src`, so a new caller cannot reintroduce the defaults.
+//! 1. **The retriever.** `compile` builds with a retriever that refuses every URI, for `$ref` and
+//!    `$schema` alike, so nothing is fetched and nothing remote is ever read. A retriever holds
+//!    under cargo feature unification: another crate in the graph enabling a `jsonschema` resolver
+//!    feature cannot widen what this compile does. No field tree can reach it — the walk has
+//!    refused every `$ref` and every `$schema` it would be asked about — so it is unreachable
+//!    through [`compile`] and has no bite of its own.
+//! 2. **No resolvers compiled in.** Every workspace `jsonschema` dependency sets
+//!    `default-features = false`, which drops the http and file resolvers and the TLS provider from
+//!    the binary. A feature switch-off alone may not hold — unification can turn the features back
+//!    on for a dependency that asks for them — which is why it is not the only layer (task
+//!    `01a15661-8460-739d-9ed3-f1e8ccbf9b69`).
 //!
-//! The draft is not chosen here: `jsonschema` selects it from the schema's own `$schema`, which is
-//! the selection a validator built any other way would make. A `$schema` outside the five standard
-//! drafts names a custom meta-schema, and a schema whose draft cannot be determined is never
-//! guessed at (spec §3.3 row 2). `jsonschema` refuses a custom `$schema` only when its URI is not
-//! among the document's own resources, so a schema that registers that URI under an `$id` of its
-//! own (at the root or in an embedded subschema) would compile under a default draft.
+//! The tripwire (`audit-shape-schema-compile.sh`) stops a new default-options compile being
+//! written. Every server-side compile of a shape schema goes through here — commit, reconcile and
+//! declare today, and any later reader of a shape — and the tripwire fails CI when another
+//! `jsonschema` entry point appears under `crates/*/src`, so a new caller cannot reintroduce the
+//! defaults. The `shape_schema_no_fetch` witnesses now show that the walk refuses before any fetch
+//! could be made.
 //!
-//! [`compile`] therefore refuses, before it builds, any document in which **any** object carries
-//! a string `$schema` that `Draft::detect` does not map to a standard draft — wherever in the
-//! document that object sits. A non-string `$schema` is left to meta-validation.
-//!
-//! **Accepted cost.** The rule is document-wide, not positional, so a custom `$schema` string
-//! inside data — a `const`, `enum`, `default` or `examples` value, or an unknown keyword — is
-//! refused too, with the same fixed sentence. Position cannot tell data from schema: a reference
-//! can make any position in the document a schema, and telling them apart would mean reproducing
-//! every spelling of a reference that `jsonschema` resolves. The rule fails closed instead.
-//!
-//! **Each `pattern` and `patternProperties` regex is held to a size.** `jsonschema` compiles every
-//! distinct `pattern` and `patternProperties` key when a schema is built, and [`compile`] holds
-//! each of those regexes to [`MAX_PATTERN_BYTES`] rather than the engine's 10 MiB default; one past
-//! it makes the schema uncompilable, with the same fixed sentence, for every caller (declare,
-//! commit, reconcile and the shape loader all compile here). The bound is per regex: no schema
-//! that compiles carries a `pattern` or `patternProperties` regex past it.
+//! **Each `pattern` regex is held to a size.** `jsonschema` compiles every distinct `pattern` when
+//! a schema is built, and [`compile`] holds each regex to [`MAX_PATTERN_BYTES`] rather than the
+//! engine's 10 MiB default; one past it makes the schema uncompilable, with the same fixed
+//! sentence, for every caller (declare, commit, reconcile and the shape loader all compile here).
 
-use jsonschema::{Draft, Retrieve, Uri, Validator};
+use jsonschema::{Retrieve, Uri, Validator};
 use serde_json::Value;
 
-/// The schema cannot be compiled without a fetch, or cannot be compiled at all.
+/// The schema is not a field tree this server can compile.
 ///
 /// Carries nothing: the compiler's own error is dropped on purpose. Under a fetching compiler it
 /// describes a remote response, and under any compiler it is the declarer's material, not the
@@ -67,11 +61,17 @@ pub struct ShapeSchemaUncompilable;
 
 impl std::fmt::Display for ShapeSchemaUncompilable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(
-            "the shape's JSON Schema cannot be compiled: it must be a valid JSON Schema in a \
-             standard draft (2020-12 unless its $schema names another), and every $ref must stay \
-             inside the document (for example #/$defs/name) because a $ref to a URL, a file or \
-             another document is never fetched",
+        write!(
+            f,
+            "the shape's JSON Schema cannot be compiled: a shape is a field tree — a JSON Schema \
+             2020-12 document using only type, properties, required, additionalProperties (true, \
+             false or a schema), items (one schema), enum (at most {MAX_ENUM_ENTRIES} values), \
+             const, pattern (at most {MAX_PATTERN_SOURCE_BYTES} bytes, at most \
+             {MAX_SHAPE_PATTERNS} in a shape, no lookaround or backreferences), minLength, \
+             maxLength, minItems, maxItems, minimum, maximum, title, description, $comment, \
+             default and examples, with $schema and $id only at the root, nested at most \
+             {MAX_SHAPE_DEPTH} levels; $ref, $defs, allOf, anyOf, oneOf, not, if, format and \
+             every other keyword are refused",
         )
     }
 }
@@ -91,27 +91,85 @@ impl Retrieve for RefuseEveryUri {
     }
 }
 
-/// Whether every object in the document whose `$schema` is a string names one of the five
-/// standard drafts — every object, wherever it sits, not only the ones in schema positions.
+/// The deepest a field tree may nest: the root is depth 0, and each step into a `properties` value,
+/// an `additionalProperties` schema or an `items` schema adds 1. This matches the ask walk's own
+/// depth cap, so the ask can always see a field tree whole.
+pub const MAX_SHAPE_DEPTH: usize = 16;
+
+/// The most values an `enum` may list.
+pub const MAX_ENUM_ENTRIES: usize = 256;
+
+/// The most `pattern` keywords a shape may hold, counting every occurrence in a schema position.
+/// A property *named* `pattern` is not a keyword and is not counted.
+pub const MAX_SHAPE_PATTERNS: usize = 32;
+
+/// The most bytes one `pattern`'s source may hold.
+pub const MAX_PATTERN_SOURCE_BYTES: usize = 256;
+
+/// The `$schema` spellings a field tree may name, at the root only: the one `referencing` bundles
+/// (so naming it fetches nothing), with or without a trailing `#`.
+const ACCEPTED_SCHEMA_URIS: [&str; 2] = [
+    "https://json-schema.org/draft/2020-12/schema",
+    "https://json-schema.org/draft/2020-12/schema#",
+];
+
+/// Whether the document is a field tree: only the allowed keywords, in schema positions, within the
+/// depth, `enum` and `pattern` caps.
 ///
-/// Detection is `Draft::detect`, the function `jsonschema` itself selects a draft with: a string
-/// `$schema` it does not recognise is `Draft::Unknown`, and a missing or non-string one detects as
-/// the default draft, so a non-string `$schema` is left to meta-validation. Every object and array
-/// is pushed once onto an explicit stack, so the walk is linear in the document's size and never
-/// recurses on the Rust stack.
-fn names_only_standard_drafts(schema: &Value) -> bool {
-    let draft = Draft::default();
-    let mut pending = vec![schema];
-    while let Some(node) = pending.pop() {
-        match node {
-            Value::Object(members) => {
-                if draft.detect(node) == Draft::Unknown {
-                    return false;
-                }
-                pending.extend(members.values());
+/// A schema position is the root, a `properties` value, an `additionalProperties` that is an object
+/// or a boolean, or an `items` that is an object or a boolean. A boolean is a leaf. Values under
+/// `const`, `enum`, `default` and `examples` are data and are never walked. Where the form of a
+/// value is not fixed here (a `type` value, a `required` item) the walk leaves it to the build's
+/// meta-validation. Every schema position is pushed once onto an explicit stack, so the walk is
+/// linear in the document's size and never recurses on the Rust stack.
+fn is_field_tree(schema: &Value) -> bool {
+    let mut pending = vec![(schema, 0usize)];
+    let mut patterns = 0usize;
+    while let Some((node, depth)) = pending.pop() {
+        if depth > MAX_SHAPE_DEPTH {
+            return false;
+        }
+        let members = match node {
+            Value::Bool(_) => continue,
+            Value::Object(members) => members,
+            _ => return false,
+        };
+        for (key, value) in members {
+            match key.as_str() {
+                "type" | "required" | "const" | "default" | "examples" | "minLength"
+                | "maxLength" | "minItems" | "maxItems" | "minimum" | "maximum" | "title"
+                | "description" | "$comment" => {}
+                "properties" => match value {
+                    Value::Object(fields) => {
+                        pending.extend(fields.values().map(|field| (field, depth + 1)));
+                    }
+                    _ => return false,
+                },
+                "additionalProperties" | "items" => match value {
+                    Value::Bool(_) | Value::Object(_) => pending.push((value, depth + 1)),
+                    _ => return false,
+                },
+                "enum" => match value {
+                    Value::Array(entries) if entries.len() <= MAX_ENUM_ENTRIES => {}
+                    _ => return false,
+                },
+                "pattern" => match value {
+                    Value::String(source) if source.len() <= MAX_PATTERN_SOURCE_BYTES => {
+                        patterns += 1;
+                        if patterns > MAX_SHAPE_PATTERNS {
+                            return false;
+                        }
+                    }
+                    _ => return false,
+                },
+                "$schema" => match value {
+                    Value::String(uri)
+                        if depth == 0 && ACCEPTED_SCHEMA_URIS.contains(&uri.as_str()) => {}
+                    _ => return false,
+                },
+                "$id" if depth == 0 => {}
+                _ => return false,
             }
-            Value::Array(items) => pending.extend(items),
-            _ => {}
         }
     }
     true
@@ -148,14 +206,15 @@ pub const MAX_PATTERN_DFA_BYTES: usize = 40 << 10;
 /// to [`MAX_PATTERN_BYTES`].
 ///
 /// # Errors
-/// [`ShapeSchemaUncompilable`] when the schema is not valid for its draft, carries a string
-/// `$schema` outside the standard drafts anywhere in the document (even one the schema itself
-/// defines, or one inside a value), has a `$ref` that leaves the document, or has a pattern that
-/// compiles past [`MAX_PATTERN_BYTES`].
+/// [`ShapeSchemaUncompilable`] when the schema is not a field tree (a keyword outside the allowed
+/// vocabulary, a `$schema` or `$id` below the root, a `$schema` other than the bundled 2020-12
+/// spelling, or a depth, `enum`, `pattern` size or `pattern` count past its cap), is not valid for
+/// 2020-12 where the walk leaves a form to meta-validation, or has a pattern that compiles past
+/// [`MAX_PATTERN_BYTES`].
 pub fn compile(schema: &Value) -> Result<Validator, ShapeSchemaUncompilable> {
     #[cfg(feature = "test-support")]
     test_support::record(schema);
-    if !names_only_standard_drafts(schema) {
+    if !is_field_tree(schema) {
         return Err(ShapeSchemaUncompilable);
     }
     let patterns = jsonschema::PatternOptions::fancy_regex()

@@ -498,7 +498,7 @@ async fn cli_declare_refuses_with_vocabulary_then_succeeds_with_the_flag(pool: P
 // door refuses with the fixed sentence and writes no row.
 
 /// The fixed sentence's distinctive words — what a declarer is told to change.
-const UNCOMPILABLE_VOCAB: &str = "never fetched";
+const UNCOMPILABLE_VOCAB: &str = "field tree";
 
 /// The schema under test: valid JSON Schema whose `$ref` leaves the document for the probe's host.
 fn remote_ref_schema(probe: &FetchProbe) -> serde_json::Value {
