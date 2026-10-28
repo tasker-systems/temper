@@ -11,8 +11,8 @@
 
 use serde_json::{json, Value};
 use temper_substrate::shape_schema::{
-    compile, ShapeSchemaUncompilable, MAX_ENUM_ENTRIES, MAX_PATTERN_SOURCE_BYTES, MAX_SHAPE_DEPTH,
-    MAX_SHAPE_PATTERNS,
+    compile, first_failure, ShapeSchemaUncompilable, MAX_ENUM_ENTRIES, MAX_FAILURE_MESSAGE_BYTES,
+    MAX_PATTERN_SOURCE_BYTES, MAX_SHAPE_DEPTH, MAX_SHAPE_PATTERNS,
 };
 
 const DRAFT_2020_12: &str = "https://json-schema.org/draft/2020-12/schema";
@@ -525,4 +525,67 @@ fn stored_shape_profiles_compile() {
         &json!({ "reading": 1.5 }),
         &json!({ "reading": "high" }),
     );
+}
+
+// ── one failure, cut to a bound ──────────────────────────────────────────────────────────────
+
+fn three_short_strings() -> Value {
+    field_tree(json!({
+        "type": "object",
+        "properties": {
+            "alpha": { "type": "string", "minLength": 5 },
+            "bravo": { "type": "string", "minLength": 5 },
+            "charlie": { "type": "string", "minLength": 5 },
+        },
+        "required": ["alpha", "bravo", "charlie"],
+    }))
+}
+
+#[test]
+fn first_failure_names_one_of_three() {
+    let validator = compile(&three_short_strings()).expect("a field tree compiles");
+    let content = json!({ "alpha": "a", "bravo": "b", "charlie": "c" });
+    let (path, _message) = first_failure(&validator, &content).expect("three violations");
+    let named = ["alpha", "bravo", "charlie"]
+        .iter()
+        .filter(|name| path.contains(*name))
+        .count();
+    assert_eq!(named, 1, "exactly one violating path is named, got: {path}");
+}
+
+#[test]
+fn first_failure_is_none_when_satisfied() {
+    let validator = compile(&three_short_strings()).expect("a field tree compiles");
+    let content = json!({ "alpha": "aaaaa", "bravo": "bbbbb", "charlie": "ccccc" });
+    assert_eq!(first_failure(&validator, &content), None);
+}
+
+/// `maxLength` renders the failing instance into its message (`"<instance>" is longer than 1
+/// character`), so a long instance makes a long message. (`const` does not echo it.)
+#[test]
+fn a_long_failure_message_is_cut_to_the_bound() {
+    let validator = compile(&field_tree(json!({ "type": "string", "maxLength": 1 })))
+        .expect("a field tree compiles");
+    let (_path, message) =
+        first_failure(&validator, &json!("y".repeat(10 * 1024))).expect("a violation");
+    assert!(
+        message.len() <= MAX_FAILURE_MESSAGE_BYTES,
+        "the message is {} bytes",
+        message.len()
+    );
+    assert!(message.ends_with('…'), "a cut message ends in an ellipsis");
+}
+
+/// The cut lands on a character boundary: the message embeds 4,000 two-byte characters, and the
+/// cut point `MAX_FAILURE_MESSAGE_BYTES - 3` (1021) is odd, so it falls inside a character. Slicing
+/// there would panic, so reaching the assertions is the witness.
+#[test]
+fn the_cut_never_splits_a_character() {
+    let validator = compile(&field_tree(json!({ "type": "string", "maxLength": 1 })))
+        .expect("a field tree compiles");
+    let (_path, message) =
+        first_failure(&validator, &json!("é".repeat(4000))).expect("a violation");
+    assert!(message.len() <= MAX_FAILURE_MESSAGE_BYTES);
+    assert!(message.ends_with('…'));
+    assert!(std::str::from_utf8(message.as_bytes()).is_ok());
 }

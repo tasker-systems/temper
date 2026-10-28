@@ -225,6 +225,45 @@ pub fn compile(schema: &Value) -> Result<Validator, ShapeSchemaUncompilable> {
         .map_err(|_| ShapeSchemaUncompilable)
 }
 
+/// The most bytes of a violation's path, or of its message, a verdict or a refusal may carry.
+///
+/// A violation's message can quote the content that broke the rule (a `const` or `enum` mismatch
+/// echoes the instance), so an unbounded message would copy an author's content into a refusal, a
+/// stored verdict detail and a log. 1 KiB names any rule a field tree can state, with room to spare.
+pub const MAX_FAILURE_MESSAGE_BYTES: usize = 1024;
+
+/// The first way `content` fails `validator`, as `(path, message)`, or `None` when it satisfies it.
+///
+/// The verdict comes from `is_valid`, which stops at the first violation; the one failure reported
+/// comes from `validate`, which also stops at the first. Neither collects every violation, so the
+/// work and the text are bounded however many places the content breaks the schema. Each of the two
+/// strings is cut to [`MAX_FAILURE_MESSAGE_BYTES`].
+pub fn first_failure(validator: &Validator, content: &Value) -> Option<(String, String)> {
+    if validator.is_valid(content) {
+        return None;
+    }
+    let error = validator.validate(content).err()?;
+    Some((
+        cut(error.instance_path().to_string()),
+        cut(error.to_string()),
+    ))
+}
+
+/// `text` if it fits in [`MAX_FAILURE_MESSAGE_BYTES`]; otherwise its longest prefix on a char
+/// boundary within `MAX_FAILURE_MESSAGE_BYTES - 3` bytes, followed by `…` (3 bytes).
+fn cut(text: String) -> String {
+    if text.len() <= MAX_FAILURE_MESSAGE_BYTES {
+        return text;
+    }
+    let mut end = MAX_FAILURE_MESSAGE_BYTES - '…'.len_utf8();
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut cut = text[..end].to_owned();
+    cut.push('…');
+    cut
+}
+
 /// What a test reads to see which schemas [`compile`] was run on — every call, from every caller,
 /// so a compile that skipped a bound is seen wherever it was written.
 #[cfg(feature = "test-support")]
