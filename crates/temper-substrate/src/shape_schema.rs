@@ -163,8 +163,9 @@ fn is_field_tree(schema: &Value) -> bool {
         };
         for (key, value) in members {
             match key.as_str() {
-                "required" => match value {
-                    Value::Array(names) => {
+                "required" => {
+                    // A non-array `required` is left to the build's meta-validation, as before.
+                    if let Value::Array(names) = value {
                         let too_long = |name: &Value| {
                             name.as_str()
                                 .is_some_and(|name| name.len() > MAX_PROPERTY_NAME_BYTES)
@@ -173,9 +174,7 @@ fn is_field_tree(schema: &Value) -> bool {
                             return false;
                         }
                     }
-                    // Not an array: left to the build's meta-validation, as before.
-                    _ => {}
-                },
+                }
                 "type" | "const" | "default" | "examples" | "minLength" | "maxLength"
                 | "minItems" | "maxItems" | "minimum" | "maximum" | "title" | "description"
                 | "$comment" => {}

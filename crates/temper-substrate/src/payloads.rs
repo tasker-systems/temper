@@ -824,7 +824,7 @@ pub enum EnforcementMode {
 /// a new one; `shape_version` is the chain depth (assert/fold, the same revision pattern
 /// `kb_data_artifacts` keeps).
 ///
-/// The `schema` is a field tree (a subset of JSON Schema 2020-12; see the data-artifacts skill) validated Rust-side — there is no in-database
+/// The `schema` is a JSON Schema (draft 2020-12) validated Rust-side — there is no in-database
 /// validator. `enforcement` carries the closed vocabulary the register closes over.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
@@ -843,7 +843,7 @@ pub struct ShapeDeclared {
     /// The bare family name, qualified by `kind_owner`. Carries no implication that a shape has been
     /// registered — persistence never requires a prior declaration.
     pub artifact_kind: String,
-    /// The field tree (a subset of JSON Schema 2020-12) governing this family. Validated Rust-side.
+    /// The JSON Schema (draft 2020-12) governing this family. Validated Rust-side.
     pub schema: serde_json::Value,
     /// Whether a non-conforming commit is refused (`enforcing`) or merely recorded (`advisory`).
     pub enforcement: EnforcementMode,
