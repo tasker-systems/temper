@@ -1,0 +1,12 @@
+title    = "open_meta refuses `doc_type` and the ten managed property names on create and update, at every door"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "mcp", "clients"]
+status   = "signal-only"
+body = '''
+A create or update whose `open_meta` (or `open_meta_add`) names `doc_type` or one of the managed property keys — `temper-stage`, `-mode`, `-effort`, `-status`, `-seq`, `-llm-model`, `-llm-run`, `-provenance`, `-branch`, `-pr` — is now refused with 400 (`BadRequest`, naming the refused keys) and writes nothing. Before, it was accepted, stored without the managed tier's validation, and read back as that managed field: `open_meta: {"temper-stage": "anything"}` became the resource's stage. The request and response shapes are unchanged; only what the server accepts narrowed, which is why this is `behavioral`.
+
+Who observes: any caller of the HTTP resource create/update/meta doors, MCP `create_resource`/`update_resource`, the CLI and the SDKs that puts one of these names in `open_meta` rather than in `managed_meta`. The read path sorts these names out of `open_meta` on every read, so a read-modify-write caller cannot be echoing one back, and a 2026-08-24 production measurement found no live row written this way. The CLI sends every `temper-` frontmatter key through the managed tier, so a vault push is affected only when a file carries a bare `doc_type:` key: that push now answers 400 where before the key silently overwrote the resource's authoritative doc type. The CLI relays the server's refusal; its stdout shape is unchanged. Other `temper-` names (an unrecognized `temper-invented`) and `date` stay open keys and still pass. `facet` is deliberately not refused here.
+
+Both skew directions hold: an old client never sent these names legitimately, and a new client gains nothing to send. Release relevance: signal-only.
+'''
