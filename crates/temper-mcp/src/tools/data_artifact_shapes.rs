@@ -112,7 +112,7 @@ pub struct DeclareShapeInput {
     /// Override the namespace half of the family name. Omit to let the server default it.
     #[serde(default)]
     pub kind_owner: Option<KindOwnerInput>,
-    /// The JSON Schema (draft 2020-12) governing this family. Validated Rust-side.
+    /// The field tree (a subset of JSON Schema 2020-12; see the data-artifacts skill for the vocabulary) governing this family. Validated Rust-side.
     pub schema: serde_json::Value,
     /// Whether a non-conforming commit is refused (`"enforcing"`) or merely recorded (`"advisory"`).
     pub enforcement: EnforcementMode,

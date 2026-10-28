@@ -1,4 +1,4 @@
-title    = "A shape's by-id read carries `askable`; a schema over 256 KiB, or a pattern over 64 KiB compiled, is refused"
+title    = "A shape's by-id read carries `askable`; a schema over 256 KiB, or a pattern over 10 KiB compiled, is refused"
 pr       = "self"
 classes  = ["additive", "behavioral"]
 surfaces = ["http", "mcp", "cli-stdout", "clients"]
@@ -25,8 +25,8 @@ sentence that names the bound and no compiler text; no shape row is written. Sch
 bound declare as before. Shapes already stored above the bound are unchanged for commit and
 reconcile.
 
-Every compile of a shape schema holds the regex of each `pattern` and `patternProperties` key to
-64 KiB compiled (the engine's default is 10 MiB). A schema with such a regex past it does not
+Every compile of a shape schema holds the regex of each `pattern` to
+10 KiB compiled (the engine's default is 10 MiB). A schema with such a regex past it does not
 compile, at declare, commit and reconcile alike, and is treated as any uncompilable schema is:
 declare refuses it with the existing fixed sentence, an `enforcing` commit is refused, an
 `advisory` commit is stored with no verdict, and reconcile skips it. Patterns written for fields

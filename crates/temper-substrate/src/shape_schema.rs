@@ -12,12 +12,12 @@
 //! schema), and refuses every other keyword. With no `$ref`, `$defs` or combinator, nothing can make
 //! a value in a data position (`const`, `enum`, `default`, `examples`) into a schema, so the walk
 //! never descends into one; with the depth, `enum` and `pattern` bounded, the work of building the
-//! validator and of running it on content is bounded by the schema's own size (spec
+//! validator and of running it on content is bounded by the schema's caps times the content's size (spec
 //! `2026-10-27-a-shape-is-a-field-tree-design`, §1 and §2). [`ShapeSchemaUncompilable`]'s sentence
 //! teaches the vocabulary.
 //!
 //! The draft is not left to `jsonschema`'s detection: `$schema` is absent, or it appears only at
-//! the root and is exactly the bundled 2020-12 spelling (optionally ending in `#`). `$id` is also
+//! the root and is the bundled 2020-12 spelling, with or without a trailing `#`. `$id` is also
 //! root-only. A subschema therefore cannot register a custom meta-schema, and no spelling of
 //! `$schema` can reach the retriever.
 //!
@@ -66,12 +66,15 @@ impl std::fmt::Display for ShapeSchemaUncompilable {
             "the shape's JSON Schema cannot be compiled: a shape is a field tree — a JSON Schema \
              2020-12 document using only type, properties, required, additionalProperties (true, \
              false or a schema), items (one schema), enum (at most {MAX_ENUM_ENTRIES} strings, or \
-             {MAX_MIXED_ENUM_ENTRIES} values of any other kind), const, pattern (at most {MAX_PATTERN_SOURCE_BYTES} bytes, at most \
+             {MAX_MIXED_ENUM_ENTRIES} values of any other kind), const, pattern (at most \
+             {MAX_PATTERN_SOURCE_BYTES} bytes of source, compiling within {pattern_kib} KiB, at most \
              {MAX_SHAPE_PATTERNS} in a shape, no lookaround or backreferences), minLength, \
              maxLength, minItems, maxItems, minimum, maximum, title, description, $comment, \
-             default and examples, with $schema and $id only at the root, nested at most \
+             default and examples, with property names (in properties and required) of at most \
+             {MAX_PROPERTY_NAME_BYTES} bytes, $schema and $id only at the root, nested at most \
              {MAX_SHAPE_DEPTH} levels; $ref, $defs, allOf, anyOf, oneOf, not, if, format and \
              every other keyword are refused",
+            pattern_kib = MAX_PATTERN_BYTES / 1024,
         )
     }
 }
@@ -96,6 +99,11 @@ impl Retrieve for RefuseEveryUri {
 /// depth cap, so the ask can always see a field tree whole.
 pub const MAX_SHAPE_DEPTH: usize = 16;
 
+const _: () = assert!(
+    MAX_SHAPE_DEPTH == temper_core::types::artifact_ask::walk::MAX_WALK_DEPTH,
+    "a field tree's depth cap is the ask walk's, so the ask can see a field tree whole"
+);
+
 /// The most entries an `enum` may list when every entry is a string — the cap for string-only
 /// enums. `jsonschema` hashes a string-only enum above 10 entries, so a check against one does not
 /// scan the entries. Any other enum is held to [`MAX_MIXED_ENUM_ENTRIES`].
@@ -104,8 +112,9 @@ pub const MAX_ENUM_ENTRIES: usize = 256;
 /// The most entries an `enum` may list when any entry is not a string.
 ///
 /// `jsonschema` compares such an enum against a value entry by entry, so every checked value costs
-/// a scan of the whole enum. Measured: about 50 ms for 32 scalars checked over 900k integers, and
-/// about 136 ms extrapolated for 32 structured entries over a 4.5 MB body. The 256 entries a
+/// a scan of the whole enum. Measured: about 50 ms for 32 scalars checked over 900k integers,
+/// about 184 ms for 32 structured entries over a 4.5 MB body at one level, and about 159 ms for a
+/// 32-entry mixed enum at every one of the 16 levels. The 256 entries a
 /// string-only enum may list would cost eight times that.
 pub const MAX_MIXED_ENUM_ENTRIES: usize = 32;
 
@@ -115,6 +124,14 @@ pub const MAX_SHAPE_PATTERNS: usize = 32;
 
 /// The most bytes one `pattern`'s source may hold.
 pub const MAX_PATTERN_SOURCE_BYTES: usize = 256;
+
+/// The most bytes a `properties` key or a `required` entry may hold.
+///
+/// Measured: a 262 KB `properties` key costs about 15 s over 4.5 MB of two-key objects, because
+/// `serde_json`'s `preserve_order` map hashes the whole key on every lookup; a 256 B key costs
+/// about 15 ms. 256 matches the ask walk's path-segment cap, so the ask never advertises a longer
+/// name than a shape can hold.
+pub const MAX_PROPERTY_NAME_BYTES: usize = 256;
 
 /// The `$schema` spellings a field tree may name, at the root only: the one `referencing` bundles
 /// (so naming it fetches nothing), with or without a trailing `#`.
@@ -146,11 +163,30 @@ fn is_field_tree(schema: &Value) -> bool {
         };
         for (key, value) in members {
             match key.as_str() {
-                "type" | "required" | "const" | "default" | "examples" | "minLength"
-                | "maxLength" | "minItems" | "maxItems" | "minimum" | "maximum" | "title"
-                | "description" | "$comment" => {}
+                "required" => match value {
+                    Value::Array(names) => {
+                        let too_long = |name: &Value| {
+                            name.as_str()
+                                .is_some_and(|name| name.len() > MAX_PROPERTY_NAME_BYTES)
+                        };
+                        if names.iter().any(too_long) {
+                            return false;
+                        }
+                    }
+                    // Not an array: left to the build's meta-validation, as before.
+                    _ => {}
+                },
+                "type" | "const" | "default" | "examples" | "minLength" | "maxLength"
+                | "minItems" | "maxItems" | "minimum" | "maximum" | "title" | "description"
+                | "$comment" => {}
                 "properties" => match value {
                     Value::Object(fields) => {
+                        if fields
+                            .keys()
+                            .any(|name| name.len() > MAX_PROPERTY_NAME_BYTES)
+                        {
+                            return false;
+                        }
                         pending.extend(fields.values().map(|field| (field, depth + 1)));
                     }
                     _ => return false,
@@ -197,16 +233,18 @@ fn is_field_tree(schema: &Value) -> bool {
 /// The most bytes one `pattern` may compile to — the `regex` engine's per-regex `size_limit`, which
 /// counted repetitions expand into.
 ///
-/// # 64 KiB
+/// # 10 KiB
 ///
 /// `jsonschema` compiles every distinct pattern eagerly when a schema is built, and the engine's
-/// own default allows 10 MiB a regex, so a pattern of twenty bytes such as a large Unicode class
-/// repeated a few hundred times can cost milliseconds and megabytes on its own. A pattern a person
-/// writes for a field — a code, a date, an identifier — compiles to kilobytes: the longest pattern
-/// any stored shape holds is 62 bytes of source. 64 KiB admits a good margin over that, and is a
-/// sixteenth of the previous 1 MiB. A `pattern` past it fails to compile, so its schema
-/// is [`ShapeSchemaUncompilable`], with the one fixed sentence. It bounds each such regex.
-pub const MAX_PATTERN_BYTES: usize = 64 << 10;
+/// own default allows 10 MiB a regex. The bound also caps what running one costs: once the lazy DFA
+/// gives up, match cost is linear in the compiled NFA's size, measured at about 0.22 ms per NFA
+/// byte over a 4.5 MB string (`^(a|b)*a(a|b){20}$`, 3.1 KB: 752 ms; `{100}`, 14 KB: 3.1 s; `{450}`,
+/// 61.6 KB: 13.9 s). 10 KiB bounds that at about 2.2 s locally, while the patterns a person writes
+/// for a field fit: a UUID is 2.9 KB, an ISO date-time 1.4 KB, `^\w{1,20}$` 2.9 KB,
+/// `^[\w.-]{1,59}$` 8.7 KB, `^[A-Za-z0-9][A-Za-z0-9._-]{0,57}$` 8.6 KB. A Unicode class such as
+/// `\p{L}` (about 43 KB on its own) does not fit. A `pattern` past it fails to compile, so its
+/// schema is [`ShapeSchemaUncompilable`], with the one fixed sentence, which names this size.
+pub const MAX_PATTERN_BYTES: usize = 10 << 10;
 
 /// The most bytes the engine's lazy DFA may use as its search cache for one pattern — what
 /// `PatternOptions::dfa_size_limit` reaches on the `regex` engine (`hybrid_cache_capacity`).
@@ -225,7 +263,8 @@ pub const MAX_PATTERN_DFA_BYTES: usize = 2 << 20;
 /// # Errors
 /// [`ShapeSchemaUncompilable`] when the schema is not a field tree (a keyword outside the allowed
 /// vocabulary, a `$schema` or `$id` below the root, a `$schema` other than the bundled 2020-12
-/// spelling, or a depth, `enum`, `pattern` size or `pattern` count past its cap), is not valid for
+/// spelling (with or without a trailing `#`), a `properties` key or `required` entry past
+/// [`MAX_PROPERTY_NAME_BYTES`], or a depth, `enum`, `pattern` size or `pattern` count past its cap), is not valid for
 /// 2020-12 where the walk leaves a form to meta-validation, or has a pattern that compiles past
 /// [`MAX_PATTERN_BYTES`].
 pub fn compile(schema: &Value) -> Result<Validator, ShapeSchemaUncompilable> {
@@ -253,14 +292,13 @@ pub const MAX_FAILURE_MESSAGE_BYTES: usize = 1024;
 
 /// The first way `content` fails `validator`, as `(path, message)`, or `None` when it satisfies it.
 ///
-/// The verdict comes from `is_valid`, which stops at the first violation; the one failure reported
-/// comes from `validate`, which also stops at the first. Neither collects every violation, so the
-/// work and the text are bounded however many places the content breaks the schema. Each of the two
-/// strings is cut to [`MAX_FAILURE_MESSAGE_BYTES`].
+/// The verdict and the detail come from one `validate` pass, which stops at the first violation. A
+/// field tree has no combinator, so nothing is lost by not asking `is_valid` first; running
+/// `is_valid` and then `validate` made a failing check two passes over the content and doubled the
+/// worst case. It does not collect every violation, so the work and the text are bounded however
+/// many places the content breaks the schema. Each of the two strings is cut to
+/// [`MAX_FAILURE_MESSAGE_BYTES`].
 pub fn first_failure(validator: &Validator, content: &Value) -> Option<(String, String)> {
-    if validator.is_valid(content) {
-        return None;
-    }
     let error = validator.validate(content).err()?;
     Some((
         cut(error.instance_path().to_string()),

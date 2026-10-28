@@ -12,7 +12,8 @@
 use serde_json::{json, Value};
 use temper_substrate::shape_schema::{
     compile, first_failure, ShapeSchemaUncompilable, MAX_ENUM_ENTRIES, MAX_FAILURE_MESSAGE_BYTES,
-    MAX_MIXED_ENUM_ENTRIES, MAX_PATTERN_SOURCE_BYTES, MAX_SHAPE_DEPTH, MAX_SHAPE_PATTERNS,
+    MAX_MIXED_ENUM_ENTRIES, MAX_PATTERN_SOURCE_BYTES, MAX_PROPERTY_NAME_BYTES, MAX_SHAPE_DEPTH,
+    MAX_SHAPE_PATTERNS,
 };
 
 const DRAFT_2020_12: &str = "https://json-schema.org/draft/2020-12/schema";
@@ -75,8 +76,9 @@ fn chain(steps: &[Step]) -> Value {
 
 #[test]
 fn refuses_ref() {
+    // The `$ref` resolves, so only the walk refuses it.
     assert_refused(&field_tree(
-        json!({ "properties": { "a": { "$ref": "#/properties/b" } } }),
+        json!({ "type": "object", "properties": { "a": { "$ref": "#" } } }),
     ));
 }
 
@@ -164,6 +166,8 @@ fn refuses_an_unknown_key() {
     assert_refused(&field_tree(json!({ "x-custom": { "type": "string" } })));
 }
 
+/// 2020-12 meta-validation also refuses `items` as an array, so this is defence in depth with no
+/// isolated bite on the walk.
 #[test]
 fn refuses_items_as_an_array() {
     assert_refused(&field_tree(
@@ -228,6 +232,8 @@ fn data_positions_are_not_walked() {
     assert_compiles(&field_tree(json!({ "const": { "anyOf": [] } })));
     assert_compiles(&field_tree(json!({ "enum": [{ "$ref": "#" }] })));
     assert_compiles(&field_tree(json!({ "const": { "$schema": "urn:x" } })));
+    assert_compiles(&field_tree(json!({ "default": { "$ref": "#" } })));
+    assert_compiles(&field_tree(json!({ "examples": [{ "anyOf": [] }] })));
 }
 
 #[test]
@@ -605,16 +611,52 @@ fn a_long_failure_message_is_cut_to_the_bound() {
     assert!(message.ends_with('…'), "a cut message ends in an ellipsis");
 }
 
-/// The cut lands on a character boundary: the message embeds 4,000 two-byte characters, and the
-/// cut point `MAX_FAILURE_MESSAGE_BYTES - 3` (1021) is odd, so it falls inside a character. Slicing
-/// there would panic, so reaching the assertions is the witness.
+/// The cut lands on a character boundary: the instance is `x` then 4,000 two-byte characters, so
+/// in the uncut message (which opens with a `"`) the characters start at even offsets and the cut
+/// point `MAX_FAILURE_MESSAGE_BYTES - 3` (1021) falls inside one. Slicing there would panic, and the
+/// walk back to a boundary is what the test exercises.
 #[test]
 fn the_cut_never_splits_a_character() {
     let validator = compile(&field_tree(json!({ "type": "string", "maxLength": 1 })))
         .expect("a field tree compiles");
-    let (_path, message) =
-        first_failure(&validator, &json!("é".repeat(4000))).expect("a violation");
+    let content = json!(format!("x{}", "é".repeat(4000)));
+    let uncut = jsonschema::validate(
+        &field_tree(json!({ "type": "string", "maxLength": 1 })),
+        &content,
+    )
+    .expect_err("a violation")
+    .to_string();
+    assert!(
+        !uncut.is_char_boundary(MAX_FAILURE_MESSAGE_BYTES - 3),
+        "the fixture's cut point is inside a character"
+    );
+    let (_path, message) = first_failure(&validator, &content).expect("a violation");
     assert!(message.len() <= MAX_FAILURE_MESSAGE_BYTES);
     assert!(message.ends_with('…'));
-    assert!(std::str::from_utf8(message.as_bytes()).is_ok());
+    let prefix = message.strip_suffix('…').expect("ends with an ellipsis");
+    assert!(uncut.starts_with(prefix));
+}
+
+// ── Property names ───────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn a_property_name_at_the_cap_compiles() {
+    let name = "k".repeat(MAX_PROPERTY_NAME_BYTES);
+    assert_compiles(&field_tree(
+        json!({ "properties": { name.clone(): { "type": "string" } }, "required": [name] }),
+    ));
+}
+
+#[test]
+fn a_property_name_past_the_cap_is_refused() {
+    let name = "k".repeat(MAX_PROPERTY_NAME_BYTES + 1);
+    assert_refused(&field_tree(
+        json!({ "properties": { name: { "type": "string" } } }),
+    ));
+}
+
+#[test]
+fn a_required_entry_past_the_cap_is_refused() {
+    let name = "k".repeat(MAX_PROPERTY_NAME_BYTES + 1);
+    assert_refused(&field_tree(json!({ "required": [name] })));
 }

@@ -1520,9 +1520,8 @@ pub async fn fire_with(
             .fetch_optional(&mut *conn)
             .await?;
 
-            // Compile once. The verdict comes from `is_valid`, which stops at the first violation;
-            // the one detail recorded comes from `validate`, which also stops at the first, cut
-            // to a bound. Compiling a JSON Schema is the expensive part — doing it twice per
+            // Compile once. The verdict and the one detail recorded come from a single
+            // `validate` pass, which stops at the first violation, cut to a bound. Compiling a JSON Schema is the expensive part — doing it twice per
             // commit is wasteful and was flagged in review. The failure is owned strings because
             // `ValidationError` borrows from the validator (which is dropped here).
             let (shape_state, validation_error_details): (

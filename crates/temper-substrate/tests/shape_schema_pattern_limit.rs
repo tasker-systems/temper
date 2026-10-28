@@ -1,5 +1,5 @@
 //! `shape_schema::compile` holds each `pattern` to `MAX_PATTERN_BYTES`: a pattern that compiles
-//! under the regex engine's own 10 MiB default but not under the 64 KiB bound makes its schema
+//! under the regex engine's own 10 MiB default but not under the 10 KiB bound makes its schema
 //! uncompilable, with the one fixed error; an ordinary pattern still compiles.
 //!
 //! Bite: drop `.with_pattern_options(patterns)` from `shape_schema::compile`. The large pattern
@@ -12,7 +12,7 @@ use temper_substrate::shape_schema::{compile, ShapeSchemaUncompilable, MAX_PATTE
 
 /// A large Unicode class, counted a hundred times. Each copy of `[\p{L}\p{N}]` compiles to tens of
 /// kilobytes of NFA (the engine's own docs measure `\w{20}` between 300 KB and 500 KB forward), so
-/// the whole is several megabytes: past `MAX_PATTERN_BYTES` (64 KiB), within the engine's 10 MiB default.
+/// the whole is several megabytes: past `MAX_PATTERN_BYTES` (10 KiB), within the engine's 10 MiB default.
 const LARGE_PATTERN: &str = r"[\p{L}\p{N}]{100}";
 
 fn with_pattern(pattern: &str) -> Value {
@@ -49,10 +49,10 @@ fn an_ordinary_pattern_still_compiles() {
 }
 
 /// Control: a pattern well under the bound compiles and is applied. Pins that the bound is a size
-/// and not a length: fifty counted repetitions of a small class are far below 64 KiB.
+/// and not a length: a 55-fold class with a literal tail compiles to about 8.7 KB, just under 10 KiB.
 #[test]
 fn a_pattern_just_under_the_bound_compiles() {
-    let validator = compile(&with_pattern("[a-z]{50}")).expect("a pattern under the bound");
-    assert!(validator.is_valid(&json!({ "code": "a".repeat(50) })));
-    assert!(!validator.is_valid(&json!({ "code": "a".repeat(3) })));
+    let validator = compile(&with_pattern(r"^[\w.-]{1,55}x1$")).expect("a pattern under the bound");
+    assert!(validator.is_valid(&json!({ "code": "ab.-x1" })));
+    assert!(!validator.is_valid(&json!({ "code": "ab" })));
 }

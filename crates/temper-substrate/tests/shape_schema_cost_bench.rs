@@ -11,6 +11,9 @@
 //!   the last 21 characters.
 //! - `compile_at_the_pattern_cap`: `compile` of a schema of `MAX_SCHEMA_BYTES` holding
 //!   `MAX_SHAPE_PATTERNS` distinct patterns, each compiling to just under `MAX_PATTERN_BYTES`.
+//! - `check_dfa_pattern_at_the_cap`: the same a/b string against `^(a|b)*a(a|b){DFA_REPEAT}$`.
+//! - `check_long_property_name_at_the_cap`: 4.5 MB of two-key objects under `items`, against a
+//!   `properties` key of `MAX_PROPERTY_NAME_BYTES`.
 //!
 //! Run before merging a change to a cap (release, so the numbers are the deployed ones):
 //!
@@ -29,8 +32,8 @@ use std::time::Instant;
 use serde_json::{json, Value};
 use temper_core::types::artifact_ask::walk::MAX_SCHEMA_BYTES;
 use temper_substrate::shape_schema::{
-    compile, first_failure, MAX_MIXED_ENUM_ENTRIES, MAX_PATTERN_SOURCE_BYTES, MAX_SHAPE_DEPTH,
-    MAX_SHAPE_PATTERNS,
+    compile, first_failure, MAX_MIXED_ENUM_ENTRIES, MAX_PATTERN_SOURCE_BYTES,
+    MAX_PROPERTY_NAME_BYTES, MAX_SHAPE_DEPTH, MAX_SHAPE_PATTERNS,
 };
 
 /// The compact-JSON size of the content the check benchmarks validate: 4.5 MB, near what the
@@ -40,10 +43,14 @@ const PLATFORM_BODY_BYTES: usize = 4_500_000;
 /// The root `$schema` every benchmark schema names.
 const DRAFT: &str = "https://json-schema.org/draft/2020-12/schema";
 
-/// The repeat count `k` in `[\p{L}]{k}` for `compile_at_the_pattern_cap`. Tuned by measurement so
-/// each pattern compiles under `MAX_PATTERN_BYTES` (64 KiB): one `\p{L}` is about 43 KB on regex
-/// 1.13.1, and `{3}` is about 129 KB, over the cap.
-const PATTERN_REPEAT: usize = 1;
+/// The repeat bound `k` in `^[\w.-]{1,k}x<NN>$` for `compile_at_the_pattern_cap`. The controller
+/// tunes it by measurement so each pattern compiles near but under `MAX_PATTERN_BYTES` (10 KiB):
+/// `k = 55` is about 8.7 KB on regex 1.13.1.
+const PATTERN_REPEAT: usize = 55;
+
+/// The `N` in `^(a|b)*a(a|b){N}$` for `check_dfa_pattern_at_the_cap`: the largest repeat whose
+/// pattern still compiles under `MAX_PATTERN_BYTES`. The controller tunes it by measurement.
+const DFA_REPEAT: usize = 70;
 
 /// Integers in each enum entry's `v` array.
 const ENTRY_INTS: usize = 16;
@@ -189,8 +196,8 @@ fn check_dfa_defeating_pattern_anchored() {
     time_pattern_check("check_dfa_defeating_pattern_anchored", "^(a|b)*a(a|b){20}$");
 }
 
-/// `MAX_SHAPE_PATTERNS` properties, each with its own pattern `[\p{L}]{k}` plus a distinct literal
-/// suffix, padded with `description` text so the compact schema is `MAX_SCHEMA_BYTES`. Times
+/// `MAX_SHAPE_PATTERNS` properties, each with its own pattern `^[\w.-]{1,k}x<NN>$` (a distinct literal
+/// suffix), padded with `description` text so the compact schema is `MAX_SCHEMA_BYTES`. Times
 /// `compile` alone.
 #[test]
 #[ignore = "benchmark: run with --release --ignored --nocapture before merge"]
@@ -198,7 +205,7 @@ fn compile_at_the_pattern_cap() {
     let build = |padding: usize| {
         let properties: serde_json::Map<String, Value> = (0..MAX_SHAPE_PATTERNS)
             .map(|index| {
-                let pattern = format!(r"[\p{{L}}]{{{PATTERN_REPEAT}}}x{index:02}");
+                let pattern = format!(r"^[\w.-]{{1,{PATTERN_REPEAT}}}x{index:02}$");
                 (
                     format!("field_{index:02}"),
                     json!({ "type": "string", "pattern": pattern }),
@@ -227,4 +234,36 @@ fn compile_at_the_pattern_cap() {
         compiled.is_ok(),
         "every pattern compiles under MAX_PATTERN_BYTES; tune PATTERN_REPEAT"
     );
+}
+
+/// The same a/b string against the largest DFA-defeating pattern that compiles under
+/// `MAX_PATTERN_BYTES`.
+#[test]
+#[ignore = "benchmark: run with --release --ignored --nocapture before merge"]
+fn check_dfa_pattern_at_the_cap() {
+    let pattern = format!("^(a|b)*a(a|b){{{DFA_REPEAT}}}$");
+    time_pattern_check("check_dfa_pattern_at_the_cap", &pattern);
+}
+
+/// A `properties` key of `MAX_PROPERTY_NAME_BYTES` under `items`; the content is 4.5 MB of
+/// `{"a":0,"b":0}` objects, so each object costs a lookup of the long key.
+#[test]
+#[ignore = "benchmark: run with --release --ignored --nocapture before merge"]
+fn check_long_property_name_at_the_cap() {
+    let schema = json!({
+        "$schema": DRAFT,
+        "type": "array",
+        "items": { "type": "object", "properties": {
+            "k".repeat(MAX_PROPERTY_NAME_BYTES): { "type": "integer" }
+        } },
+    });
+    let validator = compile(&schema).expect("a name at the cap compiles");
+    let element = json!({ "a": 0, "b": 0 });
+    let element_len = serde_json::to_vec(&element).expect("serializes").len();
+    let count = (PLATFORM_BODY_BYTES - 1) / (element_len + 1);
+    let content = Value::Array(vec![element; count]);
+    let start = Instant::now();
+    let verdict = first_failure(&validator, &content);
+    report("check_long_property_name_at_the_cap", start);
+    assert!(verdict.is_none(), "no object holds the long key");
 }
