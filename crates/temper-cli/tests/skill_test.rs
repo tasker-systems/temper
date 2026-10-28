@@ -358,9 +358,11 @@ fn skill_md_carries_the_outcome_discipline_stanza_not_just_the_pointer() {
         let skill_md = std::fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
 
         assert!(
-            skill_md.contains("names no mechanism"),
+            skill_md.contains("names no mechanism still open at")
+                && skill_md.contains("its altitude"),
             "SKILL.md lost the clause rule — a clause states what must be true and names no \
-             mechanism. Without it in the always-loaded file, only goal-authoring sessions ever \
+             mechanism still open at its altitude (a bare ban, without the qualifier, is the \
+             old rule that bred vague clauses). Without it in the always-loaded file, only goal-authoring sessions ever \
              see it, and implementing agents build the mechanism a clause named"
         );
         assert!(
