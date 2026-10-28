@@ -2314,11 +2314,16 @@ mod tests {
 
         let mcp = generate_agent_skill_files().unwrap();
         let mcp_skill_md = mcp.get("SKILL.md").expect("SKILL.md").len();
+        // 11,955 → 12,100, deliberately: the always-loaded Outcome Discipline gained the
+        // altitude qualifier and the bounded-enabling-work rule. A first pass trimmed them to
+        // fit the old budget and an independent review found the trim had made the hole rule
+        // vacuous ("answers to a clause" without "it can be judged against"), so the meaning
+        // was restored and the budget moved instead.
         assert!(
-            mcp_skill_md <= 11_955,
-            "the MCP SKILL.md is {mcp_skill_md} bytes; the budget is 11,955 — the pre-rework \
-             size. It gained the purpose-first and on-request-discovery sections and still had \
-             to fit, so any further growth needs a deliberate budget edit."
+            mcp_skill_md <= 12_100,
+            "the MCP SKILL.md is {mcp_skill_md} bytes; the budget is 12,100 — the pre-rework \
+             size plus the outcome-discipline amendment. Any further growth needs a deliberate \
+             budget edit, with its reason, never accretion."
         );
     }
 

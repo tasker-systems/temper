@@ -77,7 +77,8 @@ Four rules, always in force; the reasoning and worked failures are in `outcome-r
 - **A clause states what must be true, or must never be true, and names no mechanism still open at
   its altitude.** A clause naming an open mechanism commits every reader to it — most damagingly the
   implementing agent, which builds the mechanism a clause named rather than the outcome it meant. A
-  mechanism a cited `decision` chose is a prior: be precise about it, never vague to avoid it.
+  mechanism the frame owner chose in a cited `decision` is a prior: be precise about it, never vague
+  to avoid it.
 - **A witness is authored during the build, never in a preamble.** A witness must fail against the
   state its clause claims to change; against an unbuilt mechanism anything passes vacuously. A
   clause whose mechanism is unbuilt carries a **declared hole, not a filed task** — until the work is

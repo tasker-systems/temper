@@ -21,11 +21,11 @@ talking to.
 for your own, `+<team>/<slug>` for a team's, or a bare UUID. **Bare names are rejected**: pass
 `"@me/temper"`, never `"temper"`. Every write and list input spells this field `context_ref`.
 
-**Resources** are the documents themselves, each with a **doc type** that decides its schema.
-`references/frontmatter.md` lists the recognized types — read it, don't guess: a name
-outside it is accepted unvalidated, so a typo silently becomes a new type. The ones you'll use
-are `goal`, `task`, `session`, `research`, `decision`, `concept`, and `evidence` (a goal's
-evidence record).
+**Resources** are the documents themselves, each with a **doc type**. `references/frontmatter.md`
+lists the recognized types and their schemas — read it rather than guessing: a name outside it is
+accepted with no type schema, so a typo silently becomes a new type. The ones you will use are
+`goal`, `task`, `session`, `research`, `decision`, `concept`, and `evidence` (a goal's evidence
+record).
 
 **Cognitive maps** are a different home: a telos-governed graph of *distilled* nodes rather than
 resources as they are. See *Declared gaps* below before working in one.
@@ -61,13 +61,13 @@ authoring or amending a goal or sub-goal.
 - **A clause states what must be true, or must never be true, and names no mechanism still open at
   its altitude.** The *how* is the part that mutates, and a clause naming an open one propagates that
   commitment to every reader — most damagingly to an implementing agent, which builds the mechanism
-  the clause named rather than the outcome it meant. A mechanism a cited `decision` chose is a
-  prior — be precise about it.
+  the clause named rather than the outcome it meant. A mechanism the frame owner chose in a cited
+  `decision` is a prior: be precise about it, never vague to avoid it.
 - **A witness is authored during the build, never in a preamble.** A witness must fail against the
   state its clause claims to change. When the mechanism does not exist yet, "fails against current
   state" is satisfied by the *absence of the feature* — vacuously, by anything. A clause whose
   mechanism is unbuilt carries a **declared hole, not a filed task** — until taken up; then the work
-  answers to a clause, and if none exists, that clause is the missing goal.
+  answers to a clause it can be judged against, and if none exists, that clause is the missing goal.
 - **Coverage is never inferred from absence.** A criterion with no evidence says so explicitly. A
   retired check leaves a named remainder, not a gap that reads as clean.
 - **The discipline detects; it does not decide.** Reporting that something never ran, or that a

@@ -85,8 +85,9 @@ its SKILL.md states the CLI packaging carries them, written against CLI commands
 it progresses.
 {%- endif %}
 
-When work moves a register criterion, amend the register — `outcome-registers.md`
-governs the amendment, and the session note closes on the movement. The advances edge is asserted
+When work moves a register criterion, record the evidence in the goal's evidence record, then
+rewrite only the goal's current-state rows — `outcome-registers.md` governs both, and the session
+note carries the account of the movement. The goal gains no dated line. The advances edge is asserted
 at create time; a task found unlinked at uptake gets linked then, not left for the next session
 to miss again.
 

@@ -12,8 +12,8 @@ A register exists to give confidence about four things, and nothing else:
 
 **It stands alone.** Everything here works against the surface you already have — a body you write,
 two `open_meta` keys, and an `evidence` resource beside the goal. It needs no schema change, no query,
-and no server feature. Where a richer
-mechanism would help, this file says so and tells you what to do without it.
+and no server feature. Where a richer mechanism would help, this file says so and tells you what to do
+without it.
 
 ## Altitude — scale the register to a goal's blast radius, not its effort
 
@@ -145,7 +145,7 @@ implementing agent, which will build the mechanism the clause names rather than 
 > the decomposition had buried. That is the drift this discipline exists to prevent, produced by the
 > discipline's own instrument.
 
-## Altitude — a clause is as concrete as what is already decided
+## Concreteness — a clause is as concrete as what is already decided
 
 "Names no mechanism" was written to stop a goal becoming *a series of how-to tasks in disguise*. Met
 by abstraction, it fails the other way: a clause that dodges a mechanism everyone has already chosen
@@ -159,10 +159,15 @@ So the rule is relative to altitude:
 - **A clause names no mechanism that is still open at its altitude.** Committing to an open *how* is
   what propagates to every reader. At a parent goal the mechanism is usually open.
 - **A mechanism a recorded decision has chosen is a prior.** Cite the `decision`, then be precise
-  about it. *Decided* means a decision resource the goal cites. A mechanism named in passing — in a
+  about it. *Decided* means a decision resource the goal cites, **made or ratified by the frame
+  owner, and standing before the clause that leans on it.** A mechanism named in passing — in a
   parent register, a session note, a task body — is not decided, it is assumed, and writing clauses
   against an assumed mechanism is the dishonest third exit (see *When the system cannot express an
   element*) arriving at a lower altitude.
+- **A register cannot license itself.** A `decision` drafted in the same authoring pass by the
+  register's own author, so that its clauses may name a mechanism, decides nothing: it is the
+  four-session failure with a citation attached. Choosing the mechanism is the frame owner's call
+  (see *Enclosure of responsibility*); until they have made it, the mechanism is open.
 
 Two guards do the job the ban was doing, and they hold at every altitude:
 
@@ -279,10 +284,12 @@ against.** Apply it **at uptake** — when someone takes a part of the work up, 
 register is written:
 
 1. **Name the clause** the work will be judged against — on this goal, or on another one (work that
-   advances one goal while enabling a clause on another is an ordinary shape, not an anomaly).
+   advances one goal while enabling a clause on another is an ordinary shape, not an anomaly). The
+   test: *when this work is done, what will be true that is not true now, and which clause says so?*
+   If the only honest answer is *"the next piece of work can start,"* no clause judges it.
 2. **If there is none, the work is the symptom of a missing clause.** Author it as a child or sibling
    goal stating the outcome the work makes true — at the altitude the work sits at, so concrete about
-   whatever is already decided (see *Altitude*). File the work against that goal's clause.
+   whatever is already decided (see *Concreteness*). File the work against that goal's clause.
 3. **Keep the housing goal as thin as its blast radius allows.** Requiring a goal never requires all
    eight elements.
 
@@ -297,6 +304,8 @@ build — and its witnesses are authored the honest way, inside it.
   up. That is the four-session failure in a new costume.
 - **Not for chores.** A task that advances no goal is a legitimate task, and this rule says nothing
   about it.
+- **Not a regress.** Authoring the housing goal is the uptake act itself, not more enabling work: it
+  is done when the goal exists and states its outcome. It needs no goal of its own.
 - **Not where a clause already bounds it.** Work that can be judged directly against an existing
   clause needs no housing goal. Amending the text a goal's clauses are about is witnessed against
   those clauses; wrapping it would be the relabelled task above.
@@ -393,9 +402,10 @@ these six,"* the way [`plan-verification.md`](plan-verification.md) gates a plan
 
 1. **Does any clause name a mechanism that is still open here — or one no cited decision chose?** A
    clause states what must be true; an open *how* belongs to the build. A `--flag`, a function name,
-   a table, an envelope field appearing in a clause *body* is the slip — unless the register cites the
-   `decision` that chose it, in which case precision about it is required, not forbidden. (→
-   `no-clause-names-a-mechanism`)
+   a table, an envelope field appearing in a clause *body* is the slip — unless the register cites a
+   `decision` the frame owner made or ratified before it, in which case precision about it is
+   required, not forbidden. A decision written in the same pass to license the clause does not
+   count. (→ `no-clause-names-a-mechanism`)
 2. **Does the register contain witness definitions at all?** Witnesses are authored *inside the build*.
    A register that already carries `W1`/`W2` has decomposed in the preamble — the exact slip this file
    records happening once. (→ `no-witness-precedes-its-mechanism`)
@@ -408,10 +418,10 @@ these six,"* the way [`plan-verification.md`](plan-verification.md) gates a plan
    `no-clause-is-uncovered-silently`)
 5. **Could two competent readers disagree about whether a clause holds right now?** Then it is a mood,
    not an outcome — most often one gone vague to avoid naming a mechanism that is already decided. (→
-   *Altitude*, the two-readers test)
+   *Concreteness*, the two-readers test)
 6. **Does any clause name an action rather than a condition?** A clause holds or fails at a moment
    and can regress; "build X, then apply it" is a step, and a register of steps is a how-to list in
-   disguise. (→ *Altitude*, state not step)
+   disguise. (→ *Concreteness*, state not step)
 
 **This is the shape check, not the meaning check.** It catches a clause that *reads* like mechanism and
 a register that *contains* witnesses — most of what has slipped historically — and it cannot judge
@@ -440,7 +450,7 @@ Tool: get_resource     Input: { "id": "<goal uuid>", "include_content": true }  
 #    body is a silent truncation of the goal, not an append.
 Tool: update_resource  Input: { "id": "<goal uuid>", "content": "<the amended register>" }
 
-# 5. During the build, a task declares what it is doing for the goal.
+# 6. During the build, a task declares what it is doing for the goal.
 Tool: create_resource
 Input: {
   "context_ref": "@me/<ctx>",
@@ -455,7 +465,7 @@ Input: {
   }
 }
 
-# 6. With the FIRST witness — never before — the goal's evidence record. One per goal, a section
+# 6, continued. With the FIRST witness — never before — the goal's evidence record. One per goal, a section
 #    per clause headed with the clause's name. `evidence` is outside the recognized doc types and
 #    has no schema; the server accepts it as written.
 Tool: create_resource
@@ -551,5 +561,6 @@ somewhere to put evidence is not having evidence.
 current two-axis value. **What does not:** anything dated that says what happened.
 
 **Link the record, not a block.** Write it as `[<record title>](./<record-uuid>)` and name the
-clause's section beside it. A body link resolves only as a whole resource — a `#<block>` fragment is
-not followed — so do not promise a link into the section itself.
+clause's section beside it. A body link is recognized only in the exact form `./<uuid>`: a link
+carrying a `#<block>` fragment is not treated as a citation at all — it is never checked against
+temper and renders unchecked — so do not link into the section itself.

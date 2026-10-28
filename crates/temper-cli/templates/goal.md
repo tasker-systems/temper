@@ -47,5 +47,7 @@ this body. Delete this comment when you write.
 
 Evidence record: none yet — created with the first witness.
 
+One row per clause, each *not witnessed — why* until a witness stands. An empty table claims nothing.
+
 | Clause | Witnesses | State | Evidence |
 |---|---|---|---|

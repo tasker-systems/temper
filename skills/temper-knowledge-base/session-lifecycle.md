@@ -14,7 +14,7 @@ someone else's.
 1. Read what is in force:
    ```
    Tool: list_resources   Input: { "doc_type_name": "goal", "context_ref": "@me/<current>" }
-   Tool: get_resource     Input: { "id": "<goal uuid>" }   // the register: clauses, negative face, coverage
+   Tool: get_resource     Input: { "id": "<goal uuid>" }   // the register: clauses, negative face, current state
    ```
    Note which criteria hold, which are superseded, and which are **declared uncovered** — a declared
    hole is information, not an omission to fix. See `outcome-registers.md` if you will author or

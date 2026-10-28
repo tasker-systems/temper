@@ -15,12 +15,12 @@ someone else's.
 {%- if surface == "cli" %}
    ```bash
    temper resource list --type goal --context @me/<current> --status active --all
-   temper resource show <goal-ref>          # the register: clauses, negative face, coverage state
+   temper resource show <goal-ref>          # the register: clauses, negative face, current state
    ```
 {%- else %}
    ```
    Tool: list_resources   Input: { "doc_type_name": "goal", "context_ref": "@me/<current>" }
-   Tool: get_resource     Input: { "id": "<goal uuid>" }   // the register: clauses, negative face, coverage
+   Tool: get_resource     Input: { "id": "<goal uuid>" }   // the register: clauses, negative face, current state
    ```
 {%- endif %}
    Note which criteria hold, which are superseded, and which are **declared uncovered** — a declared
