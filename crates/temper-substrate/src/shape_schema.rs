@@ -65,8 +65,8 @@ impl std::fmt::Display for ShapeSchemaUncompilable {
             f,
             "the shape's JSON Schema cannot be compiled: a shape is a field tree — a JSON Schema \
              2020-12 document using only type, properties, required, additionalProperties (true, \
-             false or a schema), items (one schema), enum (at most {MAX_ENUM_ENTRIES} values), \
-             const, pattern (at most {MAX_PATTERN_SOURCE_BYTES} bytes, at most \
+             false or a schema), items (one schema), enum (at most {MAX_ENUM_ENTRIES} strings, or \
+             {MAX_MIXED_ENUM_ENTRIES} values of any other kind), const, pattern (at most {MAX_PATTERN_SOURCE_BYTES} bytes, at most \
              {MAX_SHAPE_PATTERNS} in a shape, no lookaround or backreferences), minLength, \
              maxLength, minItems, maxItems, minimum, maximum, title, description, $comment, \
              default and examples, with $schema and $id only at the root, nested at most \
@@ -96,8 +96,18 @@ impl Retrieve for RefuseEveryUri {
 /// depth cap, so the ask can always see a field tree whole.
 pub const MAX_SHAPE_DEPTH: usize = 16;
 
-/// The most values an `enum` may list.
+/// The most entries an `enum` may list when every entry is a string — the cap for string-only
+/// enums. `jsonschema` hashes a string-only enum above 10 entries, so a check against one does not
+/// scan the entries. Any other enum is held to [`MAX_MIXED_ENUM_ENTRIES`].
 pub const MAX_ENUM_ENTRIES: usize = 256;
+
+/// The most entries an `enum` may list when any entry is not a string.
+///
+/// `jsonschema` compares such an enum against a value entry by entry, so every checked value costs
+/// a scan of the whole enum. Measured: about 50 ms for 32 scalars checked over 900k integers, and
+/// about 136 ms extrapolated for 32 structured entries over a 4.5 MB body. The 256 entries a
+/// string-only enum may list would cost eight times that.
+pub const MAX_MIXED_ENUM_ENTRIES: usize = 32;
 
 /// The most `pattern` keywords a shape may hold, counting every occurrence in a schema position.
 /// A property *named* `pattern` is not a keyword and is not counted.
@@ -150,7 +160,16 @@ fn is_field_tree(schema: &Value) -> bool {
                     _ => return false,
                 },
                 "enum" => match value {
-                    Value::Array(entries) if entries.len() <= MAX_ENUM_ENTRIES => {}
+                    Value::Array(entries) => {
+                        let cap = if entries.iter().all(Value::is_string) {
+                            MAX_ENUM_ENTRIES
+                        } else {
+                            MAX_MIXED_ENUM_ENTRIES
+                        };
+                        if entries.len() > cap {
+                            return false;
+                        }
+                    }
                     _ => return false,
                 },
                 "pattern" => match value {

@@ -12,7 +12,7 @@
 use serde_json::{json, Value};
 use temper_substrate::shape_schema::{
     compile, first_failure, ShapeSchemaUncompilable, MAX_ENUM_ENTRIES, MAX_FAILURE_MESSAGE_BYTES,
-    MAX_PATTERN_SOURCE_BYTES, MAX_SHAPE_DEPTH, MAX_SHAPE_PATTERNS,
+    MAX_MIXED_ENUM_ENTRIES, MAX_PATTERN_SOURCE_BYTES, MAX_SHAPE_DEPTH, MAX_SHAPE_PATTERNS,
 };
 
 const DRAFT_2020_12: &str = "https://json-schema.org/draft/2020-12/schema";
@@ -266,14 +266,43 @@ fn depth_counts_items_and_additional_properties() {
 
 #[test]
 fn enum_at_the_cap_compiles() {
-    let entries: Vec<usize> = (0..MAX_ENUM_ENTRIES).collect();
+    let entries: Vec<String> = (0..MAX_ENUM_ENTRIES).map(|n| format!("v{n}")).collect();
     assert_compiles(&field_tree(json!({ "enum": entries })));
 }
 
 #[test]
 fn enum_past_the_cap_is_refused() {
-    let entries: Vec<usize> = (0..=MAX_ENUM_ENTRIES).collect();
+    let entries: Vec<String> = (0..=MAX_ENUM_ENTRIES).map(|n| format!("v{n}")).collect();
     assert_refused(&field_tree(json!({ "enum": entries })));
+}
+
+/// An enum with any non-string entry is held to the lower mixed cap: integers and strings, as
+/// many as the cap, compile.
+#[test]
+fn mixed_enum_at_the_cap_compiles() {
+    assert_compiles(&field_tree(
+        json!({ "enum": mixed_enum(MAX_MIXED_ENUM_ENTRIES) }),
+    ));
+}
+
+#[test]
+fn mixed_enum_past_the_cap_is_refused() {
+    assert_refused(&field_tree(
+        json!({ "enum": mixed_enum(MAX_MIXED_ENUM_ENTRIES + 1) }),
+    ));
+}
+
+/// `count` entries alternating integers and strings.
+fn mixed_enum(count: usize) -> Vec<Value> {
+    (0..count)
+        .map(|n| {
+            if n % 2 == 0 {
+                json!(n)
+            } else {
+                json!(format!("v{n}"))
+            }
+        })
+        .collect()
 }
 
 #[test]

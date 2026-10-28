@@ -1,10 +1,11 @@
 //! A benchmark of the worst-case cost of a shape's check and compile under the caps
-//! (`MAX_ENUM_ENTRIES`, `MAX_SHAPE_PATTERNS`, `MAX_PATTERN_SOURCE_BYTES`, `MAX_PATTERN_BYTES`,
-//! `MAX_SHAPE_DEPTH`, and the walk's `MAX_SCHEMA_BYTES`). Each test builds a schema that sits AT the
-//! caps, then times one operation with `std::time::Instant` and prints `name: <ms> ms`:
+//! (`MAX_MIXED_ENUM_ENTRIES`, `MAX_SHAPE_PATTERNS`, `MAX_PATTERN_SOURCE_BYTES`,
+//! `MAX_PATTERN_BYTES`, `MAX_SHAPE_DEPTH`, and the walk's `MAX_SCHEMA_BYTES`). Each test builds a
+//! schema that sits AT the caps, then times one operation with `std::time::Instant` and prints
+//! `name: <ms> ms`:
 //!
 //! - `check_mixed_enum_at_the_cap`: `first_failure` of a 4.5 MB array against an `enum` of
-//!   `MAX_ENUM_ENTRIES` nested objects that differ only in their last integer.
+//!   `MAX_MIXED_ENUM_ENTRIES` nested objects that differ only in their last integer.
 //! - `check_dfa_defeating_pattern` (and its anchored twin): `first_failure` of one 4.5 MB string
 //!   of `a`/`b` against `(a|b)*a(a|b){20}`, a pattern whose DFA has a state for every window of
 //!   the last 21 characters.
@@ -12,7 +13,11 @@
 //!   `MAX_SHAPE_PATTERNS` distinct patterns, each compiling to just under `MAX_PATTERN_BYTES`.
 //!
 //! Run before merging a change to a cap (release, so the numbers are the deployed ones):
-//! `cargo test -p temper-substrate --all-features --release --test shape_schema_cost_bench -- --ignored --nocapture`.
+//!
+//! ```text
+//! cargo test -p temper-substrate --all-features --release --test shape_schema_cost_bench -- --ignored --nocapture
+//! ```
+//!
 //! Peak memory is not measured here (that would need a counting allocator, which needs `unsafe`):
 //! run each test alone under `/usr/bin/time -l` and read "maximum resident set size".
 //!
@@ -24,7 +29,7 @@ use std::time::Instant;
 use serde_json::{json, Value};
 use temper_core::types::artifact_ask::walk::MAX_SCHEMA_BYTES;
 use temper_substrate::shape_schema::{
-    compile, first_failure, MAX_ENUM_ENTRIES, MAX_PATTERN_SOURCE_BYTES, MAX_SHAPE_DEPTH,
+    compile, first_failure, MAX_MIXED_ENUM_ENTRIES, MAX_PATTERN_SOURCE_BYTES, MAX_SHAPE_DEPTH,
     MAX_SHAPE_PATTERNS,
 };
 
@@ -67,7 +72,8 @@ fn nest_content(inner: Value, levels: usize) -> Value {
     )
 }
 
-/// An enum entry: a constant `k` and `ENTRY_INTS` integers, all equal but the last, which is `last`.
+/// An enum entry: a constant `k` and `ENTRY_INTS` integers, all equal but the last, which is
+/// `last`.
 fn entry(last: usize) -> Value {
     let mut ints = vec![json!(7); ENTRY_INTS - 1];
     ints.push(json!(last));
@@ -83,18 +89,19 @@ fn assert_compact_size_within(value: &Value, floor: usize, ceiling: usize, what:
 }
 
 /// The root's `items` is an object schema nested `NESTING` levels deep whose innermost schema
-/// holds an `enum` of `MAX_ENUM_ENTRIES` objects. The content is 4.5 MB of entries equal to the
-/// last one (each is a valid element and costs a scan of the whole enum) except for the final
-/// element, whose last integer is in no entry: the check runs through every element and fails there.
+/// holds an `enum` of `MAX_MIXED_ENUM_ENTRIES` objects (a mixed enum, scanned entry by entry). The
+/// content is 4.5 MB of entries equal to the last one (each is a valid element and costs a scan of
+/// the whole enum) except for the final element, whose last integer is in no entry: the check runs
+/// through every element and fails there.
 #[test]
 #[ignore = "benchmark: run with --release --ignored --nocapture before merge"]
 fn check_mixed_enum_at_the_cap() {
-    assert!(
-        NESTING + 1 <= MAX_SHAPE_DEPTH,
+    const _: () = assert!(
+        NESTING < MAX_SHAPE_DEPTH,
         "the schema is within the depth cap"
     );
-    let entries: Vec<Value> = (0..MAX_ENUM_ENTRIES).map(entry).collect();
-    assert_eq!(entries.len(), MAX_ENUM_ENTRIES);
+    let entries: Vec<Value> = (0..MAX_MIXED_ENUM_ENTRIES).map(entry).collect();
+    assert_eq!(entries.len(), MAX_MIXED_ENUM_ENTRIES);
     let schema = json!({
         "$schema": DRAFT,
         "type": "array",
@@ -102,13 +109,13 @@ fn check_mixed_enum_at_the_cap() {
     });
     let validator = compile(&schema).expect("the enum schema compiles at the caps");
 
-    let element = nest_content(entry(MAX_ENUM_ENTRIES - 1), NESTING);
+    let element = nest_content(entry(MAX_MIXED_ENUM_ENTRIES - 1), NESTING);
     let element_len = serde_json::to_vec(&element).expect("serializes").len();
     // `[e,e,...,e]` is n * (element_len + 1) + 1 bytes.
     let count = (PLATFORM_BODY_BYTES - 1) / (element_len + 1);
     let mut items = vec![element; count];
     *items.last_mut().expect("at least one element") =
-        nest_content(entry(MAX_ENUM_ENTRIES), NESTING);
+        nest_content(entry(MAX_MIXED_ENUM_ENTRIES), NESTING);
     let content = Value::Array(items);
     assert_compact_size_within(
         &content,
