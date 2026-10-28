@@ -1,0 +1,14 @@
+title    = "`temper resource list --goal` is accepted with any `--type`"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["cli-stdout"]
+status   = "signal-only"
+body = '''
+`temper resource list --goal <ref>` no longer refuses a `--type` other than `task`. The list
+endpoint has always matched every resource holding a live `advances`→goal edge whatever its doc
+type, and a goal's `decision` and `evidence` records carry that edge, so `--type evidence --goal
+<ref>` now returns the goal's evidence record instead of a mismatched-filter error. `--stage`
+(task only) and `--status` (goal only) are still refused with a mismatched type. Who observes:
+callers that pair `--goal` with a non-task type, including the outcome-register workflow finding
+a goal's evidence. Release relevance: signal-only; no server or wire shape change.
+'''
