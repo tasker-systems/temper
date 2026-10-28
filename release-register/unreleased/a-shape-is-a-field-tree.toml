@@ -1,6 +1,6 @@
 title    = "A shape is a field tree: a schema outside it is refused, and a refusal names one violation"
 pr       = "self"
-classes  = ["behavioral"]
+classes  = ["additive", "behavioral"]
 surfaces = ["http", "mcp", "cli-stdout"]
 status   = "signal-only"
 body = '''
