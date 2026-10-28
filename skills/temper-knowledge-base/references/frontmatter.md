@@ -21,7 +21,7 @@ frontmatter is inert.
 
 ## Doc types
 
-These 14 are the complete set. A `doc_type_name` outside it is rejected.
+These 14 are the recognized set, each with a schema. A `doc_type_name` outside it is accepted but carries no type schema, so a misspelled type silently becomes a new one rather than an error.
 
 - `commitment`
 - `concept`

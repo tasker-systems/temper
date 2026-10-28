@@ -74,12 +74,15 @@ ships prose only and never writes per-project files there.
 Four rules, always in force; the reasoning and worked failures are in `outcome-registers.md`
 (read **only** when authoring or amending a goal or sub-goal).
 
-- **A clause states what must be true, or must never be true, and names no mechanism.** A clause
-  naming a mechanism commits every reader to it — most damagingly the implementing agent, which
-  builds the mechanism a clause named rather than the outcome it meant.
+- **A clause states what must be true, or must never be true, and names no mechanism still open at
+  its altitude.** A clause naming an open mechanism commits every reader to it — most damagingly the
+  implementing agent, which builds the mechanism a clause named rather than the outcome it meant. A
+  mechanism a cited `decision` chose is a prior: be precise about it, never vague to avoid it.
 - **A witness is authored during the build, never in a preamble.** A witness must fail against the
   state its clause claims to change; against an unbuilt mechanism anything passes vacuously. A
-  clause whose mechanism is unbuilt carries a **declared hole, not a filed task**.
+  clause whose mechanism is unbuilt carries a **declared hole, not a filed task** — until the work is
+  taken up. Then it answers to a clause it can be judged against, and when none exists, that clause is
+  the missing goal.
 - **Coverage is never inferred from absence.** A criterion with no evidence says so explicitly; a
   retired check leaves a named remainder, not a gap that reads as clean.
 - **The discipline detects; it does not decide.** Reporting that something never ran never

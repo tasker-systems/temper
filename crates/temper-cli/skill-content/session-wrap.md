@@ -153,9 +153,11 @@ Three things go stale the moment a session ends, and each is cheap now and expen
 
 - **The task.** Its stage, and its body if the work changed shape. A task body describing a plan
   that was superseded is worse than no body — it is a plan a future session will follow.
-- **The goal's register.** If the session moved a criterion, say so *and* say what is still
-  uncovered. `outcome-registers.md` governs the amendment; the rule that matters here is that a hole
-  which has not closed must still be **stated**.
+- **The goal's register.** If the session moved a criterion, record the evidence in the goal's
+  evidence record, then update the goal's current state — and say what is still not witnessed.
+  `outcome-registers.md` governs both; the rules that matter here are that a hole which has not closed
+  must still be **stated**, and that the goal gains no dated account of the session. The account is
+  this note's job.
 - **Work that was extracted rather than done.** Scope that moved must land somewhere addressable —
   a task, with the reasoning that moved it. Scope that is only mentioned in a session note has been
   dropped, slowly.

@@ -114,7 +114,9 @@ static WF_PLAN_LARGE: &str = include_str!("../../skill-content/workflows/plan-la
 static REFERENCE_FOOTER: &str = r#"
 ## Resource Types
 
-These are the complete set (see *Template Access* for per-type schema):
+These are the recognized set, each with a schema (see *Template Access*). A type outside it is
+accepted but carries no type schema; `evidence`, a goal's evidence record, is the one the skill uses
+on purpose:
 
 {{ doc_type_table }}
 
@@ -454,7 +456,9 @@ pub fn generate_frontmatter_reference() -> Result<String> {
 
     out.push_str("\n## Doc types\n\n");
     out.push_str(&format!(
-        "These {} are the complete set. A `doc_type_name` outside it is rejected.\n\n",
+        "These {} are the recognized set, each with a schema. A `doc_type_name` outside it is \
+         accepted but carries no type schema, so a misspelled type silently becomes a new one \
+         rather than an error.\n\n",
         schema::DOC_TYPE_NAMES.len()
     ));
     for name in schema::DOC_TYPE_NAMES {

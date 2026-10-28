@@ -10,8 +10,9 @@ A register exists to give confidence about four things, and nothing else:
 3. We have **clarity on what success looks like**.
 4. We have clarity on **what must not be true at the end**, so regression is not accidental.
 
-**It stands alone.** Everything here works against the surface you already have — a body you write
-and two `open_meta` keys. It needs no schema change, no query, and no server feature. Where a richer
+**It stands alone.** Everything here works against the surface you already have — a body you write,
+two `open_meta` keys, and an `evidence` resource beside the goal. It needs no schema change, no query,
+and no server feature. Where a richer
 mechanism would help, this file says so and tells you what to do without it.
 
 ## Altitude — scale the register to a goal's blast radius, not its effort
@@ -111,7 +112,7 @@ element had a slot for. That is why it is here.
 
 | | States | Authored | Governed by |
 |---|---|---|---|
-| **Clause** | What must be true, or must never be true. **Names no mechanism** | Before the work | The meaning test |
+| **Clause** | What must be true, or must never be true. **Names no mechanism still open at its altitude** | Before the work it governs | The meaning test |
 | **Witness** | How we know. **A claim about mechanism** | During or after the build | The demonstrability floor |
 
 **Why the timing is forced rather than preferred.** A witness must **fail against the state its
@@ -126,8 +127,10 @@ is worded.
   in an authoring pass. The register's shape invites decomposition and you will feel the pull; the
   constraint has to be structural, because an instruction not to decompose was given once and did
   not hold.
-- **A clause whose mechanism is unbuilt carries a declared hole, not a filed task.** Write the hole
-  down. Do not file placeholder work against it.
+- **A clause whose mechanism is unbuilt carries a declared hole, not a filed task — until someone
+  takes that work up.** Write the hole down. Do not file placeholder work against it. At uptake the
+  work is filed against a clause it can be judged against, and when there is none, the missing clause
+  becomes a goal — see *Enabling work is bounded*.
 - **The proliferation worry dissolves instead of needing a gate.** Witnesses cannot multiply up
   front because they are not authored up front.
 
@@ -142,16 +145,63 @@ implementing agent, which will build the mechanism the clause names rather than 
 > the decomposition had buried. That is the drift this discipline exists to prevent, produced by the
 > discipline's own instrument.
 
+## Altitude — a clause is as concrete as what is already decided
+
+"Names no mechanism" was written to stop a goal becoming *a series of how-to tasks in disguise*. Met
+by abstraction, it fails the other way: a clause that dodges a mechanism everyone has already chosen
+says less, not more. *"Establish a cloud-readiness posture"* gets written when the work means a
+committed infrastructure definition, applied to staging and demo, with a production run scheduled and
+a rollback rehearsed. That is a loss of rigor passing as compliance, and it gets worse the closer a
+goal sits to the work — which is exactly where bounding enabling work (below) puts goals.
+
+So the rule is relative to altitude:
+
+- **A clause names no mechanism that is still open at its altitude.** Committing to an open *how* is
+  what propagates to every reader. At a parent goal the mechanism is usually open.
+- **A mechanism a recorded decision has chosen is a prior.** Cite the `decision`, then be precise
+  about it. *Decided* means a decision resource the goal cites. A mechanism named in passing — in a
+  parent register, a session note, a task body — is not decided, it is assumed, and writing clauses
+  against an assumed mechanism is the dishonest third exit (see *When the system cannot express an
+  element*) arriving at a lower altitude.
+
+Two guards do the job the ban was doing, and they hold at every altitude:
+
+- **The two-readers test.** Two competent readers holding the same priors must agree whether the
+  clause holds right now. A clause they could disagree about is a mood, not an outcome.
+- **State, not step.** A clause names something that holds or fails at a moment and can stop
+  holding — never an action that, once done, is simply done. This is the actual guard against a
+  how-to list; the mechanism ban was standing in for it.
+
+> **Worked contrast**, at a goal whose cited decision is *"the infrastructure is defined as committed
+> code"*:
+>
+> - *Step (rejected):* "build the definition, validate it, apply it to staging and demo, schedule
+>   production."
+> - *Mood (rejected):* "establish cloud-readiness posture."
+> - *States (accepted):* "staging and demo match the committed definition with no drift" · "the
+>   production apply has a scheduled window and a rollback already exercised against staging" ·
+>   "nothing in production is provisioned outside the committed definition."
+>
+> The accepted forms are as concrete as the work, can be witnessed, and can regress.
+
+**Deciding a mechanism is not building it.** A decided prior licenses precise clauses; it does not
+license witnesses. Those still wait for the build.
+
 ## Two floors, and they answer different questions
 
-- **Goal → sub-goal is clause decomposition**, before the work. **The meaning test: split a clause
-  when its halves can be violated independently.** If two sub-clauses can only ever fail together,
-  they are one clause.
+- **Goal → sub-goal is clause decomposition**, before the work it governs. **The meaning test: split
+  a clause when its halves can be violated independently.** If two sub-clauses can only ever fail
+  together, they are one clause.
 - **Sub-goal → task is witness decomposition**, inside the work. **The demonstrability floor**, and
   the only place it can honestly be applied.
 
 The meaning test is deliberately a judgment question. Granularity of *how* is what most resists a
 hard boundary, and a rule there manufactures false precision.
+
+**"Before the work it governs" is not "before all work."** For enabling work it means at uptake of
+that part, which may come long after the parent's work began — see *Enabling work is bounded*. That
+moves decomposition *later*, to the last responsible moment, never earlier. Decomposing early, against
+an unbuilt subject, is what the four-session bill above paid for.
 
 ## Closure — four states, and equivalence claims are the real risk
 
@@ -207,13 +257,52 @@ does not have.
 **Then there are exactly two honest exits**, and taking either is a judgment for whoever owns the
 frame — not for you, and not for the register:
 
-- **Evolve the system** — the affordance is missing and should exist. Produces an **`enables`** task.
+- **Evolve the system** — the affordance is missing and should exist. Produces **`enables`** work,
+  bounded by a clause that states the affordance as an outcome. When no clause does, that clause is
+  authored first, as a child or sibling goal — see *Enabling work is bounded*.
 - **Change the goal** — via a decision that records the supersession. A visible scar, never a silent
   edit.
 
 **The dishonest third exit is to assume the affordance and write clauses against it.** That is the
 deeper account of the four-session failure above: a register met the edge of what the system could
 express and, with no fork available to record, hallucinated the affordance.
+
+## Enabling work is bounded — an unwitnessable task is a missing goal
+
+`enables` work is legitimately filed before any witness exists. Unbounded, its only outcome is *"this
+has to happen first, before a clause can be witnessed,"* and a long run of it has nothing to be judged
+against: the frame owner cannot tell how far along it is, and the implementing agent has no checkpoint
+until the work finally reaches a clause. That is where drift lives.
+
+**The rule: goal-attached work is always held by a goal with a clause its completion can be judged
+against.** Apply it **at uptake** — when someone takes a part of the work up, not when the parent
+register is written:
+
+1. **Name the clause** the work will be judged against — on this goal, or on another one (work that
+   advances one goal while enabling a clause on another is an ordinary shape, not an anomaly).
+2. **If there is none, the work is the symptom of a missing clause.** Author it as a child or sibling
+   goal stating the outcome the work makes true — at the altitude the work sits at, so concrete about
+   whatever is already decided (see *Altitude*). File the work against that goal's clause.
+3. **Keep the housing goal as thin as its blast radius allows.** Requiring a goal never requires all
+   eight elements.
+
+Measured against the parent, the work is enablement. Measured against its housing goal, it is the
+build — and its witnesses are authored the honest way, inside it.
+
+**The guards:**
+
+- **Not a relabelled task.** A housing goal whose only clause restates the task it houses has not
+  found the outcome yet, and wrapping the work in a goal does not hide that.
+- **Not up front.** A parent register never carries sub-goals pre-authored for work nobody has taken
+  up. That is the four-session failure in a new costume.
+- **Not for chores.** A task that advances no goal is a legitimate task, and this rule says nothing
+  about it.
+- **Not where a clause already bounds it.** Work that can be judged directly against an existing
+  clause needs no housing goal. Amending the text a goal's clauses are about is witnessed against
+  those clauses; wrapping it would be the relabelled task above.
+
+Finding work with no clause to answer to is a detection, not a verdict: it never concludes, on its
+own, that the work should be dropped (see *Enclosure of responsibility*).
 
 ## Verification modes
 
@@ -263,24 +352,30 @@ from — the provenance matters more than the clause did.
 ## The loop
 
 1. **Open** — read what is in force: which clauses hold, which are superseded, where the scars are.
-2. **Author or resume** — the invariants and the negative face. **No mechanism named.**
+2. **Author or resume** — the invariants and the negative face. **No mechanism named that is still
+   open at this altitude.**
 3. **Decompose the clauses** — by the meaning test. A clause whose mechanism is unbuilt carries a
    **declared hole**, not a filed task.
 4. **Ground** — a grounding pass lands as a `research` resource, not as prose in a session note that
    has to be re-read later.
-5. **Build — and author the witnesses here.** The first honest point, and a separately authorized act.
-6. **Contradict** — measurement refutes a clause ⇒ a `decision` recording the supersession. A visible
+5. **Take up** — before enabling work starts, name the clause it will be judged against. If there is
+   none, author the housing goal now, not earlier (see *Enabling work is bounded*).
+6. **Build — and author the witnesses here.** The first honest point, and a separately authorized act.
+7. **Contradict** — measurement refutes a clause ⇒ a `decision` recording the supersession. A visible
    scar, never a silent edit.
-7. **Close** — update exercise status. Every closing note carries **hard follow** / **accepted** /
-   **for the record** / **nothing**.
+8. **Close** — record the evidence in the goal's evidence record, then rewrite only the goal's
+   current-state rows and exercise status (see *Current state on the goal, evidence beside it*). Every
+   closing note carries **hard follow** / **accepted** / **for the record** / **nothing**.
 
-> **Steps 3 and 5 were one step once, and that was the defect.** Collapsing them is precisely what
-> lets a preamble pass emit mechanism-shaped tasks for a mechanism nobody has built.
+> **Steps 3 and 6 were one step once, and that was the defect.** Collapsing them is precisely what
+> lets a preamble pass emit mechanism-shaped tasks for a mechanism nobody has built. Step 5 is not a
+> return of that defect: it decomposes clauses — never witnesses — and only for work someone has
+> actually taken up.
 
 **This is not a seventh `mode × effort` workflow.** Those answer *how much process for how big a
 job*. The register answers *what the outcome is*. They compose; neither replaces the other.
 
-## The pre-land check — four questions before a register lands
+## The pre-land check — six questions before a register lands
 
 **The crown-jewel rule — `no-witness-precedes-its-mechanism`, with its siblings `no-clause-names-a-
 mechanism` and `no-clause-is-uncovered-silently` — aspires to structural enforcement, and this file is
@@ -292,13 +387,15 @@ pure prose: the author reads the rule and internalizes it. In a fan-out dogfood 
 the controller re-read every draft hunting for mechanism-in-clauses and premature witnesses. **That is
 diligence, not structure.**
 
-So before a freshly drafted or amended register **lands**, run these four questions against it. They do
+So before a freshly drafted or amended register **lands**, run these six questions against it. They do
 not replace the principles above — they are the pre-land gate that turns *"be diligent"* into *"answer
-these four,"* the way [`plan-verification.md`](plan-verification.md) gates a plan before dispatch:
+these six,"* the way [`plan-verification.md`](plan-verification.md) gates a plan before dispatch:
 
-1. **Does any clause name a mechanism?** A clause states what must be true; the *how* belongs to the
-   build. A `--flag`, a function name, a table, an envelope field appearing in a clause *body* is the
-   slip. (→ `no-clause-names-a-mechanism`)
+1. **Does any clause name a mechanism that is still open here — or one no cited decision chose?** A
+   clause states what must be true; an open *how* belongs to the build. A `--flag`, a function name,
+   a table, an envelope field appearing in a clause *body* is the slip — unless the register cites the
+   `decision` that chose it, in which case precision about it is required, not forbidden. (→
+   `no-clause-names-a-mechanism`)
 2. **Does the register contain witness definitions at all?** Witnesses are authored *inside the build*.
    A register that already carries `W1`/`W2` has decomposed in the preamble — the exact slip this file
    records happening once. (→ `no-witness-precedes-its-mechanism`)
@@ -309,6 +406,12 @@ these four,"* the way [`plan-verification.md`](plan-verification.md) gates a pla
 4. **Is every uncovered clause declared uncovered — not silently absent?** Coverage is never inferred
    from absence; a clause with no witness says so, and a retired witness leaves a named remainder. (→
    `no-clause-is-uncovered-silently`)
+5. **Could two competent readers disagree about whether a clause holds right now?** Then it is a mood,
+   not an outcome — most often one gone vague to avoid naming a mechanism that is already decided. (→
+   *Altitude*, the two-readers test)
+6. **Does any clause name an action rather than a condition?** A clause holds or fails at a moment
+   and can regress; "build X, then apply it" is a step, and a register of steps is a how-to list in
+   disguise. (→ *Altitude*, state not step)
 
 **This is the shape check, not the meaning check.** It catches a clause that *reads* like mechanism and
 a register that *contains* witnesses — most of what has slipped historically — and it cannot judge
@@ -323,7 +426,8 @@ mechanize it (enclosure of responsibility again).
 The register itself is **the goal's body** — write it as markdown sections. There is no
 section-skeleton tool on this surface: `describe_schema` (view: `doc_type`) returns the frontmatter
 JSON Schema and an example, which is metadata, not an outline. Take the headings from *The eight
-elements* above.
+elements* above. The goal's current witnessed state lives in that body too; the evidence for it does
+not — see *Current state on the goal, evidence beside it*.
 
 ```
 # 1. Open — what is in force
@@ -350,6 +454,16 @@ Input: {
                  "floor": "…", "bites_against": "…" }
   }
 }
+
+# 6. With the FIRST witness — never before — the goal's evidence record. One per goal, a section
+#    per clause headed with the clause's name. `evidence` is outside the recognized doc types and
+#    has no schema; the server accepts it as written.
+Tool: create_resource
+Input: { "context_ref": "@me/<ctx>", "doc_type_name": "evidence", "title": "Evidence: <goal title>",
+         "goal": "<goal ref>", "content": "…" }
+
+# 8. Close — record evidence in the record first, then rewrite only the goal's current-state rows.
+Tool: list_resources   Input: { "doc_type_name": "evidence", "goal": "<goal uuid>" }   // the record
 ```
 
 **A task declares `witnesses` *or* `enables`, never both.**
@@ -357,12 +471,16 @@ Input: {
 - **`witnesses`** — this task **is** the evidence. Subject to the bite requirement, and to the rule
   that no witness precedes its mechanism.
 - **`enables`** — this task builds the mechanism that **makes** a clause witnessable. Not evidence,
-  not subject to bite, and legitimately filed before any witness exists.
+  not subject to bite, and legitimately filed before any witness exists — but never unbounded: its
+  `clauses` name a clause on the goal it advances, or on a housing goal (see *Enabling work is
+  bounded*).
 
 Without that split, the rule forbidding premature witnesses would also forbid the work that makes
 witnesses possible. The tell for a miscast one is in its own title: a task called *"make X
 enumerable (**unblocks** W2 and W8)"* declared itself a witness while saying, in its own words, that
-it enables two others. It witnessed nothing.
+it enables two others. It witnessed nothing. The mirror tell marks a missing goal: an `enables` task
+whose only honest description is *"this has to happen first"* names no clause it could be judged
+against, because the clause does not exist yet.
 
 **Clause names are readable names, not indices.** `no-witness-precedes-its-mechanism`, not `C3`. An
 index carries no information to a reader who does not have the goal open in front of them, and every
@@ -388,13 +506,50 @@ downstream reader is that reader.
   200. Compare `rows.len()` against the response's `total` before you conclude a clause has no tasks,
   or that a set is complete, and page with `offset` when it is short.
 
-### Declaring coverage without a query
+### Current state on the goal, evidence beside it
 
-There is no coverage query. Until there is, the register carries its own **declared coverage state**
-— a table of clause → witnesses → covered / declared-uncovered, updated when you close. This is not
-a workaround for a missing tool; it is the discipline's own rule applied to itself, because
-**coverage is never inferred from absence**. A clause with no witness declares it and says why. A
-retired witness leaves a named remainder rather than a gap that reads as clean.
+There is no coverage query. Until there is, the goal carries its own **current witnessed state** —
+one table, with these columns in this order:
 
+```markdown
+| Clause | Witnesses | State | Evidence |
+|---|---|---|---|
+| `clause-name` | `the_witness_fn` · `.github/scripts/the-gate.sh` | witnessed | [Evidence: <goal title>](./<record-uuid>) — `clause-name` |
+| `other-clause` | — | not witnessed — mechanism unbuilt | no evidence yet |
+```
+
+- **Witnesses** — the backticked names of the witnesses standing *now*: a test function, a script
+  path. A retired one is struck, ~~`old_name`~~, and its remainder is named in the evidence record.
+- **State** — exactly one of *witnessed*, *not witnessed — why*, or *withdrawn — the remainder named*.
+  **Nothing partial.** A partial result is not a witness; it is progress, and progress belongs in
+  the evidence record or a session note.
+- **Evidence** — a link to the goal's evidence record, naming the clause's section.
+
+**The column order is load-bearing.** Tooling that reads registers deterministically takes the first
+header cell containing *witness* as the witness column, and treats this table as the record wherever
+its sources disagree. Keep *Witnesses* before *State*, and keep every standing witness named here —
+moving the proof into the evidence record must never make a witnessed clause read as uncovered.
+
+This is not a workaround for a missing tool; it is the discipline's own rule applied to itself,
+because **coverage is never inferred from absence**. A clause with no witness says so, and why.
 Retiring a witness is fine and often correct. What must never happen is the **clause** it pointed at
 silently reading as covered.
+
+### The goal shows shape, not history
+
+Closing each session by rewriting the goal's body has, over long arcs, turned goals into diaries:
+dated status lines, session-by-session progress, inline proofs, until the goal's shape and intentions
+were buried under its history and every later reader had to dig the current state out of it.
+
+So the history lives beside the goal, in its **evidence record**: one `evidence` resource per goal,
+linked to it with `goal`, with a section per clause headed by the clause's name. It holds witness
+statements as they are drafted, proofs, measurements, and each clause's status history, retirements
+included. Create it **with the first witness, inside the build** — never as a placeholder. Having
+somewhere to put evidence is not having evidence.
+
+**What stays on the goal:** intentions, clauses, the current-state table, and exercise status as its
+current two-axis value. **What does not:** anything dated that says what happened.
+
+**Link the record, not a block.** Write it as `[<record title>](./<record-uuid>)` and name the
+clause's section beside it. A body link resolves only as a whole resource — a `#<block>` fragment is
+not followed — so do not promise a link into the section itself.

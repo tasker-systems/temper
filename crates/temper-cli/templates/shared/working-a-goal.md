@@ -11,8 +11,9 @@ decision recorded on the goal, never a drift into silence.
 ## 1. Uptake — take the goal up
 
 Read what is in force before doing anything. The register — clauses, negative face, declared
-holes, coverage state — is the goal's in-force state, and a declared hole is information, not an
-omission to fix:
+holes, current witnessed state — is the goal's in-force state, and a declared hole is information,
+not an omission to fix. The evidence behind that state is in the goal's evidence record; follow its
+link when you need the proof, not to learn where the goal stands:
 {%- if surface == "cli" %}
 
 ```bash
@@ -68,6 +69,10 @@ register's declared holes or the roadmap, and create that task linked to the goa
 will author or amend the register, read `outcome-registers.md` first; witness and `enables`
 declarations belong to it too.
 
+**Taking up a chunk is when enabling work gets bounded.** Name the clause the chunk will be judged
+against. If it is enabling work and no clause can judge it, that is a missing clause: author it as a
+child or sibling goal now (§5), not up front — `outcome-registers.md`, *Enabling work is bounded*.
+
 ## 3. Advance — task over task
 {%- if surface == "cli" %}
 
@@ -95,7 +100,9 @@ continuity.
 ## 5. Decompose — goal over goal
 
 A sub-goal is **clause decomposition by the meaning test** — split a clause when its halves can
-be violated independently; read `outcome-registers.md` before authoring it. The practiced shape:
+be violated independently; read `outcome-registers.md` before authoring it. It is also the expected
+response, at uptake, to enabling work no clause can judge: the child states the outcome that work
+makes true, as concretely as whatever its cited decisions have already settled. The practiced shape:
 a task under the parent goal authors the child goal, and the child links back to its parent:
 {%- if surface == "cli" %}
 
@@ -132,6 +139,6 @@ Tool: update_resource_meta   Input: { "id": "<goal uuid>", "managed_meta": { "te
 {%- endif %}
 
 The closing note carries one of: **hard follow** / **accepted** / **for the record** /
-**nothing**. Update the register's exercise status and declared coverage state — a declared hole
-that outlives the goal is named in the close, never dropped. The full closing discipline is
-*The loop*, step 7, in `outcome-registers.md`.
+**nothing**. Record any last evidence in the evidence record, then update the goal's exercise status
+and current witnessed state — a declared hole that outlives the goal is named in the close, never
+dropped. The full closing discipline is *The loop*, step 8, in `outcome-registers.md`.

@@ -77,10 +77,19 @@ Input: { "id": "<memory uuid>", "managed_meta": {}, "open_meta": { "reinforced":
 // already stored from being silently replaced.
 ```
 
-**If the session moved a goal's criteria, close on them too.** Update the goal's *Exercise status*
-and its declared coverage state — what now runs as distinct from what merely merged, and which
-criteria are still uncovered and why. Coverage is never inferred from absence, so a hole that has
-not been closed must still be **stated**. The register is the goal's body, so this is a body rewrite:
+**If the session moved a goal's criteria, close on them too — evidence first, then current state.**
+
+1. **Record the evidence in the goal's evidence record** — the witness statement, the proof, the
+   measurement, under the clause's section. Create the record if this is the goal's first witness
+   (`outcome-registers.md`, *The goal shows shape, not history*).
+2. **Rewrite only the goal's current-state rows and exercise status** — what now runs as distinct
+   from what merely merged, and which clauses are still not witnessed and why. A clause is witnessed
+   or it is not; partial progress goes in the record, not in the row. Coverage is never inferred from
+   absence, so a hole that has not been closed must still be **stated**.
+3. **The narrative belongs in the session note**, never in the goal. A goal that gains a dated line
+   every session has become a diary.
+
+The register is the goal's body, so step 2 is still a body rewrite — of a few rows, not an append:
 
 ```
 Tool: get_resource      Input: { "id": "<goal uuid>" }        // read `content`, edit it whole
