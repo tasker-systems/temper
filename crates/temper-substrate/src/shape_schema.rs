@@ -127,9 +127,9 @@ pub const MAX_PATTERN_SOURCE_BYTES: usize = 256;
 
 /// The most bytes a `properties` key or a `required` entry may hold.
 ///
-/// Measured: a 262 KB `properties` key costs about 15 s over 4.5 MB of two-key objects, because
-/// `serde_json`'s `preserve_order` map hashes the whole key on every lookup; a 256 B key costs
-/// about 15 ms. 256 matches the ask walk's path-segment cap, so the ask never advertises a longer
+/// `serde_json`'s `preserve_order` map hashes the whole key on every lookup, so a check's cost
+/// grows with the key's length; at 256 bytes it measured about 15 ms over 4.5 MB of two-key
+/// objects. 256 matches the ask walk's path-segment cap, so the ask never advertises a longer
 /// name than a shape can hold.
 pub const MAX_PROPERTY_NAME_BYTES: usize = 256;
 
@@ -236,9 +236,8 @@ fn is_field_tree(schema: &Value) -> bool {
 ///
 /// `jsonschema` compiles every distinct pattern eagerly when a schema is built, and the engine's
 /// own default allows 10 MiB a regex. The bound also caps what running one costs: once the lazy DFA
-/// gives up, match cost is linear in the compiled NFA's size, measured at about 0.22 ms per NFA
-/// byte over a 4.5 MB string (`^(a|b)*a(a|b){20}$`, 3.1 KB: 752 ms; `{100}`, 14 KB: 3.1 s; `{450}`,
-/// 61.6 KB: 13.9 s). 10 KiB bounds that at about 2.2 s locally, while the patterns a person writes
+/// gives up, match cost is linear in the compiled NFA's size. At 10 KiB the benchmark's worst case
+/// measured about 2.2 s over a 4.5 MB string locally, while the patterns a person writes
 /// for a field fit: a UUID is 2.9 KB, an ISO date-time 1.4 KB, `^\w{1,20}$` 2.9 KB,
 /// `^[\w.-]{1,59}$` 8.7 KB, `^[A-Za-z0-9][A-Za-z0-9._-]{0,57}$` 8.6 KB. A Unicode class such as
 /// `\p{L}` (about 43 KB on its own) does not fit. A `pattern` past it fails to compile, so its
