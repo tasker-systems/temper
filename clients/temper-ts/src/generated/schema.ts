@@ -10581,7 +10581,10 @@ export interface components {
             /** @description The bare family name, qualified by `kind_owner` (or defaulted from the home). */
             kind: string;
             kind_owner?: components["schemas"]["KindOwnerInput"] | null;
-            /** @description The JSON Schema (draft 2020-12) governing this family. Validated Rust-side. */
+            /**
+             * @description The family's shape: a field tree, which is a subset of JSON Schema 2020-12 (see the
+             *     data-artifacts skill for its vocabulary). Validated Rust-side.
+             */
             schema: unknown;
         };
         /**
@@ -10646,7 +10649,10 @@ export interface components {
             kind_owner_id: string;
             /** @description `"kb_profiles"` or `"kb_teams"` — the namespace half of the family name. */
             kind_owner_table: string;
-            /** @description The JSON Schema (draft 2020-12) governing this family. */
+            /**
+             * @description The family's shape: a field tree, which is a subset of JSON Schema 2020-12 (see the
+             *     data-artifacts skill for its vocabulary).
+             */
             schema: unknown;
             shape_id: components["schemas"]["ShapeId"];
             /**

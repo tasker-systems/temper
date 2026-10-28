@@ -62,7 +62,8 @@ pub struct ShapeView {
     pub kind_owner_table: String,
     pub kind_owner_id: Uuid,
     pub artifact_kind: String,
-    /// The JSON Schema (draft 2020-12) governing this family.
+    /// The family's shape: a field tree, which is a subset of JSON Schema 2020-12 (see the
+    /// data-artifacts skill for its vocabulary).
     pub schema: serde_json::Value,
     /// `"advisory"` or `"enforcing"`.
     pub enforcement: EnforcementMode,
@@ -114,7 +115,8 @@ pub struct ShapeDeclareRequest {
     /// Override the namespace half of the family name. Omit to let the server default it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind_owner: Option<KindOwnerInput>,
-    /// The JSON Schema (draft 2020-12) governing this family. Validated Rust-side.
+    /// The family's shape: a field tree, which is a subset of JSON Schema 2020-12 (see the
+    /// data-artifacts skill for its vocabulary). Validated Rust-side.
     pub schema: serde_json::Value,
     /// Whether a non-conforming commit is refused (`enforcing`) or merely recorded (`advisory`).
     pub enforcement: EnforcementMode,

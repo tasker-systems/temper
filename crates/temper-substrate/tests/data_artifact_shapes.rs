@@ -627,6 +627,83 @@ async fn an_enforcing_shape_refuses_and_says_what_failed(pool: sqlx::PgPool) {
     );
 }
 
+/// A shape with three required string properties of distinct names, each at least five bytes.
+fn three_property_schema() -> serde_json::Value {
+    serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "alpha": { "type": "string", "minLength": 5 },
+            "bravo": { "type": "string", "minLength": 5 },
+            "charlie": { "type": "string", "minLength": 5 }
+        },
+        "required": ["alpha", "bravo", "charlie"]
+    })
+}
+
+/// An enforcing refusal names ONE violation, not every one: content breaking three properties is
+/// refused with exactly one of the three property names in the message.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_enforcing_refusal_names_one_violation(pool: sqlx::PgPool) {
+    let (emitter, home, resource, _owner) = world(&pool, "enforcing-one-violation").await;
+    let kind = "measurement";
+    declare(
+        &pool,
+        emitter,
+        AnchorRef::context(home),
+        None,
+        kind,
+        &three_property_schema(),
+        EnforcementMode::Enforcing,
+    )
+    .await;
+
+    let content = serde_json::json!({"alpha": "a", "bravo": "b", "charlie": "c"});
+    let err = commit_err(&pool, resource, kind, &content, emitter).await;
+
+    let named = ["alpha", "bravo", "charlie"]
+        .iter()
+        .filter(|name| err.contains(*name))
+        .count();
+    assert_eq!(
+        named, 1,
+        "exactly one violating property is named, got: {err}"
+    );
+}
+
+/// An advisory verdict stores ONE violation: the stored detail has exactly one entry.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_advisory_verdict_records_one_violation(pool: sqlx::PgPool) {
+    let (emitter, home, resource, _owner) = world(&pool, "advisory-one-violation").await;
+    let kind = "measurement";
+    declare(
+        &pool,
+        emitter,
+        AnchorRef::context(home),
+        None,
+        kind,
+        &three_property_schema(),
+        EnforcementMode::Advisory,
+    )
+    .await;
+
+    let content = serde_json::json!({"alpha": "a", "bravo": "b", "charlie": "c"});
+    let (id, shape_state) = commit(&pool, resource, kind, &content, emitter).await;
+    assert_eq!(shape_state, ShapeState::DeclaredNotSatisfied);
+
+    let detail: serde_json::Value =
+        sqlx::query_scalar("SELECT detail FROM kb_data_artifact_verdicts WHERE artifact_id=$1")
+            .bind(id.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        detail.as_array().map(Vec::len),
+        Some(1),
+        "the stored detail has exactly one entry, got: {detail}"
+    );
+}
+
 /// A commit with no shape in force stays `NeverDeclared` — persistence never requires a prior
 /// declaration.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]

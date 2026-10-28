@@ -59,8 +59,8 @@ pub struct DeclareShapeServiceParams<'a> {
 /// The schema is then judged, before any write, by the decision the loader and the by-id read
 /// share ([`shape_loader::judge`]), on the blocking pool under the same compile permits. A schema
 /// larger than the walk reads ([`MAX_SCHEMA_BYTES`]) is refused before it is compiled, with a
-/// sentence naming the bound; one within it that cannot be compiled (malformed, referring to a
-/// document that is never fetched, or with a pattern past `shape_schema::MAX_PATTERN_BYTES`) is
+/// sentence naming the bound; one within it that cannot be compiled (malformed, not a field
+/// tree, or with a pattern past `shape_schema::MAX_PATTERN_BYTES`) is
 /// refused with the no-fetch constructor's fixed sentence. Both are a `DataArtifactRefusal`, so
 /// a schema no ask could use is refused when it is declared rather than stored. Before either, a
 /// family name or a schema holding U+0000, which Postgres cannot store, is refused as one too,
@@ -245,24 +245,11 @@ async fn reconcile_one_anchor(pool: &PgPool, anchor: HomeAnchor) -> ApiResult<us
             );
             continue;
         };
-        let errors: Vec<_> = validator.iter_errors(&row.content).collect();
-        let satisfied = errors.is_empty();
+        let failure = shape_schema::first_failure(&validator, &row.content);
+        let satisfied = failure.is_none();
 
-        let detail = if satisfied {
-            None
-        } else {
-            Some(serde_json::Value::Array(
-                errors
-                    .iter()
-                    .map(|e| {
-                        serde_json::json!({
-                            "path": e.instance_path().to_string(),
-                            "message": e.to_string(),
-                        })
-                    })
-                    .collect(),
-            ))
-        };
+        let detail = failure
+            .map(|(path, message)| serde_json::json!([{ "path": path, "message": message }]));
 
         sqlx::query!(
             "SELECT data_artifact_verdict_upsert($1,$2,$3,$4,$5,$6)",
@@ -667,6 +654,61 @@ mod tests {
             read_state,
             ShapeState::DeclaredSatisfied,
             "after reconciliation, the conforming artifact must read as DeclaredSatisfied"
+        );
+    }
+
+    /// Reconciliation records ONE violation per artifact, not every one: content breaking three
+    /// properties gets a stored detail with exactly one entry.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn reconcile_records_one_violation(pool: PgPool) {
+        let w = seed_world(&pool, "reconcile-one-violation").await;
+        let kind = "measurement";
+        let resource = ResourceId::from(w.resource);
+
+        let content = serde_json::json!({"alpha": "a", "bravo": "b", "charlie": "c"});
+        let (artifact_id, _) = commit_artifact(&pool, resource, kind, &content, w.emitter).await;
+
+        let schema = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+                "alpha": { "type": "string", "minLength": 5 },
+                "bravo": { "type": "string", "minLength": 5 },
+                "charlie": { "type": "string", "minLength": 5 }
+            },
+            "required": ["alpha", "bravo", "charlie"]
+        });
+        declare_shape(
+            &pool,
+            DeclareShapeServiceParams {
+                home: AnchorRef::context(ContextId::from(w.context)),
+                kind,
+                kind_owner: None,
+                schema: &schema,
+                enforcement: EnforcementMode::Advisory,
+                principal: ProfileId::from(w.owner),
+                emitter: EntityId::from(w.emitter),
+            },
+        )
+        .await
+        .unwrap();
+
+        let count = reconcile_anchor(&pool, HomeAnchor::Context(ContextId::from(w.context)))
+            .await
+            .unwrap();
+        assert_eq!(count, 1, "the one pre-existing artifact is verdicted");
+
+        let detail: serde_json::Value = sqlx::query_scalar(
+            "SELECT detail FROM kb_data_artifact_verdicts WHERE artifact_id = $1",
+        )
+        .bind(artifact_id.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            detail.as_array().map(Vec::len),
+            Some(1),
+            "the stored detail has exactly one entry, got: {detail}"
         );
     }
 

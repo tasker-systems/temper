@@ -27106,7 +27106,7 @@
                 ]
               },
               "schema": {
-                "description": "The JSON Schema (draft 2020-12) governing this family. Validated Rust-side."
+                "description": "The family's shape: a field tree, which is a subset of JSON Schema 2020-12 (see the\ndata-artifacts skill for its vocabulary). Validated Rust-side."
               }
             }
           }
@@ -27222,7 +27222,7 @@
             "description": "`\"kb_profiles\"` or `\"kb_teams\"` — the namespace half of the family name."
           },
           "schema": {
-            "description": "The JSON Schema (draft 2020-12) governing this family."
+            "description": "The family's shape: a field tree, which is a subset of JSON Schema 2020-12 (see the\ndata-artifacts skill for its vocabulary)."
           },
           "shape_id": {
             "$ref": "#/components/schemas/ShapeId"

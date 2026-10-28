@@ -912,7 +912,7 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "List data-artifact shapes declared for a context or cogmap home. Each shape is a JSON Schema (draft 2020-12) governing one artifact family in that home. Visibility-gated: you only see shapes whose home anchor you can read. An unreadable home yields an empty set, never an error.",
+        description = "List data-artifact shapes declared for a context or cogmap home. Each shape is a field tree (a subset of JSON Schema 2020-12; see the data-artifacts skill for the vocabulary) governing one artifact family in that home. Visibility-gated: you only see shapes whose home anchor you can read. An unreadable home yields an empty set, never an error.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_data_artifact_shapes(
@@ -940,7 +940,7 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "Declare a data-artifact shape for a family within a context or cogmap home. The schema is a JSON Schema (draft 2020-12) that governs the family; enforcement 'advisory' (default) records non-conformance, 'enforcing' refuses the commit. Authority-gated: requires authoring authority over the home (context_authorable_by_profile or cogmap_authorable_by_profile). A principal who cannot author the home is refused.",
+        description = "Declare a data-artifact shape for a family within a context or cogmap home. The schema is a field tree (a subset of JSON Schema 2020-12; the data-artifacts skill lists the vocabulary) that governs the family; enforcement 'advisory' (default) records non-conformance, 'enforcing' refuses the commit. Authority-gated: requires authoring authority over the home (context_authorable_by_profile or cogmap_authorable_by_profile). A principal who cannot author the home is refused.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
