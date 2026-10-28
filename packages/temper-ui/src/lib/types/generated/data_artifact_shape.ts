@@ -36,7 +36,8 @@ kind: string,
  */
 kind_owner?: KindOwnerInput | null, 
 /**
- * The JSON Schema (draft 2020-12) governing this family. Validated Rust-side.
+ * The family's shape: a field tree, which is a subset of JSON Schema 2020-12 (see the
+ * data-artifacts skill for its vocabulary). Validated Rust-side.
  */
 schema: JsonValue, 
 /**
@@ -94,7 +95,8 @@ home_anchor_table: string, home_anchor_id: string,
  */
 kind_owner_table: string, kind_owner_id: string, artifact_kind: string, 
 /**
- * The JSON Schema (draft 2020-12) governing this family.
+ * The family's shape: a field tree, which is a subset of JSON Schema 2020-12 (see the
+ * data-artifacts skill for its vocabulary).
  */
 schema: JsonValue, 
 /**

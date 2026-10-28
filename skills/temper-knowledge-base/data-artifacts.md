@@ -81,8 +81,19 @@ unchecked, which is honest.
 
 ## Declaring a shape
 
-A shape is a JSON Schema (draft 2020-12) declared for a family within a home. Declaring is a
-separate act from committing data — you never need to declare a shape to commit an artifact.
+A shape is a **field tree**: a JSON Schema (draft 2020-12) document that uses only a small, fixed
+vocabulary. Declaring is a separate act from committing data — you never need to declare a shape to
+commit an artifact.
+
+A field tree uses only `type`, `properties`, `required`, `additionalProperties` (`true`, `false` or a
+schema), `items` (one schema), `enum` (at most 256 strings, or 32 values of any other kind), `const`,
+`pattern` (at most 256 bytes, at most 32 in a shape, no lookaround or backreferences), `minLength`,
+`maxLength`, `minItems`, `maxItems`, `minimum`, `maximum`, `title`, `description`, `$comment`,
+`default` and `examples`. `$schema` and `$id` may appear only at the root, and `$schema`, if present,
+must be exactly `https://json-schema.org/draft/2020-12/schema`. A shape may nest at most 16 levels.
+`$ref`, `$defs`, `allOf`, `anyOf`, `oneOf`, `not`, `if`, `format` and every other keyword are
+refused at declare, with a sentence that lists this vocabulary. A refused commit, and a recorded
+verdict, name at most one violation, its message cut to 1 KiB.
 
 **Declaring is never required to commit.** The system persists your data whether or not a shape
 exists. `never_declared` is a first-class state, not a gate. If you declare a shape later, the
@@ -281,7 +292,7 @@ Input: {
   "home_type": "context",             // or "cogmap" — shapes are keyed per home
   "home_id": "<home UUID>",
   "kind": "measurement",
-  "schema": { ... },                  // a JSON Schema draft 2020-12 document
+  "schema": { ... },                  // a field tree (JSON Schema 2020-12 subset)
   "enforcement": "advisory"           // "advisory" (default) or "enforcing"
 }
 

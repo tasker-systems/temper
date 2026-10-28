@@ -1,0 +1,32 @@
+title    = "A shape is a field tree: a schema outside it is refused, and a refusal names one violation"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "mcp", "cli-stdout"]
+status   = "signal-only"
+body = '''
+Hardening. A data-artifact shape is now a field tree: a JSON Schema 2020-12 document using only
+`type`, `properties`, `required`, `additionalProperties` (`true`, `false` or a schema), `items` (one
+schema), `enum` (at most 256 strings, or 32 values of any other kind), `const`, `pattern` (at most
+256 bytes, at most 32 in a shape, no lookaround or backreferences), `minLength`, `maxLength`,
+`minItems`, `maxItems`, `minimum`, `maximum`, `title`, `description`, `$comment`, `default` and
+`examples`, with `$schema` and `$id` only at the root, `$schema` exactly
+`https://json-schema.org/draft/2020-12/schema`, nested at most 16 levels. Declaring a shape
+(`POST /api/contexts/{id}/shapes`, `POST /api/cognitive-maps/{id}/shapes`, the MCP
+`declare_data_artifact_shape` tool and `temper data-artifact schema declare`) with a schema outside
+it is refused with the existing data-artifact refusal (`400`, code `DATA_ARTIFACT_REFUSAL`, MCP
+`invalid_params`), carrying one fixed sentence that lists this vocabulary; no shape row is written.
+`$ref`, `$defs`, `allOf`, `anyOf`, `oneOf`, `not`, `if`, `format` and every other keyword are
+refused. Each regex a shape holds is compiled to at most 64 KiB.
+
+A shape already stored outside the field tree can no longer be checked: an `enforcing` family
+refuses commits until the shape is amended, an `advisory` family records commits unchecked (they
+read `declared_not_yet_checked`), an ask naming it is answered as uncompilable, and reconcile skips
+its artifacts. The production instance has none. Before upgrading any other deployment, read
+`SELECT artifact_kind, schema FROM kb_data_artifact_shapes WHERE NOT is_folded` and compile each
+schema against the rules above; any that fails needs amending first.
+
+A refused commit, and a recorded verdict, now name at most one violation, its message cut to 1 KiB.
+Request and response shapes are unchanged; no migration. Who observes: shape authors and the agents
+and CLIs declaring through the doors above, and writers committing to an `enforcing` family.
+Release relevance: signal-only.
+'''
