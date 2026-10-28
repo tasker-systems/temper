@@ -367,3 +367,162 @@ fn malformed_forms_answer_the_fixed_error() {
 fn enum_not_an_array_is_refused() {
     assert_refused(&field_tree(json!({ "enum": 5 })));
 }
+
+// ── The linear engine ────────────────────────────────────────────────────────────────────────
+//
+// `pattern` compiles on the `regex` crate, which has no lookaround and no backreferences: what
+// `fancy-regex` accepted and could run in exponential time is refused at compile.
+
+#[test]
+fn refuses_a_lookahead_pattern() {
+    assert_refused(&field_tree(
+        json!({ "type": "string", "pattern": "^(?=a)a$" }),
+    ));
+}
+
+#[test]
+fn refuses_a_backreference_pattern() {
+    assert_refused(&field_tree(
+        json!({ "type": "string", "pattern": "^(a)\\1$" }),
+    ));
+}
+
+// ── Stored-shape profiles ────────────────────────────────────────────────────────────────────
+//
+// One fixture per live shape, carrying that shape's keyword profile and depth only. Field names and
+// patterns are invented; no stored schema is reproduced here.
+
+/// The schema compiles, accepts `good` and refuses `bad`.
+fn assert_verdicts(schema: &Value, good: &Value, bad: &Value) {
+    let validator = compile(schema).unwrap_or_else(|_| panic!("{schema} must compile"));
+    assert!(validator.is_valid(good), "{schema} must accept {good}");
+    assert!(!validator.is_valid(bad), "{schema} must refuse {bad}");
+}
+
+/// Every stored shape's keyword profile compiles, and each gives a satisfied and an unsatisfied
+/// verdict. `compilation-manifest` (two): root `$id`, `additionalProperties` as a boolean and as a
+/// schema, `type` as an array, `items`, `minItems`, depth 3.
+#[test]
+fn stored_shape_profiles_compile() {
+    // compilation-manifest, `additionalProperties` a boolean.
+    let manifest_closed = json!({
+        "$schema": DRAFT_2020_12,
+        "$id": "urn:example:manifest-closed",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "entries": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "properties": { "label": { "type": ["string", "null"] } }
+                }
+            }
+        }
+    });
+    assert_verdicts(
+        &manifest_closed,
+        &json!({ "entries": [{ "label": "alpha" }, { "label": null }] }),
+        &json!({ "entries": [] }),
+    );
+
+    // compilation-manifest, `additionalProperties` a schema.
+    let manifest_open = json!({
+        "$schema": DRAFT_2020_12,
+        "$id": "urn:example:manifest-open",
+        "type": "object",
+        "additionalProperties": { "type": ["string", "number"] },
+        "properties": {
+            "entries": {
+                "type": "array",
+                "minItems": 2,
+                "items": {
+                    "type": "object",
+                    "properties": { "label": { "type": ["string", "null"] } }
+                }
+            }
+        }
+    });
+    assert_verdicts(
+        &manifest_open,
+        &json!({ "entries": [{ "label": "a" }, { "label": "b" }], "note": "x" }),
+        &json!({ "entries": [{ "label": "a" }] }),
+    );
+
+    // desktop-presented-view, three variants: `const`, one `pattern` of 8 bytes, string bounds,
+    // depth 2.
+    for (kind, pattern, good, bad) in [
+        ("card", "^[a-z]+$", "abc", "ABC"),
+        ("list", "^[0-9]+$", "123", "abc"),
+        ("grid", "^[A-Z]+$", "ABC", "abc"),
+    ] {
+        assert!(
+            pattern.len() <= 8,
+            "the profile's pattern is 8 bytes or fewer"
+        );
+        let view = json!({
+            "type": "object",
+            "required": ["view"],
+            "properties": {
+                "view": {
+                    "type": "object",
+                    "properties": {
+                        "kind": { "const": kind },
+                        "slug": {
+                            "type": "string",
+                            "pattern": pattern,
+                            "minLength": 2,
+                            "maxLength": 12
+                        }
+                    }
+                }
+            }
+        });
+        assert_verdicts(
+            &view,
+            &json!({ "view": { "kind": kind, "slug": good } }),
+            &json!({ "view": { "kind": kind, "slug": bad } }),
+        );
+    }
+
+    // desktop-recent-work: `items`, `maxItems`, one `pattern` of about 60 bytes (a character class
+    // with counted repetition), `minLength`, depth 3.
+    let recent_pattern = "^[A-Za-z0-9_-]{1,32}/[A-Za-z0-9_.-]{1,24}(#[a-f0-9]{1,8})?$";
+    assert!(
+        (55..=65).contains(&recent_pattern.len()),
+        "the profile's pattern is about 60 bytes"
+    );
+    let recent = json!({
+        "type": "object",
+        "properties": {
+            "recent": {
+                "type": "array",
+                "maxItems": 3,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "ref": { "type": "string", "minLength": 3, "pattern": recent_pattern }
+                    }
+                }
+            }
+        }
+    });
+    assert_verdicts(
+        &recent,
+        &json!({ "recent": [{ "ref": "team-a/notes_1#ab12" }] }),
+        &json!({ "recent": [{ "ref": "!!" }] }),
+    );
+
+    // scratch-measurement: `type`, `properties`, `required`, depth 1.
+    let measurement = json!({
+        "type": "object",
+        "required": ["reading"],
+        "properties": { "reading": { "type": "number" } }
+    });
+    assert_verdicts(
+        &measurement,
+        &json!({ "reading": 1.5 }),
+        &json!({ "reading": "high" }),
+    );
+}

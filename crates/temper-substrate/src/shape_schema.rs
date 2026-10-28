@@ -175,32 +175,30 @@ fn is_field_tree(schema: &Value) -> bool {
     true
 }
 
-/// The most bytes one `pattern` (or `patternProperties` key) may compile to — the regex engine's
-/// per-regex size limit, which counted repetitions expand into.
+/// The most bytes one `pattern` may compile to — the `regex` engine's per-regex `size_limit`, which
+/// counted repetitions expand into.
 ///
-/// # 1 MiB
+/// # 64 KiB
 ///
 /// `jsonschema` compiles every distinct pattern eagerly when a schema is built, and the engine's
 /// own default allows 10 MiB a regex, so a pattern of twenty bytes such as a large Unicode class
 /// repeated a few hundred times can cost milliseconds and megabytes on its own. A pattern a person
-/// writes for a field — a code, a date, an identifier — compiles to kilobytes; 1 MiB admits two
-/// orders of magnitude more. A `pattern` or `patternProperties` key past it fails to compile, so
-/// its schema is [`ShapeSchemaUncompilable`], with the one fixed sentence. It bounds each such
-/// regex.
-pub const MAX_PATTERN_BYTES: usize = 1 << 20;
+/// writes for a field — a code, a date, an identifier — compiles to kilobytes: the longest pattern
+/// any stored shape holds is 62 bytes of source. 64 KiB admits a good margin over that, and is a
+/// sixteenth of the previous 1 MiB. A `pattern` past it fails to compile, so its schema
+/// is [`ShapeSchemaUncompilable`], with the one fixed sentence. It bounds each such regex.
+pub const MAX_PATTERN_BYTES: usize = 64 << 10;
 
-/// The most bytes the engine may spend building a **full** DFA for one pattern — what
-/// `PatternOptions::dfa_size_limit` reaches (`fancy-regex`'s `delegate_dfa_size_limit`, which is
-/// `regex-automata`'s meta `dfa_size_limit`), not the lazy DFA's search cache. Past it the engine
-/// does not build a full DFA and searches with another engine; nothing is refused.
+/// The most bytes the engine's lazy DFA may use as its search cache for one pattern — what
+/// `PatternOptions::dfa_size_limit` reaches on the `regex` engine (`hybrid_cache_capacity`).
 ///
-/// # 40 KiB
+/// # 2 MiB
 ///
-/// The engine's own default, pinned: a full DFA costs worst-case exponential time and space to
-/// build, which is why the default is this small. Setting it to anything like
-/// [`MAX_PATTERN_BYTES`] would raise it twenty-five-fold; pinning it keeps an upstream change of
-/// default from moving what building one pattern's full DFA may cost.
-pub const MAX_PATTERN_DFA_BYTES: usize = 40 << 10;
+/// The `regex` crate's own default (`2 * (1 << 20)`), pinned. The lazy DFA builds states as input is
+/// read and, when the cache is full, clears it and carries on, so the cache bounds memory and
+/// never refuses a pattern. On this engine the full-DFA limit can no longer be set; pinning the
+/// cache keeps an upstream change of default from moving what searching with one pattern may hold.
+pub const MAX_PATTERN_DFA_BYTES: usize = 2 << 20;
 
 /// Compile a shape's JSON Schema into a validator without fetching anything, holding each pattern
 /// to [`MAX_PATTERN_BYTES`].
@@ -217,7 +215,7 @@ pub fn compile(schema: &Value) -> Result<Validator, ShapeSchemaUncompilable> {
     if !is_field_tree(schema) {
         return Err(ShapeSchemaUncompilable);
     }
-    let patterns = jsonschema::PatternOptions::fancy_regex()
+    let patterns = jsonschema::PatternOptions::regex()
         .size_limit(MAX_PATTERN_BYTES)
         .dfa_size_limit(MAX_PATTERN_DFA_BYTES);
     jsonschema::options()
