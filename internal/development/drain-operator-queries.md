@@ -269,8 +269,9 @@ UNION ALL
 SELECT 'artifact', reason, count(*) FROM kb_shape_reconcile_unreadable GROUP BY reason;
 ```
 
-A shape recorded uncheckable stays excluded under a later compiler that would accept it. To try it
-again, delete its row and enqueue a shape-reconcile job for its home.
+A record outlives a release that would now check it: a shape recorded uncheckable stays excluded
+under a compiler that would accept it, and a `content_too_large` artifact under a raised ceiling.
+To try either again, delete its rows and enqueue a shape-reconcile job for its home.
 
 **E3 — Shape-reconcile jobs that are stuck or dead** `[blind]`
 
@@ -284,8 +285,8 @@ SELECT id, context_id, cogmap_id, status, attempts, max_attempts, last_error,
 ```
 
 A job goes `dead` after `max_attempts` passes that each left an artifact it could not settle for a
-reason that may pass. The reason is in that pass's warning log, not in `last_error`, which the
-reaper writes.
+reason that may pass, or that each ran out of time having settled nothing. The reason is in that
+pass's warning log, not in `last_error`, which the reaper writes.
 
 ## Notes for whoever builds the dashboard
 

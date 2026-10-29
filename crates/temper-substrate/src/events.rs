@@ -1524,9 +1524,9 @@ pub async fn fire_with(
             // `validate` pass, which stops at the first violation, cut to a bound. Compiling a JSON Schema is the expensive part — doing it twice per
             // commit is wasteful and was flagged in review. The failure is owned strings because
             // `ValidationError` borrows from the validator (which is dropped here).
-            let (shape_state, validation_error_details): (
+            let (shape_state, validation_failure): (
                 payloads::ShapeState,
-                Option<Vec<(String, String)>>,
+                Option<(String, String)>,
             ) = match &shape {
                 None => (payloads::ShapeState::NeverDeclared, None),
                 Some(row) => {
@@ -1562,10 +1562,9 @@ pub async fn fire_with(
                                         },
                                     ));
                                 }
-                                Some(failure) => (
-                                    payloads::ShapeState::DeclaredNotSatisfied,
-                                    Some(vec![failure]),
-                                ),
+                                Some(failure) => {
+                                    (payloads::ShapeState::DeclaredNotSatisfied, Some(failure))
+                                }
                             }
                         }
                         Err(_) if enforcement == "enforcing" => {
@@ -1660,11 +1659,10 @@ pub async fn fire_with(
                 let detail = if satisfied {
                     None
                 } else {
-                    // Reuse the errors collected during the verdict decision above —
+                    // Reuse the failure found during the verdict decision above —
                     // recompiling the schema a second time was wasteful and flagged in review.
-                    validation_error_details
+                    validation_failure
                         .as_ref()
-                        .and_then(|errors| errors.first())
                         .map(|(path, msg)| crate::shape_schema::failure_detail(path, msg))
                 };
                 sqlx::query!(

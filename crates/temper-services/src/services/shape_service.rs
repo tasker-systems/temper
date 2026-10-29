@@ -158,7 +158,7 @@ pub struct ShapeReconcileSummary {
     /// Jobs handed back untouched: the invocation's deadline was already spent when they came up,
     /// or their anchor had already run in this pass.
     pub deferred: u32,
-    /// Anchors whose backlog was partly settled when their slice or the deadline ran out;
+    /// Anchors that settled part of their backlog before their slice or the deadline ran out;
     /// re-enqueued to resume.
     pub partial: u32,
     /// Jobs left in flight for the reaper to retry: the pass errored, an artifact could not be
@@ -231,18 +231,20 @@ const BACKLOG_PAGE_ROWS: i64 = 10_000;
 /// many remain, not exactly this many.
 const BACKLOG_PROBE_ROWS: i64 = 1_000;
 
-/// How many artifacts in a row may fail before the pass gives up on the anchor. Only a failure
-/// that may pass counts: one is an artifact's, a run of them is the database's, and walking the
-/// rest of the backlog would only repeat it. An artifact settled any other way, a verdict or a
-/// record, breaks the run.
+/// How many artifacts in a row may fail one step before the pass gives up on the anchor. Only a
+/// failure that may pass counts: one is an artifact's, a run of them is the database's, and walking
+/// the rest of the backlog would only repeat it. Measuring and verdicting keep separate runs
+/// ([`Step`]): a measurement breaks only a run of failed measurements, a verdict only a run of
+/// failed verdicts, and a record (unreadable content, or a shape that does not compile) both.
 const MAX_CONSECUTIVE_FAILED_ARTIFACTS: u32 = 8;
 
 /// Wall-clock ceiling for one drain invocation, in seconds: the region drain's, for its reason. It
 /// sits under the `api/internal` function's `maxDuration: 300`, so a pass that runs long still has
 /// room to hand its job back and return a summary rather than be killed mid-batch. It is checked
-/// after every artifact the pass settles, so a pass overruns it by at most one batch: the content
-/// it reads (bounded by [`BatchBound::bytes`], or one artifact up to
-/// [`MAX_RETURNED_CONTENT_BYTES`]) and the checks and writes of its artifacts.
+/// after every artifact the pass settles or fails, and a stop reads what the batch had gathered
+/// first, so a pass overruns it by at most one batch: the content it reads (bounded by
+/// [`BatchBound::bytes`], or one artifact up to [`MAX_RETURNED_CONTENT_BYTES`]) and the check and
+/// write of its first artifact.
 const DEFAULT_SHAPE_RECONCILE_DEADLINE_SECONDS: u64 = 240;
 
 /// The most the env override may set the deadline to: 30 s under the `api/internal` function's
@@ -257,7 +259,8 @@ const SHAPE_RECONCILE_DEADLINE_ENV: &str = "TEMPER_SHAPE_RECONCILE_DEADLINE_SECO
 /// With one anchor claimed at a time, an anchor with a large backlog would otherwise hold the whole
 /// deadline, and anchors queued behind it would wait a pass each. A slice leaves room for about
 /// four anchors a pass, so an anchor queued `k`-th has its next slice within `ceil(k / 4)` passes.
-/// An anchor handed back for its slice may run again in the same pass if no other is waiting.
+/// An anchor handed back for its slice may run again in the same pass if no other is waiting and
+/// it settled something; one that settled nothing is left for the reaper ([`settle`]).
 const SHAPE_RECONCILE_ANCHOR_SLICE: std::time::Duration = std::time::Duration::from_secs(60);
 
 fn resolve_dispatch_deadline() -> std::time::Duration {
@@ -508,9 +511,21 @@ struct AnchorPass {
     uncheckable_artifacts: u32,
     unreadable_artifacts: u32,
     failed_artifacts: u32,
-    consecutive_failures: u32,
+    /// Measurements that failed in a row, with no measurement or settlement between them.
+    measure_failures_in_a_row: u32,
+    /// Checks or verdict writes that failed in a row, with no verdict or record between them.
+    verdict_failures_in_a_row: u32,
     batches_read: u32,
     stop: Stop,
+}
+
+/// Which step of settling an artifact failed: each keeps its own run for the breaker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Step {
+    /// Measuring its content ([`returned_bytes`]).
+    Measure,
+    /// Reading, checking or writing its verdict ([`verdict_batch`]).
+    Verdict,
 }
 
 impl AnchorPass {
@@ -521,7 +536,8 @@ impl AnchorPass {
             uncheckable_artifacts: 0,
             unreadable_artifacts: 0,
             failed_artifacts: 0,
-            consecutive_failures: 0,
+            measure_failures_in_a_row: 0,
+            verdict_failures_in_a_row: 0,
             batches_read: 0,
             stop: Stop::Exhausted,
         }
@@ -532,15 +548,26 @@ impl AnchorPass {
         self.verdicts_written > 0 || self.unreadable_artifacts > 0 || self.uncheckable_artifacts > 0
     }
 
-    /// An artifact was settled, or its content was measured: the run of failures is broken.
-    fn progressed(&mut self) {
-        self.consecutive_failures = 0;
+    /// `step` succeeded for an artifact: that step's run of failures is broken.
+    fn succeeded(&mut self, step: Step) {
+        match step {
+            Step::Measure => self.measure_failures_in_a_row = 0,
+            Step::Verdict => self.verdict_failures_in_a_row = 0,
+        }
     }
 
-    /// Count an artifact that could not be settled for a reason that may pass, naming it in a
-    /// warning. `Some(Stop::Breaker)` when it makes [`MAX_CONSECUTIVE_FAILED_ARTIFACTS`] in a row.
+    /// An artifact was settled by a record rather than a verdict: both runs are broken.
+    fn recorded(&mut self) {
+        self.measure_failures_in_a_row = 0;
+        self.verdict_failures_in_a_row = 0;
+    }
+
+    /// Count an artifact whose `step` failed for a reason that may pass, naming it in a warning.
+    /// `Some(Stop::Breaker)` when it makes [`MAX_CONSECUTIVE_FAILED_ARTIFACTS`] failures of that
+    /// step in a row.
     fn failed(
         &mut self,
+        step: Step,
         anchor: HomeAnchor,
         artifact_id: Uuid,
         why: &dyn std::fmt::Display,
@@ -553,8 +580,12 @@ impl AnchorPass {
              anchor's job is not marked done while the artifact remains"
         );
         self.failed_artifacts += 1;
-        self.consecutive_failures += 1;
-        (self.consecutive_failures >= MAX_CONSECUTIVE_FAILED_ARTIFACTS).then_some(Stop::Breaker)
+        let run = match step {
+            Step::Measure => &mut self.measure_failures_in_a_row,
+            Step::Verdict => &mut self.verdict_failures_in_a_row,
+        };
+        *run += 1;
+        (*run >= MAX_CONSECUTIVE_FAILED_ARTIFACTS).then_some(Stop::Breaker)
     }
 }
 
@@ -576,8 +607,10 @@ impl Uncheckable {
 }
 
 /// Why the drain cannot read one artifact's content, whatever its shape: the `reason` vocabulary of
-/// `kb_shape_reconcile_unreadable` (20261108000000). Both are properties of the stored content, so
-/// a pass that finds one would find it again.
+/// `kb_shape_reconcile_unreadable` (20261108000000). Each is a property of the stored content
+/// under this drain's ceiling and Postgres's limits, so a pass that finds one would find it again.
+/// A release that raises [`MAX_RETURNED_CONTENT_BYTES`] leaves `content_too_large` records standing
+/// until the artifact or its shape changes; the operator's remedy is the migration's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Unreadable {
     /// The content returns more than [`BatchBound::max_one`] bytes.
@@ -676,7 +709,8 @@ async fn run_reconcile_job(
 /// reaper.
 ///
 /// - A pass its slice or the deadline cut off hands the job back to resume, failed artifacts or
-///   not: the next pass finds them again, and a hand-back costs no attempt.
+///   not, if it settled anything: the next pass finds the failures again, and a hand-back costs no
+///   attempt. One that settled nothing is left in flight, so its attempt counts.
 /// - A pass the breaker stopped, or one that exhausted the backlog with an artifact it could not
 ///   settle, leaves the job in flight, so the reaper retries it and counts the attempt: the pass
 ///   has already settled everything else, and the retry finds only what is left. A failure that
@@ -696,6 +730,14 @@ async fn settle(pool: &PgPool, job: &ClaimedAnchorJob, pass: &AnchorPass) -> Set
     let dispatch = DispatchType::ShapeReconcile.as_str();
 
     match pass.stop {
+        Stop::Slice | Stop::Deadline if !pass.made_progress() => {
+            // Cut off having settled nothing: only failures can have used the time, and a
+            // hand-back costs no attempt, so the next pass would meet them again with nothing to
+            // stop it. Left in flight, the reaper counts the attempt, and the job ends dead if
+            // they never pass.
+            record_backlog_remaining(pool, job.anchor).await;
+            return Settled::LeftInFlight;
+        }
         Stop::Slice | Stop::Deadline => {
             let settled = match hand_back(pool, job).await {
                 Ok(()) => Settled::HandedBack,
@@ -818,7 +860,8 @@ struct Candidate {
 ///   select them, and the verdict writer refuses them (`_resource_write_guard`, D13).
 /// - Nor are an inactive resource's: `is_active` is the erasure estate's fence for a resource
 ///   (`policy/erasure/estate.toml`), and a fenced resource's content is not processed. One made
-///   active again is backlog again.
+///   active again is backlog again, but nothing queues its anchor for that: it waits for the next
+///   declare or rehome to reach the anchor.
 ///
 /// Uses _data_artifact_shape_in_force (which calls _data_artifact_anchor and
 /// _data_artifact_kind_owner) rather than re-deriving the home — the cogmap tiebreak is
@@ -912,7 +955,8 @@ type Batch<'a> = Vec<(&'a Candidate, Arc<shape_schema::Validator>)>;
 /// next would take it past its bound ([`joins_batch`]); the batch is then read and verdicted. So the
 /// content one batch reads, and the measuring done between two batches, is bounded by what
 /// arrives, not by what was committed. The slice and the deadline are checked after every artifact
-/// the pass settles, so the first is always settled.
+/// the pass settles or fails; a stop reads the gathered batch first, so whatever was measured is
+/// settled before the pass ends.
 ///
 /// - **A shape that does not compile is recorded once** ([`load_shape_check`]), and its artifacts
 ///   are passed over, here and by every later backlog selection.
@@ -925,7 +969,8 @@ type Batch<'a> = Vec<(&'a Candidate, Arc<shape_schema::Validator>)>;
 /// - **A verdict names only the first failure** ([`shape_schema::failure_detail`]), as a commit's
 ///   does.
 /// - **An artifact that cannot be settled for a reason that may pass** is named in a warning and
-///   counted, and the pass goes on past it.
+///   counted, and the pass goes on past it, until [`MAX_CONSECUTIVE_FAILED_ARTIFACTS`] of one step
+///   fail in a row.
 async fn reconcile_one_anchor(
     pool: &PgPool,
     anchor: HomeAnchor,
@@ -951,6 +996,7 @@ async fn reconcile_one_anchor(
                 ShapeCheck::Ready(validator) => Arc::clone(validator),
                 ShapeCheck::Uncheckable => {
                     pass.uncheckable_artifacts += 1;
+                    pass.recorded();
                     continue;
                 }
             };
@@ -960,7 +1006,7 @@ async fn reconcile_one_anchor(
                     pace.stop_due(anchor_start)
                 }
                 Ok(bytes) => {
-                    pass.progressed();
+                    pass.succeeded(Step::Measure);
                     if !joins_batch(batch.len(), batch_bytes, bytes, pace.batch) {
                         let full = std::mem::take(&mut batch);
                         if let Some(stop) =
@@ -980,13 +1026,19 @@ async fn reconcile_one_anchor(
                     pace.stop_due(anchor_start)
                 }
                 Err(e) => pass
-                    .failed(anchor, c.artifact_id, &e)
+                    .failed(Step::Measure, anchor, c.artifact_id, &e)
                     .or_else(|| pace.stop_due(anchor_start)),
             };
             if let Some(stop) = stop {
-                // Whatever this batch had gathered is left for the next pass: it was measured,
-                // never read.
-                pass.stop = stop;
+                // Read what this batch had gathered before stopping, so a stop that fires after
+                // a failure still settles what was measured. `verdict_batch` stops again after its
+                // first artifact, so this overruns the stop by at most one batch.
+                pass.stop = match stop {
+                    Stop::Breaker => Stop::Breaker,
+                    _ => verdict_batch(pool, anchor, batch, &mut pass, pace, anchor_start)
+                        .await?
+                        .unwrap_or(stop),
+                };
                 return Ok(pass);
             }
         }
@@ -1039,10 +1091,10 @@ async fn verdict_batch(
         match write_verdict(pool, c, validator, content).await {
             Ok(()) => {
                 pass.verdicts_written += 1;
-                pass.progressed();
+                pass.succeeded(Step::Verdict);
             }
             Err(e) => {
-                if let Some(stop) = pass.failed(anchor, c.artifact_id, &e) {
+                if let Some(stop) = pass.failed(Step::Verdict, anchor, c.artifact_id, &e) {
                     return Ok(Some(stop));
                 }
             }
@@ -1144,7 +1196,7 @@ async fn record_unreadable(
          and stays declared_not_yet_checked"
     );
     pass.unreadable_artifacts += 1;
-    pass.progressed();
+    pass.recorded();
     Ok(())
 }
 
@@ -2662,10 +2714,10 @@ mod tests {
         );
     }
 
-    /// FAILS IF: a pass the deadline cut off after an artifact failed is left in flight rather
-    /// than handed back to resume, or is marked done with the backlog unreached.
+    /// FAILS IF: a pass cut off having settled nothing hands its job back, which costs no attempt,
+    /// so an anchor whose failures use up its time is handed back every pass and never dies.
     #[sqlx::test(migrations = "../../migrations")]
-    async fn a_pass_cut_off_after_a_failed_artifact_hands_its_job_back(pool: PgPool) {
+    async fn a_pass_cut_off_having_settled_nothing_leaves_its_job_for_the_reaper(pool: PgPool) {
         let w = seed_world(&pool, "cut-off-failed-reconcile").await;
         let artifacts = backlog_of(&pool, &w, 3).await;
         let mut ordered: Vec<Uuid> = artifacts.iter().map(|a| a.uuid()).collect();
@@ -2684,12 +2736,42 @@ mod tests {
             panic!("the job ran a pass: {ran:?}");
         };
         assert_eq!(pass.failed_artifacts, 1);
+        assert!(!pass.made_progress());
         assert_eq!(pass.stop, Stop::Deadline);
-        assert_eq!(settled, Settled::HandedBack);
+        assert_eq!(settled, Settled::LeftInFlight);
         assert_eq!(
             reconcile_job_statuses(&pool, w.context).await,
-            vec!["done".to_owned(), "pending".to_owned()]
+            vec!["in_progress".to_owned()],
+            "left for the reaper, which counts the attempt"
         );
+    }
+
+    /// FAILS IF: a measurement breaks a run of failed verdict writes, so a database refusing every
+    /// write trips the breaker only when eight artifacts share one batch.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn failed_verdict_writes_trip_the_breaker_across_batches(pool: PgPool) {
+        let w = seed_world(&pool, "breaker-batches-reconcile").await;
+        backlog_of(&pool, &w, MAX_CONSECUTIVE_FAILED_ARTIFACTS as usize + 2).await;
+        refuse_verdicts(&pool, None).await;
+        let one_a_batch = BatchBound {
+            rows: 100,
+            bytes: 1,
+            max_one: i64::MAX,
+        };
+
+        let summary = dispatch_tick_inner(
+            &pool,
+            None,
+            Pace::new(std::time::Instant::now(), ROOMY, one_a_batch),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            summary.failed_artifacts, MAX_CONSECUTIVE_FAILED_ARTIFACTS,
+            "the breaker stops the pass at the eighth write, each in its own batch"
+        );
+        assert_eq!(summary.failed, 1);
     }
 
     /// FAILS IF: a hand-back whose successor cannot be queued still marks the job done, leaving the

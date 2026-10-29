@@ -23,9 +23,10 @@
 --      checked it.
 --   2. THE KEYS. A shape row is never edited: an amendment folds it and declares a new row with a
 --      new id, which is tried afresh. An artifact's record excludes it only while the record's
---      triple is the artifact's triple now. Neither key covers the COMPILER: a release that widens
---      what compiles leaves recorded shapes excluded. The operator's remedy is to delete the
---      shape's row here and enqueue a shape-reconcile job for its home.
+--      triple is the artifact's triple now. Neither key covers the CODE: a release that widens
+--      what compiles, or raises the drain's one-artifact ceiling, leaves recorded rows excluding
+--      what it would now check. The operator's remedy is to delete those rows (by shape, or by
+--      reason = 'content_too_large') and enqueue a shape-reconcile job for each affected home.
 --   3. NO CONTENT. The rows hold ids, a version, a sha256 and a closed reason.
 --
 -- Additive: two CREATE TABLEs and one new function. No existing object is altered.

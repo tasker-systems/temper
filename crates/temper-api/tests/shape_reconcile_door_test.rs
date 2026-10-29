@@ -106,6 +106,20 @@ async fn the_door_verdicts_an_artifact_committed_before_its_shape(pool: PgPool) 
     .await
     .expect("declare");
 
+    let below_one = app
+        .client
+        .post(app.url(&format!("{DOOR}?cap=0")))
+        .header(reqwest::header::HOST, PINNED)
+        .bearer_auth(SECRET)
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(
+        below_one.status(),
+        StatusCode::BAD_REQUEST,
+        "a cap below 1 is refused, and drains nothing"
+    );
+
     let response = app
         .client
         .post(app.url(DOOR))
