@@ -1,0 +1,14 @@
+title    = "An over-size metadata value is refused with a 400 naming the limit, not a 500"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "mcp", "cli-stdout"]
+status   = "signal-only"
+body = '''
+A write whose single property value is too large for its index row (SQLSTATE `54000`: btree's 2704
+bytes after inline compression, reached by one incompressible open-meta value past about 2.6 KB on
+`uq_kb_properties_active`) now answers `400 BAD_REQUEST` with a sentence telling the caller to split
+the value across keys, where it answered `500 INTERNAL_ERROR` with the generic message. Nothing was
+applied in either case: the transaction rolls back. Who observes: `resource create`/`resource update
+--open-meta` and any other door that writes a property. Release relevance: signal-only; the limit
+itself is unchanged, and no shape moved (issue #1258).
+'''

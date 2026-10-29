@@ -125,6 +125,30 @@ pub const RESOURCE_BUSY_RETRY_AFTER_SECS: u64 = 2;
 /// SQLSTATE `55P03`, `lock_not_available`: the statement waited on a lock past `lock_timeout`.
 pub const LOCK_NOT_AVAILABLE: &str = "55P03";
 
+/// SQLSTATE `54000`, `program_limit_exceeded`. The reachable producer is a value too large for a
+/// btree index row (2704 bytes after inline compression): `uq_kb_properties_active` keys on
+/// `property_value`, so one incompressible open-meta value past ~2.6 KB raises it (issue #1258).
+/// The caller's input exceeded a storage limit and nothing was applied — a `400`, not a fault.
+pub const PROGRAM_LIMIT_EXCEEDED: &str = "54000";
+
+/// What a [`PROGRAM_LIMIT_EXCEEDED`] refusal tells the caller. The database's own message names
+/// the index and byte counts — server material — so the caller gets this fixed sentence instead.
+pub const VALUE_TOO_LARGE_MESSAGE: &str = "a value in this request is too large to store, and \
+     nothing was applied. A single metadata value must stay under about 2.6 KB of \
+     non-repetitive text; split long content across several keys or move it into the body";
+
+/// True when `e`'s chain holds a [`PROGRAM_LIMIT_EXCEEDED`] database error.
+pub(crate) fn exceeded_program_limit(e: &anyhow::Error) -> bool {
+    e.chain().any(|cause| {
+        cause
+            .downcast_ref::<sqlx::Error>()
+            .and_then(|s| s.as_database_error())
+            .and_then(|d| d.code())
+            .as_deref()
+            == Some(PROGRAM_LIMIT_EXCEEDED)
+    })
+}
+
 pub type ApiResult<T> = Result<T, ApiError>;
 
 impl ApiError {
@@ -141,6 +165,8 @@ impl ApiError {
     pub fn from_write(err: anyhow::Error) -> Self {
         if crate::backend::write_floor::hit_lock_bound(&err) {
             ApiError::ResourceBusy
+        } else if exceeded_program_limit(&err) {
+            ApiError::BadRequest(VALUE_TOO_LARGE_MESSAGE.to_string())
         } else {
             ApiError::Internal(err.to_string())
         }
@@ -397,6 +423,11 @@ impl From<sqlx::Error> for ApiError {
             {
                 ApiError::ResourceBusy
             }
+            sqlx::Error::Database(db_err)
+                if db_err.code().as_deref() == Some(PROGRAM_LIMIT_EXCEEDED) =>
+            {
+                ApiError::BadRequest(VALUE_TOO_LARGE_MESSAGE.to_string())
+            }
             _ => {
                 // Postgres embeds the offending value in several error classes
                 // (`invalid input syntax for type uuid: "<value>"`), and this codebase
@@ -524,10 +555,88 @@ impl From<temper_core::error::TemperError> for ApiError {
     }
 }
 
+/// A `sqlx::Error::Database` carrying nothing but a SQLSTATE — the one field the classifiers read.
+#[cfg(test)]
+pub(crate) fn sqlstate_error(code: &'static str) -> sqlx::Error {
+    use std::borrow::Cow;
+    use std::error::Error as StdError;
+
+    #[derive(Debug)]
+    struct SqlState(&'static str);
+
+    impl std::fmt::Display for SqlState {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "synthetic database error, SQLSTATE {}", self.0)
+        }
+    }
+
+    impl StdError for SqlState {}
+
+    impl sqlx::error::DatabaseError for SqlState {
+        fn message(&self) -> &str {
+            "synthetic database error"
+        }
+        fn code(&self) -> Option<Cow<'_, str>> {
+            Some(Cow::Borrowed(self.0))
+        }
+        fn as_error(&self) -> &(dyn StdError + Send + Sync + 'static) {
+            self
+        }
+        fn as_error_mut(&mut self) -> &mut (dyn StdError + Send + Sync + 'static) {
+            self
+        }
+        fn into_error(self: Box<Self>) -> Box<dyn StdError + Send + Sync + 'static> {
+            self
+        }
+        fn kind(&self) -> sqlx::error::ErrorKind {
+            sqlx::error::ErrorKind::Other
+        }
+    }
+
+    sqlx::Error::Database(Box::new(SqlState(code)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use temper_core::error::TemperError;
+
+    /// An over-size value (`54000`, e.g. an index row past btree's 2704 bytes) reaches the wire as
+    /// a `400` carrying the actionable sentence, from both the raw `sqlx` bridge and a write's
+    /// `anyhow` chain — wrapped in context, the way the substrate hands it back (issue #1258).
+    /// FAILS IF it renders the `500` `INTERNAL_ERROR` class.
+    #[tokio::test]
+    async fn an_over_size_value_renders_400_with_the_split_it_hint() {
+        let wrapped = anyhow::Error::from(sqlstate_error(PROGRAM_LIMIT_EXCEEDED))
+            .context("resource_update: property assert");
+        for err in [
+            ApiError::from(sqlstate_error(PROGRAM_LIMIT_EXCEEDED)),
+            ApiError::from_write(wrapped),
+        ] {
+            let (status, body) = rendered(err).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(body["error"]["code"], "BAD_REQUEST");
+            assert!(
+                body["error"]["message"]
+                    .as_str()
+                    .is_some_and(|m| m.contains(VALUE_TOO_LARGE_MESSAGE)),
+                "missing the actionable sentence: {body}"
+            );
+        }
+    }
+
+    /// The new arm is keyed on `54000` alone: any other database error keeps the generic `500`.
+    #[test]
+    fn a_database_error_that_is_not_a_size_limit_stays_internal() {
+        assert!(matches!(
+            ApiError::from(sqlstate_error("XX000")),
+            ApiError::Internal(_)
+        ));
+        assert!(matches!(
+            ApiError::from_write(sqlstate_error("XX000").into()),
+            ApiError::Internal(_)
+        ));
+    }
 
     /// Render an `ApiError` the way axum will and hand back the status plus the parsed body, so a
     /// test asserts on the BYTES a client receives rather than on the variant that produced them.
