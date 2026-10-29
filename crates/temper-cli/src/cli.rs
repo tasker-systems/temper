@@ -687,7 +687,8 @@ pub enum ResourceAction {
         /// Filter by stage (task only)
         #[arg(long)]
         stage: Option<String>,
-        /// Filter by goal (task only)
+        /// Filter to resources advancing this goal (any type: its tasks, decisions,
+        /// evidence)
         #[arg(long)]
         goal: Option<String>,
         /// Filter by status (goal only)

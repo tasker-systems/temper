@@ -178,7 +178,7 @@ Options:
       --stage <STAGE>
           Filter by stage (task only)
       --goal <GOAL>
-          Filter by goal (task only)
+          Filter to resources advancing this goal (any type: its tasks, decisions, evidence)
       --status <STATUS>
           Filter by status (goal only)
       --with <WITH>
