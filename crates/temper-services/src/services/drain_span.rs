@@ -45,8 +45,9 @@ pub const DRAIN_JOB_FIELDS: [&str; 3] = ["queue_wait_ms", "attempts", "outcome"]
 pub enum JobOutcome {
     /// Work done, job marked done.
     Completed,
-    /// The invocation's wall-clock deadline was already spent when this job came up. Handed back
-    /// untouched, **no work attempted**.
+    /// The invocation's wall-clock deadline was already spent when this job came up, or (shape
+    /// reconcile) its anchor had already run in this pass. Handed back untouched, **no work
+    /// attempted**.
     Deferred,
     /// Work was done but did not finish this claim's budget; re-enqueued to resume. Embed and shape
     /// reconcile only — a region tick has no partial state (see

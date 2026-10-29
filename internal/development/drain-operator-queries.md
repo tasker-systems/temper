@@ -98,10 +98,10 @@ anchor's unreconciled artifacts are on its `shape_reconcile_job` span as `backlo
 probe that stops at 1,000; `backlog_remaining_capped` says when it stopped. Artifacts under a shape
 that does not compile are not backlog: each such shape is a row of `kb_shape_reconcile_uncheckable`
 naming its reason, and the pass that recorded it counts the artifacts it passed over as
-`uncheckable_artifacts`. To read how many artifacts those shapes hold now, join that table to
-`_data_artifact_shape_in_force` as the drain's `backlog_page` does.
+`uncheckable_artifacts`. Artifacts whose content the drain cannot read are not backlog either:
+each is a row of `kb_shape_reconcile_unreadable`. The backlog itself, as a number, is E1 below.
 
-The twins share a function and a wall-clock budget (`maxDuration: 300`). One starving the other is
+The drains share a function and a wall-clock budget (`maxDuration: 300`). One starving another is
 visible here and nowhere else.
 
 ---
@@ -225,6 +225,67 @@ Depends on the `otel.status_code = ERROR` work from PR #638, which sets it on 5x
 correct judgment about the request and deliberately not counted.
 
 ---
+
+## E. The shape-reconcile backlog, read from the database
+
+The spans above describe passes. These read the state the passes leave, so they answer "how much
+is waiting?" even when no pass is running, or when an anchor's job has died. All three are
+`[blind]`: written against the schema, not yet run against production. Run them on a read-only
+connection.
+
+**E1 — Unreconciled artifacts per anchor** `[blind]`
+
+What the drain's `backlog_page` would select, for every anchor at once. It evaluates the shape in
+force for every live artifact, so it costs a full scan: run it by hand, not from a dashboard
+refresh.
+
+```sql
+SELECT sh.home_anchor_table, sh.home_anchor_id, count(*) AS unreconciled
+  FROM kb_data_artifacts a
+ CROSS JOIN LATERAL _data_artifact_shape_in_force(
+     a.resource_id, a.kind_owner_table, a.kind_owner_id, a.artifact_kind) s
+  JOIN kb_data_artifact_shapes sh ON sh.id = s.shape_id
+  JOIN kb_resources r ON r.id = a.resource_id
+ WHERE NOT a.is_folded AND r.erased_at IS NULL AND r.is_active
+   AND NOT EXISTS (SELECT 1 FROM kb_data_artifact_verdicts v
+                    WHERE v.artifact_id = a.id AND v.shape_id = s.shape_id
+                      AND v.shape_version = s.shape_version AND v.content_hash = a.content_hash)
+   AND NOT EXISTS (SELECT 1 FROM kb_shape_reconcile_uncheckable u WHERE u.shape_id = s.shape_id)
+   AND NOT EXISTS (SELECT 1 FROM kb_shape_reconcile_unreadable x
+                    WHERE x.artifact_id = a.id AND x.shape_id = s.shape_id
+                      AND x.shape_version = s.shape_version AND x.content_hash = a.content_hash)
+ GROUP BY 1, 2
+ ORDER BY 3 DESC;
+```
+
+An anchor listed here with no `pending`, `waiting_for_retry` or `in_progress` job (E3) is waiting for
+the next declare or rehome to reach it.
+
+**E2 — What the drain set aside, and why** `[blind]`
+
+```sql
+SELECT 'shape' AS grain, reason, count(*) FROM kb_shape_reconcile_uncheckable GROUP BY reason
+UNION ALL
+SELECT 'artifact', reason, count(*) FROM kb_shape_reconcile_unreadable GROUP BY reason;
+```
+
+A shape recorded uncheckable stays excluded under a later compiler that would accept it. To try it
+again, delete its row and enqueue a shape-reconcile job for its home.
+
+**E3 — Shape-reconcile jobs that are stuck or dead** `[blind]`
+
+```sql
+SELECT id, context_id, cogmap_id, status, attempts, max_attempts, last_error,
+       enqueued_at, lease_expires_at
+  FROM kb_workflow_jobs
+ WHERE persona = 'shape' AND dispatch_type = 'shape-reconcile'
+   AND status IN ('dead', 'waiting_for_retry', 'in_progress')
+ ORDER BY enqueued_at;
+```
+
+A job goes `dead` after `max_attempts` passes that each left an artifact it could not settle for a
+reason that may pass. The reason is in that pass's warning log, not in `last_error`, which the
+reaper writes.
 
 ## Notes for whoever builds the dashboard
 

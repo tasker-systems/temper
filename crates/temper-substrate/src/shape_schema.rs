@@ -307,6 +307,13 @@ pub fn first_failure(validator: &Validator, content: &Value) -> Option<(String, 
     ))
 }
 
+/// The stored `detail` of a verdict whose content fails its shape: `[{path, message}]`, the one
+/// violation [`first_failure`] names. Commit and reconcile both write it, so the two cannot drift.
+#[must_use]
+pub fn failure_detail(path: &str, message: &str) -> Value {
+    serde_json::json!([{ "path": path, "message": message }])
+}
+
 /// `text` if it fits in [`MAX_FAILURE_MESSAGE_BYTES`]; otherwise its longest prefix on a char
 /// boundary within `MAX_FAILURE_MESSAGE_BYTES - 3` bytes, followed by `…` (3 bytes).
 fn cut(text: String) -> String {

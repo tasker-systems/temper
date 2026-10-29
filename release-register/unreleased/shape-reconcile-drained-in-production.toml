@@ -10,29 +10,37 @@ stays out of the OpenAPI contract. A `cap` below 1 is refused with `400`, and on
 clamped.
 
 Each pass reaps expired leases, then claims shape-reconcile jobs one anchor at a time, so a large
-anchor cannot hold the others' leases. It settles each anchor's backlog against the shape in
-force, in batches of at most 200 artifacts and 32 MB of content. Content is measured as Postgres
-returns it, not as it was committed: `jsonb` prints numbers in full. One artifact larger than the
-batch bound is read alone, and one past 256 MB is not read at all. The batches are cut from a page
-of 10,000 artifacts selected once. A pass runs under a 240 s deadline, checked after every
-verdict. `TEMPER_SHAPE_RECONCILE_DEADLINE_SECONDS` overrides the deadline, up to 300 s, which is
-half the lease.
+anchor cannot hold the others' leases. An anchor runs for at most a 60 s slice, then goes back to
+the end of the queue; if no other anchor is waiting, the same pass runs it again. A pass runs under
+a 240 s deadline, checked after every artifact it settles. `TEMPER_SHAPE_RECONCILE_DEADLINE_SECONDS`
+overrides the deadline, up to 270 s, which leaves 30 s under the function's `maxDuration`. An anchor
+queued `k`-th gets its next slice within about `k / 4` passes of five minutes.
 
-Checks run on the blocking pool under the shape compile permits. A verdict the drain writes
-records the first failure, as a commit's does, with its path and message each cut to 1 KiB.
+Each anchor's backlog is settled against the shape in force, in batches of at most 200 artifacts
+and 32 MB of content. Content is measured one artifact at a time as Postgres returns it, not as it
+was committed: `jsonb` prints numbers in full. One artifact larger than the batch bound is read
+alone. The batches come from a page of 10,000 artifacts selected once. Artifacts of erased or
+inactive resources are not backlog. Checks run on the blocking pool under the shape compile
+permits. A verdict the drain writes records the first failure, as a commit's does, with its path
+and message each cut to 1 KiB.
 
-A shape that no longer compiles is not checked. This can be a shape stored before compile refused
-anything but a field tree, or one whose compile panics. Migration `20261108000000` adds
-`kb_shape_reconcile_uncheckable`, which records each such shape row once, with its reason. The
-backlog then leaves out every artifact under that shape, and those artifacts stay
-`declared_not_yet_checked`. An amendment is a new shape row, so it is tried afresh. The table's one
-text column is declared `structural` in the erasure policy.
+Migration `20261108000000` adds two records of what the drain cannot check, so the backlog leaves
+those artifacts out and they stay `declared_not_yet_checked`:
 
-An artifact that cannot be settled is counted and passed over, and its anchor's job is left for
-the reaper. This covers content that cannot be measured or is past the ceiling, and a check or a
-verdict write that fails. Eight such artifacts in a row stop the anchor's pass. A job handed back
-to resume is marked done and its successor queued in one transaction. A completed anchor whose
-backlog is not empty is queued again. That happens when a declare, an amendment or a rehome
+- `kb_shape_reconcile_uncheckable` records a shape row that no longer compiles, once. This can be a
+  shape stored before compile refused anything but a field tree. An amendment is a new row, so it
+  is tried afresh.
+- `kb_shape_reconcile_unreadable` records an artifact whose content the drain cannot read, under
+  its staleness triple. Either its content returns past 256 MB, or Postgres cannot render it as
+  text at all.
+
+Their text columns are declared `structural` in the erasure policy.
+
+An artifact that fails for a reason that may pass is counted and passed over, and its anchor's job
+is left for the reaper. That covers a measurement, a check or a verdict write that fails. Eight
+such failures in a row, with nothing settled between them, stop the anchor's pass. A job handed
+back to resume is marked done and its successor queued in one transaction. A completed anchor
+whose backlog is not empty is queued again. That happens when a declare, an amendment or a rehome
 arrived while it ran. An artifact committed with `null` content is validated as `null`, as its
 commit was. Before this, the jobs were enqueued and nothing drained them. Verdicts written at
 commit are unchanged.

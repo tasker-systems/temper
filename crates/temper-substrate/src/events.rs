@@ -1662,19 +1662,10 @@ pub async fn fire_with(
                 } else {
                     // Reuse the errors collected during the verdict decision above —
                     // recompiling the schema a second time was wasteful and flagged in review.
-                    validation_error_details.as_ref().map(|errors| {
-                        serde_json::Value::Array(
-                            errors
-                                .iter()
-                                .map(|(path, msg)| {
-                                    serde_json::json!({
-                                        "path": path,
-                                        "message": msg,
-                                    })
-                                })
-                                .collect(),
-                        )
-                    })
+                    validation_error_details
+                        .as_ref()
+                        .and_then(|errors| errors.first())
+                        .map(|(path, msg)| crate::shape_schema::failure_detail(path, msg))
                 };
                 sqlx::query!(
                     "SELECT data_artifact_verdict_upsert($1,$2,$3,$4,$5,$6)",
