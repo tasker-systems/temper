@@ -122,7 +122,10 @@ Tool: relationship     Input: { "action": "assert", "source": "<child goal uuid>
 {%- endif %}
 
 Sibling goals are children of the same parent; the parent's register says which clauses each
-one carries.
+one carries. Once a parent has two or more children, run the *separability check* in
+`outcome-registers.md` before they land, and again when a child is added or its clauses move: the
+parent records one carrier per clause, the hard and soft dependencies, each child's standalone value,
+which children are postponable, and the shipping order that follows.
 
 ## 6. Close — the goal ends on purpose
 

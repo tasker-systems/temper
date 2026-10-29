@@ -301,7 +301,14 @@ build — and its witnesses are authored the honest way, inside it.
 - **Not a relabelled task.** A housing goal whose only clause restates the task it houses has not
   found the outcome yet, and wrapping the work in a goal does not hide that.
 - **Not up front.** A parent register never carries sub-goals pre-authored for work nobody has taken
-  up. That is the four-session failure in a new costume.
+  up. That is the four-session failure in a new costume. What the guard forbids is a goal authored
+  to *house enabling work*: a child whose outcome the parent never stated, written so that work has
+  somewhere to sit. It does not forbid **clause decomposition**: a child that carries clauses the
+  parent already states, split by the meaning test (see *Two floors*), may be authored before anyone
+  takes its work up, and its clauses carry declared holes until then. A child carrying an outcome
+  the parent does not yet state is the first kind until the parent's register states that outcome,
+  as a ruling or a clause; after that it is decomposition. Either way, once a parent has two or more
+  children it owes the *separability check* below.
 - **Not for chores.** A task that advances no goal is a legitimate task, and this rule says nothing
   about it.
 - **Not a regress.** Authoring the housing goal is the uptake act itself, not more enabling work: it
@@ -430,6 +437,50 @@ mechanical form of these checks earns its keep, it belongs in a `temper goal lin
 the code repo — flagging clause bodies with imperative/mechanism language, witness-shaped content in a
 goal body, and EXTEND/AMEND without a citation. The doc names the check; the owner decides whether to
 mechanize it (enclosure of responsibility again).
+
+## The separability check — before two or more children land
+
+The pre-land check reads one register. A parent with several children can pass it child by child and
+still fail as a family: a clause carried twice or by nobody, a child whose witnesses need a sibling's
+unbuilt mechanism, a closure that waits on the goal meant to come last. **Children may build on each
+other; none may be intertwined with another for sequence or segmentation.** Each must be shippable as
+a coherent set on its own.
+
+So when a parent has two or more children — at decomposition, and again whenever a child is added or
+its clauses move — the parent's register states these, and the check is whether it can:
+
+1. **One carrier per clause.** A single table on the parent names, for every clause id in the family,
+   the one goal that carries it. A boundary that must bind every child — a privacy or disclosure
+   clause, "scaffolding, not shackles" — is carried by the parent and binds them all; a child that
+   needs its own form of it carries a named instance. A clause carried twice, or by nobody, or
+   unknown to the parent, is the finding.
+2. **A dependency map, hard and soft.** *Hard*: a witness on this child cannot honestly run until the
+   other goal's (or task's) mechanism exists. *Soft*: enriches, or is enriched by, but is not
+   required. The hard edges form a DAG, and no child's witnesses — or its closure pass — need a later
+   child's mechanism. Dependencies that exist in substance but not in the text are the usual finding.
+3. **Standalone value, stated.** For each child: what is better if it ships and nothing after it
+   does. Thin is acceptable; unstated is not, because a child with no standalone value is a step, not
+   an outcome.
+4. **Postponable children named.** A child the owner wants last, or deferrable indefinitely, is
+   named as such on the parent. Nothing earlier waits on it — not a clause, not a Then, not a
+   closure pass. Its future needs reach the earlier children only as cheap guards in their stated
+   silence (keep a set of outcomes open; route new reads through a shared function), never as
+   clauses they must witness.
+5. **One owner per shared substrate.** Whatever several children mint or depend on — identities, a
+   vocabulary, a namespace — has exactly one owning child, so a later child can never re-mint what an
+   earlier one already served.
+6. **A shipping order** that follows from 2–4, recorded on the parent with each child's hard
+   dependencies beside it.
+
+**Run it with independent reviewers, not by rereading.** The author of a decomposition believes it is
+separable; that belief is what the check tests. Give two or three read-only reviewers the goal ids and
+one lens each — *dependencies and separable delivery*, *what is deferred and what must not foreclose
+it*, *clause and face coherence* — and have them report findings ranked by how much each would block
+separate delivery. Differences between the lenses are the point: one family's review found the
+disclosure clause carried only by the second of two children (so the first could ship the leak with
+nothing binding it), identities a later child could re-mint, and two closure passes waiting on the
+child meant to come last — none of which rereading by the author had caught. The owner rules on what
+needs ruling; the rest is applied, and the parent records both.
 
 ## Doing it with the tools you have
 
