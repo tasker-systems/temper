@@ -38,8 +38,9 @@ those artifacts out and they stay `declared_not_yet_checked`:
 
 Their text columns are declared `structural` in the erasure policy.
 
-An artifact that fails for a reason that may pass is counted and passed over, and its anchor's job
-is not completed while it remains. That covers a measurement, a check or a verdict write that fails.
+An artifact that fails for a reason that may pass is counted and passed over, and its anchor keeps a
+job while it remains: handed back to a successor if the pass was cut off after settling something,
+otherwise left for the reaper. That covers a measurement, a check or a verdict write that fails.
 Eight failed measurements in a row, or eight failed checks or writes in a row, stop the anchor's
 pass. A job handed back to resume is marked done and its successor queued in one transaction. A
 completed anchor whose backlog is not empty is queued again. That happens when a declare, an

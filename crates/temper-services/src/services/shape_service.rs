@@ -181,9 +181,10 @@ pub struct ShapeReconcileSummary {
     /// render. They stay `declared_not_yet_checked`.
     pub unreadable_artifacts: u32,
     /// Artifacts that could not be settled for a reason that may pass: a measurement, a check or
-    /// a verdict write that failed. Each is named in a warning, and its anchor's job is not
-    /// completed while it remains: handed back if the pass was cut off after settling something,
-    /// otherwise left in flight for the reaper.
+    /// a verdict write that failed. Each is named in a warning, and its anchor is never left
+    /// without a job while it remains: the job is handed back to a successor if the pass was cut
+    /// off after settling something, and otherwise left in flight for the reaper, ending `dead` if
+    /// the failure never passes.
     pub failed_artifacts: u32,
     /// Backlog batches read this invocation.
     pub batches_read: u32,
@@ -242,10 +243,11 @@ const MAX_CONSECUTIVE_FAILED_ARTIFACTS: u32 = 8;
 /// Wall-clock ceiling for one drain invocation, in seconds: the region drain's, for its reason. It
 /// sits under the `api/internal` function's `maxDuration: 300`, so a pass that runs long still has
 /// room to hand its job back and return a summary rather than be killed mid-batch. It is checked
-/// after every artifact the pass settles or fails, not after a measurement, so a pass overruns it
-/// by at most one batch measured and read (bounded by [`BatchBound::bytes`] plus the artifact that
-/// overflows it, or one artifact up to [`MAX_RETURNED_CONTENT_BYTES`]) and one artifact's check and
-/// write.
+/// after every verdict, record and failure, not after a measurement, so a pass overruns it by
+/// about one batch measured and read (bounded by [`BatchBound::bytes`] plus the artifact that
+/// overflows it, each artifact at most [`MAX_RETURNED_CONTENT_BYTES`]), one artifact's check and
+/// write, and whatever ran unchecked between them: a backlog page selected, and shapes loaded or
+/// compiled on first sight.
 const DEFAULT_SHAPE_RECONCILE_DEADLINE_SECONDS: u64 = 240;
 
 /// The most the env override may set the deadline to: 30 s under the `api/internal` function's
@@ -580,7 +582,7 @@ impl AnchorPass {
             artifact_id = %artifact_id,
             anchor = %anchor.uuid(),
             "shape reconciliation could not settle one artifact; the pass goes on, and the \
-             anchor's job is not completed while the artifact remains"
+             anchor keeps a job while the artifact remains"
         );
         self.failed_artifacts += 1;
         let run = match step {
@@ -962,10 +964,10 @@ type Batch<'a> = Vec<(&'a Candidate, Arc<shape_schema::Validator>)>;
 /// one at a time as Postgres returns them ([`returned_bytes`]), and gathered into a batch until the
 /// next would take it past its bound ([`joins_batch`]); the batch is then read and verdicted. So the
 /// content one batch reads, and the measuring done between two batches, is bounded by what
-/// arrives, not by what was committed. The slice and the deadline are checked after every artifact
-/// the pass settles or fails, not after a measurement. A stop that comes after a failure first
-/// settles the first artifact measured since the last batch, if any, so a pass that measured
-/// anything settles something before it ends.
+/// arrives, not by what was committed. The slice and the deadline are checked after every verdict,
+/// record of unreadable content and failure, not after a measurement or a pass-over. A slice or
+/// deadline stop reached while measuring first tries the first artifact measured since the last
+/// batch, if any; a breaker stop does not.
 ///
 /// - **A shape that does not compile is recorded once** ([`load_shape_check`]), and its artifacts
 ///   are passed over, here and by every later backlog selection.
@@ -1038,9 +1040,9 @@ async fn reconcile_one_anchor(
                     .or_else(|| pace.stop_due(anchor_start)),
             };
             if let Some(stop) = stop {
-                // Settle the first artifact this batch had gathered before stopping, so a stop
-                // that fires after a failure still makes progress when anything was measured.
-                // Only the first: the stop is already due, so `verdict_batch` would stop after it.
+                // Try the first artifact this batch had gathered before stopping, so a stop that
+                // comes after a failure can still settle something. Only the first: the stop is
+                // already due, so `verdict_batch` would stop after it anyway.
                 pass.stop = match stop {
                     Stop::Breaker => Stop::Breaker,
                     _ => {
