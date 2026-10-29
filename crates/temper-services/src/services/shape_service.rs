@@ -181,8 +181,9 @@ pub struct ShapeReconcileSummary {
     /// render. They stay `declared_not_yet_checked`.
     pub unreadable_artifacts: u32,
     /// Artifacts that could not be settled for a reason that may pass: a measurement, a check or
-    /// a verdict write that failed. Each is named in a warning, and its anchor's job is left in
-    /// flight for the reaper.
+    /// a verdict write that failed. Each is named in a warning, and its anchor's job is not
+    /// completed while it remains: handed back if the pass was cut off after settling something,
+    /// otherwise left in flight for the reaper.
     pub failed_artifacts: u32,
     /// Backlog batches read this invocation.
     pub batches_read: u32,
@@ -241,10 +242,10 @@ const MAX_CONSECUTIVE_FAILED_ARTIFACTS: u32 = 8;
 /// Wall-clock ceiling for one drain invocation, in seconds: the region drain's, for its reason. It
 /// sits under the `api/internal` function's `maxDuration: 300`, so a pass that runs long still has
 /// room to hand its job back and return a summary rather than be killed mid-batch. It is checked
-/// after every artifact the pass settles or fails, and a stop reads what the batch had gathered
-/// first, so a pass overruns it by at most one batch: the content it reads (bounded by
-/// [`BatchBound::bytes`], or one artifact up to [`MAX_RETURNED_CONTENT_BYTES`]) and the check and
-/// write of its first artifact.
+/// after every artifact the pass settles or fails, not after a measurement, so a pass overruns it
+/// by at most one batch measured and read (bounded by [`BatchBound::bytes`] plus the artifact that
+/// overflows it, or one artifact up to [`MAX_RETURNED_CONTENT_BYTES`]) and one artifact's check and
+/// write.
 const DEFAULT_SHAPE_RECONCILE_DEADLINE_SECONDS: u64 = 240;
 
 /// The most the env override may set the deadline to: 30 s under the `api/internal` function's
@@ -494,8 +495,9 @@ enum Settled {
 enum Stop {
     /// The backlog was exhausted.
     Exhausted,
-    /// The anchor used its slice ([`SHAPE_RECONCILE_ANCHOR_SLICE`]). What was settled stands, and
-    /// the re-enqueued job resumes from what is left, behind the anchors already waiting.
+    /// The anchor used its slice ([`SHAPE_RECONCILE_ANCHOR_SLICE`]). What was settled stands; if
+    /// anything was, the re-enqueued job resumes from what is left, behind the anchors already
+    /// waiting ([`settle`]).
     Slice,
     /// The pass's deadline came first. As for a slice, and the pass ends.
     Deadline,
@@ -511,7 +513,7 @@ struct AnchorPass {
     uncheckable_artifacts: u32,
     unreadable_artifacts: u32,
     failed_artifacts: u32,
-    /// Measurements that failed in a row, with no measurement or settlement between them.
+    /// Measurements that failed in a row, with no successful measurement or record between them.
     measure_failures_in_a_row: u32,
     /// Checks or verdict writes that failed in a row, with no verdict or record between them.
     verdict_failures_in_a_row: u32,
@@ -524,7 +526,8 @@ struct AnchorPass {
 enum Step {
     /// Measuring its content ([`returned_bytes`]).
     Measure,
-    /// Reading, checking or writing its verdict ([`verdict_batch`]).
+    /// Checking it or writing its verdict ([`verdict_batch`]). A failure to read a batch's content
+    /// fails the whole anchor instead.
     Verdict,
 }
 
@@ -577,7 +580,7 @@ impl AnchorPass {
             artifact_id = %artifact_id,
             anchor = %anchor.uuid(),
             "shape reconciliation could not settle one artifact; the pass goes on, and the \
-             anchor's job is not marked done while the artifact remains"
+             anchor's job is not completed while the artifact remains"
         );
         self.failed_artifacts += 1;
         let run = match step {
@@ -712,8 +715,8 @@ async fn run_reconcile_job(
 ///   not, if it settled anything: the next pass finds the failures again, and a hand-back costs no
 ///   attempt. One that settled nothing is left in flight, so its attempt counts.
 /// - A pass the breaker stopped, or one that exhausted the backlog with an artifact it could not
-///   settle, leaves the job in flight, so the reaper retries it and counts the attempt: the pass
-///   has already settled everything else, and the retry finds only what is left. A failure that
+///   settle, leaves the job in flight, so the reaper retries it and counts the attempt: the retry
+///   finds only what this pass did not settle. A failure that
 ///   does not pass ends the job `dead` after the reaper's attempts; the artifact stays in the
 ///   backlog for the next declare or rehome to reach.
 /// - A clean, exhausted pass marks the job done, and then probes the backlog. The single-flight
@@ -731,10 +734,15 @@ async fn settle(pool: &PgPool, job: &ClaimedAnchorJob, pass: &AnchorPass) -> Set
 
     match pass.stop {
         Stop::Slice | Stop::Deadline if !pass.made_progress() => {
-            // Cut off having settled nothing: only failures can have used the time, and a
-            // hand-back costs no attempt, so the next pass would meet them again with nothing to
-            // stop it. Left in flight, the reaper counts the attempt, and the job ends dead if
-            // they never pass.
+            // Cut off having settled nothing, so the stop came at a failure. A hand-back costs no
+            // attempt, and the next pass could meet the same failure with nothing to stop it.
+            // Left in flight, the reaper counts the attempt, and the job ends dead if it never
+            // passes.
+            tracing::warn!(
+                failed_artifacts = pass.failed_artifacts,
+                "a shape-reconcile pass ran out of time having settled nothing; its job is left in \
+                 flight for the reaper, which counts the attempt"
+            );
             record_backlog_remaining(pool, job.anchor).await;
             return Settled::LeftInFlight;
         }
@@ -955,8 +963,9 @@ type Batch<'a> = Vec<(&'a Candidate, Arc<shape_schema::Validator>)>;
 /// next would take it past its bound ([`joins_batch`]); the batch is then read and verdicted. So the
 /// content one batch reads, and the measuring done between two batches, is bounded by what
 /// arrives, not by what was committed. The slice and the deadline are checked after every artifact
-/// the pass settles or fails; a stop reads the gathered batch first, so whatever was measured is
-/// settled before the pass ends.
+/// the pass settles or fails, not after a measurement. A stop that comes after a failure first
+/// settles the first artifact measured since the last batch, if any, so a pass that measured
+/// anything settles something before it ends.
 ///
 /// - **A shape that does not compile is recorded once** ([`load_shape_check`]), and its artifacts
 ///   are passed over, here and by every later backlog selection.
@@ -996,7 +1005,6 @@ async fn reconcile_one_anchor(
                 ShapeCheck::Ready(validator) => Arc::clone(validator),
                 ShapeCheck::Uncheckable => {
                     pass.uncheckable_artifacts += 1;
-                    pass.recorded();
                     continue;
                 }
             };
@@ -1030,14 +1038,17 @@ async fn reconcile_one_anchor(
                     .or_else(|| pace.stop_due(anchor_start)),
             };
             if let Some(stop) = stop {
-                // Read what this batch had gathered before stopping, so a stop that fires after
-                // a failure still settles what was measured. `verdict_batch` stops again after its
-                // first artifact, so this overruns the stop by at most one batch.
+                // Settle the first artifact this batch had gathered before stopping, so a stop
+                // that fires after a failure still makes progress when anything was measured.
+                // Only the first: the stop is already due, so `verdict_batch` would stop after it.
                 pass.stop = match stop {
                     Stop::Breaker => Stop::Breaker,
-                    _ => verdict_batch(pool, anchor, batch, &mut pass, pace, anchor_start)
-                        .await?
-                        .unwrap_or(stop),
+                    _ => {
+                        batch.truncate(1);
+                        verdict_batch(pool, anchor, batch, &mut pass, pace, anchor_start)
+                            .await?
+                            .unwrap_or(stop)
+                    }
                 };
                 return Ok(pass);
             }
@@ -1148,6 +1159,7 @@ async fn load_shape_check<'s>(
     .await?;
     if recorded.rows_affected() > 0 {
         pass.shapes_uncheckable += 1;
+        pass.recorded();
     }
     tracing::warn!(
         shape_id = %c.shape_id,
@@ -2744,6 +2756,36 @@ mod tests {
             vec!["in_progress".to_owned()],
             "left for the reaper, which counts the attempt"
         );
+    }
+
+    /// FAILS IF: a stop that comes after a failed measurement ends the pass without settling what
+    /// it had measured, so the pass settles nothing and its job is left for the reaper.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_stop_after_a_failed_measurement_still_settles_what_was_measured(pool: PgPool) {
+        let w = seed_world(&pool, "flush-on-stop-reconcile").await;
+        let artifacts = backlog_of(&pool, &w, 3).await;
+        let mut ordered: Vec<Uuid> = artifacts.iter().map(|a| a.uuid()).collect();
+        ordered.sort();
+        poison_measurement(&pool, &ordered[1..2], "XX000").await;
+        let job = claimed_job(&pool).await;
+        let pace = Pace::new(
+            std::time::Instant::now(),
+            std::time::Duration::ZERO,
+            SHAPE_RECONCILE_BATCH,
+        );
+
+        let ran = run_reconcile_job(&pool, &job, None, false, pace).await;
+
+        let ReconcileJobResult::Ran { pass, settled } = ran else {
+            panic!("the job ran a pass: {ran:?}");
+        };
+        assert_eq!(pass.failed_artifacts, 1);
+        assert_eq!(
+            pass.verdicts_written, 1,
+            "the artifact measured before the failure is settled"
+        );
+        assert_eq!(pass.stop, Stop::Deadline);
+        assert_eq!(settled, Settled::HandedBack);
     }
 
     /// FAILS IF: a measurement breaks a run of failed verdict writes, so a database refusing every

@@ -13,9 +13,10 @@ Each pass reaps expired leases, then claims shape-reconcile jobs one anchor at a
 anchor cannot hold the others' leases. An anchor runs for at most a 60 s slice, then goes back to
 the end of the queue; if no other anchor is waiting and it settled something, the same pass runs it
 again. An anchor cut off having settled nothing is left for the reaper, so its attempt counts. A
-pass runs under a 240 s deadline, checked after every artifact it settles or fails. `TEMPER_SHAPE_RECONCILE_DEADLINE_SECONDS`
-overrides the deadline, up to 270 s, which leaves 30 s under the function's `maxDuration`. An anchor
-queued `k`-th gets its next slice within about `k / 4` passes of five minutes.
+pass runs under a 240 s deadline, checked after every artifact it settles or fails.
+`TEMPER_SHAPE_RECONCILE_DEADLINE_SECONDS` overrides the deadline, up to 270 s, which leaves 30 s
+under the function's `maxDuration`. An anchor queued `k`-th gets its next slice within about `k / 4`
+passes of five minutes.
 
 Each anchor's backlog is settled against the shape in force, in batches of at most 200 artifacts
 and 32 MB of content. Content is measured one artifact at a time as Postgres returns it, not as it
@@ -38,13 +39,13 @@ those artifacts out and they stay `declared_not_yet_checked`:
 Their text columns are declared `structural` in the erasure policy.
 
 An artifact that fails for a reason that may pass is counted and passed over, and its anchor's job
-is left for the reaper. That covers a measurement, a check or a verdict write that fails. Eight
-failed measurements in a row, or eight failed checks or writes in a row, stop the anchor's pass. A job handed
-back to resume is marked done and its successor queued in one transaction. A completed anchor
-whose backlog is not empty is queued again. That happens when a declare, an amendment or a rehome
-arrived while it ran. An artifact committed with `null` content is validated as `null`, as its
-commit was. Before this, the jobs were enqueued and nothing drained them. Verdicts written at
-commit are unchanged.
+is not completed while it remains. That covers a measurement, a check or a verdict write that fails.
+Eight failed measurements in a row, or eight failed checks or writes in a row, stop the anchor's
+pass. A job handed back to resume is marked done and its successor queued in one transaction. A
+completed anchor whose backlog is not empty is queued again. That happens when a declare, an
+amendment or a rehome arrived while it ran. An artifact committed with `null` content is validated
+as `null`, as its commit was. Before this, the jobs were enqueued and nothing drained them. Verdicts
+written at commit are unchanged.
 
 The behavioral change is in what reads report. Today, every read that carries a `shape_state`
 reports `declared_not_yet_checked` for such an artifact. Once a pass has verdicted it, the same
