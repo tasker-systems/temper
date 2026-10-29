@@ -68,6 +68,7 @@ const ADMITTED: &[(&str, &str)] = &[
     ("GET", "/api/graph/traverse"),             // handlers::graph::traverse
     ("GET", "/api/invocations"),                // handlers::invocations::list
     ("GET", "/api/invocations/{id}"),           // handlers::invocations::show
+    ("GET", "/api/me/context-activity"),        // handlers::me::context_activity
     ("GET", "/api/profile"),                    // handlers::profiles::get
     ("GET", "/api/relationships/{edge_handle}/facets"), // handlers::facets::list_edge_facets
     ("GET", "/api/resources"),                  // handlers::resources::list

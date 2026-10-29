@@ -147,7 +147,7 @@ async fn declaring_a_schema_that_needs_a_fetch_is_refused_and_writes_nothing(poo
         other => panic!("the refusal must be the typed data-artifact refusal, got {other:?}"),
     };
     assert!(
-        message.contains("cannot be compiled") && message.contains("never fetched"),
+        message.contains("cannot be compiled") && message.contains("field tree"),
         "the refusal must carry the fixed sentence, got: {message}"
     );
     assert!(
@@ -273,8 +273,9 @@ async fn reconcile_over_a_stored_remote_ref_shape_writes_no_verdict_and_does_not
         "exactly one verdict: the sibling family's artifact"
     );
     assert_eq!(
-        summary.set_aside, 1,
-        "the uncompilable shape's artifact is set aside, not skipped silently"
+        (summary.shapes_uncheckable, summary.uncheckable_artifacts),
+        (1, 1),
+        "the uncompilable shape is recorded, and its artifact passed over, not skipped silently"
     );
     assert_eq!(
         summary.completed, 1,

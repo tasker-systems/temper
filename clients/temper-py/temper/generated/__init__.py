@@ -36,6 +36,7 @@ __all__ = [
     "InvitationsApi",
     "InvocationsApi",
     "MachineClientsApi",
+    "MeApi",
     "MetaApi",
     "ProfileApi",
     "QueryApi",
@@ -182,6 +183,7 @@ __all__ = [
     "ConnectionCredential",
     "ConnectionSubscription",
     "ContentResponse",
+    "ContextActivity",
     "ContextCreateRequest",
     "ContextOwnerRef",
     "ContextOwnerRefOneOf",
@@ -545,6 +547,7 @@ from temper.generated.api.ingest_api import IngestApi as IngestApi
 from temper.generated.api.invitations_api import InvitationsApi as InvitationsApi
 from temper.generated.api.invocations_api import InvocationsApi as InvocationsApi
 from temper.generated.api.machine_clients_api import MachineClientsApi as MachineClientsApi
+from temper.generated.api.me_api import MeApi as MeApi
 from temper.generated.api.meta_api import MetaApi as MetaApi
 from temper.generated.api.profile_api import ProfileApi as ProfileApi
 from temper.generated.api.query_api import QueryApi as QueryApi
@@ -695,6 +698,7 @@ from temper.generated.models.confidence_band import ConfidenceBand as Confidence
 from temper.generated.models.connection_credential import ConnectionCredential as ConnectionCredential
 from temper.generated.models.connection_subscription import ConnectionSubscription as ConnectionSubscription
 from temper.generated.models.content_response import ContentResponse as ContentResponse
+from temper.generated.models.context_activity import ContextActivity as ContextActivity
 from temper.generated.models.context_create_request import ContextCreateRequest as ContextCreateRequest
 from temper.generated.models.context_owner_ref import ContextOwnerRef as ContextOwnerRef
 from temper.generated.models.context_owner_ref_one_of import ContextOwnerRefOneOf as ContextOwnerRefOneOf

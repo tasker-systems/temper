@@ -54,7 +54,8 @@ pub fn load_global_config() -> Result<GlobalConfig> {
     let path = global_config_path();
     if !path.exists() {
         return Err(TemperError::Config(format!(
-            "global config not found: {}. Run 'temper init' first.",
+            "global config not found: {}. Run 'temper init' first \
+             (or name the vault with --vault / TEMPER_VAULT).",
             path.display()
         )));
     }
@@ -104,20 +105,30 @@ pub fn load_from(global: &TemperConfig, cli_vault: Option<&str>) -> Config {
 }
 
 /// Resolve vault + build Config from global config.
+///
+/// When the vault is named explicitly (`--vault` or `TEMPER_VAULT`), an absent
+/// config file reads as defaults: everything else it holds is optional, so a
+/// host configured only through the environment (a cloud agent session:
+/// `TEMPER_VAULT`, `TEMPER_API_URL`, `TEMPER_AUTH`) needs no `temper init`. A
+/// file that exists but does not parse is still refused. With no vault named,
+/// the file is required — the default vault path is a guess, and `init` is
+/// where a person picks the real one.
 pub fn load(cli_vault: Option<&str>) -> Result<Config> {
-    let global = load_global_config()?;
-
-    let vault_root = if let Some(v) = cli_vault {
-        expand_tilde(v)
-    } else if let Ok(v) = std::env::var("TEMPER_VAULT") {
-        if !v.is_empty() {
-            expand_tilde(&v)
-        } else {
-            expand_tilde(&global.vault.path)
-        }
-    } else {
-        expand_tilde(&global.vault.path)
+    let explicit_vault = match cli_vault {
+        Some(v) => Some(expand_tilde(v)),
+        None => std::env::var("TEMPER_VAULT")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .map(|v| expand_tilde(&v)),
     };
+
+    let global = if explicit_vault.is_some() {
+        load_global_config_defaulting_when_absent()?
+    } else {
+        load_global_config()?
+    };
+
+    let vault_root = explicit_vault.unwrap_or_else(|| expand_tilde(&global.vault.path));
 
     Ok(Config {
         state_dir: vault_root.join(".temper"),
@@ -192,5 +203,80 @@ mod tests {
 
         let cfg = result.expect("an absent config file must still default");
         assert_eq!(cfg.vault.path, TemperConfig::default().vault.path);
+    }
+
+    /// A named vault makes the config file optional: an env-only host (a cloud
+    /// agent session) runs vault-backed commands without `temper init`.
+    #[test]
+    fn a_named_vault_needs_no_config_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("absent.toml");
+        let vault = dir.path().join("vault");
+
+        let cfg = temp_env::with_vars(
+            [
+                ("TEMPER_GLOBAL_CONFIG", Some(config_path.to_str().unwrap())),
+                ("TEMPER_VAULT", Some(vault.to_str().unwrap())),
+            ],
+            || load(None),
+        )
+        .expect("TEMPER_VAULT with no config file must load defaults");
+
+        assert_eq!(cfg.vault_root, vault);
+        assert_eq!(cfg.state_dir, vault.join(".temper"));
+        assert_eq!(
+            cfg.contexts,
+            TemperConfig::default().sync.subscriptions.contexts
+        );
+
+        let cfg = temp_env::with_vars(
+            [
+                ("TEMPER_GLOBAL_CONFIG", Some(config_path.to_str().unwrap())),
+                ("TEMPER_VAULT", None),
+            ],
+            || load(Some(vault.to_str().unwrap())),
+        )
+        .expect("--vault with no config file must load defaults");
+        assert_eq!(cfg.vault_root, vault);
+    }
+
+    /// With no vault named, the default path is a guess: the file stays
+    /// required, and the refusal names both ways out.
+    #[test]
+    fn no_named_vault_still_requires_the_config_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("absent.toml");
+
+        let err = temp_env::with_vars(
+            [
+                ("TEMPER_GLOBAL_CONFIG", Some(config_path.to_str().unwrap())),
+                ("TEMPER_VAULT", None),
+            ],
+            || load(None),
+        )
+        .expect_err("no vault and no config must be refused");
+
+        let msg = format!("{err}");
+        assert!(msg.contains("temper init"), "names init: {msg}");
+        assert!(msg.contains("TEMPER_VAULT"), "names TEMPER_VAULT: {msg}");
+    }
+
+    /// A named vault does not launder a broken file into defaults.
+    #[test]
+    fn a_named_vault_still_refuses_a_malformed_config() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("config.toml");
+        std::fs::write(&config_path, "[vault\npath = \"x\"\n").unwrap();
+
+        let result = temp_env::with_vars(
+            [
+                ("TEMPER_GLOBAL_CONFIG", Some(config_path.to_str().unwrap())),
+                ("TEMPER_VAULT", Some(dir.path().to_str().unwrap())),
+            ],
+            || load(None),
+        );
+
+        let err = result.expect_err("a malformed config must not read as defaults");
+        assert!(format!("{err}").contains(config_path.to_str().unwrap()));
     }
 }

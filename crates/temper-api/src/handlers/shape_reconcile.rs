@@ -55,8 +55,8 @@ pub async fn dispatch(
         failed = summary.failed,
         requeued = summary.requeued,
         verdicts_written = summary.verdicts_written,
-        set_aside = summary.set_aside,
-        interrupted_checks = summary.interrupted_checks,
+        shapes_uncheckable = summary.shapes_uncheckable,
+        uncheckable_artifacts = summary.uncheckable_artifacts,
         failed_artifacts = summary.failed_artifacts,
         batches_read = summary.batches_read,
         "shape reconcile pass complete"

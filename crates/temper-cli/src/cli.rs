@@ -687,7 +687,8 @@ pub enum ResourceAction {
         /// Filter by stage (task only)
         #[arg(long)]
         stage: Option<String>,
-        /// Filter by goal (task only)
+        /// Filter to resources advancing this goal (any type: its tasks, decisions,
+        /// evidence)
         #[arg(long)]
         goal: Option<String>,
         /// Filter by status (goal only)
@@ -1334,7 +1335,7 @@ pub enum SchemaAction {
     /// Gated on authoring authority over the home. Exactly one of the positional
     /// context ref / `--cogmap`. The schema content is read from
     /// `--content @<path>`, `--content -` (stdin), or piped stdin — the same convention as
-    /// `data-artifact commit`. The content must be a valid JSON Schema (draft 2020-12).
+    /// `data-artifact commit`. The content must be a field tree (a subset of JSON Schema 2020-12; see the data-artifacts skill for the vocabulary).
     Declare {
         /// Context ref: a UUID or the `@owner/slug` / `+team-slug/slug` form. Mutually
         /// exclusive with --cogmap — exactly one home.
@@ -1356,7 +1357,7 @@ pub enum SchemaAction {
         #[arg(long, value_enum, default_value_t = CliEnforcementMode::Advisory)]
         enforcement: CliEnforcementMode,
         /// Content source: `@<path>` (file), `-` (stdin), or omitted for implicit stdin.
-        /// The content must be valid JSON (a JSON Schema draft 2020-12 document).
+        /// The content must be valid JSON (a field tree: a subset of JSON Schema 2020-12; see the data-artifacts skill).
         #[arg(long)]
         content: Option<String>,
         #[command(flatten)]
@@ -1402,6 +1403,10 @@ pub enum ContextAction {
         #[arg(long)]
         retired: bool,
     },
+    /// When you last changed something in each context you can read, newest first. Only your
+    /// own authored changes count: an agent writing under your profile counts, a machine client
+    /// or a teammate does not, and nothing the system computes does.
+    Activity,
     /// Share a context into a team's read-reach. Requires that you administer the context
     /// (own it, or manage its owning team) AND manage the target team (owner/maintainer), OR
     /// that you are an instance administrator. The context ref is a UUID or the

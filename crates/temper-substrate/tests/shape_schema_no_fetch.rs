@@ -2,24 +2,25 @@
 //! fetch would have returned (task `01a15661-8460-739d-9ed3-f1e8ccbf9b69`).
 //!
 //! A shape's schema is written by any author of its home, so every compile of it is a fetch
-//! trigger unless the compiler is configured not to. The three bites are written so that they fail
-//! against `jsonschema::validator_for` with the resolver features enabled (default options resolve
-//! `http(s)` and `file:`); `jsonschema` is now built without those features, so to run the bite
-//! re-enable `resolve-http` and `resolve-file` as well as swapping the compile:
+//! trigger unless the compiler is configured not to. `compile` now meets the field-tree walk first
+//! (spec `2026-10-27-a-shape-is-a-field-tree-design`, §1), which refuses every `$ref`, every
+//! `$schema` but the bundled 2020-12 spelling at the root, and every keyword outside the field-tree
+//! vocabulary — so the three connection and sentinel tests below now witness that the walk refuses
+//! before any fetch could be made, not the retriever. The retriever and the compiled-out resolvers
+//! stay as defence in depth; no field tree can reach them. Their assertions are unchanged and still
+//! fail against `jsonschema::validator_for` with the resolver features enabled (default options
+//! resolve `http(s)` and `file:`):
 //!
 //! - the connection count is read from a real loopback listener, so "nothing was fetched" is
 //!   observed rather than inferred from an error;
 //! - the `file:` witness compiles under the defaults and is refused here;
 //! - the sentinel the file carries must appear in no error text.
 //!
-//! The rest are controls or property pins, not bites. Local `#/$defs` refs still compile and an
-//! unknown `$schema` is refused, pinning that the refusing retriever did not narrow what compiles.
-//! Several witnesses pin that a custom `$schema` string is refused wherever it sits in the
-//! document, including when the schema defines it for itself (which `jsonschema` alone would
-//! compile under a guessed draft) and wherever a reference of any spelling could make it a schema.
-//! One pins the accepted cost: a custom `$schema` inside a `const` value is refused too. Controls
-//! pin that a standard `$schema` inside a `const`, a property named `$schema` and a recursive
-//! `$ref` still compile.
+//! The rest are controls or property pins. A local `#/$defs` or `#/definitions` ref and a recursive
+//! pointer `$ref` are refused as outside the field tree; a custom or off-list `$schema` is refused
+//! wherever it sits as a schema keyword, including one the schema defines for itself; and a custom
+//! `$schema` string inside data (a `const`, an `enum`) is not a schema keyword and compiles.
+//! Controls pin that a standard `$schema` inside a `const` and a property named `$schema` compile.
 //!
 //! These are plain `#[test]`s on purpose: the blocking fetch a default compile makes panics inside
 //! a tokio runtime instead of connecting, so the async suites' zero-connection assertions are not
@@ -142,11 +143,10 @@ fn every_cause_answers_the_one_fixed_error() {
     }
 }
 
-/// Control: an explicit 2020-12 `$schema` with local `#/$defs` refs still compiles, and the
-/// validator it yields applies the `$ref`. The draft's meta-schema is bundled; naming it fetches
-/// nothing.
+/// A 2020-12 `$schema` with local `#/$defs` refs is refused: `$ref` and `$defs` are outside the
+/// field tree, even though the ref never leaves the document.
 #[test]
-fn a_2020_12_schema_with_local_defs_refs_still_compiles() {
+fn a_local_defs_ref_is_refused_as_outside_the_field_tree() {
     let schema = json!({
         "$schema": DRAFT_2020_12,
         "type": "object",
@@ -154,18 +154,16 @@ fn a_2020_12_schema_with_local_defs_refs_still_compiles() {
         "$defs": { "label": { "type": "string", "minLength": 1 } },
     });
 
-    let validator = compile(&schema).expect("a self-contained 2020-12 schema compiles");
-    assert!(validator.is_valid(&json!({ "name": "ok" })));
     assert!(
-        !validator.is_valid(&json!({ "name": "" })),
-        "the local $ref is applied, not skipped"
+        compile(&schema).is_err(),
+        "a local $ref is outside the field tree and must not compile"
     );
 }
 
-/// Control: the draft comes from `$schema`, so a draft-07 schema whose `$ref` reads
-/// `#/definitions/…` compiles and applies the `$ref`.
+/// A draft-07 schema whose `$ref` reads `#/definitions/…` is refused: the draft-07 `$schema` is
+/// not the accepted spelling, and `$ref` and `definitions` are outside the field tree anyway.
 #[test]
-fn a_draft_07_schema_with_local_definitions_refs_still_compiles() {
+fn a_draft_07_definitions_ref_is_refused() {
     let schema = json!({
         "$schema": "http://json-schema.org/draft-07/schema#",
         "type": "object",
@@ -173,9 +171,10 @@ fn a_draft_07_schema_with_local_definitions_refs_still_compiles() {
         "definitions": { "label": { "type": "string", "minLength": 1 } },
     });
 
-    let validator = compile(&schema).expect("a self-contained draft-07 schema compiles");
-    assert!(validator.is_valid(&json!({ "name": "ok" })));
-    assert!(!validator.is_valid(&json!({ "name": "" })));
+    assert!(
+        compile(&schema).is_err(),
+        "a draft-07 schema with a definitions $ref must not compile"
+    );
 }
 
 /// A `$schema` the schema defines for itself is still a custom meta-schema, and is refused. The
@@ -369,10 +368,10 @@ fn a_custom_schema_uri_under_an_escaped_pointer_is_refused() {
     }
 }
 
-/// Control: a recursive schema (a `$ref` cycle through `$defs`) compiles and applies its `$ref`, so
-/// a legitimate self-referencing schema is not refused.
+/// A recursive schema (a `$ref` cycle through `$defs`) is refused: a field tree has no `$ref`, so
+/// nothing in it can refer back to itself.
 #[test]
-fn a_recursive_pointer_ref_schema_still_compiles() {
+fn a_recursive_pointer_ref_is_refused() {
     let schema = json!({
         "$schema": DRAFT_2020_12,
         "$ref": "#/$defs/node",
@@ -384,9 +383,10 @@ fn a_recursive_pointer_ref_schema_still_compiles() {
         },
     });
 
-    let validator = compile(&schema).expect("a recursive schema compiles");
-    assert!(validator.is_valid(&json!({ "next": { "next": {} } })));
-    assert!(!validator.is_valid(&json!({ "next": 1 })));
+    assert!(
+        compile(&schema).is_err(),
+        "a recursive $ref must not compile"
+    );
 }
 
 /// A custom `$schema` under the target of a reference written relative to the document root
@@ -462,20 +462,18 @@ fn a_custom_schema_uri_under_a_loosely_spelled_array_index_is_refused() {
     }
 }
 
-/// The accepted cost of the document-wide rule: a custom `$schema` string inside a `const` value
-/// is refused too, although `const` holds data. Position cannot tell data from schema, because a
-/// reference can make any position a schema, so the rule fails closed with the same fixed error.
+/// A custom `$schema` string inside a `const` value compiles: `const` holds data, and with no
+/// `$ref` nothing can make data a schema, so the walk never reads it as a `$schema` keyword.
 #[test]
-fn a_custom_schema_uri_inside_a_const_value_is_refused_too() {
+fn a_custom_schema_uri_inside_a_const_value_compiles() {
     let schema = json!({
         "$schema": DRAFT_2020_12,
         "const": { "$schema": "urn:x", "kind": "example" },
     });
 
-    assert_eq!(
-        compile(&schema).err(),
-        Some(ShapeSchemaUncompilable),
-        "a custom $schema inside a const is refused with the fixed error"
+    assert!(
+        compile(&schema).is_ok(),
+        "a custom $schema inside a const is data and must compile"
     );
 }
 
@@ -493,9 +491,8 @@ fn a_standard_schema_uri_inside_a_const_value_still_compiles() {
     assert!(!validator.is_valid(&json!({ "kind": "other" })));
 }
 
-/// Control: a property merely NAMED `$schema` is not a meta-schema declaration, because the value
-/// under that key in `properties` is an object, not a string; and a standard `$schema` inside a
-/// subschema is fine.
+/// Control: a property merely NAMED `$schema` is not a meta-schema declaration, because it is a
+/// name in `properties`, not a keyword in a schema position.
 #[test]
 fn a_property_named_schema_is_not_mistaken_for_a_meta_schema_declaration() {
     let schema = json!({
@@ -503,23 +500,22 @@ fn a_property_named_schema_is_not_mistaken_for_a_meta_schema_declaration() {
         "type": "object",
         "properties": {
             "$schema": { "type": "string" },
-            "nested": { "$schema": DRAFT_2020_12, "type": "integer" },
         },
     });
 
     let validator = compile(&schema).expect("a property named $schema compiles");
-    assert!(validator.is_valid(&json!({ "$schema": "x", "nested": 1 })));
+    assert!(validator.is_valid(&json!({ "$schema": "x" })));
 }
 
-/// A custom `$schema` object nested inside an array inside an array is refused: the document-wide
-/// walk descends through arrays of arrays, not only through object members.
+/// A custom `$schema` object nested inside an array inside an array compiles: it sits under
+/// `enum`, a data position the walk never enters.
 #[test]
-fn a_custom_schema_uri_inside_nested_arrays_is_refused() {
+fn a_custom_schema_uri_inside_nested_arrays_compiles() {
     let schema = json!({ "type": "object", "enum": [[{ "$schema": "urn:example:custom" }]] });
 
     assert!(
-        compile(&schema).is_err(),
-        "a custom $schema inside an array nested in an array must not compile"
+        compile(&schema).is_ok(),
+        "a custom $schema inside an enum's nested arrays is data and must compile"
     );
 }
 

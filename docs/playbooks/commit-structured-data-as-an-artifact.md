@@ -71,7 +71,11 @@ The commit returns the artifact with its server-assigned ID, content hash, and s
 
 ## Declaring a shape
 
-A shape is a JSON Schema (draft 2020-12) you declare for a family within a context. Declaring is a
+A shape is a field tree — a JSON Schema (draft 2020-12) document that uses only `type`, `properties`,
+`required`, `additionalProperties`, `items`, `enum`, `const`, `pattern`, the length, item-count and
+numeric bounds, and the annotation keywords — that you declare for a family within a context.
+Keywords such as `$ref`, `allOf`, `anyOf`, `oneOf` and `format` are refused at declare, and the
+refusal lists what is allowed. Declaring is a
 **separate act** from committing data — you never need to declare a shape to commit an artifact.
 The system persists your data whether or not a shape exists. `never_declared` is a first-class
 state, not a gate.
@@ -86,7 +90,7 @@ temper data-artifact schema declare <context-ref> \
   --content @measurement-schema.json
 ```
 
-The schema file is a JSON Schema draft 2020-12 document:
+The schema file is a field tree:
 
 ```json
 {
@@ -95,7 +99,7 @@ The schema file is a JSON Schema draft 2020-12 document:
     "metric": { "type": "string" },
     "value": { "type": "number" },
     "endpoint": { "type": "string" },
-    "timestamp": { "type": "string", "format": "date-time" }
+    "timestamp": { "type": "string", "minLength": 20 }
   },
   "required": ["metric", "value", "timestamp"]
 }

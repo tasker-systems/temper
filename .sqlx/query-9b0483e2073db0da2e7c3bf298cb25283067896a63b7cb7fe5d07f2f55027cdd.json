@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT octet_length(content::text)::bigint AS \"bytes!: i64\"\n             FROM kb_data_artifact_content WHERE artifact_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "bytes!: i64",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "9b0483e2073db0da2e7c3bf298cb25283067896a63b7cb7fe5d07f2f55027cdd"
+}

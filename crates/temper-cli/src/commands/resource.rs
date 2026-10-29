@@ -1149,7 +1149,7 @@ fn resolve_cogmap_scope_csv(cogmaps: &[String], context: Option<&str>) -> Result
     Ok(Some(ids.join(",")))
 }
 
-/// Refuse a type-scoped filter paired with a `--type` it cannot apply to. All three are sent
+/// Refuse a type-scoped filter paired with a `--type` it cannot apply to. Both are sent
 /// to the server unconditionally, so "ignored" was never true of any of them — a mismatch is
 /// a hard error rather than a hint.
 ///
@@ -1160,11 +1160,12 @@ fn resolve_cogmap_scope_csv(cogmaps: &[String], context: Option<&str>) -> Result
 /// flag demonstrably cannot apply to.
 ///
 /// `--tag` is deliberately absent: tags are not doc-type-scoped (14 doc types carry them in
-/// production), so there is no doc type it could mismatch.
+/// production), so there is no doc type it could mismatch. `--goal` is absent for the same
+/// reason: the server matches any resource holding a live `advances`→goal edge, and a goal's
+/// `decision` and `evidence` records carry that edge just as its tasks do.
 fn check_type_scoped_filters(
     doc_type: Option<&str>,
     stage: Option<&str>,
-    goal: Option<&str>,
     status: Option<&str>,
 ) -> Result<()> {
     let Some(doc_type) = doc_type else {
@@ -1172,9 +1173,6 @@ fn check_type_scoped_filters(
     };
     if stage.is_some() && doc_type != "task" {
         return Err(mismatched_filter_err("--stage", "task", doc_type));
-    }
-    if goal.is_some() && doc_type != "task" {
-        return Err(mismatched_filter_err("--goal", "task", doc_type));
     }
     if status.is_some() && doc_type != "goal" {
         return Err(mismatched_filter_err("--status", "goal", doc_type));
@@ -1250,10 +1248,12 @@ fn parse_sort_arg(
 
     let order = match dir_str {
         None => match field {
-            // Time and sequence sort newest/highest-first by default.
-            ResourceSortField::Updated | ResourceSortField::Created | ResourceSortField::Seq => {
-                SortOrder::Desc
-            }
+            // Time and sequence sort newest/highest-first by default. `ChangedByMe` is not
+            // parsed above (the CLI has no `changed_by` flag), but it is a time too.
+            ResourceSortField::Updated
+            | ResourceSortField::Created
+            | ResourceSortField::Seq
+            | ResourceSortField::ChangedByMe => SortOrder::Desc,
             // Textual fields read most naturally in ascending (A→Z) order.
             ResourceSortField::Title
             | ResourceSortField::Stage
@@ -1481,7 +1481,7 @@ fn list_api_params(
 /// The paging state it prints (`returned`, `truncated`, `limit`, `offset`) is read off the
 /// response, never recomputed here — see `build_list_envelope`.
 pub fn list(_config: &Config, params: ListParams<'_>) -> Result<()> {
-    check_type_scoped_filters(params.doc_type, params.stage, params.goal, params.status)?;
+    check_type_scoped_filters(params.doc_type, params.stage, params.status)?;
 
     if let Some(s) = params.stage {
         vault::validate_stage(s)?;
@@ -3333,18 +3333,37 @@ mod list_helpers_tests {
     fn a_type_scoped_filter_errors_only_when_a_type_was_named() {
         // Named and mismatched -> still an error. This is the behavior `--type`'s becoming
         // optional must not have weakened.
-        assert!(check_type_scoped_filters(Some("goal"), Some("backlog"), None, None).is_err());
-        assert!(check_type_scoped_filters(Some("task"), None, None, Some("active")).is_err());
-        assert!(check_type_scoped_filters(Some("goal"), None, Some("ref"), None).is_err());
+        assert!(check_type_scoped_filters(Some("goal"), Some("backlog"), None).is_err());
+        assert!(check_type_scoped_filters(Some("task"), None, Some("active")).is_err());
 
         // Named and matching -> no refusal.
-        assert!(check_type_scoped_filters(Some("task"), Some("backlog"), None, None).is_ok());
-        assert!(check_type_scoped_filters(Some("goal"), None, None, Some("active")).is_ok());
+        assert!(check_type_scoped_filters(Some("task"), Some("backlog"), None).is_ok());
+        assert!(check_type_scoped_filters(Some("goal"), None, Some("active")).is_ok());
 
         // Type OMITTED -> no refusal for any of them. There is no stated type to conflict with.
-        assert!(check_type_scoped_filters(None, Some("backlog"), None, None).is_ok());
-        assert!(check_type_scoped_filters(None, None, None, Some("active")).is_ok());
-        assert!(check_type_scoped_filters(None, None, Some("ref"), None).is_ok());
+        assert!(check_type_scoped_filters(None, Some("backlog"), None).is_ok());
+        assert!(check_type_scoped_filters(None, None, Some("active")).is_ok());
+    }
+
+    /// `--goal` is not task-scoped: the server matches any resource holding a live
+    /// `advances`→goal edge, and a goal's `decision` and `evidence` records carry one. So
+    /// `--type evidence --goal <ref>` passes the type guard and sends both filters.
+    #[test]
+    fn goal_filter_pairs_with_any_named_type() {
+        let goal_uuid = uuid::Uuid::now_v7();
+        let goal_ref = format!("some-goal-{goal_uuid}");
+        for doc_type in ["task", "evidence", "decision"] {
+            let mut params = list_params(&[], &[]);
+            params.doc_type = Some(doc_type);
+            params.goal = Some(goal_ref.as_str());
+            assert!(
+                check_type_scoped_filters(params.doc_type, params.stage, params.status).is_ok(),
+                "--type {doc_type} --goal must not be refused"
+            );
+            let api = list_api_params(&params, &no_sections()).unwrap();
+            assert_eq!(api.doc_type_name.as_deref(), Some(doc_type));
+            assert_eq!(api.goal, Some(goal_uuid));
+        }
     }
 
     #[test]
@@ -3943,6 +3962,7 @@ mod action_result_tests {
             is_active: true,
             created: chrono::Utc::now(),
             updated: chrono::Utc::now(),
+            changed_by_me_at: None,
             body_hash: None,
             ingest_state: Some(temper_core::types::resource::IngestState::Complete),
             ingest_ended: None,
@@ -4334,6 +4354,7 @@ mod resource_list_render_tests {
             is_active: true,
             created: chrono::DateTime::from_timestamp(0, 0).unwrap(),
             updated: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+            changed_by_me_at: None,
             body_hash: Some("abc123deadbeef".to_string()),
             ingest_state: Some(temper_core::types::resource::IngestState::Complete),
             ingest_ended: None,

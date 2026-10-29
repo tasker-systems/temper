@@ -15,8 +15,10 @@ temper-created: {{ date }}
 An outcome register. Read `outcome-registers.md` in the temper skill before filling this in.
 
 Fill the sections that carry weight, and say so briefly in the ones that do not — a padded section
-reads as coverage. Clauses state what must be true and NAME NO MECHANISM; witnesses are authored
-later, during the build. Delete this comment when you write.
+reads as coverage. Clauses state what must be true and NAME NO MECHANISM STILL OPEN AT THIS
+ALTITUDE; a mechanism a cited decision chose is a prior to be precise about. Witnesses are authored
+later, during the build, and their evidence goes in an `evidence` record beside this goal, never in
+this body. Delete this comment when you write.
 -->
 
 ## Why-anchor
@@ -40,3 +42,12 @@ later, during the build. Delete this comment when you write.
 ## Closure
 
 ## Stated silence
+
+## Current witnessed state
+
+Evidence record: none yet — created with the first witness.
+
+One row per clause, each *not witnessed — why* until a witness stands. An empty table claims nothing.
+
+| Clause | Witnesses | State | Evidence |
+|---|---|---|---|

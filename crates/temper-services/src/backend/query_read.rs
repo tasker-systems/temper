@@ -2184,6 +2184,7 @@ mod tests {
             is_active: true,
             created: chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0).expect("epoch"),
             updated: chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0).expect("epoch"),
+            changed_by_me_at: None,
             body_hash: None,
             ingest_state: None,
             ingest_ended: None,

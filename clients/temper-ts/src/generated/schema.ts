@@ -2476,6 +2476,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/me/context-activity": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /** When you last changed something in each context you can read */
+        get: operations["list_my_context_activity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/profile": {
         parameters: {
             query?: never;
@@ -5728,6 +5748,25 @@ export interface components {
              */
             open_meta?: unknown;
             resource_id: components["schemas"]["ResourceId"];
+        };
+        /**
+         * @description When the reading principal last changed something in one context — themselves, or an agent
+         *     writing under their profile. One row per context they changed something in and can still read;
+         *     `GET /api/me/context-activity`.
+         *
+         *     Their own authored changes only: a teammate's, a machine client's, and an event the system
+         *     computes (a region materialization stamped with a writer's emitter) never set it. A row's absence
+         *     says nothing about the context: the caller cannot read it, or never changed anything there.
+         *     A profile-scoped read of its own rather than a field of the contexts list, so the list every page
+         *     loads does not pay for a scan of the caller's whole history.
+         */
+        ContextActivity: {
+            context_id: components["schemas"]["ContextId"];
+            /**
+             * Format: date-time
+             * @description The time of the caller's latest authored change produced in this context.
+             */
+            last_changed_at: string;
         };
         /** @description Request body for POST /api/contexts. */
         ContextCreateRequest: {
@@ -9874,7 +9913,7 @@ export interface components {
          * @description Sort field for resource listing.
          * @enum {string}
          */
-        ResourceSortField: "updated" | "created" | "title" | "stage" | "seq" | "context_name" | "doc_type_name";
+        ResourceSortField: "updated" | "created" | "title" | "stage" | "seq" | "context_name" | "doc_type_name" | "changed_by_me";
         /** @description Request body for updating a resource. */
         ResourceUpdateRequest: components["schemas"]["ActInput"] & {
             /**
@@ -10005,6 +10044,15 @@ export interface components {
              */
             body_hash?: string | null;
             body_storage?: components["schemas"]["BodyStorage"] | null;
+            /**
+             * Format: date-time
+             * @description When the caller last changed this resource themselves. Present only on a row read with
+             *     `changed_by=@me`, the same time `sort=changed_by_me` orders by; absent on every other read.
+             *
+             *     Not `updated`, which can be a teammate's later change: this counts only the caller's own
+             *     authored events on the resource, so it never reports another principal's activity.
+             */
+            changed_by_me_at?: string | null;
             /**
              * Format: uuid
              * @description Set when the resource is homed in a cognitive map. Mutually exclusive with
@@ -10533,7 +10581,10 @@ export interface components {
             /** @description The bare family name, qualified by `kind_owner` (or defaulted from the home). */
             kind: string;
             kind_owner?: components["schemas"]["KindOwnerInput"] | null;
-            /** @description The JSON Schema (draft 2020-12) governing this family. Validated Rust-side. */
+            /**
+             * @description The family's shape: a field tree, which is a subset of JSON Schema 2020-12 (see the
+             *     data-artifacts skill for its vocabulary). Validated Rust-side.
+             */
             schema: unknown;
         };
         /**
@@ -10598,7 +10649,10 @@ export interface components {
             kind_owner_id: string;
             /** @description `"kb_profiles"` or `"kb_teams"` — the namespace half of the family name. */
             kind_owner_table: string;
-            /** @description The JSON Schema (draft 2020-12) governing this family. */
+            /**
+             * @description The family's shape: a field tree, which is a subset of JSON Schema 2020-12 (see the
+             *     data-artifacts skill for its vocabulary).
+             */
             schema: unknown;
             shape_id: components["schemas"]["ShapeId"];
             /**
@@ -17992,6 +18046,29 @@ export interface operations {
             };
         };
     };
+    list_my_context_activity: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One row per context you changed something in and can still read, the time of your latest authored change there, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContextActivity"][];
+                };
+            };
+        };
+    };
     get_profile: {
         parameters: {
             query?: never;
@@ -18706,6 +18783,21 @@ export interface operations {
                  */
                 doc_type_name?: string | null;
                 owner?: string | null;
+                /**
+                 * @description `"@me"`: only resources the caller changed — themselves, or an agent writing under their
+                 *     profile, on any surface. A change counts when it reaches the resource through its element
+                 *     trail's arms (names it, owns a property of it, names one of its blocks) and is an AUTHORED
+                 *     event the caller's profile emitted: events the system computes, such as a region
+                 *     materialization stamped with a writer's emitter, never count. A machine client is its own
+                 *     profile, and its changes are not the caller's.
+                 *
+                 *     **Only `"@me"`.** Any other non-empty value is a `400`: naming someone else would make this a read of
+                 *     another principal's activity, which no door offers. Composes with every other filter as one
+                 *     more AND, under the same visibility join, so a resource the caller changed and can no longer
+                 *     read is absent from the rows and from every count. An empty value is no filter, as for
+                 *     `tags` and `ids`.
+                 */
+                changed_by?: string | null;
                 q?: string | null;
                 stage?: string | null;
                 /**

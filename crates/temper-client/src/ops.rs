@@ -278,6 +278,7 @@ registry! {
         OPEN = Post "/api/invocations" => "open";
         SHOW = Get "/api/invocations/{id}" => "show";
         CLOSE = Post "/api/invocations/{id}/close" => "close";
+        LIST_MY_CONTEXT_ACTIVITY = Get "/api/me/context-activity" => "list_my_context_activity";
         LIST_MACHINE_CLIENTS = Get "/api/machine-clients" => "list_machine_clients";
         PROVISION_MACHINE_CLIENT = Post "/api/machine-clients" => "provision_machine_client";
         GET_MACHINE_CLIENT = Get "/api/machine-clients/{id}" => "get_machine_client";

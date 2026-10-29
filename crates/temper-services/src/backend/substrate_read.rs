@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 
+use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
@@ -79,6 +80,9 @@ fn search_stage_err(stage: &str, e: impl std::fmt::Display) -> ApiError {
 /// the one that is not the truth.
 struct VisiblePage {
     page_ids: Vec<Uuid>,
+    /// The caller's own latest change to each page row, keyed by id. Filled only under
+    /// `changed_by=@me`, the one read that computes it; empty on every other list.
+    changed_by_me_at: HashMap<Uuid, DateTime<Utc>>,
     total: i64,
     facets: ResourceFacets,
     offset: i64,
@@ -96,6 +100,8 @@ struct ScannedRow {
     doc_type: Option<String>,
     stage: Option<String>,
     status: Option<String>,
+    /// `mine.changed_at`, read only when the `mine` CTE was emitted; `None` otherwise.
+    changed_at: Option<DateTime<Utc>>,
 }
 
 /// The ORDER BY column expression for a sort field. Enum-controlled (no caller string
@@ -111,6 +117,9 @@ fn sort_column_sql(field: ResourceSortField) -> &'static str {
         ResourceSortField::Seq => "wp.seq::bigint",
         ResourceSortField::ContextName => "c.name",
         ResourceSortField::DocTypeName => "dt.property_value #>> '{}'",
+        // The `mine` CTE exists only when `changed_by = "@me"`, which `filtered_visible_page`
+        // requires for this sort, so every row it orders carries a time.
+        ResourceSortField::ChangedByMe => "mine.changed_at",
     }
 }
 
@@ -180,6 +189,31 @@ async fn filtered_visible_page(
         Some(h) if h != "@me" => Some(h),
         _ => None,
     };
+    // `changed_by`: the caller's own changes, and nobody else's. Another value would make this door
+    // a read of someone else's activity, so it is refused rather than matched. The sort by the
+    // caller's latest change is refused without it: a row the filter did not admit has no such time,
+    // and ordering by one would present an order the rows do not hold.
+    //
+    // An empty or whitespace-only value is no filter, as `tags`, `ids` and `doc_type_name` treat
+    // theirs: absent and empty must not mean two different things at one door. Anything else that
+    // is not exactly `@me` is refused, never trimmed into it.
+    let changed_by_self: Option<Uuid> = match params.changed_by.as_deref() {
+        None => None,
+        Some(s) if s.trim().is_empty() => None,
+        Some("@me") => Some(*profile_id),
+        Some(_) => {
+            return Err(ApiError::BadRequest(
+                "`changed_by` accepts only \"@me\": a caller may list their own changes, not another's"
+                    .into(),
+            ));
+        }
+    };
+    if matches!(params.sort, Some(ResourceSortField::ChangedByMe)) && changed_by_self.is_none() {
+        return Err(ApiError::BadRequest(
+            "sort `changed_by_me` needs `changed_by=@me`: only resources you changed carry that time"
+                .into(),
+        ));
+    }
     // Cognitive-map scope: a CSV of cogmap UUIDs (the list GET can't carry a Vec over the query
     // string). Parse to a `uuid[]`; the WHERE below filters on the resource's home anchor. A single
     // home per resource means this composes with `context_ref` only to the empty set (no resource is
@@ -308,9 +342,29 @@ async fn filtered_visible_page(
     // They come from the pivot view's LEFT JOIN, so a resource carrying no `temper-stage` /
     // `temper-status` yields NULL — which the passes below skip rather than counting under a
     // synthetic key.
+    // The caller's own changes, only when `changed_by=@me` asked for them. Emitted conditionally,
+    // not guarded by a `$12 IS NOT NULL` inside one shared text: these are cached prepared
+    // statements, and once Postgres switches one to a generic plan the guard becomes a join filter
+    // and the change set is re-derived once per outer row (measured: 22 s for a plain 10k-resource
+    // list). So a list without the filter runs exactly the SQL it ran before this filter existed,
+    // with eleven binds. With it, the change set is a top-level MATERIALIZED CTE, computed once
+    // whatever plan is chosen; `resources_changed_by` is gated inside by the caller's own predicate
+    // (20261107000000), and the visibility join below gates the row again.
+    // The inner JOIN is the narrowing: a resource the caller did not change has no `mine` row.
+    // The time it selects is the one `sort=changed_by_me` orders by, so the row says the time its
+    // place in the order stands on.
+    let (mine_cte, mine_col, mine_join) = if changed_by_self.is_some() {
+        (
+            "WITH mine AS MATERIALIZED (SELECT * FROM resources_changed_by($12)) ",
+            ", mine.changed_at AS changed_at",
+            "JOIN mine ON mine.resource_id = r.id",
+        )
+    } else {
+        ("", "", "")
+    };
     let sql = format!(
-        "SELECT r.id AS id, dt.property_value #>> '{{}}' AS doc_type_name,
-                wp.stage AS stage, wp.status AS status
+        "{mine_cte}SELECT r.id AS id, dt.property_value #>> '{{}}' AS doc_type_name,
+                wp.stage AS stage, wp.status AS status{mine_col}
            FROM kb_resources r
            JOIN resources_visible_to($1) v ON v.resource_id = r.id
            JOIN kb_resource_homes h ON h.resource_id = r.id
@@ -321,6 +375,7 @@ async fn filtered_visible_page(
              ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
             AND dt.property_key = 'doc_type' AND NOT dt.is_folded
            LEFT JOIN kb_resource_workflow_props wp ON wp.resource_id = r.id
+           {mine_join}
           WHERE r.is_active
             -- An interrupted segmented ingest is NOT a document. It is excluded from list (and from
             -- search, by the same predicate carried inline in `search_exact` and `search_wide`)
@@ -413,8 +468,10 @@ async fn filtered_visible_page(
     // correspondence at compile time — a bind dropped or added out of order silently applies one
     // caller's filter as another's. Read it against the WHERE clause above, one for one:
     // $1 profile_id, $2 context_id, $3 owner_self, $4 owner_handle, $5 q, $6 goal,
-    // $7 GOAL_EDGE_LABEL, $8 cogmap_ids, $9 tag_filter, $10 has_artifacts, $11 ids.
-    let rows = sqlx::query(&sql)
+    // $7 GOAL_EDGE_LABEL, $8 cogmap_ids, $9 tag_filter, $10 has_artifacts, $11 ids,
+    // and $12 changed_by_self ONLY when `mine_cte` was emitted — the text above references $12
+    // exactly then, and a bind the statement does not declare is a protocol error.
+    let query = sqlx::query(&sql)
         .bind(profile_id)
         .bind(context_id)
         .bind(owner_self)
@@ -425,10 +482,12 @@ async fn filtered_visible_page(
         .bind(cogmap_ids)
         .bind(tag_filter.as_deref())
         .bind(params.has_artifacts)
-        .bind(ids)
-        .fetch_all(pool)
-        .await
-        .map_err(api_err)?;
+        .bind(ids);
+    let query = match changed_by_self {
+        Some(profile) => query.bind(profile),
+        None => query,
+    };
+    let rows = query.fetch_all(pool).await.map_err(api_err)?;
 
     // Decode once (see [`ScannedRow`]); the four passes below all read the same three columns.
     let scanned: Vec<ScannedRow> = rows
@@ -438,6 +497,7 @@ async fn filtered_visible_page(
             doc_type: row.get("doc_type_name"),
             stage: row.get("stage"),
             status: row.get("status"),
+            changed_at: changed_by_self.map(|_| row.get("changed_at")),
         })
         .collect();
 
@@ -493,26 +553,31 @@ async fn filtered_visible_page(
 
     // The kept set: every predicate, in the SQL's ORDER BY order (a filter preserves order, so
     // pagination below is unaffected by where the filtering happens).
-    let all_ids: Vec<Uuid> = scanned
+    let kept: Vec<&ScannedRow> = scanned
         .iter()
         .filter(|r| doc_type_ok(r) && stage_ok(r) && status_ok(r))
-        .map(|r| r.id)
         .collect();
-    let total = all_ids.len() as i64;
+    let total = kept.len() as i64;
 
     let offset = params.offset.unwrap_or(0).max(0);
     let limit = params.limit.filter(|l| *l >= 0);
-    let page_ids: Vec<Uuid> = match limit {
-        Some(limit) => all_ids
+    let page: Vec<&ScannedRow> = match limit {
+        Some(limit) => kept
             .into_iter()
             .skip(offset as usize)
             .take(limit as usize)
             .collect(),
-        None => all_ids.into_iter().skip(offset as usize).collect(),
+        None => kept.into_iter().skip(offset as usize).collect(),
     };
+    let page_ids: Vec<Uuid> = page.iter().map(|r| r.id).collect();
+    let changed_by_me_at: HashMap<Uuid, DateTime<Utc>> = page
+        .iter()
+        .filter_map(|r| r.changed_at.map(|t| (r.id, t)))
+        .collect();
 
     Ok(VisiblePage {
         page_ids,
+        changed_by_me_at,
         total,
         facets,
         offset,
@@ -672,7 +737,8 @@ pub async fn list_views_select(
     for new_id in &page.page_ids {
         // An id absent from the batch means the row stopped being visible between the two
         // statements — a dropped row, not a fault. Same convention as the readback's own.
-        if let Some(view) = by_id.remove(new_id) {
+        if let Some(mut view) = by_id.remove(new_id) {
+            view.changed_by_me_at = page.changed_by_me_at.get(new_id).copied();
             views.push(view);
         }
     }

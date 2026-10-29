@@ -300,8 +300,8 @@ pub async fn complete_resource(
 /// **`None` is the point here, not a degraded outcome.** Every settling-worthy write on an anchor
 /// enqueues; the single-flight index collapses them to one job, so N arrivals within a settling
 /// window cost one materialization rather than N.
-pub async fn enqueue_anchor(
-    pool: &PgPool,
+pub async fn enqueue_anchor<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
     anchor: HomeAnchor,
     persona: &str,
     dispatch_type: &str,
@@ -322,7 +322,7 @@ pub async fn enqueue_anchor(
         dispatch_type,
         payload,
     )
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await?;
     Ok(id)
 }
@@ -390,8 +390,8 @@ pub async fn claim_anchor(
 
 /// Transition the one active anchor-keyed job for the tuple → done — the anchor twin of
 /// [`complete`]. Returns the job id if one was active.
-pub async fn complete_anchor(
-    pool: &PgPool,
+pub async fn complete_anchor<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
     anchor: HomeAnchor,
     persona: &str,
     dispatch_type: &str,
@@ -407,7 +407,7 @@ pub async fn complete_anchor(
         persona,
         dispatch_type,
     )
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await?;
     Ok(id)
 }

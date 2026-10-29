@@ -1078,15 +1078,15 @@ pub(crate) async fn project_property_unset(
 }
 
 /// The refusal for a commit into a family whose `enforcing` shape cannot be compiled, whether
-/// the schema is malformed or refers to a document that is never fetched. A fixed sentence true
+/// the schema is malformed or is not a field tree. A fixed sentence true
 /// of both causes: the compiler's text and any URI in the schema never reach the caller. Typed so
 /// the surfaces render it as the data-artifact refusal rather than the 500-class bridge.
 fn uncompilable_shape_refusal() -> anyhow::Error {
     anyhow::Error::new(crate::writes::DataArtifactRefusal {
         message: "data_artifact_commit: the enforcing shape in force for this family cannot be \
-                  compiled — it is not a valid JSON Schema, or it refers to a document that is \
-                  never fetched — so the content's conformance cannot be checked and the commit \
-                  is refused; a steward must amend the shape"
+                  compiled — it is not a field tree this server can compile — so the content's \
+                  conformance cannot be checked and the commit is refused; a steward must amend \
+                  the shape"
             .to_owned(),
     })
 }
@@ -1520,10 +1520,10 @@ pub async fn fire_with(
             .fetch_optional(&mut *conn)
             .await?;
 
-            // Validate once, reuse the errors for both the verdict decision and the detail
-            // record. Compiling a JSON Schema is the expensive part — doing it twice per commit
-            // is wasteful and was flagged in review. The errors are collected into owned strings
-            // because `ValidationError` borrows from the validator (which is dropped here).
+            // Compile once. The verdict and the one detail recorded come from a single
+            // `validate` pass, which stops at the first violation, cut to a bound. Compiling a JSON Schema is the expensive part — doing it twice per
+            // commit is wasteful and was flagged in review. The failure is owned strings because
+            // `ValidationError` borrows from the validator (which is dropped here).
             let (shape_state, validation_error_details): (
                 payloads::ShapeState,
                 Option<Vec<(String, String)>>,
@@ -1539,38 +1539,33 @@ pub async fn fire_with(
                         .as_deref()
                         .context("shape in force returned null enforcement despite CHECK")?;
                     // The family's rule is stated by the shape in force, not by the commit's
-                    // outcome: a shape that cannot be compiled (malformed, or referring to a
-                    // document that is never fetched) cannot be checked, so enforcing refuses and
+                    // outcome: a shape that cannot be compiled (malformed, or not a
+                    // field tree) cannot be checked, so enforcing refuses and
                     // advisory records the artifact unchecked (task 01a15661-8460-739d-9ed3-f1e8ccbf9b69). Neither arm
                     // carries the compiler's text.
                     match crate::shape_schema::compile(schema) {
                         Ok(validator) => {
-                            let errors: Vec<(String, String)> = validator
-                                .iter_errors(content)
-                                .map(|e| (e.instance_path().to_string(), e.to_string()))
-                                .collect();
-                            if errors.is_empty() {
-                                (payloads::ShapeState::DeclaredSatisfied, None)
-                            } else if enforcement == "enforcing" {
-                                let detail = errors
-                                    .iter()
-                                    .map(|(path, msg)| format!("{path}: {msg}"))
-                                    .collect::<Vec<_>>()
-                                    .join("; ");
-                                // TYPED, not a bare bail: this is a refusal the caller can
-                                // satisfy, and the surfaces must render the violations instead of
-                                // the 500-class bridge. The message names every violating location
-                                // and reason.
-                                return Err(anyhow::Error::new(
-                                    crate::writes::DataArtifactRefusal {
-                                        message: format!(
-                                        "data_artifact_commit: content does not conform to the \
-                                         enforcing shape in force for this family — {detail}"
-                                    ),
-                                    },
-                                ));
-                            } else {
-                                (payloads::ShapeState::DeclaredNotSatisfied, Some(errors))
+                            match crate::shape_schema::first_failure(&validator, content) {
+                                None => (payloads::ShapeState::DeclaredSatisfied, None),
+                                Some((path, msg)) if enforcement == "enforcing" => {
+                                    // TYPED, not a bare bail: this is a refusal the caller can
+                                    // satisfy, and the surfaces must render the violation instead
+                                    // of the 500-class bridge. The message names the first
+                                    // violating location and reason, cut to a bound.
+                                    return Err(anyhow::Error::new(
+                                        crate::writes::DataArtifactRefusal {
+                                            message: format!(
+                                                "data_artifact_commit: content does not conform \
+                                                 to the enforcing shape in force for this family \
+                                                 — {path}: {msg}"
+                                            ),
+                                        },
+                                    ));
+                                }
+                                Some(failure) => (
+                                    payloads::ShapeState::DeclaredNotSatisfied,
+                                    Some(vec![failure]),
+                                ),
                             }
                         }
                         Err(_) if enforcement == "enforcing" => {

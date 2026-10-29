@@ -171,6 +171,10 @@ The validation is unchanged: whatever the proxy attaches passes the same two gat
 both `TEMPER_AUTH=ambient` and `TEMPER_TOKEN` is refused as a configuration error, and so is
 any other `TEMPER_AUTH` value.
 
+Such a session needs no `temper init` either. Set `TEMPER_VAULT` to a directory for the local
+projection, and commands that resolve a vault read the absent `~/.config/temper/config.toml` as
+defaults. Without a named vault, the config file is still required.
+
 A **human-driven agent** (Claude Code, an IDE plugin) authenticates as the human: the human
 runs `temper auth login`, the CLI caches the token, and the agent inherits it by driving the
 CLI. There is no separate "agent identity" — the agent is the human, through the CLI.

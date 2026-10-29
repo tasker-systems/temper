@@ -1,15 +1,19 @@
-import { HANDOFF_LABEL, nextSection } from '@tasker-systems/temper-design/handoff';
 import { WAYS_IN } from '@tasker-systems/temper-design/ways-in';
 import {
 	type FirstViewList,
-	handoffPath,
+	openingOf,
+	PLACES_SCOPE,
+	placesPath,
+	RESUME_LABEL,
 	recentPath,
+	resumeOf,
+	resumePath,
 	wayInPath,
 	wayInShown,
 } from '$lib/first-view';
 import { apiGet } from '$lib/server/api';
 import { bounded, derive } from '$lib/server/bounded';
-import type { ContentResponse, ResourceListResponse } from '$lib/types';
+import type { ContentResponse, ContextActivity, ResourceListResponse } from '$lib/types';
 import type { PageServerLoad } from './$types';
 
 function listOf(response: ResourceListResponse): FirstViewList {
@@ -24,28 +28,29 @@ function listOf(response: ResourceListResponse): FirstViewList {
 export const load: PageServerLoad = async ({ locals, url }) => {
 	const accessToken = locals.accessToken!;
 
-	const session = bounded(
-		apiGet<ResourceListResponse>(handoffPath(), accessToken).then((r) => r.rows[0] ?? null),
-		HANDOFF_LABEL,
+	// What the reader last changed. Its time and its order are the same changes the places' times
+	// count (`resources_changed_by` and `contexts_changed_by` share one definition), so "your last
+	// change" means one thing on this page. Its own read: a failure fails resume alone.
+	const resume = bounded(
+		apiGet<ResourceListResponse>(resumePath(), accessToken).then((r) => resumeOf(r.rows)),
+		RESUME_LABEL,
 	);
-	// The next steps are a second read, of the session's body, with its own bound that starts when
-	// the session arrives — never the remainder of the session read's. A reader with no session has
-	// none to quote, and a session with no "Next" heading quotes nothing: both are `null`, never a
-	// summary. A failed body read fails this region alone; the session itself still shows. A failed
-	// session read is the handoff region's failure, and this region is never drawn under it, so it
-	// answers `null` rather than reporting the same failure twice.
-	const next = derive(
-		session.then(
-			(s) => s,
+	// The opening of that work is a second read, of its body, with its own bound that starts when
+	// the return arrives. A failed body read fails the opening alone: the return still shows. A
+	// failed or empty resume read has no opening to read, so this answers `null` rather than
+	// reporting the same failure twice.
+	const opening = derive(
+		resume.then(
+			(r) => r,
 			() => null,
 		),
-		(s) =>
-			s
+		(r) =>
+			r
 				? bounded(
-						apiGet<ContentResponse>(`/api/resources/${s.id}/content`, accessToken).then((c) =>
-							nextSection(c.markdown),
+						apiGet<ContentResponse>(`/api/resources/${r.resource.id}/content`, accessToken).then(
+							(c) => openingOf(c.markdown),
 						),
-						'next steps',
+						'opening',
 					)
 				: null,
 	);
@@ -62,10 +67,16 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		};
 	});
 
+	// The reader's own latest change in each place. It carries no names: the page names each place
+	// from the contexts the layout already sent (`placesInUse`). Joining here would mean awaiting
+	// `parent()`, which holds every read below behind the layout's and, on a client-side rerun,
+	// re-runs the layout's reads too.
+	const places = bounded(apiGet<ContextActivity[]>(placesPath(), accessToken), PLACES_SCOPE);
+
 	const recent = bounded(
 		apiGet<ResourceListResponse>(recentPath(), accessToken).then(listOf),
 		'recently updated',
 	);
 
-	return { session, next, ways, recent };
+	return { resume, opening, places, ways, recent };
 };

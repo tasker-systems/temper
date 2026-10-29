@@ -133,6 +133,13 @@ pub struct ResourceView {
     pub is_active: bool,
     pub created: DateTime<Utc>,
     pub updated: DateTime<Utc>,
+    /// When the caller last changed this resource themselves. Present only on a row read with
+    /// `changed_by=@me`, the same time `sort=changed_by_me` orders by; absent on every other read.
+    ///
+    /// Not `updated`, which can be a teammate's later change: this counts only the caller's own
+    /// authored events on the resource, so it never reports another principal's activity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_by_me_at: Option<DateTime<Utc>>,
 
     // ---- body state (never the body itself, except via `content`) ---------------
     /// SHA-256 hash of the resource body, from `kb_resource_manifests`. `None` when no
@@ -499,6 +506,7 @@ mod tests {
             is_active: true,
             created: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch"),
             updated: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch"),
+            changed_by_me_at: None,
             body_hash: None,
             ingest_state: Some(IngestState::Complete),
             ingest_ended: None,

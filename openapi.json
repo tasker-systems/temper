@@ -9823,6 +9823,51 @@
         "x-apidog-folder": "Reference/API Reference/Machine Clients"
       }
     },
+    "/api/me/context-activity": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Me"
+        ],
+        "summary": "When you last changed something in each context you can read",
+        "operationId": "list_my_context_activity",
+        "responses": {
+          "200": {
+            "description": "One row per context you changed something in and can still read, the time of your latest authored change there, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ContextActivity"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Me"
+      }
+    },
     "/api/profile": {
       "parameters": [
         {
@@ -10936,6 +10981,18 @@
           {
             "name": "owner",
             "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "changed_by",
+            "in": "query",
+            "description": "`\"@me\"`: only resources the caller changed — themselves, or an agent writing under their\nprofile, on any surface. A change counts when it reaches the resource through its element\ntrail's arms (names it, owns a property of it, names one of its blocks) and is an AUTHORED\nevent the caller's profile emitted: events the system computes, such as a region\nmaterialization stamped with a writer's emitter, never count. A machine client is its own\nprofile, and its changes are not the caller's.\n\n**Only `\"@me\"`.** Any other non-empty value is a `400`: naming someone else would make this a read of\nanother principal's activity, which no door offers. Composes with every other filter as one\nmore AND, under the same visibility join, so a resource the caller changed and can no longer\nread is absent from the rows and from every count. An empty value is no filter, as for\n`tags` and `ids`.",
             "required": false,
             "schema": {
               "type": [
@@ -18957,6 +19014,24 @@
           }
         }
       },
+      "ContextActivity": {
+        "type": "object",
+        "description": "When the reading principal last changed something in one context — themselves, or an agent\nwriting under their profile. One row per context they changed something in and can still read;\n`GET /api/me/context-activity`.\n\nTheir own authored changes only: a teammate's, a machine client's, and an event the system\ncomputes (a region materialization stamped with a writer's emitter) never set it. A row's absence\nsays nothing about the context: the caller cannot read it, or never changed anything there.\nA profile-scoped read of its own rather than a field of the contexts list, so the list every page\nloads does not pay for a scan of the caller's whole history.",
+        "required": [
+          "context_id",
+          "last_changed_at"
+        ],
+        "properties": {
+          "context_id": {
+            "$ref": "#/components/schemas/ContextId"
+          },
+          "last_changed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The time of the caller's latest authored change produced in this context."
+          }
+        }
+      },
       "ContextCreateRequest": {
         "type": "object",
         "description": "Request body for POST /api/contexts.",
@@ -25987,7 +26062,8 @@
           "stage",
           "seq",
           "context_name",
-          "doc_type_name"
+          "doc_type_name",
+          "changed_by_me"
         ]
       },
       "ResourceUpdateRequest": {
@@ -26126,6 +26202,14 @@
                 "type": "null"
               }
             ]
+          },
+          "changed_by_me_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the caller last changed this resource themselves. Present only on a row read with\n`changed_by=@me`, the same time `sort=changed_by_me` orders by; absent on every other read.\n\nNot `updated`, which can be a teammate's later change: this counts only the caller's own\nauthored events on the resource, so it never reports another principal's activity."
           },
           "cogmap_id": {
             "type": [
@@ -27022,7 +27106,7 @@
                 ]
               },
               "schema": {
-                "description": "The JSON Schema (draft 2020-12) governing this family. Validated Rust-side."
+                "description": "The family's shape: a field tree, which is a subset of JSON Schema 2020-12 (see the\ndata-artifacts skill for its vocabulary). Validated Rust-side."
               }
             }
           }
@@ -27138,7 +27222,7 @@
             "description": "`\"kb_profiles\"` or `\"kb_teams\"` — the namespace half of the family name."
           },
           "schema": {
-            "description": "The JSON Schema (draft 2020-12) governing this family."
+            "description": "The family's shape: a field tree, which is a subset of JSON Schema 2020-12 (see the\ndata-artifacts skill for its vocabulary)."
           },
           "shape_id": {
             "$ref": "#/components/schemas/ShapeId"
@@ -28726,6 +28810,10 @@
     {
       "name": "Contexts",
       "description": "Contexts — named homes for resources, and who they are shared with"
+    },
+    {
+      "name": "Me",
+      "description": "Reads about the calling profile's own work, named for nothing but the caller"
     },
     {
       "name": "Cognitive Maps",

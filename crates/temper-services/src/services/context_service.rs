@@ -31,11 +31,34 @@ use temper_core::types::team::TeamRole;
 use temper_workflow::operations::sluggify;
 
 pub use temper_core::types::context::{
-    ContextCreateRequest, ContextRow, ContextRowWithCounts, InheritedReadGrant, InheritedShare,
-    ReassignContextOutcome, ReassignContextRequest, RenameContextOutcome, RenameContextRequest,
-    RestoreContextOutcome, RetireContextOutcome, ShareContextOutcome, ShareContextRequest,
-    UnshareContextOutcome,
+    ContextActivity, ContextCreateRequest, ContextRow, ContextRowWithCounts, InheritedReadGrant,
+    InheritedShare, ReassignContextOutcome, ReassignContextRequest, RenameContextOutcome,
+    RenameContextRequest, RestoreContextOutcome, RetireContextOutcome, ShareContextOutcome,
+    ShareContextRequest, UnshareContextOutcome,
 };
+
+/// When the profile last changed something in each context they can read — one row per context
+/// they ever changed something in, newest first. `GET /api/me/context-activity`.
+///
+/// Read through `contexts_changed_by` (20261107000000), which aggregates the profile's own authored
+/// changes per context and then gates once by `contexts_readable_by`; a context the profile cannot
+/// read, or a retired one, has no row. A read of its own, not a column of [`list_visible`], because
+/// it scans the profile's whole history and the contexts list is read on every page load.
+pub async fn activity_of(pool: &PgPool, profile_id: ProfileId) -> ApiResult<Vec<ContextActivity>> {
+    let rows = sqlx::query_as!(
+        ContextActivity,
+        r#"
+        SELECT a.context_id AS "context_id!: ContextId",
+               a.changed_at AS "last_changed_at!"
+          FROM contexts_changed_by($1) a
+         ORDER BY a.changed_at DESC, a.context_id
+        "#,
+        *profile_id
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
 
 /// List all contexts visible to the profile (owned + team-shared), with resource counts.
 pub async fn list_visible(

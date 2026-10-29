@@ -266,7 +266,7 @@ Options:
 ```text
 Declare a shape for a data-artifact family within a context or cognitive-map home.
 
-Gated on authoring authority over the home. Exactly one of the positional context ref / `--cogmap`. The schema content is read from `--content @<path>`, `--content -` (stdin), or piped stdin — the same convention as `data-artifact commit`. The content must be a valid JSON Schema (draft 2020-12).
+Gated on authoring authority over the home. Exactly one of the positional context ref / `--cogmap`. The schema content is read from `--content @<path>`, `--content -` (stdin), or piped stdin — the same convention as `data-artifact commit`. The content must be a field tree (a subset of JSON Schema 2020-12; see the data-artifacts skill for the vocabulary).
 
 Usage: temper data-artifact schema declare [OPTIONS] --kind <KIND> [REF]
 
@@ -306,7 +306,7 @@ Options:
           [default: advisory]
 
       --content <CONTENT>
-          Content source: `@<path>` (file), `-` (stdin), or omitted for implicit stdin. The content must be valid JSON (a JSON Schema draft 2020-12 document)
+          Content source: `@<path>` (file), `-` (stdin), or omitted for implicit stdin. The content must be valid JSON (a field tree: a subset of JSON Schema 2020-12; see the data-artifacts skill)
 
       --invocation <INVOCATION>
           Correlate this act with an open invocation envelope (its ref/UUID from `invocation open`)

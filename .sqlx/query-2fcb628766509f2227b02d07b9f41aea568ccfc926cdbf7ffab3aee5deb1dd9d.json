@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO kb_shape_reconcile_uncheckable (shape_id, reason)\n        VALUES ($1, $2)\n        ON CONFLICT (shape_id) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2fcb628766509f2227b02d07b9f41aea568ccfc926cdbf7ffab3aee5deb1dd9d"
+}
