@@ -198,8 +198,8 @@ fn the_allowed_and_refused_lists_are_disjoint() {
 }
 
 /// The ask walk reads every construct a field tree may hold: a schema using every allowed keyword,
-/// in every schema position the walk reads, passes `reads_whole` — so the shape loader does not
-/// judge it uncompilable — and its paths are declared. The walk keeps its own list, deliberately
+/// in every schema position the walk reads, passes `reads_whole` — so the walk does not read it as
+/// declaring nothing — and its paths are declared. The walk keeps its own list, deliberately
 /// apart from the compile's, so this is the test that bites when the compile's allow-list widens
 /// without a decision on how the walk reads the new keyword.
 #[test]

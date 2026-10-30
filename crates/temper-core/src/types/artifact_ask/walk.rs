@@ -15,9 +15,10 @@
 //! than the 2020-12 spelling, a value that is not a schema where a schema sits, or an `enum` or
 //! `type` in a form the walk does not read fails [`reads_whole`], and the walk reads that schema as
 //! `false` — it declares nothing: every path is `NotDeclared` and the vocabulary is empty — and
-//! logs the mismatch. No shape that compiles reaches it while the compile and the walk agree, which
-//! `temper-substrate`'s field-tree tests hold them to; if the field tree is widened, the walk
-//! refuses the new construct until someone decides how it reads.
+//! logs the mismatch. No shape that compiles reaches it while the compile and the walk agree on what
+//! a field tree holds — the keywords `temper-substrate`'s field-tree tests hold them to, and the
+//! forms of `enum` and `type` that the compile's meta-validation refuses besides. If the field tree
+//! is widened, the walk refuses the new construct until someone decides how it reads.
 //!
 //! The walk's list is its own, not the compile's. The two answer different questions — what a shape
 //! may say, and what the walk has decided how to read — and one shared list would widen the walk
@@ -1112,9 +1113,9 @@ mod tests {
     // ── Everything else is refused ───────────────────────────────────────────────────────────
 
     /// Every construct a field tree cannot hold, at the root and nested in each schema position
-    /// the walk reads, fails `reads_whole` — so the loader judges the schema uncompilable — and a
-    /// walk handed it anyway declares nothing: every path, including one the rest of the schema
-    /// declares, is not declared, and the vocabulary is empty. Bites `reads_whole`: with it reading
+    /// the walk reads, fails `reads_whole`, and the walk reads the schema as `false`: every path,
+    /// including one the rest of the schema declares, is not declared, and the vocabulary is empty.
+    /// No compiling shape holds one. Bites `reads_whole`: with it reading
     /// every schema as whole, the `$ref` rows resolve `a` as declared and unconstrained (what the
     /// walk once did with a `$ref` it did not follow), and the rest resolve `ok` as declared.
     #[test]
