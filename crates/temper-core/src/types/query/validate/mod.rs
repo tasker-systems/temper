@@ -5449,8 +5449,8 @@ mod tests {
         )
     }
 
-    /// The `n`th (`1 <= n < 64`) of a run of asks naming both of [`two_paths`]'s paths, each with its
-    /// own subset of the intents and shape states: different asks, walking the same paths.
+    /// The `n`th (`1 <= n < 64`) of a run of asks naming both of [`two_paths`]'s paths, each with
+    /// its own subset of the intents and shape states: different asks, walking the same paths.
     fn two_path_ask(id: u128, n: usize) -> ArtifactAsk {
         let pick = |terms: &[&str], bits: usize| -> Vec<String> {
             terms

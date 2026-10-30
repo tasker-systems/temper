@@ -17,12 +17,16 @@
 //! - `many_tiny_subschemas_at_the_size_cap`: schemas of `MAX_SCHEMA_BYTES` built of as many small
 //!   subschemas as fit — empty fields, typed fields with `required` and `additionalProperties:
 //!   false`, and trees of 2, 4 and 16 children a node — each timed for `compile`, a check of
-//!   content holding every key, and the ask walk's `enumerate`, which no visit budget bounds.
+//!   content holding every key, and the ask walk's `enumerate`, which no visit budget bounds. Two
+//!   more are walked whole without reaching `MAX_WALK_PATHS`: fields that are each `false`, which
+//!   the walk reads and never counts, and fields each carrying an enum of `MAX_ENUM_ENTRIES`
+//!   strings, as many as fill the schema.
 //!
 //! Run before merging a change to a cap (release, so the numbers are the deployed ones):
 //!
 //! ```text
-//! cargo test -p temper-substrate --all-features --release --test shape_schema_cost_bench -- --ignored --nocapture
+//! cargo test -p temper-substrate --all-features --release \
+//!     --test shape_schema_cost_bench -- --ignored --nocapture
 //! ```
 //!
 //! Peak memory is not measured here (that would need a counting allocator, which needs `unsafe`):
@@ -37,7 +41,7 @@ use serde_json::{json, Value};
 use temper_core::types::artifact_ask::walk::MAX_SCHEMA_BYTES;
 use temper_core::types::artifact_ask::{enumerate, WalkBounds};
 use temper_substrate::shape_schema::{
-    compile, first_failure, MAX_MIXED_ENUM_ENTRIES, MAX_PATTERN_SOURCE_BYTES,
+    compile, first_failure, MAX_ENUM_ENTRIES, MAX_MIXED_ENUM_ENTRIES, MAX_PATTERN_SOURCE_BYTES,
     MAX_PROPERTY_NAME_BYTES, MAX_SHAPE_DEPTH, MAX_SHAPE_PATTERNS,
 };
 
@@ -368,4 +372,42 @@ fn many_tiny_subschemas_at_the_size_cap() {
         schema["$schema"] = json!(DRAFT);
         time_at_the_size_cap(&format!("tree of {children} at depth {depth}"), &schema);
     }
+    time_a_whole_walk("false fields", &wide_object(&json!(false), false), 0);
+    let (schema, fields) = enum_fields();
+    time_a_whole_walk("enum-carrying fields", &schema, fields);
+}
+
+/// As many fields as fit the size cap, each an `enum` of `MAX_ENUM_ENTRIES` short distinct codes,
+/// and how many there are.
+fn enum_fields() -> (Value, usize) {
+    let members: Vec<Value> = (0..MAX_ENUM_ENTRIES)
+        .map(|c| json!(format!("c{c:05}")))
+        .collect();
+    let field = json!({ "enum": members });
+    let per = serde_json::to_vec(&json!({ "f0000": field }))
+        .expect("serializes")
+        .len();
+    let fields = (MAX_SCHEMA_BYTES - 256) / per;
+    let properties: serde_json::Map<String, Value> = (0..fields)
+        .map(|f| (format!("f{f:04}"), field.clone()))
+        .collect();
+    let schema = json!({ "$schema": DRAFT, "type": "object", "properties": properties });
+    (schema, fields)
+}
+
+/// Time `compile` and `enumerate` of a schema the walk reads to its end without a cut: the
+/// vocabulary holds `paths` paths and was truncated at no bound.
+fn time_a_whole_walk(name: &str, schema: &Value, paths: usize) {
+    assert_compact_size_within(schema, MAX_SCHEMA_BYTES / 2, MAX_SCHEMA_BYTES, name);
+    let start = Instant::now();
+    compile(schema).expect("a field tree at the size cap compiles");
+    report(&format!("{name} compile"), start);
+    let start = Instant::now();
+    let vocabulary = enumerate(schema, &WalkBounds::BUILD);
+    report(&format!("{name} enumerate"), start);
+    assert_eq!(vocabulary.paths.len(), paths, "{name}: every declared path");
+    assert!(
+        vocabulary.truncated.is_empty(),
+        "{name}: walked whole, never cut"
+    );
 }

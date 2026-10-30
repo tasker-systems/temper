@@ -11,8 +11,9 @@
 //! - [`validate`] — refusal step 4 of §3.5, with its shape-free half [`validate_ask_form`]; the
 //!   steps 1–3 refusals a [`ShapeLoad`] carries; the [`RefusalTeaching`] a refusal carries;
 //! - [`session`] — [`AskSession`], the one way an ask is validated: one request's asks against one
-//!   [`ShapeContext`], each shape's walk built once and one membership budget for them all, and each
-//!   shape's [`PathTeaching`] made once — or taken from the context, where a caller remembered it;
+//!   [`ShapeContext`], each shape's walk built once and one membership budget for them all, and
+//!   each shape's [`PathTeaching`] made once — or taken from the context, where a caller remembered
+//!   it;
 //! - [`mod@reference`] — the Rust reference evaluator the SQL is differential-tested against;
 //! - [`batch`] — the batch read's wire ([`AskRequest`], [`AskResponse`]) and the refusals a page
 //!   earns without its shape.
@@ -263,8 +264,9 @@ pub enum ShapeLoad {
 /// before validation runs and untouched by anything after it.
 ///
 /// What a request derives from these shapes — each one's walk, the paths it has resolved, what a
-/// path refusal teaches of it, each ask's answer — and the membership budget its asks share live in the
-/// [`AskSession`] begun from it with [`ShapeContext::session`], which borrows the shapes held here.
+/// path refusal teaches of it, each ask's answer — and the membership budget its asks share live in
+/// the [`AskSession`] begun from it with [`ShapeContext::session`], which borrows the shapes held
+/// here.
 ///
 /// **Beside a loaded shape it may hold that shape's [`PathTeaching`]**, remembered by its caller
 /// from an earlier request ([`ShapeContext::with_path_teaching`]), so that a path refusal on the

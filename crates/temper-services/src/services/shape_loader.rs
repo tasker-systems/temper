@@ -21,9 +21,7 @@
 //! 3. **Compiles?** First measured: a schema larger than the walk reads
 //!    ([`within_schema_bound`]) is `SchemaTooLarge` and is never compiled. Within the bound,
 //!    through the no-fetch constructor ([`shape_schema::compile`]); a schema it refuses is
-//!    `Uncompilable`, and the compiler's text goes nowhere. So is a schema that compiles but holds
-//!    a construct the ask walk does not read ([`reads_whole`]) — none does while the compile and
-//!    the walk agree, so it is logged as the server mismatch it is.
+//!    `Uncompilable`, and the compiler's text goes nowhere.
 //!
 //! **One decision for every door that decides whether a schema can be asked** ([`judge`]): the
 //! loader, the by-id read's `askable`, and declare (`shape_service::declare_shape`) measure
@@ -62,9 +60,9 @@ use tokio::sync::Semaphore;
 use crate::error::{ApiError, ApiResult};
 use temper_core::error::TemperError;
 use temper_core::types::artifact_ask::{
-    enumerate, reads_whole, within_schema_bound, AskOperator, AskSession, AskablePath, BoundKind,
-    JsonType, LoadedShape, PathFacts, PathTeaching, RefusalTeaching, ShapeContext, ShapeLoad,
-    ShapeSuccessor, Vocabulary, WalkBounds,
+    enumerate, within_schema_bound, AskOperator, AskSession, AskablePath, BoundKind, JsonType,
+    LoadedShape, PathFacts, PathTeaching, RefusalTeaching, ShapeContext, ShapeLoad, ShapeSuccessor,
+    Vocabulary, WalkBounds,
 };
 use temper_core::types::ids::{ProfileId, ShapeId};
 use temper_core::types::query::filter::{property_value_bytes, property_value_nodes};
@@ -78,8 +76,8 @@ use temper_substrate::shape_schema;
 /// **What it costs is per distinct shape**, and the caller bounds how many it passes: each id is
 /// one gated read (the stored schema whole), one bounded measurement, at most one compile within
 /// the walk's byte bound, and — once validation teaches its vocabulary, if no teaching of it is
-/// remembered — one enumeration under a budget of its own. The asks then share one budget for path
-/// resolution and membership ([`AskSession`]).
+/// remembered — one enumeration, linear in the schema. The asks then share one budget for
+/// membership ([`AskSession`]); each path they name is resolved once per request.
 ///
 /// **Each shape loaded live and compiling carries its remembered [`PathTeaching`]**, if the
 /// process remembers one (`remember_path_teachings`), so a path refusal on it teaches without
@@ -246,8 +244,7 @@ impl SchemaVerdict {
 /// Step 3's decision, the one every door that decides whether a schema can be asked shares:
 /// measure the schema against the walk's byte bound ([`within_schema_bound`], which reads no
 /// further than the bound), and only within it compile through the no-fetch constructor — on the
-/// blocking pool, under a compile permit — and check that the ask walk reads it whole
-/// ([`reads_whole`]). The schema is copied for the blocking task only once it
+/// blocking pool, under a compile permit. The schema is copied for the blocking task only once it
 /// is known to be within the bound and a permit is held, so the copy is at most 256 KiB and no
 /// request waiting for a permit holds one.
 ///
@@ -258,15 +255,10 @@ pub async fn judge(schema: &Value) -> ApiResult<SchemaVerdict> {
         return Ok(SchemaVerdict::TooLarge);
     }
     with_schema_off_the_executor(schema, |schema| {
-        if shape_schema::compile(schema).is_err() {
-            SchemaVerdict::Uncompilable
-        } else if !reads_whole(schema) {
-            tracing::error!(
-                "a schema compiled that the ask walk does not read whole; judged uncompilable"
-            );
-            SchemaVerdict::Uncompilable
-        } else {
+        if shape_schema::compile(schema).is_ok() {
             SchemaVerdict::Compiles
+        } else {
+            SchemaVerdict::Uncompilable
         }
     })
     .await
@@ -326,11 +318,11 @@ fn remember(id: ShapeId, verdict: SchemaVerdict) {
 /// An entry is weighed by what it holds, not by what it serializes to: its place in the map
 /// (`ENTRY_BYTES`); each path its own size, its segments' `String`s and their bytes, and its
 /// operators; each declared value at least `NODE_BYTES` and never less than a `Value`, plus its
-/// text; each node nested in a value at `NODE_BYTES`; and each object in a value the map nodes its members sit in (`MAP_NODE_BYTES`). A
-/// short code that serializes to two bytes is charged as the `Value` it occupies, and a container
-/// as the allocations it holds, so what the map holds in memory is its weight within a small
-/// factor — allocator rounding, the table's spare slots — and 32 MiB of weight is about that much
-/// memory.
+/// text; each node nested in a value at `NODE_BYTES`; and each object in a value the map nodes its
+/// members sit in (`MAP_NODE_BYTES`). A short code that serializes to two bytes is charged as the
+/// `Value` it occupies, and a container as the allocations it holds, so what the map holds in
+/// memory is its weight within a small factor — allocator rounding, the table's spare slots — and
+/// 32 MiB of weight is about that much memory.
 const MAX_REMEMBERED_VOCABULARY_BYTES: usize = 32 << 20;
 
 /// What one entry holds beside what it remembers: its key and value in the map's table, a control
@@ -349,7 +341,8 @@ const ENTRY_BYTES: usize = entry_bytes::<Arc<Vocabulary>>();
 ///
 /// An estimate, and low for an object: a copied non-empty map allocates about 630 bytes, which
 /// [`MAP_NODE_BYTES`] adds for each one. The const/enum bound at declare decides whether a value
-/// can nest deeply enough for the difference to matter (task `01a187e3-f00b-706f-b217-c49022239529`).
+/// can nest deeply enough for the difference to matter (task
+/// `01a187e3-f00b-706f-b217-c49022239529`).
 const NODE_BYTES: usize = 64;
 
 /// One leaf node of a JSON object's map: eleven key and value slots and the node's own header. A
@@ -633,11 +626,13 @@ pub async fn askable(row: &RetrievedShape) -> ApiResult<(Vocabulary, Option<Plan
     }
     let verdict = verdict_of(row.shape_id, &row.schema).await?;
     let vocabulary = match verdict {
-        // Within the bound: a walk of at most 256 KiB, bounded in work, off the executor.
+        // Within the bound: a walk of at most 256 KiB, linear in it, off the executor.
         SchemaVerdict::Compiles => {
             #[cfg(feature = "test-db")]
             test_support::record(&row.schema);
-            let (vocabulary, weight) = with_schema_off_the_executor(&row.schema, |schema| {
+            let shape = row.shape_id;
+            let (vocabulary, weight) = with_schema_off_the_executor(&row.schema, move |schema| {
+                let _shape = tracing::error_span!("askable", %shape).entered();
                 let mut vocabulary = enumerate(schema, &WalkBounds::BUILD);
                 vocabulary.paths.shrink_to_fit();
                 let weight = vocabulary_weight(&vocabulary);

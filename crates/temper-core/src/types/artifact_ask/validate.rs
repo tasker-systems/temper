@@ -156,7 +156,7 @@ pub struct RefusalTeaching {
 /// What a `path_outside_shape` refusal teaches of one shape — its askable vocabulary held to
 /// [`MAX_TEACHING_BYTES`], and how many paths were cut — without the bound the refused path met,
 /// which each refusal sets beside it (`beyond_bound`). That is a function of the shape alone: the
-/// vocabulary is enumerated under a budget of its own, whatever the request has spent. A shape row
+/// vocabulary is enumerated whole, whatever the request's asks have spent. A shape row
 /// is immutable per id (§2.2), so a caller may remember a teaching by shape id across requests and
 /// hand it back in a later request's [`ShapeContext`](super::ShapeContext)
 /// ([`ShapeContext::with_path_teaching`](super::ShapeContext::with_path_teaching)), whose session

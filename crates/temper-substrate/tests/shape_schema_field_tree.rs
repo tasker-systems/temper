@@ -3,9 +3,9 @@
 //! positions, one pinned draft, and caps on depth, `enum` size, `pattern` size and `pattern` count.
 //!
 //! The allow-list is witnessed against the whole 2020-12 vocabulary in one table, each keyword its
-//! own assertion: removing the walk makes every refused row compile. The data-position tests are the opposite bite:
-//! walking `const`, `enum`, `default` or `examples` as schemas refuses them. Every cap is pinned on
-//! both sides, at the cap (compiles) and one past it (refused).
+//! own assertion: removing the walk makes every refused row compile. The data-position tests are
+//! the opposite bite: walking `const`, `enum`, `default` or `examples` as schemas refuses them.
+//! Every cap is pinned on both sides, at the cap (compiles) and one past it (refused).
 //!
 //! Plain `#[test]`s: needs no database, runs in the Unit CI job.
 
@@ -74,8 +74,8 @@ fn chain(steps: &[Step]) -> Value {
 
 // ── The allow-list, against the whole 2020-12 vocabulary ─────────────────────────────────────
 
-/// Every keyword the field tree allows, with a value it may take. `$schema` and `$id` are root-only,
-/// so they are witnessed at the root alone (`schema_and_id_compile_at_the_root`).
+/// Every keyword the field tree allows, with a value it may take. `$schema` and `$id` are
+/// root-only, so they are witnessed at the root alone (`schema_and_id_compile_at_the_root`).
 const ALLOWED: &[(&str, &str)] = &[
     ("type", r#""string""#),
     ("properties", r#"{ "a": { "type": "string" } }"#),
@@ -105,7 +105,7 @@ const REFUSED: &[(&str, &str)] = &[
     // core
     ("$ref", r##""#""##),
     ("$anchor", r#""a""#),
-    ("$dynamicRef", r##""#a""##),
+    ("$dynamicRef", r##""#""##),
     ("$dynamicAnchor", r#""a""#),
     ("$vocabulary", "{}"),
     ("$defs", r#"{ "x": { "type": "string" } }"#),

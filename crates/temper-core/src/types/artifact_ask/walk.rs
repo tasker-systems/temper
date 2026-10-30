@@ -5,18 +5,19 @@
 //! (`temper_substrate::shape_schema`, spec `2026-10-27-a-shape-is-a-field-tree-design`): schemas at
 //! the root, in each `properties` value, in `additionalProperties` and in `items`, each an object
 //! or a boolean, with no `$ref`, `$defs` or combinator. The walk reads `properties` chains, `type`,
-//! `enum`, `const`, boolean subschemas and a single `items` schema. It passes over the keywords that
-//! constrain content without changing what a path declares — `required`, `pattern`, the length,
-//! size and range bounds, the annotations, and `$schema` and `$id` at the root. `additionalProperties`
-//! is **not walked**, so a path reachable only through it is not declared — the declared hole of
-//! spec §11, refused as `path_outside_shape` rather than guessed at.
+//! `enum`, `const`, boolean subschemas and a single `items` schema. It passes over the keywords
+//! that constrain content without changing what a path declares — `required`, `pattern`, the
+//! length, size and range bounds, the annotations, and `$schema` and `$id` at the root.
+//! `additionalProperties` is **not walked**, so a path reachable only through it is not declared —
+//! the declared hole of spec §11, refused as `path_outside_shape` rather than guessed at.
 //!
 //! **Anything else is refused, never read as unconstrained.** Any other keyword, a `$schema` other
-//! than the 2020-12 spelling, or a value that is not a schema where a schema sits fails
-//! [`reads_whole`], and the shape loader judges such a schema uncompilable, so no ask reaches the
-//! walk with one. Handed one anyway, the walk reads it as `false` — it declares nothing: every path
-//! is `NotDeclared` and the vocabulary is empty — and logs the mismatch. If the field tree is
-//! widened, the walk refuses the new construct until someone decides how it reads.
+//! than the 2020-12 spelling, a value that is not a schema where a schema sits, or an `enum` or
+//! `type` in a form the walk does not read fails [`reads_whole`], and the walk reads that schema as
+//! `false` — it declares nothing: every path is `NotDeclared` and the vocabulary is empty — and
+//! logs the mismatch. No shape that compiles reaches it while the compile and the walk agree, which
+//! `temper-substrate`'s field-tree tests hold them to; if the field tree is widened, the walk
+//! refuses the new construct until someone decides how it reads.
 //!
 //! The walk's list is its own, not the compile's. The two answer different questions — what a shape
 //! may say, and what the walk has decided how to read — and one shared list would widen the walk
@@ -27,9 +28,9 @@
 //! With no `$ref` and no combinator, each schema node is reached by one path and read once:
 //! resolving a path reads the nodes along it and its `items` chain, and enumerating reads each node
 //! once. So the walk's work is linear in the schema, which it reads only up to [`MAX_SCHEMA_BYTES`]
-//! — the size declare holds a schema to. [`MAX_WALK_PATHS`] bounds the vocabulary a read returns and
-//! [`MAX_WALK_DEPTH`] how deep an ask and a vocabulary reach. Nothing recurses over the schema but
-//! an `items` chain, held to the depth bound.
+//! — the size declare holds a schema to. [`MAX_WALK_PATHS`] bounds the vocabulary a read returns
+//! and [`MAX_WALK_DEPTH`] how deep an ask and a vocabulary reach. Nothing recurses over the schema
+//! but an `items` chain, held to the depth bound.
 //!
 //! **What a vocabulary holds.** A vocabulary copies each path's `enum` and `const` values onto the
 //! wire. No two paths share a keyword, so each value is copied at most once and a vocabulary holds
@@ -350,8 +351,9 @@ const READ_SCHEMA_URIS: [&str; 2] = [
 /// Whether the walk reads every construct in the schema: in each schema position — the root, each
 /// `properties` value and an `items` schema — an object or a boolean, holding only keywords the
 /// walk reads or passes over, with `$schema` (the 2020-12 spelling, with or without a trailing `#`)
-/// and `$id` at the root alone. What `additionalProperties` holds is not walked, so it is not read here. The shape loader
-/// asks it beside the compile, and judges a schema that fails it uncompilable.
+/// and `$id` at the root alone. An `enum` must be an array, and a `type` a name or an array of
+/// names, since the walk would read any other form as declaring nothing. What
+/// `additionalProperties` holds is not walked, so it is not read here.
 ///
 /// One pass from an explicit stack, each schema position pushed once, so it is linear in the
 /// schema and never recurses on the Rust stack.
@@ -374,8 +376,10 @@ pub fn reads_whole(schema: &Value) -> bool {
                     Value::Bool(_) | Value::Object(_) => pending.push(value),
                     _ => return false,
                 },
-                // What a path declares.
-                "type" | "enum" | "const"
+                // What a path declares, in the forms the walk reads.
+                "type" if is_type_form(value) => {}
+                "enum" if value.is_array() => {}
+                "const"
                 // Not walked: a path reachable only through it is not declared.
                 | "additionalProperties"
                 // What content must satisfy, which changes nothing a path declares.
@@ -396,7 +400,16 @@ pub fn reads_whole(schema: &Value) -> bool {
     true
 }
 
-/// What the walk reads in place of a schema it does not read whole: `false`, which declares no path.
+/// Whether a `type` is in a form the walk reads: one name, or an array of names.
+fn is_type_form(value: &Value) -> bool {
+    match value {
+        Value::String(_) => true,
+        Value::Array(names) => names.iter().all(Value::is_string),
+        _ => false,
+    }
+}
+
+/// What the walk reads in place of a schema it does not read whole: `false`, declaring no path.
 static DECLARES_NOTHING: Value = Value::Bool(false);
 
 /// One schema, measured and read whole, ready to resolve paths against.
@@ -410,8 +423,8 @@ impl<'s> Walk<'s> {
     /// Measure the schema once, no further than the bound, then check that the walk reads every
     /// construct in it ([`reads_whole`]). Over [`WalkBounds::max_schema_bytes`] it is
     /// [`BoundKind::SchemaBytes`]. With a construct the walk does not read it is walked as `false`,
-    /// declaring nothing, and logged as the server mismatch it is: the loader judges such a schema
-    /// uncompilable, so it never reaches here from an ask.
+    /// declaring nothing, and logged as the server mismatch it is — under the caller's span, which
+    /// names the shape.
     pub(super) fn new(schema: &'s Value, bounds: &WalkBounds) -> Result<Walk<'s>, BoundKind> {
         if json_bytes_up_to(schema, bounds.max_schema_bytes) > bounds.max_schema_bytes {
             return Err(BoundKind::SchemaBytes);
@@ -628,6 +641,13 @@ pub(super) struct ShapeWalk<'s> {
     enumerated: bool,
 }
 
+/// The walk of one shape's schema under the build's bounds, built under a span naming the shape, so
+/// a mismatch [`Walk::new`] logs says which shape it met.
+fn walk_of(shape: ShapeId, schema: &Value) -> Result<Walk<'_>, BoundKind> {
+    let _shape = tracing::error_span!("shape_walk", %shape).entered();
+    Walk::new(schema, &WalkBounds::BUILD)
+}
+
 /// Where a shape's path teaching came from: its context, which remembered it from an earlier
 /// request, or this walk, which made it.
 #[derive(Debug)]
@@ -665,11 +685,8 @@ impl<'s> ShapeWalk<'s> {
         if let Some(known) = self.resolved.get(path) {
             return known.clone();
         }
-        let schema = self.schema;
-        let reached = match self
-            .walk
-            .get_or_insert_with(|| Walk::new(schema, &WalkBounds::BUILD))
-        {
+        let (shape, schema) = (self.shape, self.schema);
+        let reached = match self.walk.get_or_insert_with(|| walk_of(shape, schema)) {
             Ok(walk) => walk.reach(path),
             Err(at) => Resolved::BeyondBound(*at),
         };
@@ -696,8 +713,7 @@ impl<'s> ShapeWalk<'s> {
         let schema: &'s Value = schema;
         let shape = *shape;
         let taught = taught.get_or_insert_with(|| {
-            let vocabulary = match walk.get_or_insert_with(|| Walk::new(schema, &WalkBounds::BUILD))
-            {
+            let vocabulary = match walk.get_or_insert_with(|| walk_of(shape, schema)) {
                 Ok(walk) => {
                     *enumerated = true;
                     walk.enumerate_borrowed()
@@ -1120,6 +1136,9 @@ mod tests {
             json!({ "$schema": "http://json-schema.org/draft-07/schema#" }),
             json!({ "$schema": "http://json-schema.org/draft/2020-12/schema" }),
             json!({ "$schema": 7 }),
+            json!({ "enum": "x" }),
+            json!({ "type": 7 }),
+            json!({ "type": ["string", 7] }),
         ];
         for construct in constructs {
             let positions = [
@@ -1318,6 +1337,40 @@ mod tests {
                 truncated: BTreeSet::new(),
             }
         );
+    }
+
+    /// A shape whose enums fill the schema is advertised whole: every path with every member, cut
+    /// at no bound. The walk's work is bounded by the schema's size alone, so no shape within
+    /// [`MAX_SCHEMA_BYTES`] meets a cut but `depth` or `paths`. The fixture is one a field tree can
+    /// be — each enum of 256 strings, the most the compile admits — so it bites a per-read work or
+    /// copy budget on a shape that compiles: the visit budget this walk replaced charged each such
+    /// path about 770 visits and cut this vocabulary at `work` after about 85 of its paths.
+    #[test]
+    fn a_vocabulary_whose_enums_fill_the_schema_is_advertised_whole() {
+        let codes = 256;
+        let members: Vec<Value> = (0..codes).map(|c| json!(format!("c{c:05}"))).collect();
+        let field = json!({ "enum": members });
+        let fields = (MAX_SCHEMA_BYTES - 256) / json_bytes(&json!({ "f0000": field }));
+        assert!(fields > 85, "past where the visit budget cut: {fields}");
+        let properties: Map<String, Value> = (0..fields)
+            .map(|f| (format!("f{f:04}"), field.clone()))
+            .collect();
+        let s = json!({ "type": "object", "properties": properties });
+        assert!(
+            within_schema_bound(&s),
+            "the fixture is within the walk's bound"
+        );
+        let vocabulary = enumerate(&s, &WalkBounds::BUILD);
+        assert!(
+            vocabulary.truncated.is_empty(),
+            "{:?}",
+            vocabulary.truncated
+        );
+        assert_eq!(vocabulary.paths.len(), fields);
+        for path in &vocabulary.paths {
+            let values = path.facts.values.as_ref().expect("an enum declares values");
+            assert_eq!(values.len(), codes, "{:?}", path.path);
+        }
     }
 
     /// Every path a vocabulary advertises resolves to the facts it advertises, so a caller who
