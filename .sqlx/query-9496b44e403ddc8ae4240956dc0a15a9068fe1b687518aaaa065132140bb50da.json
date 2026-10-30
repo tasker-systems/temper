@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, personal_of IS NOT NULL AS \"is_personal!\" FROM kb_teams\n                WHERE slug = $1 AND is_active",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "is_personal!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "9496b44e403ddc8ae4240956dc0a15a9068fe1b687518aaaa065132140bb50da"
+}

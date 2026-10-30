@@ -10,7 +10,8 @@
 //! Role-gating is pure authz over `kb_team_members.role` + the `kb_teams_parents`
 //! DAG (spec §3 decision #1): anyone may create a **root** (parentless) team and
 //! becomes its `owner`; creating a **child** requires `owner`/`maintainer` on the
-//! parent; setting `auto_join_role` requires `is_system_admin`. Auth checks
+//! parent (a system admin, when the parent is the root or the gating team; never under a
+//! personal team); setting `auto_join_role` requires `is_system_admin`. Auth checks
 //! precede every write.
 
 use sqlx::PgPool;
@@ -142,6 +143,36 @@ pub(crate) async fn require_team_exists(pool: &PgPool, team_id: Uuid) -> ApiResu
     }
 }
 
+/// The root slug. Every personal team descends from it, so it is never deleted, and only a system
+/// admin creates children under it, renames it or administers grants to it.
+const ROOT_TEAM_SLUG: &str = "temper-system";
+
+/// Is `team_id` the root (`temper-system`) or the configured gating team? The lifecycle gates
+/// (`create_team` as parent, `update_team`, `delete_team`) are admin-only on both (team-authority
+/// fixes D4). Both are asked because an instance may point `gating_team_slug` elsewhere, and then
+/// the root is a second team every profile reaches.
+async fn is_root_or_gating(pool: &PgPool, team_id: Uuid) -> ApiResult<bool> {
+    let is_root = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1 AND slug = $2) AS "e!: bool""#,
+        team_id,
+        ROOT_TEAM_SLUG,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(is_root || crate::services::access_service::is_gating_team(pool, team_id).await?)
+}
+
+/// Refuse unless `caller` is a system admin.
+async fn require_admin_on(pool: &PgPool, caller: &HumanPrincipal) -> ApiResult<()> {
+    match crate::authz::Principal::Human(caller)
+        .system_admin(pool)
+        .await?
+    {
+        Some(_) => Ok(()),
+        None => Err(ApiError::Forbidden),
+    }
+}
+
 /// Proof that `create_team` has just inserted the team row it is about to write the creator's
 /// `owner` row for. Defined here with a private field and constructed only in this module, so the
 /// genesis constructor in `authz::team_membership` cannot be called from anywhere else (plan P16).
@@ -158,7 +189,8 @@ pub(crate) struct GenesisToken {
 /// first of two guards against squatting, and keeps `personal-<handle>` meaning that profile's.
 ///
 /// Auth before writes:
-/// - **child** (`parent` set): caller must be `owner`/`maintainer` on the parent.
+/// - **child** (`parent` set): caller must be `owner`/`maintainer` on the parent. When the parent is
+///   the root or the gating team, a system admin only. A personal team takes no children (400).
 /// - **root** (`parent` None): any authenticated profile may create.
 /// - `auto_join_role` set: caller must be `is_system_admin`, and the role must be `member` or
 ///   `watcher` (400 otherwise; spec C15).
@@ -194,16 +226,31 @@ pub async fn create_team(
     // Child team: resolve the parent and require owner/maintainer on it.
     let parent_id = if let Some(parent_ref) = &req.parent {
         let slug = team_slug(parent_ref);
-        let parent_id = sqlx::query_scalar!(
-            "SELECT id FROM kb_teams WHERE slug = $1 AND is_active",
+        let parent = sqlx::query!(
+            r#"SELECT id, personal_of IS NOT NULL AS "is_personal!" FROM kb_teams
+                WHERE slug = $1 AND is_active"#,
             slug
         )
         .fetch_optional(pool)
         .await?
         .ok_or_else(|| ApiError::NotFound("parent team not found or not readable".to_string()))?;
-        match role_on_team(pool, parent_id, creator).await? {
-            Some(role) if can_manage(role) => {}
-            _ => return Err(ApiError::Forbidden),
+        let parent_id = parent.id;
+        // The root and the gating team take children only from a system admin (team-authority
+        // fixes D4): a child of either is read reach into everything attached to it, and R11 keeps
+        // the gating roster admin-only. A leftover managing row (a demoted admin's) confers nothing.
+        if is_root_or_gating(pool, parent_id).await? {
+            require_admin_on(pool, authed).await?;
+        } else {
+            match role_on_team(pool, parent_id, creator).await? {
+                Some(role) if can_manage(role) => {}
+                _ => return Err(ApiError::Forbidden),
+            }
+            // After the role check, so a non-manager learns nothing about the parent.
+            if parent.is_personal {
+                return Err(ApiError::BadRequest(
+                    "a personal team cannot have child teams".to_string(),
+                ));
+            }
         }
         Some(parent_id)
     } else {
@@ -459,7 +506,8 @@ pub async fn team_detail(pool: &PgPool, caller: &Caller, team_id: Uuid) -> ApiRe
     })
 }
 
-/// Update a team's mutable metadata (name/description). Owner/maintainer only.
+/// Update a team's mutable metadata (name/description). Owner/maintainer; on the root or the
+/// gating team, a system admin only.
 ///
 /// Partial merge: a `None` field leaves that column unchanged (SQL COALESCE).
 /// A soft-deleted team is not updatable — the `is_active` filter yields
@@ -470,10 +518,15 @@ pub async fn update_team(
     team_id: Uuid,
     req: &TeamUpdateRequest,
 ) -> ApiResult<TeamRow> {
-    // Auth before writes: owner or maintainer.
-    match role_on_team(pool, team_id, caller.profile_id()).await? {
-        Some(role) if can_manage(role) => {}
-        _ => return Err(ApiError::Forbidden),
+    // Auth before writes: owner or maintainer — and on the root or the gating team, a system admin
+    // only (team-authority fixes D4).
+    if is_root_or_gating(pool, team_id).await? {
+        require_admin_on(pool, caller).await?;
+    } else {
+        match role_on_team(pool, team_id, caller.profile_id()).await? {
+            Some(role) if can_manage(role) => {}
+            _ => return Err(ApiError::Forbidden),
+        }
     }
 
     let row = sqlx::query_as!(
@@ -497,18 +550,29 @@ pub async fn update_team(
     Ok(row)
 }
 
-/// Soft-delete a team (`is_active = false`). Owner only.
+/// Soft-delete a team (`is_active = false`). Owner, or a system admin; on the root or the gating
+/// team, a system admin only.
 ///
 /// Refuses the `temper-system` root (load-bearing: every profile descends from
 /// it). Idempotency: a team that is absent OR already soft-deleted yields
 /// `NotFound`. Rows are preserved — recovery is a DB-level `is_active = true`.
 /// Children are NOT recursively deleted (see the migration's cascade note).
 pub async fn delete_team(pool: &PgPool, caller: &HumanPrincipal, team_id: Uuid) -> ApiResult<()> {
-    // Auth before writes: owner only (stricter than manage — a maintainer cannot
-    // dissolve the team).
-    match role_on_team(pool, team_id, caller.profile_id()).await? {
-        Some(TeamRole::Owner) => {}
-        _ => return Err(ApiError::Forbidden),
+    // Auth before writes: owner only (stricter than manage — a maintainer cannot dissolve the
+    // team), or a system admin. On the root or the gating team, a system admin only
+    // (team-authority fixes D4).
+    let admin = crate::authz::Principal::Human(caller)
+        .system_admin(pool)
+        .await?
+        .is_some();
+    if !admin {
+        if is_root_or_gating(pool, team_id).await? {
+            return Err(ApiError::Forbidden);
+        }
+        match role_on_team(pool, team_id, caller.profile_id()).await? {
+            Some(TeamRole::Owner) => {}
+            _ => return Err(ApiError::Forbidden),
+        }
     }
 
     // Guard the DAG root. Folded into the UPDATE's WHERE so the check and the
@@ -1406,13 +1470,25 @@ mod lifecycle_tests {
         .await
         .unwrap();
 
+        // A non-admin owner of the root is refused before the root guard: the root's lifecycle is a
+        // system admin's alone (team-authority fixes D4).
         let denied = delete_team(
             &pool,
             &crate::test_support::human_principal_for(&pool, owner).await,
             sys,
         )
         .await;
-        assert!(matches!(denied, Err(ApiError::Conflict(_))));
+        assert!(matches!(denied, Err(ApiError::Forbidden)), "{denied:?}");
+
+        // And a system admin meets the root guard itself.
+        crate::test_support::approved_admin(&pool, owner).await;
+        let denied = delete_team(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, owner).await,
+            sys,
+        )
+        .await;
+        assert!(matches!(denied, Err(ApiError::Conflict(_))), "{denied:?}");
     }
 
     #[sqlx::test(migrations = "../../migrations")]
