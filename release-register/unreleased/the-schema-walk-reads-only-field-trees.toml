@@ -20,9 +20,8 @@ size, release build). That changes what one kind of shape returns, always toward
 a shape whose declared values were heavy enough to spend the budget — more than about 85 fields
 each carrying a full 256-member enum, or a `const` of hundreds of KiB of small nested objects — was
 advertised cut at `truncated: ["work"]`, and an ask over such a value could be refused with
-`beyond_bound: work`. It is now advertised whole and answered. Production holds no such shape (its
-largest schema is 1.5 KB, with no `enum` and no `const` over 10 bytes), and ordinary use stays far
-below the old budget. Bounding the size of declared values at declare is its own task.
+`beyond_bound: work`. It is now advertised whole and answered. Ordinary shapes stay far below the old
+budget. Bounding the size of declared values at declare is its own change.
 
 `beyond_bound: work` now means only that the request's `contains` values spent its membership
 steps, and its sentence says so. The path refusal's rule now reads "only `properties` chains are
