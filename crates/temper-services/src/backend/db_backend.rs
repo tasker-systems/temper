@@ -21,7 +21,9 @@ use temper_macros::act_span;
 
 use temper_core::error::TemperError;
 use temper_core::types::authorship::ActContext;
-use temper_core::types::data_artifact::{unstorable_nul, ArtifactView, KindOwnerInput};
+use temper_core::types::data_artifact::{
+    overlong_kind, unstorable_nul, ArtifactView, KindOwnerInput,
+};
 use temper_core::types::graph;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{
@@ -3254,7 +3256,11 @@ impl Backend for DbBackend {
         // fault. The check reads the request alone, so refusing ahead of the modify floor
         // discloses nothing about the resource. Every door that commits reaches it here: the MCP
         // tool and the CLI relay the request to the API, which reads it into this command.
-        if let Some(refusal) = unstorable_nul(&cmd.kind, "content", &cmd.content) {
+        // A family name past its cap is refused the same way, naming the cap: one past the
+        // family-name indexes' row limit would otherwise fail in the database too.
+        if let Some(refusal) =
+            unstorable_nul(&cmd.kind, "content", &cmd.content).or_else(|| overlong_kind(&cmd.kind))
+        {
             return Err(TemperError::DataArtifactRefusal(refusal));
         }
         // Correlation-integrity gate for any claimed invocation. It reads the invocation, never the

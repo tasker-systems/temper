@@ -856,3 +856,200 @@ async fn a_nul_in_a_shape_is_refused_by_name_and_writes_nothing(pool: PgPool) {
         .expect("the same declare without U+0000 is stored");
     assert_eq!(shape_row_count(&app).await, rows_before + 1);
 }
+
+// ── Inputs the store cannot index or hold: refused by name ahead of the database ─────────────
+//
+// A family name is a key in three btree indexes (the live-shape unique index, and
+// `idx_kb_data_artifacts_kind` / `idx_kb_data_artifacts_family`), and a btree row holds at most
+// 2704 bytes after compression. A family name past that failed in the database: 500 at the shape
+// door, and at the commit door the bare `54000` sentence, which names no field. An act's prose
+// fields ride `kb_events.metadata` (`jsonb`), which cannot hold U+0000.
+
+/// A family name far past every index's row limit, even compressed (300,000 characters answered
+/// 500 at the shape door when this was found).
+fn unindexable_family() -> String {
+    "k".repeat(300_000)
+}
+
+/// **A shape whose family name is longer than `MAX_ARTIFACT_KIND_BYTES` is refused by name, as a
+/// 400 under `DATA_ARTIFACT_REFUSAL_CODE` naming `kind` and the limit, and writes no shape row; a
+/// family name at the limit is declared.**
+///
+/// Bite: in `shape_service::declare_shape`, the `overlong_kind` check removed — the 300,000-character
+/// declare answers 500 again, and the typed match panics.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_overlong_family_name_is_refused_by_name_at_the_shape_door(pool: PgPool) {
+    use temper_core::types::data_artifact::MAX_ARTIFACT_KIND_BYTES;
+    let app = common::setup(pool).await;
+    let (context_id, _resource) = context_with_resource(&app, "e2e-long-kind-shape").await;
+    let rows_before = shape_row_count(&app).await;
+    let request = |kind: String| ShapeDeclareRequest {
+        kind,
+        kind_owner: None,
+        schema: string_schema(),
+        enforcement: EnforcementMode::Advisory,
+        act: Default::default(),
+    };
+
+    for kind in [
+        unindexable_family(),
+        "k".repeat(MAX_ARTIFACT_KIND_BYTES + 1),
+    ] {
+        let err = app
+            .client
+            .data_artifacts()
+            .declare_shape(context_id, &request(kind))
+            .await
+            .expect_err("an over-long family name must refuse");
+        let refusal = match err {
+            ClientError::DataArtifactRefusal { message } => message,
+            other => panic!("an over-long `kind` must arrive as a typed 400, not as {other}"),
+        };
+        assert!(
+            refusal.starts_with("`kind` is ")
+                && refusal.contains(&MAX_ARTIFACT_KIND_BYTES.to_string()),
+            "the refusal names `kind` and its limit, got: {refusal}"
+        );
+    }
+    assert_eq!(
+        shape_row_count(&app).await,
+        rows_before,
+        "a refused declare writes no shape row"
+    );
+
+    app.client
+        .data_artifacts()
+        .declare_shape(context_id, &request("k".repeat(MAX_ARTIFACT_KIND_BYTES)))
+        .await
+        .expect("a family name at the limit is declared");
+    assert_eq!(shape_row_count(&app).await, rows_before + 1);
+}
+
+/// **A commit whose family name is longer than `MAX_ARTIFACT_KIND_BYTES` is refused by name, as a
+/// 400 under `DATA_ARTIFACT_REFUSAL_CODE` naming `kind` and the limit, and stores nothing; a
+/// family name at the limit is stored.** No shape is declared, so nothing but the commit's own
+/// indexes reads the name.
+///
+/// Bite: in `DbBackend::commit_data_artifact`, the `overlong_kind` check removed — the
+/// 300,000-character commit answers the generic `54000` 400 (or a 500 before #1264), which is not
+/// the typed refusal, and the match panics.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_overlong_family_name_is_refused_by_name_at_the_commit_door(pool: PgPool) {
+    use temper_core::types::data_artifact::MAX_ARTIFACT_KIND_BYTES;
+    let app = common::setup(pool).await;
+    let (_context, resource_id) = context_with_resource(&app, "e2e-long-kind-commit").await;
+    let request = |kind: String| ArtifactCommitRequest {
+        kind,
+        kind_owner: None,
+        intent: "member".to_string(),
+        precedence: 0.0,
+        content: json!({ "value": "fine" }),
+        supersedes: Vec::new(),
+        act: Default::default(),
+    };
+
+    for kind in [
+        unindexable_family(),
+        "k".repeat(MAX_ARTIFACT_KIND_BYTES + 1),
+    ] {
+        let err = app
+            .client
+            .data_artifacts()
+            .commit(resource_id, &request(kind))
+            .await
+            .expect_err("an over-long family name must refuse");
+        let refusal = match err {
+            ClientError::DataArtifactRefusal { message } => message,
+            other => panic!("an over-long `kind` must arrive as a typed 400, not as {other}"),
+        };
+        assert!(
+            refusal.starts_with("`kind` is ")
+                && refusal.contains(&MAX_ARTIFACT_KIND_BYTES.to_string()),
+            "the refusal names `kind` and its limit, got: {refusal}"
+        );
+    }
+    assert_eq!(
+        artifacts_on(&app, resource_id).await,
+        0,
+        "a refused commit stores nothing"
+    );
+
+    app.client
+        .data_artifacts()
+        .commit(resource_id, &request("k".repeat(MAX_ARTIFACT_KIND_BYTES)))
+        .await
+        .expect("a family name at the limit is stored");
+    assert_eq!(artifacts_on(&app, resource_id).await, 1);
+}
+
+/// **U+0000 in any of an act's prose fields is refused as a 400 naming the field, and the write
+/// stores nothing; the same act with U+0001 is stored.** Witnessed at the commit door; every door
+/// that carries an act assembles it through `ActInput::into_act_context`, where the check sits.
+///
+/// Bite: in `ActInput::into_act_context`, the `storable` checks removed — each commit answers 500
+/// when `kb_events.metadata` refuses the bind.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_nul_in_an_act_prose_field_is_refused_by_name(pool: PgPool) {
+    use temper_core::types::authorship::{ActInput, ConfidenceBand};
+    let app = common::setup(pool).await;
+    let (_context, resource_id) = context_with_resource(&app, "e2e-nul-act").await;
+    let request = |field: &str, value: &str| {
+        let mut act = ActInput {
+            confidence: Some(ConfidenceBand::Probable),
+            ..Default::default()
+        };
+        let value = Some(value.to_string());
+        match field {
+            "reasoning" => act.reasoning = value,
+            "rationale" => act.rationale = value,
+            "persona" => act.persona = value,
+            "model" => act.model = value,
+            other => unreachable!("not an act prose field: {other}"),
+        }
+        ArtifactCommitRequest {
+            kind: "measurement".to_string(),
+            kind_owner: None,
+            intent: "member".to_string(),
+            precedence: 0.0,
+            content: json!({ "value": "fine" }),
+            supersedes: Vec::new(),
+            act,
+        }
+    };
+
+    for field in ["reasoning", "rationale", "persona", "model"] {
+        let err = app
+            .client
+            .data_artifacts()
+            .commit(resource_id, &request(field, "a\u{0}secret"))
+            .await
+            .expect_err("an act holding U+0000 must refuse");
+        let message = match err {
+            ClientError::Server {
+                status: 400,
+                message,
+            } => message,
+            other => panic!("U+0000 in `{field}` must arrive as a 400, not as {other}"),
+        };
+        assert!(
+            message.contains(&format!("`{field}` holds the character U+0000")),
+            "the refusal names `{field}`, got: {message}"
+        );
+        assert!(
+            !message.contains("secret"),
+            "the refusal quotes nothing of the value, got: {message}"
+        );
+    }
+    assert_eq!(
+        artifacts_on(&app, resource_id).await,
+        0,
+        "a refused act stores nothing"
+    );
+
+    app.client
+        .data_artifacts()
+        .commit(resource_id, &request("reasoning", "a\u{1}b"))
+        .await
+        .expect("the same act without U+0000 is stored");
+    assert_eq!(artifacts_on(&app, resource_id).await, 1);
+}

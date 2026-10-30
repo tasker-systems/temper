@@ -156,12 +156,19 @@ pub const MAX_ACT_PROSE_BYTES: usize = 16_384;
 /// [`MAX_ACT_PROSE_BYTES`].
 pub const MAX_ACT_LABEL_BYTES: usize = 256;
 
-/// Refuse an authorship field longer than `limit` bytes, naming the field and the limit.
+/// Refuse an authorship field longer than `limit` bytes, naming the field and the limit; or one
+/// holding U+0000, naming the field and quoting none of the value. Authorship rides
+/// `kb_events.metadata` (`jsonb`), which cannot store the character, so binding it would fail in
+/// the database as a fault on every door that carries an act.
 fn bounded(field: &str, value: &Option<String>, limit: usize) -> Result<(), TemperError> {
     match value {
         Some(v) if v.len() > limit => Err(TemperError::BadRequest(format!(
             "agent authorship field `{field}` is {} bytes; the limit is {limit}",
             v.len()
+        ))),
+        Some(v) if v.contains('\0') => Err(TemperError::BadRequest(format!(
+            "agent authorship field `{field}` holds the character U+0000 (NUL), which the \
+             database cannot store; remove it from `{field}`, and send the request again"
         ))),
         _ => Ok(()),
     }
@@ -175,7 +182,8 @@ impl ActInput {
     /// [`TemperError::BadRequest`] — `AgentAuthorship::confidence` is non-`Option`, so a graded
     /// band is mandatory once authorship is claimed. Each authorship string is bounded
     /// ([`MAX_ACT_PROSE_BYTES`], [`MAX_ACT_LABEL_BYTES`]); an over-long one is a `BadRequest` naming
-    /// the field. The `invocation_id` and `correlation_id` correlators ride independently and may be
+    /// the field, and so is one holding U+0000, which no event's metadata can store. The
+    /// `invocation_id` and `correlation_id` correlators ride independently and may be
     /// present with no authorship at all.
     pub fn into_act_context(self) -> Result<ActContext, TemperError> {
         let ActInput {
@@ -305,6 +313,29 @@ mod tests {
                 ),
                 other => panic!("{field}: expected BadRequest, got {other:?}"),
             }
+        }
+    }
+
+    /// FAILS IF U+0000 in an authorship string is admitted, or refused without naming the field, or
+    /// refused quoting the value: each field holding one is a `BadRequest` naming it; U+0001 is
+    /// admitted.
+    #[test]
+    fn a_nul_in_an_authorship_string_is_refused_by_name() {
+        for field in ["reasoning", "rationale", "persona", "model"] {
+            let refused = authored(field, "a\u{0}secret".to_string())
+                .into_act_context()
+                .expect_err("U+0000 is refused");
+            match refused {
+                TemperError::BadRequest(message) => assert!(
+                    message.contains(&format!("`{field}` holds the character U+0000"))
+                        && !message.contains("secret"),
+                    "the refusal names {field} and quotes nothing: {message}"
+                ),
+                other => panic!("{field}: expected BadRequest, got {other:?}"),
+            }
+            authored(field, "a\u{1}b".to_string())
+                .into_act_context()
+                .unwrap_or_else(|e| panic!("{field} with U+0001 is accepted: {e:?}"));
         }
     }
 
