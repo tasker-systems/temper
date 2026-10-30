@@ -61,7 +61,8 @@ use sqlx::PgPool;
 use temper_core::error::DATA_ARTIFACT_REFUSAL_CODE;
 use temper_core::types::artifact_ask::{reference, ArtifactPredicate, AskResponse};
 use temper_core::types::data_artifact::{
-    ArtifactCommitRequest, ArtifactCursor, ARTIFACT_ASK_CONTENT_DEPTH, MAX_ARTIFACT_PAGE_ROWS,
+    ArtifactCommitRequest, ArtifactCursor, ARTIFACT_ASK_CONTENT_DEPTH, MAX_ARTIFACT_KIND_BYTES,
+    MAX_ARTIFACT_PAGE_ROWS,
 };
 use temper_core::types::data_artifact_shape::{EnforcementMode, ShapeDeclareRequest};
 use temper_core::types::ids::DataArtifactId;
@@ -157,8 +158,14 @@ const DEEPEST_PROBED: usize = 130;
 
 /// The family-name lengths offered to the doors, longest first; the first one both the shape door
 /// and the commit door admit is the long family. Each name is one control character repeated, so
-/// it is written six bytes a character, and compresses as far as storage can compress a name.
-const LONG_FAMILY_CHARS: [usize; 5] = [1_000_000, 300_000, 100_000, 10_000, 2_000];
+/// it is written six bytes a character, and compresses as far as storage can compress a name. Both
+/// doors refuse a name past `MAX_ARTIFACT_KIND_BYTES`, so the longest they admit is that length.
+const LONG_FAMILY_CHARS: [usize; 4] = [
+    1_000_000,
+    300_000,
+    MAX_ARTIFACT_KIND_BYTES + 1,
+    MAX_ARTIFACT_KIND_BYTES,
+];
 
 /// Where the corpus expects an artifact to land on a page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -951,8 +958,7 @@ async fn world(pool: PgPool) -> World {
 /// four small artifacts and one without content committed under it. Where a page puts its rows
 /// follows from the name: a row writes it once, as a JSON string, beside small content and fixed
 /// fields within [`ARTIFACT_ROW_FIXED_BYTES`]. Each door's answer to each length is recorded in
-/// `probes`, but not held to a 4xx: the doors set no length of their own for a family name, so a
-/// longer name's refusal is recorded as they give it.
+/// `probes`; a longer name's refusal is witnessed by name in `data_artifact_refusal_e2e`.
 async fn long_family(
     app: &common::E2eTestApp,
     context: Uuid,
