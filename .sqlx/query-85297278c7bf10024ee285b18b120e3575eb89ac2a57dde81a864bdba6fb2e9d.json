@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT EXISTS (\n            SELECT 1\n            FROM kb_resource_homes h\n            JOIN kb_contexts c\n              ON c.id = h.anchor_id AND c.is_active\n            JOIN kb_teams t\n              ON t.is_active\n             AND ( EXISTS (SELECT 1 FROM kb_team_contexts tc\n                            WHERE tc.team_id = t.id AND tc.context_id = c.id)\n                OR (c.owner_table = 'kb_teams' AND c.owner_id = t.id) )\n            JOIN kb_team_members cm\n              ON cm.team_id = t.id AND cm.profile_id = $2\n                 AND cm.role IN ('owner', 'maintainer')\n            JOIN kb_team_members tm\n              ON tm.team_id = t.id AND tm.profile_id = $3\n            WHERE h.resource_id = $1\n              AND h.anchor_table = 'kb_contexts'\n              AND NOT (c.owner_table = 'kb_profiles' AND c.owner_id = h.owner_profile_id)\n              AND ( EXISTS (SELECT 1 FROM kb_team_members om\n                             WHERE om.team_id = t.id AND om.profile_id = h.owner_profile_id)\n                 OR EXISTS (SELECT 1 FROM kb_events e\n                              JOIN kb_event_types et ON et.id = e.event_type_id\n                             WHERE et.name = 'team_membership_changed'\n                               AND e.payload @> jsonb_build_object(\n                                     'team_id', t.id, 'profile_id', h.owner_profile_id)) )\n        ) AS \"exists!: bool\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!: bool",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "85297278c7bf10024ee285b18b120e3575eb89ac2a57dde81a864bdba6fb2e9d"
+}

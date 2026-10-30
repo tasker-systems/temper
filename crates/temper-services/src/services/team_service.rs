@@ -936,14 +936,17 @@ mod lifecycle_tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn remove_member_surfaces_residual_owned_reach(pool: PgPool) {
-        // owner removes `leaver`, who owns 2 resources in a shared context + 0 elsewhere.
+        // owner removes `leaver`, who owns 2 resources in a context carol shared to the team + 0
+        // elsewhere. (A context the leaver owns is never in the team's scope — team-authority
+        // fixes D5 — so the shared context is someone else's.)
         let owner = mk_profile(&pool, "owner").await;
         let leaver = mk_profile(&pool, "leaver").await;
+        let carol = mk_profile(&pool, "carol").await;
         let team = mk_team(&pool, "acme").await;
         add(&pool, team, owner, "owner", "native").await;
         add(&pool, team, leaver, "member", "native").await;
 
-        let shared = mk_shared_profile_context(&pool, leaver, team, "shared").await;
+        let shared = mk_shared_profile_context(&pool, carol, team, "shared").await;
         let _r1 = mk_homed_resource(&pool, shared, leaver).await;
         let _r2 = mk_homed_resource(&pool, shared, leaver).await;
 
@@ -973,12 +976,13 @@ mod lifecycle_tests {
         let owner = mk_profile(&pool, "owner").await;
         let leaver = mk_profile(&pool, "leaver").await;
         let carol = mk_profile(&pool, "carol").await;
+        let dave = mk_profile(&pool, "dave").await;
         let team = mk_team(&pool, "acme").await;
         add(&pool, team, owner, "owner", "native").await;
         add(&pool, team, leaver, "member", "native").await;
 
         let ctx_a = mk_shared_profile_context(&pool, carol, team, "docs").await; // @carol/docs
-        let ctx_b = mk_shared_profile_context(&pool, leaver, team, "docs").await; // @leaver/docs
+        let ctx_b = mk_shared_profile_context(&pool, dave, team, "docs").await; // @dave/docs
 
         let _r1 = mk_homed_resource(&pool, ctx_a, leaver).await;
         let _r2 = mk_homed_resource(&pool, ctx_b, leaver).await;
@@ -1005,7 +1009,7 @@ mod lifecycle_tests {
             .map(|c| (c.context_ref.as_str(), c.count))
             .collect();
         assert_eq!(by_ref.get("@carol/docs"), Some(&2));
-        assert_eq!(by_ref.get("@leaver/docs"), Some(&1));
+        assert_eq!(by_ref.get("@dave/docs"), Some(&1));
     }
 
     #[sqlx::test(migrations = "../../migrations")]

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT ( EXISTS (SELECT 1 FROM kb_team_members\n                             WHERE team_id = $1 AND profile_id = $2)\n                 OR EXISTS (SELECT 1 FROM kb_events e\n                              JOIN kb_event_types et ON et.id = e.event_type_id\n                             WHERE et.name = 'team_membership_changed'\n                               AND e.payload @> jsonb_build_object(\n                                     'team_id', $1::uuid, 'profile_id', $2::uuid)) ) AS \"e!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "e!: bool",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "3799bc4a2ab30d51ae8e4935a3b8bb525df4dc8a3204c75ab743942faa05873b"
+}

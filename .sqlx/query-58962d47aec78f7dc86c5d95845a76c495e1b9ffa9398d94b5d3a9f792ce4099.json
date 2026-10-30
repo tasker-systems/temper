@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT h.resource_id AS \"resource_id!\",\n               c.id          AS \"context_id!\",\n               c.slug        AS \"slug!\",\n               CASE c.owner_table\n                 WHEN 'kb_teams'    THEN '+' || t.slug\n                 WHEN 'kb_profiles' THEN '@' || p.handle\n               END AS \"owner_ref!\"\n        FROM kb_contexts c\n        JOIN kb_resource_homes h\n          ON h.anchor_table = 'kb_contexts' AND h.anchor_id = c.id\n        JOIN kb_resources r ON r.id = h.resource_id AND r.is_active\n        LEFT JOIN kb_teams    t ON c.owner_table = 'kb_teams'    AND t.id = c.owner_id\n        LEFT JOIN kb_profiles p ON c.owner_table = 'kb_profiles' AND p.id = c.owner_id\n        WHERE c.is_active\n          AND h.owner_profile_id = $2\n          AND ( EXISTS (SELECT 1 FROM kb_team_contexts tc\n                         WHERE tc.team_id = $1 AND tc.context_id = c.id)\n             OR (c.owner_table = 'kb_teams' AND c.owner_id = $1) )\n          -- A sharer's own context is never in a team's scope (team-authority fixes D5).\n          AND NOT (c.owner_table = 'kb_profiles' AND c.owner_id = $2)\n        ORDER BY c.slug, h.resource_id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "resource_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "context_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "slug!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "owner_ref!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "58962d47aec78f7dc86c5d95845a76c495e1b9ffa9398d94b5d3a9f792ce4099"
+}
