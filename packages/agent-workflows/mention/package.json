@@ -18,7 +18,7 @@
   },
   "dependencies": {
     "ai": "^7.0.128",
-    "eve": "^0.81.1",
+    "eve": "^0.84.1",
     "@tasker-systems/temper-telemetry-ts": "file:../../../clients/temper-telemetry-ts",
     "@tasker-systems/temper-ts": "file:../../../clients/temper-ts",
     "zod": "4.6.7"
