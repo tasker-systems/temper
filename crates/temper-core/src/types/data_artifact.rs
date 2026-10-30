@@ -314,6 +314,19 @@ pub struct ArtifactCommitRequest {
     pub act: ActInput,
 }
 
+/// The longest family name (`kind`) a commit or a shape declaration may carry, in bytes.
+///
+/// # 256
+///
+/// A family name is an identifier, and it is a key in three btree indexes (the live-shape unique
+/// index, `idx_kb_data_artifacts_kind` and `idx_kb_data_artifacts_family`), whose rows hold at most
+/// 2704 bytes. Past that the database refuses the write as a fault. 256 is the cap the other
+/// identifiers a caller names already carry: a shape property name
+/// (`shape_schema::MAX_PROPERTY_NAME_BYTES`) and an ask path segment
+/// (`MAX_ARTIFACT_PATH_SEGMENT_BYTES`). It is well inside the index row with the other key columns
+/// beside it, compressed or not. Chosen, not measured against stored families.
+pub const MAX_ARTIFACT_KIND_BYTES: usize = 256;
+
 /// Whether a JSON value holds U+0000 anywhere: in a string, or in an object key, at any depth of
 /// arrays and objects. `jsonb` cannot store the character, so no stored artifact or shape holds
 /// it, and binding a value that does is a database error rather than a refusal. An ask refuses a
@@ -353,6 +366,21 @@ pub fn unstorable_nul(kind: &str, value_field: &str, value: &serde_json::Value) 
         "{named} the character U+0000 (NUL), which the database cannot store, so no artifact or \
          shape can hold it; remove it from {remedy}, and send the request again"
     ))
+}
+
+/// The refusal for a commit or a shape declaration whose family name is longer than
+/// [`MAX_ARTIFACT_KIND_BYTES`]: it names `kind`, its length and the limit, and never quotes the
+/// value. `None` when the name is within it. The doors run it beside [`unstorable_nul`], before
+/// anything is stored, so a name no index row can hold is refused by name rather than failing in
+/// the database.
+pub fn overlong_kind(kind: &str) -> Option<String> {
+    (kind.len() > MAX_ARTIFACT_KIND_BYTES).then(|| {
+        format!(
+            "`kind` is {} bytes; the limit is {MAX_ARTIFACT_KIND_BYTES}. A family name is an \
+             identifier: shorten it, and send the request again",
+            kind.len()
+        )
+    })
 }
 
 /// Response body for `POST /api/resources/{id}/artifacts` — the committed artifact's ID
@@ -555,6 +583,27 @@ mod tests {
             more["next"],
             serde_json::to_value(cursor()).expect("cursor serializes")
         );
+    }
+
+    /// **A family name is admitted at `MAX_ARTIFACT_KIND_BYTES` and refused one byte past it**,
+    /// measured in bytes (a multi-byte name over the limit in bytes but not in characters is
+    /// refused), naming `kind`, its length and the limit, and quoting none of it.
+    /// Bite: `>` replaced by `>=` in `overlong_kind` (the name at the limit is refused).
+    #[test]
+    fn an_overlong_family_name_is_refused_naming_its_limit() {
+        assert_eq!(overlong_kind(&"k".repeat(MAX_ARTIFACT_KIND_BYTES)), None);
+        for name in [
+            "k".repeat(MAX_ARTIFACT_KIND_BYTES + 1),
+            "é".repeat(MAX_ARTIFACT_KIND_BYTES / 2 + 1),
+        ] {
+            let refusal = overlong_kind(&name).expect("one byte past the limit is refused");
+            assert!(
+                refusal.starts_with(&format!("`kind` is {} bytes", name.len()))
+                    && refusal.contains(&format!("the limit is {MAX_ARTIFACT_KIND_BYTES}"))
+                    && !refusal.contains(&name),
+                "got: {refusal}"
+            );
+        }
     }
 
     /// **U+0000 is found wherever a stored value can carry it, and a write is refused by the field

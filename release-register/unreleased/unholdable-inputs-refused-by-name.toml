@@ -1,0 +1,16 @@
+title    = "A family name past 256 bytes, and U+0000 in an act's authorship fields, are refused by name, not with a 500"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "mcp", "cli-stdout"]
+status   = "signal-only"
+body = '''
+Two inputs the store cannot hold now meet a refusal that names the field, ahead of the database.
+
+A data-artifact family name (`kind`) longer than `MAX_ARTIFACT_KIND_BYTES` (256 bytes) is refused at the shape door (`POST /api/contexts/{id}/shapes`, `POST /api/cognitive-maps/{id}/shapes`, MCP `declare_data_artifact_shape`, `temper data-artifact schema declare`) and at the commit door (`POST /api/resources/{id}/artifacts`, MCP `commit_data_artifact`, `temper data-artifact commit`) as `DATA_ARTIFACT_REFUSAL` (400), naming `kind`, its length and the limit, and quoting none of it. A family name is a key in three btree indexes, whose rows hold 2704 bytes. A name past that answered `500 INTERNAL_ERROR` at the shape door; at the commit door it answered the generic `54000` 400 from #1264, which names no field. The cap is 256, the cap a shape property name and an ask path segment already carry. A name from 257 bytes up to what the indexes held, previously stored, is now refused at both doors; the shape door's check runs after its authority gate, and the commit door's before the modify floor, beside the U+0000 check, since it reads the request alone.
+
+U+0000 in `reasoning`, `rationale`, `persona` or `model` is refused as `400 BAD_REQUEST` naming the field, where the act is assembled (`ActInput::into_act_context`), on every door that carries an act. These fields ride `kb_events.metadata` (`jsonb`), which cannot hold the character, so the write answered `500 INTERNAL_ERROR`. The CLI assembles the act locally and now refuses before sending.
+
+Who observes it: a caller sending either input. Nothing a caller could store before is refused, except a family name between 257 bytes and the index limit.
+
+Release relevance: signal-only. No shape changes; a 500 becomes a typed 400, and the family-name cap is new.
+'''

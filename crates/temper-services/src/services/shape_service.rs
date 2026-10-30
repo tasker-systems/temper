@@ -25,7 +25,7 @@ use crate::services::drain_span::{self, JobOutcome};
 use crate::services::shape_loader::{self, SchemaVerdict};
 use crate::services::workflow_job_service;
 use temper_core::types::artifact_ask::walk::MAX_SCHEMA_BYTES;
-use temper_core::types::data_artifact::unstorable_nul;
+use temper_core::types::data_artifact::{overlong_kind, unstorable_nul};
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ContextId, EntityId, ProfileId, ShapeId};
 use temper_core::types::workflow_job::{AnchorJobPayload, ClaimedAnchorJob, DispatchType, Persona};
@@ -77,7 +77,11 @@ pub struct DeclareShapeServiceParams<'a> {
 /// refused with the no-fetch constructor's fixed sentence. Both are a `DataArtifactRefusal`, so
 /// a schema no ask could use is refused when it is declared rather than stored. Before either, a
 /// family name or a schema holding U+0000, which Postgres cannot store, is refused as one too,
-/// naming the field ([`unstorable_nul`]), where binding it would have failed in the database.
+/// naming the field ([`unstorable_nul`]), where binding it would have failed in the database; and
+/// so is a family name longer than [`MAX_ARTIFACT_KIND_BYTES`], naming its limit
+/// ([`overlong_kind`]).
+///
+/// [`MAX_ARTIFACT_KIND_BYTES`]: temper_core::types::data_artifact::MAX_ARTIFACT_KIND_BYTES
 ///
 /// After the declare succeeds, a reconcile job is enqueued on the anchor queue. The single-flight
 /// index collapses N declarations into one job — the second enqueue returns `None`, not an error.
@@ -89,7 +93,9 @@ pub async fn declare_shape(pool: &PgPool, p: DeclareShapeServiceParams<'_>) -> A
     // stranger `Forbidden` whatever the schema says, so the refusals below teach only an author.
     // A U+0000 no row can hold is refused first, by the field that holds it; then the schema is
     // measured before it is compiled — a schema past the walk's byte bound is never compiled.
-    if let Some(refusal) = unstorable_nul(p.kind, "schema", p.schema) {
+    if let Some(refusal) =
+        unstorable_nul(p.kind, "schema", p.schema).or_else(|| overlong_kind(p.kind))
+    {
         return Err(ApiError::DataArtifactRefusal(refusal));
     }
     match shape_loader::judge(p.schema).await? {
