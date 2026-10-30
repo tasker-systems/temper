@@ -688,7 +688,7 @@ fn parse_retired_vault_keys(raw: Option<String>, current: &VaultKey) -> RetiredK
 /// | Variable                    | Capability it confers                                          |
 /// | --------------------------- | -------------------------------------------------------------- |
 /// | `INTERNAL_RECONCILE_SECRET` | call `/internal/saml/reconcile`                                  |
-/// | `EMBED_DISPATCH_SECRET`     | call the embed drain crons, the `/api/erasure/drain` byte-delete fence and the `/api/sensitivity/sweep` tick |
+/// | `EMBED_DISPATCH_SECRET`     | call the embed drain crons, the `/api/erasure/drain` byte-delete fence, the `/api/sensitivity/sweep` tick and the `/api/shape/reconcile` drain |
 /// | `SLACK_LINK_SECRET`         | ask `/internal/slack/link-state` *"is this principal linked?"*    |
 /// | `SLACK_MINT_SECRET`         | mint a token acting as **any linked human, with their full reach**|
 /// | `BLOB_READ_WRITE_TOKEN`     | write to the provider blob store                                  |

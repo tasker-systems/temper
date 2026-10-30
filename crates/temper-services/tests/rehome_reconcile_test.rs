@@ -201,7 +201,7 @@ async fn rehoming_a_resource_enqueues_shape_reconcile(pool: PgPool) {
     .expect("declare shape in ctx_b");
 
     // The declare itself enqueues a reconcile job for ctx_b. Consume it so the baseline is clean.
-    shape_service::reconcile_anchor(&pool, HomeAnchor::Context(ContextId::from(ctx_b)))
+    shape_service::dispatch_tick(&pool, None)
         .await
         .expect("drain declare's job");
 
@@ -225,9 +225,10 @@ async fn rehoming_a_resource_enqueues_shape_reconcile(pool: PgPool) {
     );
 
     // Run the reconciler — it should verdict the rehomed artifact.
-    let count = shape_service::reconcile_anchor(&pool, HomeAnchor::Context(ContextId::from(ctx_b)))
+    let count = shape_service::dispatch_tick(&pool, None)
         .await
-        .expect("reconcile after rehome");
+        .expect("reconcile after rehome")
+        .verdicts_written;
 
     assert_eq!(
         count, 1,

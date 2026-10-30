@@ -47,8 +47,11 @@
 //! engine's 10 MiB default; one past it makes the schema uncompilable, with the same fixed
 //! sentence, for every caller (declare, commit, reconcile and the shape loader all compile here).
 
-use jsonschema::{Retrieve, Uri, Validator};
+use jsonschema::{Retrieve, Uri};
 use serde_json::Value;
+
+/// The compiled form of a shape's JSON Schema, as [`compile`] returns it.
+pub use jsonschema::Validator;
 
 /// The schema is not a field tree this server can compile.
 ///
@@ -302,6 +305,13 @@ pub fn first_failure(validator: &Validator, content: &Value) -> Option<(String, 
         cut(error.instance_path().to_string()),
         cut(error.to_string()),
     ))
+}
+
+/// The stored `detail` of a verdict whose content fails its shape: `[{path, message}]`, the one
+/// violation [`first_failure`] names. Commit and reconcile both write it, so the two cannot drift.
+#[must_use]
+pub fn failure_detail(path: &str, message: &str) -> Value {
+    serde_json::json!([{ "path": path, "message": message }])
 }
 
 /// `text` if it fits in [`MAX_FAILURE_MESSAGE_BYTES`]; otherwise its longest prefix on a char

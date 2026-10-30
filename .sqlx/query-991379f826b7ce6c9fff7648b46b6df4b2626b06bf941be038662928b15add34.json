@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO kb_shape_reconcile_unreadable\n               (artifact_id, shape_id, shape_version, content_hash, reason)\n        VALUES ($1, $2, $3, $4, $5)\n        ON CONFLICT (artifact_id) DO UPDATE\n           SET shape_id      = EXCLUDED.shape_id,\n               shape_version = EXCLUDED.shape_version,\n               content_hash  = EXCLUDED.content_hash,\n               reason        = EXCLUDED.reason,\n               recorded_at   = now()\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int4",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "991379f826b7ce6c9fff7648b46b6df4b2626b06bf941be038662928b15add34"
+}

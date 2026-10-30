@@ -70,7 +70,7 @@ fn arrived_on_cron_host(cron_host: Option<&str>, headers: &HeaderMap) -> bool {
     host.eq_ignore_ascii_case(expected)
 }
 
-/// Shared fail-closed gate for the self-gated cron doors: the eight routes in
+/// Shared fail-closed gate for the self-gated cron doors: the nine routes in
 /// `routes::embed_internal`, all invoked by Vercel Cron. Two checks, in order:
 ///
 /// 1. **Host pin.** On Vercel, the request must arrive on the deployment's own generated URL

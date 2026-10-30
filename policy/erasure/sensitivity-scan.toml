@@ -23,9 +23,9 @@
 # temper_services::MIGRATOR (so `_sqlx_migrations` is included). The complement is that set minus
 # every `table.column` declared in personal-data.toml.
 #
-# COUNT at `count_at`: 175 text/varchar columns; 18 declared in the sibling; `declared_count` declared here.
-count_at = "20261028100000"
-declared_count = 157
+# COUNT at `count_at`: 178 text/varchar columns; 18 declared in the sibling; `declared_count` declared here.
+count_at = "20261108000000"
+declared_count = 160
 #
 # THERE IS NO `unadjudicated` CLASS. A class that means "we will decide later" is how a manifest
 # starts accumulating lines nobody reads. A new column is declared by the PR that adds it.
@@ -91,9 +91,12 @@ declared_count = 157
 "kb_erasure_retention_policies.name"              = { disposition = "structural", note = "an operator-chosen slug naming a policy" }
 "kb_erasure_retention_policies.category"          = { disposition = "structural", note = "closed vocabulary (RetentionCategory)" }
 "kb_erasure_slack_revocations.outcome"            = { disposition = "structural", note = "closed vocabulary: revoked, abandoned" }
+"kb_shape_reconcile_uncheckable.reason"          = { disposition = "structural", note = "closed vocabulary (CHECK): schema_uncompilable" }
+"kb_shape_reconcile_unreadable.reason"           = { disposition = "structural", note = "closed vocabulary (CHECK): content_too_large, content_unrenderable" }
 "kb_data_artifact_content.content_hash"           = { disposition = "structural", note = "sha256" }
 "kb_data_artifacts.content_hash"                  = { disposition = "structural", note = "sha256" }
 "kb_data_artifact_verdicts.content_hash"          = { disposition = "structural", note = "sha256" }
+"kb_shape_reconcile_unreadable.content_hash"     = { disposition = "structural", note = "sha256" }
 "kb_event_field_redactions.path"                  = { disposition = "structural", note = "a dotted payload path from the erasure allowlist (_erasure_redact_paths), never a value" }
 "kb_event_field_redactions.authority"             = { disposition = "structural", note = "the authorising event's type, never a value" }
 "kb_erased_content.content_hash"                  = { disposition = "structural", note = "sha256; the erasure tombstone key" }

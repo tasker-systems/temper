@@ -12,7 +12,6 @@
 #![cfg(feature = "test-db")]
 
 use sqlx::PgPool;
-use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, EntityId, ProfileId, ResourceId};
 use temper_services::error::ApiError;
 use temper_services::services::shape_service::{self, DeclareShapeServiceParams};
@@ -265,14 +264,22 @@ async fn reconcile_over_a_stored_remote_ref_shape_writes_no_verdict_and_does_not
     .await
     .unwrap();
 
-    let written =
-        shape_service::reconcile_anchor(&pool, HomeAnchor::Context(ContextId::from(w.context)))
-            .await
-            .expect("one uncompilable shape must not fail the anchor's reconcile");
+    let summary = shape_service::dispatch_tick(&pool, None)
+        .await
+        .expect("one uncompilable shape must not fail the anchor's reconcile");
 
     assert_eq!(
-        written, 1,
+        summary.verdicts_written, 1,
         "exactly one verdict: the sibling family's artifact"
+    );
+    assert_eq!(
+        (summary.shapes_uncheckable, summary.uncheckable_artifacts),
+        (1, 1),
+        "the uncompilable shape is recorded, and its artifact passed over, not skipped silently"
+    );
+    assert_eq!(
+        summary.completed, 1,
+        "the anchor's pass completes rather than re-reading the shape's artifacts"
     );
     assert_eq!(probe.connections(), 0, "reconcile must not fetch");
     let verdict_for = |artifact: Uuid| {

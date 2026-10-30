@@ -1,10 +1,11 @@
 //! What the `api/internal` drains report about themselves.
 //!
-//! Both drains (region materialization, embedding) emit the same two-level span shape: a
-//! `*_dispatch` tick span carrying queue state and tallies, and a `*_job` span per claimed job. The
-//! field vocabulary lives here, in one declaration, for the reason [`crate::services::region_service`]'s
-//! module doc gives about the twins generally — two copies drift, and a drifted field name silently
-//! empties an operator's panel rather than failing anything.
+//! The drains (region materialization, embedding, shape reconciliation) emit the same two-level
+//! span shape: a `*_dispatch` tick span carrying queue state and tallies, and a `*_job` span per
+//! claimed job. The field vocabulary lives here, in one declaration, for the reason
+//! [`crate::services::region_service`]'s module doc gives about the twins generally — two copies
+//! drift, and a drifted field name silently empties an operator's panel rather than failing
+//! anything.
 //!
 //! These spans are deliberately `internal` kind. Tempo's span-metrics processor derives RED only
 //! from `server`/`client` spans, so none of this appears in `traces_spanmetrics_*` — that is
@@ -44,11 +45,13 @@ pub const DRAIN_JOB_FIELDS: [&str; 3] = ["queue_wait_ms", "attempts", "outcome"]
 pub enum JobOutcome {
     /// Work done, job marked done.
     Completed,
-    /// The invocation's wall-clock deadline was already spent when this job came up. Handed back
-    /// untouched, **no work attempted**.
+    /// The invocation's wall-clock deadline was already spent when this job came up, or (shape
+    /// reconcile) its anchor had already run in this pass. Handed back untouched, **no work
+    /// attempted**.
     Deferred,
-    /// Work was done but did not finish this claim's budget; re-enqueued to resume. Embed only — a
-    /// region tick has no partial state (see [`crate::services::region_service`]'s module doc).
+    /// Work was done but did not finish this claim's budget; re-enqueued to resume. Embed and shape
+    /// reconcile only — a region tick has no partial state (see
+    /// [`crate::services::region_service`]'s module doc).
     Partial,
     /// The unit of work errored. Left in-flight for the reaper.
     Failed,

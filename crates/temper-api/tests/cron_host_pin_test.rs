@@ -1,7 +1,7 @@
 #![cfg(feature = "test-db")]
 //! The self-gated cron doors answer only on the deployment's own host.
 //!
-//! On Vercel, the eight routes in `routes::embed_internal` are reachable through the public
+//! On Vercel, the nine routes in `routes::embed_internal` are reachable through the public
 //! production alias and through the UI's `/api` proxy, as well as through the generated
 //! deployment URL that Vercel Cron calls. `ApiConfig::cron_host` pins them to the last of those.
 //! These tests drive every door through the real router: a request on any other host is a 404

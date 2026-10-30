@@ -1,0 +1,63 @@
+title    = "Shape-reconcile jobs are drained in production: artifacts committed before their shape was declared, or rehomed under a new one, gain a verdict"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["internal", "http", "mcp", "cli-stdout", "erasure-policy"]
+status   = "signal-only"
+body = '''
+A new self-gated cron door, `GET|POST /api/shape/reconcile` on the `api/internal` function, runs
+every five minutes behind the existing dispatch secret and host pin. Like the other cron doors, it
+stays out of the OpenAPI contract. A `cap` below 1 is refused with `400`, and one above 10 is
+clamped.
+
+Each pass reaps expired leases, then claims shape-reconcile jobs one anchor at a time, so a large
+anchor cannot hold the others' leases. An anchor runs for at most a 60 s slice, then goes back to
+the end of the queue; if no other anchor is waiting and it settled something, the same pass runs it
+again. An anchor cut off having settled nothing is left for the reaper, so its attempt counts. A
+pass runs under a 240 s deadline, checked after every artifact it settles or fails.
+`TEMPER_SHAPE_RECONCILE_DEADLINE_SECONDS` overrides the deadline, up to 270 s, which leaves 30 s
+under the function's `maxDuration`. An anchor queued `k`-th gets its next slice within about `k / 4`
+passes of five minutes.
+
+Each anchor's backlog is settled against the shape in force, in batches of at most 200 artifacts
+and 32 MB of content. Content is measured one artifact at a time as Postgres returns it, not as it
+was committed: `jsonb` prints numbers in full. One artifact larger than the batch bound is read
+alone. The batches come from a page of 10,000 artifacts selected once. Artifacts of erased or
+inactive resources are not backlog. Checks run on the blocking pool under the shape compile
+permits. A verdict the drain writes records the first failure, as a commit's does, with its path
+and message each cut to 1 KiB.
+
+Migration `20261108000000` adds two records of what the drain cannot check, so the backlog leaves
+those artifacts out and they stay `declared_not_yet_checked`:
+
+- `kb_shape_reconcile_uncheckable` records a shape row that no longer compiles, once. This can be a
+  shape stored before compile refused anything but a field tree. An amendment is a new row, so it
+  is tried afresh.
+- `kb_shape_reconcile_unreadable` records an artifact whose content the drain cannot read, under
+  its staleness triple. Either its content returns past 256 MB, or Postgres cannot render it as
+  text at all.
+
+Their text columns are declared `structural` in the erasure policy.
+
+An artifact that fails for a reason that may pass is counted and passed over, and its anchor keeps a
+job while it remains: handed back to a successor if the pass was cut off after settling something,
+otherwise left for the reaper. That covers a measurement, a check or a verdict write that fails.
+Eight failed measurements in a row, or eight failed checks or writes in a row, stop the anchor's
+pass. A job handed back to resume is marked done and its successor queued in one transaction. A
+completed anchor whose backlog is not empty is queued again. That happens when a declare, an
+amendment or a rehome arrived while it ran. An artifact committed with `null` content is validated
+as `null`, as its commit was. Before this, the jobs were enqueued and nothing drained them. Verdicts
+written at commit are unchanged.
+
+The behavioral change is in what reads report. Today, every read that carries a `shape_state`
+reports `declared_not_yet_checked` for such an artifact. Once a pass has verdicted it, the same
+read reports `declared_satisfied` or `declared_not_satisfied`. That covers:
+
+- `GET /api/resources/{id}/artifacts`;
+- the batch ask and its population counts;
+- `/api/query`'s artifact-ask trace counts;
+- MCP;
+- `temper data-artifact`.
+
+Shapes are unchanged. Who observes: anyone reading artifacts whose family's shape was declared
+after they were committed, or whose resource was rehomed. Release relevance: signal-only.
+'''
