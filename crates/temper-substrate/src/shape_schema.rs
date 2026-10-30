@@ -74,10 +74,12 @@ impl std::fmt::Display for ShapeSchemaUncompilable {
              {MAX_SHAPE_PATTERNS} in a shape, no lookaround or backreferences), minLength, \
              maxLength, minItems, maxItems, minimum, maximum, title, description, $comment, \
              default and examples, with property names (in properties and required) of at most \
-             {MAX_PROPERTY_NAME_BYTES} bytes, $schema and $id only at the root, nested at most \
+             {MAX_PROPERTY_NAME_BYTES} bytes, $schema and $id only at the root ($schema, if \
+             present, spelled {schema_uri} with or without a trailing #), nested at most \
              {MAX_SHAPE_DEPTH} levels; $ref, $defs, allOf, anyOf, oneOf, not, if, format and \
              every other keyword are refused",
             pattern_kib = MAX_PATTERN_BYTES / 1024,
+            schema_uri = ACCEPTED_SCHEMA_URIS[0],
         )
     }
 }

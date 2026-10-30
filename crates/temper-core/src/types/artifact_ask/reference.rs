@@ -186,10 +186,9 @@ fn spend(steps: &mut usize, n: usize) -> Option<()> {
 ///
 /// # 64
 ///
-/// The walk charges author text at the same rate (`walk::BYTES_PER_VISIT`). A key or a string of
-/// tens of bytes costs one step, so a real ask is unchanged; a 16 KiB probe key costs 257, so the
-/// step budget bounds the bytes hashed and compared — `MAX_MEMBERSHIP_STEPS` × 64, 64 MiB — and not
-/// only the nodes visited.
+/// A key or a string of tens of bytes costs one step, as a node does; a 16 KiB probe key costs 257,
+/// so the step budget bounds the bytes hashed and compared — `MAX_MEMBERSHIP_STEPS` × 64, 64 MiB —
+/// and not only the nodes visited.
 const BYTES_PER_STEP: usize = 64;
 
 /// [`scalar_eq`], charged for the bytes it compares. Two strings are compared byte for byte only

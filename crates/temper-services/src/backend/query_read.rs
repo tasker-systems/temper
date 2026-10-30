@@ -3208,9 +3208,9 @@ mod tests {
         assert_eq!(pairs(&cleared), expected, "the echo reads the seal");
     }
 
-    /// The `n`th (`1 <= n < 64`) of a run of asks naming both of the heavy shape's paths, each with
-    /// its own subset of the intents and the shape states: different asks, walking the same paths.
-    fn heavy_ask(n: usize) -> ArtifactAsk {
+    /// The `n`th (`1 <= n < 64`) of a run of asks naming both of the shape's paths, each with its
+    /// own subset of the intents and the shape states: different asks, walking the same paths.
+    fn two_path_ask(n: usize) -> ArtifactAsk {
         use temper_core::types::artifact_ask::{ARTIFACT_INTENTS, ASKABLE_SHAPE_STATES};
         let pick = |terms: &[&str], bits: usize| -> Vec<String> {
             terms
@@ -3228,12 +3228,12 @@ mod tests {
     }
 
     /// **Through `gate_embed_seal`, the gate and the seal share one ask session**, and a
-    /// many-stage composition over one heavy shape costs one walk: sixteen selections, each asking a
-    /// different ask of a shape whose two paths each reference one `allOf` of 2,500 branches. After
-    /// the gate, the embed and the seal, the session has walked the shape once, and answered every
-    /// one of the sixteen asks a second time from what the gate validated — which is the seal
-    /// re-validating them, spending nothing. What one walk costs in visits is pinned in temper-core
-    /// (`a_many_stage_composition_over_one_heavy_shape_costs_one_walk_across_gate_and_seal`).
+    /// many-stage composition over one shape costs one walk: sixteen selections, each asking a
+    /// different ask of a shape with two paths. After the gate, the embed and the seal, the session
+    /// has walked the shape once, and answered every one of the sixteen asks a second time from
+    /// what the gate validated — which is the seal re-validating them, walking nothing. That each
+    /// path is reached once is pinned in temper-core
+    /// (`a_many_stage_composition_over_one_shape_costs_one_walk_across_gate_and_seal`).
     ///
     /// That `prepare` hands both passes one session is structural rather than witnessed here:
     /// `prepare` begins exactly one session and calls this function, which holds no
@@ -3245,22 +3245,20 @@ mod tests {
     #[tokio::test]
     async fn the_gate_and_the_seal_share_one_ask_session_through_gate_embed_seal() {
         const STAGES: usize = 16;
-        let branches: Vec<serde_json::Value> = (0..2_500).map(|_| serde_json::json!({})).collect();
-        let heavy = loaded_shape(
+        let shape = loaded_shape(
             1,
             serde_json::json!({
-                "$defs": { "w": { "allOf": branches } },
                 "properties": {
-                    "p0": { "$ref": "#/$defs/w" },
-                    "p1": { "$ref": "#/$defs/w" }
+                    "p0": { "type": "string" },
+                    "p1": { "type": "string" }
                 }
             }),
         );
-        let shapes: ShapeContext = [(shape_id(1), ShapeLoad::Loaded(heavy))]
+        let shapes: ShapeContext = [(shape_id(1), ShapeLoad::Loaded(shape))]
             .into_iter()
             .collect();
         let mut stages: Vec<StageNode> = (0..STAGES)
-            .map(|i| selecting(&format!("sel{i}"), vec![heavy_ask(i + 1)]))
+            .map(|i| selecting(&format!("sel{i}"), vec![two_path_ask(i + 1)]))
             .collect();
         stages.push(act_node("hits", ActName::FindExact, bounded_by("sel0")));
         let c = Composition {

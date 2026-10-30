@@ -27,7 +27,7 @@ from pydantic_core import to_jsonable_python
 
 class Vocabulary(BaseModel):
     """
-    What a shape lets a caller ask: its askable paths, and every bound the list was cut at.  `truncated` names each walk bound met, never a silent short list (spec §2.5): a recursive tree through `properties` is `depth`, a 2^N `$defs` fan-out is `paths`, an oversized schema is `schema_bytes` with no paths, and a walk that spent its budget is `work`. Ordered, and at most one of each.
+    What a shape lets a caller ask: its askable paths, and every bound the list was cut at.  `truncated` names each walk bound met, never a silent short list (spec §2.5): a tree nested deeper than the walk descends is `depth`, a shape declaring more paths than are advertised is `paths`, and an oversized schema is `schema_bytes` with no paths. Ordered, and at most one of each.
     """ # noqa: E501
     paths: List[AskablePath]
     truncated: Optional[List[BoundKind]] = None

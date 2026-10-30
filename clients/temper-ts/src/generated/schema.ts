@@ -5165,7 +5165,7 @@ export interface components {
          */
         BodyStorage: "verbatim" | "derived";
         /**
-         * @description Which walk bound was met. A truncated vocabulary and a refusal both name it.
+         * @description Which bound reading a shape met. A truncated vocabulary and a refusal both name it.
          * @enum {string}
          */
         BoundKind: "depth" | "paths" | "schema_bytes" | "work";
@@ -8231,8 +8231,8 @@ export interface components {
         PathFacts: {
             items?: components["schemas"]["PathFacts"] | null;
             /**
-             * @description The declared JSON types. `None`: no `type` constrains the path. An empty set: the branches
-             *     that apply here declare types with nothing in common, so no value is admissible.
+             * @description The declared JSON types. `None`: no `type` constrains the path. An empty set: no value is
+             *     admissible — a `type` naming no JSON type, or the element of an `items: false` array.
              */
             types?: components["schemas"]["JsonType"][] | null;
             /** @description The `enum` / `const` values. `None`: no value set constrains the path. */
@@ -11659,10 +11659,10 @@ export interface components {
         /**
          * @description What a shape lets a caller ask: its askable paths, and every bound the list was cut at.
          *
-         *     `truncated` names each walk bound met, never a silent short list (spec §2.5): a recursive tree
-         *     through `properties` is `depth`, a 2^N `$defs` fan-out is `paths`, an oversized schema is
-         *     `schema_bytes` with no paths, and a walk that spent its budget is `work`. Ordered, and at most
-         *     one of each.
+         *     `truncated` names each walk bound met, never a silent short list (spec §2.5): a tree nested
+         *     deeper than the walk descends is `depth`, a shape declaring more paths than are advertised is
+         *     `paths`, and an oversized schema is `schema_bytes` with no paths. Ordered, and at most one of
+         *     each.
          */
         Vocabulary: {
             paths: components["schemas"]["AskablePath"][];

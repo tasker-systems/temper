@@ -29,7 +29,7 @@ class PathFacts(BaseModel):
     What the schema declares at one path. Each field is `None` when the schema leaves it unconstrained, so an absent field never reads as \"nothing is admitted\".
     """ # noqa: E501
     items: Optional[PathFacts] = Field(default=None, description="What an element of an array at this path declares. `None`: elements are unconstrained. Reported at most as many arrays deep as the walk's depth bound.")
-    types: Optional[List[JsonType]] = Field(default=None, description="The declared JSON types. `None`: no `type` constrains the path. An empty set: the branches that apply here declare types with nothing in common, so no value is admissible.")
+    types: Optional[List[JsonType]] = Field(default=None, description="The declared JSON types. `None`: no `type` constrains the path. An empty set: no value is admissible — a `type` naming no JSON type, or the element of an `items: false` array.")
     values: Optional[List[Any]] = Field(default=None, description="The `enum` / `const` values. `None`: no value set constrains the path.")
     __properties: ClassVar[List[str]] = ["items", "types", "values"]
 

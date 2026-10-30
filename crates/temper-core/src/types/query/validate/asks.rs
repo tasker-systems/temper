@@ -72,15 +72,15 @@ pub const MAX_ASKS_PER_REQUEST: usize = 32;
 /// # 8, sized against what each shape costs
 ///
 /// Every distinct shape is a gated read and a compile of up to `MAX_SCHEMA_BYTES` (256 KiB) before
-/// the gate, a schema the request holds for its length, a walk built over it, and — when a
-/// refusal teaches its vocabulary and no teaching of it is remembered — an enumeration budget of
-/// its own, `MAX_WALK_VISITS`, beside the one budget every ask shares. The teaching a request makes
-/// is remembered by shape id for later requests (temper-services' `shape_loader`), so each shape is
-/// enumerated once per process while its teaching stays remembered. So the request's walk work is
-/// at most nine budgets — one when every shape it names has its teaching remembered — and the
-/// schemas it holds at most 2 MiB of compact JSON. A resource has one home, so a stage's asks name
-/// one home's shapes; asking several homes means several stages combined by `union`, and eight
-/// shapes is far above what one question names.
+/// the gate, a schema the request holds for its length, a walk built over it, and — when a refusal
+/// teaches its vocabulary and no teaching of it is remembered — an enumeration of it, linear in its
+/// schema. The teaching a request makes is remembered by shape id for later requests
+/// (temper-services' `shape_loader`), so each shape is enumerated once per process while its
+/// teaching stays remembered. So the request's walk work is at most eight enumerations of at most
+/// 256 KiB each — none when every shape it names has its teaching remembered — and the schemas it
+/// holds at most 2 MiB of compact JSON. A resource has one home, so a stage's asks name one home's
+/// shapes; asking several homes means several stages combined by `union`, and eight shapes is far
+/// above what one question names.
 pub const MAX_ASKED_SHAPES: usize = 8;
 
 /// The shapes a composition's asks name — the ids the handler loads before the gate — or the
