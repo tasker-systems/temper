@@ -1,58 +1,42 @@
-//! The bounded schema walk — what a shape declares at a path, decided over a `serde_json::Value`
-//! with no JSON Schema validator (spec §2.4, §3.3).
+//! The schema walk — what a shape declares at a path, decided over a `serde_json::Value` with no
+//! JSON Schema validator (spec §2.4, §3.3).
 //!
-//! **It walks exactly the constructs of the §3.3 table, and nothing more.** `properties` chains; a
-//! local `$ref` — any `#`-prefixed JSON pointer into the schema, `#/$defs/…` and `#/definitions/…`
-//! among them; boolean subschemas; `allOf` (merged); `anyOf` / `oneOf` (unioned).
-//! `additionalProperties`, `patternProperties`, `unevaluatedProperties`, `if`/`then`/`else` and
-//! `dependentSchemas` are **not walked**, so a path reachable only through them is not declared —
-//! the declared hole of spec §11, refused as `path_outside_shape` rather than guessed at.
+//! **It reads a field tree, and refuses anything else.** A shape compiles only as a field tree
+//! (`temper_substrate::shape_schema`, spec `2026-10-27-a-shape-is-a-field-tree-design`): schemas at
+//! the root, in each `properties` value, in `additionalProperties` and in `items`, each an object
+//! or a boolean, with no `$ref`, `$defs` or combinator. The walk reads `properties` chains, `type`,
+//! `enum`, `const`, boolean subschemas and a single `items` schema. It passes over the keywords that
+//! constrain content without changing what a path declares — `required`, `pattern`, the length,
+//! size and range bounds, the annotations, and `$schema` and `$id` at the root. `additionalProperties`
+//! is **not walked**, so a path reachable only through it is not declared — the declared hole of
+//! spec §11, refused as `path_outside_shape` rather than guessed at.
 //!
-//! **A `$ref` the walk does not follow is `true`, under every draft.** An anchor, a remote one, or
-//! any reference made inside a resource the schema embeds under its own `$id` (where `#` means that
-//! resource, not the root): the walk cannot see what it says, so the subschema it stands for is
-//! declared and unconstrained. That never refuses a declared path; a value admitted there may then
-//! match nothing, which is an honest empty.
+//! **Anything else is refused, never read as unconstrained.** Any other keyword, a `$schema` other
+//! than the 2020-12 spelling, or a value that is not a schema where a schema sits fails
+//! [`reads_whole`], and the shape loader judges such a schema uncompilable, so no ask reaches the
+//! walk with one. Handed one anyway, the walk reads it as `false` — it declares nothing: every path
+//! is `NotDeclared` and the vocabulary is empty — and logs the mismatch. If the field tree is
+//! widened, the walk refuses the new construct until someone decides how it reads.
 //!
-//! **The walk sees only schemas that compiled.** The loader (spec §2.4) compiled the schema with
-//! the no-fetch compiler before handing it here, so an unrecognised `$schema` or a remote `$ref` has
-//! already been decided `Uncompilable`. What this module reads `$schema` for is where the drafts
-//! differ for it: whether keywords beside a `$ref` apply (2019-09 and 2020-12) or are ignored
-//! (draft-04/06/07), and whether `const` and `prefixItems` exist. The draft names are the ones
-//! `jsonschema` recognises (`referencing::Draft::from_schema_uri`); an absent `$schema` is 2020-12,
-//! its default.
+//! The walk's list is its own, not the compile's. The two answer different questions — what a shape
+//! may say, and what the walk has decided how to read — and one shared list would widen the walk
+//! silently whenever the compile widened.
 //!
-//! # Bounded in time, memory and stack (§3.3: the walk "never stalls or exhausts the server")
+//! # Bounded by the schema (§3.3: the walk "never stalls or exhausts the server")
 //!
-//! A schema is written by any author of its home and read by every reader of it, and a cycle guard
-//! alone does not bound the walk: a non-cyclic `$defs` graph in which each definition references
-//! the next twice declares 2^N paths from a few kilobytes, and an `allOf` of tens of thousands of
-//! branches makes every visit to its schema expensive. So:
+//! With no `$ref` and no combinator, each schema node is reached by one path and read once:
+//! resolving a path reads the nodes along it and its `items` chain, and enumerating reads each node
+//! once. So the walk's work is linear in the schema, which it reads only up to [`MAX_SCHEMA_BYTES`]
+//! — the size declare holds a schema to. [`MAX_WALK_PATHS`] bounds the vocabulary a read returns and
+//! [`MAX_WALK_DEPTH`] how deep an ask and a vocabulary reach. Nothing recurses over the schema but
+//! an `items` chain, held to the depth bound.
 //!
-//! - **Four named bounds** ([`BoundKind`]): path depth, advertised paths, schema bytes, and a
-//!   **work budget** of subschema visits shared by everything one [`resolve`] or one [`enumerate`]
-//!   does, and by every ask one [`AskSession`](super::AskSession) validates. Meeting any of them is
-//!   reported, never a stall.
-//! - **Every size an author controls is charged before work proportional to it is done.** The
-//!   schema is measured only up to its bound; each `$ref` is decoded once, when the walk is built;
-//!   each list a visit reads — branches, `type` names, `enum` members, a frame's property keys —
-//!   costs its length; and each advertised path costs its bytes. A property key longer than an
-//!   asked segment may be (`MAX_ARTIFACT_PATH_SEGMENT_BYTES`) is never advertised and never walked
-//!   below: no ask can name it.
-//! - **No recursion over the schema.** A subschema is evaluated from an explicit stack, so a chain
-//!   of thousands of `$ref` hops costs heap, not call stack. The only recursion left is over the
-//!   [`PathFacts`] value built, whose `items` nesting is held to the depth bound.
-//! - **Memoised per walk** by `(subschema, path position)`, so a definition referenced many times
-//!   at one position is evaluated once.
-//! - **Values cost what they carry.** An `enum` / `const` member is read once per walk and charged
-//!   by its size — its bytes and the values nested in it; the set a keyword declares is built once
-//!   per walk and shared rather than copied; sets intersect and union by member id in linear time,
-//!   charged by their sizes each time; and copying them into an answer is charged by size again.
-//!   An ask's paths are never copied at all, and a refusal's teaching copies only the paths it
-//!   sends. So a wide `allOf` over a large enum stops at the work budget instead of holding
-//!   millions of values or comparing them pairwise.
+//! **What a vocabulary holds.** A vocabulary copies each path's `enum` and `const` values onto the
+//! wire. No two paths share a keyword, so each value is copied at most once and a vocabulary holds
+//! no more values than its schema. An ask, and a refusal's teaching until it sends a path, read the
+//! values where they sit and copy none.
 
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -61,7 +45,7 @@ use serde_json::{Map, Value};
 use super::reference::canonical;
 use super::validate::{PathTeaching, MAX_ARTIFACT_PATH_SEGMENT_BYTES};
 use crate::types::ids::ShapeId;
-use crate::types::query::filter::{json_string_bytes, property_value_nodes};
+use crate::types::query::filter::json_string_bytes;
 
 /// The deepest path, in object-key segments, the walk descends to. A deeper ask is
 /// [`PathResolution::BeyondBound`]`(`[`BoundKind::Depth`]`)`, refused `path_outside_shape` with
@@ -70,10 +54,9 @@ use crate::types::query::filter::{json_string_bytes, property_value_nodes};
 ///
 /// # 16
 ///
-/// It bounds a legitimately recursive schema — a tree through `properties` declares unboundedly
-/// many paths, and this is where its vocabulary stops. Structured content in a shape is a record of
-/// a few levels; 16 levels of object nesting is far past any shape a person writes, and the bound
-/// is what makes a recursive one finite.
+/// Structured content in a shape is a record of a few levels; 16 levels of object nesting is far
+/// past any shape a person writes. A field tree nests at most this deep (`MAX_SHAPE_DEPTH`, held
+/// equal to it), so the walk sees a field tree whole.
 pub const MAX_WALK_DEPTH: usize = 16;
 
 /// The most paths [`enumerate`] advertises. Past it the vocabulary is truncated at
@@ -82,15 +65,13 @@ pub const MAX_WALK_DEPTH: usize = 16;
 /// # 1024
 ///
 /// The vocabulary is read whole by `schema show`, `GET /api/shapes/{id}` and
-/// `get_data_artifact_shape`, so this bounds a response body and the walk behind it. It is far
-/// above a shape a person writes — a record with tens of fields — and it is the bound the 2^N
-/// `$defs` fan-out meets.
+/// `get_data_artifact_shape`, so this bounds a response body. It is far above a shape a person
+/// writes — a record with tens of fields — and below what a schema at [`MAX_SCHEMA_BYTES`] can
+/// declare: about twenty thousand empty fields fit in one.
 ///
 /// It bounds how many paths, not how large each is. A path's text is at most [`MAX_WALK_DEPTH`]
 /// segments of at most `MAX_ARTIFACT_PATH_SEGMENT_BYTES` — a longer key is never advertised — so
-/// 4 KiB; and every path built is charged its bytes against [`MAX_WALK_VISITS`] at
-/// [`BYTES_PER_VISIT`], so one walk builds at most about 4 MiB of path text whatever the count. A
-/// path's declared values are charged the same way.
+/// 4 KiB.
 pub const MAX_WALK_PATHS: usize = 1024;
 
 /// The largest schema the walk reads, in compact serialized JSON bytes. Past it nothing is walked:
@@ -100,33 +81,17 @@ pub const MAX_WALK_PATHS: usize = 1024;
 ///
 /// # 256 KiB
 ///
-/// Today a schema is bounded only by the 25 MiB gated request body (spec §3.3). A JSON Schema for
-/// one family of structured records is kilobytes; 256 KiB admits two orders of magnitude more than
-/// that, and it bounds how much any one subschema can hold — the widest `allOf` is under 100,000
-/// branches.
+/// A JSON Schema for one family of structured records is kilobytes; 256 KiB admits two orders of
+/// magnitude more than that. Declare refuses a larger schema, so a stored shape is never past it.
 pub const MAX_SCHEMA_BYTES: usize = 256 * 1024;
 
-/// The most subschema visits one [`resolve`] or one [`enumerate`] makes, and the most every ask
-/// one [`AskSession`](super::AskSession) validates makes between them, counted as each subschema
-/// is scheduled for evaluation or expansion. Past it the walk stops at [`BoundKind::Work`].
-///
-/// # 65,536
-///
-/// The other three bounds limit the answer, not the work behind it: an `allOf` of ~85,000 empty
-/// branches beside a two-way fan-out fits every one of them and costs ~10⁹ visits to enumerate.
-/// This one limits the work directly. A real shape needs tens of visits per path — a `properties`
-/// step, a `$ref` hop, an `allOf` or two — so the vocabulary of a shape at [`MAX_WALK_PATHS`] with
-/// sixty-four visits each fits, and a pathological schema stops after a few milliseconds of work.
-pub const MAX_WALK_VISITS: usize = 65_536;
-
-/// The walk's four bounds. The values the build runs are [`WalkBounds::BUILD`]; tests construct
-/// smaller ones to reach a bound without a large schema.
+/// The walk's bounds. The values the build runs are [`WalkBounds::BUILD`]; tests construct smaller
+/// ones to reach a bound without a large schema.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WalkBounds {
     pub max_depth: usize,
     pub max_paths: usize,
     pub max_schema_bytes: usize,
-    pub max_visits: usize,
 }
 
 impl WalkBounds {
@@ -135,11 +100,10 @@ impl WalkBounds {
         max_depth: MAX_WALK_DEPTH,
         max_paths: MAX_WALK_PATHS,
         max_schema_bytes: MAX_SCHEMA_BYTES,
-        max_visits: MAX_WALK_VISITS,
     };
 }
 
-/// Which walk bound was met. A truncated vocabulary and a refusal both name it.
+/// Which bound reading a shape met. A truncated vocabulary and a refusal both name it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -153,7 +117,7 @@ pub enum BoundKind {
     Paths,
     /// The schema is larger than the walk reads.
     SchemaBytes,
-    /// Reading the shape spent its work budget — schema visits, or enum membership steps —
+    /// Checking the request's values against the shape's `enum`s spent its membership steps
     /// before it could say.
     Work,
 }
@@ -211,8 +175,8 @@ impl JsonType {
 #[cfg_attr(feature = "typescript", ts(export, export_to = "artifact_ask.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct PathFacts {
-    /// The declared JSON types. `None`: no `type` constrains the path. An empty set: the branches
-    /// that apply here declare types with nothing in common, so no value is admissible.
+    /// The declared JSON types. `None`: no `type` constrains the path. An empty set: no value is
+    /// admissible — a `type` naming no JSON type, or the element of an `items: false` array.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub types: Option<BTreeSet<JsonType>>,
     /// The `enum` / `const` values. `None`: no value set constrains the path.
@@ -298,10 +262,10 @@ impl AskablePath {
 
 /// What a shape lets a caller ask: its askable paths, and every bound the list was cut at.
 ///
-/// `truncated` names each walk bound met, never a silent short list (spec §2.5): a recursive tree
-/// through `properties` is `depth`, a 2^N `$defs` fan-out is `paths`, an oversized schema is
-/// `schema_bytes` with no paths, and a walk that spent its budget is `work`. Ordered, and at most
-/// one of each.
+/// `truncated` names each walk bound met, never a silent short list (spec §2.5): a tree nested
+/// deeper than the walk descends is `depth`, a shape declaring more paths than are advertised is
+/// `paths`, and an oversized schema is `schema_bytes` with no paths. Ordered, and at most one of
+/// each.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -318,13 +282,13 @@ pub struct Vocabulary {
 pub enum PathResolution {
     /// Reached through `properties` at every segment, and not forbidden by a `false`.
     Declared(PathFacts),
-    /// Not reached through the walked constructs, or forbidden (`false`).
+    /// Not reached through `properties`, or forbidden (`false`).
     NotDeclared,
     /// The walk stopped at a bound before it could say.
     BeyondBound(BoundKind),
 }
 
-/// Resolve one path against a schema. Lazy: one walk down the schema, never an enumeration.
+/// Resolve one path against a schema: one walk down it, never an enumeration.
 pub fn resolve(schema: &Value, path: &[String], bounds: &WalkBounds) -> PathResolution {
     match Walk::new(schema, bounds) {
         Ok(walk) => walk.resolve(path),
@@ -375,295 +339,129 @@ impl<F> Enumerated<F> {
     }
 }
 
-/// The draft a schema is applied under, as far as the walk needs to know it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Draft {
-    /// draft-04
-    D4,
-    /// draft-06
-    D6,
-    /// draft-07
-    D7,
-    /// 2019-09
-    D2019,
-    /// 2020-12
-    D2020,
-}
+/// The `$schema` spellings the walk reads as 2020-12, at the root only: the bundled one, with or
+/// without a trailing `#`. The walk's own list beside the compile's, for the reason the module
+/// gives.
+const READ_SCHEMA_URIS: [&str; 2] = [
+    "https://json-schema.org/draft/2020-12/schema",
+    "https://json-schema.org/draft/2020-12/schema#",
+];
 
-impl Draft {
-    /// The draft `jsonschema` selects for a root schema: `referencing::Draft::from_schema_uri` over
-    /// `$schema` with a trailing `#` trimmed, and 2020-12 when there is none. A URI it does not
-    /// recognise never reaches the walk (the loader refused it), and is read as 2020-12, which is
-    /// also how `referencing` treats its unknown arm.
-    fn of(root: &Value) -> Draft {
-        let uri = root.get("$schema").and_then(Value::as_str).unwrap_or("");
-        match uri.trim_end_matches('#') {
-            "https://json-schema.org/draft/2019-09/schema"
-            | "http://json-schema.org/draft/2019-09/schema" => Draft::D2019,
-            "https://json-schema.org/draft-07/schema"
-            | "http://json-schema.org/draft-07/schema" => Draft::D7,
-            "https://json-schema.org/draft-06/schema"
-            | "http://json-schema.org/draft-06/schema" => Draft::D6,
-            "https://json-schema.org/draft-04/schema"
-            | "http://json-schema.org/draft-04/schema" => Draft::D4,
-            _ => Draft::D2020,
+/// Whether the walk reads every construct in the schema: in each schema position — the root, each
+/// `properties` value and an `items` schema — an object or a boolean, holding only keywords the
+/// walk reads or passes over, with `$schema` (the 2020-12 spelling, with or without a trailing `#`)
+/// and `$id` at the root alone. What `additionalProperties` holds is not walked, so it is not read here. The shape loader
+/// asks it beside the compile, and judges a schema that fails it uncompilable.
+///
+/// One pass from an explicit stack, each schema position pushed once, so it is linear in the
+/// schema and never recurses on the Rust stack.
+pub fn reads_whole(schema: &Value) -> bool {
+    let mut pending = vec![schema];
+    while let Some(node) = pending.pop() {
+        let map = match node {
+            Value::Bool(_) => continue,
+            Value::Object(map) => map,
+            _ => return false,
+        };
+        let root = std::ptr::eq(node, schema);
+        for (keyword, value) in map {
+            match keyword.as_str() {
+                "properties" => match value {
+                    Value::Object(fields) => pending.extend(fields.values()),
+                    _ => return false,
+                },
+                "items" => match value {
+                    Value::Bool(_) | Value::Object(_) => pending.push(value),
+                    _ => return false,
+                },
+                // What a path declares.
+                "type" | "enum" | "const"
+                // Not walked: a path reachable only through it is not declared.
+                | "additionalProperties"
+                // What content must satisfy, which changes nothing a path declares.
+                | "required" | "pattern" | "minLength" | "maxLength" | "minItems" | "maxItems"
+                | "minimum" | "maximum"
+                // Annotations.
+                | "title" | "description" | "$comment" | "default" | "examples" => {}
+                "$schema"
+                    if root
+                        && value
+                            .as_str()
+                            .is_some_and(|uri| READ_SCHEMA_URIS.contains(&uri)) => {}
+                "$id" if root => {}
+                _ => return false,
+            }
         }
     }
-
-    /// Before 2019-09 a `$ref` replaces its whole schema object; its siblings are ignored.
-    fn ref_overrides_siblings(self) -> bool {
-        matches!(self, Draft::D4 | Draft::D6 | Draft::D7)
-    }
-
-    /// `const` arrived in draft-06; draft-04 ignores it as an unknown keyword.
-    fn has_const(self) -> bool {
-        !matches!(self, Draft::D4)
-    }
-
-    /// `prefixItems` arrived in 2020-12; earlier drafts ignore it.
-    fn has_prefix_items(self) -> bool {
-        matches!(self, Draft::D2020)
-    }
-
-    /// Whether a schema object opens a resource of its own: an `$id` (`id` in draft-04) that is a
-    /// URI rather than a plain-name fragment, which in draft-06/07 is an anchor and changes no base.
-    fn opens_resource(self, schema: &Map<String, Value>) -> bool {
-        let keyword = if self == Draft::D4 { "id" } else { "$id" };
-        schema
-            .get(keyword)
-            .and_then(Value::as_str)
-            .is_some_and(|id| !id.starts_with('#'))
-    }
+    true
 }
 
-/// How many bytes one visit of the budget pays for, wherever the walk carries text the author
-/// sized. A member of an `enum` or `const` costs one visit, plus one per this many bytes of its
-/// canonical text and of its nested values counted at [`NODE_BYTES`] each, when the walk first
-/// reads it and each time it is copied into an answer; a path [`enumerate`] builds costs one
-/// visit, plus one per this many bytes of its segments.
-///
-/// # 64
-///
-/// A short code, or a path of short keys, costs one visit; a single member of 200 KB costs over
-/// three thousand. So no walk copies more than about [`MAX_WALK_VISITS`] × 64 bytes — 4 MiB — of
-/// declared values, nor builds more than that of path text.
-///
-/// # What that leaves a real shape
-///
-/// An `enum` of `n` short codes costs `2n` visits the first time a walk reads it — `n` for its
-/// members, `n` for the set — and nothing more when another path reaches it under the same
-/// budget, since both are read once per budget. So:
-///
-/// - **An ask** reads its paths without copying their values, so every path an ask names over one
-///   shared 9,000-code enum costs 18,000 visits for the enum and a few visits for each path —
-///   [`MAX_ASK_PREDICATES`](super::validate::MAX_ASK_PREDICATES) such paths fit, in visits — and
-///   the enum and the paths are read once for the whole request, however many of its asks name
-///   them. Their `contains` values are checked against the enum under a budget of their own,
-///   `MAX_MEMBERSHIP_STEPS`, shared by the request's asks, which one ask can still spend: 32
-///   predicates of four admissible values each, matched late against 9,000 members, need about
-///   1.15M steps, past 1,048,576, and the later predicates are refused `path_outside_shape` with
-///   `beyond_bound: work`. A value the enum does not hold refuses its predicate
-///   `value_outside_shape` at that value, before the rest scan.
-/// - **A vocabulary** copies each advertised path's values into the answer, `n` visits a copy, so a
-///   shape whose `k` paths all carry the same `n`-code enum costs about `(2 + k) · n`: eleven paths
-///   over one 5,000-code enum fit (2 · 5,000 + 11 · 5,000 = 65,000 of 65,536), and the twelfth
-///   meets `work`, visibly. Paths over distinct enums each pay the read as well as the copy, `3n`
-///   a path, so about four paths over distinct 5,000-code enums fit (4 · 15,000 = 60,000) and the
-///   fifth meets `work`. Each copy is memory the answer holds, so it is charged every time.
-/// - **A refusal's teaching** enumerates the same paths in the same order without copying their
-///   values — each is the walk's own borrowed facts — so it costs what an ask's paths cost: the
-///   twelve paths above, and many more, fit. It copies only the paths it sends, which fit
-///   `MAX_TEACHING_BYTES`.
-pub const BYTES_PER_VISIT: usize = 64;
+/// What the walk reads in place of a schema it does not read whole: `false`, which declares no path.
+static DECLARES_NOTHING: Value = Value::Bool(false);
 
-/// The bytes a member's nested value is charged as, beside its canonical text. A value nested in
-/// an `enum` member is cloned with the member as its own `Value` — 32 bytes — held in a container
-/// that is its own allocation, so its heap cost is several times the one or two bytes its canonical
-/// text spends on it (`[[[…]]]` is two bytes a level). Charged as 64 bytes, one visit, a deep or
-/// wide member costs what copying it allocates.
-pub const NODE_BYTES: usize = 64;
-
-/// What one walk may still spend, and the members and value sets it has already read. Shared by
-/// everything one `resolve` or one `enumerate` does, and by every ask one
-/// [`AskSession`](super::AskSession) validates — so a request's asks spend one budget between
-/// them, and a value set any of them reads is read once.
-///
-/// Its memo is keyed by a schema node's address, so one budget may span several schemas only while
-/// they are all borrowed for its whole life, as a session's are from its context.
-#[derive(Debug)]
-pub(super) struct Budget<'s> {
-    left: usize,
-    /// Canonical text → member id: jsonb-equal members share an id.
-    ids: HashMap<String, usize>,
-    /// A member value in the schema → its id and weight, so each is read once per walk.
-    read: HashMap<usize, (usize, usize)>,
-    /// An `enum` or `const` keyword in the schema → the value set it declares, built and charged
-    /// once per budget and shared by every path that reaches it.
-    sets: HashMap<usize, Values<'s>>,
-}
-
-impl<'s> Budget<'s> {
-    pub(super) fn new(visits: usize) -> Budget<'s> {
-        Budget {
-            left: visits,
-            ids: HashMap::new(),
-            read: HashMap::new(),
-            sets: HashMap::new(),
-        }
-    }
-
-    /// The visits not yet spent — what a test reads to see what a run of asks cost.
-    #[cfg(test)]
-    pub(super) fn left(&self) -> usize {
-        self.left
-    }
-
-    fn spend(&mut self, visits: usize) -> Result<(), BoundKind> {
-        self.left = self.left.checked_sub(visits).ok_or(BoundKind::Work)?;
-        Ok(())
-    }
-
-    /// One `enum` or `const` member, read once per walk and charged by its size: its canonical
-    /// bytes, and its nested values at [`NODE_BYTES`] each. Its canonical text and node count are
-    /// built before the charge can be known; because each member node is read once per budget, that
-    /// work is at most the schema's own size per budget.
-    fn member(&mut self, value: &'s Value) -> Result<Member<'s>, BoundKind> {
-        let node = identity(value);
-        if let Some(&(id, weight)) = self.read.get(&node) {
-            return Ok(Member { id, weight, value });
-        }
-        let text = canonical(value);
-        let nested = property_value_nodes(value) * NODE_BYTES;
-        let weight = 1 + (text.len() + nested) / BYTES_PER_VISIT;
-        self.spend(weight)?;
-        let next = self.ids.len();
-        let id = *self.ids.entry(text).or_insert(next);
-        self.read.insert(node, (id, weight));
-        Ok(Member { id, weight, value })
-    }
-
-    /// The value set an `enum` or `const` keyword declares: every member read, and the set
-    /// charged once per member — once per budget, then shared, so a path reaching it again costs
-    /// nothing more.
-    fn members(
-        &mut self,
-        keyword: &'s Value,
-        values: &'s [Value],
-    ) -> Result<Values<'s>, BoundKind> {
-        let key = identity(keyword);
-        if let Some(set) = self.sets.get(&key) {
-            return Ok(Arc::clone(set));
-        }
-        self.spend(values.len())?;
-        let members = values
-            .iter()
-            .map(|v| self.member(v))
-            .collect::<Result<Vec<_>, _>>()?;
-        let set = Arc::new(members);
-        self.sets.insert(key, Arc::clone(&set));
-        Ok(set)
-    }
-}
-
-/// One schema, measured, its draft selected, and its `$ref`s resolved, ready to resolve paths
-/// against.
+/// One schema, measured and read whole, ready to resolve paths against.
 #[derive(Debug)]
 pub(super) struct Walk<'s> {
     root: &'s Value,
-    draft: Draft,
     bounds: WalkBounds,
-    /// Each schema object with a `$ref` the walk follows → the subschema it names. Built once, so a
-    /// visit looks a reference up rather than decoding its text again.
-    refs: HashMap<usize, &'s Value>,
 }
 
 impl<'s> Walk<'s> {
-    /// Measure the schema once, no further than the bound. Over [`WalkBounds::max_schema_bytes`]
-    /// nothing is walked. Under it, every `$ref` is resolved here, in passes linear in the schema.
+    /// Measure the schema once, no further than the bound, then check that the walk reads every
+    /// construct in it ([`reads_whole`]). Over [`WalkBounds::max_schema_bytes`] it is
+    /// [`BoundKind::SchemaBytes`]. With a construct the walk does not read it is walked as `false`,
+    /// declaring nothing, and logged as the server mismatch it is: the loader judges such a schema
+    /// uncompilable, so it never reaches here from an ask.
     pub(super) fn new(schema: &'s Value, bounds: &WalkBounds) -> Result<Walk<'s>, BoundKind> {
         if json_bytes_up_to(schema, bounds.max_schema_bytes) > bounds.max_schema_bytes {
             return Err(BoundKind::SchemaBytes);
         }
+        let root = if reads_whole(schema) {
+            schema
+        } else {
+            tracing::error!(
+                "the schema walk met a construct it does not read; the shape declares nothing"
+            );
+            &DECLARES_NOTHING
+        };
         #[cfg(test)]
         WALKS_BUILT.with(|built| built.set(built.get() + 1));
-        let draft = Draft::of(schema);
-        let embedded = embedded_resources(schema, draft);
         Ok(Walk {
-            root: schema,
-            draft,
+            root,
             bounds: *bounds,
-            refs: local_references(schema, &embedded),
         })
     }
 
-    /// One path, under a budget of its own.
-    pub(super) fn resolve(&self, path: &[String]) -> PathResolution {
-        self.resolve_within(path, &mut Budget::new(self.bounds.max_visits))
-    }
-
-    /// Several paths under **one** budget of the walk's own, so what reading them costs does not
-    /// grow with how many are named (§3.3: the walk "never stalls or exhausts the server"). Once
-    /// the budget is spent every later path is [`Resolved::BeyondBound`]`(`[`BoundKind::Work`]`)`.
-    ///
-    /// The facts are the walk's own, borrowed from the schema: no value is copied, so a value set
-    /// many paths share is read once (by [`Budget::members`]) and costs nothing per path after.
-    ///
-    /// What [`ShapeWalk::resolve`] does path by path for a request's asks, under the request's
-    /// budget; the walk's own tests measure the walk through this form.
-    #[cfg(test)]
-    pub(super) fn resolve_all(&self, paths: &[&[String]]) -> Vec<Resolved<'s>> {
-        let mut budget = Budget::new(self.bounds.max_visits);
-        paths
-            .iter()
-            .map(|path| self.reach(path, &mut budget))
-            .collect()
-    }
-
-    /// One path, its facts copied onto the wire and charged for the copy.
-    fn resolve_within(&self, path: &[String], budget: &mut Budget<'s>) -> PathResolution {
-        match self.reach(path, budget) {
-            Resolved::Declared(facts) => match into_wire(&facts, budget) {
-                Ok(facts) => PathResolution::Declared(facts),
-                Err(bound) => PathResolution::BeyondBound(bound),
-            },
+    /// One path, its facts copied onto the wire.
+    fn resolve(&self, path: &[String]) -> PathResolution {
+        match self.reach(path) {
+            Resolved::Declared(facts) => PathResolution::Declared(facts.to_wire()),
             Resolved::NotDeclared => PathResolution::NotDeclared,
             Resolved::BeyondBound(bound) => PathResolution::BeyondBound(bound),
         }
     }
 
-    /// One path, its facts left as the walk found them.
-    fn reach(&self, path: &[String], budget: &mut Budget<'s>) -> Resolved<'s> {
+    /// One path, its facts left where they sit in the schema.
+    pub(super) fn reach(&self, path: &[String]) -> Resolved<'s> {
+        #[cfg(test)]
+        PATHS_REACHED.with(|reached| reached.set(reached.get() + 1));
         if path.len() > self.bounds.max_depth {
             return Resolved::BeyondBound(BoundKind::Depth);
         }
-        let reached = Resolver {
-            walk: self,
-            path,
-            budget,
-            memo: HashMap::new(),
-            active: HashSet::new(),
-        }
-        .run();
-        match reached {
-            Ok(Reach::Declared(facts)) => Resolved::Declared(facts),
-            Ok(Reach::Silent | Reach::Forbidden) => Resolved::NotDeclared,
-            Err(bound) => Resolved::BeyondBound(bound),
+        let reached = path
+            .iter()
+            .try_fold(self.root, |node, segment| property(node, segment));
+        match reached.and_then(|node| self.facts_of(node, 0)) {
+            Some(facts) => Resolved::Declared(facts),
+            None => Resolved::NotDeclared,
         }
     }
 
     /// Breadth-first over property keys, shallowest paths first and keys in byte order within a
-    /// level, so a truncated vocabulary is the shallow part of the full one. One budget covers
-    /// every frame and every path. Every value is copied onto the wire, charged before it is made:
-    /// the whole vocabulary, for `askable`.
-    pub(super) fn enumerate(&self) -> Vocabulary {
-        let found =
-            self.enumerate_with(
-                |walk, path, budget| match walk.resolve_within(path, budget) {
-                    PathResolution::Declared(facts) => Ok(Some(facts)),
-                    PathResolution::NotDeclared => Ok(None),
-                    PathResolution::BeyondBound(bound) => Err(bound),
-                },
-            );
+    /// level, so a truncated vocabulary is the shallow part of the full one. Every value is copied
+    /// onto the wire: the whole vocabulary, for `askable`.
+    fn enumerate(&self) -> Vocabulary {
+        let found = self.enumerate_with(|facts| facts.to_wire());
         Vocabulary {
             paths: found
                 .paths
@@ -674,143 +472,137 @@ impl<'s> Walk<'s> {
         }
     }
 
-    /// The same paths in the same order, each with the walk's own facts, borrowed from the schema:
-    /// no value is copied, so nothing is charged for a copy. What a refusal teaches from — it
-    /// copies only the paths it sends (`teaching` in `validate`).
-    ///
-    /// Where [`Walk::enumerate`]'s copy charge is what stops it at [`BoundKind::Work`], this one
-    /// goes on and lists more paths; everywhere else the two list the same paths with the same
-    /// facts and the same cuts.
+    /// The same paths in the same order with the same cuts, each with the walk's own facts,
+    /// borrowed from the schema: no value is copied. What a refusal teaches from — it copies only
+    /// the paths it sends (`teaching` in `validate`).
     pub(super) fn enumerate_borrowed(&self) -> Enumerated<Facts<'s>> {
-        self.enumerate_with(|walk, path, budget| match walk.reach(path, budget) {
-            Resolved::Declared(facts) => Ok(Some(facts)),
-            Resolved::NotDeclared => Ok(None),
-            Resolved::BeyondBound(bound) => Err(bound),
-        })
+        self.enumerate_with(|facts| facts)
     }
 
-    /// One enumeration, with `facts_at` deciding what each candidate path declares and in what
-    /// form it is kept — `Ok(None)` for a path not declared, `Err` for a bound that stops the walk.
-    fn enumerate_with<F>(
-        &self,
-        facts_at: impl Fn(&Walk<'s>, &[String], &mut Budget<'s>) -> Result<Option<F>, BoundKind>,
-    ) -> Enumerated<F> {
+    /// One enumeration, with `keep` deciding the form each declared path's facts are kept in.
+    fn enumerate_with<F>(&self, keep: impl Fn(Facts<'s>) -> F) -> Enumerated<F> {
         #[cfg(test)]
         VOCABULARIES_ENUMERATED.with(|enumerated| enumerated.set(enumerated.get() + 1));
-        let mut budget = Budget::new(self.bounds.max_visits);
         let mut found = Enumerated {
             paths: Vec::new(),
             truncated: BTreeSet::new(),
         };
-        if let Err(bound) = self.enumerate_into(&mut found, &mut budget, &facts_at) {
+        if let Err(bound) = self.enumerate_into(&mut found, &keep) {
             found.truncated.insert(bound);
         }
         found
     }
 
     /// The breadth-first walk behind [`Walk::enumerate_with`]. A depth cut is recorded and the walk
-    /// goes on; any other bound stops it, and is returned.
+    /// goes on; the path bound stops it, and is returned.
     ///
-    /// **No prefix is held twice.** A queued frame names the path it sits under by its index in
-    /// `out.paths`, so a prefix lives only in the path the vocabulary carries; and each candidate
-    /// path is charged its bytes before it is built, whether or not it is then advertised.
+    /// **No prefix is held twice.** A queued node names the path it sits under by its index in
+    /// `out.paths`, so a prefix lives only in the path the vocabulary carries.
     fn enumerate_into<F>(
         &self,
         out: &mut Enumerated<F>,
-        budget: &mut Budget<'s>,
-        facts_at: &impl Fn(&Walk<'s>, &[String], &mut Budget<'s>) -> Result<Option<F>, BoundKind>,
+        keep: &impl Fn(Facts<'s>) -> F,
     ) -> Result<(), BoundKind> {
-        let root = self.frame([self.root], budget)?;
-        // (the index in `out.paths` of the path a frame sits under — none for the root; the frame)
-        let mut queue: VecDeque<(Option<usize>, Vec<&'s Value>)> = VecDeque::from([(None, root)]);
-        while let Some((parent, frame)) = queue.pop_front() {
+        // (the index in `out.paths` of the path a node sits under — none for the root; the node)
+        let mut queue: VecDeque<(Option<usize>, &'s Value)> = VecDeque::from([(None, self.root)]);
+        while let Some((parent, node)) = queue.pop_front() {
             let depth = parent.map_or(0, |at| out.paths[at].0.len());
             if depth == self.bounds.max_depth {
                 // Whether keys exist below the bound, read without collecting them: a cut costs the
-                // frame, not the keys under it. Whether each is declared is past the bound too, so
+                // node, not the keys under it. Whether each is declared is past the bound too, so
                 // this says "there may be more" — the honest reading of a depth cut.
-                if frame.iter().any(|node| declares_properties(node)) {
+                if declares_properties(node) {
                     out.truncated.insert(BoundKind::Depth);
                 }
                 continue;
             }
-            for key in child_keys(&frame, budget)? {
-                let prefix: &[String] = match parent {
-                    Some(at) => &out.paths[at].0,
-                    None => &[],
-                };
-                let bytes = prefix.iter().map(String::len).sum::<usize>() + key.len();
-                budget.spend(1 + bytes / BYTES_PER_VISIT)?;
-                let mut path = Vec::with_capacity(prefix.len() + 1);
-                path.extend_from_slice(prefix);
-                path.push(key.to_string());
-                let Some(facts) = facts_at(self, path.as_slice(), &mut *budget)? else {
+            for (key, child) in child_properties(node) {
+                let Some(facts) = self.facts_of(child, 0) else {
                     continue;
                 };
                 if out.paths.len() == self.bounds.max_paths {
                     return Err(BoundKind::Paths);
                 }
-                out.paths.push((path, facts));
-                let at = out.paths.len() - 1;
-                // Each frame node is asked for the key, so the child frame costs the frame's size.
-                budget.spend(frame.len())?;
-                let children = frame
-                    .iter()
-                    .copied()
-                    .filter_map(|node| node.get("properties").and_then(|p| p.get(key)));
-                queue.push_back((Some(at), self.frame(children, budget)?));
+                let prefix: &[String] = match parent {
+                    Some(at) => &out.paths[at].0,
+                    None => &[],
+                };
+                let mut path = Vec::with_capacity(prefix.len() + 1);
+                path.extend_from_slice(prefix);
+                path.push(key.to_string());
+                out.paths.push((path, keep(facts)));
+                queue.push_back((Some(out.paths.len() - 1), child));
             }
         }
         Ok(())
     }
 
-    /// The schema objects whose `properties` apply at one location — the given nodes and what their
-    /// `$ref`, `allOf`, `anyOf` and `oneOf` reach — and only those: a node without `properties` is
-    /// expanded through and not kept. Each node is expanded once, from an explicit stack, and every
-    /// node taken off the stack — expanded, already seen, or not a schema object — is spent from
-    /// the budget, so a list of branches costs its length however many of them are skipped.
-    fn frame(
-        &self,
-        nodes: impl IntoIterator<Item = &'s Value>,
-        budget: &mut Budget<'_>,
-    ) -> Result<Vec<&'s Value>, BoundKind> {
-        let mut out = Vec::new();
-        let mut seen = HashSet::new();
-        let mut stack: Vec<&'s Value> = nodes.into_iter().collect();
-        while let Some(node) = stack.pop() {
-            budget.spend(1)?;
-            let Value::Object(map) = node else {
-                continue;
-            };
-            if !seen.insert(identity(node)) {
-                continue;
-            }
-            if let Some(target) = self.target(node) {
-                stack.push(target);
-            }
-            if self.draft.ref_overrides_siblings() && map.contains_key("$ref") {
-                continue;
-            }
-            if map.get("properties").is_some_and(Value::is_object) {
-                out.push(node);
-            }
-            for keyword in ["allOf", "anyOf", "oneOf"] {
-                stack.extend(
-                    map.get(keyword)
-                        .and_then(Value::as_array)
-                        .into_iter()
-                        .flatten(),
-                );
-            }
-        }
-        Ok(out)
+    /// What a subschema declares at a path's end, `arrays` arrays below it: `None` for `false`,
+    /// nothing at all for `true`, and an object's own `type`, `enum` / `const` and element facts.
+    /// Element facts stop at the depth bound, past which an element is unconstrained.
+    fn facts_of(&self, node: &'s Value, arrays: usize) -> Option<Facts<'s>> {
+        let map = match node {
+            Value::Bool(false) => return None,
+            Value::Object(map) => map,
+            // `true`. Nothing else sits in a schema position of a schema the walk reads whole.
+            _ => return Some(Facts::default()),
+        };
+        let items = map
+            .get("items")
+            .filter(|_| arrays < self.bounds.max_depth)
+            .and_then(|element| match self.facts_of(element, arrays + 1) {
+                // `items: false` admits no element at all.
+                None => Some(Arc::new(Facts {
+                    types: Some(BTreeSet::new()),
+                    ..Facts::default()
+                })),
+                Some(facts) if facts.is_unconstrained() => None,
+                Some(facts) => Some(Arc::new(facts)),
+            });
+        Some(Facts {
+            types: declared_types(map),
+            values: declared_values(map),
+            items,
+        })
     }
+}
 
-    /// The subschema the `$ref` on `from` names, if the walk follows it — read from the references
-    /// [`local_references`] resolved when the walk was built, never from the reference's text.
-    fn target(&self, from: &Value) -> Option<&'s Value> {
-        self.refs.get(&identity(from)).copied()
-    }
+/// The subschema `properties[key]` declares on `node`, if any. A `true`, a `false` and a schema
+/// without `properties` declare nothing below them.
+fn property<'s>(node: &'s Value, key: &str) -> Option<&'s Value> {
+    node.get("properties")?.get(key)
+}
+
+/// The types a `type` keyword declares: one name, a list of them, or — for any other form — none
+/// admissible.
+fn declared_types(map: &Map<String, Value>) -> Option<BTreeSet<JsonType>> {
+    Some(match map.get("type")? {
+        Value::String(name) => JsonType::from_keyword(name).into_iter().collect(),
+        Value::Array(names) => names
+            .iter()
+            .filter_map(|n| n.as_str().and_then(JsonType::from_keyword))
+            .collect(),
+        _ => BTreeSet::new(),
+    })
+}
+
+/// The value set `enum` and `const` declare between them: an `enum`'s members, a `const`'s one
+/// value, or with both the members jsonb-equal to the `const`.
+fn declared_values<'s>(map: &'s Map<String, Value>) -> Option<Values<'s>> {
+    let enumerated = map.get("enum").and_then(Value::as_array);
+    let values: Vec<&'s Value> = match (enumerated, map.get("const")) {
+        (None, None) => return None,
+        (Some(members), None) => members.iter().collect(),
+        (None, Some(constant)) => vec![constant],
+        (Some(members), Some(constant)) => {
+            let constant = canonical(constant);
+            members
+                .iter()
+                .filter(|member| canonical(member) == constant)
+                .collect()
+        }
+    };
+    Some(Arc::new(values))
 }
 
 /// One shape's walk as a request reads it: built once, on the first ask that needs it, and kept
@@ -822,9 +614,6 @@ impl<'s> Walk<'s> {
 /// **Owned by an [`AskSession`](super::AskSession), never by the schema's owner.** A [`Walk`]
 /// borrows the schema it reads, so the cache cannot live beside the schema in one struct; it lives
 /// in a session that borrows the context holding the schemas, for as long as the request runs.
-///
-/// A resolved path is kept whatever it said, `work` included: a request's budget never refills,
-/// so a path the budget could not afford stays unaffordable for the rest of the request.
 #[derive(Debug)]
 pub(super) struct ShapeWalk<'s> {
     shape: ShapeId,
@@ -870,10 +659,9 @@ impl<'s> ShapeWalk<'s> {
         self.shape
     }
 
-    /// One path, as this walk last said it, or reached now under `budget` — the request's, shared
-    /// by every path of every ask, so a path is paid for once per request however many asks name
-    /// it, and a request's paths together cost what one budget allows.
-    pub(super) fn resolve(&mut self, path: &[String], budget: &mut Budget<'s>) -> Resolved<'s> {
+    /// One path, as this walk last said it, or reached now — so a path is walked once per request
+    /// however many asks name it.
+    pub(super) fn resolve(&mut self, path: &[String]) -> Resolved<'s> {
         if let Some(known) = self.resolved.get(path) {
             return known.clone();
         }
@@ -882,7 +670,7 @@ impl<'s> ShapeWalk<'s> {
             .walk
             .get_or_insert_with(|| Walk::new(schema, &WalkBounds::BUILD))
         {
-            Ok(walk) => walk.reach(path, budget),
+            Ok(walk) => walk.reach(path),
             Err(at) => Resolved::BeyondBound(*at),
         };
         self.resolved.insert(path.to_vec(), reached.clone());
@@ -891,9 +679,8 @@ impl<'s> ShapeWalk<'s> {
 
     /// What a path refusal teaches of this shape: the teaching its context remembered, or — the
     /// first time one is needed, when there is none — the one `teach` makes from the shape's
-    /// askable vocabulary over borrowed facts ([`Walk::enumerate_borrowed`]), enumerated here once
-    /// under a budget of its own, so a request that has spent its budget still teaches what may be
-    /// asked. Either is kept for every later refusal; the vocabulary is not.
+    /// askable vocabulary over borrowed facts ([`Walk::enumerate_borrowed`]), enumerated here once.
+    /// Either is kept for every later refusal; the vocabulary is not.
     pub(super) fn path_teaching(
         &mut self,
         teach: impl FnOnce(&Enumerated<Facts<'s>>, ShapeId) -> PathTeaching,
@@ -966,170 +753,45 @@ pub(super) fn json_bytes_up_to<T: Serialize + ?Sized>(value: &T, limit: usize) -
     count.bytes
 }
 
-/// Every `$ref` the walk follows, resolved once: each object anywhere in the schema that carries a
-/// `#`-prefixed `$ref` → the subschema its fragment names, percent-decoded and read as a JSON
-/// pointer from the root (`~0`/`~1` unescaped by `Value::pointer`). `#` alone is the root.
-///
-/// Every object, not only schema positions, because a `$ref` may point anywhere and the walk then
-/// reads what it finds there as a schema. One pass from an explicit stack, and each reference's
-/// text is decoded once, so the whole costs time linear in the schema — bounded, like the byte
-/// measurement before it, by [`MAX_SCHEMA_BYTES`] — and a visit costs a lookup.
-///
-/// Not followed, so absent here: an anchor, a remote or `file:` URI (§3.3, the remote-`$ref` row),
-/// a pointer that names nothing, and any reference made from inside an embedded resource, where `#`
-/// means that resource and not the root.
-fn local_references<'s>(root: &'s Value, embedded: &HashSet<usize>) -> HashMap<usize, &'s Value> {
-    let mut refs = HashMap::new();
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
-        match node {
-            Value::Object(map) => {
-                let target = map
-                    .get("$ref")
-                    .and_then(Value::as_str)
-                    .and_then(|reference| reference.strip_prefix('#'))
-                    .filter(|_| !embedded.contains(&identity(node)))
-                    .and_then(percent_decode)
-                    .and_then(|pointer| root.pointer(&pointer));
-                if let Some(target) = target {
-                    refs.insert(identity(node), target);
-                }
-                stack.extend(map.values());
-            }
-            Value::Array(elements) => stack.extend(elements),
-            _ => {}
-        }
-    }
-    refs
-}
-
-/// The schema objects inside a resource the schema embeds: a non-root object that opens one, and
-/// every schema object beneath it. One pass from an explicit stack, bounded like the byte
-/// measurement beside it by [`MAX_SCHEMA_BYTES`].
-///
-/// It descends schema positions only. The values of `enum`, `const`, `default` and `examples` are
-/// data, and the values of `properties`, `patternProperties`, `$defs`, `definitions`,
-/// `dependentSchemas` and `dependencies` are maps of name to schema — so a property named `$id`, or
-/// an `enum` member carrying one, is not a resource.
-fn embedded_resources(root: &Value, draft: Draft) -> HashSet<usize> {
-    let mut marked = HashSet::new();
-    // (node, inside an embedded resource, a map of name to schema rather than a schema)
-    let mut stack = vec![(root, false, false)];
-    while let Some((node, inside, names)) = stack.pop() {
-        match node {
-            Value::Object(map) if names => {
-                stack.extend(map.values().map(|schema| (schema, inside, false)));
-            }
-            Value::Object(map) => {
-                let inside = inside || (!std::ptr::eq(node, root) && draft.opens_resource(map));
-                if inside {
-                    marked.insert(identity(node));
-                }
-                for (keyword, child) in map {
-                    match keyword.as_str() {
-                        "enum" | "const" | "default" | "examples" => {}
-                        "properties" | "patternProperties" | "$defs" | "definitions"
-                        | "dependentSchemas" | "dependencies" => {
-                            stack.push((child, inside, true));
-                        }
-                        _ => stack.push((child, inside, false)),
-                    }
-                }
-            }
-            Value::Array(schemas) => {
-                stack.extend(schemas.iter().map(|schema| (schema, inside, false)));
-            }
-            _ => {}
-        }
-    }
-    marked
-}
-
-/// A URI fragment with its `%XX` escapes decoded, or `None` if an escape is malformed or the
-/// result is not UTF-8.
-fn percent_decode(fragment: &str) -> Option<String> {
-    let bytes = fragment.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' {
-            let hex = bytes.get(i + 1..i + 3)?;
-            if !hex.iter().all(u8::is_ascii_hexdigit) {
-                return None;
-            }
-            out.push(u8::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()?);
-            i += 3;
-        } else {
-            out.push(bytes[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8(out).ok()
-}
-
-/// The askable property keys any schema object in a frame declares, in byte order. Every key read
-/// is charged one visit before it is collected.
+/// The askable keys a node's `properties` declares, each with its subschema, in byte order.
 ///
 /// A key longer than an asked segment may be (`MAX_ARTIFACT_PATH_SEGMENT_BYTES`, the form cap
 /// `validate_ask_form` refuses a longer segment by) is skipped: no ask can name it, so it is never
-/// advertised and nothing below it is walked. Its length is read first, which is all a long key
-/// costs — escaping only lengthens a key, so one longer than the cap is past it.
-fn child_keys<'s>(
-    frame: &[&'s Value],
-    budget: &mut Budget<'_>,
-) -> Result<BTreeSet<&'s str>, BoundKind> {
-    let mut keys = BTreeSet::new();
-    let declared = frame
-        .iter()
-        .copied()
-        .filter_map(|node| node.get("properties").and_then(Value::as_object));
-    for props in declared {
-        budget.spend(props.len())?;
-        keys.extend(
-            props
-                .keys()
-                .map(String::as_str)
-                .filter(|key| askable_segment(key)),
-        );
-    }
-    Ok(keys)
+/// advertised and nothing below it is walked.
+fn child_properties(node: &Value) -> Vec<(&str, &Value)> {
+    let mut children: Vec<(&str, &Value)> = node
+        .get("properties")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .map(|(key, child)| (key.as_str(), child))
+        .filter(|(key, _)| askable_segment(key))
+        .collect();
+    children.sort_unstable_by_key(|&(key, _)| key);
+    children
 }
 
 /// Whether a key could be one segment of an asked path: within `MAX_ARTIFACT_PATH_SEGMENT_BYTES`,
-/// JSON-escaped, as `validate_ask_form` measures it.
+/// JSON-escaped, as `validate_ask_form` measures it. Its length is read first — escaping only
+/// lengthens a key, so one longer than the cap is past it.
 fn askable_segment(key: &str) -> bool {
     key.len() <= MAX_ARTIFACT_PATH_SEGMENT_BYTES
         && json_string_bytes(key) <= MAX_ARTIFACT_PATH_SEGMENT_BYTES
 }
 
-/// Whether a frame node declares any property at all.
+/// Whether a node declares any property at all.
 fn declares_properties(node: &Value) -> bool {
     node.get("properties")
         .and_then(Value::as_object)
         .is_some_and(|props| !props.is_empty())
 }
 
-/// A subschema's identity for memoising and cycle-guarding: its address inside the borrowed root,
-/// which is stable for the walk's lifetime.
-fn identity(node: &Value) -> usize {
-    std::ptr::from_ref(node) as usize
-}
+/// A value set, borrowed from the schema and shared rather than copied when a result is kept.
+pub(super) type Values<'s> = Arc<Vec<&'s Value>>;
 
-/// One `enum` / `const` member as the walk carries it: an id equal for jsonb-equal members, so
-/// sets intersect and union by id in linear time; its weight in visits; and the schema value.
-#[derive(Debug, Clone, Copy)]
-pub(super) struct Member<'s> {
-    id: usize,
-    weight: usize,
-    pub(super) value: &'s Value,
-}
-
-/// A value set, shared rather than copied when a result is memoised or reused.
-pub(super) type Values<'s> = Arc<Vec<Member<'s>>>;
-
-/// What the walk has found at a path: [`PathFacts`], with its values as members of the schema and
+/// What the walk has found at a path: [`PathFacts`], with its values borrowed from the schema and
 /// every part shared, so carrying it costs nothing per value. An ask's validation reads its paths
-/// in this form and never copies them; only the wire copies, charged by [`into_wire`].
+/// in this form and never copies them; only the wire copies.
 #[derive(Debug, Clone, Default)]
 pub(super) struct Facts<'s> {
     pub(super) types: Option<BTreeSet<JsonType>>,
@@ -1143,16 +805,15 @@ impl Facts<'_> {
         self.types.is_none() && self.values.is_none() && self.items.is_none()
     }
 
-    /// The facts as the wire carries them, every value copied. Uncharged here: [`into_wire`]
-    /// charges a copy before making it, and a refusal's teaching copies only a path it has first
-    /// measured, through [`AskableView`], to fit.
+    /// The facts as the wire carries them, every value copied. A refusal's teaching copies only a
+    /// path it has first measured, through [`AskableView`], to fit.
     pub(super) fn to_wire(&self) -> PathFacts {
         PathFacts {
             types: self.types.clone(),
-            values: self.values.as_ref().map(|members| {
+            values: self.values.as_ref().map(|values| {
                 #[cfg(test)]
-                VALUES_COPIED.with(|copied| copied.set(copied.get() + members.len()));
-                members.iter().map(|m| m.value.clone()).collect()
+                VALUES_COPIED.with(|copied| copied.set(copied.get() + values.len()));
+                values.iter().map(|&v| v.clone()).collect()
             }),
             items: self
                 .items
@@ -1167,11 +828,20 @@ thread_local! {
     /// Every value [`Facts::to_wire`] has copied on this thread — what a test reads to see that a
     /// copy was, or was not, made.
     pub(crate) static VALUES_COPIED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    /// Every [`Walk`] built on this thread — measured, its draft selected, its `$ref`s resolved.
+    /// Every [`Walk`] built on this thread — measured and read whole.
     pub(crate) static WALKS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Every vocabulary a [`Walk`] has enumerated on this thread, copied or borrowed.
     pub(crate) static VOCABULARIES_ENUMERATED: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
+    /// Every path a [`Walk`] has reached on this thread — what a test reads to see that a path was,
+    /// or was not, walked again.
+    pub(crate) static PATHS_REACHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The paths reached on this thread so far ([`PATHS_REACHED`]).
+#[cfg(test)]
+pub(crate) fn paths_reached() -> usize {
+    PATHS_REACHED.with(std::cell::Cell::get)
 }
 
 /// The wire form of [`PathFacts`], written from the borrowed facts without copying a value, so a
@@ -1190,7 +860,7 @@ impl Serialize for Facts<'_> {
             None => out.skip_field("types")?,
         }
         match &self.values {
-            Some(members) => out.serialize_field("values", &MemberValues(members.as_slice()))?,
+            Some(values) => out.serialize_field("values", values.as_slice())?,
             None => out.skip_field("values")?,
         }
         match &self.items {
@@ -1198,15 +868,6 @@ impl Serialize for Facts<'_> {
             None => out.skip_field("items")?,
         }
         out.end()
-    }
-}
-
-/// A value set written as the wire writes it: its members' values, in order.
-struct MemberValues<'a, 's>(&'a [Member<'s>]);
-
-impl Serialize for MemberValues<'_, '_> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_seq(self.0.iter().map(|m| m.value))
     }
 }
 
@@ -1247,433 +908,10 @@ pub(super) enum Resolved<'s> {
     BeyondBound(BoundKind),
 }
 
-/// The facts as the wire carries them, each value copied once and charged by its weight first.
-fn into_wire(facts: &Facts<'_>, budget: &mut Budget<'_>) -> Result<PathFacts, BoundKind> {
-    charge_copy(facts, budget)?;
-    Ok(facts.to_wire())
-}
-
-/// What copying facts onto the wire costs: every member's weight, at every array level.
-fn charge_copy(facts: &Facts<'_>, budget: &mut Budget<'_>) -> Result<(), BoundKind> {
-    if let Some(members) = &facts.values {
-        budget.spend(members.iter().map(|m| m.weight).sum())?;
-    }
-    match &facts.items {
-        Some(element) => charge_copy(element, budget),
-        None => Ok(()),
-    }
-}
-
-/// What one subschema says about the remaining path.
-#[derive(Debug, Clone)]
-enum Reach<'s> {
-    /// The path can never be present (`false`, or every branch of a union forbids it).
-    Forbidden,
-    /// This subschema does not reach the path; it neither declares nor constrains it.
-    Silent,
-    Declared(Facts<'s>),
-}
-
-/// Both hold — `allOf`, and keywords beside a `$ref` under 2019-09 / 2020-12.
-fn conjoin<'s>(
-    a: Reach<'s>,
-    b: Reach<'s>,
-    budget: &mut Budget<'_>,
-) -> Result<Reach<'s>, BoundKind> {
-    Ok(match (a, b) {
-        (Reach::Forbidden, _) | (_, Reach::Forbidden) => Reach::Forbidden,
-        (Reach::Silent, other) | (other, Reach::Silent) => other,
-        (Reach::Declared(x), Reach::Declared(y)) => Reach::Declared(conjoin_facts(&x, &y, budget)?),
-    })
-}
-
-/// One of them holds — `anyOf` / `oneOf` (§3.3 row 6). A branch that does not declare the path
-/// takes no part; if none declares it the union is silent, unless every branch forbids it.
-fn disjoin<'s>(branches: Vec<Reach<'s>>, budget: &mut Budget<'_>) -> Result<Reach<'s>, BoundKind> {
-    let all_forbidden =
-        !branches.is_empty() && branches.iter().all(|b| matches!(b, Reach::Forbidden));
-    let mut union: Option<Facts<'s>> = None;
-    for branch in branches {
-        if let Reach::Declared(facts) = branch {
-            union = Some(match union {
-                Some(acc) => disjoin_facts(&acc, &facts, budget)?,
-                None => facts,
-            });
-        }
-    }
-    Ok(match union {
-        Some(facts) => Reach::Declared(facts),
-        None if all_forbidden => Reach::Forbidden,
-        None => Reach::Silent,
-    })
-}
-
-fn conjoin_facts<'s>(
-    a: &Facts<'s>,
-    b: &Facts<'s>,
-    budget: &mut Budget<'_>,
-) -> Result<Facts<'s>, BoundKind> {
-    let values = match (&a.values, &b.values) {
-        (Some(x), Some(y)) => Some(intersect(x, y, budget)?),
-        (x, None) | (None, x) => x.clone(),
-    };
-    let items = match (&a.items, &b.items) {
-        (Some(x), Some(y)) => Some(Arc::new(conjoin_facts(x, y, budget)?)),
-        (x, None) | (None, x) => x.clone(),
-    };
-    Ok(Facts {
-        types: both(a.types.clone(), b.types.clone(), intersect_types),
-        values,
-        items,
-    })
-}
-
-/// A union's facts: unconstrained if either side is — so a value one branch admits is never
-/// refused because another branch enumerates (§3.3 row 6).
-fn disjoin_facts<'s>(
-    a: &Facts<'s>,
-    b: &Facts<'s>,
-    budget: &mut Budget<'_>,
-) -> Result<Facts<'s>, BoundKind> {
-    let values = match (&a.values, &b.values) {
-        (Some(x), Some(y)) => Some(union(x, y, budget)?),
-        _ => None,
-    };
-    let items = match (&a.items, &b.items) {
-        (Some(x), Some(y)) => Some(Arc::new(disjoin_facts(x, y, budget)?)),
-        _ => None,
-    };
-    Ok(Facts {
-        types: either(a.types.clone(), b.types.clone(), |mut x, y| {
-            x.extend(y);
-            x
-        }),
-        values,
-        items,
-    })
-}
-
-/// The members of `x` some member of `y` equals, in `x`'s order. Linear, and charged by both sizes.
-fn intersect<'s>(
-    x: &Values<'s>,
-    y: &Values<'s>,
-    budget: &mut Budget<'_>,
-) -> Result<Values<'s>, BoundKind> {
-    budget.spend(x.len() + y.len())?;
-    let keep: HashSet<usize> = y.iter().map(|m| m.id).collect();
-    Ok(Arc::new(
-        x.iter().filter(|m| keep.contains(&m.id)).copied().collect(),
-    ))
-}
-
-/// `x`, then the members of `y` it lacks. Linear, and charged by both sizes.
-fn union<'s>(
-    x: &Values<'s>,
-    y: &Values<'s>,
-    budget: &mut Budget<'_>,
-) -> Result<Values<'s>, BoundKind> {
-    budget.spend(x.len() + y.len())?;
-    let mut seen: HashSet<usize> = x.iter().map(|m| m.id).collect();
-    let mut out: Vec<Member<'s>> = x.to_vec();
-    out.extend(y.iter().filter(|m| seen.insert(m.id)).copied());
-    Ok(Arc::new(out))
-}
-
-/// Both constraints apply: an absent one leaves the other.
-fn both<T>(a: Option<T>, b: Option<T>, merge: impl FnOnce(T, T) -> T) -> Option<T> {
-    match (a, b) {
-        (Some(x), Some(y)) => Some(merge(x, y)),
-        (x, None) | (None, x) => x,
-    }
-}
-
-/// Either constraint applies: an absent one is no constraint at all.
-fn either<T>(a: Option<T>, b: Option<T>, merge: impl FnOnce(T, T) -> T) -> Option<T> {
-    match (a, b) {
-        (Some(x), Some(y)) => Some(merge(x, y)),
-        _ => None,
-    }
-}
-
-/// `integer` is the integral subset of `number`, so `number` ∧ `integer` is `integer`.
-fn intersect_types(a: BTreeSet<JsonType>, b: BTreeSet<JsonType>) -> BTreeSet<JsonType> {
-    let mut out: BTreeSet<JsonType> = a.intersection(&b).copied().collect();
-    let crosses = |x: &BTreeSet<JsonType>, y: &BTreeSet<JsonType>| {
-        x.contains(&JsonType::Integer) && y.contains(&JsonType::Number)
-    };
-    if crosses(&a, &b) || crosses(&b, &a) {
-        out.insert(JsonType::Integer);
-    }
-    out
-}
-
-/// The part a subschema plays for the object that applies it.
-#[derive(Debug, Clone, Copy)]
-enum Role {
-    /// The `$ref` target, when the walk follows it.
-    Ref,
-    /// `properties[segment]`, one segment deeper.
-    Property,
-    /// `items`, at the end of the path: what an element declares.
-    Items,
-    AllOf,
-    AnyOf,
-    OneOf,
-}
-
-/// A subschema to evaluate, and where.
-type Child<'s> = (&'s Value, usize, Role);
-
-/// One step of the evaluation: evaluate a subschema at a position, or combine an object's
-/// children's results once they are all on the value stack.
-enum Task<'s> {
-    Eval(&'s Value, usize),
-    Combine(&'s Value, &'s Map<String, Value>, usize),
-}
-
-/// One path's walk: an explicit-stack evaluation, memoised by `(subschema, position)` and
-/// cycle-guarded on the same key.
-///
-/// A position past the path's end is inside `items`: `path.len() + k` is the element schema `k`
-/// arrays deep, so element facts are memoised and bounded like everything else.
-///
-/// **A cycle that consumes no segment adds nothing.** `A = {allOf: [{$ref: B}]}`,
-/// `B = {allOf: [{$ref: A}]}` re-enters `A` at the same position; the re-entry is silent, so the
-/// facts are those reached before the cycle closed. The direction that loses is lenient — an
-/// admitted value runs and is an honest empty — never a refusal of something declared.
-struct Resolver<'w, 's> {
-    walk: &'w Walk<'s>,
-    path: &'w [String],
-    budget: &'w mut Budget<'s>,
-    memo: HashMap<(usize, usize), Reach<'s>>,
-    active: HashSet<(usize, usize)>,
-}
-
-impl<'s> Resolver<'_, 's> {
-    fn run(mut self) -> Result<Reach<'s>, BoundKind> {
-        self.budget.spend(1)?;
-        let mut tasks = vec![Task::Eval(self.walk.root, 0)];
-        let mut values: Vec<Reach<'s>> = Vec::new();
-        while let Some(task) = tasks.pop() {
-            match task {
-                Task::Eval(node, at) => self.eval(node, at, &mut tasks, &mut values)?,
-                Task::Combine(node, map, at) => {
-                    let children = self.children(node, map, at);
-                    // Each child's evaluation pushed exactly one value, after this task was pushed
-                    // and before it is popped.
-                    let results = values.split_off(values.len() - children.len());
-                    let reached = self.combine(map, at, &children, results)?;
-                    let key = (identity(node), at);
-                    self.active.remove(&key);
-                    self.memo.insert(key, reached.clone());
-                    values.push(reached);
-                }
-            }
-        }
-        Ok(values.pop().unwrap_or(Reach::Silent))
-    }
-
-    /// Push one value for a leaf, a memoised object, or a cycle; or schedule an object's children
-    /// and its combination, spending one visit per child.
-    fn eval(
-        &mut self,
-        node: &'s Value,
-        at: usize,
-        tasks: &mut Vec<Task<'s>>,
-        values: &mut Vec<Reach<'s>>,
-    ) -> Result<(), BoundKind> {
-        let reached = match node {
-            Value::Bool(false) => Reach::Forbidden,
-            Value::Bool(true) => self.unconstrained(at),
-            Value::Object(map) => {
-                let key = (identity(node), at);
-                if let Some(known) = self.memo.get(&key) {
-                    known.clone()
-                } else if self.active.contains(&key) {
-                    Reach::Silent
-                } else {
-                    let children = self.children(node, map, at);
-                    self.budget.spend(children.len())?;
-                    self.active.insert(key);
-                    tasks.push(Task::Combine(node, map, at));
-                    tasks.extend(
-                        children
-                            .iter()
-                            .rev()
-                            .map(|&(child, child_at, _)| Task::Eval(child, child_at)),
-                    );
-                    return Ok(());
-                }
-            }
-            _ => Reach::Silent,
-        };
-        values.push(reached);
-        Ok(())
-    }
-
-    /// `true`, or a `$ref` the walk does not follow: declared and unconstrained where it sits, and
-    /// declaring nothing below it — a deeper segment is not reached through `properties`.
-    fn unconstrained(&self, at: usize) -> Reach<'s> {
-        if at >= self.path.len() {
-            Reach::Declared(Facts::default())
-        } else {
-            Reach::Silent
-        }
-    }
-
-    /// The subschemas an object applies at a position, in a fixed order the combination relies on.
-    fn children(&self, node: &'s Value, map: &'s Map<String, Value>, at: usize) -> Vec<Child<'s>> {
-        let mut out = Vec::new();
-        if let Some(target) = self.walk.target(node) {
-            out.push((target, at, Role::Ref));
-        }
-        if self.walk.draft.ref_overrides_siblings() && map.contains_key("$ref") {
-            return out;
-        }
-        match self.path.get(at) {
-            Some(segment) => {
-                if let Some(child) = map.get("properties").and_then(|p| p.get(segment.as_str())) {
-                    out.push((child, at + 1, Role::Property));
-                }
-            }
-            None => {
-                if let Some(items) = self.items_schema(map, at) {
-                    out.push((items, at + 1, Role::Items));
-                }
-            }
-        }
-        for (keyword, role) in [
-            ("allOf", Role::AllOf),
-            ("anyOf", Role::AnyOf),
-            ("oneOf", Role::OneOf),
-        ] {
-            out.extend(
-                map.get(keyword)
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .map(|branch| (branch, at, role)),
-            );
-        }
-        out
-    }
-
-    /// The element schema, when `items` is a single schema that applies to every element and the
-    /// element is within the depth bound. A tuple (`items` as an array before 2020-12, or
-    /// `prefixItems` in it) gives each position its own schema, so an element anywhere is
-    /// unconstrained here.
-    fn items_schema(&self, map: &'s Map<String, Value>, at: usize) -> Option<&'s Value> {
-        if at - self.path.len() >= self.walk.bounds.max_depth {
-            return None;
-        }
-        if self.walk.draft.has_prefix_items() && map.contains_key("prefixItems") {
-            return None;
-        }
-        map.get("items").filter(|i| i.is_object() || i.is_boolean())
-    }
-
-    /// An object's own reach from its children's. Under draft-04/06/07 an object with a `$ref` is
-    /// the reference alone; otherwise its own facts (or its `properties` step) are conjoined with
-    /// the reference, every `allOf` branch, and each union.
-    fn combine(
-        &mut self,
-        map: &'s Map<String, Value>,
-        at: usize,
-        children: &[Child<'s>],
-        results: Vec<Reach<'s>>,
-    ) -> Result<Reach<'s>, BoundKind> {
-        if self.walk.draft.ref_overrides_siblings() && map.contains_key("$ref") {
-            return Ok(results
-                .into_iter()
-                .next()
-                .unwrap_or_else(|| self.unconstrained(at)));
-        }
-        let mut step = Reach::Silent;
-        let mut items = None;
-        let mut conjuncts = Vec::new();
-        let mut any_of: Option<Vec<Reach<'s>>> = None;
-        let mut one_of: Option<Vec<Reach<'s>>> = None;
-        for ((_, _, role), reach) in children.iter().zip(results) {
-            match role {
-                Role::Property => step = reach,
-                Role::Items => items = Some(reach),
-                Role::Ref | Role::AllOf => conjuncts.push(reach),
-                Role::AnyOf => any_of.get_or_insert_with(Vec::new).push(reach),
-                Role::OneOf => one_of.get_or_insert_with(Vec::new).push(reach),
-            }
-        }
-        let mut acc = if at >= self.path.len() {
-            Reach::Declared(self.local_facts(map, items)?)
-        } else {
-            step
-        };
-        for conjunct in conjuncts {
-            acc = conjoin(acc, conjunct, self.budget)?;
-        }
-        for branches in [any_of, one_of].into_iter().flatten() {
-            let union = disjoin(branches, self.budget)?;
-            acc = conjoin(acc, union, self.budget)?;
-        }
-        Ok(acc)
-    }
-
-    /// What one schema object itself declares at the path's end: `type`, `enum` / `const`, and
-    /// what its element schema reached. A list of `type` names costs its length, like an `enum`.
-    fn local_facts(
-        &mut self,
-        map: &'s Map<String, Value>,
-        items: Option<Reach<'s>>,
-    ) -> Result<Facts<'s>, BoundKind> {
-        let types = match map.get("type") {
-            None => None,
-            Some(Value::String(name)) => Some(JsonType::from_keyword(name).into_iter().collect()),
-            Some(Value::Array(names)) => {
-                self.budget.spend(names.len())?;
-                Some(
-                    names
-                        .iter()
-                        .filter_map(|n| n.as_str().and_then(JsonType::from_keyword))
-                        .collect(),
-                )
-            }
-            Some(_) => Some(BTreeSet::new()),
-        };
-        let enumerated = match map.get("enum") {
-            Some(keyword) => match keyword.as_array() {
-                Some(members) => Some(self.budget.members(keyword, members)?),
-                None => None,
-            },
-            None => None,
-        };
-        let constant = match map.get("const").filter(|_| self.walk.draft.has_const()) {
-            Some(value) => Some(self.budget.members(value, std::slice::from_ref(value))?),
-            None => None,
-        };
-        let values = match (enumerated, constant) {
-            (Some(x), Some(y)) => Some(intersect(&x, &y, self.budget)?),
-            (x, None) | (None, x) => x,
-        };
-        let items = match items {
-            None | Some(Reach::Silent) => None,
-            // `items: false` admits no element at all.
-            Some(Reach::Forbidden) => Some(Arc::new(Facts {
-                types: Some(BTreeSet::new()),
-                ..Facts::default()
-            })),
-            Some(Reach::Declared(facts)) if facts.is_unconstrained() => None,
-            Some(Reach::Declared(facts)) => Some(Arc::new(facts)),
-        };
-        Ok(Facts {
-            types,
-            values,
-            items,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    //! The §3.3 table, row by row, each with a hand-written expected [`PathResolution`].
+    //! The walk's reading of a field tree, row by row, each with a hand-written expected
+    //! [`PathResolution`]; then its refusal of everything else, and its bounds.
 
     use super::*;
     use crate::types::query::filter::json_bytes;
@@ -1702,9 +940,7 @@ mod tests {
         PathResolution::Declared(PathFacts::default())
     }
 
-    const DRAFT_07: &str = "http://json-schema.org/draft-07/schema#";
-
-    // ── Row 1: `properties` chains ───────────────────────────────────────────────────────────
+    // ── `properties` chains ──────────────────────────────────────────────────────────────────
 
     #[test]
     fn a_properties_chain_declares_each_level_and_nothing_beside_it() {
@@ -1735,189 +971,7 @@ mod tests {
         assert_eq!(at(&s, &["unit", "x"]), PathResolution::NotDeclared);
     }
 
-    // ── Row 2: draft selection, and siblings beside `$ref` ────────────────────────────────────
-
-    #[test]
-    fn under_draft_07_keywords_beside_a_ref_are_ignored() {
-        let s = json!({
-            "$schema": DRAFT_07,
-            "definitions": { "d": { "properties": { "x": { "type": "string" } } } },
-            "properties": {
-                "a": { "$ref": "#/definitions/d", "properties": { "y": { "type": "number" } } }
-            }
-        });
-        assert_eq!(at(&s, &["a", "x"]), typed(&[JsonType::String]));
-        assert_eq!(at(&s, &["a", "y"]), PathResolution::NotDeclared);
-    }
-
-    #[test]
-    fn under_2020_12_keywords_beside_a_ref_apply_with_it() {
-        let s = json!({
-            "$defs": { "d": { "properties": { "x": { "type": "string" } } } },
-            "properties": {
-                "a": { "$ref": "#/$defs/d", "properties": { "y": { "type": "number" } } }
-            }
-        });
-        assert_eq!(at(&s, &["a", "x"]), typed(&[JsonType::String]));
-        assert_eq!(at(&s, &["a", "y"]), typed(&[JsonType::Number]));
-    }
-
-    #[test]
-    fn under_2019_09_keywords_beside_a_ref_apply_with_it() {
-        let s = json!({
-            "$schema": "https://json-schema.org/draft/2019-09/schema",
-            "$defs": { "d": { "type": "string" } },
-            "properties": { "a": { "$ref": "#/$defs/d", "enum": ["x"] } }
-        });
-        assert_eq!(
-            at(&s, &["a"]),
-            PathResolution::Declared(PathFacts {
-                types: types(&[JsonType::String]),
-                values: Some(vec![json!("x")]),
-                items: None,
-            })
-        );
-    }
-
-    #[test]
-    fn const_is_a_value_set_from_draft_06_and_ignored_by_draft_04() {
-        let draft6 = json!({
-            "$schema": "http://json-schema.org/draft-06/schema#",
-            "properties": { "a": { "const": "x" } }
-        });
-        assert_eq!(
-            at(&draft6, &["a"]),
-            PathResolution::Declared(PathFacts {
-                values: Some(vec![json!("x")]),
-                ..PathFacts::default()
-            })
-        );
-        let draft4 = json!({
-            "$schema": "http://json-schema.org/draft-04/schema#",
-            "properties": { "a": { "const": "x" } }
-        });
-        assert_eq!(at(&draft4, &["a"]), untyped());
-    }
-
-    // ── Row 3: local `$ref`, with a cycle guard ───────────────────────────────────────────────
-
-    #[test]
-    fn a_ref_into_defs_is_followed() {
-        let s = json!({
-            "$defs": { "unit": { "type": "string", "enum": ["ms", "s"] } },
-            "properties": { "u": { "$ref": "#/$defs/unit" } }
-        });
-        assert_eq!(
-            at(&s, &["u"]),
-            PathResolution::Declared(PathFacts {
-                types: types(&[JsonType::String]),
-                values: Some(vec![json!("ms"), json!("s")]),
-                items: None,
-            })
-        );
-    }
-
-    #[test]
-    fn a_root_ref_is_followed_alike_under_every_draft() {
-        for schema in [None, Some(DRAFT_07)] {
-            let mut s = json!({
-                "type": "object",
-                "properties": { "child": { "$ref": "#" }, "n": { "type": "integer" } }
-            });
-            if let (Some(uri), Some(map)) = (schema, s.as_object_mut()) {
-                map.insert("$schema".to_string(), json!(uri));
-            }
-            assert_eq!(at(&s, &["child"]), typed(&[JsonType::Object]), "{s}");
-            assert_eq!(at(&s, &["child", "n"]), typed(&[JsonType::Integer]), "{s}");
-        }
-    }
-
-    #[test]
-    fn a_ref_pointer_is_unescaped_and_percent_decoded() {
-        let s = json!({
-            "$defs": { "a/b": { "type": "string" }, "c%d": { "type": "boolean" } },
-            "properties": {
-                "slash": { "$ref": "#/$defs/a~1b" },
-                "percent": { "$ref": "#/$defs/c%25d" }
-            }
-        });
-        assert_eq!(at(&s, &["slash"]), typed(&[JsonType::String]));
-        assert_eq!(at(&s, &["percent"]), typed(&[JsonType::Boolean]));
-    }
-
-    #[test]
-    fn a_ref_cycle_that_consumes_no_segment_terminates() {
-        let s = json!({
-            "$defs": {
-                "a": { "$ref": "#/$defs/b", "type": "string" },
-                "b": { "$ref": "#/$defs/a" }
-            },
-            "properties": { "p": { "$ref": "#/$defs/a" } }
-        });
-        assert_eq!(at(&s, &["p"]), typed(&[JsonType::String]));
-    }
-
-    #[test]
-    fn a_definition_doubled_at_every_level_resolves_one_path_without_fanning_out() {
-        // Each definition conjoins the next one twice: 2^64 visits unmemoised.
-        let mut defs = Map::new();
-        for i in 0..64 {
-            defs.insert(
-                format!("d{i}"),
-                json!({ "allOf": [
-                    { "$ref": format!("#/$defs/d{}", i + 1) },
-                    { "$ref": format!("#/$defs/d{}", i + 1) }
-                ] }),
-            );
-        }
-        defs.insert(
-            "d64".to_string(),
-            json!({ "properties": { "x": { "type": "integer" } } }),
-        );
-        let s = json!({ "$defs": defs, "$ref": "#/$defs/d0" });
-        assert_eq!(at(&s, &["x"]), typed(&[JsonType::Integer]));
-    }
-
-    #[test]
-    fn a_long_acyclic_ref_chain_resolves_without_deep_recursion() {
-        // 5,000 `$ref` hops at one position. Recursing once per hop would need far more than the
-        // 256 KiB this runs on; the explicit stack needs none of it.
-        let hops = 5_000;
-        let mut defs = Map::new();
-        for i in 0..hops {
-            defs.insert(
-                format!("d{i}"),
-                json!({ "$ref": format!("#/$defs/d{}", i + 1) }),
-            );
-        }
-        defs.insert(
-            format!("d{hops}"),
-            json!({ "properties": { "x": { "type": "integer" } } }),
-        );
-        let s = json!({ "$defs": defs, "$ref": "#/$defs/d0" });
-        let (resolved, vocabulary) = std::thread::Builder::new()
-            .stack_size(256 * 1024)
-            .spawn(move || (at(&s, &["x"]), enumerate(&s, &WalkBounds::BUILD)))
-            .expect("spawn a small-stack thread")
-            .join()
-            .expect("the walk returns on a 256 KiB stack");
-        assert_eq!(resolved, typed(&[JsonType::Integer]));
-        assert_eq!(
-            vocabulary,
-            Vocabulary {
-                paths: vec![AskablePath::new(
-                    path(&["x"]),
-                    PathFacts {
-                        types: types(&[JsonType::Integer]),
-                        ..PathFacts::default()
-                    }
-                )],
-                truncated: BTreeSet::new(),
-            }
-        );
-    }
-
-    // ── Row 4: boolean subschemas ─────────────────────────────────────────────────────────────
+    // ── Boolean subschemas ───────────────────────────────────────────────────────────────────
 
     #[test]
     fn a_true_subschema_is_declared_and_untyped() {
@@ -1937,115 +991,47 @@ mod tests {
         assert_eq!(at(&s, &["never"]), PathResolution::NotDeclared);
     }
 
-    // ── Row 5: `allOf` merges ─────────────────────────────────────────────────────────────────
+    // ── Value sets ───────────────────────────────────────────────────────────────────────────
 
     #[test]
-    fn all_of_declares_every_branchs_paths_and_intersects_their_constraints() {
-        let s = json!({ "allOf": [
-            { "properties": { "a": { "type": "number", "enum": [1, 2] } } },
-            { "properties": { "a": { "type": "integer", "enum": [2.0, 3] }, "b": { "type": "string" } } }
-        ] });
-        assert_eq!(
-            at(&s, &["a"]),
+    fn enum_and_const_are_value_sets_and_together_keep_the_jsonb_equal_members() {
+        let s = json!({ "properties": {
+            "e": { "enum": ["ms", "s"] },
+            "c": { "const": "x" },
+            "both": { "enum": [1, 2, 3], "const": 2.0 },
+            "neither": { "enum": ["a"], "const": "b" }
+        } });
+        let valued = |values: Vec<Value>| {
             PathResolution::Declared(PathFacts {
-                types: types(&[JsonType::Integer]),
-                values: Some(vec![json!(2)]),
-                items: None,
+                values: Some(values),
+                ..PathFacts::default()
             })
-        );
-        assert_eq!(at(&s, &["b"]), typed(&[JsonType::String]));
+        };
+        assert_eq!(at(&s, &["e"]), valued(vec![json!("ms"), json!("s")]));
+        assert_eq!(at(&s, &["c"]), valued(vec![json!("x")]));
+        assert_eq!(at(&s, &["both"]), valued(vec![json!(2)]));
+        assert_eq!(at(&s, &["neither"]), valued(vec![]));
     }
 
-    #[test]
-    fn an_all_of_branch_forbidding_a_path_forbids_it() {
-        let s = json!({ "allOf": [
-            { "properties": { "a": { "type": "string" } } },
-            { "properties": { "a": false } }
-        ] });
-        assert_eq!(at(&s, &["a"]), PathResolution::NotDeclared);
-    }
-
-    // ── Row 6: `anyOf` / `oneOf` union ────────────────────────────────────────────────────────
+    // ── `additionalProperties`, not walked ───────────────────────────────────────────────────
 
     #[test]
-    fn any_of_unions_types_and_enums_across_the_branches_that_declare_the_path() {
-        let s = json!({ "anyOf": [
-            { "properties": { "a": { "type": "string", "enum": ["x"] } } },
-            { "properties": { "a": { "type": "number", "enum": [1] } } },
-            { "properties": { "b": { "type": "boolean" } } }
-        ] });
-        assert_eq!(
-            at(&s, &["a"]),
-            PathResolution::Declared(PathFacts {
-                types: types(&[JsonType::Number, JsonType::String]),
-                values: Some(vec![json!("x"), json!(1)]),
-                items: None,
-            })
-        );
-        assert_eq!(at(&s, &["b"]), typed(&[JsonType::Boolean]));
-    }
-
-    #[test]
-    fn one_of_is_unconstrained_in_value_when_any_declaring_branch_has_no_enum() {
-        let s = json!({ "oneOf": [
-            { "properties": { "a": { "type": "string", "enum": ["x"] } } },
-            { "properties": { "a": { "type": "string" } } }
-        ] });
+    fn a_path_reachable_only_through_additional_properties_is_not_declared() {
+        let s = json!({
+            "properties": { "a": { "type": "string" } },
+            "additionalProperties": { "type": "string" }
+        });
         assert_eq!(at(&s, &["a"]), typed(&[JsonType::String]));
+        assert_eq!(at(&s, &["b"]), PathResolution::NotDeclared);
     }
 
-    #[test]
-    fn a_union_branch_with_no_type_leaves_the_union_untyped() {
-        let s = json!({ "anyOf": [
-            { "properties": { "a": { "type": "string" } } },
-            { "properties": { "a": {} } }
-        ] });
-        assert_eq!(at(&s, &["a"]), untyped());
-    }
-
-    // ── Row 7: constructs not walked ──────────────────────────────────────────────────────────
-
-    #[test]
-    fn a_path_reachable_only_through_an_unwalked_construct_is_not_declared() {
-        for s in [
-            json!({ "additionalProperties": { "type": "string" } }),
-            json!({ "patternProperties": { "^a": { "type": "string" } } }),
-            json!({ "unevaluatedProperties": { "type": "string" } }),
-            json!({ "if": { "properties": { "a": {} } },
-                    "then": { "properties": { "a": { "type": "string" } } },
-                    "else": { "properties": { "a": { "type": "number" } } } }),
-            json!({ "dependentSchemas": { "z": { "properties": { "a": { "type": "string" } } } } }),
-        ] {
-            assert_eq!(at(&s, &["a"]), PathResolution::NotDeclared, "{s}");
-        }
-    }
-
-    // ── Row 8: never fetched ──────────────────────────────────────────────────────────────────
-
-    #[test]
-    fn a_ref_the_walk_does_not_follow_declares_its_path_unconstrained_under_every_draft() {
-        for reference in [
-            "http://169.254.169.254/latest/meta-data",
-            "file:///etc/passwd",
-            "other.json#/$defs/x",
-            "#an-anchor",
-        ] {
-            for schema in [None, Some(DRAFT_07)] {
-                let mut s = json!({ "properties": { "a": { "$ref": reference } } });
-                if let (Some(uri), Some(map)) = (schema, s.as_object_mut()) {
-                    map.insert("$schema".to_string(), json!(uri));
-                }
-                assert_eq!(at(&s, &["a"]), untyped(), "{s}");
-                assert_eq!(at(&s, &["a", "x"]), PathResolution::NotDeclared, "{s}");
-            }
-        }
-    }
-
-    // ── Row 9: no type and no enum ────────────────────────────────────────────────────────────
+    // ── No type and no enum ──────────────────────────────────────────────────────────────────
 
     #[test]
     fn a_path_with_no_type_and_no_enum_is_declared_and_unconstrained() {
-        let s = json!({ "properties": { "note": { "description": "free" } } });
+        let s = json!({ "properties": { "note": {
+            "description": "free", "minLength": 1, "pattern": "^x", "default": "x"
+        } } });
         assert_eq!(at(&s, &["note"]), untyped());
     }
 
@@ -2054,7 +1040,9 @@ mod tests {
     #[test]
     fn an_array_path_carries_its_element_facts() {
         let s = json!({ "properties": {
-            "tags": { "type": "array", "items": { "type": "string", "enum": ["a", "b"] } }
+            "tags": { "type": "array", "items": { "type": "string", "enum": ["a", "b"] } },
+            "never": { "type": "array", "items": false },
+            "any": { "type": "array", "items": true }
         } });
         assert_eq!(
             at(&s, &["tags"]),
@@ -2068,14 +1056,18 @@ mod tests {
                 })),
             })
         );
-    }
-
-    #[test]
-    fn a_tuple_leaves_its_elements_unconstrained() {
-        let s = json!({ "properties": {
-            "pair": { "type": "array", "prefixItems": [{ "type": "string" }], "items": { "type": "number" } }
-        } });
-        assert_eq!(at(&s, &["pair"]), typed(&[JsonType::Array]));
+        assert_eq!(
+            at(&s, &["never"]),
+            PathResolution::Declared(PathFacts {
+                types: types(&[JsonType::Array]),
+                values: None,
+                items: Some(Box::new(PathFacts {
+                    types: types(&[]),
+                    ..PathFacts::default()
+                })),
+            })
+        );
+        assert_eq!(at(&s, &["any"]), typed(&[JsonType::Array]));
     }
 
     #[test]
@@ -2101,7 +1093,115 @@ mod tests {
         );
     }
 
-    // ── The bounds ────────────────────────────────────────────────────────────────────────────
+    // ── Everything else is refused ───────────────────────────────────────────────────────────
+
+    /// Every construct a field tree cannot hold, at the root and nested in each schema position
+    /// the walk reads, fails `reads_whole` — so the loader judges the schema uncompilable — and a
+    /// walk handed it anyway declares nothing: every path, including one the rest of the schema
+    /// declares, is not declared, and the vocabulary is empty. Bites `reads_whole`: with it reading
+    /// every schema as whole, the `$ref` rows resolve `a` as declared and unconstrained (what the
+    /// walk once did with a `$ref` it did not follow), and the rest resolve `ok` as declared.
+    #[test]
+    fn a_schema_holding_a_construct_the_walk_does_not_read_declares_nothing() {
+        let constructs = [
+            json!({ "$ref": "#/$defs/x" }),
+            json!({ "$ref": "http://169.254.169.254/latest/meta-data" }),
+            json!({ "$defs": { "x": {} } }),
+            json!({ "allOf": [{}] }),
+            json!({ "anyOf": [{}] }),
+            json!({ "oneOf": [{}] }),
+            json!({ "not": {} }),
+            json!({ "if": {}, "then": {} }),
+            json!({ "format": "date" }),
+            json!({ "prefixItems": [{}] }),
+            json!({ "patternProperties": { "^a": {} } }),
+            json!({ "dependentSchemas": { "z": {} } }),
+            json!({ "x-extension": true }),
+            json!({ "$schema": "http://json-schema.org/draft-07/schema#" }),
+            json!({ "$schema": "http://json-schema.org/draft/2020-12/schema" }),
+            json!({ "$schema": 7 }),
+        ];
+        for construct in constructs {
+            let positions = [
+                construct.clone(),
+                json!({ "properties": { "a": construct.clone() } }),
+                json!({ "properties": { "a": { "items": construct.clone() } } }),
+            ];
+            for mut s in positions {
+                s.as_object_mut()
+                    .expect("an object")
+                    .entry("properties")
+                    .or_insert_with(|| json!({}))
+                    .as_object_mut()
+                    .expect("properties is an object")
+                    .insert("ok".to_string(), json!({ "type": "string" }));
+                assert!(!reads_whole(&s), "{s}");
+                assert_eq!(at(&s, &["ok"]), PathResolution::NotDeclared, "{s}");
+                assert_eq!(at(&s, &["a"]), PathResolution::NotDeclared, "{s}");
+                assert_eq!(
+                    enumerate(&s, &WalkBounds::BUILD),
+                    Vocabulary::default(),
+                    "{s}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn schema_and_id_are_read_at_the_root_and_refused_below_it() {
+        let root = json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$id": "https://example.com/shape",
+            "properties": { "a": { "type": "string" } }
+        });
+        assert_eq!(at(&root, &["a"]), typed(&[JsonType::String]));
+        let trailing = json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema#",
+            "properties": { "a": {} }
+        });
+        assert_eq!(at(&trailing, &["a"]), untyped());
+        for keyword in ["$schema", "$id"] {
+            let below = json!({ "properties": { "a": {
+                keyword: "https://json-schema.org/draft/2020-12/schema"
+            } } });
+            assert!(!reads_whole(&below), "{below}");
+            assert_eq!(at(&below, &["a"]), PathResolution::NotDeclared, "{below}");
+        }
+    }
+
+    #[test]
+    fn a_value_that_is_not_a_schema_where_a_schema_sits_is_refused() {
+        for s in [
+            json!("string"),
+            json!({ "properties": { "a": 7 } }),
+            json!({ "properties": ["a"] }),
+            json!({ "properties": { "a": { "items": [{}] } } }),
+        ] {
+            assert!(!reads_whole(&s), "{s}");
+            assert_eq!(at(&s, &["a"]), PathResolution::NotDeclared, "{s}");
+        }
+    }
+
+    /// What `additionalProperties` and the data keywords hold is not a schema the walk reads, so a
+    /// construct there is not refused: a `$ref` as a `default` is a value, and the walk never
+    /// descends `additionalProperties`. Bites a `reads_whole` that pushed every object it met.
+    #[test]
+    fn data_and_an_unwalked_additional_properties_are_not_read_for_constructs() {
+        let s = json!({
+            "properties": {
+                "a": {
+                    "default": { "$ref": "#" },
+                    "enum": [{ "allOf": [] }],
+                    "const": { "allOf": [] },
+                    "examples": [{ "$ref": "#" }]
+                }
+            },
+            "additionalProperties": { "$ref": "#" }
+        });
+        assert!(matches!(at(&s, &["a"]), PathResolution::Declared(_)));
+    }
+
+    // ── The bounds ───────────────────────────────────────────────────────────────────────────
 
     #[test]
     fn a_path_deeper_than_the_walk_is_beyond_the_depth_bound() {
@@ -2124,170 +1224,20 @@ mod tests {
             resolve(&s, &path(&["a"]), &small),
             PathResolution::BeyondBound(BoundKind::SchemaBytes)
         );
-        assert_eq!(
-            enumerate(&s, &small),
-            Vocabulary {
-                paths: vec![],
-                truncated: BTreeSet::from([BoundKind::SchemaBytes]),
-            }
-        );
+        assert_eq!(enumerate(&s, &small), unwalked(BoundKind::SchemaBytes));
     }
 
-    #[test]
-    fn a_defs_fan_out_terminates_under_the_path_budget_and_says_it_was_truncated() {
-        // Each definition declares two properties that both reference the next one: 2^N paths
-        // from a schema of a few kilobytes (§3.3, *bounded*).
-        let n = 40;
-        let mut defs = Map::new();
-        for i in 0..n {
-            let next = format!("#/$defs/d{}", i + 1);
-            defs.insert(
-                format!("d{i}"),
-                json!({ "properties": { "a": { "$ref": next }, "b": { "$ref": next } } }),
-            );
+    /// A chain of `n` nested objects, each declaring `v` and `child`.
+    fn chain(n: usize) -> Value {
+        let mut node = json!({ "properties": { "v": { "type": "integer" } } });
+        for _ in 0..n {
+            node = json!({ "properties": { "v": { "type": "integer" }, "child": node } });
         }
-        defs.insert(format!("d{n}"), json!({ "type": "string" }));
-        let s = json!({ "$defs": defs, "$ref": "#/$defs/d0" });
-        let v = enumerate(&s, &WalkBounds::BUILD);
-        assert_eq!(v.truncated, BTreeSet::from([BoundKind::Paths]));
-        assert_eq!(v.paths.len(), MAX_WALK_PATHS);
-        // Breadth-first: the shallowest level is whole.
-        assert_eq!(v.paths[0].path, path(&["a"]));
-        assert_eq!(v.paths[1].path, path(&["b"]));
-    }
-
-    /// A self-referencing two-way fan-out whose every visit also pays for a wide `allOf`.
-    fn wide_fan_out(width: usize) -> Value {
-        let empties: Vec<Value> = (0..width).map(|_| json!({})).collect();
-        json!({
-            "$defs": { "d": {
-                "properties": { "a": { "$ref": "#/$defs/d" }, "b": { "$ref": "#/$defs/d" } },
-                "allOf": empties
-            } },
-            "$ref": "#/$defs/d"
-        })
+        node
     }
 
     #[test]
-    fn a_wide_all_of_under_a_fan_out_stops_at_the_work_budget_and_says_so() {
-        let v = enumerate(&wide_fan_out(100), &WalkBounds::BUILD);
-        assert!(v.truncated.contains(&BoundKind::Work), "{:?}", v.truncated);
-        assert!(
-            !v.paths.is_empty(),
-            "the shallow vocabulary is still advertised"
-        );
-        assert!(v.paths.len() < MAX_WALK_PATHS, "{}", v.paths.len());
-    }
-
-    #[test]
-    fn an_all_of_wider_than_the_budget_stops_one_path_at_the_work_budget() {
-        // Under the schema byte bound, and wider than the visit budget.
-        let s = wide_fan_out(MAX_WALK_VISITS + 1);
-        assert_eq!(
-            resolve(&s, &path(&["a"]), &WalkBounds::BUILD),
-            PathResolution::BeyondBound(BoundKind::Work)
-        );
-        assert_eq!(
-            enumerate(&s, &WalkBounds::BUILD),
-            Vocabulary {
-                paths: vec![],
-                truncated: BTreeSet::from([BoundKind::Work]),
-            }
-        );
-    }
-
-    /// `$defs.E` is an enum of 8,000 numbers; `a` is a union or intersection of 9,000 references
-    /// to it. About 230 KB and 18,000 subschema visits, so it fits both the byte and the visit
-    /// bound.
-    fn wide_enum_references(keyword: &str) -> Value {
-        let members: Vec<Value> = (0..8_000).map(|i| json!(i)).collect();
-        let references: Vec<Value> = (0..9_000).map(|_| json!({ "$ref": "#/$defs/E" })).collect();
-        json!({
-            "$defs": { "E": { "enum": members } },
-            "properties": { "a": { keyword: references } }
-        })
-    }
-
-    /// Catches the regression where values were cloned per reference and intersected pairwise
-    /// outside the budget (round-3 review N1): ~72M `Value`s held at once and ~10¹¹ comparisons
-    /// for this schema, under every bound the walk then had.
-    #[test]
-    fn values_carried_through_a_wide_all_of_or_any_of_are_charged_and_stop_at_the_work_budget() {
-        for keyword in ["allOf", "anyOf"] {
-            let s = wide_enum_references(keyword);
-            assert!(
-                json_bytes(&s) <= MAX_SCHEMA_BYTES,
-                "{keyword}: under the byte bound"
-            );
-            assert_eq!(
-                at(&s, &["a"]),
-                PathResolution::BeyondBound(BoundKind::Work),
-                "{keyword}"
-            );
-            assert_eq!(
-                enumerate(&s, &WalkBounds::BUILD),
-                Vocabulary {
-                    paths: vec![],
-                    truncated: BTreeSet::from([BoundKind::Work]),
-                },
-                "{keyword}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_ref_inside_an_embedded_resource_is_not_resolved_against_the_root() {
-        // `#/$defs/x` inside `child` means child's own `$defs/x` (an integer), not the root's (a
-        // string). The walk does not follow it, so it says nothing it cannot see.
-        let s = json!({
-            "$defs": { "x": { "type": "string" } },
-            "properties": {
-                "child": {
-                    "$id": "https://example.com/child",
-                    "$defs": { "x": { "type": "integer" } },
-                    "properties": { "y": { "$ref": "#/$defs/x" }, "self": { "$ref": "#" } }
-                },
-                "z": { "$ref": "#/$defs/x" }
-            }
-        });
-        assert_eq!(at(&s, &["child", "y"]), untyped());
-        assert_eq!(at(&s, &["child", "self"]), untyped());
-        assert_eq!(at(&s, &["child", "self", "y"]), PathResolution::NotDeclared);
-        // Outside the resource the root's definition still applies.
-        assert_eq!(at(&s, &["z"]), typed(&[JsonType::String]));
-    }
-
-    #[test]
-    fn data_and_name_maps_carrying_an_id_open_no_resource() {
-        // A property named `$id`, and an `$id` inside an `enum` member, are not resources: the
-        // references beside them still resolve against the root.
-        let s = json!({
-            "$defs": { "x": { "type": "string" } },
-            "properties": {
-                "$id": { "$ref": "#/$defs/x" },
-                "e": { "enum": [{ "$id": "https://example.com/data" }], "$ref": "#/$defs/x" }
-            }
-        });
-        assert_eq!(at(&s, &["$id"]), typed(&[JsonType::String]));
-        assert_eq!(
-            at(&s, &["e"]),
-            PathResolution::Declared(PathFacts {
-                types: types(&[JsonType::String]),
-                values: Some(vec![json!({ "$id": "https://example.com/data" })]),
-                items: None,
-            })
-        );
-    }
-
-    #[test]
-    fn a_recursive_properties_tree_yields_its_depth_bounded_paths_and_says_so() {
-        let s = json!({
-            "$defs": { "node": { "properties": {
-                "v": { "type": "integer" },
-                "child": { "$ref": "#/$defs/node" }
-            } } },
-            "$ref": "#/$defs/node"
-        });
+    fn a_tree_deeper_than_the_walk_yields_its_depth_bounded_paths_and_says_so() {
         let three = WalkBounds {
             max_depth: 3,
             ..WalkBounds::BUILD
@@ -2298,7 +1248,7 @@ mod tests {
             ..PathFacts::default()
         };
         assert_eq!(
-            enumerate(&s, &three),
+            enumerate(&chain(5), &three),
             Vocabulary {
                 paths: vec![
                     AskablePath::new(path(&["child"]), node.clone()),
@@ -2311,48 +1261,25 @@ mod tests {
                 truncated: BTreeSet::from([BoundKind::Depth]),
             }
         );
-        // And under the build's bound: two paths per level, to the bound and no further.
-        let built = enumerate(&s, &WalkBounds::BUILD);
-        assert_eq!(built.truncated, BTreeSet::from([BoundKind::Depth]));
-        assert_eq!(built.paths.len(), 2 * MAX_WALK_DEPTH);
-        assert!(built.paths.iter().all(|p| p.path.len() <= MAX_WALK_DEPTH));
+        // A tree exactly as deep as the bound is whole: `child`, `v`, `child.child`, `child.v` and
+        // `child.child.v`.
+        let whole = enumerate(&chain(2), &three);
+        assert!(whole.truncated.is_empty(), "{:?}", whole.truncated);
+        assert_eq!(whole.paths.len(), 5);
     }
 
     #[test]
-    fn each_cut_names_the_bound_that_made_it() {
-        // A three-way recursive fan-out, cut three different ways.
-        let s = json!({
-            "$defs": { "node": { "properties": {
-                "a": { "$ref": "#/$defs/node" },
-                "b": { "$ref": "#/$defs/node" },
-                "c": { "$ref": "#/$defs/node" }
-            } } },
-            "$ref": "#/$defs/node"
-        });
-        let by_paths = WalkBounds {
-            max_depth: 1,
-            max_paths: 2,
-            ..WalkBounds::BUILD
-        };
-        let v = enumerate(&s, &by_paths);
-        assert_eq!(v.paths.len(), 2);
+    fn a_shape_declaring_more_paths_than_are_advertised_is_cut_breadth_first_and_says_so() {
+        let fields: Map<String, Value> = (0..=MAX_WALK_PATHS)
+            .map(|i| (format!("f{i:05}"), json!({ "properties": { "x": {} } })))
+            .collect();
+        let s = json!({ "properties": fields });
+        let v = enumerate(&s, &WalkBounds::BUILD);
         assert_eq!(v.truncated, BTreeSet::from([BoundKind::Paths]));
-        let by_depth = WalkBounds {
-            max_depth: 1,
-            ..WalkBounds::BUILD
-        };
-        let v = enumerate(&s, &by_depth);
-        assert_eq!(v.paths.len(), 3);
-        assert_eq!(v.truncated, BTreeSet::from([BoundKind::Depth]));
-        // Depth two needs twelve paths and about a hundred visits; forty is not enough.
-        let by_work = WalkBounds {
-            max_depth: 2,
-            max_visits: 40,
-            ..WalkBounds::BUILD
-        };
-        let v = enumerate(&s, &by_work);
-        assert_eq!(v.truncated, BTreeSet::from([BoundKind::Work]));
-        assert!(v.paths.len() < 12, "{}", v.paths.len());
+        assert_eq!(v.paths.len(), MAX_WALK_PATHS);
+        // Breadth-first: every path is at the shallowest level, in byte order.
+        assert!(v.paths.iter().all(|p| p.path.len() == 1));
+        assert_eq!(v.paths[0].path, path(&["f00000"]));
     }
 
     #[test]
@@ -2393,49 +1320,44 @@ mod tests {
         );
     }
 
-    // ── Every size an author controls is charged ─────────────────────────────────────────────
-
-    /// The least visit budget under which `enumerate` finishes without a `work` cut, under a depth
-    /// bound. A run spends the same visits whatever its budget, and finishes exactly when they fit,
-    /// so this is what the walk charged — a deterministic measure, not a timing.
-    fn least_visits(schema: &Value, max_depth: usize) -> usize {
-        let finishes = |max_visits| {
-            let bounds = WalkBounds {
-                max_depth,
-                max_visits,
-                ..WalkBounds::BUILD
-            };
-            !enumerate(schema, &bounds)
-                .truncated
-                .contains(&BoundKind::Work)
-        };
-        assert!(finishes(MAX_WALK_VISITS), "fits the build's budget");
-        let (mut lo, mut hi) = (0, MAX_WALK_VISITS);
-        while lo < hi {
-            let mid = (lo + hi) / 2;
-            if finishes(mid) {
-                hi = mid;
-            } else {
-                lo = mid + 1;
-            }
+    /// Every path a vocabulary advertises resolves to the facts it advertises, so a caller who
+    /// asks what the vocabulary listed is never told something else. Bites any drift between the
+    /// enumeration's descent and `reach`'s.
+    #[test]
+    fn every_advertised_path_resolves_to_what_it_advertises() {
+        let s = json!({ "properties": {
+            "a": { "type": "object", "properties": {
+                "b": { "enum": [1, 2] },
+                "c": { "type": "array", "items": { "const": "x" } },
+                "d": true,
+                "e": false
+            } },
+            "f": { "type": ["string", "null"] }
+        } });
+        let v = enumerate(&s, &WalkBounds::BUILD);
+        assert_eq!(v.paths.len(), 5, "{v:?}");
+        for advertised in v.paths {
+            assert_eq!(
+                resolve(&s, &advertised.path, &WalkBounds::BUILD),
+                PathResolution::Declared(advertised.facts),
+                "{:?}",
+                advertised.path
+            );
         }
-        lo
     }
 
-    /// Two keys of 131,000 bytes, each referencing the
-    /// root, fit the byte bound and declare a two-way fan-out every path of which carries them.
-    /// Bites the key skip in `child_keys`: without it the vocabulary advertises paths built of
-    /// those keys — about 1 GB of path text at the path bound with no byte charge, a `work` cut
-    /// after about a dozen paths of 131 KB or more with it — where with the skip there is only
-    /// `ok`.
+    /// A key too long to ask, beside one that is not, is never advertised and nothing below it is
+    /// walked. Bites the key skip in `child_properties`: without it the vocabulary advertises the
+    /// long key and the path below it.
     #[test]
     fn a_key_too_long_to_ask_is_never_advertised_nor_walked_below() {
         let mut props = Map::new();
-        props.insert("a".repeat(131_000), json!({ "$ref": "#" }));
-        props.insert("b".repeat(131_000), json!({ "$ref": "#" }));
+        props.insert(
+            "a".repeat(MAX_ARTIFACT_PATH_SEGMENT_BYTES + 1),
+            json!({ "properties": { "x": {} } }),
+        );
         props.insert("ok".to_string(), json!({ "type": "string" }));
         let s = json!({ "properties": props });
-        assert!(json_bytes(&s) <= MAX_SCHEMA_BYTES, "{}", json_bytes(&s));
         assert_eq!(
             enumerate(&s, &WalkBounds::BUILD),
             Vocabulary {
@@ -2449,131 +1371,6 @@ mod tests {
                 truncated: BTreeSet::new(),
             }
         );
-    }
-
-    fn two_way_fan_out(a: &str, b: &str) -> Value {
-        json!({ "properties": { a: { "$ref": "#" }, b: { "$ref": "#" } } })
-    }
-
-    /// The byte charge: keys of `MAX_ARTIFACT_PATH_SEGMENT_BYTES` (256) are askable, so
-    /// the skip keeps them and only the charge sees their length. Under a depth bound of 3 the
-    /// fan-out builds 2 paths of one segment, 4 of two and 8 of three; each 256-byte segment costs
-    /// 256 / 64 = 4 visits more than a one-byte one, so the long fan-out costs
-    /// 2·4 + 4·8 + 8·12 = 136 visits more. Bites the per-path charge in `enumerate_into`: without
-    /// it the two cost the same.
-    #[test]
-    fn every_path_built_is_charged_its_bytes() {
-        let short = two_way_fan_out("a", "b");
-        let long = two_way_fan_out(
-            &"a".repeat(MAX_ARTIFACT_PATH_SEGMENT_BYTES),
-            &"b".repeat(MAX_ARTIFACT_PATH_SEGMENT_BYTES),
-        );
-        assert_eq!(least_visits(&long, 3) - least_visits(&short, 3), 136);
-        let three = WalkBounds {
-            max_depth: 3,
-            ..WalkBounds::BUILD
-        };
-        let v = enumerate(&long, &three);
-        assert_eq!(v.paths.len(), 14);
-        assert_eq!(v.truncated, BTreeSet::from([BoundKind::Depth]));
-    }
-
-    /// The key charge: each key a frame declares costs one visit as it is read, even
-    /// one too long to ask, which is never walked. One hundred such keys beside `ok` cost exactly
-    /// one hundred visits more. Bites the charge in `child_keys`: without it they cost nothing.
-    #[test]
-    fn every_key_a_frame_declares_is_charged_even_one_too_long_to_ask() {
-        let ok = json!({ "properties": { "ok": {} } });
-        let mut props = Map::new();
-        props.insert("ok".to_string(), json!({}));
-        for i in 0..100 {
-            props.insert(
-                format!("{i:03}{}", "k".repeat(MAX_ARTIFACT_PATH_SEGMENT_BYTES)),
-                json!({}),
-            );
-        }
-        let crowded = json!({ "properties": props });
-        assert_eq!(
-            enumerate(&crowded, &WalkBounds::BUILD),
-            enumerate(&ok, &WalkBounds::BUILD),
-            "the long keys are not advertised"
-        );
-        assert_eq!(
-            least_visits(&crowded, MAX_WALK_DEPTH) - least_visits(&ok, MAX_WALK_DEPTH),
-            100
-        );
-    }
-
-    /// The depth cut: a frame at the depth bound is read for whether it declares any
-    /// property, never for its keys, so a thousand keys under the cut cost what one does. Bites the
-    /// order in `enumerate_into`: collecting (and charging) keys before checking the depth would
-    /// cost 999 visits more here.
-    #[test]
-    fn a_depth_cut_costs_nothing_per_key_below_it() {
-        let under = |n: usize| {
-            let keys: Map<String, Value> = (0..n).map(|i| (format!("k{i}"), json!({}))).collect();
-            json!({ "properties": { "a": { "properties": keys } } })
-        };
-        let (one, many) = (under(1), under(1_000));
-        assert_eq!(least_visits(&many, 1), least_visits(&one, 1));
-        let v = enumerate(
-            &many,
-            &WalkBounds {
-                max_depth: 1,
-                ..WalkBounds::BUILD
-            },
-        );
-        assert_eq!(v.paths.len(), 1);
-        assert_eq!(v.truncated, BTreeSet::from([BoundKind::Depth]));
-    }
-
-    /// A frame expansion charges every node it takes off its stack, so an `allOf` of
-    /// `true`s — not schema objects, never expanded — still costs its length. One thousand of them
-    /// cost 2,000 visits more: 1,000 in the root's frame and 1,000 as the root's children when `x`
-    /// is resolved. Bites the per-pop charge in `frame`: charging only the objects it expands, the
-    /// frame's thousand pops are free and the difference is 1,000.
-    #[test]
-    fn a_frame_charges_every_branch_it_takes_even_one_it_skips() {
-        let with = |n: usize| {
-            let trues: Vec<Value> = (0..n).map(|_| json!(true)).collect();
-            json!({ "properties": { "x": {} }, "allOf": trues })
-        };
-        assert_eq!(
-            least_visits(&with(1_000), MAX_WALK_DEPTH) - least_visits(&with(0), MAX_WALK_DEPTH),
-            2_000
-        );
-    }
-
-    /// A `type` list costs its length each time it is read, like an `enum`. One
-    /// thousand names cost 999 visits more than one. Bites the charge in `local_facts`: without it
-    /// the list is read free at every visit.
-    #[test]
-    fn a_list_of_type_names_is_charged_its_length() {
-        let with = |n: usize| {
-            let names: Vec<Value> = (0..n).map(|_| json!("string")).collect();
-            json!({ "properties": { "x": { "type": names } } })
-        };
-        assert_eq!(
-            least_visits(&with(1_000), MAX_WALK_DEPTH) - least_visits(&with(1), MAX_WALK_DEPTH),
-            999
-        );
-    }
-
-    /// A `$ref` is decoded and resolved once, when the walk is built, and a visit reads
-    /// that resolution — never the reference's text. Bites resolving per visit: a lookup that read
-    /// the text would resolve the stranger below, which the walk was never built over.
-    #[test]
-    fn a_ref_is_resolved_when_the_walk_is_built_not_when_it_is_visited() {
-        let s = json!({
-            "$defs": { "x": { "type": "string" } },
-            "properties": { "a": { "$ref": "#/$defs/x" } }
-        });
-        let walk = Walk::new(&s, &WalkBounds::BUILD).expect("under the byte bound");
-        assert!(walk
-            .target(&s["properties"]["a"])
-            .is_some_and(|target| std::ptr::eq(target, &s["$defs"]["x"])));
-        let stranger = json!({ "$ref": "#/$defs/x" });
-        assert_eq!(walk.target(&stranger), None);
     }
 
     /// The schema is measured only until it passes the bound. Serializing an array of
@@ -2591,112 +1388,42 @@ mod tests {
         assert_eq!(json_bytes_up_to(&s, whole), whole, "exact within the limit");
     }
 
-    // ── Copies cost what they allocate, and a shared set is read once ────────────────────────
-
-    /// A member is charged for the values nested in it, not only for its text. A
-    /// member 31 arrays deep has 62 canonical bytes, as a 60-letter string does, but holds 30
-    /// nested values, each cloned as its own `Value` in its own allocation; charged at `NODE_BYTES`
-    /// each it weighs 1 + (62 + 30 · 64) / 64 = 31 visits against the string's 1. Enumerating its
-    /// one path reads the member once and copies it once: 2 · 30 = 60 visits more. Bites the node
-    /// charge in `Budget::member`: without it the two cost the same.
-    #[test]
-    fn a_member_is_charged_for_its_nested_values_not_only_its_bytes() {
-        let mut deep = json!([]);
-        for _ in 0..30 {
-            deep = json!([deep]);
-        }
-        let text = json!("x".repeat(60));
-        assert_eq!(canonical(&deep).len(), 62);
-        assert_eq!(canonical(&text).len(), 62);
-        let at_x = |member: &Value| json!({ "properties": { "x": { "enum": [member] } } });
-        assert_eq!(
-            least_visits(&at_x(&deep), MAX_WALK_DEPTH) - least_visits(&at_x(&text), MAX_WALK_DEPTH),
-            60
-        );
-    }
-
-    /// The least visit budget under which `resolve_all` declares every path — what it charged.
-    fn least_visits_to_resolve(schema: &Value, paths: &[&[String]]) -> usize {
-        let resolves = |max_visits| {
-            let bounds = WalkBounds {
-                max_visits,
-                ..WalkBounds::BUILD
-            };
-            let walk = Walk::new(schema, &bounds).expect("under the byte bound");
-            walk.resolve_all(paths)
-                .iter()
-                .all(|r| matches!(r, Resolved::Declared(_)))
-        };
-        assert!(resolves(MAX_WALK_VISITS), "fits the build's budget");
-        let (mut lo, mut hi) = (0, MAX_WALK_VISITS);
-        while lo < hi {
-            let mid = (lo + hi) / 2;
-            if resolves(mid) {
-                hi = mid;
-            } else {
-                lo = mid + 1;
-            }
-        }
-        lo
-    }
-
-    /// Eight paths over one shared 5,000-member enum cost what one does, plus a
-    /// few visits a path. One path reads the enum — 5,000 members and the 5,000-member set — so it
-    /// costs at least 10,000; seven more paths cost under 100 more, where reading the set again or
-    /// copying it for each would cost 5,000 or more a path. Bites the per-budget set memo in
-    /// `Budget::members`, and an ask's `resolve_all` copying its values onto the wire.
-    #[test]
-    fn paths_sharing_one_enum_read_it_once_under_one_budget() {
-        let members: Vec<Value> = (0..5_000).map(|i| json!(i)).collect();
-        let props: Map<String, Value> = (0..8)
-            .map(|i| (format!("p{i}"), json!({ "$ref": "#/$defs/e" })))
-            .collect();
-        let s = json!({ "$defs": { "e": { "enum": members } }, "properties": props });
-        let owned: Vec<Vec<String>> = (0..8).map(|i| path(&[format!("p{i}").as_str()])).collect();
-        let paths: Vec<&[String]> = owned.iter().map(Vec::as_slice).collect();
-        let one = least_visits_to_resolve(&s, &paths[..1]);
-        let eight = least_visits_to_resolve(&s, &paths);
-        assert!(one >= 10_000, "{one}");
-        assert!(eight - one < 100, "{one} for one path, {eight} for eight");
-    }
-
     /// The borrowed view writes exactly the bytes of the copy it stands for —
     /// every field present only when set, at every items level, over enum members, a `const`, an
     /// enum and a `const` together, and `items: false` — so measuring the view measures the copy.
     /// Bites any drift between `Facts`'s `Serialize` and `PathFacts`'s derived one.
     #[test]
     fn the_borrowed_view_writes_the_wire_bytes() {
+        let codes = json!({ "enum": ["ms", 7, null, { "k": [1, 2.5] }, ["x"]] });
         let s = json!({
-            "$defs": { "codes": { "enum": ["ms", 7, null, { "k": [1, 2.5] }, ["x"]] } },
             "properties": {
                 "plain": {},
                 "typed": { "type": ["integer", "null"] },
-                "coded": { "$ref": "#/$defs/codes" },
+                "coded": codes,
                 "constant": { "type": "string", "const": "x" },
                 "both": { "enum": ["x", "y"], "const": "x" },
                 "grid": { "type": "array", "items": {
-                    "type": "array", "items": { "$ref": "#/$defs/codes" }
+                    "type": "array", "items": codes
                 } },
                 "never": { "type": "array", "items": false }
             }
         });
-        let walk = Walk::new(&s, &WalkBounds::BUILD).expect("under the byte bound");
+        let walk = Walk::new(&s, &WalkBounds::BUILD).expect("a field tree under the byte bound");
         let names = [
             "plain", "typed", "coded", "constant", "both", "grid", "never",
         ];
-        let owned: Vec<Vec<String>> = names.iter().map(|name| path(&[*name])).collect();
-        let paths: Vec<&[String]> = owned.iter().map(Vec::as_slice).collect();
-        for (asked, resolved) in paths.iter().zip(walk.resolve_all(&paths)) {
-            let Resolved::Declared(facts) = resolved else {
-                panic!("{asked:?} is declared");
+        for name in names {
+            let asked = path(&[name]);
+            let Resolved::Declared(facts) = walk.reach(&asked) else {
+                panic!("{name} is declared");
             };
-            let view = AskableView::new(asked, &facts);
-            let wire = AskablePath::new(asked.to_vec(), facts.to_wire());
+            let view = AskableView::new(&asked, &facts);
+            let wire = AskablePath::new(asked.clone(), facts.to_wire());
             let viewed = serde_json::to_vec(&view).expect("the view serializes");
             assert_eq!(
                 viewed,
                 serde_json::to_vec(&wire).expect("the wire serializes"),
-                "{asked:?}"
+                "{name}"
             );
             assert_eq!(json_bytes_up_to(&view, usize::MAX), viewed.len());
             assert_eq!(view.into_askable(), wire);

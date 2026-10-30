@@ -21,7 +21,9 @@
 //! 3. **Compiles?** First measured: a schema larger than the walk reads
 //!    ([`within_schema_bound`]) is `SchemaTooLarge` and is never compiled. Within the bound,
 //!    through the no-fetch constructor ([`shape_schema::compile`]); a schema it refuses is
-//!    `Uncompilable`, and the compiler's text goes nowhere.
+//!    `Uncompilable`, and the compiler's text goes nowhere. So is a schema that compiles but holds
+//!    a construct the ask walk does not read ([`reads_whole`]) — none does while the compile and
+//!    the walk agree, so it is logged as the server mismatch it is.
 //!
 //! **One decision for every door that decides whether a schema can be asked** ([`judge`]): the
 //! loader, the by-id read's `askable`, and declare (`shape_service::declare_shape`) measure
@@ -60,9 +62,9 @@ use tokio::sync::Semaphore;
 use crate::error::{ApiError, ApiResult};
 use temper_core::error::TemperError;
 use temper_core::types::artifact_ask::{
-    enumerate, within_schema_bound, AskOperator, AskSession, AskablePath, BoundKind, JsonType,
-    LoadedShape, PathFacts, PathTeaching, RefusalTeaching, ShapeContext, ShapeLoad, ShapeSuccessor,
-    Vocabulary, WalkBounds, NODE_BYTES,
+    enumerate, reads_whole, within_schema_bound, AskOperator, AskSession, AskablePath, BoundKind,
+    JsonType, LoadedShape, PathFacts, PathTeaching, RefusalTeaching, ShapeContext, ShapeLoad,
+    ShapeSuccessor, Vocabulary, WalkBounds,
 };
 use temper_core::types::ids::{ProfileId, ShapeId};
 use temper_core::types::query::filter::{property_value_bytes, property_value_nodes};
@@ -244,7 +246,8 @@ impl SchemaVerdict {
 /// Step 3's decision, the one every door that decides whether a schema can be asked shares:
 /// measure the schema against the walk's byte bound ([`within_schema_bound`], which reads no
 /// further than the bound), and only within it compile through the no-fetch constructor — on the
-/// blocking pool, under a compile permit. The schema is copied for the blocking task only once it
+/// blocking pool, under a compile permit — and check that the ask walk reads it whole
+/// ([`reads_whole`]). The schema is copied for the blocking task only once it
 /// is known to be within the bound and a permit is held, so the copy is at most 256 KiB and no
 /// request waiting for a permit holds one.
 ///
@@ -255,10 +258,15 @@ pub async fn judge(schema: &Value) -> ApiResult<SchemaVerdict> {
         return Ok(SchemaVerdict::TooLarge);
     }
     with_schema_off_the_executor(schema, |schema| {
-        if shape_schema::compile(schema).is_ok() {
-            SchemaVerdict::Compiles
-        } else {
+        if shape_schema::compile(schema).is_err() {
             SchemaVerdict::Uncompilable
+        } else if !reads_whole(schema) {
+            tracing::error!(
+                "a schema compiled that the ask walk does not read whole; judged uncompilable"
+            );
+            SchemaVerdict::Uncompilable
+        } else {
+            SchemaVerdict::Compiles
         }
     })
     .await
@@ -302,13 +310,13 @@ fn remember(id: ShapeId, verdict: SchemaVerdict) {
 }
 
 /// The most bytes of vocabulary the process remembers, each entry weighed as an estimate of the
-/// memory it holds, in the walk's own model (`vocabulary_weight`).
+/// memory it holds (`vocabulary_weight`).
 ///
 /// # 32 MiB
 ///
-/// A count cap would not bound this: the walk bounds what one vocabulary copies by its visits
-/// (`MAX_WALK_VISITS`), not by a size, so in this weight one ranges from a few KiB for an ordinary
-/// shape to several MiB, and past the cap for values built of many small objects. Weighed
+/// A count cap would not bound this: what one vocabulary copies is bounded by its schema's size
+/// (`MAX_SCHEMA_BYTES`), not by a count, so in this weight one ranges from a few KiB for an
+/// ordinary shape to several MiB, and past the cap for values built of many small objects. Weighed
 /// instead, 32 MiB holds thousands of ordinary ones, or one of the heaviest that fit. Past the
 /// cap an arbitrary entry is forgotten, and that shape is enumerated again when it is next read; a
 /// vocabulary heavier than the whole cap is never remembered, and is enumerated on each read.
@@ -318,8 +326,7 @@ fn remember(id: ShapeId, verdict: SchemaVerdict) {
 /// An entry is weighed by what it holds, not by what it serializes to: its place in the map
 /// (`ENTRY_BYTES`); each path its own size, its segments' `String`s and their bytes, and its
 /// operators; each declared value at least `NODE_BYTES` and never less than a `Value`, plus its
-/// text; each node nested in a value at `NODE_BYTES`, the charge the walk makes for a copied
-/// member; and each object in a value the map nodes its members sit in (`MAP_NODE_BYTES`). A
+/// text; each node nested in a value at `NODE_BYTES`; and each object in a value the map nodes its members sit in (`MAP_NODE_BYTES`). A
 /// short code that serializes to two bytes is charged as the `Value` it occupies, and a container
 /// as the allocations it holds, so what the map holds in memory is its weight within a small
 /// factor — allocator rounding, the table's spare slots — and 32 MiB of weight is about that much
@@ -334,6 +341,16 @@ const fn entry_bytes<V>() -> usize {
 
 /// What one vocabulary entry holds beside its vocabulary (`entry_bytes`).
 const ENTRY_BYTES: usize = entry_bytes::<Arc<Vocabulary>>();
+
+/// What one `Value` nested in a declared value is weighed at, beside its text: the `Value` itself
+/// (32 bytes) in a container's slot, and its share of the allocation that holds it.
+///
+/// # 64
+///
+/// An estimate, and low for an object: a copied non-empty map allocates about 630 bytes, which
+/// [`MAP_NODE_BYTES`] adds for each one. The const/enum bound at declare decides whether a value
+/// can nest deeply enough for the difference to matter (task `01a187e3-f00b-706f-b217-c49022239529`).
+const NODE_BYTES: usize = 64;
 
 /// One leaf node of a JSON object's map: eleven key and value slots and the node's own header. A
 /// non-empty object copied into a vocabulary holds at least one, however few members it has, and
@@ -454,7 +471,7 @@ fn facts_weight(facts: &PathFacts) -> usize {
         + facts.items.as_deref().map_or(0, facts_weight)
 }
 
-/// One declared value, as the walk charges a copied member: at least `NODE_BYTES`, and never less
+/// One declared value, as a vocabulary copies it: at least `NODE_BYTES`, and never less
 /// than the `Value` it occupies; each node nested in it at `NODE_BYTES`; the map nodes of each
 /// object in it; and its compact text, counted through a sink so that weighing a large value
 /// allocates nothing.

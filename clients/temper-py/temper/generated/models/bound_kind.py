@@ -20,7 +20,7 @@ from typing_extensions import Self
 
 class BoundKind(str, Enum):
     """
-    Which walk bound was met. A truncated vocabulary and a refusal both name it.
+    Which bound reading a shape met. A truncated vocabulary and a refusal both name it.
     """
 
     """

@@ -1,5 +1,5 @@
 //! One request's asks, validated against one [`ShapeContext`] — the walk of each shape built once,
-//! and one work budget for every ask (spec §2.4, §3.3).
+//! and one membership budget for every ask (spec §2.4, §3.3).
 //!
 //! A request can carry many asks: a composition's stages each carry an artifact filter, and its
 //! gate and its seal both validate them (a batch read carries one). Validated one at a time, each ask
@@ -16,7 +16,7 @@ use super::validate::{
     exceeds_form_caps, not_askable, refuse_unserved, validate_ask_form, validate_loaded,
     ValidatedAsk,
 };
-use super::walk::{Budget, ShapeWalk, MAX_WALK_VISITS};
+use super::walk::ShapeWalk;
 use super::{ArtifactAsk, LoadedShape, PathTeaching, ShapeContext, MAX_MEMBERSHIP_STEPS};
 use crate::types::ids::ShapeId;
 use crate::types::query::PlanRefusal;
@@ -30,12 +30,11 @@ use crate::types::query::PlanRefusal;
 /// over the same context builds every walk again and starts a fresh budget, which is exactly the
 /// multiplication a session exists to prevent.
 ///
-/// **What it keeps, per shape:** the walk — the schema measured, its draft selected and its
-/// `$ref`s resolved — built on the first ask that needs it; every path any ask has resolved; and
-/// the shape's [`PathTeaching`], what every path refusal on it teaches beside its own bound. Paths
-/// hold the walk's facts borrowed from the schema, so what a session keeps of them is bounded by
-/// the walk's charges, not by the values the schema declares; the teaching holds only the paths it
-/// sends, at most `MAX_TEACHING_BYTES` of them. A shape row is immutable per id (an amendment
+/// **What it keeps, per shape:** the walk — the schema measured and read whole — built on the
+/// first ask that needs it; every path any ask has resolved; and the shape's [`PathTeaching`], what
+/// every path refusal on it teaches beside its own bound. Paths hold the walk's facts borrowed from
+/// the schema, so a session copies none of the values the schema declares; the teaching holds only
+/// the paths it sends, at most `MAX_TEACHING_BYTES` of them. A shape row is immutable per id (an amendment
 /// mints a new id, §2.2), so none of it can go stale within a request — nor, for the teaching,
 /// across requests.
 ///
@@ -49,17 +48,15 @@ use crate::types::query::PlanRefusal;
 /// answer back, byte for byte, and spends nothing. So a composition's seal, re-validating the asks
 /// its gate admitted, cannot refuse them for work the gate already paid — whatever the gate spent.
 ///
-/// **What it spends, in all:** one shared budget for path resolution and membership —
-/// [`MAX_WALK_VISITS`] subschema visits and [`MAX_MEMBERSHIP_STEPS`] membership steps, drawn on by
-/// every ask — **plus one enumeration budget of [`MAX_WALK_VISITS`] per distinct shape** whose
-/// vocabulary a refusal teaches and whose teaching the context did not hold, spent once for that
-/// shape; a shape whose teaching the context held spends none. Past the shared budget a predicate
-/// is refused `path_outside_shape` with `teaches.beyond_bound: work`, never admitted unchecked. A
-/// path already resolved costs nothing to name again. The vocabulary has a budget of its own so a
-/// request that has spent its shared budget still teaches what may be asked; that makes the
-/// request's total grow with the number of distinct shapes it names whose teaching is not yet
-/// remembered, which the caller bounds — a composition by `MAX_ASKED_SHAPES`, decided before any
-/// shape is loaded.
+/// **What it spends, in all:** one shared budget of [`MAX_MEMBERSHIP_STEPS`] membership steps,
+/// drawn on by every ask's `contains` values; past it a predicate is refused `path_outside_shape`
+/// with `teaches.beyond_bound: work`, never admitted unchecked. The walk itself needs no budget: a
+/// field tree is read node by node, so resolving a path reads the schema along it, and a path
+/// already resolved costs nothing to name again. **Plus one enumeration per distinct shape** whose
+/// vocabulary a refusal teaches and whose teaching the context did not hold, linear in that
+/// shape's schema; a shape whose teaching the context held enumerates nothing. So the request's
+/// walk work grows with the number of distinct shapes it names, which the caller bounds — a
+/// composition by `MAX_ASKED_SHAPES`, decided before any shape is loaded.
 ///
 /// **Why it borrows the context rather than living in it.** A walk borrows the schema it reads, so
 /// a cache of walks inside the struct that owns the schemas would be self-referential. The context
@@ -69,7 +66,7 @@ use crate::types::query::PlanRefusal;
 pub struct AskSession<'c> {
     context: &'c ShapeContext,
     shapes: BTreeMap<ShapeId, ShapeWalk<'c>>,
-    budget: RequestBudget<'c>,
+    budget: RequestBudget,
     /// Each ask validated, keyed by its JSON text, with its answer. serde_json writes an
     /// `ArtifactAsk` losslessly, so equal text is an equal ask; two equal asks written differently
     /// (object keys in another order) only miss, and are answered afresh.
@@ -78,18 +75,15 @@ pub struct AskSession<'c> {
     answered_again: usize,
 }
 
-/// What one request may still spend reading shapes: the walk's visits, with the members and value
-/// sets already read, and the membership steps.
+/// What one request may still spend reading shapes: the membership steps.
 #[derive(Debug)]
-pub(super) struct RequestBudget<'c> {
-    pub(super) walk: Budget<'c>,
+pub(super) struct RequestBudget {
     pub(super) membership_steps: usize,
 }
 
-impl RequestBudget<'_> {
+impl RequestBudget {
     fn new() -> Self {
         RequestBudget {
-            walk: Budget::new(MAX_WALK_VISITS),
             membership_steps: MAX_MEMBERSHIP_STEPS,
         }
     }
@@ -208,12 +202,6 @@ impl<'c> AskSession<'c> {
             .filter_map(ShapeWalk::made_path_teaching)
     }
 
-    /// The visits the request has left — what a test reads to see what its asks cost.
-    #[cfg(test)]
-    pub(crate) fn visits_left(&self) -> usize {
-        self.budget.walk.left()
-    }
-
     /// The membership steps the request has left.
     #[cfg(test)]
     fn steps_left(&self) -> usize {
@@ -241,7 +229,7 @@ impl ShapeContext {
 mod tests {
     use super::*;
     use crate::types::artifact_ask::walk::{
-        BoundKind, MAX_WALK_DEPTH, VOCABULARIES_ENUMERATED, WALKS_BUILT,
+        paths_reached, BoundKind, MAX_WALK_DEPTH, VOCABULARIES_ENUMERATED, WALKS_BUILT,
     };
     use crate::types::artifact_ask::{
         ArtifactPredicate, LoadedShape, ShapeLoad, ShapeSuccessor, ARTIFACT_INTENTS,
@@ -387,19 +375,16 @@ mod tests {
         assert_eq!(forward.bind(), backward.bind());
     }
 
-    /// A shape each of whose `MAX_ASK_PREDICATES` properties references one `allOf` of 2,500
-    /// branches: resolving one property costs about 2,503 visits, so a request's budget affords
-    /// about 26 of them.
-    fn heavy() -> LoadedShape {
-        let branches: Vec<Value> = (0..2_500).map(|_| json!({})).collect();
+    /// A shape of `MAX_ASK_PREDICATES` string properties, `p0` onwards.
+    fn wide() -> LoadedShape {
         let props: serde_json::Map<String, Value> = (0..MAX_ASK_PREDICATES)
-            .map(|i| (format!("p{i}"), json!({ "$ref": "#/$defs/w" })))
+            .map(|i| (format!("p{i}"), json!({ "type": "string" })))
             .collect();
-        shape_of(json!({ "$defs": { "w": { "allOf": branches } }, "properties": props }))
+        shape_of(json!({ "properties": props }))
     }
 
-    /// An ask naming the heavy shape's paths `p{from}` .. `p{from + count - 1}`.
-    fn heavy_paths(from: usize, count: usize) -> ArtifactAsk {
+    /// An ask naming the wide shape's paths `p{from}` .. `p{from + count - 1}`.
+    fn wide_paths(from: usize, count: usize) -> ArtifactAsk {
         let names: Vec<String> = (from..from + count).map(|i| format!("p{i}")).collect();
         let names: Vec<&str> = names.iter().map(String::as_str).collect();
         ask_of(&names, PropertyOp::HasKey)
@@ -443,21 +428,20 @@ mod tests {
 
     // ── One walk per shape per request ──────────────────────────────────────────────────────
 
-    /// Many asks against one heavy shape, through one session, cost about one walk: the first ask
+    /// Many asks against one shape, through one session, cost about one walk: the first ask
     /// builds the walk, resolves its paths and enumerates the vocabulary its refusal teaches; the
     /// 62 after it — each a different ask, so none is answered from the session's memo of asks —
-    /// build nothing, enumerate nothing and spend no visits, because every path they name was
+    /// build nothing, enumerate nothing and reach no path again, because every path they name was
     /// resolved by the first. Bites the session's caches: build the shape's walk per ask (a fresh
     /// `ShapeWalk` in `AskSession::answer`) and the walk is built once per ask, the
-    /// vocabulary enumerated once per refused ask, and every ask re-spends its paths' visits until
-    /// the budget refuses them.
+    /// vocabulary enumerated once per refused ask, and every ask reaches its paths again.
     #[test]
-    fn many_asks_against_one_heavy_shape_cost_about_one_walk() {
+    fn many_asks_against_one_shape_cost_about_one_walk() {
         const ASKS: usize = 62;
-        let context = context_of(heavy());
-        let admitted = heavy_paths(0, 2);
+        let context = context_of(wide());
+        let admitted = wide_paths(0, 2);
         let refused = {
-            let mut a = heavy_paths(0, 2);
+            let mut a = wide_paths(0, 2);
             a.predicates.push(ArtifactPredicate {
                 path: vec!["undeclared".to_string()],
                 op: PropertyOp::HasKey,
@@ -475,7 +459,7 @@ mod tests {
             (1, 1),
             "the first ask builds and enumerates"
         );
-        let after_first = session.visits_left();
+        let after_first = paths_reached();
 
         let (built, (enumerated, outcomes)) = counted(&WALKS_BUILT, || {
             counted(&VOCABULARIES_ENUMERATED, || {
@@ -497,7 +481,7 @@ mod tests {
             "the vocabulary was enumerated by the first ask"
         );
         assert_eq!(
-            session.visits_left(),
+            paths_reached(),
             after_first,
             "every path the later asks name was resolved by the first"
         );
@@ -540,35 +524,6 @@ mod tests {
     }
 
     // ── One budget per request ──────────────────────────────────────────────────────────────
-
-    /// Asks that each fit the budget alone are refused `beyond_bound: work` once together they
-    /// exceed it — the request is bounded, not each ask. Four asks of eight distinct heavy paths
-    /// each: one ask is about 20,000 visits; three are about 60,000 and fit; the fourth passes
-    /// 65,536 part-way and is refused. Bites a per-ask budget (`RequestBudget::new()` per call in
-    /// `AskSession::answer`): every ask then fits and the fourth validates.
-    #[test]
-    fn asks_that_fit_alone_but_not_together_are_refused_for_work() {
-        let context = context_of(heavy());
-        let asks: Vec<ArtifactAsk> = (0..4).map(|k| heavy_paths(8 * k, 8)).collect();
-        for (k, a) in asks.iter().enumerate() {
-            assert!(
-                context.session().validate(a).is_ok(),
-                "ask {k} fits a request of its own"
-            );
-        }
-        let mut session = context.session();
-        for (k, a) in asks.iter().take(3).enumerate() {
-            assert!(
-                session.validate(a).is_ok(),
-                "ask {k} fits beside the earlier ones"
-            );
-        }
-        let rs = session
-            .validate(&asks[3])
-            .expect_err("the fourth passes the request's budget");
-        assert_eq!(reasons(&rs), vec![RefusalReason::PathOutsideShape]);
-        assert_eq!(beyond(&rs), Some(BoundKind::Work));
-    }
 
     /// The membership steps are the request's too. Four distinct asks, each checking a window of
     /// 64 late members of a 5,000-member enum: each fits alone, three fit together (941,664 of
@@ -623,7 +578,7 @@ mod tests {
             "both windows fit once"
         );
         assert!(first[2].is_err(), "the undeclared path is refused");
-        let (visits, steps) = (session.visits_left(), session.steps_left());
+        let (reached, steps) = (paths_reached(), session.steps_left());
 
         let second: Vec<_> = asks.iter().map(|a| session.validate(a)).collect();
         assert!(second == first, "the second pass answers as the first did");
@@ -635,8 +590,8 @@ mod tests {
         };
         assert_eq!(wire(&second), wire(&first));
         assert_eq!(
-            (session.visits_left(), session.steps_left()),
-            (visits, steps),
+            (paths_reached(), session.steps_left()),
+            (reached, steps),
             "the second pass spends nothing"
         );
     }

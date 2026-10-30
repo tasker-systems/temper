@@ -19,7 +19,7 @@ module Temper::Generated
     # What an element of an array at this path declares. `None`: elements are unconstrained. Reported at most as many arrays deep as the walk's depth bound.
     attr_accessor :items
 
-    # The declared JSON types. `None`: no `type` constrains the path. An empty set: the branches that apply here declare types with nothing in common, so no value is admissible.
+    # The declared JSON types. `None`: no `type` constrains the path. An empty set: no value is admissible — a `type` naming no JSON type, or the element of an `items: false` array.
     attr_accessor :types
 
     # The `enum` / `const` values. `None`: no value set constrains the path.

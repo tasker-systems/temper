@@ -1,0 +1,27 @@
+title    = "The ask walk reads only field trees, and its work budget is gone"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp", "cli-stdout", "clients"]
+status   = "signal-only"
+body = '''
+Hardening. The schema walk behind an ask and a shape's vocabulary (`GET /api/shapes/{id}`'s
+`askable`, the MCP `get_data_artifact_shape` tool, `temper data-artifact schema show`) now reads
+only what a field tree may hold. A schema holding any other construct is judged uncompilable by the
+shape loader — the existing `Uncompilable` refusal and the existing empty vocabulary — and a walk
+handed one anyway declares nothing, so every path is refused `path_outside_shape`; it is never read
+as unconstrained. No shape that compiles reaches either, since declare already refuses anything
+outside a field tree, so each is logged at error as a server mismatch. No wire value is added:
+`BoundKind` keeps its four members, and OpenAPI, ts-rs and the three generated SDKs change only in
+description text.
+
+The walk's 65,536-visit work budget is gone: with no `$ref` or combinator each schema node is read
+once, so the walk is linear in a schema held to 256 KiB (measured under 1 ms to enumerate at that
+size). `beyond_bound: work` now means only that the request's `contains` values spent its
+membership steps, and its sentence says so. The path refusal's rule now reads "only `properties`
+chains are walked", no longer naming `$ref` or the combinators. The declare refusal's fixed sentence
+now names the accepted `$schema` spelling. What any ask returns for a shape that exists today is
+unchanged; no migration.
+
+Who observes: agents and CLIs reading a refusal's sentence or a shape's documented vocabulary.
+Release relevance: signal-only.
+'''

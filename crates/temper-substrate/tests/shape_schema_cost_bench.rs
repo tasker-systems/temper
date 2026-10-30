@@ -14,6 +14,10 @@
 //! - `check_dfa_pattern_at_the_cap`: the same a/b string against `^(a|b)*a(a|b){DFA_REPEAT}$`.
 //! - `check_long_property_name_at_the_cap`: 4.5 MB of two-key objects under `items`, against a
 //!   `properties` key of `MAX_PROPERTY_NAME_BYTES`.
+//! - `many_tiny_subschemas_at_the_size_cap`: schemas of `MAX_SCHEMA_BYTES` built of as many small
+//!   subschemas as fit — empty fields, typed fields with `required` and `additionalProperties:
+//!   false`, and trees of 2, 4 and 16 children a node — each timed for `compile`, a check of
+//!   content holding every key, and the ask walk's `enumerate`, which no visit budget bounds.
 //!
 //! Run before merging a change to a cap (release, so the numbers are the deployed ones):
 //!
@@ -31,6 +35,7 @@ use std::time::Instant;
 
 use serde_json::{json, Value};
 use temper_core::types::artifact_ask::walk::MAX_SCHEMA_BYTES;
+use temper_core::types::artifact_ask::{enumerate, WalkBounds};
 use temper_substrate::shape_schema::{
     compile, first_failure, MAX_MIXED_ENUM_ENTRIES, MAX_PATTERN_SOURCE_BYTES,
     MAX_PROPERTY_NAME_BYTES, MAX_SHAPE_DEPTH, MAX_SHAPE_PATTERNS,
@@ -266,4 +271,101 @@ fn check_long_property_name_at_the_cap() {
     let verdict = first_failure(&validator, &content);
     report("check_long_property_name_at_the_cap", start);
     assert!(verdict.is_none(), "no object holds the long key");
+}
+
+/// An object schema of as many fields `f00000`, `f00001`, … as fit in `MAX_SCHEMA_BYTES`, each
+/// `field`; with `closed`, every field is also `required` and `additionalProperties` is `false`.
+fn wide_object(field: &Value, closed: bool) -> Value {
+    let entry = serde_json::to_vec(&json!({ "f00000": field }))
+        .expect("serializes")
+        .len()
+        - 1;
+    let per = entry + if closed { r#""f00000","#.len() } else { 0 };
+    let count = (MAX_SCHEMA_BYTES - 128) / per;
+    let names: Vec<String> = (0..count).map(|i| format!("f{i:05}")).collect();
+    let properties: serde_json::Map<String, Value> =
+        names.iter().map(|n| (n.clone(), field.clone())).collect();
+    let mut schema = json!({ "$schema": DRAFT, "type": "object", "properties": properties });
+    if closed {
+        schema["required"] = json!(names);
+        schema["additionalProperties"] = json!(false);
+    }
+    schema
+}
+
+/// A complete tree of `children` children a node, `depth` levels below the root, each leaf
+/// `{ "type": "integer" }`.
+fn tree(children: usize, depth: usize) -> Value {
+    if depth == 0 {
+        return json!({ "type": "integer" });
+    }
+    let properties: serde_json::Map<String, Value> = (0..children)
+        .map(|i| (format!("c{i}"), tree(children, depth - 1)))
+        .collect();
+    json!({ "type": "object", "properties": properties })
+}
+
+/// Content holding every key `schema` declares, at every level, with `0` at each leaf.
+fn every_key(schema: &Value) -> Value {
+    match schema.get("properties").and_then(Value::as_object) {
+        Some(properties) => Value::Object(
+            properties
+                .iter()
+                .map(|(key, child)| (key.clone(), every_key(child)))
+                .collect(),
+        ),
+        None => json!(0),
+    }
+}
+
+/// Time `compile`, a check of content holding every key, and `enumerate` of one schema.
+fn time_at_the_size_cap(name: &str, schema: &Value) {
+    assert_compact_size_within(schema, 1, MAX_SCHEMA_BYTES, name);
+    let start = Instant::now();
+    let validator = compile(schema).expect("a field tree at the size cap compiles");
+    report(&format!("{name} compile"), start);
+    let content = every_key(schema);
+    let start = Instant::now();
+    let verdict = first_failure(&validator, &content);
+    report(&format!("{name} check"), start);
+    assert!(
+        verdict.is_none(),
+        "{name}: content holding every key conforms"
+    );
+    let start = Instant::now();
+    let vocabulary = enumerate(schema, &WalkBounds::BUILD);
+    report(&format!("{name} enumerate"), start);
+    assert!(!vocabulary.paths.is_empty(), "{name}: the walk reads it");
+}
+
+/// Schemas of `MAX_SCHEMA_BYTES` built of the smallest subschemas a field tree allows. Measured in
+/// the 2026-10-29 retro before this file held it: compile 7–30 ms and check 0.2–2.3 ms on a local
+/// release build.
+#[test]
+#[ignore = "benchmark: run with --release --ignored --nocapture before merge"]
+fn many_tiny_subschemas_at_the_size_cap() {
+    time_at_the_size_cap("empty fields", &wide_object(&json!({}), false));
+    time_at_the_size_cap("true fields", &wide_object(&json!(true), false));
+    time_at_the_size_cap(
+        "typed fields",
+        &wide_object(&json!({ "type": "integer" }), false),
+    );
+    time_at_the_size_cap(
+        "typed fields, closed",
+        &wide_object(&json!({ "type": "integer" }), true),
+    );
+    for children in [2, 4, 16] {
+        let depth = (1..=MAX_SHAPE_DEPTH)
+            .take_while(|&depth| {
+                serde_json::to_vec(&tree(children, depth))
+                    .expect("serializes")
+                    .len()
+                    <= MAX_SCHEMA_BYTES - 128
+            })
+            .last()
+            .expect("one level fits");
+        let mut schema = tree(children, depth);
+        schema["$schema"] = json!(DRAFT);
+        time_at_the_size_cap(&format!("tree of {children} at depth {depth}"), &schema);
+    }
 }

@@ -4731,7 +4731,7 @@ mod tests {
 
     // ---- Artifact asks on the composable arm ------------------------------------------------
 
-    use crate::types::artifact_ask::walk::{VOCABULARIES_ENUMERATED, WALKS_BUILT};
+    use crate::types::artifact_ask::walk::{paths_reached, VOCABULARIES_ENUMERATED, WALKS_BUILT};
     use crate::types::artifact_ask::{
         ArtifactAsk, ArtifactPredicate, LoadedShape, ShapeHome, ShapeLoad, ShapeSuccessor,
         ARTIFACT_INTENTS, ASKABLE_SHAPE_STATES,
@@ -4985,11 +4985,11 @@ mod tests {
     // ── Validated through the session, sealed by stage and position ─────────────────────────
 
     /// A composition with no asks reads nothing from the session: it validates as it does against
-    /// an empty context, and no shape is walked however heavy the context holds.
+    /// an empty context, and no shape is walked however large a shape the context holds.
     #[test]
     fn a_composition_with_no_asks_validates_alike_whatever_the_context() {
         let c = plan_with_intention(vec![act("s", ActName::FindExact, None)], vec!["s"]);
-        let shapes = loaded(vec![heavy(1)]);
+        let shapes = loaded(vec![two_paths(1)]);
         let (built, with) = counted(&WALKS_BUILT, || {
             super::validate(&c, &mut shapes.session()).map(|v| ValidationOutcome::of(&v))
         });
@@ -5440,26 +5440,18 @@ mod tests {
 
     // ── The gate and the seal, through one session ───────────────────────────────────────────
 
-    /// A shape whose two properties each reference one `allOf` of 2,500 branches: resolving both
-    /// costs about 5,000 visits.
-    fn heavy(id: u128) -> LoadedShape {
-        let branches: Vec<Value> = (0..2_500).map(|_| json!({})).collect();
+    /// A shape of two properties, `p0` and `p1`.
+    fn two_paths(id: u128) -> LoadedShape {
         shape_at(
             id,
             &home(),
-            json!({
-                "$defs": { "w": { "allOf": branches } },
-                "properties": {
-                    "p0": { "$ref": "#/$defs/w" },
-                    "p1": { "$ref": "#/$defs/w" }
-                }
-            }),
+            json!({ "properties": { "p0": { "type": "string" }, "p1": { "type": "string" } } }),
         )
     }
 
-    /// The `n`th (`1 <= n < 64`) of a run of asks naming both of [`heavy`]'s paths, each with its
+    /// The `n`th (`1 <= n < 64`) of a run of asks naming both of [`two_paths`]'s paths, each with its
     /// own subset of the intents and shape states: different asks, walking the same paths.
-    fn heavy_ask(id: u128, n: usize) -> ArtifactAsk {
+    fn two_path_ask(id: u128, n: usize) -> ArtifactAsk {
         let pick = |terms: &[&str], bits: usize| -> Vec<String> {
             terms
                 .iter()
@@ -5483,35 +5475,35 @@ mod tests {
         }
     }
 
-    /// **A many-stage composition over one heavy shape costs about one walk, across the gate and
-    /// the seal** — when both validate through one session, as `prepare` must. The gate builds the
-    /// shape's walk once and spends what one ask alone spends, however many stages ask; the seal
-    /// re-validates the identical asks, is answered from the gate's memo for every one of them,
-    /// builds nothing and spends nothing, and seals what the gate sealed.
+    /// **A many-stage composition over one shape costs about one walk, across the gate and the
+    /// seal** — when both validate through one session, as `prepare` must. The gate builds the
+    /// shape's walk once and reaches the paths one ask alone reaches, however many stages ask; the
+    /// seal re-validates the identical asks, is answered from the gate's memo for every one of
+    /// them, builds nothing and reaches nothing, and seals what the gate sealed.
     ///
     /// Bites a fresh session for the seal: it builds the walk again and its memo answers nothing.
     /// Bites a session per stage inside `validate`: the gate builds the walk once per stage.
     #[test]
-    fn a_many_stage_composition_over_one_heavy_shape_costs_one_walk_across_gate_and_seal() {
+    fn a_many_stage_composition_over_one_shape_costs_one_walk_across_gate_and_seal() {
         const STAGES: usize = 16;
-        let shapes = loaded(vec![heavy(1)]);
+        let shapes = loaded(vec![two_paths(1)]);
         let c = answered_by_find(
             (0..STAGES)
-                .map(|i| selecting(&format!("sel{i}"), vec![heavy_ask(1, i + 1)], None))
+                .map(|i| selecting(&format!("sel{i}"), vec![two_path_ask(1, i + 1)], None))
                 .collect(),
         );
         let one_ask = {
             let mut alone = shapes.session();
-            let before = alone.visits_left();
+            let before = paths_reached();
             alone
-                .validate(&heavy_ask(1, 1))
+                .validate(&two_path_ask(1, 1))
                 .expect("fits a request alone");
-            before - alone.visits_left()
+            paths_reached() - before
         };
-        assert!(one_ask > 4_000, "the fixture is heavy: {one_ask}");
+        assert_eq!(one_ask, 2, "one ask reaches its two paths");
 
         let mut session = shapes.session();
-        let start = session.visits_left();
+        let start = paths_reached();
         let (built, (enumerated, gate)) = counted(&WALKS_BUILT, || {
             counted(&VOCABULARIES_ENUMERATED, || {
                 super::validate(&c, &mut session)
@@ -5524,12 +5516,12 @@ mod tests {
             "one walk built, no vocabulary read"
         );
         assert_eq!(
-            start - session.visits_left(),
+            paths_reached() - start,
             one_ask,
             "{STAGES} stages cost what one ask costs"
         );
 
-        let after_gate = session.visits_left();
+        let after_gate = paths_reached();
         assert_eq!(
             session.answered_again(),
             0,
@@ -5543,7 +5535,7 @@ mod tests {
             answered, STAGES,
             "every ask the seal re-validated was answered from the gate's memo"
         );
-        assert_eq!(session.visits_left(), after_gate, "and spent nothing");
+        assert_eq!(paths_reached(), after_gate, "and reached nothing");
         for i in 0..STAGES {
             let s = stage(&format!("sel{i}"));
             assert_eq!(seal.asks(&s).len(), 1);
