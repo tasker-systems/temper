@@ -1,0 +1,30 @@
+title    = "A team grant confers change only on direct authoring members; the grant door, team lifecycle and reassign are bounded"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "mcp", "cli-stdout"]
+status   = "signal-only"
+body = '''
+Hardening of team authority, under one rule: reading inherits down the team tree, changing things
+does not and is role-gated. Request and response shapes are unchanged.
+
+- A grant whose principal is a team still confers read on every member of the team and of every
+  team beneath it, at any role. Write and delete now need a direct owner, maintainer or member row
+  on the granted team, and grant (re-sharing) a direct owner or maintainer row. A write grant on an
+  umbrella team no longer lets members of its descendant teams write; grant the descendant directly.
+  Migration `20261109000000`.
+- `POST|DELETE /api/resources/{id}/grants` and `/api/cognitive-maps/{id}/grants` (and the CLI and
+  MCP doors over them): a non-admin may grant only to a team they manage directly, never to
+  `temper-system`, the gating team or someone else's personal team, and not to themselves; and may
+  overwrite or revoke only a row they granted, on a team they manage, or on a subject they own
+  (`403`). A grant to a soft-deleted or nonexistent team or profile is `404` for every caller.
+- `POST /api/teams` with a `parent` of `temper-system` or the gating team, and `PATCH`/`DELETE
+  /api/teams/{id}` on either, are system-admin only (`403`). A personal team takes no children
+  (`400`). A system admin may now soft-delete any team other than `temper-system`.
+- `POST /api/teams/{id}/reassign` and the team-admin path of `POST /api/resources/{id}/reassign`
+  move only resources whose owner is, or was (per the membership ledger), on the team, never one in
+  a context its owner owns, and now include contexts the team owns. A `from` that never belonged to
+  the team is `403`. `DELETE /api/teams/{id}/members/{profile_id}`'s residual-reach report uses the
+  same scope.
+
+Who observes: team managers and grant delegates. Release relevance: signal-only.
+'''
