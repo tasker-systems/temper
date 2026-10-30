@@ -467,12 +467,29 @@ pub async fn grant_capability(
             Ok(proof) => proof,
             Err(refusal) => return Err(erased_or_refused(pool, caller, subject, refusal).await),
         };
+    // Who the grant is TO (team-authority fixes D2). Authority over the subject says nothing about
+    // the recipient; without this bar the grant door was a way around the two-sided share gate.
+    recipient_bar(pool, &proof, caller, &req.principal_table, req.principal_id).await?;
     // The subject floor at the head of the grant write's own transaction; its lock holds until
     // the grant row commits, and a refusal rolls the transaction back before it is answered. The
     // emitter is resolved only after it admits, on the same transaction — never the pool, which a
     // transaction already holding a connection would wait on for a second.
     let mut tx = pool.begin().await?;
     if let Err(refusal) = grant_subject_floor_in_tx(&mut tx, caller, subject).await {
+        return Err(write_floor::rollback_with(tx, refusal).await);
+    }
+    // An upsert over an existing row is an overwrite of someone's grant: a delegate may do that
+    // only to a row that is theirs to change.
+    if let Err(refusal) = delegated_may_change_row(
+        &mut tx,
+        &proof,
+        caller,
+        subject,
+        &req.principal_table,
+        req.principal_id,
+    )
+    .await
+    {
         return Err(write_floor::rollback_with(tx, refusal).await);
     }
     let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller, "web")
@@ -500,6 +517,167 @@ pub async fn grant_capability(
     Ok(GrantOutcome { granted })
 }
 
+/// The grant door's bar on the RECIPIENT of a grant (team-authority fixes D2).
+///
+/// Authority over the subject (`GrantAuthority`) decides what may be conferred; it never looked at
+/// who receives it. So a delegate could grant to any team id in the instance — `temper-system`,
+/// which every profile reaches, the gating team, a team they had nothing to do with, a soft-deleted
+/// or nonexistent one (`principal_id` has no foreign key) — and the grant door was a way around the
+/// two-sided share gate. This applies that gate's bar to the recipient:
+///
+/// - **team, delegated:** the caller manages it directly (`require_manage_on_team`, which also
+///   refuses a team that does not exist, without saying so); it is active; it is not `temper-system`
+///   or the gating team; it is not someone else's personal team. `Forbidden` throughout, so the
+///   refusal discloses nothing about the team.
+/// - **team, admin:** exists and is active (`NotFound` otherwise) — an admin may grant to any team,
+///   but never mint a dangling row.
+/// - **profile:** exists (`NotFound`); a delegate may not grant to themselves, which is how an
+///   inherited `can_grant` used to launder into a personal row that outlived the team.
+async fn recipient_bar(
+    pool: &PgPool,
+    proof: &crate::authz::Authorized<GrantAuthority>,
+    caller: ProfileId,
+    principal_table: &str,
+    principal_id: Uuid,
+) -> ApiResult<()> {
+    let delegated = matches!(proof.authority(), GrantAuthority::Delegated);
+    match principal_table {
+        "kb_teams" => {
+            if delegated {
+                crate::services::team_service::require_manage_on_team(pool, principal_id, caller)
+                    .await?;
+            }
+            let team = sqlx::query!(
+                r#"SELECT is_active, slug, personal_of FROM kb_teams WHERE id = $1"#,
+                principal_id,
+            )
+            .fetch_optional(pool)
+            .await?;
+            let Some(team) = team.filter(|t| t.is_active) else {
+                return Err(if delegated {
+                    ApiError::Forbidden
+                } else {
+                    ApiError::NotFound("team not found or not readable".to_string())
+                });
+            };
+            if !delegated {
+                return Ok(());
+            }
+            let root_or_gating =
+                team.slug == ROOT_TEAM_SLUG || is_gating_team(pool, principal_id).await?;
+            let others_personal = team.personal_of.is_some_and(|owner| owner != *caller);
+            if root_or_gating || others_personal {
+                return Err(ApiError::Forbidden);
+            }
+            Ok(())
+        }
+        "kb_profiles" => {
+            let exists = sqlx::query_scalar!(
+                r#"SELECT EXISTS(SELECT 1 FROM kb_profiles WHERE id = $1) AS "e!: bool""#,
+                principal_id,
+            )
+            .fetch_one(pool)
+            .await?;
+            if !exists {
+                return Err(ApiError::NotFound("profile not found".to_string()));
+            }
+            if delegated && principal_id == *caller {
+                return Err(ApiError::Forbidden);
+            }
+            Ok(())
+        }
+        _ => Err(ApiError::BadRequest(format!(
+            "unknown principal_table `{principal_table}`"
+        ))),
+    }
+}
+
+/// May a DELEGATED caller overwrite or revoke the existing grant row for `(subject, principal)`?
+/// (team-authority fixes D2.) Admitted when there is no row (an insert, or a no-op revoke), when
+/// the caller granted it, when it is anchored on a team the caller manages directly, or when the
+/// caller owns the subject. A system admin is not asked. Locks the row `FOR UPDATE`, so the answer
+/// holds until the write commits.
+///
+/// Before this, the upsert and the delete took the principal from the request and touched any row:
+/// a delegate could downgrade or evict the very team grant their own authority came from.
+async fn delegated_may_change_row(
+    conn: &mut sqlx::PgConnection,
+    proof: &crate::authz::Authorized<GrantAuthority>,
+    caller: ProfileId,
+    subject: RefTarget,
+    principal_table: &str,
+    principal_id: Uuid,
+) -> ApiResult<()> {
+    if !matches!(proof.authority(), GrantAuthority::Delegated) {
+        return Ok(());
+    }
+    let granted_by = sqlx::query_scalar!(
+        r#"SELECT granted_by_profile_id FROM kb_access_grants
+            WHERE subject_table = $1 AND subject_id = $2
+              AND principal_table = $3 AND principal_id = $4
+              FOR UPDATE"#,
+        subject.kind.as_str(),
+        subject.id,
+        principal_table,
+        principal_id,
+    )
+    .fetch_optional(&mut *conn)
+    .await?;
+    let Some(granted_by) = granted_by else {
+        return Ok(());
+    };
+    if granted_by == *caller {
+        return Ok(());
+    }
+    if principal_table == "kb_teams"
+        && matches!(
+            crate::services::team_service::role_on_team_on(conn, principal_id, caller).await?,
+            Some(role) if crate::services::team_service::can_manage(role)
+        )
+    {
+        return Ok(());
+    }
+    let owns_subject = match subject.kind {
+        AnchorTable::Resources => {
+            sqlx::query_scalar!(
+                r#"SELECT EXISTS(SELECT 1 FROM kb_resource_homes
+                              WHERE resource_id = $1 AND owner_profile_id = $2) AS "e!: bool""#,
+                subject.id,
+                *caller,
+            )
+            .fetch_one(&mut *conn)
+            .await?
+        }
+        AnchorTable::Contexts => {
+            sqlx::query_scalar!(
+                r#"SELECT EXISTS(
+                 SELECT 1 FROM kb_contexts c
+                  WHERE c.id = $1
+                    AND ( (c.owner_table = 'kb_profiles' AND c.owner_id = $2)
+                       OR (c.owner_table = 'kb_teams' AND EXISTS (
+                             SELECT 1 FROM kb_team_members tm
+                              WHERE tm.team_id = c.owner_id AND tm.profile_id = $2
+                                AND tm.role IN ('owner', 'maintainer'))))) AS "e!: bool""#,
+                subject.id,
+                *caller,
+            )
+            .fetch_one(&mut *conn)
+            .await?
+        }
+        // A cogmap has no owner column, so there is no owner arm.
+        _ => false,
+    };
+    if owns_subject {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden)
+    }
+}
+
+/// The root team's slug: every personal team descends from it, so a grant to it reaches every
+/// profile. Only a system admin grants to it.
+const ROOT_TEAM_SLUG: &str = "temper-system";
+
 /// Delete one access grant. Auth before write: `can_administer_grant`. Absent row ⇒ no-op success
 /// (idempotent, mirrors `bind_team`/`unbind_team`).
 pub async fn revoke_capability(
@@ -524,6 +702,20 @@ pub async fn revoke_capability(
     // The subject floor at the head of the revoke's own transaction (see `grant_capability`).
     let mut tx = pool.begin().await?;
     if let Err(refusal) = grant_subject_floor_in_tx(&mut tx, caller, subject).await {
+        return Err(write_floor::rollback_with(tx, refusal).await);
+    }
+    // Not attenuated, but not free either: a delegate withdraws only a row that is theirs to
+    // change (team-authority fixes D2) — never the grant their own authority came from.
+    if let Err(refusal) = delegated_may_change_row(
+        &mut tx,
+        &proof,
+        caller,
+        subject,
+        &req.principal_table,
+        req.principal_id,
+    )
+    .await
+    {
         return Err(write_floor::rollback_with(tx, refusal).await);
     }
     let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller, "web")

@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT granted_by_profile_id FROM kb_access_grants\n            WHERE subject_table = $1 AND subject_id = $2\n              AND principal_table = $3 AND principal_id = $4\n              FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "granted_by_profile_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "cdaa8187fe4739a07ee44418968e6d1891d580852ffe367a2f7528092851de15"
+}
