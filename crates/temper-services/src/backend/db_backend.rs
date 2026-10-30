@@ -63,14 +63,21 @@ use temper_substrate::readback;
 use temper_substrate::writes;
 
 /// Bridge a temper-substrate (`anyhow`) or database error into `TemperError` without naming
-/// `anyhow` (temper-api does not depend on it): the `500` class, carrying the message. The one
-/// exception is a lock wait past the write-side bound (`55P03`, `write_floor::hit_lock_bound`):
-/// that statement's transaction rolls back, and it answers [`TemperError::ResourceBusy`] (`503`).
-/// Classified HERE, at the bridge every door uses, so no door's mapping can flatten it to a `500`.
+/// `anyhow` (temper-api does not depend on it): the `500` class, carrying the message. Two
+/// exceptions, each rolled back with nothing applied: a lock wait past the write-side bound
+/// (`55P03`, `write_floor::hit_lock_bound`) answers [`TemperError::ResourceBusy`] (`503`), and a
+/// value past a storage limit (`54000`, `crate::error::exceeded_program_limit`) answers
+/// [`TemperError::BadRequest`] (`400`). Classified HERE, at the bridge every door uses, so no
+/// door's mapping can flatten either to a `500`.
 fn api_err<E: Into<anyhow::Error>>(e: E) -> TemperError {
     let e = e.into();
     if write_floor::hit_lock_bound(&e) {
         return TemperError::ResourceBusy;
+    }
+    // A value past a storage limit (`54000`, an over-size index row) rolled back with nothing
+    // applied: the caller's input, so a `400` it can act on rather than a `500` (issue #1258).
+    if crate::error::exceeded_program_limit(&e) {
+        return TemperError::BadRequest(crate::error::VALUE_TOO_LARGE_MESSAGE.to_string());
     }
     TemperError::Api(e.to_string())
 }
@@ -5429,6 +5436,27 @@ fn ingest_ended_conflict(message: &str) -> TemperError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Resource create and update reach the wire through `tx_err` → [`api_err`]: an over-size
+    /// open-meta value (`54000` from `uq_kb_properties_active`) must come back a `400`, not the
+    /// `500` issue #1258 reported. Anything else keeps the `500` class.
+    #[test]
+    fn an_over_size_value_is_a_bad_request_at_the_write_bridge() {
+        let e = anyhow::Error::from(crate::error::sqlstate_error(
+            crate::error::PROGRAM_LIMIT_EXCEEDED,
+        ))
+        .context("fire_with: PropertyAssert");
+        match tx_err(e) {
+            TemperError::BadRequest(msg) => {
+                assert_eq!(msg, crate::error::VALUE_TOO_LARGE_MESSAGE)
+            }
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+        assert!(matches!(
+            api_err(crate::error::sqlstate_error("XX000")),
+            TemperError::Api(_)
+        ));
+    }
 
     #[test]
     fn is_object_safe() {
