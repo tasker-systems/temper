@@ -288,12 +288,12 @@ async fn a_read_grant_reads_facets_and_still_cannot_assert_one(pool: PgPool) {
 
     let reader =
         common::fixtures::create_test_profile(&pool, "facet-read-reader@example.com").await;
-    let admin = common::fixtures::create_test_profile(&pool, "facet-read-admin@example.com").await;
-    common::fixtures::make_test_admin(&pool, admin).await;
 
+    // The owner grants: the resource is homed in the owner's personal context, where a system
+    // admin's arm does not reach (task `01a191b4`).
     access_service::grant_capability(
         &pool,
-        &temper_services::test_support::human_principal_for(&pool, admin).await,
+        &temper_services::test_support::human_principal_for(&pool, *owner).await,
         &GrantCapabilityRequest {
             subject_table: "kb_resources".into(),
             subject_id: Uuid::from(resource),
@@ -306,7 +306,7 @@ async fn a_read_grant_reads_facets_and_still_cannot_assert_one(pool: PgPool) {
         },
     )
     .await
-    .expect("admin grants read");
+    .expect("the owner grants read");
 
     let reader_id = ProfileId::from(reader);
 

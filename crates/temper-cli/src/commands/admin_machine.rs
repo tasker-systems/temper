@@ -3,7 +3,7 @@
 //! **Not operator-only.** The gates are `MachineRegistrationAuthority` and, for acts on an existing
 //! machine, `MachineClientControlAuthority` (`temper-services/src/authz/machine.rs`): a system
 //! admin, **or** the owner of the machine's owning team — a teamless machine fails closed to
-//! admin-only. The `admin` grouping names the deployment *subject*, not an elevation bar. A machine
+//! admin-only, and on someone else's personal team the admin arm does not apply. The `admin` grouping names the deployment *subject*, not an elevation bar. A machine
 //! the caller may not act on reads as not found, exactly like a missing id.
 //!
 //! Thin commands: parse, resolve refs to ids, call the client, render. Reach

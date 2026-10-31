@@ -276,6 +276,32 @@ pub(crate) async fn profile_can_grant(
     profile_can(pool, caller, AccessAction::Grant, subject_table, subject_id).await
 }
 
+/// Whether a grant subject is someone else's personal space: a personal context that is not
+/// `caller`'s, or a resource homed in one. The SQL `context_personal_owner` and
+/// `resource_personal_owner` are the one definition.
+pub(crate) async fn subject_is_others_personal(
+    pool: &PgPool,
+    subject: RefTarget,
+    caller: ProfileId,
+) -> ApiResult<bool> {
+    Ok(match subject.kind {
+        temper_substrate::payloads::AnchorTable::Contexts => {
+            crate::services::context_service::is_others_personal_context(pool, subject.id, caller)
+                .await?
+        }
+        temper_substrate::payloads::AnchorTable::Resources => {
+            sqlx::query_scalar!(
+                r#"SELECT COALESCE(resource_personal_owner($1) <> $2, false) AS "p!: bool""#,
+                subject.id,
+                *caller,
+            )
+            .fetch_one(pool)
+            .await?
+        }
+        _ => false,
+    })
+}
+
 /// Is `team_id` the root, `temper-system`? Every personal team descends from it, so whatever is
 /// attached to it reaches every profile. Most gates want [`is_root_or_gating_team`]; this narrower
 /// question is for machine reach (`machine_authz::contain_target_team`), which excludes the root but

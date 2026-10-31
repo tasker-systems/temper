@@ -133,8 +133,10 @@ impl ScopedAuthority for TwoSidedAuthority {
     ///
     /// The admin short-circuit does not apply when the target is a personal team (task
     /// `01a19006`, ruled 2026-10-31): attaching an object to someone's personal team, or detaching
-    /// one from it, is acting on that team, which only its owner and erasure do. The owner passes
-    /// the ordinary arm below — they manage the team and must administer the object.
+    /// one from it, is acting on that team, which only its owner and erasure do. Nor when the
+    /// object is a personal context (task `01a191b4`): sharing, unsharing or reassigning someone's
+    /// personal context is acting on their personal space. The owner passes the ordinary arm below
+    /// — they manage the team and administer the object.
     async fn resolve(
         pool: &PgPool,
         principal: Principal<'_>,
@@ -143,7 +145,13 @@ impl ScopedAuthority for TwoSidedAuthority {
         let caller = principal.profile_id();
         let personal = team_service::personal_of(pool, scope.team_id)
             .await?
-            .is_some();
+            .is_some()
+            || match scope.object {
+                TwoSidedObject::Context(context_id) => {
+                    context_service::is_others_personal_context(pool, context_id, caller).await?
+                }
+                TwoSidedObject::Cogmap(_) => false,
+            };
         if !personal && principal.system_admin(pool).await?.is_some() {
             return Ok(TwoSidedAuthority::SystemAdmin);
         }

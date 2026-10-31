@@ -348,7 +348,7 @@ class MachineClientsApi:
     ) -> IssuedMachineCredential:
         """Issue a machine credential
 
-        Mints a new machine principal with a temper-issued `client_id` and secret. The `client_secret` in the response is shown once and never stored; only its hash is kept, so it cannot be retrieved later. Requires a system admin or the owner of `owner_team_id`; a machine with no owning team can only be issued by a system admin. A team owner can confer only reach they could grant themselves, and no caller can give a machine a team role above `member`. Where an external identity provider mints this instance's tokens, the credential is returned with `dormant: true`: it authenticates once the instance runs temper's own authorization server.
+        Mints a new machine principal with a temper-issued `client_id` and secret. The `client_secret` in the response is shown once and never stored; only its hash is kept, so it cannot be retrieved later. Requires a system admin (only its owner, on someone else's personal team) or the owner of `owner_team_id`; a machine with no owning team can only be issued by a system admin. A team owner can confer only reach they could grant themselves, and no caller can give a machine a team role above `member`. Where an external identity provider mints this instance's tokens, the credential is returned with `dormant: true`: it authenticates once the instance runs temper's own authorization server.
 
         :param issue_machine_request: (required)
         :type issue_machine_request: IssueMachineRequest
@@ -422,7 +422,7 @@ class MachineClientsApi:
     ) -> ApiResponse[IssuedMachineCredential]:
         """Issue a machine credential
 
-        Mints a new machine principal with a temper-issued `client_id` and secret. The `client_secret` in the response is shown once and never stored; only its hash is kept, so it cannot be retrieved later. Requires a system admin or the owner of `owner_team_id`; a machine with no owning team can only be issued by a system admin. A team owner can confer only reach they could grant themselves, and no caller can give a machine a team role above `member`. Where an external identity provider mints this instance's tokens, the credential is returned with `dormant: true`: it authenticates once the instance runs temper's own authorization server.
+        Mints a new machine principal with a temper-issued `client_id` and secret. The `client_secret` in the response is shown once and never stored; only its hash is kept, so it cannot be retrieved later. Requires a system admin (only its owner, on someone else's personal team) or the owner of `owner_team_id`; a machine with no owning team can only be issued by a system admin. A team owner can confer only reach they could grant themselves, and no caller can give a machine a team role above `member`. Where an external identity provider mints this instance's tokens, the credential is returned with `dormant: true`: it authenticates once the instance runs temper's own authorization server.
 
         :param issue_machine_request: (required)
         :type issue_machine_request: IssueMachineRequest
@@ -496,7 +496,7 @@ class MachineClientsApi:
     ) -> RESTResponseType:
         """Issue a machine credential
 
-        Mints a new machine principal with a temper-issued `client_id` and secret. The `client_secret` in the response is shown once and never stored; only its hash is kept, so it cannot be retrieved later. Requires a system admin or the owner of `owner_team_id`; a machine with no owning team can only be issued by a system admin. A team owner can confer only reach they could grant themselves, and no caller can give a machine a team role above `member`. Where an external identity provider mints this instance's tokens, the credential is returned with `dormant: true`: it authenticates once the instance runs temper's own authorization server.
+        Mints a new machine principal with a temper-issued `client_id` and secret. The `client_secret` in the response is shown once and never stored; only its hash is kept, so it cannot be retrieved later. Requires a system admin (only its owner, on someone else's personal team) or the owner of `owner_team_id`; a machine with no owning team can only be issued by a system admin. A team owner can confer only reach they could grant themselves, and no caller can give a machine a team role above `member`. Where an external identity provider mints this instance's tokens, the credential is returned with `dormant: true`: it authenticates once the instance runs temper's own authorization server.
 
         :param issue_machine_request: (required)
         :type issue_machine_request: IssueMachineRequest
@@ -1517,7 +1517,7 @@ class MachineClientsApi:
     ) -> IssuedMachineCredential:
         """Rotate a machine client secret
 
-        Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.
+        Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.
 
         :param id: Machine client ID (required)
         :type id: UUID
@@ -1596,7 +1596,7 @@ class MachineClientsApi:
     ) -> ApiResponse[IssuedMachineCredential]:
         """Rotate a machine client secret
 
-        Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.
+        Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.
 
         :param id: Machine client ID (required)
         :type id: UUID
@@ -1675,7 +1675,7 @@ class MachineClientsApi:
     ) -> RESTResponseType:
         """Rotate a machine client secret
 
-        Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.
+        Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.
 
         :param id: Machine client ID (required)
         :type id: UUID

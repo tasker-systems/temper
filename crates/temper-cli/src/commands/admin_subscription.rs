@@ -2,7 +2,8 @@
 //!
 //! **Not operator-only.** The gates are `SubscriptionAuthority` and, for acts on an existing
 //! subscription, `SubscriptionControlAuthority` (`temper-services/src/authz/subscription.rs`): owner
-//! or maintainer of the authoring team, **or** a system admin. The `admin` grouping names the
+//! or maintainer of the authoring team, **or** a system admin (except on someone else's personal
+//! team). The `admin` grouping names the
 //! deployment *subject*, not an elevation bar. A subscription the caller may not act on reads as not
 //! found, exactly like a missing id.
 //!

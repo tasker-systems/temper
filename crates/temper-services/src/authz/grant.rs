@@ -33,7 +33,13 @@ impl ScopedAuthority for GrantAuthority {
         subject: RefTarget,
     ) -> ApiResult<Self> {
         let caller = principal.profile_id();
-        if principal.system_admin(pool).await?.is_some() {
+        // The admin arm stops at personal space (task `01a191b4`): granting on someone's personal
+        // context or a resource homed in one is acting on it, which only its owner and erasure do.
+        // An admin there resolves like anyone else, through `profile_can_grant` below.
+        if principal.system_admin(pool).await?.is_some()
+            && !crate::services::access_service::subject_is_others_personal(pool, subject, caller)
+                .await?
+        {
             // The subject-liveness floor the delegated arm carries inside `can()` (migration
             // `20260902000010`: "both profile branches answer a tombstoned subject identically")
             // applies to the admin arm too, so an admin cannot administer grants on a tombstoned

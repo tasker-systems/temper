@@ -1,0 +1,42 @@
+title    = "A personal context, and what a personal team owns, is its owner's alone; a system admin no longer acts on it"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp", "cli-stdout", "clients"]
+status   = "signal-only"
+body = '''
+Extends the personal-team rule to everything inside someone's personal space: a context owned by a
+profile or by a personal team, a resource homed in one, and the machines, connections and
+subscriptions a personal team owns. A system admin's arm stops there; only erasure still acts on it
+without its owner. An admin's own personal space is unaffected. Migration `20261113000000`.
+
+- Context rename, retire, restore, share, unshare and reassign on someone else's personal context:
+  `403` for a system admin, as for anyone else who does not administer it. The database refuses the
+  same acts through `context_rename`, `context_retire`, `context_restore` and `context_reassign`, and
+  refuses a reassign into someone else's personal team.
+- `POST`/`DELETE` grants whose subject is someone else's personal context or a resource homed in one:
+  `403` for a system admin.
+- Machine clients, connections and subscriptions owned by someone else's personal team: get, revoke
+  and every other act answer `404` (machines, connections, subscriptions) or `403` (create) to a
+  system admin. A subscription whose subscriber is someone else's personal context is refused at
+  create unless the caller manages the authoring team.
+- Read surfaces: the retired-contexts listing and get, the admin ledger (grant acts on someone
+  else's personal space, on both axes) and the subscription listing omit someone else's personal
+  space for a system admin. `POST /api/embed/admin/reembed` refuses a resource or context scope in someone
+  else's personal space (`403`), and the `all` sweep still re-embeds it but no longer names its ids
+  in the receipt. The `all` reblock sweep skips it.
+
+- A system admin manages every machine principal, one on a personal team included: list, get,
+  revoke and rotate are unchanged for them. A credential minted for a machine on someone's personal
+  team (a rotated secret, or a rebound client id) by anyone but that person removes the machine
+  from that personal team in the same transaction, recorded as a `team_membership_changed`
+  (`machine_reach`, the minter as actor). The machine keeps its other teams.
+- The connection listing omits someone else's personal team's rows for a system admin, as its
+  per-row get already did. Subscription get and revoke refuse a system admin on a subscription delivering into
+  someone else's personal context, as the listing already did.
+- An agent's own context (a teamless connection's home) is not personal space: only a person's
+  profile, or a person's personal team, makes one. `context_reassign` refuses moving a context into
+  another person's ownership for every caller.
+
+Request and response shapes are unchanged. Who observes: system admins. Release relevance:
+signal-only.
+'''

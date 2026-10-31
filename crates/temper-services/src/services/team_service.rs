@@ -138,6 +138,25 @@ pub(crate) async fn personal_of_on(
     Ok(owner.map(ProfileId::from))
 }
 
+/// The person whose personal space a team's holdings are: [`personal_of`] when that profile is a
+/// person, `None` for a shared team or an agent's personal team (`profile_is_person`, migration
+/// 20261113000000). The admin arm over machines, connections and subscriptions stops here; an
+/// agent's personal team is not anyone's personal space, so an admin still reaches it.
+pub(crate) async fn personal_space_owner(
+    pool: &PgPool,
+    team_id: Uuid,
+) -> ApiResult<Option<ProfileId>> {
+    let owner = sqlx::query_scalar!(
+        r#"SELECT CASE WHEN profile_is_person(personal_of) THEN personal_of END AS "owner"
+             FROM kb_teams WHERE id = $1"#,
+        team_id
+    )
+    .fetch_optional(pool)
+    .await?
+    .flatten();
+    Ok(owner.map(ProfileId::from))
+}
+
 /// True if the role is `owner` or `maintainer` (may manage the team).
 ///
 /// `pub(crate)` so sibling services reuse the one definition (see `role_on_team`).
