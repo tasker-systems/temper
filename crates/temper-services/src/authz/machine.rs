@@ -331,7 +331,20 @@ mod personal_space_tests {
         require_credential_minter(&pool, *machine, *alice)
             .await
             .expect("alice mints for her own machine");
+        // A machine on no person's personal team (its own personal team is no one's personal space).
         let (lonely, _) = person(&pool, "mint-lonely").await;
+        sqlx::query(
+            "INSERT INTO kb_machine_clients (client_id, issuer, label, profile_id, team_id, \
+                                             registered_by_profile_id) \
+             VALUES ('mint-lonely-client', 'auth0-m2m', 'l', $1, $2, $3)",
+        )
+        .bind(*lonely)
+        .bind(acme)
+        .bind(*admin)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(admitting_person(&pool, *lonely).await.unwrap(), None);
         require_credential_minter(&pool, *lonely, *admin)
             .await
             .expect("no personal team admits it, so the ordinary gate decides");
