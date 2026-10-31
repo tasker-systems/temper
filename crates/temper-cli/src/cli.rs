@@ -1640,6 +1640,17 @@ pub enum TeamAction {
         /// Team slug (optionally `+`-prefixed) or UUID
         team: String,
     },
+    /// Detach a child team from a parent team (an owner or maintainer of the parent, or a system
+    /// admin)
+    ///
+    /// The child keeps its roster and only this link is cut; its members stop reaching what is
+    /// attached to the parent. `temper team show <parent>` lists the parent's children.
+    Detach {
+        /// Parent team slug (optionally `+`-prefixed) or UUID
+        parent: String,
+        /// Child team slug, decorated ref, or UUID
+        child: String,
+    },
     /// Remove a member from a team (owner/maintainer)
     RemoveMember {
         /// Team slug or UUID
@@ -1672,16 +1683,16 @@ pub enum TeamAction {
         #[arg(long)]
         description: Option<String>,
     },
-    /// Soft-delete a team (owner only)
+    /// Soft-delete a team (its owner, or a system admin)
     Delete {
         /// Team slug (optionally `+`-prefixed) or UUID
         team: String,
     },
     /// Bulk-reassign a departing member's team-scoped resources (offboarding).
     ///
-    /// Reassigns every resource owned by `--from` and homed in a context shared
-    /// to this team, over to `--to` (who must be a team member). Owner/maintainer
-    /// only. Sends a `POST /api/teams/{id}/reassign` request via `temper-client`.
+    /// Reassigns every resource owned by `--from` (a current or former member) and
+    /// homed in a context this team owns, over to `--to` (who must be a team member).
+    /// Contexts merely shared to the team are out of scope. Owner/maintainer only. Sends a `POST /api/teams/{id}/reassign` request via `temper-client`.
     Reassign {
         /// Team slug (optionally `+`-prefixed) or UUID
         team: String,

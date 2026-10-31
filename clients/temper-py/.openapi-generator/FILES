@@ -479,6 +479,7 @@ temper/generated/models/subscription_selector_one_of2.py
 temper/generated/models/system_access_details.py
 temper/generated/models/system_settings.py
 temper/generated/models/teaching_elision.py
+temper/generated/models/team_child_ref.py
 temper/generated/models/team_create_request.py
 temper/generated/models/team_detail.py
 temper/generated/models/team_invitation.py

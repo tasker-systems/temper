@@ -501,6 +501,7 @@ __all__ = [
     "SystemAccessDetails",
     "SystemSettings",
     "TeachingElision",
+    "TeamChildRef",
     "TeamCreateRequest",
     "TeamDetail",
     "TeamInvitation",
@@ -1016,6 +1017,7 @@ from temper.generated.models.subscription_selector_one_of2 import SubscriptionSe
 from temper.generated.models.system_access_details import SystemAccessDetails as SystemAccessDetails
 from temper.generated.models.system_settings import SystemSettings as SystemSettings
 from temper.generated.models.teaching_elision import TeachingElision as TeachingElision
+from temper.generated.models.team_child_ref import TeamChildRef as TeamChildRef
 from temper.generated.models.team_create_request import TeamCreateRequest as TeamCreateRequest
 from temper.generated.models.team_detail import TeamDetail as TeamDetail
 from temper.generated.models.team_invitation import TeamInvitation as TeamInvitation

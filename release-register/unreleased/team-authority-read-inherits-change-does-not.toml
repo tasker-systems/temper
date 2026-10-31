@@ -1,0 +1,39 @@
+title    = "A team grant confers change only on direct authoring members; grants, team lifecycle and reassign are bounded; a parent sees and can detach its children"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp", "cli-stdout", "clients"]
+status   = "signal-only"
+body = '''
+Hardening of team authority, under one rule: reading inherits down the team tree, changing things
+does not and is role-gated.
+
+- A grant whose principal is a team still confers read on every member of the team and of every
+  team beneath it, at any role. Write and delete now need an owner, maintainer or member row on the
+  granted team or on a team beneath it (a watcher never writes through a team grant), and grant
+  (re-sharing) a direct owner or maintainer row on the granted team itself; it no longer inherits.
+  Migration `20261109000000`.
+- `POST|DELETE /api/resources/{id}/grants` and `/api/cognitive-maps/{id}/grants` (and the CLI and
+  MCP doors over them): a non-admin may grant only to a team they manage directly, never to
+  `temper-system`, the gating team or any personal team, and not to themselves; and may
+  overwrite or revoke only a row they granted, on a team they manage, or on a subject they own
+  (`403`). A grant to a soft-deleted or nonexistent team or profile is `404` to a system admin and `403` to a non-admin, who learns nothing about which ids exist.
+- `POST /api/teams` with a `parent` of `temper-system` or the gating team, and `PATCH`/`DELETE
+  /api/teams/{id}` on either, are system-admin only (`403`). A personal team takes no children
+  (`400`). A system admin may now soft-delete any team other than `temper-system`.
+- `POST /api/teams/{id}/reassign` and the team-admin path of `POST /api/resources/{id}/reassign`
+  reach only contexts the team OWNS (no longer contexts merely shared to it), and only resources
+  whose owner is, or was (per the membership ledger), on the team; never on `temper-system` or the
+  gating team. A `from` that never belonged to the team is `403`.
+  `DELETE /api/teams/{id}/members/{profile_id}`'s residual-reach report uses the same scope.
+- Additive: `GET /api/teams/{id}` gains `children` (the team's direct child teams: `id`, `slug`,
+  `name`), filled for a caller who manages the team or is a system admin and empty for everyone
+  else. A direct owner or maintainer of a team's ancestor may now read its detail and roster (never
+  through `temper-system` or the gating team). New `DELETE /api/teams/{id}/children/{child_id}`
+  (204; 403 unless a manager of the parent or a system admin; 404 when not a child) detaches a child,
+  which keeps its roster while that link is cut; client `teams.detach_child`, CLI
+  `temper team detach <parent> <child>`. No MCP action. Linking a child (creating it under a parent)
+  and detaching one are recorded on the admin ledger as `team_parent_link_changed`, readable by the
+  parent's managers. Migration `20261109000010`.
+
+Who observes: team managers and grant delegates. Release relevance: signal-only.
+'''

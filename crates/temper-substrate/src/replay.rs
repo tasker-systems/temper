@@ -323,6 +323,8 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             // A team membership change (team-role rank spec C8): an authority act, NULL-anchored,
             // content-free. No sidecar.
             | EventKind::TeamMembershipChanged
+            // A team parent link or unlink (team-authority fixes D3): the same posture.
+            | EventKind::TeamParentLinkChanged
             // The erasure act's admin pair (spec 2026-08-31): authority acts about a PERSON,
             // never knowledge. Same NULL-anchored, content-free shape. The snapshot side of the
             // replay redaction needs NOTHING more than this posture, and that is the point:
@@ -1012,6 +1014,9 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // events — which is also why the derived writers (personal-team genesis, auto-join)
             // can stay un-evented (R13).
             | EventKind::TeamMembershipChanged
+            // A team parent link or unlink: the same posture. Link STATE is replayed from the
+            // kb_teams_parents input table, not rebuilt from these events.
+            | EventKind::TeamParentLinkChanged
             // The erasure act's refusal face (spec 2026-08-31, D6): NULL-anchored, mutates
             // NOTHING by design — one reason-code event, and the refusal set must not admit
             // it. The walk stays a no-op; `PrincipalErased` graduated above.

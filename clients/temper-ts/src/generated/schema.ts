@@ -570,7 +570,7 @@ export interface paths {
         };
         /**
          * Read the admin ledger
-         * @description Returns a page of recorded administrative acts, newest first, on exactly one axis. `subject` (`<kind>:<uuid>`, e.g. `kb_resources:<uuid>`) returns the acts performed on that subject, limited to the act families the caller may read about it: a system admin reads all of them, a caller who may administer grants on the subject reads its grant acts, and an owner or maintainer of a team (`kb_teams:<uuid>`) reads that team's membership changes (on the gating team, only a system admin does). `actor` returns the acts a profile performed: any caller may read their own, and only a system admin may read another's. A read the caller is not allowed is answered 404, not 403, so a refusal reveals nothing about the subject. `epoch` is when recording began; acts before it were not recorded. `limit` defaults to 50 and is capped at 200.
+         * @description Returns a page of recorded administrative acts, newest first, on exactly one axis. `subject` (`<kind>:<uuid>`, e.g. `kb_resources:<uuid>`) returns the acts performed on that subject, limited to the act families the caller may read about it: a system admin reads all of them, a caller who may administer grants on the subject reads its grant acts, and an owner or maintainer of a team (`kb_teams:<uuid>`) reads that team's membership changes and the linking or detaching of its child teams (on the gating team, only a system admin does). `actor` returns the acts a profile performed: any caller may read their own, and only a system admin may read another's. A read the caller is not allowed is answered 404, not 403, so a refusal reveals nothing about the subject. `epoch` is when recording began; acts before it were not recorded. `limit` defaults to 50 and is capped at 200.
          */
         get: operations["list_admin_ledger"];
         put?: never;
@@ -3461,6 +3461,31 @@ export interface paths {
         patch: operations["update_team"];
         trace?: never;
     };
+    "/api/teams/{id}/children/{child_id}": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Detach a child team from this team
+         * @description Removes the parent link, so the child's members stop reaching what is attached to this team and
+         *     its ancestors. The child and its roster survive; only this link is cut. Recorded on the admin
+         *     ledger as `team_parent_link_changed`.
+         */
+        delete: operations["detach_child_team"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/teams/{id}/invitations": {
         parameters: {
             query?: never;
@@ -3574,7 +3599,12 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Bulk reassign a team's resources */
+        /**
+         * Bulk reassign a team's resources
+         * @description Moves every live resource owned by `from_profile_id` (a current or former member of the team) and
+         *     homed in a context the team owns to `to_profile_id` (a member). Contexts merely shared to the team
+         *     are out of scope: a share confers read, never authority over the container.
+         */
         post: operations["reassign_team"];
         delete?: never;
         options?: never;
@@ -11354,6 +11384,13 @@ export interface components {
             omitted_paths: number;
             shape: components["schemas"]["ShapeId"];
         };
+        /** @description A direct child team, as listed on its parent's [`TeamDetail`]. */
+        TeamChildRef: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            slug: string;
+        };
         /**
          * @description Request body for `POST /api/teams`.
          *
@@ -11373,6 +11410,12 @@ export interface components {
          */
         TeamDetail: {
             auto_join_role?: components["schemas"]["TeamRole"] | null;
+            /**
+             * @description The team's direct child teams. Present (non-empty) only for a caller who manages this team
+             *     or is a system admin: a child's members reach everything attached to this team, so its
+             *     managers see which teams hang beneath it (team-authority fixes D3). Empty for everyone else.
+             */
+            children?: components["schemas"]["TeamChildRef"][];
             /** Format: date-time */
             created: string;
             description?: string | null;
@@ -21175,14 +21218,14 @@ export interface operations {
                     "application/json": components["schemas"]["TeamRow"];
                 };
             };
-            /** @description The `personal-` slug prefix is reserved for personal teams; `auto_join_role` is above `member` (it may be `member` or `watcher`: a role that governs a team is granted by a person); or the caller is a machine principal (a team's creator becomes its owner, and a machine never governs) */
+            /** @description The `personal-` slug prefix is reserved for personal teams; the parent is a personal team, which takes no children; `auto_join_role` is above `member` (it may be `member` or `watcher`: a role that governs a team is granted by a person); or the caller is a machine principal (a team's creator becomes its owner, and a machine never governs) */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Forbidden (child requires owner/maintainer; auto_join_role requires admin); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden (a child requires owner/maintainer on the parent, and a system admin when the parent is temper-system or the gating team; auto_join_role requires admin); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -21255,7 +21298,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Forbidden (caller is not the owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden (caller is neither the owner nor a system admin; on temper-system or the gating team, not a system admin); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -21308,7 +21351,7 @@ export interface operations {
                     "application/json": components["schemas"]["TeamRow"];
                 };
             };
-            /** @description Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden (caller is not owner/maintainer; on temper-system or the gating team, not a system admin); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -21318,6 +21361,48 @@ export interface operations {
                 };
             };
             /** @description Team not found or soft-deleted */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    detach_child_team: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Parent team ID */
+                id: string;
+                /** @description Child team ID */
+                child_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Child detached */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forbidden: the caller is not an owner or maintainer of the parent team, or the parent is temper-system or the gating team and the caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description That team is not a child of this team; told only to a caller who may manage the parent */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -21671,7 +21756,7 @@ export interface operations {
                     "application/json": components["schemas"]["BulkReassignAck"];
                 };
             };
-            /** @description Forbidden (caller does not manage the team, or target not a member); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden (caller does not manage the team, the team is temper-system or the gating team, the target is not a member, or `from` was never a member); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;

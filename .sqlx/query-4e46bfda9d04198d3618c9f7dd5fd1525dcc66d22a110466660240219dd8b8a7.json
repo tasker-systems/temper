@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n                 SELECT 1 FROM team_ancestors($1) a\n                   JOIN kb_team_members tm ON tm.team_id = a.team_id\n                   JOIN kb_teams t ON t.id = a.team_id\n                  WHERE a.team_id <> $1 AND tm.profile_id = $2\n                    AND tm.role IN ('owner', 'maintainer')\n                    AND t.slug <> 'temper-system'\n                    AND t.slug IS DISTINCT FROM\n                        (SELECT s.gating_team_slug FROM kb_system_settings s WHERE s.id = 1))\n               AS \"e!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "e!: bool",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "4e46bfda9d04198d3618c9f7dd5fd1525dcc66d22a110466660240219dd8b8a7"
+}

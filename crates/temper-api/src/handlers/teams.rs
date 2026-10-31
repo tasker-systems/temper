@@ -48,8 +48,8 @@ pub async fn list(
     request_body = TeamCreateRequest,
     responses(
         (status = 201, description = "Team created", body = TeamRow),
-        (status = 400, description = "The `personal-` slug prefix is reserved for personal teams; `auto_join_role` is above `member` (it may be `member` or `watcher`: a role that governs a team is granted by a person); or the caller is a machine principal (a team's creator becomes its owner, and a machine never governs)"),
-        (status = 403, description = "Forbidden (child requires owner/maintainer; auto_join_role requires admin); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 400, description = "The `personal-` slug prefix is reserved for personal teams; the parent is a personal team, which takes no children; `auto_join_role` is above `member` (it may be `member` or `watcher`: a role that governs a team is granted by a person); or the caller is a machine principal (a team's creator becomes its owner, and a machine never governs)"),
+        (status = 403, description = "Forbidden (a child requires owner/maintainer on the parent, and a system admin when the parent is temper-system or the gating team; auto_join_role requires admin); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 409, description = "Team slug already exists"),
     )
 )]
@@ -121,7 +121,7 @@ pub async fn detail(
     request_body = TeamUpdateRequest,
     responses(
         (status = 200, description = "Team metadata updated", body = TeamRow),
-        (status = 403, description = "Forbidden (caller is not owner/maintainer); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 403, description = "Forbidden (caller is not owner/maintainer; on temper-system or the gating team, not a system admin); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 404, description = "Team not found or soft-deleted"),
     )
 )]
@@ -146,7 +146,7 @@ pub async fn update(
     security(("bearer_auth" = [])),
     responses(
         (status = 204, description = "Team soft-deleted"),
-        (status = 403, description = "Forbidden (caller is not the owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 403, description = "Forbidden (caller is neither the owner nor a system admin; on temper-system or the gating team, not a system admin); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 404, description = "Team not found or already soft-deleted"),
         (status = 409, description = "Cannot delete the temper-system root team"),
     )
@@ -214,4 +214,34 @@ pub async fn change_role(
     team_service::change_role(&state.pool, &auth.0, team_id, profile_id, body.role)
         .await
         .map(Json)
+}
+
+/// Detach a child team from this team
+///
+/// Removes the parent link, so the child's members stop reaching what is attached to this team and
+/// its ancestors. The child and its roster survive; only this link is cut. Recorded on the admin
+/// ledger as `team_parent_link_changed`.
+#[utoipa::path(
+    delete,
+    operation_id = "detach_child_team",
+    path = "/api/teams/{id}/children/{child_id}",
+    tag = "Teams",
+    params(
+        ("id" = Uuid, Path, description = "Parent team ID"),
+        ("child_id" = Uuid, Path, description = "Child team ID"),
+    ),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 204, description = "Child detached"),
+        (status = 403, description = "Forbidden: the caller is not an owner or maintainer of the parent team, or the parent is temper-system or the gating team and the caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 404, description = "That team is not a child of this team; told only to a caller who may manage the parent"),
+    )
+)]
+pub async fn detach_child(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((team_id, child_id)): Path<(Uuid, Uuid)>,
+) -> ApiResult<StatusCode> {
+    team_service::detach_child(&state.pool, &auth.0, team_id, child_id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
