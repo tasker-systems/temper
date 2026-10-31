@@ -29,11 +29,28 @@ fn field_tree(members: Value) -> Value {
 }
 
 fn assert_refused(schema: &Value) {
+    refusal(schema);
+}
+
+/// What `schema`'s refusal names, asserting it is refused with the fixed sentence as its `Display`
+/// and a named refusal within the bound beside it.
+fn refusal(schema: &Value) -> String {
+    let error = compile(schema).expect_err("the schema must be refused");
     assert_eq!(
-        compile(schema).err(),
-        Some(ShapeSchemaUncompilable),
-        "schema {schema} must be refused with the fixed error"
+        error.to_string(),
+        ShapeSchemaUncompilable::default().to_string(),
+        "schema {schema} must be refused with the fixed sentence as its Display"
     );
+    let detailed = error.detailed();
+    assert!(
+        detailed.len() <= MAX_FAILURE_MESSAGE_BYTES,
+        "{} bytes: {detailed}",
+        detailed.len()
+    );
+    error
+        .refused()
+        .unwrap_or_else(|| panic!("schema {schema} must name what was refused"))
+        .to_owned()
 }
 
 fn assert_compiles(schema: &Value) {
@@ -96,10 +113,17 @@ const ALLOWED: &[(&str, &str)] = &[
     ("$comment", r#""c""#),
     ("default", r#""a""#),
     ("examples", r#"["a"]"#),
+    // An annotation, never an assertion (shape ruling R1).
+    ("format", r#""date-time""#),
+    // Carried and ignored, whatever it holds (shape ruling R2).
+    (
+        "x-ui",
+        r##"{ "$ref": "#", "allOf": [7], "properties": 7 }"##,
+    ),
 ];
 
 /// Every other keyword of the JSON Schema 2020-12 vocabularies — core, applicator, unevaluated,
-/// validation, meta-data, format-annotation and content — and the earlier drafts' spellings of
+/// validation, meta-data and content — and the earlier drafts' spellings of
 /// what they replaced, each with a value it may take there, so that only the allow-list refuses it.
 const REFUSED: &[(&str, &str)] = &[
     // core
@@ -139,8 +163,6 @@ const REFUSED: &[(&str, &str)] = &[
     ("deprecated", "true"),
     ("readOnly", "true"),
     ("writeOnly", "true"),
-    // format-annotation
-    ("format", r#""email""#),
     // content
     ("contentEncoding", r#""base64""#),
     ("contentMediaType", r#""text/plain""#),
@@ -241,7 +263,7 @@ fn schema_and_id_compile_at_the_root() {
 
 #[test]
 fn refuses_an_unknown_key() {
-    assert_refused(&field_tree(json!({ "x-custom": { "type": "string" } })));
+    assert_refused(&field_tree(json!({ "custom": { "type": "string" } })));
 }
 
 /// 2020-12 meta-validation also refuses `items` as an array, so this is defence in depth with no
@@ -743,7 +765,329 @@ fn a_required_entry_past_the_cap_is_refused() {
 /// so a declarer refused for an `http://` or draft-07 spelling is told what to write instead.
 #[test]
 fn the_refusal_names_the_accepted_schema_spellings() {
-    let sentence = ShapeSchemaUncompilable.to_string();
+    let sentence = ShapeSchemaUncompilable::default().to_string();
     assert!(sentence.contains(DRAFT_2020_12), "{sentence}");
     assert!(sentence.contains("trailing #"), "{sentence}");
+}
+
+// ── format and x-* are inert annotations (shape rulings R1, R2) ──────────────────────────────
+
+/// `format` asserts nothing: the compile turns on no format validation, so a string that is not a
+/// date-time satisfies a `format: date-time` field. Witnessed against the `jsonschema` in
+/// `Cargo.lock`, so an upgrade that turned format assertion on by default bites here.
+#[test]
+fn format_is_an_annotation_and_asserts_nothing() {
+    let schema = field_tree(json!({
+        "type": "object",
+        "properties": {
+            "when": { "type": "string", "format": "date-time" },
+            "mail": { "type": "string", "format": "email" },
+            "id": { "type": "string", "format": "uuid" },
+        }
+    }));
+    let validator = compile(&schema).expect("format is an annotation");
+    let content = json!({ "when": "not a date", "mail": "not an address", "id": "nope" });
+    assert_eq!(first_failure(&validator, &content), None);
+    assert!(
+        first_failure(&validator, &json!({ "when": 7 })).is_some(),
+        "control: the field's type is still enforced"
+    );
+}
+
+/// `format` is accepted in every schema position: the root, a `properties` value, an `items`
+/// schema and an `additionalProperties` schema, and nested at depth.
+#[test]
+fn format_is_accepted_in_every_schema_position() {
+    for schema in [
+        field_tree(json!({ "type": "string", "format": "date" })),
+        field_tree(json!({ "properties": { "a": { "format": "date" } } })),
+        field_tree(json!({ "type": "array", "items": { "format": "date" } })),
+        field_tree(json!({ "additionalProperties": { "format": "date" } })),
+        field_tree(
+            json!({ "properties": { "a": { "items": { "properties": { "b": { "format": "x" } } } } } }),
+        ),
+    ] {
+        assert_compiles(&schema);
+    }
+}
+
+/// A `format` must be a string; any other value is refused by the walk, naming it.
+#[test]
+fn a_format_that_is_not_a_string_is_refused() {
+    assert_eq!(
+        refusal(&field_tree(
+            json!({ "properties": { "a": { "format": 7 } } })
+        )),
+        "keyword format that is not a string at /properties/a"
+    );
+}
+
+/// A key beginning `x-` is accepted in every schema position and its value is never walked: an
+/// object holding refused keywords, a scalar, an array, and a key that is only the prefix.
+#[test]
+fn an_extension_key_is_carried_in_every_position_and_never_walked() {
+    let held = json!({ "$ref": "#", "allOf": [{}], "properties": 7, "$schema": "draft-07" });
+    for value in [held, json!(7), json!([1, "two"]), json!(null)] {
+        for schema in [
+            field_tree(json!({ "x-a": value.clone() })),
+            field_tree(json!({ "properties": { "a": { "x-": value.clone() } } })),
+            field_tree(json!({ "items": { "x-order": value.clone() } })),
+            field_tree(json!({ "additionalProperties": { "x-ui": value.clone() } })),
+        ] {
+            assert_compiles(&schema);
+        }
+    }
+}
+
+/// Only the `x-` prefix is inert: `X-` and `xa` are unknown keywords like any other.
+#[test]
+fn only_the_lowercase_x_dash_prefix_is_inert() {
+    assert_eq!(
+        refusal(&field_tree(json!({ "X-ui": 1 }))),
+        "keyword X-ui at the root"
+    );
+    assert_eq!(
+        refusal(&field_tree(json!({ "xui": 1 }))),
+        "keyword xui at the root"
+    );
+}
+
+// ── A refusal names the first keyword and path that failed (shape ruling R4) ───────────────
+
+/// The refusal names the keyword and the JSON-pointer path of the schema position holding it, and
+/// the detailed sentence keeps the fixed explanation after it.
+#[test]
+fn the_refusal_names_the_keyword_and_its_path() {
+    let schema = field_tree(json!({
+        "type": "object",
+        "properties": { "when": { "allOf": [{ "type": "string" }] } }
+    }));
+    assert_eq!(refusal(&schema), "keyword allOf at /properties/when");
+    let detailed = compile(&schema).expect_err("refused").detailed();
+    let fixed = ShapeSchemaUncompilable::default().to_string();
+    assert!(
+        detailed.starts_with(
+            "the shape's JSON Schema cannot be compiled (keyword allOf at /properties/when): a \
+             shape is a field tree"
+        ),
+        "{detailed}"
+    );
+    let explanation = fixed
+        .split_once(": ")
+        .expect("the fixed sentence explains after a colon")
+        .1;
+    assert!(detailed.ends_with(explanation), "{detailed}");
+}
+
+/// Paths step through `properties`, `items` and `additionalProperties`, and a name holding `~` or
+/// `/` is escaped as RFC 6901 says.
+#[test]
+fn the_path_names_every_kind_of_step_and_escapes_names() {
+    let schema = field_tree(json!({
+        "properties": { "a/b~c": { "items": { "additionalProperties": { "not": {} } } } }
+    }));
+    assert_eq!(
+        refusal(&schema),
+        "keyword not at /properties/a~1b~0c/items/additionalProperties"
+    );
+}
+
+/// **First** is the walk's order: a position's own keywords before the positions nested in it,
+/// and nested positions in the map's order. Of three refusals the first is named, and only it.
+#[test]
+fn the_first_refusal_in_the_walks_order_is_named() {
+    let schema = field_tree(json!({
+        "$defs": {},
+        "properties": {
+            "a": { "oneOf": [] },
+            "b": { "anyOf": [] }
+        }
+    }));
+    assert_eq!(refusal(&schema), "keyword $defs at the root");
+    let nested = field_tree(json!({
+        "properties": { "a": { "oneOf": [] }, "b": { "anyOf": [] } }
+    }));
+    assert_eq!(refusal(&nested), "keyword oneOf at /properties/a");
+    let deeper = field_tree(json!({
+        "properties": { "a": { "items": { "if": {} } }, "b": { "anyOf": [] } }
+    }));
+    assert_eq!(
+        refusal(&deeper),
+        "keyword if at /properties/a/items",
+        "depth first: a's nested position before b"
+    );
+}
+
+/// Each cap failure names the cap and the path.
+#[test]
+fn a_cap_failure_names_the_cap_and_the_path() {
+    let strings: Vec<String> = (0..=MAX_ENUM_ENTRIES).map(|i| format!("v{i}")).collect();
+    assert_eq!(
+        refusal(&field_tree(
+            json!({ "properties": { "a": { "enum": strings } } })
+        )),
+        format!(
+            "enum of {} entries, past the cap of {MAX_ENUM_ENTRIES}, at /properties/a",
+            MAX_ENUM_ENTRIES + 1
+        )
+    );
+    let mixed: Vec<Value> = (0..=MAX_MIXED_ENUM_ENTRIES).map(|i| json!(i)).collect();
+    assert_eq!(
+        refusal(&field_tree(json!({ "items": { "enum": mixed } }))),
+        format!(
+            "enum of {} entries, past the cap of {MAX_MIXED_ENUM_ENTRIES}, at /items",
+            MAX_MIXED_ENUM_ENTRIES + 1
+        )
+    );
+    let source = "a".repeat(MAX_PATTERN_SOURCE_BYTES + 1);
+    assert_eq!(
+        refusal(&field_tree(
+            json!({ "properties": { "a": { "pattern": source } } })
+        )),
+        format!(
+            "pattern of {} bytes, past the cap of {MAX_PATTERN_SOURCE_BYTES} bytes of source, at \
+             /properties/a",
+            MAX_PATTERN_SOURCE_BYTES + 1
+        )
+    );
+    let fields: serde_json::Map<String, Value> = (0..=MAX_SHAPE_PATTERNS)
+        .map(|i| (format!("p{i:02}"), json!({ "pattern": "^a" })))
+        .collect();
+    assert_eq!(
+        refusal(&field_tree(json!({ "properties": fields }))),
+        format!(
+            "pattern past the cap of {MAX_SHAPE_PATTERNS} in a shape at /properties/p{MAX_SHAPE_PATTERNS}"
+        )
+    );
+    let name = "k".repeat(MAX_PROPERTY_NAME_BYTES + 1);
+    assert_eq!(
+        refusal(&field_tree(
+            json!({ "properties": { "a": { "properties": { name.clone(): {} } } } })
+        )),
+        format!("a name in properties past {MAX_PROPERTY_NAME_BYTES} bytes at /properties/a")
+    );
+    assert_eq!(
+        refusal(&field_tree(json!({ "required": [name] }))),
+        format!("a name in required past {MAX_PROPERTY_NAME_BYTES} bytes at the root")
+    );
+    // Seventeen steps of `/properties/a` are past the room the bound leaves, so the path loses its
+    // middle and keeps both ends.
+    let too_deep = refusal(&chain(&[Step::Property; MAX_SHAPE_DEPTH + 1]));
+    assert!(
+        too_deep.starts_with(&format!(
+            "nesting past {MAX_SHAPE_DEPTH} levels at /properties/a/"
+        )) && too_deep.ends_with("/properties/a/properties/a")
+            && too_deep.contains('…'),
+        "{too_deep}"
+    );
+}
+
+/// The refusal never quotes a value under `const`, `enum`, `default`, `examples` or an `x-` key,
+/// and never a `$schema` it refused: only the schema's keywords, counts, caps and path.
+#[test]
+fn the_refusal_quotes_no_value() {
+    const SENTINEL: &str = "SENTINEL-content-9d1e";
+    let schema = field_tree(json!({
+        "properties": {
+            "a": {
+                "const": SENTINEL,
+                "enum": [SENTINEL],
+                "default": SENTINEL,
+                "examples": [SENTINEL],
+                "x-note": SENTINEL,
+                "allOf": []
+            }
+        }
+    }));
+    let error = compile(&schema).expect_err("refused");
+    assert_eq!(error.refused(), Some("keyword allOf at /properties/a"));
+    assert!(!error.detailed().contains(SENTINEL), "{}", error.detailed());
+    let wrong_draft = json!({ "$schema": format!("https://{SENTINEL}/schema") });
+    let error = compile(&wrong_draft).expect_err("refused");
+    assert!(!error.detailed().contains(SENTINEL), "{}", error.detailed());
+}
+
+/// However long the path or the keyword, the detailed sentence fits the failure-message bound and
+/// keeps the explanation whole: what was refused is cut, never the sentence after it.
+#[test]
+fn the_detailed_refusal_is_bounded_and_keeps_the_explanation() {
+    let long = "n".repeat(MAX_PROPERTY_NAME_BYTES);
+    let mut node = json!({ "allOf": [] });
+    for _ in 0..MAX_SHAPE_DEPTH {
+        node = json!({ "properties": { long.clone(): node } });
+    }
+    let fixed = ShapeSchemaUncompilable::default().to_string();
+    let explanation = fixed.split_once(": ").expect("explained").1.to_owned();
+    for schema in [field_tree(node), field_tree(json!({ "k".repeat(4096): 1 }))] {
+        let error = compile(&schema).expect_err("refused");
+        let detailed = error.detailed();
+        assert!(
+            detailed.len() <= MAX_FAILURE_MESSAGE_BYTES,
+            "{}",
+            detailed.len()
+        );
+        assert!(detailed.ends_with(&explanation), "{detailed}");
+        assert!(
+            error.refused().is_some_and(|r| r.contains('…')),
+            "{detailed}"
+        );
+    }
+}
+
+/// A property name or an unknown key carrying control or bidirectional-formatting characters is
+/// named with them escaped, so a refusal shown to another reader cannot drive a terminal or
+/// reorder the sentence.
+#[test]
+fn control_and_bidi_characters_in_a_named_refusal_are_escaped() {
+    let schema = field_tree(json!({
+        "properties": { "a\u{1b}[31m\n\u{202e}b": { "allOf": [] } }
+    }));
+    let refused = refusal(&schema);
+    assert_eq!(
+        refused,
+        "keyword allOf at /properties/a\\u{1b}[31m\\u{a}\\u{202e}b"
+    );
+    assert!(!refused.chars().any(char::is_control), "{refused:?}");
+    assert_eq!(
+        refusal(&field_tree(json!({ "\u{7}bell": 1 }))),
+        "keyword \\u{7}bell at the root"
+    );
+}
+
+/// The fixed sentence leaves room under the bound to name what was refused. Bites a sentence
+/// grown so long that every refusal would silently name nothing.
+#[test]
+fn the_detailed_refusal_has_room() {
+    use temper_substrate::shape_schema::{refused_room, MIN_REFUSED_ROOM};
+    assert!(
+        refused_room() >= MIN_REFUSED_ROOM,
+        "{} bytes",
+        refused_room()
+    );
+}
+
+/// A refusal the build gives — 2020-12 meta-validation, or a pattern the regex engine will not
+/// build — names a position whose property names are escaped as the walk's are. Bites a
+/// `build_refusal` that quotes the build's pointer raw.
+#[test]
+fn control_and_bidi_characters_in_a_build_refusal_are_escaped() {
+    let name = "a\u{1b}[31m\n\u{202e}b";
+    let meta = refusal(&field_tree(
+        json!({ "properties": { name: { "type": 5 } } }),
+    ));
+    assert_eq!(
+        meta,
+        "a value that is not valid 2020-12 at /properties/a\\u{1b}[31m\\u{a}\\u{202e}b/type"
+    );
+    let regex = refusal(&field_tree(
+        json!({ "properties": { name: { "pattern": "(" } } }),
+    ));
+    assert!(
+        regex.ends_with("at /properties/a\\u{1b}[31m\\u{a}\\u{202e}b"),
+        "{regex}"
+    );
+    for refused in [&meta, &regex] {
+        assert!(!refused.chars().any(char::is_control), "{refused:?}");
+        assert!(!refused.contains('\u{202e}'), "{refused:?}");
+    }
 }

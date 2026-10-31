@@ -21,7 +21,8 @@
 //! 3. **Compiles?** First measured: a schema larger than the walk reads
 //!    ([`within_schema_bound`]) is `SchemaTooLarge` and is never compiled. Within the bound,
 //!    through the no-fetch constructor ([`shape_schema::compile`]); a schema it refuses is
-//!    `Uncompilable`, and the compiler's text goes nowhere.
+//!    `Uncompilable`, naming the first thing the compile refused and where (schema text, which
+//!    the reader step 1 admitted can already read), and the compiler's own text goes nowhere.
 //!
 //! **One decision for every door that decides whether a schema can be asked** ([`judge`]): the
 //! loader, the by-id read's `askable`, and declare (`shape_service::declare_shape`) measure
@@ -68,7 +69,7 @@ use temper_core::types::ids::{ProfileId, ShapeId};
 use temper_core::types::query::filter::{property_value_bytes, property_value_nodes};
 use temper_core::types::query::PlanRefusal;
 use temper_substrate::readback::{self, RetrievedShape};
-use temper_substrate::shape_schema;
+use temper_substrate::shape_schema::{self, ShapeSchemaUncompilable};
 
 /// Load every shape one request's asks name, for `principal`, into the context its asks are
 /// validated against ([`ShapeContext::session`]). One [`load_one`] per id, in id order.
@@ -222,20 +223,25 @@ async fn compiled(row: RetrievedShape) -> ApiResult<ShapeLoad> {
 }
 
 /// What a stored or declared schema is, for asking: within the walk's byte bound and compiling,
-/// within it and not compiling, or past it — and then never compiled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// within it and not compiling — with what the compile refused first — or past it, and then never
+/// compiled.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchemaVerdict {
     Compiles,
-    Uncompilable,
+    Uncompilable(ShapeSchemaUncompilable),
     TooLarge,
 }
 
 impl SchemaVerdict {
-    /// The load a schema with this verdict is refused as, or `None` when it compiles.
-    pub fn refusing_load(self) -> Option<ShapeLoad> {
+    /// The load a schema with this verdict is refused as, or `None` when it compiles. An
+    /// uncompilable load names what the compile refused: every load is of a row a gated read
+    /// returned, so its reader can already read the schema the name describes.
+    pub fn refusing_load(&self) -> Option<ShapeLoad> {
         match self {
             SchemaVerdict::Compiles => None,
-            SchemaVerdict::Uncompilable => Some(ShapeLoad::Uncompilable),
+            SchemaVerdict::Uncompilable(refused) => Some(ShapeLoad::Uncompilable {
+                refused: refused.refused().map(str::to_owned),
+            }),
             SchemaVerdict::TooLarge => Some(ShapeLoad::SchemaTooLarge),
         }
     }
@@ -254,19 +260,17 @@ pub async fn judge(schema: &Value) -> ApiResult<SchemaVerdict> {
     if !within_schema_bound(schema) {
         return Ok(SchemaVerdict::TooLarge);
     }
-    with_schema_off_the_executor(schema, |schema| {
-        if shape_schema::compile(schema).is_ok() {
-            SchemaVerdict::Compiles
-        } else {
-            SchemaVerdict::Uncompilable
-        }
+    with_schema_off_the_executor(schema, |schema| match shape_schema::compile(schema) {
+        Ok(_) => SchemaVerdict::Compiles,
+        Err(refused) => SchemaVerdict::Uncompilable(refused),
     })
     .await
 }
 
-/// The most verdicts the process remembers. An entry is a shape id and a byte, about 150 KiB of
-/// map at the cap; past it an arbitrary entry is forgotten, and that shape is judged again when it
-/// is next read.
+/// The most verdicts the process remembers. An entry is a shape id and a verdict — for one that
+/// does not compile, the bounded name of what it refused (at most `shape_schema::refused_room()`,
+/// about 120 bytes) — so under 1 MiB of map at the cap; past it an arbitrary entry is forgotten,
+/// and that shape is judged again when it is next read.
 const MAX_REMEMBERED_VERDICTS: usize = 4096;
 
 /// Each stored shape's verdict, by id, for the life of the process.
@@ -279,7 +283,7 @@ async fn verdict_of(id: ShapeId, schema: &Value) -> ApiResult<SchemaVerdict> {
         return Ok(verdict);
     }
     let verdict = judge(schema).await?;
-    remember(id, verdict);
+    remember(id, verdict.clone());
     Ok(verdict)
 }
 
@@ -288,7 +292,7 @@ fn remembered(id: ShapeId) -> Option<SchemaVerdict> {
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .get(&id)
-        .copied()
+        .cloned()
 }
 
 fn remember(id: ShapeId, verdict: SchemaVerdict) {
@@ -646,7 +650,7 @@ pub async fn askable(row: &RetrievedShape) -> ApiResult<(Vocabulary, Option<Plan
         // Past it the walk reads nothing — the measurement stops at the bound — and says why:
         // `truncated: [schema_bytes]`.
         SchemaVerdict::TooLarge => enumerate(&row.schema, &WalkBounds::BUILD),
-        SchemaVerdict::Uncompilable => Vocabulary::default(),
+        SchemaVerdict::Uncompilable(_) => Vocabulary::default(),
     };
     let refusal = verdict.refusing_load().and_then(|load| load.loaded().err());
     Ok((vocabulary, refusal))
@@ -833,8 +837,16 @@ mod tests {
             remember(ShapeId::new(), SchemaVerdict::Compiles);
         }
         let id = ShapeId::new();
-        remember(id, SchemaVerdict::Uncompilable);
-        assert_eq!(remembered(id), Some(SchemaVerdict::Uncompilable));
+        remember(
+            id,
+            SchemaVerdict::Uncompilable(ShapeSchemaUncompilable::default()),
+        );
+        assert_eq!(
+            remembered(id),
+            Some(SchemaVerdict::Uncompilable(
+                ShapeSchemaUncompilable::default()
+            ))
+        );
         let held = VERDICTS
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -1139,7 +1151,7 @@ mod tests {
         for load in [
             ShapeLoad::NotAskable,
             ShapeLoad::Superseded { successor: None },
-            ShapeLoad::Uncompilable,
+            ShapeLoad::Uncompilable { refused: None },
             ShapeLoad::SchemaTooLarge,
             ShapeLoad::Loaded(elsewhere),
         ] {

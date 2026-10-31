@@ -5055,7 +5055,7 @@ mod tests {
                     shape_version: 2,
                 }),
             },
-            ShapeLoad::Uncompilable,
+            ShapeLoad::Uncompilable { refused: None },
             ShapeLoad::SchemaTooLarge,
         ] {
             let expected = load.loaded().err();

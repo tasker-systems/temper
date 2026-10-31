@@ -30,7 +30,7 @@ use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ContextId, EntityId, ProfileId, ShapeId};
 use temper_core::types::workflow_job::{AnchorJobPayload, ClaimedAnchorJob, DispatchType, Persona};
 use temper_substrate::payloads::{AnchorRef, EnforcementMode, KindOwner};
-use temper_substrate::shape_schema::{self, ShapeSchemaUncompilable};
+use temper_substrate::shape_schema;
 use temper_substrate::writes::{self, DataArtifactRefusal, DeclareShapeParams};
 
 /// Lease for a claimed shape-reconcile job. Same reasoning as the region lease: MUST exceed the
@@ -74,7 +74,8 @@ pub struct DeclareShapeServiceParams<'a> {
 /// larger than the walk reads ([`MAX_SCHEMA_BYTES`]) is refused before it is compiled, with a
 /// sentence naming the bound; one within it that cannot be compiled (malformed, not a field
 /// tree, or with a pattern past `shape_schema::MAX_PATTERN_BYTES`) is
-/// refused with the no-fetch constructor's fixed sentence. Both are a `DataArtifactRefusal`, so
+/// refused with the no-fetch constructor's sentence, naming what it refused first and where — the
+/// declarer wrote the schema (shape ruling R4). Both are a `DataArtifactRefusal`, so
 /// a schema no ask could use is refused when it is declared rather than stored. Before either, a
 /// family name or a schema holding U+0000, which Postgres cannot store, is refused as one too,
 /// naming the field ([`unstorable_nul`]), where binding it would have failed in the database; and
@@ -100,10 +101,9 @@ pub async fn declare_shape(pool: &PgPool, p: DeclareShapeServiceParams<'_>) -> A
     }
     match shape_loader::judge(p.schema).await? {
         SchemaVerdict::Compiles => {}
-        SchemaVerdict::Uncompilable => {
-            return Err(ApiError::DataArtifactRefusal(
-                ShapeSchemaUncompilable.to_string(),
-            ))
+        // The declarer wrote the schema, so the refusal names what the compile refused first.
+        SchemaVerdict::Uncompilable(refused) => {
+            return Err(ApiError::DataArtifactRefusal(refused.detailed()))
         }
         SchemaVerdict::TooLarge => return Err(ApiError::DataArtifactRefusal(too_large())),
     }

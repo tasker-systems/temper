@@ -719,7 +719,7 @@ mod tests {
         elsewhere.shape_id = ShapeId::from(Uuid::from_u128(SHAPE + 1));
         for load in [
             ShapeLoad::NotAskable,
-            ShapeLoad::Uncompilable,
+            ShapeLoad::Uncompilable { refused: None },
             ShapeLoad::Superseded { successor: None },
             ShapeLoad::Loaded(elsewhere),
         ] {
@@ -793,7 +793,7 @@ mod tests {
                 RefusalReason::ShapeSuperseded,
             ),
             (
-                ShapeLoad::Uncompilable,
+                ShapeLoad::Uncompilable { refused: None },
                 RefusalReason::ShapeSchemaUncompilable,
             ),
             (

@@ -348,6 +348,77 @@ async fn enforcing_refusal_names_the_violations_over_http(pool: PgPool) {
     );
 }
 
+/// A commit into an enforcing family whose stored shape is not a field tree (declared before
+/// declare compiled, and stored here through the substrate write, which does not compile) is
+/// refused naming what the compile refused first — the committer owns the context, so it can read
+/// the shape (shape ruling R4). The detail rides beside the substrate's fixed message and only the
+/// API door, which knows the reader, names it: bites a door that drops it, or names it unasked.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_uncompilable_enforcing_shape_refusal_names_what_failed_to_its_reader_over_http(
+    pool: PgPool,
+) {
+    let app = common::setup(pool).await;
+    let (context_id, resource_id) = context_with_resource(&app, "e2e-uncompilable-commit").await;
+    let owner: uuid::Uuid = sqlx::query_scalar("SELECT id FROM kb_profiles WHERE email = $1")
+        .bind("e2e@test.example.com")
+        .fetch_one(&app.pool)
+        .await
+        .expect("the harness profile");
+    let emitter: uuid::Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_entities (profile_id, name) VALUES ($1, 'e2e-shape-emitter') RETURNING id",
+    )
+    .bind(owner)
+    .fetch_one(&app.pool)
+    .await
+    .expect("an emitter for the substrate write");
+    let schema = json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": { "value": { "anyOf": [{ "type": "string" }] } }
+    });
+    temper_substrate::writes::declare_shape(
+        &app.pool,
+        temper_substrate::writes::DeclareShapeParams {
+            home: temper_substrate::payloads::AnchorRef::context(context_id.into()),
+            kind: "measurement",
+            kind_owner: None,
+            schema: &schema,
+            enforcement: temper_substrate::payloads::EnforcementMode::Enforcing,
+            emitter: emitter.into(),
+        },
+    )
+    .await
+    .expect("the substrate write stores a schema declare would refuse");
+
+    let err = app
+        .client
+        .data_artifacts()
+        .commit(
+            resource_id,
+            &ArtifactCommitRequest {
+                kind: "measurement".to_string(),
+                kind_owner: None,
+                intent: "current".to_string(),
+                precedence: 0.0,
+                content: json!({ "value": "x" }),
+                supersedes: Vec::new(),
+                act: Default::default(),
+            },
+        )
+        .await
+        .expect_err("an enforcing family whose shape cannot compile refuses the commit");
+    let refusal = match err {
+        ClientError::DataArtifactRefusal { message } => message,
+        other => panic!("the refusal must arrive typed, not as {other}"),
+    };
+    assert_eq!(
+        refusal,
+        temper_substrate::writes::uncompilable_shape_message(Some(
+            "keyword anyOf at /properties/value"
+        )),
+    );
+}
+
 /// The enforcing refusal through the MCP commit door — `map_api_err` must not wrap it
 /// in an internal-error envelope either.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
@@ -558,6 +629,10 @@ async fn an_uncompilable_schema_is_refused_at_declare_over_http(pool: PgPool) {
         other => panic!("the refusal must arrive typed (a 400), not as {other}"),
     };
     assert_fixed_sentence(&message, &probe);
+    assert!(
+        message.contains("(keyword $ref at the root)"),
+        "the declarer is told the first keyword refused and where, got: {message}"
+    );
     assert_eq!(
         shape_row_count(&app).await,
         rows_before,
