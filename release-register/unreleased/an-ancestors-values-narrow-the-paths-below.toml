@@ -20,16 +20,17 @@ there is admitted as before, while the paths below it are still narrowed.
 
 What changes for a caller: a shape's vocabulary (`GET /api/shapes/{id}`'s `askable`, the MCP
 `get_data_artifact_shape` tool, `temper data-artifact schema show`) now lists `values` at a path
-below an ancestor that declares an `enum` or `const`, and a `value_outside_shape` refusal teaches
-them. An ask at such a path whose value no ancestor member holds is refused; before, it was
-admitted and matched nothing. Only shapes that declare an `enum` or `const` above a declared
-`properties` key are affected. No wire field is added: `PathFacts.values` changes only in its
-description text, in OpenAPI, ts-rs and the three generated SDKs.
+below an ancestor that declares an `enum` or `const`, wherever the path lists them under the rule
+above, and a `value_outside_shape` refusal teaches them. An ask at a path that lists them, whose
+value no ancestor member holds, is refused; before, it was admitted and matched nothing. Only
+shapes that declare an `enum` or `const` above a declared `properties` key are affected. No wire
+field is added: `PathFacts.values` changes only in its description text, in OpenAPI, ts-rs and the
+three generated SDKs.
 
 No object or array an ancestor declares is copied onto the paths below it, and each scalar inside
 one is listed at one path at most, so a vocabulary holds the values its schema declares plus at
-most one copy of each such scalar. An element's values (`items`) are not narrowed. Bounding the size of declared values at declare is its own change. No
-migration.
+most one copy of each such scalar. An element's values (`items`) are not narrowed. Bounding the
+size of declared values at declare is its own change. No migration.
 
 Who observes: agents and CLIs asking at a path below a declared value, and readers of a shape's
 vocabulary. Release relevance: signal-only.

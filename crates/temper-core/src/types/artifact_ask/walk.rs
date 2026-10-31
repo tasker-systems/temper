@@ -1182,6 +1182,37 @@ mod tests {
         assert_eq!(at(&s, &["m", "n"]), untyped());
     }
 
+    /// A path declaring nothing of its own lists what it inherits only when every value is a
+    /// scalar, through a `true` subschema as through an object. Bites `lists` three ways: with
+    /// `any` for `all`, `p` lists its mixed set; counting an array a scalar, `a` lists `[1]` and
+    /// `[2]`; and with the `true` arm listing everything, `t` lists both objects.
+    #[test]
+    fn a_path_lists_what_it_inherits_only_when_all_of_it_is_scalar() {
+        let s = json!({
+            "enum": [
+                { "p": 1, "a": [1], "t": { "x": 1 }, "s": "u" },
+                { "p": { "x": 2 }, "a": [2], "t": { "x": 3 }, "s": "v" }
+            ],
+            "properties": {
+                "p": { "properties": { "x": {} } },
+                "a": {},
+                "t": true,
+                "s": true
+            }
+        });
+        let valued = |values: Vec<Value>| {
+            PathResolution::Declared(PathFacts {
+                values: Some(values),
+                ..PathFacts::default()
+            })
+        };
+        assert_eq!(at(&s, &["p"]), untyped());
+        assert_eq!(at(&s, &["p", "x"]), valued(vec![json!(2)]));
+        assert_eq!(at(&s, &["a"]), untyped());
+        assert_eq!(at(&s, &["t"]), untyped());
+        assert_eq!(at(&s, &["s"]), valued(vec![json!("u"), json!("v")]));
+    }
+
     /// An object or array an ancestor declares is never copied onto the paths below it. A `const`
     /// nested down a chain as deep as the walk reads, over a wide object, would otherwise be copied
     /// once per level — the vocabulary many times the schema — and a scalar inside it is still
