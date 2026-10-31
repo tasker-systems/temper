@@ -201,6 +201,23 @@ pub struct TeamDetail {
     pub created: DateTime<Utc>,
     pub auto_join_role: Option<TeamRole>,
     pub members: Vec<TeamMemberDetail>,
+    /// The team's direct child teams. Present (non-empty) only for a caller who manages this team
+    /// or is a system admin: a child's members reach everything attached to this team, so its
+    /// managers see which teams hang beneath it (team-authority fixes D3). Empty for everyone else.
+    #[serde(default)]
+    pub children: Vec<TeamChildRef>,
+}
+
+/// A direct child team, as listed on its parent's [`TeamDetail`].
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct TeamChildRef {
+    pub id: Uuid,
+    pub slug: String,
+    pub name: String,
 }
 
 /// Request body for `PATCH /api/teams/{id}` — update team metadata.

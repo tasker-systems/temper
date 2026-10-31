@@ -44,6 +44,10 @@ pub async fn reassign_resource(
 }
 
 /// Bulk reassign a team's resources
+///
+/// Moves every live resource owned by `from_profile_id` (a current or former member of the team) and
+/// homed in a context the team owns to `to_profile_id` (a member). Contexts merely shared to the team
+/// are out of scope: a share confers read, never authority over the container.
 #[utoipa::path(
     post,
     path = "/api/teams/{id}/reassign",
@@ -53,7 +57,7 @@ pub async fn reassign_resource(
     request_body = BulkReassignRequest,
     responses(
         (status = 200, description = "Team resources reassigned", body = BulkReassignAck),
-        (status = 403, description = "Forbidden (caller does not manage the team, or target not a member); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
+        (status = 403, description = "Forbidden (caller does not manage the team, the team is temper-system or the gating team, the target is not a member, or `from` was never a member); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
     )
 )]
 pub async fn reassign_team(

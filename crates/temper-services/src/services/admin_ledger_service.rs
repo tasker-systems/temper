@@ -93,6 +93,9 @@ const ADMIN_EVENT_TYPES: &[&str] = &[
     // removes team authority; managers of the team read it through the C12 arm in
     // `readable_event_types`, which calls the membership gate rather than restating it.
     "team_membership_changed",
+    // A child team linked under, or detached from, a parent (team-authority fixes D3): the parent
+    // is the subject, and its managers read it through the same arm as its membership changes.
+    "team_parent_link_changed",
 ];
 
 /// The §5 table, evaluated for one subject. Returns the event types `caller` may read about
@@ -151,6 +154,7 @@ async fn readable_event_types(
         .await?;
         if resolved.manages() {
             readable.push("team_membership_changed");
+            readable.push("team_parent_link_changed");
         }
     }
 

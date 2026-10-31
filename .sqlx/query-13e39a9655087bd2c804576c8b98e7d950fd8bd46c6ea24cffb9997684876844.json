@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n                 SELECT 1 FROM kb_teams t\n                  WHERE t.id = $1 AND t.is_active AND t.slug <> 'temper-system'\n                    AND t.slug IS DISTINCT FROM\n                        (SELECT s.gating_team_slug FROM kb_system_settings s WHERE s.id = 1))\n               AS \"e!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "e!: bool",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "13e39a9655087bd2c804576c8b98e7d950fd8bd46c6ea24cffb9997684876844"
+}

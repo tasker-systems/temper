@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT t.id, t.slug, t.name\n                 FROM kb_teams_parents tp\n                 JOIN kb_teams t ON t.id = tp.child_id AND t.is_active\n                WHERE tp.parent_id = $1\n                ORDER BY t.slug",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "a1803f8295a3635b6faac3155191d7d6d90abe5a2fbb585179da5969aedf0de3"
+}

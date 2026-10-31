@@ -5,7 +5,8 @@
 //!
 //! Two authorized paths: the current owner may reassign their own resource to
 //! anyone (mis-attribution self-fix); a team admin may reassign a resource
-//! scoped to a team they manage, to a member of that team (offboarding +
+//! homed in a context their team owns, owned by a current or former member of it, to a member
+//! of that team (offboarding +
 //! admin-assisted mis-attribution). Only **context-homed** resources are
 //! reassignable — a cogmap interior is team-resource-derived, not personally
 //! owned, and is refused here (and by the `resource_reassign` SQL backstop).
@@ -37,8 +38,9 @@ async fn home_of(pool: &PgPool, resource: Uuid) -> ApiResult<Option<HomeRow>> {
     .await?)
 }
 
-/// Is there a team T where caller manages T, `resource` is homed in a context shared
-/// to T, and `to` is a member of T? (admin-path reach: from-scope + into-scope).
+/// Is there a team T where caller manages T, `resource` is homed in a context **owned by T**, `to` is a
+/// member of T, and the resource's current owner is a current or former member of T? T is never the
+/// root or the gating team. (admin-path reach: from-scope + into-scope.)
 ///
 /// Both the team and the context must be live. A retired context closes this arm the
 /// same way it closes the team-share read arm in `contexts_readable_by_teams` — without
@@ -46,6 +48,12 @@ async fn home_of(pool: &PgPool, resource: Uuid) -> ApiResult<Option<HomeRow>> {
 /// context's resource to themselves and then read it through the owner arm of
 /// `resources_visible_to`, which has no context floor. Witness:
 /// `admin_cannot_reassign_via_retired_context`.
+///
+/// **Reassign acts only inside T's own containers** (team-authority fixes D5). A read-only share of
+/// someone's context into T used to let T's managers take ownership of the resources in it. A
+/// share confers read and nothing more, so only contexts T owns are in scope: the one place T's
+/// managers already govern the container. Membership is no bar on its own — a manager can add
+/// anyone to T — so it is kept as an extra check, not as the authority.
 async fn admin_reach(
     pool: &PgPool,
     caller: ProfileId,
@@ -56,24 +64,54 @@ async fn admin_reach(
         r#"
         SELECT EXISTS (
             SELECT 1
-            FROM kb_team_contexts tc
-            JOIN kb_teams t
-              ON t.id = tc.team_id AND t.is_active
+            FROM kb_resource_homes h
             JOIN kb_contexts c
-              ON c.id = tc.context_id AND c.is_active
-            JOIN kb_resource_homes h
-              ON h.anchor_table = 'kb_contexts' AND h.anchor_id = tc.context_id
+              ON c.id = h.anchor_id AND c.is_active
+            JOIN kb_teams t
+              ON t.is_active
+             AND c.owner_table = 'kb_teams' AND c.owner_id = t.id
+             AND t.slug <> 'temper-system'
+             AND t.slug IS DISTINCT FROM
+                 (SELECT s.gating_team_slug FROM kb_system_settings s WHERE s.id = 1)
             JOIN kb_team_members cm
-              ON cm.team_id = tc.team_id AND cm.profile_id = $2
+              ON cm.team_id = t.id AND cm.profile_id = $2
                  AND cm.role IN ('owner', 'maintainer')
             JOIN kb_team_members tm
-              ON tm.team_id = tc.team_id AND tm.profile_id = $3
+              ON tm.team_id = t.id AND tm.profile_id = $3
             WHERE h.resource_id = $1
+              AND h.anchor_table = 'kb_contexts'
+              AND ( EXISTS (SELECT 1 FROM kb_team_members om
+                             WHERE om.team_id = t.id AND om.profile_id = h.owner_profile_id)
+                 OR EXISTS (SELECT 1 FROM kb_events e
+                              JOIN kb_event_types et ON et.id = e.event_type_id
+                             WHERE et.name = 'team_membership_changed'
+                               AND e.payload @> jsonb_build_object(
+                                     'team_id', t.id, 'profile_id', h.owner_profile_id)) )
         ) AS "exists!: bool"
         "#,
         resource,
         *caller,
         to,
+    )
+    .fetch_one(pool)
+    .await?)
+}
+
+/// Is `profile_id` a current member of `team_id`, or a former one — a `team_membership_changed`
+/// admin event names them on it? The "former" half is what offboarding needs: the handoff runs
+/// after the member is gone. A removal that predates the ledger (`20261101200000`) left no record,
+/// so that leaver is reassigned with the admin path instead.
+async fn is_or_was_member(pool: &PgPool, team_id: Uuid, profile_id: Uuid) -> ApiResult<bool> {
+    Ok(sqlx::query_scalar!(
+        r#"SELECT ( EXISTS (SELECT 1 FROM kb_team_members
+                             WHERE team_id = $1 AND profile_id = $2)
+                 OR EXISTS (SELECT 1 FROM kb_events e
+                              JOIN kb_event_types et ON et.id = e.event_type_id
+                             WHERE et.name = 'team_membership_changed'
+                               AND e.payload @> jsonb_build_object(
+                                     'team_id', $1::uuid, 'profile_id', $2::uuid)) ) AS "e!: bool""#,
+        team_id,
+        profile_id,
     )
     .fetch_one(pool)
     .await?)
@@ -172,8 +210,7 @@ pub async fn reassign_resource(
     Ok(())
 }
 
-/// A resource owned by a given profile and homed in a context shared to a given
-/// team. The single definition of "what a departing member still owns in this
+/// A resource owned by a given profile and homed in a context owned by a given team. The single definition of "what a departing member still owns in this
 /// team" — consumed by both the bulk handoff (the move set) and `remove_member`'s
 /// residual surfacing (the count + per-context breakdown), so the two can never drift.
 pub struct ScopedOwnedRow {
@@ -183,7 +220,9 @@ pub struct ScopedOwnedRow {
     pub context_ref: String,
 }
 
-/// *Live* resources owned by `profile_id` and homed in a *live* context shared to `team_id`.
+/// *Live* resources owned by `profile_id` and homed in a *live* context OWNED by `team_id`. A context
+/// merely shared to the team is out of scope: a share confers read, never authority over the
+/// container's contents (team-authority fixes D5).
 /// A retired context drops out of this scope, and so does a soft-deleted or erased resource
 /// (`kb_resources.is_active`), so the bulk handoff and `remove_member`'s residual surfacing
 /// both stop counting either and agree on what is left to hand off. Witnesses:
@@ -207,14 +246,17 @@ pub async fn team_scoped_owned(
                  WHEN 'kb_teams'    THEN '+' || t.slug
                  WHEN 'kb_profiles' THEN '@' || p.handle
                END AS "owner_ref!"
-        FROM kb_team_contexts tc
+        FROM kb_contexts c
         JOIN kb_resource_homes h
-          ON h.anchor_table = 'kb_contexts' AND h.anchor_id = tc.context_id
+          ON h.anchor_table = 'kb_contexts' AND h.anchor_id = c.id
         JOIN kb_resources r ON r.id = h.resource_id AND r.is_active
-        JOIN kb_contexts c ON c.id = tc.context_id AND c.is_active
         LEFT JOIN kb_teams    t ON c.owner_table = 'kb_teams'    AND t.id = c.owner_id
         LEFT JOIN kb_profiles p ON c.owner_table = 'kb_profiles' AND p.id = c.owner_id
-        WHERE tc.team_id = $1 AND h.owner_profile_id = $2
+        WHERE c.is_active
+          AND h.owner_profile_id = $2
+          -- Only the team's OWN contexts (team-authority fixes D5): a share confers read, never
+          -- authority over what is in the shared container.
+          AND c.owner_table = 'kb_teams' AND c.owner_id = $1
         ORDER BY c.slug, h.resource_id
         "#,
         team_id,
@@ -234,8 +276,8 @@ pub async fn team_scoped_owned(
 }
 
 /// Bulk-reassign, from `from_profile_id` to `to_profile_id`, every LIVE resource owned by
-/// `from` and homed in a context shared to `team_id`. Auth: caller manages the team AND
-/// `to` is a member of it. One transaction; returns the reassigned resource ids. A tombstoned or
+/// `from` and homed in a context owned by `team_id`. Auth: caller manages the team (never the root
+/// or the gating team), `to` is a member of it, and `from` is or was a member of it. One transaction; returns the reassigned resource ids. A tombstoned or
 /// erased resource is outside the scope; one tombstoned or erased after the scope read fails the
 /// liveness floor, is skipped, and is not among them.
 pub async fn reassign_team_resources(
@@ -259,10 +301,26 @@ pub async fn reassign_team_resources(
         return Err(ApiError::Forbidden);
     }
 
-    // Auth before writes: caller manages the team, and `to` is a member of it.
+    // Auth before writes: caller manages the team, and `to` is a member of it. Never on the root or
+    // the gating team, where a leftover managing row (a demoted admin's) confers nothing.
     match role_on_team(pool, team_id, caller).await? {
         Some(role) if can_manage(role) => {}
         _ => return Err(ApiError::Forbidden),
+    }
+    let root_or_gating = sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+             SELECT 1 FROM kb_teams t
+              WHERE t.id = $1
+                AND (t.slug = 'temper-system'
+                     OR t.slug IS NOT DISTINCT FROM
+                        (SELECT s.gating_team_slug FROM kb_system_settings s WHERE s.id = 1)))
+           AS "e!: bool""#,
+        team_id,
+    )
+    .fetch_one(pool)
+    .await?;
+    if root_or_gating {
+        return Err(ApiError::Forbidden);
     }
     let to_is_member = sqlx::query_scalar!(
         r#"SELECT EXISTS(SELECT 1 FROM kb_team_members WHERE team_id=$1 AND profile_id=$2) AS "e!: bool""#,
@@ -272,6 +330,11 @@ pub async fn reassign_team_resources(
     .fetch_one(pool)
     .await?;
     if !to_is_member {
+        return Err(ApiError::Forbidden);
+    }
+    // ...and `from` is, or was, on the team: reassign hands off a member's work, never a sharer's
+    // (team-authority fixes D5).
+    if !is_or_was_member(pool, team_id, from_profile_id).await? {
         return Err(ApiError::Forbidden);
     }
 
@@ -348,6 +411,19 @@ mod tests {
         )
         .bind(slug)
         .bind(*owner)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    /// A context OWNED by `team` — the only kind a team's reassign reaches (team-authority fixes D5).
+    async fn mk_team_context(pool: &PgPool, slug: &str, team: Uuid) -> Uuid {
+        sqlx::query_scalar(
+            "INSERT INTO kb_contexts (slug, name, owner_table, owner_id) \
+             VALUES ($1, $1, 'kb_teams', $2) RETURNING id",
+        )
+        .bind(slug)
+        .bind(team)
         .fetch_one(pool)
         .await
         .unwrap()
@@ -472,8 +548,7 @@ mod tests {
         let other = mk_profile(&pool, "other").await;
         let team = mk_team(&pool, "acme").await;
 
-        let shared = mk_context(&pool, "shared", leaver).await;
-        share_ctx(&pool, shared, team).await;
+        let shared = mk_team_context(&pool, "shared", team).await;
         let private = mk_context(&pool, "private", leaver).await; // NOT shared to team
 
         let in_scope = mk_homed_resource(&pool, shared, leaver).await; // owned + scoped → listed
@@ -630,8 +705,8 @@ mod tests {
         let team = mk_team(&pool, "acme").await;
         add_member(&pool, team, admin, "owner").await;
         add_member(&pool, team, steward, "member").await;
-        let ctx = mk_context(&pool, "shared", alice).await;
-        share_ctx(&pool, ctx, team).await;
+        add_member(&pool, team, alice, "member").await;
+        let ctx = mk_team_context(&pool, "shared", team).await;
         let r = mk_homed_resource(&pool, ctx, alice).await;
 
         reassign_resource(
@@ -652,8 +727,8 @@ mod tests {
         let outsider = mk_profile(&pool, "outsider").await;
         let team = mk_team(&pool, "acme").await;
         add_member(&pool, team, admin, "owner").await;
-        let ctx = mk_context(&pool, "shared", alice).await;
-        share_ctx(&pool, ctx, team).await;
+        add_member(&pool, team, alice, "member").await;
+        let ctx = mk_team_context(&pool, "shared", team).await;
         let r = mk_homed_resource(&pool, ctx, alice).await;
         let err = reassign_resource(
             &pool,
@@ -713,9 +788,9 @@ mod tests {
         let steward = mk_profile(&pool, "steward").await;
         let team = mk_team(&pool, "acme").await;
         add_member(&pool, team, admin, "owner").await;
+        add_member(&pool, team, alice, "member").await;
         add_member(&pool, team, steward, "member").await;
-        let ctx = mk_context(&pool, "shared", alice).await;
-        share_ctx(&pool, ctx, team).await;
+        let ctx = mk_team_context(&pool, "shared", team).await;
         let r = mk_homed_resource(&pool, ctx, alice).await;
         soft_delete_team(&pool, team).await;
 
@@ -738,9 +813,9 @@ mod tests {
         let steward = mk_profile(&pool, "steward").await;
         let team = mk_team(&pool, "acme").await;
         add_member(&pool, team, admin, "owner").await;
+        add_member(&pool, team, leaver, "member").await;
         add_member(&pool, team, steward, "member").await;
-        let shared = mk_context(&pool, "shared", leaver).await;
-        share_ctx(&pool, shared, team).await;
+        let shared = mk_team_context(&pool, "shared", team).await;
         let r = mk_homed_resource(&pool, shared, leaver).await;
         soft_delete_team(&pool, team).await;
 
@@ -766,9 +841,9 @@ mod tests {
         let steward = mk_profile(&pool, "steward").await;
         let team = mk_team(&pool, "acme").await;
         add_member(&pool, team, admin, "owner").await;
+        add_member(&pool, team, alice, "member").await;
         add_member(&pool, team, steward, "member").await;
-        let ctx = mk_context(&pool, "shared", alice).await;
-        share_ctx(&pool, ctx, team).await;
+        let ctx = mk_team_context(&pool, "shared", team).await;
         let r = mk_homed_resource(&pool, ctx, alice).await;
         retire_ctx(&pool, ctx).await;
 
@@ -814,11 +889,10 @@ mod tests {
         let team = mk_team(&pool, "acme").await;
         add_member(&pool, team, admin, "owner").await;
         add_member(&pool, team, steward, "member").await;
+        add_member(&pool, team, leaver, "member").await;
 
-        let live = mk_context(&pool, "live", leaver).await;
-        share_ctx(&pool, live, team).await;
-        let retired = mk_context(&pool, "retired", leaver).await;
-        share_ctx(&pool, retired, team).await;
+        let live = mk_team_context(&pool, "live", team).await;
+        let retired = mk_team_context(&pool, "retired", team).await;
 
         let in_scope = mk_homed_resource(&pool, live, leaver).await; // live share → moves
         let out_scope = mk_homed_resource(&pool, retired, leaver).await; // retired → stays
@@ -848,9 +922,9 @@ mod tests {
         let team = mk_team(&pool, "acme").await;
         add_member(&pool, team, admin, "owner").await;
         add_member(&pool, team, steward, "member").await;
+        add_member(&pool, team, leaver, "member").await;
 
-        let shared = mk_context(&pool, "shared", leaver).await;
-        share_ctx(&pool, shared, team).await;
+        let shared = mk_team_context(&pool, "shared", team).await;
         let private = mk_context(&pool, "private", leaver).await; // NOT shared to team
 
         let in_scope = mk_homed_resource(&pool, shared, leaver).await; // owned+scoped → moves
@@ -919,6 +993,7 @@ mod tests {
         let team = mk_team(&pool, "acme").await;
         add_member(&pool, team, admin, "owner").await;
         add_member(&pool, team, steward, "member").await;
+        add_member(&pool, team, leaver, "member").await;
         let moved = reassign_team_resources(
             &pool,
             &crate::test_support::human_principal_for(&pool, *admin).await,
@@ -929,5 +1004,128 @@ mod tests {
         .await
         .expect("empty is ok");
         assert!(moved.is_empty());
+    }
+
+    // ---- Reassign acts only inside the team's own contexts (team-authority fixes D5). ----
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_forced_member_cannot_be_reassigned_out_of_their_own_teams_shared_context(
+        pool: PgPool,
+    ) {
+        // The shape that defeated the first D5: Bob owns team B, B's context is shared read-only
+        // into T, and T's manager Mallory force-adds Bob to T (add_member needs no consent). Bob's
+        // resource in B's context stays Bob's.
+        let mallory = mk_profile(&pool, "mallory").await;
+        let bob = mk_profile(&pool, "bob").await;
+        let t = mk_team(&pool, "acme").await;
+        let b = mk_team(&pool, "bobs").await;
+        add_member(&pool, t, mallory, "owner").await;
+        add_member(&pool, b, bob, "owner").await;
+        let ctx = mk_team_context(&pool, "b-notes", b).await;
+        share_ctx(&pool, ctx, t).await;
+        let r = mk_homed_resource(&pool, ctx, bob).await;
+        add_member(&pool, t, bob, "watcher").await;
+
+        let m = crate::test_support::human_principal_for(&pool, *mallory).await;
+        let err = reassign_resource(&pool, &m, r, *mallory).await.unwrap_err();
+        assert!(matches!(err, ApiError::Forbidden), "{err:?}");
+        let moved = reassign_team_resources(&pool, &m, t, *bob, *mallory)
+            .await
+            .expect("authorized, empty scope");
+        assert!(moved.is_empty());
+        assert_eq!(owner_of(&pool, r).await, *bob);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_shared_context_is_never_in_scope(pool: PgPool) {
+        // Bob shares HIS context read-only into the team. Whether or not he is a member, the
+        // team's managers cannot take his resources in it: a share confers read, never authority
+        // over the shared container's contents.
+        let admin = mk_profile(&pool, "admin").await;
+        let bob = mk_profile(&pool, "bob").await;
+        let mallory = mk_profile(&pool, "mallory").await;
+        let team = mk_team(&pool, "acme").await;
+        add_member(&pool, team, admin, "owner").await;
+        add_member(&pool, team, mallory, "maintainer").await;
+        let ctx = mk_context(&pool, "bob-notes", bob).await;
+        share_ctx(&pool, ctx, team).await;
+        let r = mk_homed_resource(&pool, ctx, bob).await;
+
+        // Not a member: refused outright, on both doors.
+        let err = reassign_team_resources(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *admin).await,
+            team,
+            *bob,
+            *mallory,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, ApiError::Forbidden), "{err:?}");
+        let err = reassign_resource(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *admin).await,
+            r,
+            *mallory,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, ApiError::Forbidden), "{err:?}");
+
+        // A member: still never his own context's resources.
+        add_member(&pool, team, bob, "member").await;
+        let moved = reassign_team_resources(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *admin).await,
+            team,
+            *bob,
+            *mallory,
+        )
+        .await
+        .expect("authorized, empty scope");
+        assert!(moved.is_empty());
+        let err = reassign_resource(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *admin).await,
+            r,
+            *mallory,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, ApiError::Forbidden), "{err:?}");
+        assert_eq!(owner_of(&pool, r).await, *bob);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_former_member_recorded_on_the_ledger_is_handed_off(pool: PgPool) {
+        // Offboarding proper: the leaver is removed through the recorded membership write, then
+        // their work in a TEAM-OWNED context (in scope since D5) is handed to a steward.
+        let admin = mk_profile(&pool, "admin").await;
+        let leaver = mk_profile(&pool, "leaver").await;
+        let steward = mk_profile(&pool, "steward").await;
+        let team = mk_team(&pool, "acme").await;
+        add_member(&pool, team, admin, "owner").await;
+        add_member(&pool, team, steward, "member").await;
+        add_member(&pool, team, leaver, "member").await;
+        let team_ctx: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+             VALUES ('kb_teams', $1, 'team-ctx', 'team-ctx') RETURNING id",
+        )
+        .bind(team)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let r = mk_homed_resource(&pool, team_ctx, leaver).await;
+
+        let admin_p = crate::test_support::human_principal_for(&pool, *admin).await;
+        crate::services::team_service::remove_member(&pool, &admin_p, team, *leaver)
+            .await
+            .expect("remove the leaver through the recorded write");
+
+        let moved = reassign_team_resources(&pool, &admin_p, team, *leaver, *steward)
+            .await
+            .expect("a former member's work is handed off");
+        assert_eq!(moved, vec![r]);
+        assert_eq!(owner_of(&pool, r).await, *steward);
     }
 }

@@ -195,7 +195,7 @@ pub async fn update_remote(
     Ok(())
 }
 
-/// Soft-delete a team (owner only).
+/// Soft-delete a team (its owner, or a system admin).
 pub async fn delete_remote(
     client: &temper_client::TemperClient,
     team: &str,
@@ -211,8 +211,53 @@ pub async fn delete_remote(
     Ok(())
 }
 
+/// Detach a child team from a parent team (an owner or maintainer of the parent, or a system
+/// admin). The child keeps its roster and only this link is cut; its members stop reaching what is
+/// attached to the parent.
+///
+/// The child is named by UUID, decorated ref, or slug. A slug is looked up among the parent's own
+/// children (on the parent's detail, which lists them for its managers), because a parent's manager
+/// need not be a member of the child.
+pub async fn detach_remote(
+    client: &temper_client::TemperClient,
+    parent: &str,
+    child: &str,
+    _fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let parent_id = resolve_team_id(client, parent).await?;
+    let token = child.trim().strip_prefix('+').unwrap_or(child.trim());
+    let child_id = match temper_workflow::operations::parse_ref(token) {
+        Ok(id) => uuid::Uuid::from(id),
+        Err(_) => {
+            let detail = client
+                .teams()
+                .get(parent_id)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            detail
+                .children
+                .into_iter()
+                .find(|c| c.slug == token)
+                .map(|c| c.id)
+                .ok_or_else(|| {
+                    TemperError::Api(format!(
+                        "not a child of {parent:?}: {token:?} (expected a child team slug, a \
+                         decorated `slug-<uuid>` ref, or a team UUID)"
+                    ))
+                })?
+        }
+    };
+    client
+        .teams()
+        .detach_child(parent_id, child_id)
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+    output::success("Child team detached.");
+    Ok(())
+}
+
 /// Bulk-reassign a departing member's team-scoped resources (a manager of the team, or a system admin).
-/// Reassigns every resource owned by `from` and homed in a context shared to the
+/// Reassigns every resource owned by `from` and homed in a context the team owns,
 /// team, over to `to` (who must be a team member). `from`/`to` are profile UUIDs.
 pub async fn reassign_remote(
     client: &temper_client::TemperClient,

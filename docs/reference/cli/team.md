@@ -17,10 +17,11 @@ Commands:
   uninvite       Revoke (withdraw) a pending invitation (a team manager or a system admin; on a personal team, its owner only)
   show           Show a team's detail and member roster
   leave          Leave a team you are a member of (removes your membership)
+  detach         Detach a child team from a parent team (an owner or maintainer of the parent, or a system admin)
   remove-member  Remove a member from a team (owner/maintainer)
   set-role       Change a member's role (a team owner/maintainer or a system admin; personal team: its owner)
   update         Update a team's metadata (owner/maintainer)
-  delete         Soft-delete a team (owner only)
+  delete         Soft-delete a team (its owner, or a system admin)
   reassign       Bulk-reassign a departing member's team-scoped resources (offboarding)
   create         Create a team (you become its owner)
   add-member     Add a member to a team (owner/maintainer only)
@@ -164,6 +165,39 @@ Options:
   -h, --help               Print help
 ```
 
+### `temper team detach`
+
+```text
+Detach a child team from a parent team (an owner or maintainer of the parent, or a system admin)
+
+The child keeps its roster and only this link is cut; its members stop reaching what is attached to the parent. `temper team show <parent>` lists the parent's children.
+
+Usage: temper team detach [OPTIONS] <PARENT> <CHILD>
+
+Arguments:
+  <PARENT>
+          Parent team slug (optionally `+`-prefixed) or UUID
+
+  <CHILD>
+          Child team slug, decorated ref, or UUID
+
+Options:
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
 ### `temper team remove-member`
 
 ```text
@@ -242,7 +276,7 @@ Options:
 ### `temper team delete`
 
 ```text
-Soft-delete a team (owner only)
+Soft-delete a team (its owner, or a system admin)
 
 Usage: temper team delete [OPTIONS] <TEAM>
 
@@ -262,7 +296,7 @@ Options:
 ```text
 Bulk-reassign a departing member's team-scoped resources (offboarding).
 
-Reassigns every resource owned by `--from` and homed in a context shared to this team, over to `--to` (who must be a team member). Owner/maintainer only. Sends a `POST /api/teams/{id}/reassign` request via `temper-client`.
+Reassigns every resource owned by `--from` (a current or former member) and homed in a context this team owns, over to `--to` (who must be a team member). Contexts merely shared to the team are out of scope. Owner/maintainer only. Sends a `POST /api/teams/{id}/reassign` request via `temper-client`.
 
 Usage: temper team reassign [OPTIONS] --from <FROM> --to <TO> <TEAM>
 

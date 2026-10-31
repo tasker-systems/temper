@@ -94,7 +94,7 @@ impl<'a> TeamsClient<'a> {
             .await
     }
 
-    /// DELETE /api/teams/{id} — soft-delete a team (owner only).
+    /// DELETE /api/teams/{id} — soft-delete a team (owner or system admin).
     ///
     /// Returns `()` on a 204; `send` errors on any non-2xx (403/404/409), so
     /// callers surface the guard failures without decoding a body.
@@ -102,6 +102,20 @@ impl<'a> TeamsClient<'a> {
         let token = self.http.resolve_token()?;
         let op = &ops::DELETE_TEAM;
         let path = op.path(&[&team_id])?;
+        let req = self.http.request(op, &path);
+        self.http
+            .send(&op.method(), &path, req, token.as_deref())
+            .await?;
+        Ok(())
+    }
+
+    /// DELETE /api/teams/{id}/children/{child_id} — detach a child team from this team.
+    ///
+    /// Returns `()` on a 204; `send` errors on any non-2xx (403/404).
+    pub async fn detach_child(&self, team_id: Uuid, child_id: Uuid) -> Result<()> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::DETACH_CHILD_TEAM;
+        let path = op.path(&[&team_id, &child_id])?;
         let req = self.http.request(op, &path);
         self.http
             .send(&op.method(), &path, req, token.as_deref())

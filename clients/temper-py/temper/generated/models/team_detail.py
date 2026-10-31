@@ -18,9 +18,10 @@ import re  # noqa: F401
 import json
 
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional
 from uuid import UUID
+from temper.generated.models.team_child_ref import TeamChildRef
 from temper.generated.models.team_member_detail import TeamMemberDetail
 from temper.generated.models.team_role import TeamRole
 from typing import Optional, Set
@@ -32,13 +33,14 @@ class TeamDetail(BaseModel):
     Full team detail — the team row plus its member roster. Response body for `GET /api/teams/{id}`.
     """ # noqa: E501
     auto_join_role: Optional[TeamRole] = None
+    children: Optional[List[TeamChildRef]] = Field(default=None, description="The team's direct child teams. Present (non-empty) only for a caller who manages this team or is a system admin: a child's members reach everything attached to this team, so its managers see which teams hang beneath it (team-authority fixes D3). Empty for everyone else.")
     created: datetime
     description: Optional[StrictStr] = None
     id: UUID
     members: List[TeamMemberDetail]
     name: StrictStr
     slug: StrictStr
-    __properties: ClassVar[List[str]] = ["auto_join_role", "created", "description", "id", "members", "name", "slug"]
+    __properties: ClassVar[List[str]] = ["auto_join_role", "children", "created", "description", "id", "members", "name", "slug"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -79,6 +81,13 @@ class TeamDetail(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # override the default output from pydantic by calling `to_dict()` of each item in children (list)
+        _items = []
+        if self.children:
+            for _item_children in self.children:
+                if _item_children:
+                    _items.append(_item_children.to_dict())
+            _dict['children'] = _items
         # override the default output from pydantic by calling `to_dict()` of each item in members (list)
         _items = []
         if self.members:
@@ -109,6 +118,7 @@ class TeamDetail(BaseModel):
 
         _obj = cls.model_validate({
             "auto_join_role": obj.get("auto_join_role"),
+            "children": [TeamChildRef.from_dict(_item) for _item in obj["children"]] if obj.get("children") is not None else None,
             "created": obj.get("created"),
             "description": obj.get("description"),
             "id": obj.get("id"),

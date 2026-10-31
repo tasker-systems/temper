@@ -11,6 +11,11 @@ export type AddMemberRequest = { profile_id: string, role: TeamRole, };
 export type ChangeRoleRequest = { role: TeamRole, };
 
 /**
+ * A direct child team, as listed on its parent's [`TeamDetail`].
+ */
+export type TeamChildRef = { id: string, slug: string, name: string, };
+
+/**
  * Request body for `POST /api/teams`.
  *
  * `parent` is an optional team ref (`+slug` or bare `slug`); when present the
@@ -23,7 +28,13 @@ export type TeamCreateRequest = { slug: string, name: string | null, parent: str
  * Full team detail — the team row plus its member roster. Response body for
  * `GET /api/teams/{id}`.
  */
-export type TeamDetail = { id: string, slug: string, name: string, description: string | null, created: string, auto_join_role: TeamRole | null, members: Array<TeamMemberDetail>, };
+export type TeamDetail = { id: string, slug: string, name: string, description: string | null, created: string, auto_join_role: TeamRole | null, members: Array<TeamMemberDetail>, 
+/**
+ * The team's direct child teams. Present (non-empty) only for a caller who manages this team
+ * or is a system admin: a child's members reach everything attached to this team, so its
+ * managers see which teams hang beneath it (team-authority fixes D3). Empty for everyone else.
+ */
+children: Array<TeamChildRef>, };
 
 /**
  * A team member enriched with the profile handle and provenance — the row

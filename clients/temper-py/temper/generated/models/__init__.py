@@ -456,6 +456,7 @@ from temper.generated.models.subscription_selector_one_of2 import SubscriptionSe
 from temper.generated.models.system_access_details import SystemAccessDetails
 from temper.generated.models.system_settings import SystemSettings
 from temper.generated.models.teaching_elision import TeachingElision
+from temper.generated.models.team_child_ref import TeamChildRef
 from temper.generated.models.team_create_request import TeamCreateRequest
 from temper.generated.models.team_detail import TeamDetail
 from temper.generated.models.team_invitation import TeamInvitation

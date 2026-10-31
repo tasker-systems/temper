@@ -871,6 +871,19 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     temper_cli::commands::team::leave_remote(client, &team, output_format).await
                 })
             }),
+            TeamAction::Detach { parent, child } => {
+                temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::team::detach_remote(
+                            client,
+                            &parent,
+                            &child,
+                            output_format,
+                        )
+                        .await
+                    })
+                })
+            }
             TeamAction::RemoveMember { team, profile } => {
                 temper_cli::actions::runtime::with_client(|client| {
                     Box::pin(async move {

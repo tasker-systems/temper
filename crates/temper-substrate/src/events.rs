@@ -169,6 +169,10 @@ pub enum EventKind {
     /// rank spec C8). Category `admin`, NULL-anchored, written only by
     /// `_admin_team_membership_write` in the same statement as the row.
     TeamMembershipChanged,
+    /// A child team linked under, or detached from, a parent (team-authority fixes D3). Category
+    /// `admin`, NULL-anchored, written only by `_admin_team_parent_link_write` in the same statement
+    /// as the `kb_teams_parents` row.
+    TeamParentLinkChanged,
     /// An auditor's signed verdict on one `(block, source)` citation (Set 5, spec §4.1-4.2).
     /// Append-only — fires `citation_audited`, projected by `_project_citation_audited` into
     /// `kb_citation_audits` with no supersession. Registered permissive (NULL `payload_schema`),
@@ -262,6 +266,7 @@ impl EventKind {
             EventKind::BlockHistoryScrubbed => "block_history_scrubbed",
             EventKind::ResourceScrubbed => "resource_scrubbed",
             EventKind::TeamMembershipChanged => "team_membership_changed",
+            EventKind::TeamParentLinkChanged => "team_parent_link_changed",
             EventKind::CitationAudited => "citation_audited",
             EventKind::BlobCommitted => "blob_committed",
             EventKind::ResourceReblocked => "resource_reblocked",
@@ -324,6 +329,7 @@ impl EventKind {
             "block_history_scrubbed" => EventKind::BlockHistoryScrubbed,
             "resource_scrubbed" => EventKind::ResourceScrubbed,
             "team_membership_changed" => EventKind::TeamMembershipChanged,
+            "team_parent_link_changed" => EventKind::TeamParentLinkChanged,
             "citation_audited" => EventKind::CitationAudited,
             "blob_committed" => EventKind::BlobCommitted,
             "resource_reblocked" => EventKind::ResourceReblocked,

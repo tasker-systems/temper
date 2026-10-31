@@ -1345,6 +1345,21 @@ async fn team_with(pool: &PgPool, members: &[(Uuid, &str)]) -> Uuid {
     team
 }
 
+/// A context owned by `team`: the only kind a team handoff reaches.
+async fn team_owned_context(pool: &PgPool, team: Uuid) -> Uuid {
+    let context = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name) \
+         VALUES ($1, 'kb_teams', $2, 'husk-reassign', 'husk-reassign')",
+    )
+    .bind(context)
+    .bind(team)
+    .execute(pool)
+    .await
+    .expect("insert team-owned context");
+    context
+}
+
 /// A departing member's tombstone and husk are kept out of the bulk run twice over:
 /// `team_scoped_owned` (the run's scope) enumerates live resources only, and the liveness floor in
 /// the run's transaction skips one that died after the scope read. The run answers `200`, moves
@@ -1361,7 +1376,7 @@ async fn team_with(pool: &PgPool, members: &[(Uuid, &str)]) -> Uuid {
 async fn team_reassign_skips_an_erased_and_a_deleted_resource(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
     let (admin, _) = caller(&app.pool, "admin").await;
-    let (from, from_context) = caller(&app.pool, "departing").await;
+    let (from, _) = caller(&app.pool, "departing").await;
     let (to, _) = caller(&app.pool, "recipient").await;
     let team = team_with(
         &app.pool,
@@ -1372,12 +1387,7 @@ async fn team_reassign_skips_an_erased_and_a_deleted_resource(pool: PgPool) {
         ],
     )
     .await;
-    sqlx::query("INSERT INTO kb_team_contexts (context_id, team_id) VALUES ($1, $2)")
-        .bind(from_context)
-        .bind(team)
-        .execute(&app.pool)
-        .await
-        .expect("share the departing member's context to the team");
+    let from_context = team_owned_context(&app.pool, team).await;
 
     let live = ingest(&app, &from, from_context).await;
     let husk = ingest(&app, &from, from_context).await;
@@ -1419,8 +1429,9 @@ async fn team_reassign_skips_an_erased_and_a_deleted_resource(pool: PgPool) {
 
 // ── WITNESS: a system admin is refused on a tombstone and answered 410 on a husk they hold ────
 
-/// `who` grants read on `resource` to a fresh principal id: the status and body.
+/// `who` grants read on `resource` to a fresh profile: the status and body.
 async fn grant_as(app: &common::TestApp, who: &Caller, resource: Uuid) -> (u16, Value) {
+    let (recipient, _) = caller(&app.pool, "grant-recipient").await;
     call(
         app,
         who,
@@ -1428,7 +1439,7 @@ async fn grant_as(app: &common::TestApp, who: &Caller, resource: Uuid) -> (u16, 
         format!("/api/resources/{resource}/grants"),
         Some(json!({
             "principal_table": "kb_profiles",
-            "principal_id": Uuid::now_v7(),
+            "principal_id": recipient.profile,
             "can_read": true,
             "can_write": false,
             "can_delete": false,
@@ -1657,7 +1668,8 @@ async fn a_grant_racing_the_act_answers_its_owner_410_and_lands_no_row(pool: PgP
     let app = common::setup_test_app(pool).await;
     let (owner, own_context) = caller(&app.pool, "owner").await;
     let resource = ingest(&app, &owner, own_context).await;
-    let grantee = Uuid::now_v7();
+    let (grantee, _) = caller(&app.pool, "grantee").await;
+    let grantee = grantee.profile;
 
     let act = hold_the_act(&app, resource).await;
     let (status, body) = raced_by_the_act(
@@ -1789,7 +1801,7 @@ async fn the_owner_administers_no_grant_on_a_dead_resource(pool: PgPool) {
 /// `remove_member`'s residual warning and the team handoff read one scope,
 /// `reassign_service::team_scoped_owned`, which enumerates live resources only: a departing
 /// member's husk and tombstone are nothing to hand off. The member owns three resources in a
-/// context shared to the team — one live, one erased, one deleted. Removing them answers a
+/// context the team owns — one live, one erased, one deleted. Removing them answers a
 /// residual of exactly the live one; the handoff then moves exactly the live one.
 ///
 /// FAILS IF the scope enumerates a dead resource. The bite: drop
@@ -1800,7 +1812,7 @@ async fn the_owner_administers_no_grant_on_a_dead_resource(pool: PgPool) {
 async fn remove_member_and_team_reassign_leave_out_a_husk_and_a_tombstone(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
     let (admin, _) = caller(&app.pool, "admin").await;
-    let (from, from_context) = caller(&app.pool, "departing").await;
+    let (from, _) = caller(&app.pool, "departing").await;
     let (to, _) = caller(&app.pool, "recipient").await;
     let team = team_with(
         &app.pool,
@@ -1811,12 +1823,7 @@ async fn remove_member_and_team_reassign_leave_out_a_husk_and_a_tombstone(pool: 
         ],
     )
     .await;
-    sqlx::query("INSERT INTO kb_team_contexts (context_id, team_id) VALUES ($1, $2)")
-        .bind(from_context)
-        .bind(team)
-        .execute(&app.pool)
-        .await
-        .expect("share the departing member's context to the team");
+    let from_context = team_owned_context(&app.pool, team).await;
 
     let live = ingest(&app, &from, from_context).await;
     let husk = ingest(&app, &from, from_context).await;

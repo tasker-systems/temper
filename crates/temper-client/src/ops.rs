@@ -354,6 +354,7 @@ registry! {
         DELETE_TEAM = Delete "/api/teams/{id}" => "delete_team";
         DETAIL = Get "/api/teams/{id}" => "detail";
         UPDATE_TEAM = Patch "/api/teams/{id}" => "update_team";
+        DETACH_CHILD_TEAM = Delete "/api/teams/{id}/children/{child_id}" => "detach_child_team";
         LIST_TEAM_INVITATIONS = Get "/api/teams/{id}/invitations" => "list_team_invitations";
         REVOKE_TEAM_INVITATION = Delete "/api/teams/{id}/invitations/{invitation_id}" => "revoke_team_invitation";
         CREATE_TEAM_INVITATION = Post "/api/teams/{id}/invite" => "create_team_invitation";

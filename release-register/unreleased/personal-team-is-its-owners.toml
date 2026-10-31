@@ -12,7 +12,9 @@ it without its owner. Migration `20261110000000`.
   system admin, as for anyone else who is not its owner. Its owner adding anyone but one of their
   own machines: `400`.
 - `POST /api/teams/{id}/invitations` on a personal team: `400` for its owner, `403` for anyone else.
-- `POST /api/teams` with a personal team as `parent`: `400`.
+- `POST /api/teams` with a personal team as `parent`: `400`. `DELETE /api/teams/{id}` on someone else's
+  personal team: `403` for a system admin too. `DELETE /api/teams/{id}/children/{child_id}` with a personal
+  team as the child: `403` for everyone.
 - Context share, unshare and reassign, cognitive-map bind and unbind, and connection reach whose
   target is someone else's personal team: `403` for a system admin too.
 - The database refuses the same rows from any writer: SAML group mappings and invitations onto a

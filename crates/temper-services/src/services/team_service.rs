@@ -10,7 +10,8 @@
 //! Role-gating is pure authz over `kb_team_members.role` + the `kb_teams_parents`
 //! DAG (spec §3 decision #1): anyone may create a **root** (parentless) team and
 //! becomes its `owner`; creating a **child** requires `owner`/`maintainer` on the
-//! parent; setting `auto_join_role` requires `is_system_admin`. Auth checks
+//! parent (a system admin, when the parent is the root or the gating team; never under a
+//! personal team); setting `auto_join_role` requires `is_system_admin`. Auth checks
 //! precede every write.
 
 use sqlx::PgPool;
@@ -22,7 +23,7 @@ use crate::error::{ApiError, ApiResult};
 use temper_core::types::ids::ProfileId;
 use temper_core::types::reassign::{RemoveMemberOutcome, ResidualContext, ResidualOwnedReach};
 use temper_core::types::team::{
-    AddMemberRequest, TeamCreateRequest, TeamDetail, TeamMemberDetail, TeamMemberRow,
+    AddMemberRequest, TeamChildRef, TeamCreateRequest, TeamDetail, TeamMemberDetail, TeamMemberRow,
     TeamMemberSource, TeamRole, TeamRow, TeamUpdateRequest,
 };
 
@@ -171,6 +172,36 @@ pub(crate) async fn require_team_exists(pool: &PgPool, team_id: Uuid) -> ApiResu
     }
 }
 
+/// The root slug. Every personal team descends from it, so it is never deleted, and only a system
+/// admin creates children under it, renames it or administers grants to it.
+const ROOT_TEAM_SLUG: &str = "temper-system";
+
+/// Is `team_id` the root (`temper-system`) or the configured gating team? The lifecycle gates
+/// (`create_team` as parent, `update_team`, `delete_team`) are admin-only on both (team-authority
+/// fixes D4). Both are asked because an instance may point `gating_team_slug` elsewhere, and then
+/// the root is a second team every profile reaches.
+async fn is_root_or_gating(pool: &PgPool, team_id: Uuid) -> ApiResult<bool> {
+    let is_root = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1 AND slug = $2) AS "e!: bool""#,
+        team_id,
+        ROOT_TEAM_SLUG,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(is_root || crate::services::access_service::is_gating_team(pool, team_id).await?)
+}
+
+/// Refuse unless `caller` is a system admin.
+async fn require_admin_on(pool: &PgPool, caller: &HumanPrincipal) -> ApiResult<()> {
+    match crate::authz::Principal::Human(caller)
+        .system_admin(pool)
+        .await?
+    {
+        Some(_) => Ok(()),
+        None => Err(ApiError::Forbidden),
+    }
+}
+
 /// Proof that `create_team` has just inserted the team row it is about to write the creator's
 /// `owner` row for. Defined here with a private field and constructed only in this module, so the
 /// genesis constructor in `authz::team_membership` cannot be called from anywhere else (plan P16).
@@ -187,7 +218,8 @@ pub(crate) struct GenesisToken {
 /// first of two guards against squatting, and keeps `personal-<handle>` meaning that profile's.
 ///
 /// Auth before writes:
-/// - **child** (`parent` set): caller must be `owner`/`maintainer` on the parent.
+/// - **child** (`parent` set): caller must be `owner`/`maintainer` on the parent. When the parent is
+///   the root or the gating team, a system admin only. A personal team takes no children (400).
 /// - **root** (`parent` None): any authenticated profile may create.
 /// - `auto_join_role` set: caller must be `is_system_admin`, and the role must be `member` or
 ///   `watcher` (400 otherwise; spec C15).
@@ -223,24 +255,31 @@ pub async fn create_team(
     // Child team: resolve the parent and require owner/maintainer on it.
     let parent_id = if let Some(parent_ref) = &req.parent {
         let slug = team_slug(parent_ref);
-        let parent_id = sqlx::query_scalar!(
-            "SELECT id FROM kb_teams WHERE slug = $1 AND is_active",
+        let parent = sqlx::query!(
+            r#"SELECT id, personal_of IS NOT NULL AS "is_personal!" FROM kb_teams
+                WHERE slug = $1 AND is_active"#,
             slug
         )
         .fetch_optional(pool)
         .await?
         .ok_or_else(|| ApiError::NotFound("parent team not found or not readable".to_string()))?;
-        match role_on_team(pool, parent_id, creator).await? {
-            Some(role) if can_manage(role) => {}
-            _ => return Err(ApiError::Forbidden),
-        }
-        // A child's members read everything attached to the parent, so a team under a personal
-        // team would be a second door into it. Refused for its owner too — the one caller the role
-        // check above admits there.
-        if personal_of(pool, parent_id).await?.is_some() {
-            return Err(ApiError::BadRequest(
-                "a personal team cannot have child teams".to_string(),
-            ));
+        let parent_id = parent.id;
+        // The root and the gating team take children only from a system admin (team-authority
+        // fixes D4): a child of either is read reach into everything attached to it, and R11 keeps
+        // the gating roster admin-only. A leftover managing row (a demoted admin's) confers nothing.
+        if is_root_or_gating(pool, parent_id).await? {
+            require_admin_on(pool, authed).await?;
+        } else {
+            match role_on_team(pool, parent_id, creator).await? {
+                Some(role) if can_manage(role) => {}
+                _ => return Err(ApiError::Forbidden),
+            }
+            // After the role check, so a non-manager learns nothing about the parent.
+            if parent.is_personal {
+                return Err(ApiError::BadRequest(
+                    "a personal team cannot have child teams".to_string(),
+                ));
+            }
         }
         Some(parent_id)
     } else {
@@ -296,13 +335,20 @@ pub async fn create_team(
     .await
     .map_err(|e| map_unique_violation(e, "team slug already exists"))?;
 
+    // The parent link is read reach into everything attached to the parent, so it is a recorded act
+    // (team-authority fixes D3): the row and its `team_parent_link_changed` record are one write.
     if let Some(parent_id) = parent_id {
-        sqlx::query!(
-            "INSERT INTO kb_teams_parents (child_id, parent_id) VALUES ($1, $2)",
-            team_id,
+        let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, creator, "web")
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+        sqlx::query_scalar!(
+            r#"SELECT _admin_team_parent_link_write($1, $2, 'link', $3, $4) AS "outcome!""#,
+            emitter.uuid(),
+            *creator,
             parent_id,
+            team_id,
         )
-        .execute(&mut *tx)
+        .fetch_one(&mut *tx)
         .await?;
     }
 
@@ -485,6 +531,35 @@ pub async fn team_detail(pool: &PgPool, caller: &Caller, team_id: Uuid) -> ApiRe
     .fetch_all(pool)
     .await?;
 
+    // The direct children, for a caller who manages this team or is a system admin (team-authority
+    // fixes D3): they are who reaches this team's material from beneath it.
+    // On the root or the gating team only a system admin: every personal team hangs under the root.
+    let admin = crate::authz::Principal::from(caller)
+        .system_admin(pool)
+        .await?
+        .is_some();
+    let manages = admin
+        || (!is_root_or_gating(pool, team_id).await?
+            && matches!(
+                role_on_team(pool, team_id, caller.profile_id()).await?,
+                Some(role) if can_manage(role)
+            ));
+    let children = if manages {
+        sqlx::query_as!(
+            TeamChildRef,
+            r#"SELECT t.id, t.slug, t.name
+                 FROM kb_teams_parents tp
+                 JOIN kb_teams t ON t.id = tp.child_id AND t.is_active
+                WHERE tp.parent_id = $1
+                ORDER BY t.slug"#,
+            team_id,
+        )
+        .fetch_all(pool)
+        .await?
+    } else {
+        Vec::new()
+    };
+
     Ok(TeamDetail {
         id: team.id,
         slug: team.slug,
@@ -493,10 +568,12 @@ pub async fn team_detail(pool: &PgPool, caller: &Caller, team_id: Uuid) -> ApiRe
         created: team.created,
         auto_join_role: team.auto_join_role,
         members,
+        children,
     })
 }
 
-/// Update a team's mutable metadata (name/description). Owner/maintainer only.
+/// Update a team's mutable metadata (name/description). Owner/maintainer; on the root or the
+/// gating team, a system admin only.
 ///
 /// Partial merge: a `None` field leaves that column unchanged (SQL COALESCE).
 /// A soft-deleted team is not updatable — the `is_active` filter yields
@@ -507,10 +584,15 @@ pub async fn update_team(
     team_id: Uuid,
     req: &TeamUpdateRequest,
 ) -> ApiResult<TeamRow> {
-    // Auth before writes: owner or maintainer.
-    match role_on_team(pool, team_id, caller.profile_id()).await? {
-        Some(role) if can_manage(role) => {}
-        _ => return Err(ApiError::Forbidden),
+    // Auth before writes: owner or maintainer — and on the root or the gating team, a system admin
+    // only (team-authority fixes D4).
+    if is_root_or_gating(pool, team_id).await? {
+        require_admin_on(pool, caller).await?;
+    } else {
+        match role_on_team(pool, team_id, caller.profile_id()).await? {
+            Some(role) if can_manage(role) => {}
+            _ => return Err(ApiError::Forbidden),
+        }
     }
 
     let row = sqlx::query_as!(
@@ -534,18 +616,31 @@ pub async fn update_team(
     Ok(row)
 }
 
-/// Soft-delete a team (`is_active = false`). Owner only.
+/// Soft-delete a team (`is_active = false`). Owner, or a system admin; on the root or the gating
+/// team, a system admin only; on a personal team, its owner only (task `01a19006`).
 ///
 /// Refuses the `temper-system` root (load-bearing: every profile descends from
 /// it). Idempotency: a team that is absent OR already soft-deleted yields
 /// `NotFound`. Rows are preserved — recovery is a DB-level `is_active = true`.
 /// Children are NOT recursively deleted (see the migration's cascade note).
 pub async fn delete_team(pool: &PgPool, caller: &HumanPrincipal, team_id: Uuid) -> ApiResult<()> {
-    // Auth before writes: owner only (stricter than manage — a maintainer cannot
-    // dissolve the team).
-    match role_on_team(pool, team_id, caller.profile_id()).await? {
-        Some(TeamRole::Owner) => {}
-        _ => return Err(ApiError::Forbidden),
+    // Auth before writes: owner only (stricter than manage — a maintainer cannot dissolve the
+    // team), or a system admin. On the root or the gating team, a system admin only
+    // (team-authority fixes D4). The admin arm stops at a personal team, which only its owner and
+    // erasure act on.
+    let admin = personal_of(pool, team_id).await?.is_none()
+        && crate::authz::Principal::Human(caller)
+            .system_admin(pool)
+            .await?
+            .is_some();
+    if !admin {
+        if is_root_or_gating(pool, team_id).await? {
+            return Err(ApiError::Forbidden);
+        }
+        match role_on_team(pool, team_id, caller.profile_id()).await? {
+            Some(TeamRole::Owner) => {}
+            _ => return Err(ApiError::Forbidden),
+        }
     }
 
     // Guard the DAG root. Folded into the UPDATE's WHERE so the check and the
@@ -576,6 +671,85 @@ pub async fn delete_team(pool: &PgPool, caller: &HumanPrincipal, team_id: Uuid) 
             ApiError::NotFound("team not found or not readable".to_string())
         });
     }
+    Ok(())
+}
+
+/// Detach `child_id` from its parent `parent_id` (team-authority fixes D3).
+///
+/// Rank stays per team (team-role rank spec R7): a parent's managers have no say in a child's
+/// roster. What they do have, as they would over a member added to the parent directly, is the
+/// means to end the reach: a child's members reach everything attached to the parent and its
+/// ancestors, and this cuts that. The child and its roster survive; only this link is cut.
+///
+/// Auth before writes: an `owner` or `maintainer` of the PARENT (direct, live), or a system admin.
+/// The personal-team link under `temper-system` is structural and nobody removes it: a system
+/// admin's arm does not reach a personal team (task `01a19006`), and only a system admin manages
+/// the root.
+/// A caller who may not manage the parent learns nothing about the link (`Forbidden`); a manager
+/// asking to cut a link that does not exist gets `NotFound`. The row and its
+/// `team_parent_link_changed` record are one write.
+pub async fn detach_child(
+    pool: &PgPool,
+    caller: &HumanPrincipal,
+    parent_id: Uuid,
+    child_id: Uuid,
+) -> ApiResult<()> {
+    let admin = personal_of(pool, child_id).await?.is_none()
+        && crate::authz::Principal::Human(caller)
+            .system_admin(pool)
+            .await?
+            .is_some();
+    if !admin {
+        let parent_live = sqlx::query_scalar!(
+            r#"SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1 AND is_active) AS "e!: bool""#,
+            parent_id,
+        )
+        .fetch_one(pool)
+        .await?;
+        match role_on_team(pool, parent_id, caller.profile_id()).await? {
+            Some(role) if can_manage(role) && parent_live => {}
+            _ => return Err(ApiError::Forbidden),
+        }
+        if is_root_or_gating(pool, parent_id).await? {
+            return Err(ApiError::Forbidden);
+        }
+    }
+
+    let mut tx = pool.begin().await?;
+    // Under the parent's row lock (the one every membership writer takes), re-read the caller's
+    // role, so a concurrent demotion or removal cannot race the detach it would have refused.
+    sqlx::query!(
+        "SELECT id FROM kb_teams WHERE id = $1 FOR NO KEY UPDATE",
+        parent_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    if !admin
+        && !matches!(
+            role_on_team_on(&mut tx, parent_id, caller.profile_id()).await?,
+            Some(role) if can_manage(role)
+        )
+    {
+        return Err(ApiError::Forbidden);
+    }
+    let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let outcome = sqlx::query_scalar!(
+        r#"SELECT _admin_team_parent_link_write($1, $2, 'unlink', $3, $4) AS "outcome!""#,
+        emitter.uuid(),
+        *caller.profile_id(),
+        parent_id,
+        child_id,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if outcome != "unlinked" {
+        return Err(ApiError::NotFound(
+            "that team is not a child of this team".to_string(),
+        ));
+    }
+    tx.commit().await?;
     Ok(())
 }
 
@@ -909,14 +1083,19 @@ mod lifecycle_tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn remove_member_surfaces_residual_owned_reach(pool: PgPool) {
-        // owner removes `leaver`, who owns 2 resources in a shared context + 0 elsewhere.
+        // owner removes `leaver`, who owns 2 resources in a context the team OWNS + 0 elsewhere. A
+        // context merely shared to the team is out of its scope (team-authority fixes D5).
         let owner = mk_profile(&pool, "owner").await;
         let leaver = mk_profile(&pool, "leaver").await;
+        let carol = mk_profile(&pool, "carol").await;
         let team = mk_team(&pool, "acme").await;
         add(&pool, team, owner, "owner", "native").await;
         add(&pool, team, leaver, "member", "native").await;
 
-        let shared = mk_shared_profile_context(&pool, leaver, team, "shared").await;
+        // Out of scope: carol's context shared to the team.
+        let foreign = mk_shared_profile_context(&pool, carol, team, "carols").await;
+        let _r0 = mk_homed_resource(&pool, foreign, leaver).await;
+        let shared = mk_team_context(&pool, team, "shared").await;
         let _r1 = mk_homed_resource(&pool, shared, leaver).await;
         let _r2 = mk_homed_resource(&pool, shared, leaver).await;
 
@@ -937,21 +1116,20 @@ mod lifecycle_tests {
     }
 
     #[sqlx::test(migrations = "../../migrations")]
-    async fn remove_member_residual_groups_same_slug_contexts_by_identity(pool: PgPool) {
-        // Two DISTINCT contexts sharing the slug "docs" (slug is unique only per-owner),
-        // both shared to the team, both holding leaver-owned resources. Resources are
-        // inserted interleaved (A, B, A); kb_resources.id is uuid_generate_v7 (monotonic),
-        // so `ORDER BY slug, resource_id` yields the non-adjacent sequence A, B, A. The
-        // fold must group by context IDENTITY — an adjacency fold would split A in two.
+    async fn remove_member_residual_groups_by_context_identity(pool: PgPool) {
+        // Two of the team's own contexts, both holding leaver-owned resources, inserted interleaved
+        // (A, B, A). The fold must group by context IDENTITY (`context_id`), not by row adjacency.
+        // (The scope is the team's OWN contexts since team-authority fixes D5, and a slug is unique
+        // per owner, so two in-scope contexts can no longer share a slug; the grouping-by-identity
+        // rule is still what this pins.)
         let owner = mk_profile(&pool, "owner").await;
         let leaver = mk_profile(&pool, "leaver").await;
-        let carol = mk_profile(&pool, "carol").await;
         let team = mk_team(&pool, "acme").await;
         add(&pool, team, owner, "owner", "native").await;
         add(&pool, team, leaver, "member", "native").await;
 
-        let ctx_a = mk_shared_profile_context(&pool, carol, team, "docs").await; // @carol/docs
-        let ctx_b = mk_shared_profile_context(&pool, leaver, team, "docs").await; // @leaver/docs
+        let ctx_a = mk_team_context(&pool, team, "docs-a").await;
+        let ctx_b = mk_team_context(&pool, team, "docs-b").await;
 
         let _r1 = mk_homed_resource(&pool, ctx_a, leaver).await;
         let _r2 = mk_homed_resource(&pool, ctx_b, leaver).await;
@@ -977,8 +1155,8 @@ mod lifecycle_tests {
             .iter()
             .map(|c| (c.context_ref.as_str(), c.count))
             .collect();
-        assert_eq!(by_ref.get("@carol/docs"), Some(&2));
-        assert_eq!(by_ref.get("@leaver/docs"), Some(&1));
+        assert_eq!(by_ref.get("+acme/docs-a"), Some(&2));
+        assert_eq!(by_ref.get("+acme/docs-b"), Some(&1));
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -1443,13 +1621,25 @@ mod lifecycle_tests {
         .await
         .unwrap();
 
+        // A non-admin owner of the root is refused before the root guard: the root's lifecycle is a
+        // system admin's alone (team-authority fixes D4).
         let denied = delete_team(
             &pool,
             &crate::test_support::human_principal_for(&pool, owner).await,
             sys,
         )
         .await;
-        assert!(matches!(denied, Err(ApiError::Conflict(_))));
+        assert!(matches!(denied, Err(ApiError::Forbidden)), "{denied:?}");
+
+        // And a system admin meets the root guard itself.
+        crate::test_support::approved_admin(&pool, owner).await;
+        let denied = delete_team(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, owner).await,
+            sys,
+        )
+        .await;
+        assert!(matches!(denied, Err(ApiError::Conflict(_))), "{denied:?}");
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -2991,7 +3181,25 @@ mod lifecycle_tests {
         assert!(matches!(denied, Err(ApiError::Forbidden)), "got {denied:?}");
         let denied = remove_member(&pool, &me, personal, dana).await;
         assert!(matches!(denied, Err(ApiError::Forbidden)), "got {denied:?}");
+        let denied = delete_team(&pool, &me, personal).await;
+        assert!(matches!(denied, Err(ApiError::Forbidden)), "got {denied:?}");
+        let root: Uuid = sqlx::query_scalar("SELECT id FROM kb_teams WHERE slug = 'temper-system'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let denied = detach_child(&pool, &me, root, personal).await;
+        assert!(matches!(denied, Err(ApiError::Forbidden)), "got {denied:?}");
 
+        let live: bool = sqlx::query_scalar(
+            "SELECT is_active AND EXISTS (SELECT 1 FROM kb_teams_parents \
+              WHERE child_id = $1 AND parent_id = $2) FROM kb_teams WHERE id = $1",
+        )
+        .bind(personal)
+        .bind(root)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(live, "still live, still under the root");
         assert_eq!(roster(&pool, personal).await, vec!["dana".to_string()]);
         assert!(membership_events(&pool, personal).await.is_empty());
     }

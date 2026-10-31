@@ -86,7 +86,7 @@
 //! *before* any team reach is consulted, so an `outsider` who owns the fixture resource passes
 //! every check for a reason that has nothing to do with the expression under test. That is not a
 //! hypothetical — the first draft of this file did exactly that, and
-//! `can_modify_resource_reaches_up_the_chain` failed its own negative control.
+//! `can_modify_resource_reaches_up_the_chain` (now `can_modify_resource_inherits_a_write_grant_only_through_an_authoring_role`) failed its own negative control.
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -154,6 +154,14 @@ const AUTHORITATIVE: &str = "profile_reachable_teams";
 /// The lesson worth keeping: **a stated one-directional error is what stops anyone re-examining a
 /// gate.** The claim was more harmful than the hole.
 const REACH_FORMS: (&str, &str) = ("%profile_effective_teams%", "%kb_team_members%");
+
+/// The one function that walks `team_ancestors` from a profile's memberships and is NOT a copy of
+/// [`AUTHORITATIVE`]: `profile_authoring_teams` (migration `20261109000000`) starts the walk from a
+/// ROLE-FILTERED direct membership (owner|maintainer|member, for write and delete), where the
+/// authoritative relation is role-blind. Routing it through `profile_reachable_teams` would lose
+/// the role on the direct team, which is the whole of what it adds. It is the false positive the
+/// gate's doc anticipates, named here rather than by loosening the gate.
+const ROLE_GATED_REACH: &str = "profile_authoring_teams";
 const ANCESTOR_WALK: &str = "%team_ancestors%";
 
 // =================================================================================================
@@ -187,7 +195,7 @@ async fn the_reachable_teams_expression_has_exactly_one_home(pool: PgPool) -> sq
            JOIN pg_namespace n ON n.oid = p.pronamespace \
            CROSS JOIN LATERAL (SELECT pg_get_functiondef(p.oid) AS def) d \
           WHERE n.nspname = 'public' AND p.prokind = 'f' \
-            AND p.proname NOT IN ($1, 'profile_effective_teams', 'team_ancestors') \
+            AND p.proname NOT IN ($1, 'profile_effective_teams', 'team_ancestors', $5) \
             AND d.def LIKE $2 \
             AND (d.def LIKE $3 OR d.def LIKE $4) \
           ORDER BY 1",
@@ -196,6 +204,7 @@ async fn the_reachable_teams_expression_has_exactly_one_home(pool: PgPool) -> sq
     .bind(ANCESTOR_WALK)
     .bind(calls_pet)
     .bind(inlines_pet)
+    .bind(ROLE_GATED_REACH)
     .fetch_all(&pool)
     .await?;
 
@@ -873,45 +882,56 @@ async fn profile_explicit_grant_reaches_up_the_chain(pool: PgPool) -> sqlx::Resu
     Ok(())
 }
 
+/// The mutation gate walks the chain only through an AUTHORING role (`20261109000000`): a write grant
+/// to an ancestor of dana's direct team reaches her as a `member`, never a `watcher` beneath it.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn can_modify_resource_reaches_up_the_chain(pool: PgPool) -> sqlx::Result<()> {
+async fn can_modify_resource_inherits_a_write_grant_only_through_an_authoring_role(
+    pool: PgPool,
+) -> sqlx::Result<()> {
     let o = org(&pool).await?;
     let sec = team_context(&pool, o.security_it_ops, "security-ctx").await?;
     let resource = resource_in(&pool, sec, o.owner, "granted").await?;
+    grant_resource_to_team(&pool, resource, o.engineering, o.owner, true).await?;
 
-    // A WRITE grant to ENGINEERING, an ancestor of dana's direct team.
+    let watcher = profile(&pool, "squad-watcher").await?;
     sqlx::query(
-        "INSERT INTO kb_access_grants \
-           (id, subject_table, subject_id, principal_table, principal_id, can_read, can_write, granted_by_profile_id) \
-         VALUES (uuid_generate_v7(), 'kb_resources', $1, 'kb_teams', $2, true, true, $3)",
+        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'watcher')",
     )
-    .bind(resource)
-    .bind(o.engineering)
-    .bind(o.owner)
+    .bind(o.squad_two)
+    .bind(watcher)
     .execute(&pool)
     .await?;
 
-    let dana: bool = sqlx::query_scalar("SELECT can_modify_resource($1, $2)")
-        .bind(o.dana)
-        .bind(resource)
-        .fetch_one(&pool)
-        .await?;
-    let outsider: bool = sqlx::query_scalar("SELECT can_modify_resource($1, $2)")
-        .bind(o.outsider)
-        .bind(resource)
-        .fetch_one(&pool)
-        .await?;
-
+    let modify = |who: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, bool>("SELECT can_modify_resource($1, $2)")
+                .bind(who)
+                .bind(resource)
+                .fetch_one(&pool)
+                .await
+        }
+    };
     assert!(
-        dana,
-        "a write grant to an ancestor team reaches a member beneath it"
+        modify(o.dana).await?,
+        "a write grant to an ancestor team reaches an authoring member beneath it"
     );
-    assert!(!outsider, "the outsider may modify nothing");
+    assert!(!modify(watcher).await?, "...and never a watcher beneath it");
+    assert!(
+        !modify(o.outsider).await?,
+        "the outsider may modify nothing"
+    );
     Ok(())
 }
 
-/// One fixture reaching every arm the nine folds actually feed, plus the SQL form of each
+/// One fixture reaching every arm the routed folds actually feed, plus the SQL form of each
 /// characterization's assertion.
+///
+/// **Eight, not nine, since `20261109000000`.** `can_modify_resource` no longer joins
+/// `profile_reachable_teams`: its team arm walks the chain through `profile_authoring_teams`, which
+/// starts from a role-filtered membership ([`ROLE_GATED_REACH`]), so it has no role-blind fold left
+/// to probe. Its behaviour is pinned by
+/// [`can_modify_resource_inherits_a_write_grant_only_through_an_authoring_role`].
 ///
 /// **Shared by both tier-3 gates, deliberately.** They ask different questions — one empties a
 /// single function's fold site, the other flattens the shared relation for all nine — but they ask
@@ -936,8 +956,6 @@ async fn fold_probes(pool: &PgPool, o: &Org) -> sqlx::Result<Vec<(&'static str, 
     let sealed_ctx = team_context(pool, o.security_it_ops, "sealed-ctx").await?;
     let team_read = resource_in(pool, sealed_ctx, o.owner, "team-read").await?;
     grant_resource_to_team(pool, team_read, o.engineering, o.owner, false).await?;
-    let team_write = resource_in(pool, sealed_ctx, o.owner, "team-write").await?;
-    grant_resource_to_team(pool, team_write, o.engineering, o.owner, true).await?;
 
     sqlx::query(
         "INSERT INTO kb_access_grants \
@@ -997,10 +1015,6 @@ async fn fold_probes(pool: &PgPool, o: &Org) -> sqlx::Result<Vec<(&'static str, 
         (
             "profile_explicit_grant",
             format!("SELECT profile_explicit_grant('{d}','read','kb_contexts','{sec_ctx}')"),
-        ),
-        (
-            "can_modify_resource",
-            format!("SELECT can_modify_resource('{d}','{team_write}')"),
         ),
     ])
 }
@@ -1081,7 +1095,7 @@ async fn every_fold_site_is_load_bearing(pool: PgPool) -> sqlx::Result<()> {
 
     assert!(
         inert.is_empty(),
-        "for {} of 9 routed function(s), emptying that function's OWN fold site changed nothing \
+        "for {} of {} routed function(s), emptying that function's OWN fold site changed nothing \
          its characterization asserts: {inert:?}\n\
          \n\
          That test is not a witness for that function — it is passing through some other \
@@ -1090,6 +1104,7 @@ async fn every_fold_site_is_load_bearing(pool: PgPool) -> sqlx::Result<()> {
          \n\
          This is not hypothetical: four of these nine were inert when first written.",
         inert.len(),
+        probes.len(),
     );
 
     Ok(())
@@ -1169,12 +1184,13 @@ async fn the_equivalence_tier_actually_bites(pool: PgPool) -> sqlx::Result<()> {
 
     assert!(
         still_lit.is_empty(),
-        "BITE PROBE FAILED for {} of 9 door(s): {still_lit:?} still reached ancestor-attached \
+        "BITE PROBE FAILED for {} of {} door(s): {still_lit:?} still reached ancestor-attached \
          material with a FLATTENED reachable-teams relation.\n\
          \n\
          Either those functions are not routed through {AUTHORITATIVE}(), or they carry their own \
          copy of the walk — in which case the clause-1 witness is the test to look at.",
         still_lit.len(),
+        probes.len(),
     );
 
     // ...while the DIRECT arm still works: the flattening removed exactly one axis.
