@@ -82,8 +82,9 @@ pub const MAX_WALK_DEPTH: usize = 16;
 ///
 /// The vocabulary is read whole by `schema show`, `GET /api/shapes/{id}` and
 /// `get_data_artifact_shape`, so this bounds a response body. It is far above a shape a person
-/// writes — a record with tens of fields — and below what a schema at [`MAX_SCHEMA_BYTES`] can
-/// declare: about twenty thousand empty fields fit in one.
+/// writes — a record with tens of fields — and below what a schema within the declare budget can
+/// declare: a shape holds at most 12,288 JSON values, 3,072 of them objects, so about three
+/// thousand empty fields fit in one.
 ///
 /// It bounds how many paths, not how large each is. A path's text is at most [`MAX_WALK_DEPTH`]
 /// segments of at most `MAX_ARTIFACT_PATH_SEGMENT_BYTES` — a longer key is never advertised — so

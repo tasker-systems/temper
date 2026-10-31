@@ -25,7 +25,8 @@
 //! holds it to [`MAX_SHAPE_NODES`] JSON values at every depth, at most [`MAX_SHAPE_OBJECTS`] of
 //! them objects, `default` and `examples` included ([`within_node_budget`]). One weight model,
 //! [`parsed_weight`], sizes the two caps, and an assertion holds them to
-//! [`MAX_SHAPE_PARSED_WEIGHT`].
+//! [`MAX_SHAPE_PARSED_WEIGHT`]. The shape loader counts the same budget before it takes a compile
+//! permit or copies a stored schema, so a schema past it is refused without being cloned.
 //!
 //! The draft is not left to `jsonschema`'s detection: `$schema` is absent, or it appears only at
 //! the root and is the bundled 2020-12 spelling, with or without a trailing `#`. `$id` is also

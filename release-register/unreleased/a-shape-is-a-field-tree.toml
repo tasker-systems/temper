@@ -6,13 +6,13 @@ status   = "signal-only"
 body = '''
 Hardening. A data-artifact shape is now a field tree: a JSON Schema 2020-12 document using only
 `type`, `properties`, `required`, `additionalProperties` (`true`, `false` or a schema), `items` (one
-schema), `enum` (at most 256 strings, or 32 values of any other kind), `const`, `pattern` (at most
-256 bytes, at most 32 in a shape, no lookaround or backreferences), `minLength`, `maxLength`,
+schema), `enum` (at most 256 strings, or 32 values of any other kind, every member a scalar),
+`const` (a scalar), `pattern` (at most 256 bytes, at most 32 in a shape, no lookaround or backreferences), `minLength`, `maxLength`,
 `minItems`, `maxItems`, `minimum`, `maximum`, `title`, `description`, `$comment`, `default` and
 `examples`, with property names (in `properties` and `required`) of at most 256 bytes, `$schema` and
 `$id` only at the root, `$schema` the bundled 2020-12 spelling (with or without a trailing `#`), nested
-at most 16 levels. Declaring a shape
-(`POST /api/contexts/{id}/shapes`, `POST /api/cognitive-maps/{id}/shapes`, the MCP
+at most 16 levels, holding at most 12,288 JSON values in all, at most 3,072 of them objects.
+Declaring a shape (`POST /api/contexts/{id}/shapes`, `POST /api/cognitive-maps/{id}/shapes`, the MCP
 `declare_data_artifact_shape` tool and `temper data-artifact schema declare`) with a schema outside
 it is refused with the existing data-artifact refusal (`400`, code `DATA_ARTIFACT_REFUSAL`, MCP
 `invalid_params`), carrying one fixed sentence that lists this vocabulary; no shape row is written.
