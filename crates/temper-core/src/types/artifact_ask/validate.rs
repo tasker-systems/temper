@@ -1827,6 +1827,31 @@ mod tests {
         );
     }
 
+    /// A value its ancestor's `const` rules out is refused, though the path declares no value set of
+    /// its own, and the value the ancestor leaves it is admitted. Bites the narrowing: read only at
+    /// the path's end, `m.unit` is unconstrained and `"lb"` is admitted.
+    #[test]
+    fn a_value_an_ancestors_const_rules_out_is_outside_the_shape() {
+        let shape = shape_of(json!({ "properties": {
+            "m": { "const": { "unit": "kg" }, "properties": { "unit": { "type": "string" } } }
+        } }));
+        let unit = |value: &str| ask(vec![at(&["m", "unit"], contains(vec![json!(value)]))]);
+        let rs = refusals(&unit("lb"), &shape);
+        assert_eq!(reasons(&rs), vec![RefusalReason::ValueOutsideShape]);
+        assert_eq!(
+            rs[0].teaches.clone().unwrap().vocabulary.map(|v| v.paths),
+            Some(vec![AskablePath::new(
+                vec!["m".to_string(), "unit".to_string()],
+                PathFacts {
+                    types: Some([JsonType::String].into_iter().collect()),
+                    values: Some(vec![json!("kg")]),
+                    items: None,
+                }
+            )])
+        );
+        assert!(validate_ask(&unit("kg"), &shape).is_ok());
+    }
+
     #[test]
     fn a_value_outside_an_enum_teaches_the_declared_values_and_the_route_to_the_rest() {
         let shape = shape_of(json!({ "properties": {

@@ -1,0 +1,33 @@
+title    = "An ancestor's enum or const narrows the paths below it"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp", "cli-stdout", "clients"]
+status   = "signal-only"
+body = '''
+Correctness. Content at a path must satisfy the `enum` / `const` of every node above it, and the
+schema walk now reads it that way. It used to read a path's value set only at the path itself, so
+in `{"properties":{"m":{"const":{"unit":"kg"},"properties":{"unit":{}}}}}` the path `m.unit` read as
+unconstrained and an ask for `m.unit contains "lb"` was admitted, though no conforming artifact can
+match it. Now `m.unit` holds `["kg"]` and that ask is refused `value_outside_shape`.
+
+A path holds what its ancestors' members hold at it: a member that is an object holding the key
+leaves its value there, and any other member leaves nothing. A path declaring its own `enum` or
+`const` keeps only its members jsonb-equal to one of those. A declared key that no ancestor member
+holds is left the empty set, so no value is admissible there. A path's own `type` stands as
+declared.
+
+What changes for a caller: a shape's vocabulary (`GET /api/shapes/{id}`'s `askable`, the MCP
+`get_data_artifact_shape` tool, `temper data-artifact schema show`) now lists `values` at a path
+below an ancestor that declares an `enum` or `const`, and a `value_outside_shape` refusal teaches
+them. An ask at such a path whose value no ancestor member holds is refused; before, it was
+admitted and matched nothing. Only shapes that declare an `enum` or `const` above a declared
+`properties` key are affected. No wire field is added: `PathFacts.values` changes only in its
+description text, in OpenAPI, ts-rs and the three generated SDKs.
+
+A value an ancestor declares is now copied again onto every declared path below it that it
+reaches, so a vocabulary holds at most the walk's depth bound times the values in its schema.
+Bounding the size of declared values at declare is its own change. No migration.
+
+Who observes: agents and CLIs asking at a path below a declared value, and readers of a shape's
+vocabulary. Release relevance: signal-only.
+'''

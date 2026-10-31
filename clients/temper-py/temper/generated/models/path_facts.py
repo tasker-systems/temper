@@ -30,7 +30,7 @@ class PathFacts(BaseModel):
     """ # noqa: E501
     items: Optional[PathFacts] = Field(default=None, description="What an element of an array at this path declares. `None`: elements are unconstrained. Reported at most as many arrays deep as the walk's depth bound.")
     types: Optional[List[JsonType]] = Field(default=None, description="The declared JSON types. `None`: no `type` constrains the path. An empty set: no value is admissible — a `type` naming no JSON type, or the element of an `items: false` array.")
-    values: Optional[List[Any]] = Field(default=None, description="The `enum` / `const` values. `None`: no value set constrains the path.")
+    values: Optional[List[Any]] = Field(default=None, description="The values the path may hold: its own `enum` / `const`, narrowed by each ancestor's — an ancestor's member leaves a value here only if it holds one at this path. `None`: no value set constrains the path. An empty list: no value is admissible.")
     __properties: ClassVar[List[str]] = ["items", "types", "values"]
 
     model_config = ConfigDict(
