@@ -19,8 +19,9 @@
 #     ignored here — cargo audit does not fail the build on them by default, so
 #     they stay visible as advisories without gating.
 #
-# Snapshot when this list was written: `cargo audit` reported 10 vulnerabilities
-# (1 unfixable, 9 fix-pending) + 13 informational warnings.
+# Last reconciled against Cargo.lock 2026-10-31: the zip (0367/0368/0369, now
+# zip 9.0.5), lopdf (0187, now 0.45.0) and quinn-proto (0185, now 0.11.19) entries
+# were removed once the lock carried the fixed versions. Five ids remain below.
 
 [advisories]
 ignore = [
@@ -38,33 +39,14 @@ ignore = [
     # it", and the ignore is exactly what keeps the gate from blocking on it.
     "RUSTSEC-2023-0071",
 
-    # ── UNFIXABLE, and BUILD-TIME ONLY — never linked ────────────────────────
-    # zip 3.0.0: extraction applies SUID/SGID bits (RUSTSEC-2026-0367), creates
-    # symlinks pointing outside the destination (RUSTSEC-2026-0368), and applies
-    # Unix permissions through symlinks (RUSTSEC-2026-0369). Each is fixed in
-    # zip >= 9.0.0. `zip` is only a [build-dependency] of `utoipa-swagger-ui`
-    # (`cargo tree -i zip`); its build script unpacks the Swagger UI archive
-    # bundled by the `vendored` feature. That archive is fixed bytes from a
-    # pinned crate, not untrusted input, and zip is not linked into any binary.
-    # There is no fix to adopt: utoipa-swagger-ui 10.0.1, the latest, still
-    # requires zip ^8.6. Drop all three ids once a release moves to zip >= 9.
-    "RUSTSEC-2026-0367",
-    "RUSTSEC-2026-0368",
-    "RUSTSEC-2026-0369",
-
     # ── FIX-PENDING — a patched version exists; adopting it is a tracked bump ─
     # crossbeam-epoch 0.9.18 → >=0.9.20 (invalid-pointer deref in Debug impl).
     "RUSTSEC-2026-0204",
-    # lopdf 0.40.0 → >=0.42.0 (stack overflow on deeply nested PDF objects).
-    "RUSTSEC-2026-0187",
     # quick-xml 0.39.4 → >=0.41.0 (quadratic duplicate-attr check) — crosses a
     # 0.x-major, may need a direct-dep edit.
     "RUSTSEC-2026-0194",
     # quick-xml 0.39.4 → >=0.41.0 (unbounded namespace-decl allocation, DoS).
     "RUSTSEC-2026-0195",
-    # quinn-proto 0.11.14 → >=0.11.15 (remote memory exhaustion, transitive
-    # under the HTTP stack).
-    "RUSTSEC-2026-0185",
 
     # ── NOT EXPOSED — a version-matched shim over the patched crate ─────────
     # webpki-roots 0.26.11 (distrusted emSign intermediates in the bundled roots;

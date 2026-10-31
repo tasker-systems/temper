@@ -7,8 +7,11 @@ body = '''
 A new package, `packages/temper-design`: the closed role schema every temper surface paints
 from, Quiet Instrument and its Paper counterpart, the contract CSS and recipes, the brand marks,
 and a generated `themes.json` index (name, title, appearance, counterpart per theme). Its
-exports name those files only; the Python checker that proves them is not published. Nothing
-consumes it yet and it is not yet in the npm release lane, so no installed client, SDK or
-surface changes. Who observes: no one until the web UI or the desktop depends on it.
-User-visible: no. Release relevance: additive — a new published name once the lane carries it.
+exports name those files only; the Python checker that proves them is not published. The web
+UI depends on it (`packages/temper-ui`, as a workspace `file:` dependency) and paints from its
+contract, and it is published to npmjs.org through the `publish-npm-clients` release lane beside
+temper-ts and temper-telemetry-ts. Who observes: the web UI, which builds against it, and any
+surface that installs `@tasker-systems/temper-design` from npm. User-visible: no, not by itself;
+the web changes built on it have their own entries. Release relevance: additive — the package's
+first release through the lane (0.6.2 was published to npm by hand).
 '''
