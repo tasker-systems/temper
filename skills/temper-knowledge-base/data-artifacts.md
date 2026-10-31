@@ -165,7 +165,8 @@ artifacts satisfies **all** of that ask's predicates. So "an artifact with `unit
   holds the empty set: a `contains` ask there is refused `value_outside_shape`, while `compare` and
   `has_key` are admitted. A shape whose schema the compile refuses cannot be asked: the ask answers
   `shape_schema_uncompilable` until the shape is amended; re-declaring it returns the refusal
-  sentence, which names every bound a shape is held to.
+  sentence, which names every rule the compile holds a schema to (a schema past the 256 KiB size
+  cap is refused with a sentence of its own).
 - **An ask ranges over its shape's home.** It reads the live artifacts of that shape's family on
   resources homed there that you can see and that have finished ingesting. Anchor the stage to that
   home or leave it unanchored; asks of shapes in two homes cannot share a stage (`ask_scope_conflict`)

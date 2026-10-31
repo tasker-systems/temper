@@ -226,7 +226,7 @@ async fn declaring_without_credentials_is_refused_on_both_paths(pool: PgPool) {
         assert_eq!(
             res.status(),
             StatusCode::UNAUTHORIZED,
-            "{path}: without credentials the gated tier's auth must answer before the declare handler"
+            "{path}: a declare without credentials must be refused as unauthenticated"
         );
     }
 }
