@@ -1,0 +1,22 @@
+title    = "A personal team holds only its owner and the owner's machines; a system admin lists it but does not act on it"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "mcp", "cli-stdout", "clients"]
+status   = "signal-only"
+body = '''
+A personal team's members are its owner and the machines the owner registered, and nobody else.
+A system admin may still read one (`GET /api/teams/{id}`) for audit; only erasure otherwise acts on
+it without its owner. Migration `20261110000000`.
+
+- `POST`/`PATCH`/`DELETE /api/teams/{id}/members…` on someone else's personal team: `403` for a
+  system admin, as for anyone else who is not its owner. Its owner adding anyone but one of their
+  own machines: `400`.
+- `POST /api/teams/{id}/invitations` on a personal team: `400` for its owner, `403` for anyone else.
+- `POST /api/teams` with a personal team as `parent`: `400`.
+- Context share, unshare and reassign, cognitive-map bind and unbind, and connection reach whose
+  target is someone else's personal team: `403` for a system admin too.
+- The database refuses the same rows from any writer: SAML group mappings and invitations onto a
+  personal team, a team beneath one, and a membership row the rule does not admit.
+
+Who observes: system admins and personal-team owners. Release relevance: signal-only.
+'''
