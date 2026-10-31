@@ -414,9 +414,6 @@ pub async fn rebind(
     // inherits — which is why this takes a `&SystemAdmin` proof, NOT `machine_authz`. The proof itself
     // IS the check (admin-authz enclosure, spec §3); do not widen it back to a scoped gate.
     let old = machine_client_service::get(pool, req.from_machine_client_id).await?;
-    // The admin proof does not reach a machine on someone else's personal team: a rebound client id
-    // is a credential into that person's personal space, theirs alone to mint (task `01a191b4`).
-    machine_client_service::require_credential_minter(pool, old.profile_id, *admin.actor()).await?;
 
     // The new client id is the caller's choice, so it may not sit in a namespace temper mints.
     refuse_minted_namespace(&req.client_id)?;
@@ -447,6 +444,12 @@ pub async fn rebind(
         .begin()
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {e}")))?;
+
+    // A rebound client id is a new credential for the same principal. One minted by anyone but the
+    // person whose personal team admits the machine costs the machine that team (task `01a191b4`):
+    // the admin manages the principal, but its new credential does not open someone's personal
+    // space. First in the transaction, ahead of its writes.
+    machine_client_service::sever_personal_reach(&mut tx, old.profile_id, admin.actor()).await?;
 
     // A second auth link for the same profile, under the new client id.
     sqlx::query!(

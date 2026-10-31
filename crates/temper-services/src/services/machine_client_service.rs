@@ -148,8 +148,9 @@ async fn authorize_control(pool: &PgPool, authed: &HumanPrincipal, id: Uuid) -> 
 }
 
 /// List machine clients visible to `caller` (B2 D5), newest first. Revoked rows are hidden
-/// unless asked for. A system admin sees every row but those of someone else's personal team
-/// (teamless ones included); a team owner sees only machines owned by a team they own.
+/// unless asked for. A system admin sees every row, including teamless ones and those of a personal
+/// team (they manage every principal, task `01a191b4`); a team owner sees only machines owned by a
+/// team they own.
 ///
 /// `EXISTS`, not `array_agg` — an empty scope must DENY, and an aggregate over an empty scope
 /// yields NULL, which falls open.
@@ -171,12 +172,7 @@ pub async fn list(
                   revoked_at, revoked_by_profile_id
              FROM kb_machine_clients mc
             WHERE ($1 OR mc.revoked_at IS NULL)
-              -- The admin arm stops at someone else's personal team (task `01a191b4`), as the
-              -- per-row gate does; its roster stays readable through the team's members.
-              AND ( ($2 AND NOT EXISTS (SELECT 1 FROM kb_teams pt
-                                         WHERE pt.id = mc.team_id
-                                           AND profile_is_person(pt.personal_of)
-                                           AND pt.personal_of <> $3))
+              AND ( $2
                     OR ( mc.team_id IS NOT NULL
                          AND EXISTS (
                              SELECT 1
@@ -274,42 +270,62 @@ async fn has_live_credential(pool: &PgPool, profile: ProfileId) -> ApiResult<boo
     .await?)
 }
 
-/// The person whose personal team admits this machine profile, if any (task `01a191b4`).
-///
-/// A machine's credential is a key to every team it sits on. One that sits on a person's personal
-/// team reads that person's personal space, so minting it a credential (a rotated secret, or a
-/// rebound client id) is that person's act alone, whatever team owns the machine row. Owning a
-/// shared team, or holding a system-admin grant, does not reach it. Revoking is not minting: it
-/// only takes access away, and stays with the row's ordinary control gate.
-pub(crate) async fn admitting_person(pool: &PgPool, profile: Uuid) -> ApiResult<Option<Uuid>> {
+/// The proof that a machine's personal-team membership is being severed by a credential mint
+/// (task `01a191b4`). Private field: only [`sever_personal_reach`] constructs it, so
+/// `AuthorizedMembershipChange::severed_by_credential` runs for no other caller.
+#[derive(Debug)]
+pub(crate) struct CredentialSeverance(());
+
+/// The personal teams, of persons other than `minter`, that admit this machine profile.
+pub(crate) async fn others_personal_teams(
+    conn: &mut sqlx::PgConnection,
+    profile: Uuid,
+    minter: Uuid,
+) -> ApiResult<Vec<Uuid>> {
     Ok(sqlx::query_scalar!(
-        r#"SELECT t.personal_of AS "owner!"
+        r#"SELECT t.id
              FROM kb_team_members tm
              JOIN kb_teams t ON t.id = tm.team_id
             WHERE tm.profile_id = $1
               AND profile_is_person(t.personal_of)
-            ORDER BY t.personal_of
-            LIMIT 1"#,
+              AND t.personal_of <> $2
+            ORDER BY t.id"#,
         profile,
+        minter,
     )
-    .fetch_optional(pool)
+    .fetch_all(&mut *conn)
     .await?)
 }
 
-/// Refuse minting a credential for `profile` unless `caller` is the person whose personal team
-/// admits it, or no personal team does. The refusal is the per-row control gate's own `NotFound`,
-/// so it reveals nothing the caller could not already see.
-pub(crate) async fn require_credential_minter(
-    pool: &PgPool,
+/// Sever `profile` from every person's personal team but the minter's own, in the minting
+/// transaction and before its writes (task `01a191b4`).
+///
+/// A machine's credential is a key to every team it sits on, and a person's personal team is theirs
+/// alone. A system admin manages every principal, machines included, and an owner of the team that
+/// owns a machine row may rotate its secret; neither may thereby open someone's personal space. So
+/// a credential minted by anyone but the person whose personal team admits the machine (a rotated
+/// secret, or a rebound client id) costs the machine that team. Each removal is a recorded
+/// `team_membership_changed` (`machine_reach`, the minter as actor). Returns the teams severed.
+pub(crate) async fn sever_personal_reach(
+    conn: &mut sqlx::PgConnection,
     profile: Uuid,
-    caller: Uuid,
-) -> ApiResult<()> {
-    match admitting_person(pool, profile).await? {
-        Some(owner) if owner != caller => {
-            Err(ApiError::NotFound(MACHINE_CLIENT_REFUSAL.to_string()))
+    minter: ProfileId,
+) -> ApiResult<Vec<Uuid>> {
+    use crate::authz::team_membership::{self, AuthorizedMembershipChange};
+    let teams = others_personal_teams(conn, profile, *minter).await?;
+    for team in &teams {
+        let target = team_membership::locked(conn, *team, ProfileId::from(profile)).await?;
+        if target.current().is_none() {
+            continue;
         }
-        _ => Ok(()),
+        let change = AuthorizedMembershipChange::severed_by_credential(
+            CredentialSeverance(()),
+            &target,
+            minter,
+        )?;
+        team_membership::membership_write(conn, None, change).await?;
     }
+    Ok(teams)
 }
 
 /// The longest a rotated-away secret may remain valid. A rotation window is meant to be brief
@@ -334,9 +350,6 @@ pub async fn rotate_secret(
     // Auth before writes, keyed on the existing row's owning team (B2 D5). Ahead of the
     // transaction, so a rejected rotation never touches the row.
     authorize_control(pool, authed, id).await?;
-    // A machine on someone's personal team is minted for by that person alone (task `01a191b4`).
-    let row = get(pool, id).await?;
-    require_credential_minter(pool, row.profile_id, authed.profile().id).await?;
 
     if !(0..=MAX_ROTATION_GRACE_SECONDS).contains(&grace_seconds) {
         return Err(ApiError::BadRequest(format!(
@@ -344,10 +357,16 @@ pub async fn rotate_secret(
         )));
     }
 
+    let profile = get(pool, id).await?.profile_id;
     let mut tx = pool
         .begin()
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {e}")))?;
+
+    // A secret minted by anyone but the person whose personal team admits this machine costs the
+    // machine that team (task `01a191b4`). First in the transaction, so its team locks come before
+    // the row lock below, as every membership writer orders them; a refusal below rolls it back.
+    sever_personal_reach(&mut tx, profile, ProfileId::from(authed.profile().id)).await?;
 
     // FOR UPDATE locks the row so a concurrent revoke cannot land between these guards and the
     // write — the issuer/revoked checks and the rotation see one consistent, pinned row.

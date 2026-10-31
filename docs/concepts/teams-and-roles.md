@@ -19,13 +19,17 @@ but cannot change its membership, attach anything to it or detach anything from 
 acts on it without you.
 
 The same holds for everything inside your personal space: your personal contexts, the resources
-homed in them, and the machines, connections and subscriptions your personal team owns. A system
-admin cannot rename, retire, restore, share, unshare or reassign your personal contexts, grant or
-revoke on what they hold, aim a re-embed at them, or manage your team's machines, connections and
-subscriptions. A machine on your personal team gets a new credential only from you, whoever owns
-its row. Nor does a system admin read your personal space through the side doors: your
-retired contexts, the grant history on your personal resources, and your subscriptions stay out of
-their listings. A system admin's own personal space is theirs, like anyone's.
+homed in them, and the connections and subscriptions your personal team owns. A system admin
+cannot rename, retire, restore, share, unshare or reassign your personal contexts, grant or revoke
+on what they hold, aim a re-embed at them, or manage your team's connections and subscriptions.
+Nor does a system admin read your personal space through the side doors: your retired contexts,
+the grant history on your personal resources, and your subscriptions stay out of their listings.
+A system admin's own personal space is theirs, like anyone's.
+
+Machines are different: they are principals, and a system admin manages every principal, yours
+included. What protects your personal team is the credential. If anyone but you gives a machine on
+your personal team a new credential (a rotated secret, or a rebound client id), the machine leaves
+your personal team in the same act, so the new credential cannot open it.
 
 ## The role ladder
 

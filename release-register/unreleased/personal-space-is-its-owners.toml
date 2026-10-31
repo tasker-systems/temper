@@ -25,12 +25,13 @@ without its owner. An admin's own personal space is unaffected. Migration `20261
   else's personal space (`403`), and the `all` sweep still re-embeds it but no longer names its ids
   in the receipt. The `all` reblock sweep skips it.
 
-- Minting a credential for a machine that sits on someone's personal team (rotating its secret,
-  or rebinding its client id) is that person's act alone, whatever team owns the machine row: a
-  system admin and the other owners of that team get `404`. Revoking it is unchanged.
-- The machine-client and connection listings omit someone else's personal team's rows for a system
-  admin, as their per-row get already did; the personal team's roster stays readable through its
-  members. Subscription get and revoke refuse a system admin on a subscription delivering into
+- A system admin manages every machine principal, one on a personal team included: list, get,
+  revoke and rotate are unchanged for them. A credential minted for a machine on someone's personal
+  team (a rotated secret, or a rebound client id) by anyone but that person removes the machine
+  from that personal team in the same transaction, recorded as a `team_membership_changed`
+  (`machine_reach`, the minter as actor). The machine keeps its other teams.
+- The connection listing omits someone else's personal team's rows for a system admin, as its
+  per-row get already did. Subscription get and revoke refuse a system admin on a subscription delivering into
   someone else's personal context, as the listing already did.
 - An agent's own context (a teamless connection's home) is not personal space: only a person's
   profile, or a person's personal team, makes one. `context_reassign` refuses moving a context into

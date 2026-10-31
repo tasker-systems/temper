@@ -1,5 +1,7 @@
 //! Machine-registration authority — may this caller act on a machine owned by this team? — and its
-//! per-row twin, [`MachineClientControlAuthority`], for acts on an existing machine client.
+//! per-row twin, [`MachineClientControlAuthority`], for acts on an existing machine client. A
+//! system admin's registration arm stops at someone else's personal team; their per-row arm does
+//! not (task `01a191b4`), because a system admin manages every principal.
 //!
 //! **Fails closed on `None`** (spec D2): a teamless machine (`team_id IS NULL`) is admin-only to
 //! create, read, or operate. *"No team to check" must never mean "nothing to deny"* — so the
@@ -98,6 +100,15 @@ impl ScopedAuthority for MachineClientControlAuthority {
         // A missing row is `NotFound(MACHINE_CLIENT_REFUSAL)` from the lookup itself — the same
         // refusal `denial` renders below, which is what closes the oracle.
         let client = machine_client_service::get(pool, machine_client).await?;
+
+        // A system admin manages every principal, machines on a personal team included (task
+        // `01a191b4`): get, revoke and rotation are theirs. What protects the personal team is
+        // that a credential minted by anyone but its person severs the machine from it
+        // (`machine_client_service::sever_personal_reach`), not a refusal here. Registration and
+        // connections keep `MachineRegistrationAuthority`'s personal-team stop.
+        if caller.system_admin(pool).await?.is_some() {
+            return Ok(MachineClientControlAuthority::SystemAdmin);
+        }
 
         Ok(
             match <MachineRegistrationAuthority as ScopedAuthority>::resolve(
@@ -283,15 +294,24 @@ mod personal_space_tests {
         );
     }
 
-    /// A machine on a person's personal team is that person's to mint credentials for, whatever
-    /// shared team owns its row: not a system admin's, not another owner of that team's.
+    /// A system admin manages every machine principal, one on a person's personal team included;
+    /// but a credential they (or an owner of the machine row's team) mint severs the machine from
+    /// that personal team, recorded, so it cannot open it. The person minting keeps the membership.
     #[sqlx::test(migrations = "../../migrations")]
-    async fn only_the_person_mints_for_a_machine_on_their_personal_team(pool: PgPool) {
+    async fn a_credential_minted_by_anyone_but_the_person_severs_their_personal_team(pool: PgPool) {
         use crate::services::machine_client_service::{
-            admitting_person, require_credential_minter,
+            others_personal_teams, sever_personal_reach,
         };
         let (admin, _) = person(&pool, "mint-admin").await;
         crate::test_support::grant_governance(&pool, *admin).await;
+        // The admin acts through their `@web` emitter, which records the severance.
+        sqlx::query(
+            "INSERT INTO kb_entities (profile_id, name, metadata) VALUES ($1, 'mint-admin@web', '{}')",
+        )
+        .bind(*admin)
+        .execute(&pool)
+        .await
+        .unwrap();
         let (alice, alices_team) = person(&pool, "mint-alice").await;
         let (machine, _) = person(&pool, "mint-machine").await;
         let acme: Uuid = sqlx::query_scalar(
@@ -300,15 +320,15 @@ mod personal_space_tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        sqlx::query(
+        let client: Uuid = sqlx::query_scalar(
             "INSERT INTO kb_machine_clients (client_id, issuer, label, profile_id, team_id, \
                                              registered_by_profile_id) \
-             VALUES ('mint-client', 'auth0-m2m', 'm', $1, $2, $3)",
+             VALUES ('mint-client', 'auth0-m2m', 'm', $1, $2, $3) RETURNING id",
         )
         .bind(*machine)
         .bind(acme)
         .bind(*alice)
-        .execute(&pool)
+        .fetch_one(&pool)
         .await
         .unwrap();
         sqlx::query(
@@ -319,34 +339,69 @@ mod personal_space_tests {
         .execute(&pool)
         .await
         .expect("alice's machine joins her personal team");
-
-        assert_eq!(
-            admitting_person(&pool, *machine).await.unwrap(),
-            Some(*alice)
-        );
-        assert!(matches!(
-            require_credential_minter(&pool, *machine, *admin).await,
-            Err(ApiError::NotFound(_))
-        ));
-        require_credential_minter(&pool, *machine, *alice)
+        let on_alices = || async {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (SELECT 1 FROM kb_team_members WHERE team_id = $1 AND profile_id = $2)",
+            )
+            .bind(alices_team)
+            .bind(*machine)
+            .fetch_one(&pool)
             .await
-            .expect("alice mints for her own machine");
-        // A machine on no person's personal team (its own personal team is no one's personal space).
-        let (lonely, _) = person(&pool, "mint-lonely").await;
-        sqlx::query(
-            "INSERT INTO kb_machine_clients (client_id, issuer, label, profile_id, team_id, \
-                                             registered_by_profile_id) \
-             VALUES ('mint-lonely-client', 'auth0-m2m', 'l', $1, $2, $3)",
+            .unwrap()
+        };
+
+        // The admin manages the principal: the per-row gate admits them.
+        assert_eq!(
+            MachineClientControlAuthority::resolve(&pool, Principal::Bare(admin), client)
+                .await
+                .unwrap(),
+            MachineClientControlAuthority::SystemAdmin
+        );
+
+        // Alice minting for her own machine keeps it on her personal team.
+        let mut tx = pool.begin().await.unwrap();
+        assert!(sever_personal_reach(&mut tx, *machine, alice)
+            .await
+            .unwrap()
+            .is_empty());
+        tx.commit().await.unwrap();
+        assert!(on_alices().await);
+
+        // The admin minting severs it, and the removal is recorded with the admin as actor.
+        let mut conn = pool.acquire().await.unwrap();
+        assert_eq!(
+            others_personal_teams(&mut conn, *machine, *admin)
+                .await
+                .unwrap(),
+            vec![alices_team]
+        );
+        drop(conn);
+        let mut tx = pool.begin().await.unwrap();
+        assert_eq!(
+            sever_personal_reach(&mut tx, *machine, admin)
+                .await
+                .unwrap(),
+            vec![alices_team]
+        );
+        tx.commit().await.unwrap();
+        assert!(
+            !on_alices().await,
+            "the admin's credential does not open alice's personal team"
+        );
+        let recorded: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+              WHERE t.name = 'team_membership_changed' \
+                AND e.payload->>'via' = 'machine_reach' \
+                AND e.payload->>'actor' = $1::text \
+                AND e.payload->>'role' IS NULL",
         )
-        .bind(*lonely)
-        .bind(acme)
         .bind(*admin)
-        .execute(&pool)
+        .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(admitting_person(&pool, *lonely).await.unwrap(), None);
-        require_credential_minter(&pool, *lonely, *admin)
-            .await
-            .expect("no personal team admits it, so the ordinary gate decides");
+        assert_eq!(
+            recorded, 1,
+            "the severance is a recorded membership removal"
+        );
     }
 }

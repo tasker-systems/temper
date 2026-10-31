@@ -831,6 +831,42 @@ impl AuthorizedMembershipChange {
         })
     }
 
+    /// A machine severed from a person's personal team because someone other than that person
+    /// minted it a credential (task `01a191b4`). A machine's credential is a key to every team it
+    /// sits on, and a person's personal team is theirs alone: a secret rotated, or a client id
+    /// rebound, by a system admin or by an owner of the team that owns the machine row must not
+    /// open it. The minter keeps every act on the principal; the machine loses only that team, and
+    /// its person re-admits it if they still want it there.
+    ///
+    /// Recorded as `machine_reach` (a registration act changing a machine's team reach) with the
+    /// minter as actor. `token` is minted only inside `machine_client_service`'s severance, and
+    /// `target` is a [`locked`] read of a native row on someone else's personal team.
+    pub(crate) fn severed_by_credential(
+        _token: crate::services::machine_client_service::CredentialSeverance,
+        target: &MembershipTarget,
+        minter: ProfileId,
+    ) -> ApiResult<Self> {
+        match target.current {
+            Some((_, TeamMemberSource::Native)) => Ok(Self {
+                team_id: target.team_id,
+                profile: target.profile,
+                act: MembershipAct::Remove,
+                via: MembershipVia::MachineReach,
+                expected: target.current,
+                new_source: TeamMemberSource::Native,
+                actor: Some(minter),
+                invited_by: None,
+                guard_last_owner: true,
+            }),
+            Some((_, TeamMemberSource::Idp)) => Err(ApiError::Internal(
+                "a machine on a personal team holds an identity-provider row".to_string(),
+            )),
+            None => Err(ApiError::Internal(
+                "credential severance was handed an absent membership row".to_string(),
+            )),
+        }
+    }
+
     /// An identity-provider reconcile write (plan C4, R8): the IdP wins over the last-owner
     /// guard, the system is the actor, and the row's source stays (or becomes) `idp`. `token` is
     /// minted only inside `saml_provisioning_service::reconcile_pass`. `target` is a

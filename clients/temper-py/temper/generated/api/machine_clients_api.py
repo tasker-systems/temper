@@ -63,7 +63,7 @@ class MachineClientsApi:
     ) -> MachineClient:
         """Get a machine client
 
-        Returns one machine client. Requires a system admin or the owner of the machine's owning team; on someone else's personal team only its owner, a system admin included. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+        Returns one machine client. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Machine client ID (required)
         :type id: UUID
@@ -137,7 +137,7 @@ class MachineClientsApi:
     ) -> ApiResponse[MachineClient]:
         """Get a machine client
 
-        Returns one machine client. Requires a system admin or the owner of the machine's owning team; on someone else's personal team only its owner, a system admin included. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+        Returns one machine client. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Machine client ID (required)
         :type id: UUID
@@ -211,7 +211,7 @@ class MachineClientsApi:
     ) -> RESTResponseType:
         """Get a machine client
 
-        Returns one machine client. Requires a system admin or the owner of the machine's owning team; on someone else's personal team only its owner, a system admin included. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+        Returns one machine client. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Machine client ID (required)
         :type id: UUID
@@ -646,7 +646,7 @@ class MachineClientsApi:
     ) -> List[MachineClient]:
         """List machine clients
 
-        Lists the machine clients the caller may manage, newest first. A system admin sees every machine client but those of someone else's personal team (its roster stays readable through the team's members); any other caller sees only those owned by a team they own. Revoked clients are omitted unless `include_revoked` is set.
+        Lists the machine clients the caller may manage, newest first. A system admin sees every machine client; any other caller sees only those owned by a team they own. Revoked clients are omitted unless `include_revoked` is set.
 
         :param include_revoked: Include revoked machine clients. Default `false`.
         :type include_revoked: bool
@@ -719,7 +719,7 @@ class MachineClientsApi:
     ) -> ApiResponse[List[MachineClient]]:
         """List machine clients
 
-        Lists the machine clients the caller may manage, newest first. A system admin sees every machine client but those of someone else's personal team (its roster stays readable through the team's members); any other caller sees only those owned by a team they own. Revoked clients are omitted unless `include_revoked` is set.
+        Lists the machine clients the caller may manage, newest first. A system admin sees every machine client; any other caller sees only those owned by a team they own. Revoked clients are omitted unless `include_revoked` is set.
 
         :param include_revoked: Include revoked machine clients. Default `false`.
         :type include_revoked: bool
@@ -792,7 +792,7 @@ class MachineClientsApi:
     ) -> RESTResponseType:
         """List machine clients
 
-        Lists the machine clients the caller may manage, newest first. A system admin sees every machine client but those of someone else's personal team (its roster stays readable through the team's members); any other caller sees only those owned by a team they own. Revoked clients are omitted unless `include_revoked` is set.
+        Lists the machine clients the caller may manage, newest first. A system admin sees every machine client; any other caller sees only those owned by a team they own. Revoked clients are omitted unless `include_revoked` is set.
 
         :param include_revoked: Include revoked machine clients. Default `false`.
         :type include_revoked: bool
@@ -1231,7 +1231,7 @@ class MachineClientsApi:
     ) -> MachineClient:
         """Revoke a machine client
 
-        Revokes a machine client so its credential no longer authenticates. When a system admin revokes the agent profile's last live credential, its standing is revoked too if it was approved; while another credential on the profile is still live, or when a team owner revokes, standing is left as an admin set it. Team memberships and grants are left in place. Revoking an already-revoked client returns it unchanged. Requires a system admin or the owner of the machine's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+        Revokes a machine client so its credential no longer authenticates. When a system admin revokes the agent profile's last live credential, its standing is revoked too if it was approved; while another credential on the profile is still live, or when a team owner revokes, standing is left as an admin set it. Team memberships and grants are left in place. Revoking an already-revoked client returns it unchanged. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Machine client ID (required)
         :type id: UUID
@@ -1305,7 +1305,7 @@ class MachineClientsApi:
     ) -> ApiResponse[MachineClient]:
         """Revoke a machine client
 
-        Revokes a machine client so its credential no longer authenticates. When a system admin revokes the agent profile's last live credential, its standing is revoked too if it was approved; while another credential on the profile is still live, or when a team owner revokes, standing is left as an admin set it. Team memberships and grants are left in place. Revoking an already-revoked client returns it unchanged. Requires a system admin or the owner of the machine's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+        Revokes a machine client so its credential no longer authenticates. When a system admin revokes the agent profile's last live credential, its standing is revoked too if it was approved; while another credential on the profile is still live, or when a team owner revokes, standing is left as an admin set it. Team memberships and grants are left in place. Revoking an already-revoked client returns it unchanged. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Machine client ID (required)
         :type id: UUID
@@ -1379,7 +1379,7 @@ class MachineClientsApi:
     ) -> RESTResponseType:
         """Revoke a machine client
 
-        Revokes a machine client so its credential no longer authenticates. When a system admin revokes the agent profile's last live credential, its standing is revoked too if it was approved; while another credential on the profile is still live, or when a team owner revokes, standing is left as an admin set it. Team memberships and grants are left in place. Revoking an already-revoked client returns it unchanged. Requires a system admin or the owner of the machine's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+        Revokes a machine client so its credential no longer authenticates. When a system admin revokes the agent profile's last live credential, its standing is revoked too if it was approved; while another credential on the profile is still live, or when a team owner revokes, standing is left as an admin set it. Team memberships and grants are left in place. Revoking an already-revoked client returns it unchanged. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Machine client ID (required)
         :type id: UUID
@@ -1517,7 +1517,7 @@ class MachineClientsApi:
     ) -> IssuedMachineCredential:
         """Rotate a machine client secret
 
-        Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.
+        Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.
 
         :param id: Machine client ID (required)
         :type id: UUID
@@ -1596,7 +1596,7 @@ class MachineClientsApi:
     ) -> ApiResponse[IssuedMachineCredential]:
         """Rotate a machine client secret
 
-        Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.
+        Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.
 
         :param id: Machine client ID (required)
         :type id: UUID
@@ -1675,7 +1675,7 @@ class MachineClientsApi:
     ) -> RESTResponseType:
         """Rotate a machine client secret
 
-        Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.
+        Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.
 
         :param id: Machine client ID (required)
         :type id: UUID

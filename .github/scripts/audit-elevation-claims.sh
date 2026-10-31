@@ -373,6 +373,18 @@ current_gates() {
 # the `idp` constructor's doc names `reconcile_pass` as where its token is now minted, and
 # `ALREADY_A_MEMBER` / `MEMBERSHIP_CHANGED` lose `pub(crate)` now that SAML reconcile matches on
 # `NotWritten` rather than on their text. No arm, check or refusal moved; no claim moved.
+# REVIEWED 2026-10-31 (task 01a191b4, PR #1275) — `machine` -> 0e2f8550f690 and `team_membership`
+# 82e3e63f4881 -> 94d7d78cbcb4: a system admin manages every machine principal, one on a person's
+# personal team included, so `MachineClientControlAuthority` admits the admin before delegating
+# (get, revoke, rotate); `MachineRegistrationAuthority`'s personal-team stop still bounds
+# registration and connections. What guards the personal team is the new sealed constructor
+# `AuthorizedMembershipChange::severed_by_credential`: a credential minted (rotate, rebind) by
+# anyone but the person whose personal team admits the machine removes it from that team in the
+# minting transaction, recorded as `machine_reach` with the minter as actor; its token is minted
+# only by `machine_client_service::sever_personal_reach`. It only removes a membership; no arm of
+# the rank rule moved. Claims bound to both gates were re-read: the machine-client handler texts
+# now say a system admin reaches every machine and that a non-owner's credential severs the
+# personal team, which this code does.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -436,7 +448,7 @@ gate audit_gate 021f87ca4bed
 gate connection 586029b73345
 gate context_admin 36e336482872
 gate grant 8fca715c38c3
-gate machine 6710908bcae4
+gate machine 0e2f8550f690
 gate reconcile_regime 76ead78c03ac
 gate read_gates 6a6ce4847fbc
 gate ledger_subject 89ab4129fe64
@@ -445,7 +457,7 @@ gate two_sided c54345d313d3
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e
-gate team_membership 82e3e63f4881
+gate team_membership 94d7d78cbcb4
 EOF
 
 CURRENT="$(current_claims; current_gates)"
