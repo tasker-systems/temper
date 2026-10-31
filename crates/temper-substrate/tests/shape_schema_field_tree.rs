@@ -267,6 +267,54 @@ fn the_ask_walk_reads_whole_every_schema_built_of_allowed_keywords() {
     }
 }
 
+/// The compile and the walk agree on every value a shape may declare: each scalar kind, as a
+/// `const` and as an `enum` member — a mixed enum and a string at the cap among them — compiles,
+/// passes `reads_whole`, and resolves to a declared path listing exactly those values. Bites a
+/// `reads_whole` member test that drops a kind: every stored shape holding, say, `const: true`
+/// would then declare nothing, while every other witness passes.
+#[test]
+fn the_ask_walk_reads_whole_every_value_the_compile_admits() {
+    use temper_core::types::artifact_ask::{
+        reads_whole, resolve, PathFacts, PathResolution, WalkBounds,
+    };
+    let at_cap = json!("a".repeat(MAX_SHAPE_VALUE_STRING_BYTES));
+    let mut declarations = Vec::new();
+    for scalar in [
+        json!(null),
+        json!(true),
+        json!(false),
+        json!(0),
+        json!(-1.5),
+        json!(""),
+        at_cap.clone(),
+    ] {
+        declarations.push((json!({ "const": scalar }), vec![scalar.clone()]));
+        declarations.push((json!({ "enum": [scalar] }), vec![scalar]));
+    }
+    let mixed = vec![
+        json!("ms"),
+        json!(7),
+        json!(null),
+        json!(true),
+        json!(2.5),
+        at_cap,
+    ];
+    declarations.push((json!({ "enum": mixed.clone() }), mixed));
+    for (declared, values) in declarations {
+        let schema = field_tree(json!({ "type": "object", "properties": { "a": declared } }));
+        assert_compiles(&schema);
+        assert!(reads_whole(&schema), "{schema}");
+        assert_eq!(
+            resolve(&schema, &["a".to_string()], &WalkBounds::BUILD),
+            PathResolution::Declared(PathFacts {
+                values: Some(values),
+                ..PathFacts::default()
+            }),
+            "{schema}"
+        );
+    }
+}
+
 #[test]
 fn schema_and_id_compile_at_the_root() {
     assert_compiles(&field_tree(json!({ "$id": "https://example.com/shape" })));

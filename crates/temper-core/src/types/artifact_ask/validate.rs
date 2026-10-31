@@ -1278,31 +1278,29 @@ mod tests {
                   contains: [V, V, V, V, A, V, V], compare: [O, O, O, O, O, O, O] },
             Row { declared: json!({ "type": "null", "enum": [null] }), has_key: A,
                   contains: [V, V, V, V, A, V, V], compare: [O, O, O, O, O, O, O] },
-            // object — each value must be an object; under an enum, one some member contains
+            // object — each value must be an object; under an enum, whose members are scalars, no
+            // object is held by a member
             Row { declared: json!({ "type": "object" }), has_key: A,
                   contains: [V, V, V, V, V, A, V], compare: [O, O, O, O, O, O, O] },
-            Row { declared: json!({ "type": "object", "enum": [{ "z": 1 }] }), has_key: A,
+            Row { declared: json!({ "type": "object", "enum": ["z"] }), has_key: A,
                   contains: [V, V, V, V, V, V, V], compare: [O, O, O, O, O, O, O] },
-            Row { declared: json!({ "type": "object", "enum": [{ "k": 1, "z": 2 }] }), has_key: A,
-                  contains: [V, V, V, V, V, A, V], compare: [O, O, O, O, O, O, O] },
             // array of strings — each value is an ELEMENT, wrapped; `["a"]` is not a string element
             Row { declared: json!({ "type": "array", "items": { "type": "string" } }), has_key: A,
                   contains: [W, V, V, V, V, V, V], compare: [O, O, O, O, O, O, O] },
             Row { declared: json!({ "type": "array", "items": { "type": "string", "enum": ["z"] } }),
                   has_key: A,
                   contains: [V, V, V, V, V, V, V], compare: [O, O, O, O, O, O, O] },
-            // no type — every operator; an enum holds scalars to membership and containers to
-            // containment by a member of their own kind
+            // no type — every operator; an enum's members are scalars, so a scalar is held to
+            // membership by value and a container is held by no member
             Row { declared: json!({}), has_key: A,
                   contains: [A, A, A, A, A, A, A], compare: [A, A, A, A, A, A, A] },
             Row { declared: json!({ "enum": ["z", 7] }), has_key: A,
                   contains: [V, V, V, V, V, V, V], compare: [A, A, A, A, A, A, A] },
-            // `"a"` matches stored `["a","b"]` by jsonb's top-level exception, so it is admitted
-            Row { declared: json!({ "enum": [{ "k": 1 }, ["a", "b"]] }), has_key: A,
-                  contains: [A, V, V, V, V, A, A], compare: [A, A, A, A, A, A, A] },
-            // a string-or-array path whose one member is an array: a string the member holds is
-            // admitted as written; anything else becomes an element `[v]` the member must hold
-            Row { declared: json!({ "type": ["string", "array"], "enum": [["a", "b"]] }), has_key: A,
+            Row { declared: json!({ "enum": ["a", 1, null] }), has_key: A,
+                  contains: [A, A, V, V, A, V, V], compare: [A, A, A, A, A, A, A] },
+            // a string-or-array path whose one member is a string: the string is admitted as
+            // written; anything else becomes an element `[v]`, which no scalar member holds
+            Row { declared: json!({ "type": ["string", "array"], "enum": ["a"] }), has_key: A,
                   contains: [A, V, V, V, V, V, V], compare: [A, O, O, O, O, O, O] },
         ]
     }
@@ -1464,15 +1462,21 @@ mod tests {
         (VALUES_COPIED.with(std::cell::Cell::get) - before, rs)
     }
 
-    /// `x` is an array whose `enum` holds one 200,000-byte string. `compare` there is not feasible,
-    /// so the refusal teaches `x` — which cannot fit 16 KiB, is measured through the borrowed view,
-    /// elided, and never copied. Bites copying a path before measuring it: that clones the string,
-    /// 200 KB, to throw it away.
+    /// `x` is an array whose `enum` holds 256 strings of 256 bytes — the most members an all-string
+    /// enum may list (`MAX_ENUM_ENTRIES`) and the longest string a shape value may be
+    /// (`MAX_SHAPE_VALUE_STRING_BYTES`, held equal to [`MAX_FILTER_STRING_BYTES`]), so declare
+    /// admits it: about 66 KB of schema, 261 JSON values. `compare` there is not feasible, so the
+    /// refusal teaches `x` — which, at about 66 KB, cannot fit 16 KiB, is measured through the
+    /// borrowed view, elided, and never copied. Bites copying a path before measuring it: that
+    /// clones its 256 strings to throw them away.
     #[test]
     fn a_teaching_copies_no_path_it_cannot_hold() {
+        let members: Vec<Value> = (0..256)
+            .map(|i| json!(format!("{i:03}{}", "s".repeat(MAX_FILTER_STRING_BYTES - 3))))
+            .collect();
         let shape = shape_of(json!({ "properties": { "x": {
             "type": "array",
-            "enum": ["s".repeat(200_000)]
+            "enum": members
         } } }));
         let (copied, rs) =
             values_copied_validating(&ask(vec![at(&["x"], compare(json!(1)))]), &shape);
@@ -1490,24 +1494,6 @@ mod tests {
             &small,
         );
         assert_eq!(copied, 2);
-    }
-
-    #[test]
-    fn a_container_value_is_held_to_containment_by_an_enum_member() {
-        let schema = wrapped(&json!({ "enum": [{ "k": 1, "z": 2 }, ["a", "b"]] }));
-        assert_eq!(verdict(&schema, contains(vec![json!({ "z": 2 })])), A);
-        assert_eq!(verdict(&schema, contains(vec![json!(["b"])])), A);
-        assert_eq!(verdict(&schema, contains(vec![json!({ "k": 2 })])), V);
-        assert_eq!(verdict(&schema, contains(vec![json!(["c"])])), V);
-        // `{}` is held by the object member, and by no member of the other kind.
-        assert_eq!(verdict(&schema, contains(vec![json!({})])), A);
-        assert_eq!(
-            verdict(
-                &wrapped(&json!({ "enum": [["a"]] })),
-                contains(vec![json!({})])
-            ),
-            V
-        );
     }
 
     #[test]
@@ -1827,29 +1813,42 @@ mod tests {
         );
     }
 
-    /// A value its ancestor's `const` rules out is refused, though the path declares no value set of
-    /// its own, and the value the ancestor leaves it is admitted. Bites the narrowing: read only at
-    /// the path's end, `m.unit` is unconstrained and `"lb"` is admitted.
+    /// Below a node whose `const` is a scalar, a path holds the empty set: a scalar holds nothing at
+    /// any key, so no value is admissible there, and a `contains` ask at `m.unit` is refused
+    /// `value_outside_shape` whatever its value — `"kg"`, the ancestor's own, included — though the
+    /// path declares no value set of its own. `compare` and `has_key` there are admitted: `compare`
+    /// is decided by the declared types, of which `m.unit` declares none, and `has_key` reads no
+    /// value set. Admitting them is the present behaviour, stated so that changing it is
+    /// deliberate. Bites the narrowing: read only at the path's end, `m.unit` is unconstrained and
+    /// every `contains` is admitted.
     #[test]
     fn a_value_an_ancestors_const_rules_out_is_outside_the_shape() {
         let shape = shape_of(json!({ "properties": {
-            "m": { "const": { "unit": "kg" }, "properties": { "unit": { "type": "string" } } }
+            "m": { "const": "kg", "properties": { "unit": {} } }
         } }));
-        let unit = |value: &str| ask(vec![at(&["m", "unit"], contains(vec![json!(value)]))]);
-        let rs = refusals(&unit("lb"), &shape);
-        assert_eq!(reasons(&rs), vec![RefusalReason::ValueOutsideShape]);
-        assert_eq!(
-            rs[0].teaches.clone().unwrap().vocabulary.map(|v| v.paths),
-            Some(vec![AskablePath::new(
-                vec!["m".to_string(), "unit".to_string()],
-                PathFacts {
-                    types: Some([JsonType::String].into_iter().collect()),
-                    values: Some(vec![json!("kg")]),
-                    items: None,
-                }
-            )])
-        );
-        assert!(validate_ask(&unit("kg"), &shape).is_ok());
+        let unit = |op: PropertyOp| ask(vec![at(&["m", "unit"], op)]);
+        for value in [json!("kg"), json!("lb")] {
+            let rs = refusals(&unit(contains(vec![value.clone()])), &shape);
+            assert_eq!(
+                reasons(&rs),
+                vec![RefusalReason::ValueOutsideShape],
+                "{value}"
+            );
+            assert_eq!(
+                rs[0].teaches.clone().unwrap().vocabulary.map(|v| v.paths),
+                Some(vec![AskablePath::new(
+                    vec!["m".to_string(), "unit".to_string()],
+                    PathFacts {
+                        types: None,
+                        values: Some(vec![]),
+                        items: None,
+                    }
+                )]),
+                "{value}"
+            );
+        }
+        assert!(validate_ask(&unit(compare(json!(1))), &shape).is_ok());
+        assert!(validate_ask(&unit(PropertyOp::HasKey), &shape).is_ok());
     }
 
     #[test]
@@ -2154,12 +2153,26 @@ mod tests {
         paths.iter().map(|p| of(&p.facts)).sum()
     }
 
-    /// 200 paths, each over an `enum` of 40 small nested objects — the shape whose owned
-    /// vocabulary copies every member of every path (8,000 values) to teach the few that fit.
-    fn nested_object_enum() -> LoadedShape {
-        let members: Vec<Value> = (0..40).map(|i| json!({ "k": { "v": i } })).collect();
-        let props: serde_json::Map<String, Value> = (0..200)
-            .map(|i| (format!("p{i:03}"), json!({ "enum": members })))
+    /// 100 paths, each over an `enum` of 64 strings of 24 bytes — the shape whose owned vocabulary
+    /// copies every member of every path (6,400 values) to teach the few that fit.
+    ///
+    /// Declare admits it; temper-core cannot call the compile, so it is counted here. Each member
+    /// is a string of 24 bytes, none escaped, under the 256-byte value cap, and each enum lists 64
+    /// strings, under the 256 an all-string enum may list. Its JSON values are the root, the
+    /// `properties` object, 100 path objects, 100 enum arrays and 6,400 strings: 6,602, under the
+    /// 12,288-value budget, of which 102 are objects, under 3,072. A member is 26 bytes quoted, an
+    /// enum 64 × 26 + 63 commas + 2 brackets = 1,729, a path `"p000":{"enum":…}` 1,745, and the
+    /// schema 100 × 1,745 + 99 commas + 17 = 174,616 bytes, under [`MAX_SCHEMA_BYTES`]. Its
+    /// vocabulary is 1,811 bytes a path — 181,100 in all, about 11 × [`MAX_TEACHING_BYTES`] — so a
+    /// teaching holds 9 of its paths.
+    fn wide_string_enums() -> LoadedShape {
+        let props: serde_json::Map<String, Value> = (0..100)
+            .map(|p| {
+                let members: Vec<Value> = (0..64)
+                    .map(|m| json!(format!("p{p:03}-m{m:02}-{}", "v".repeat(15))))
+                    .collect();
+                (format!("p{p:03}"), json!({ "enum": members }))
+            })
             .collect();
         shape_of(json!({ "properties": props }))
     }
@@ -2167,12 +2180,12 @@ mod tests {
     /// A `path_outside_shape` refusal copies no more values than its teaching sends, however many
     /// the whole vocabulary declares; `omitted_paths` still counts the whole vocabulary. Bites the
     /// session's vocabulary taken from the owned enumeration: every path's values are then copied
-    /// — the whole vocabulary, ten times what fits — and only the first few sent.
+    /// — the whole vocabulary, eleven times what fits — and only the first few sent.
     #[test]
     fn a_path_refusal_copies_only_the_values_its_teaching_sends() {
-        let shape = nested_object_enum();
+        let shape = wide_string_enums();
         let whole = values_in(&enumerate(&shape.schema, &WalkBounds::BUILD).paths);
-        assert_eq!(whole, 200 * 40);
+        assert_eq!(whole, 100 * 64);
 
         let (copied, rs) =
             values_copied_validating(&ask(vec![at(&["absent"], PropertyOp::HasKey)]), &shape);
@@ -2188,7 +2201,7 @@ mod tests {
         );
         assert_eq!(
             teaches.elided.map(|e| e.omitted_paths + kept.len()),
-            Some(200),
+            Some(100),
             "the elision counts the whole vocabulary"
         );
     }
@@ -2220,7 +2233,7 @@ mod tests {
                 } }
             } }),
             json!({ "properties": {
-                "a": { "enum": ["ms", 7, null, { "k": [1, 2.5] }] },
+                "a": { "enum": ["ms", 7, null] },
                 "b": { "type": ["string", "null"] }
             } }),
             json!({ "properties": wide }),
@@ -2230,7 +2243,7 @@ mod tests {
                     "name": { "type": "string" }
                 } })
             }),
-            nested_object_enum().schema,
+            wide_string_enums().schema,
             json!({ "properties": { "p": { "description": "x".repeat(MAX_SCHEMA_BYTES) } } }),
         ];
         for (i, schema) in schemas.into_iter().enumerate() {
