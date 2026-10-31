@@ -177,8 +177,9 @@ pub async fn create(
     let authoring_team = authorized.subject();
     // A subscription delivering into a personal context writes into personal space, which only its
     // owner acts on (task `01a191b4`): the admin arm above does not carry it. A manager of the
-    // authoring team the context was shared into still may — they act through that share, as the
-    // context's owner chose.
+    // authoring team the context was shared into passes this check, but the share alone is not
+    // enough: leg 3 below also requires them to author the context, which for someone else's
+    // personal context means a write grant its owner gave.
     if req.subscriber_table == "kb_contexts"
         && context_service::is_others_personal_context(pool, req.subscriber_id, caller).await?
         && !matches!(

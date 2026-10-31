@@ -411,6 +411,11 @@ current_gates() {
 # system admin only, which `cogmap_authorable_by_profile` now enforces. `subscription_service.rs`
 # 6 -> 9: the subscriber-authorship leg's docs say system admins are held to the same authorship bar;
 # `refuse_unless_subscriber_authorable` has no admin arm, and a test asserts the refusal.
+# REVIEWED 2026-10-31 (same PR, after merging #1275) — `machine` b24fecc74f83 -> 175b6fd6e623: only
+# the test `a_subscription_into_someone_elses_personal_context_is_not_the_admins` moved. Its fixture
+# can no longer declare that subscription through `subscription_service::create`, because the
+# subscriber must now be authored, so it asserts that refusal and seeds the row directly to test
+# who controls it. No arm of `MachineClientControlAuthority` or the registration gate moved.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -474,7 +479,7 @@ gate audit_gate 021f87ca4bed
 gate connection 586029b73345
 gate context_admin 36e336482872
 gate grant 8fca715c38c3
-gate machine b24fecc74f83
+gate machine 175b6fd6e623
 gate read_gates 6a6ce4847fbc
 gate ledger_subject 89ab4129fe64
 gate subscription f45d76e9be69
