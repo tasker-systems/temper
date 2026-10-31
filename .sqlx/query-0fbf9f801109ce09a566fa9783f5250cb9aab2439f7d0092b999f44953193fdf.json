@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT is_machine_profile($2) AS \"is_machine!: bool\",\n                  personal_team_admits($1, $2) AS \"personal_admits!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "is_machine!: bool",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "personal_admits!: bool",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "0fbf9f801109ce09a566fa9783f5250cb9aab2439f7d0092b999f44953193fdf"
+}

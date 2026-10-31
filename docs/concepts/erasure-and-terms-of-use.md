@@ -29,7 +29,7 @@ afterwards is the team's act, not yours, and your erasure never performs it for 
 **2. Writing into someone else's personal context declares the content's lifetime.** A
 person's personal contexts are their own (`@me`) contexts and the contexts of their personal
 team, the `+personal-<handle>` team made for them. When the owner of a personal context
-grants you authorship into it — or adds you to their personal team — everything you write there
+grants you authorship into it, everything you write there
 lives and dies with that context: if that profile is later erased, your content there is
 erased with it — text, structured content, and binary files alike. You tied its lifetime
 to theirs by writing into their context — being its author does not hold it back, and

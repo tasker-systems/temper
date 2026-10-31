@@ -21,7 +21,8 @@ fn parse_role(s: &str) -> Result<TeamRole> {
     }
 }
 
-/// Invite an email to a team (a manager of the team, or a system admin).
+/// Invite an email to a team
+/// (a team manager or a system admin; on a personal team, its owner only).
 pub async fn invite_remote(
     client: &temper_client::TemperClient,
     team: &str,
@@ -73,7 +74,8 @@ pub async fn decline_invitation(
     Ok(())
 }
 
-/// Revoke (withdraw) a pending invitation by its id (a manager of the team, or a system admin).
+/// Revoke (withdraw) a pending invitation by its id
+/// (a team manager or a system admin; on a personal team, its owner only).
 /// The invitation id is shown by `temper team invitations`.
 pub async fn revoke_invitation_remote(
     client: &temper_client::TemperClient,
@@ -93,7 +95,8 @@ pub async fn revoke_invitation_remote(
     Ok(())
 }
 
-/// List pending invitations for a team (a manager of the team, or a system admin).
+/// List pending invitations for a team
+/// (a team manager or a system admin; on a personal team, its owner only).
 pub async fn list_invitations_remote(
     client: &temper_client::TemperClient,
     team: &str,
@@ -335,7 +338,8 @@ pub async fn leave_remote(
     Ok(())
 }
 
-/// Remove a member from a team (a manager of the team, or a system admin).
+/// Remove a member from a team
+/// (a team manager or a system admin; on a personal team, its owner only).
 pub async fn remove_member_remote(
     client: &temper_client::TemperClient,
     team: &str,
@@ -382,7 +386,7 @@ fn print_residual_nudge(
     ));
 }
 
-/// Change a member's role (a team owner or maintainer, or a system admin).
+/// Change a member's role (a team owner/maintainer or a system admin; personal team: its owner).
 pub async fn set_role_remote(
     client: &temper_client::TemperClient,
     team: &str,

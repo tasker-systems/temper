@@ -930,7 +930,7 @@ class MachineClientsApi:
     ) -> MachineClient:
         """Register a machine client
 
-        Registers an externally issued IdP `client_id` as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin. An instance that runs temper's own authorization server refuses it, because an externally issued client id could never authenticate there; issue a credential instead. No caller can give a machine a team role above `member`.
+        Registers an externally issued IdP `client_id` as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin, and a listed personal team must be the caller's own. An instance that runs temper's own authorization server refuses it, because an externally issued client id could never authenticate there; issue a credential instead. No caller can give a machine a team role above `member`.
 
         :param provision_machine_request: (required)
         :type provision_machine_request: ProvisionMachineRequest
@@ -1005,7 +1005,7 @@ class MachineClientsApi:
     ) -> ApiResponse[MachineClient]:
         """Register a machine client
 
-        Registers an externally issued IdP `client_id` as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin. An instance that runs temper's own authorization server refuses it, because an externally issued client id could never authenticate there; issue a credential instead. No caller can give a machine a team role above `member`.
+        Registers an externally issued IdP `client_id` as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin, and a listed personal team must be the caller's own. An instance that runs temper's own authorization server refuses it, because an externally issued client id could never authenticate there; issue a credential instead. No caller can give a machine a team role above `member`.
 
         :param provision_machine_request: (required)
         :type provision_machine_request: ProvisionMachineRequest
@@ -1080,7 +1080,7 @@ class MachineClientsApi:
     ) -> RESTResponseType:
         """Register a machine client
 
-        Registers an externally issued IdP `client_id` as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin. An instance that runs temper's own authorization server refuses it, because an externally issued client id could never authenticate there; issue a credential instead. No caller can give a machine a team role above `member`.
+        Registers an externally issued IdP `client_id` as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin, and a listed personal team must be the caller's own. An instance that runs temper's own authorization server refuses it, because an externally issued client id could never authenticate there; issue a credential instead. No caller can give a machine a team role above `member`.
 
         :param provision_machine_request: (required)
         :type provision_machine_request: ProvisionMachineRequest

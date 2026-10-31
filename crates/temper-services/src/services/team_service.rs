@@ -91,6 +91,35 @@ pub(crate) async fn role_on_team_on(
     Ok(role)
 }
 
+/// The refusal for anything that would put someone else on a personal team, or hang a team under
+/// one (task `01a19006`). The database holds the same rule (`personal_team_admits` and its
+/// triggers); this is the refusal by name.
+pub(crate) const PERSONAL_TEAM_HOLDS_ITS_OWNER: &str =
+    "a personal team holds only its owner and the owner's machines";
+
+/// Whose personal team this is, or `None` for a shared team (or no team).
+///
+/// A personal team is acted on by its owner alone, and by erasure: a system admin's arm does not
+/// reach it (ruled 2026-10-31). Every gate that would otherwise let an admin through asks this
+/// first. Listing a personal team for audit is not an act, and is not gated by it.
+pub(crate) async fn personal_of(pool: &PgPool, team_id: Uuid) -> ApiResult<Option<ProfileId>> {
+    let mut conn = pool.acquire().await?;
+    personal_of_on(&mut conn, team_id).await
+}
+
+/// [`personal_of`] on a connection — for a decision made inside a write transaction, under its
+/// locks.
+pub(crate) async fn personal_of_on(
+    conn: &mut sqlx::PgConnection,
+    team_id: Uuid,
+) -> ApiResult<Option<ProfileId>> {
+    let owner = sqlx::query_scalar!("SELECT personal_of FROM kb_teams WHERE id = $1", team_id)
+        .fetch_optional(&mut *conn)
+        .await?
+        .flatten();
+    Ok(owner.map(ProfileId::from))
+}
+
 /// True if the role is `owner` or `maintainer` (may manage the team).
 ///
 /// `pub(crate)` so sibling services reuse the one definition (see `role_on_team`).
@@ -588,7 +617,7 @@ pub async fn update_team(
 }
 
 /// Soft-delete a team (`is_active = false`). Owner, or a system admin; on the root or the gating
-/// team, a system admin only.
+/// team, a system admin only; on a personal team, its owner only (task `01a19006`).
 ///
 /// Refuses the `temper-system` root (load-bearing: every profile descends from
 /// it). Idempotency: a team that is absent OR already soft-deleted yields
@@ -597,11 +626,13 @@ pub async fn update_team(
 pub async fn delete_team(pool: &PgPool, caller: &HumanPrincipal, team_id: Uuid) -> ApiResult<()> {
     // Auth before writes: owner only (stricter than manage — a maintainer cannot dissolve the
     // team), or a system admin. On the root or the gating team, a system admin only
-    // (team-authority fixes D4).
-    let admin = crate::authz::Principal::Human(caller)
-        .system_admin(pool)
-        .await?
-        .is_some();
+    // (team-authority fixes D4). The admin arm stops at a personal team, which only its owner and
+    // erasure act on.
+    let admin = personal_of(pool, team_id).await?.is_none()
+        && crate::authz::Principal::Human(caller)
+            .system_admin(pool)
+            .await?
+            .is_some();
     if !admin {
         if is_root_or_gating(pool, team_id).await? {
             return Err(ApiError::Forbidden);
@@ -651,7 +682,9 @@ pub async fn delete_team(pool: &PgPool, caller: &HumanPrincipal, team_id: Uuid) 
 /// ancestors, and this cuts that. The child and its roster survive; only this link is cut.
 ///
 /// Auth before writes: an `owner` or `maintainer` of the PARENT (direct, live), or a system admin.
-/// The personal-team link under `temper-system` is structural and only a system admin removes it.
+/// The personal-team link under `temper-system` is structural and nobody removes it: a system
+/// admin's arm does not reach a personal team (task `01a19006`), and only a system admin manages
+/// the root.
 /// A caller who may not manage the parent learns nothing about the link (`Forbidden`); a manager
 /// asking to cut a link that does not exist gets `NotFound`. The row and its
 /// `team_parent_link_changed` record are one write.
@@ -661,10 +694,11 @@ pub async fn detach_child(
     parent_id: Uuid,
     child_id: Uuid,
 ) -> ApiResult<()> {
-    let admin = crate::authz::Principal::Human(caller)
-        .system_admin(pool)
-        .await?
-        .is_some();
+    let admin = personal_of(pool, child_id).await?.is_none()
+        && crate::authz::Principal::Human(caller)
+            .system_admin(pool)
+            .await?
+            .is_some();
     if !admin {
         let parent_live = sqlx::query_scalar!(
             r#"SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1 AND is_active) AS "e!: bool""#,
@@ -2802,9 +2836,10 @@ mod lifecycle_tests {
         assert_eq!(membership_events(&pool, team).await.len(), 1);
     }
 
-    /// C6 carve-out, pin: a machine's personal team holds no owner, and acting on it is no error.
+    /// A machine's personal team holds no owner, and nobody acts on it: a machine never acts on
+    /// membership (C4), and a system admin's arm does not reach a personal team (task `01a19006`).
     #[sqlx::test(migrations = "../../migrations")]
-    async fn machine_personal_team_without_an_owner_is_not_an_error(pool: PgPool) {
+    async fn a_machine_personal_team_is_no_one_s_to_act_on(pool: PgPool) {
         let admin = mk_admin(&pool, "admin").await;
         let machine = mk_machine(&pool, "bot", admin).await;
         let human = mk_profile(&pool, "human").await;
@@ -2820,7 +2855,7 @@ mod lifecycle_tests {
         );
         let me = principal(&pool, admin).await;
 
-        add_member(
+        let denied = add_member(
             &pool,
             &me,
             personal,
@@ -2829,12 +2864,11 @@ mod lifecycle_tests {
                 role: TeamRole::Watcher,
             },
         )
-        .await
-        .expect("an ownerless team is no error");
-        change_role(&pool, &me, personal, machine, TeamRole::Watcher)
-            .await
-            .expect("the guard never fires without an owner");
-        assert_eq!(membership_events(&pool, personal).await.len(), 2);
+        .await;
+        assert!(matches!(denied, Err(ApiError::Forbidden)), "got {denied:?}");
+        let denied = change_role(&pool, &me, personal, machine, TeamRole::Watcher).await;
+        assert!(matches!(denied, Err(ApiError::Forbidden)), "got {denied:?}");
+        assert!(membership_events(&pool, personal).await.is_empty());
     }
 
     /// #1070, pin: an add over any existing row is a 409 naming `change_role`, for every
@@ -3096,5 +3130,286 @@ mod lifecycle_tests {
             owner,
             "member_act",
         );
+    }
+
+    // --- A personal team holds its owner and the owner's machines (task 01a19006) ---
+
+    /// Every member of `team`, by handle, for a refusal to compare against.
+    async fn roster(pool: &PgPool, team: Uuid) -> Vec<String> {
+        sqlx::query_scalar(
+            "SELECT p.handle FROM kb_team_members tm JOIN kb_profiles p ON p.id = tm.profile_id \
+              WHERE tm.team_id = $1 ORDER BY p.handle",
+        )
+        .bind(team)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+
+    /// A system admin cannot act on someone else's personal team through any membership door:
+    /// not add (themselves or anyone, at any role), not change the owner's role, not remove them.
+    /// The roster and the ledger are unchanged.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_system_admin_cannot_act_on_someone_elses_personal_team(pool: PgPool) {
+        let admin = mk_admin(&pool, "admin").await;
+        let dana = mk_profile(&pool, "dana").await;
+        let other = mk_profile(&pool, "other").await;
+        let (personal, _) = personal_team_of(&pool, dana).await;
+        let me = principal(&pool, admin).await;
+
+        for (who, role) in [
+            (admin, TeamRole::Owner),
+            (admin, TeamRole::Watcher),
+            (other, TeamRole::Member),
+        ] {
+            let denied = add_member(
+                &pool,
+                &me,
+                personal,
+                &AddMemberRequest {
+                    profile_id: who,
+                    role,
+                },
+            )
+            .await;
+            assert!(
+                matches!(denied, Err(ApiError::Forbidden)),
+                "add {role:?}: {denied:?}"
+            );
+        }
+        let denied = change_role(&pool, &me, personal, dana, TeamRole::Watcher).await;
+        assert!(matches!(denied, Err(ApiError::Forbidden)), "got {denied:?}");
+        let denied = remove_member(&pool, &me, personal, dana).await;
+        assert!(matches!(denied, Err(ApiError::Forbidden)), "got {denied:?}");
+        let denied = delete_team(&pool, &me, personal).await;
+        assert!(matches!(denied, Err(ApiError::Forbidden)), "got {denied:?}");
+        let root: Uuid = sqlx::query_scalar("SELECT id FROM kb_teams WHERE slug = 'temper-system'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let denied = detach_child(&pool, &me, root, personal).await;
+        assert!(matches!(denied, Err(ApiError::Forbidden)), "got {denied:?}");
+
+        let live: bool = sqlx::query_scalar(
+            "SELECT is_active AND EXISTS (SELECT 1 FROM kb_teams_parents \
+              WHERE child_id = $1 AND parent_id = $2) FROM kb_teams WHERE id = $1",
+        )
+        .bind(personal)
+        .bind(root)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(live, "still live, still under the root");
+        assert_eq!(roster(&pool, personal).await, vec!["dana".to_string()]);
+        assert!(membership_events(&pool, personal).await.is_empty());
+    }
+
+    /// Listing is not acting: a system admin still reads a personal team's roster, for audit.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_system_admin_still_lists_a_personal_team(pool: PgPool) {
+        let admin = mk_admin(&pool, "admin").await;
+        let dana = mk_profile(&pool, "dana").await;
+        let (personal, slug) = personal_team_of(&pool, dana).await;
+
+        let detail = team_detail(
+            &pool,
+            &crate::test_support::caller_for(&pool, admin).await,
+            personal,
+        )
+        .await
+        .expect("an admin lists a personal team");
+        assert_eq!(detail.slug, slug);
+        assert_eq!(detail.members.len(), 1);
+    }
+
+    /// The owner adds their own machine to their personal team; never another person, and never
+    /// someone else's machine — the service refuses by name, before the database would.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn the_owner_adds_their_machines_and_no_one_else(pool: PgPool) {
+        let dana = mk_profile(&pool, "dana").await;
+        let erin = mk_profile(&pool, "erin").await;
+        let mine = mk_machine(&pool, "dana-bot", dana).await;
+        let theirs = mk_machine(&pool, "erin-bot", erin).await;
+        let (personal, _) = personal_team_of(&pool, dana).await;
+        let me = principal(&pool, dana).await;
+
+        add_member(
+            &pool,
+            &me,
+            personal,
+            &AddMemberRequest {
+                profile_id: mine,
+                role: TeamRole::Member,
+            },
+        )
+        .await
+        .expect("the owner's own machine is admitted");
+        for who in [erin, theirs] {
+            let denied = add_member(
+                &pool,
+                &me,
+                personal,
+                &AddMemberRequest {
+                    profile_id: who,
+                    role: TeamRole::Watcher,
+                },
+            )
+            .await;
+            assert!(
+                matches!(&denied, Err(ApiError::BadRequest(m)) if m == PERSONAL_TEAM_HOLDS_ITS_OWNER),
+                "got {denied:?}"
+            );
+        }
+        assert_eq!(
+            roster(&pool, personal).await,
+            vec!["dana".to_string(), "dana-bot".to_string()]
+        );
+    }
+
+    /// No team hangs under a personal team: its owner is refused by name, and nothing is created.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn no_child_team_under_a_personal_team(pool: PgPool) {
+        let dana = mk_profile(&pool, "dana").await;
+        let (_, slug) = personal_team_of(&pool, dana).await;
+
+        let denied = create_team(
+            &pool,
+            &principal(&pool, dana).await,
+            &TeamCreateRequest {
+                slug: "dana-squad".into(),
+                name: None,
+                parent: Some(slug),
+                auto_join_role: None,
+            },
+        )
+        .await;
+        assert!(
+            matches!(denied, Err(ApiError::BadRequest(_))),
+            "got {denied:?}"
+        );
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM kb_teams WHERE slug = 'dana-squad')")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(!exists);
+    }
+
+    /// The database holds the rule for every writer the service does not front — hand-written
+    /// SQL here, standing in for an operator, a SAML reconcile or an older binary.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn the_database_refuses_what_the_service_refuses(pool: PgPool) {
+        fn is_check_violation(err: &sqlx::Error) -> bool {
+            err.as_database_error()
+                .and_then(|e| e.code())
+                .is_some_and(|code| code == "23514")
+        }
+        let dana = mk_profile(&pool, "dana").await;
+        let erin = mk_profile(&pool, "erin").await;
+        let (personal, _) = personal_team_of(&pool, dana).await;
+        let shared = mk_team(&pool, "acme").await;
+
+        let err = sqlx::query(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'watcher')",
+        )
+        .bind(personal)
+        .bind(erin)
+        .execute(&pool)
+        .await
+        .expect_err("another person on a personal team");
+        assert!(is_check_violation(&err), "{err}");
+
+        let err = sqlx::query("INSERT INTO kb_teams_parents (child_id, parent_id) VALUES ($1, $2)")
+            .bind(shared)
+            .bind(personal)
+            .execute(&pool)
+            .await
+            .expect_err("a team under a personal team");
+        assert!(is_check_violation(&err), "{err}");
+
+        let err = sqlx::query("INSERT INTO kb_teams_parents (child_id, parent_id) VALUES ($1, $2)")
+            .bind(personal)
+            .bind(shared)
+            .execute(&pool)
+            .await
+            .expect_err("a personal team under anything but temper-system");
+        assert!(is_check_violation(&err), "{err}");
+
+        let err = sqlx::query(
+            "INSERT INTO kb_team_invitations (id, team_id, invited_email, invited_by_profile_id, \
+                                              role, token) \
+             VALUES (gen_random_uuid(), $1, 'erin@example.com', $2, 'member', 'tok')",
+        )
+        .bind(personal)
+        .bind(dana)
+        .execute(&pool)
+        .await
+        .expect_err("an invitation to a personal team");
+        assert!(is_check_violation(&err), "{err}");
+
+        sqlx::query("INSERT INTO kb_saml_idp (idp_key) VALUES ('okta')")
+            .execute(&pool)
+            .await
+            .ok();
+        let err = sqlx::query(
+            "INSERT INTO kb_saml_group_mappings (idp_key, group_value, team_id, role) \
+             VALUES ('okta', 'eng', $1, 'member')",
+        )
+        .bind(personal)
+        .execute(&pool)
+        .await
+        .expect_err("a SAML mapping onto a personal team");
+        assert!(is_check_violation(&err), "{err}");
+
+        // A shared team takes the same writes.
+        sqlx::query(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'watcher')",
+        )
+        .bind(shared)
+        .bind(erin)
+        .execute(&pool)
+        .await
+        .expect("a shared team admits anyone");
+        assert_eq!(roster(&pool, personal).await, vec!["dana".to_string()]);
+    }
+
+    /// A machine registration writes the machine's reach before its client row, in one
+    /// transaction; the membership rule is judged at commit, when the machine is its registrar's.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_machine_joins_its_registrars_personal_team_in_the_registering_transaction(
+        pool: PgPool,
+    ) {
+        let dana = mk_profile(&pool, "dana").await;
+        let erin = mk_profile(&pool, "erin").await;
+        let (personal, _) = personal_team_of(&pool, dana).await;
+
+        for (registrar, admitted) in [(dana, true), (erin, false)] {
+            let mut tx = pool.begin().await.unwrap();
+            let machine: Uuid = sqlx::query_scalar(
+                "INSERT INTO kb_profiles (handle, display_name) VALUES (gen_random_uuid()::text, 'bot') \
+                 RETURNING id",
+            )
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'member')",
+            )
+            .bind(personal)
+            .bind(machine)
+            .execute(&mut *tx)
+            .await
+            .expect("not judged until commit");
+            sqlx::query(
+                "INSERT INTO kb_machine_clients (client_id, label, profile_id, registered_by_profile_id) \
+                 VALUES (gen_random_uuid()::text, 'bot', $1, $2)",
+            )
+            .bind(machine)
+            .bind(registrar)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+            assert_eq!(tx.commit().await.is_ok(), admitted, "registrar {registrar}");
+        }
     }
 }

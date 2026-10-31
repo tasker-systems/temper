@@ -11,15 +11,15 @@ Usage: temper team [OPTIONS] <COMMAND>
 
 Commands:
   join           Accept a team invitation by its token. Only the account whose verified email the invitation names can accept it
-  invite         Invite an email to a team (a manager of the team, or a system admin)
+  invite         Invite an email to a team (a team manager or a system admin; on a personal team, its owner only)
   decline        Decline a team invitation by its token
-  invitations    List pending invitations for a team (a manager of the team, or a system admin)
-  uninvite       Revoke (withdraw) a pending invitation (a manager of the team, or a system admin)
+  invitations    List pending invitations for a team (a team manager or a system admin; on a personal team, its owner only)
+  uninvite       Revoke (withdraw) a pending invitation (a team manager or a system admin; on a personal team, its owner only)
   show           Show a team's detail and member roster
   leave          Leave a team you are a member of (removes your membership)
   detach         Detach a child team from a parent team (an owner or maintainer of the parent, or a system admin)
   remove-member  Remove a member from a team (owner/maintainer)
-  set-role       Change a member's role (a team owner or maintainer, or a system admin)
+  set-role       Change a member's role (a team owner/maintainer or a system admin; personal team: its owner)
   update         Update a team's metadata (owner/maintainer)
   delete         Soft-delete a team (its owner, or a system admin)
   reassign       Bulk-reassign a departing member's team-scoped resources (offboarding)
@@ -57,7 +57,7 @@ Options:
 ### `temper team invite`
 
 ```text
-Invite an email to a team (a manager of the team, or a system admin)
+Invite an email to a team (a team manager or a system admin; on a personal team, its owner only)
 
 Usage: temper team invite [OPTIONS] --role <ROLE> <TEAM> <EMAIL>
 
@@ -95,7 +95,7 @@ Options:
 ### `temper team invitations`
 
 ```text
-List pending invitations for a team (a manager of the team, or a system admin)
+List pending invitations for a team (a team manager or a system admin; on a personal team, its owner only)
 
 Usage: temper team invitations [OPTIONS] <TEAM>
 
@@ -113,7 +113,7 @@ Options:
 ### `temper team uninvite`
 
 ```text
-Revoke (withdraw) a pending invitation (a manager of the team, or a system admin)
+Revoke (withdraw) a pending invitation (a team manager or a system admin; on a personal team, its owner only)
 
 Usage: temper team uninvite [OPTIONS] <TEAM> <INVITATION_ID>
 
@@ -220,7 +220,7 @@ Options:
 ### `temper team set-role`
 
 ```text
-Change a member's role (a team owner or maintainer, or a system admin)
+Change a member's role (a team owner/maintainer or a system admin; personal team: its owner)
 
 You can set roles up to your own and act on members up to your own rank; only a system admin changes an owner other than yourself. To hand a team over, grant `owner` to another member, then lower your own role.
 

@@ -38,8 +38,8 @@ use temper_services::state::AppState;
     request_body = CreateInvitationRequest,
     responses(
         (status = 201, description = "Invitation created", body = TeamInvitation),
-        (status = 400, description = "The offered role outranks the inviter (`OFFER_ABOVE_YOUR_OWN_ROLE`: an invitation can offer a role up to the inviter's own on the team; only a system admin can offer more)"),
-        (status = 403, description = "Forbidden (the caller does not manage the team; on the gating team only a system admin invites); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 400, description = "The offered role outranks the inviter (`OFFER_ABOVE_YOUR_OWN_ROLE`: an invitation can offer a role up to the inviter's own on the team; only a system admin can offer more); or the team is a personal team, which admits no one to invite"),
+        (status = 403, description = "Forbidden (the caller does not manage the team; on the gating team only a system admin invites; on a personal team nobody but its owner, a system admin included); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 404, description = "The team does not exist or has been deleted (told only to a caller who manages it, or a system admin)"),
         (status = 409, description = "A pending invitation already exists for this email"),
     )

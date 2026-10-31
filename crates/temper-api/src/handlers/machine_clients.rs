@@ -33,7 +33,7 @@ use temper_core::types::query_params::MachineClientListQuery as ListQuery;
     post,
     operation_id = "provision_machine_client",
     summary = "Register a machine client",
-    description = "Registers an externally issued IdP `client_id` as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin. An instance that runs temper's own authorization server refuses it, because an externally issued client id could never authenticate there; issue a credential instead. No caller can give a machine a team role above `member`.",
+    description = "Registers an externally issued IdP `client_id` as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin, and a listed personal team must be the caller's own. An instance that runs temper's own authorization server refuses it, because an externally issued client id could never authenticate there; issue a credential instead. No caller can give a machine a team role above `member`.",
     path = "/api/machine-clients",
     tag = "Machine Clients",
     request_body = ProvisionMachineRequest,

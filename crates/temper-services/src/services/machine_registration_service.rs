@@ -2440,9 +2440,10 @@ mod tests {
         assert!(is_machine_refusal(&err), "{err:?}");
     }
 
-    /// As `member` the last-owner guard no longer holds a machine on its personal team; this
-    /// refusal does. The machine cannot leave by itself (`remove_member` takes a person), so the
-    /// witness is a person who manages the team removing it.
+    /// As `member` the last-owner guard no longer holds a machine on its personal team. Nobody can
+    /// manage that team to remove it: a machine cannot act on membership (`remove_member` takes a
+    /// person), no other person may hold a row there (`personal_team_admits`, task `01a19006`), and
+    /// a system admin's arm does not reach a personal team. The witness is the admin, refused.
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn a_machine_is_never_removed_from_its_personal_team(pool: PgPool) {
         let admin = seed_admin(&pool).await;
@@ -2452,14 +2453,15 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .expect("personal team");
-        sqlx::query!(
+        let err = sqlx::query!(
             "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'owner')",
             team,
             *admin,
         )
         .execute(&pool)
         .await
-        .expect("a person manages the machine's personal team");
+        .expect_err("no person manages a machine's personal team");
+        assert!(is_check_violation(&err), "{err}");
         let err = crate::services::team_service::remove_member(
             &pool,
             &crate::test_support::human_principal_for(&pool, *admin).await,
@@ -2468,10 +2470,8 @@ mod tests {
         )
         .await
         .expect_err("a machine is never removed from its personal team");
-        assert!(
-            matches!(&err, crate::error::ApiError::Conflict(m) if m.contains("personal team")),
-            "{err:?}"
-        );
+        assert!(matches!(&err, crate::error::ApiError::Forbidden), "{err:?}");
+        assert_eq!(personal_team_role(&pool, machine).await, "member");
     }
 
     /// Pin, not a bite: capping the personal team at `member` takes nothing a machine uses on its

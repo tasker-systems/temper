@@ -72,7 +72,7 @@ impl TwoSidedScope {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TwoSidedAuthority {
     /// A system admin. Bypasses both sides — including the gating-team exclusion, which exists to
-    /// keep these acts admin-only in the first place.
+    /// keep these acts admin-only in the first place — on any team but a personal one.
     SystemAdmin,
     /// The caller administers the object AND manages a target team that is not the gating team.
     Delegated,
@@ -114,13 +114,23 @@ impl ScopedAuthority for TwoSidedAuthority {
     /// Its third sibling, `machine_authz::contain_target_team`, deliberately has no such exclusion.
     /// All three reasons: spec §6.1 in
     /// `temper-artifacts:specs/2026-07-22-scoped-authority-policy-layer-design.md`.
+    ///
+    /// ## A personal team target is its owner's alone
+    ///
+    /// The admin short-circuit does not apply when the target is a personal team (task
+    /// `01a19006`, ruled 2026-10-31): attaching an object to someone's personal team, or detaching
+    /// one from it, is acting on that team, which only its owner and erasure do. The owner passes
+    /// the ordinary arm below — they manage the team and must administer the object.
     async fn resolve(
         pool: &PgPool,
         principal: Principal<'_>,
         scope: TwoSidedScope,
     ) -> ApiResult<Self> {
         let caller = principal.profile_id();
-        if principal.system_admin(pool).await?.is_some() {
+        let personal = team_service::personal_of(pool, scope.team_id)
+            .await?
+            .is_some();
+        if !personal && principal.system_admin(pool).await?.is_some() {
             return Ok(TwoSidedAuthority::SystemAdmin);
         }
         if access_service::is_gating_team(pool, scope.team_id).await? {
