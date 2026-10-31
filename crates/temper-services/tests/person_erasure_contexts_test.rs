@@ -385,15 +385,16 @@ async fn replay_reproduces_the_erased_contexts_from_the_walk(pool: PgPool) {
     assert!(!live.0 .2, "the @me context ends retired");
 }
 
-/// FAILS IF an erased context can come back: a co-admin of the erased person's personal team, who
-/// administers its contexts, and an instance admin are both refused, through the service (410)
-/// and through `context_restore` itself (SQLSTATE TE001).
+/// FAILS IF an erased context can come back: an instance admin is refused through the service
+/// (410), and anyone through `context_restore` itself (SQLSTATE TE001). There is no co-admin of a
+/// personal team to try: a personal team holds only its owner and the owner's machines, and the
+/// database refuses the row that would make one (20261110000000).
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn an_erased_context_cannot_be_restored_by_anyone(pool: PgPool) {
     let p = person(&pool).await;
     let co_admin = person(&pool).await;
     temper_services::test_support::approve(&pool, co_admin.profile).await;
-    sqlx::query(
+    let err = sqlx::query(
         "INSERT INTO kb_team_members (team_id, profile_id, role) \
               SELECT t.id, $2, 'maintainer' FROM kb_teams t WHERE t.personal_of = $1",
     )
@@ -401,15 +402,15 @@ async fn an_erased_context_cannot_be_restored_by_anyone(pool: PgPool) {
     .bind(co_admin.profile)
     .execute(&pool)
     .await
-    .unwrap();
+    .expect_err("no co-admin of a personal team");
+    assert_eq!(
+        err.as_database_error().and_then(|d| d.code()).as_deref(),
+        Some("23514"),
+        "{err}"
+    );
 
     erase(&pool, p.profile).await;
 
-    let co_admin_proof = temper_services::test_support::caller_for(&pool, co_admin.profile).await;
-    match context_service::restore(&pool, &co_admin_proof, p.personal_team.uuid()).await {
-        Err(ApiError::Gone(_)) => {}
-        other => panic!("the co-admin's restore is refused with 410, got {other:?}"),
-    }
     let (op, _) = operator(&pool).await;
     let op_proof = temper_services::test_support::caller_for(&pool, op.profile).await;
     for c in [p.me, p.personal_team] {
@@ -425,7 +426,7 @@ async fn an_erased_context_cannot_be_restored_by_anyone(pool: PgPool) {
         p.personal_team,
         &format!("erased-{}", p.personal_team.uuid()),
         "journal",
-        EntityId::from(co_admin.emitter),
+        EntityId::from(op.emitter),
         EventContext::default(),
     )
     .await
@@ -972,12 +973,13 @@ async fn a_rename_committing_while_the_act_waits_is_rewritten(pool: PgPool) {
 }
 
 /// FAILS IF an erased context can be moved out of its erased owner's estate, where a later run of
-/// the act could no longer reach its ledger copies: a co-admin of the personal team who also
-/// administers another team is refused (SQLSTATE TE001).
+/// the act could no longer reach its ledger copies: an instance admin, who passes every other gate
+/// on the move, is refused (SQLSTATE TE001). A personal team has no co-admin to try it
+/// (20261110000000).
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn an_erased_context_cannot_be_reassigned(pool: PgPool) {
     let p = person(&pool).await;
-    let co_admin = person(&pool).await;
+    let (co_admin, _) = operator(&pool).await;
     let personal_team: Uuid = sqlx::query_scalar("SELECT id FROM kb_teams WHERE personal_of = $1")
         .bind(p.profile)
         .fetch_one(&pool)
@@ -989,16 +991,14 @@ async fn an_erased_context_cannot_be_reassigned(pool: PgPool) {
         .fetch_one(&pool)
         .await
         .unwrap();
-    for team in [personal_team, elsewhere_team] {
-        sqlx::query(
-            "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'maintainer')",
-        )
-        .bind(team)
-        .bind(co_admin.profile)
-        .execute(&pool)
-        .await
-        .unwrap();
-    }
+    sqlx::query(
+        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'maintainer')",
+    )
+    .bind(elsewhere_team)
+    .bind(co_admin.profile)
+    .execute(&pool)
+    .await
+    .unwrap();
 
     erase(&pool, p.profile).await;
 

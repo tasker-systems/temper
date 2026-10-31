@@ -232,7 +232,7 @@ module Temper::Generated
     end
 
     # Register a machine client
-    # Registers an externally issued IdP `client_id` as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin. An instance that runs temper's own authorization server refuses it, because an externally issued client id could never authenticate there; issue a credential instead. No caller can give a machine a team role above `member`.
+    # Registers an externally issued IdP `client_id` as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin, and a listed personal team must be the caller's own. An instance that runs temper's own authorization server refuses it, because an externally issued client id could never authenticate there; issue a credential instead. No caller can give a machine a team role above `member`.
     # @param provision_machine_request [ProvisionMachineRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -243,7 +243,7 @@ module Temper::Generated
     end
 
     # Register a machine client
-    # Registers an externally issued IdP &#x60;client_id&#x60; as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin. An instance that runs temper&#39;s own authorization server refuses it, because an externally issued client id could never authenticate there; issue a credential instead. No caller can give a machine a team role above &#x60;member&#x60;.
+    # Registers an externally issued IdP &#x60;client_id&#x60; as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin, and a listed personal team must be the caller&#39;s own. An instance that runs temper&#39;s own authorization server refuses it, because an externally issued client id could never authenticate there; issue a credential instead. No caller can give a machine a team role above &#x60;member&#x60;.
     # @param provision_machine_request [ProvisionMachineRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.

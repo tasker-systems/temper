@@ -331,7 +331,7 @@ pub async fn analytics(
     request_body = BindTeamRequest,
     responses(
         (status = 200, description = "Team bound (or idempotent no-op)", body = BindTeamOutcome),
-        (status = 403, description = "Caller is not a system admin and does not both administer the map and manage the team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 403, description = "Caller is not a system admin and does not both administer the map and manage the team (on a personal team, a system admin too must be its owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
     )
 )]
 pub async fn bind_team(
@@ -358,7 +358,7 @@ pub async fn bind_team(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Team unbound (or no-op)", body = UnbindTeamOutcome),
-        (status = 403, description = "Caller is not a system admin and does not both administer the map and manage the team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 403, description = "Caller is not a system admin and does not both administer the map and manage the team (on a personal team, a system admin too must be its owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
     )
 )]
 pub async fn unbind_team(

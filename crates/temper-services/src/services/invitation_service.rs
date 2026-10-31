@@ -1611,6 +1611,50 @@ mod tests {
         assert_eq!(pending, 0);
     }
 
+    /// Task 01a19006: a personal team admits no other person, so nobody invites anyone to one —
+    /// not its owner (refused by name), and not a system admin, whose arm does not reach it.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn nobody_invites_anyone_to_a_personal_team(pool: PgPool) {
+        let owner = mk_profile(&pool, "owner").await;
+        let admin = mk_profile(&pool, "admin").await;
+        crate::test_support::approved_admin(&pool, *admin).await;
+        let team: Uuid = sqlx::query_scalar("SELECT id FROM kb_teams WHERE personal_of = $1")
+            .bind(*owner)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let params = || CreateInvitationParams {
+            invited_email: "a@e.com".into(),
+            role: TeamRole::Watcher,
+        };
+
+        let err = create_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *owner).await,
+            team,
+            params(),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, ApiError::BadRequest(_)), "got {err:?}");
+        let err = create_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *admin).await,
+            team,
+            params(),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
+        let pending: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM kb_team_invitations WHERE team_id = $1")
+                .bind(team)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(pending, 0);
+    }
+
     #[sqlx::test(migrations = "../../migrations")]
     async fn create_invitation_non_manager_forbidden(pool: PgPool) {
         let (team_id, _owner) = seed_team_with_owner(&pool).await;
