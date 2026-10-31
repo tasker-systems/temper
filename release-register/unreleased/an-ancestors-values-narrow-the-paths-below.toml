@@ -24,9 +24,11 @@ admitted and matched nothing. Only shapes that declare an `enum` or `const` abov
 `properties` key are affected. No wire field is added: `PathFacts.values` changes only in its
 description text, in OpenAPI, ts-rs and the three generated SDKs.
 
-A value an ancestor declares is now copied again onto every declared path below it that it
-reaches, so a vocabulary holds at most the walk's depth bound times the values in its schema.
-Bounding the size of declared values at declare is its own change. No migration.
+The parts of a value an ancestor declares are now copied again onto each declared path below it
+that they reach. Sibling paths copy disjoint parts and a path is at most 16 keys deep, so a
+vocabulary holds at most 16 times the bytes of the values its schema declares. An element's values
+(`items`) are not narrowed. Bounding the size of declared values at declare is its own change. No
+migration.
 
 Who observes: agents and CLIs asking at a path below a declared value, and readers of a shape's
 vocabulary. Release relevance: signal-only.
