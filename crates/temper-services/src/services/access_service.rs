@@ -276,31 +276,56 @@ pub(crate) async fn profile_can_grant(
     profile_can(pool, caller, AccessAction::Grant, subject_table, subject_id).await
 }
 
-/// Is `team_id` the configured gating/root team? An unconfigured system (`gating_team_slug` NULL)
-/// has no gating team ⇒ `false`. Used by the bind gate's escalation guard: binding a map to the
-/// gating team flips it into the admin-only regime ([`cogmap_write_requires_admin`]), so it stays
-/// admin-only.
-pub(crate) async fn is_gating_team(pool: &PgPool, team_id: Uuid) -> ApiResult<bool> {
-    let mut conn = pool.acquire().await?;
-    is_gating_team_on(&mut conn, team_id).await
+/// Is `team_id` the root, `temper-system`? Every personal team descends from it, so whatever is
+/// attached to it reaches every profile. Most gates want [`is_root_or_gating_team`]; this narrower
+/// question is for machine reach (`machine_authz::contain_target_team`), which excludes the root but
+/// deliberately not the gating team (scoped-authority spec §6.1).
+pub(crate) async fn is_root_team(pool: &PgPool, team_id: Uuid) -> ApiResult<bool> {
+    let ok = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1 AND slug = $2) AS "e!: bool""#,
+        team_id,
+        ROOT_TEAM_SLUG,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(ok)
 }
 
-/// [`is_gating_team`] on a connection — for a decision made inside a write transaction, under its
-/// locks (team-role rank plan P1). The one predicate both spellings run.
-pub(crate) async fn is_gating_team_on(
+/// Is `team_id` an **instance team**: the root (`temper-system`) or the configured gating team? An
+/// unconfigured system (`gating_team_slug` NULL) has no gating team, and only the root answers.
+///
+/// Both reach every profile on the instance — the root because every personal team descends from
+/// it, the gating team because it is the instance's access pool — so attaching anything to either,
+/// or governing either's roster, is an instance-level act and a system admin's alone. They are
+/// asked separately because they are not the same team by construction: `gating_team_slug` is NULL
+/// by default, and an admin may point it at any shared team (team DAG review G14).
+///
+/// Gates that answer this: the two-sided share/bind/reassign gate (`TwoSidedAuthority`, and its
+/// plpgsql twin in `context_reassign`), the membership authority (`MembershipAuthority`), the grant
+/// door's recipient bar, and the team lifecycle gates (`team_service::is_root_or_gating`).
+pub(crate) async fn is_root_or_gating_team(pool: &PgPool, team_id: Uuid) -> ApiResult<bool> {
+    let mut conn = pool.acquire().await?;
+    is_root_or_gating_team_on(&mut conn, team_id).await
+}
+
+/// [`is_root_or_gating_team`] on a connection, for a decision made under a write transaction's
+/// locks. The one predicate both spellings run.
+pub(crate) async fn is_root_or_gating_team_on(
     conn: &mut sqlx::PgConnection,
     team_id: Uuid,
 ) -> ApiResult<bool> {
     let ok = sqlx::query_scalar!(
-        "SELECT EXISTS( \
-           SELECT 1 FROM kb_teams t \
-             JOIN kb_system_settings s ON t.slug = s.gating_team_slug \
-            WHERE t.id = $1 )",
+        r#"SELECT EXISTS(
+             SELECT 1 FROM kb_teams t
+              WHERE t.id = $1
+                AND (t.slug = $2
+                     OR t.slug = (SELECT s.gating_team_slug FROM kb_system_settings s WHERE s.id = 1)))
+           AS "e!: bool""#,
         team_id,
+        ROOT_TEAM_SLUG,
     )
     .fetch_one(&mut *conn)
-    .await?
-    .unwrap_or(false);
+    .await?;
     Ok(ok)
 }
 
@@ -549,7 +574,7 @@ async fn recipient_bar(
                     .await?;
             }
             let team = sqlx::query!(
-                r#"SELECT is_active, slug, personal_of FROM kb_teams WHERE id = $1"#,
+                r#"SELECT is_active, personal_of FROM kb_teams WHERE id = $1"#,
                 principal_id,
             )
             .fetch_optional(pool)
@@ -564,8 +589,7 @@ async fn recipient_bar(
             if !delegated {
                 return Ok(());
             }
-            let root_or_gating =
-                team.slug == ROOT_TEAM_SLUG || is_gating_team(pool, principal_id).await?;
+            let root_or_gating = is_root_or_gating_team(pool, principal_id).await?;
             // Any personal team, the caller's own included: a delegate's personal team is a second
             // spelling of a grant to themselves, which outlives their removal from the source team.
             let personal = team.personal_of.is_some();

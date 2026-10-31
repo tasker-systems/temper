@@ -5999,8 +5999,8 @@ export interface components {
          * @description Request body for `POST /api/teams/{id}/invite`.
          *
          *     `role` may be anything up to the inviter's own rank on the team — an owner can invite at
-         *     `owner` — and on the gating team only a system admin invites (the team-role rank rule,
-         *     C16/R10).
+         *     `owner` — and on the gating team or temper-system only a system admin invites (the team-role
+         *     rank rule, C16/R10).
          */
         CreateInvitationRequest: {
             invited_email: string;
@@ -11451,7 +11451,8 @@ export interface components {
          *
          *     Constraints:
          *     - `role` is at most the inviter's own role on the team — an owner can invite at `owner` —
-         *       and on the gating team only a system admin invites (the team-role rank rule)
+         *       and on the gating team or temper-system only a system admin invites (the team-role rank
+         *       rule)
          *     - One *live pending* invite per email per team (declined/expired/revoked history coexists)
          *     - 7-day default expiry, checked lazily at acceptance time; a lapsed-but-unswept pending
          *       row is swept to `expired` when the same email is re-invited, so re-invite is never blocked
@@ -21537,7 +21538,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Forbidden (the caller does not manage the team; on the gating team only a system admin invites; on a personal team nobody but its owner, a system admin included); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden (the caller does not manage the team; on the gating team or temper-system only a system admin invites; on a personal team nobody but its owner, a system admin included); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -21597,7 +21598,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Forbidden: the caller is not an owner or maintainer of this team (on the gating team, not a system admin; on a personal team, not its owner — a system admin included); or (`FORBIDDEN_DETAIL`) the role is above the caller's own — a manager grants up to their own role, a system admin any; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden: the caller is not an owner or maintainer of this team (on the gating team or temper-system, not a system admin; on a personal team, not its owner — a system admin included); or (`FORBIDDEN_DETAIL`) the role is above the caller's own — a manager grants up to their own role, a system admin any; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -21648,7 +21649,7 @@ export interface operations {
                     "application/json": components["schemas"]["RemoveMemberOutcome"];
                 };
             };
-            /** @description Forbidden: the caller is neither the member leaving nor an owner or maintainer of this team (on the gating team, not a system admin; on a personal team, not its owner — a system admin included); or (`FORBIDDEN_DETAIL`) the member is an owner other than the caller, or ranks above the caller — only a system admin removes another owner; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden: the caller is neither the member leaving nor an owner or maintainer of this team (on the gating team or temper-system, not a system admin; on a personal team, not its owner — a system admin included); or (`FORBIDDEN_DETAIL`) the member is an owner other than the caller, or ranks above the caller — only a system admin removes another owner; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -21710,7 +21711,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Forbidden: the caller is not an owner or maintainer of this team (on the gating team, not a system admin; on a personal team, not its owner — a system admin included); or (`FORBIDDEN_DETAIL`) the role is above the caller's own, the member is an owner other than the caller or ranks above the caller (only a system admin changes another owner), or the caller is raising their own role; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden: the caller is not an owner or maintainer of this team (on the gating team or temper-system, not a system admin; on a personal team, not its owner — a system admin included); or (`FORBIDDEN_DETAIL`) the role is above the caller's own, the member is an owner other than the caller or ranks above the caller (only a system admin changes another owner), or the caller is raising their own role; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;

@@ -191,23 +191,14 @@ pub(crate) async fn require_team_exists(pool: &PgPool, team_id: Uuid) -> ApiResu
     }
 }
 
-/// The root slug. Every personal team descends from it, so it is never deleted, and only a system
-/// admin creates children under it, renames it or administers grants to it.
-const ROOT_TEAM_SLUG: &str = "temper-system";
-
 /// Is `team_id` the root (`temper-system`) or the configured gating team? The lifecycle gates
 /// (`create_team` as parent, `update_team`, `delete_team`) are admin-only on both (team-authority
-/// fixes D4). Both are asked because an instance may point `gating_team_slug` elsewhere, and then
-/// the root is a second team every profile reaches.
+/// fixes D4). The predicate is [`access_service::is_root_or_gating_team`], which every
+/// instance-team gate shares.
+///
+/// [`access_service::is_root_or_gating_team`]: crate::services::access_service::is_root_or_gating_team
 async fn is_root_or_gating(pool: &PgPool, team_id: Uuid) -> ApiResult<bool> {
-    let is_root = sqlx::query_scalar!(
-        r#"SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1 AND slug = $2) AS "e!: bool""#,
-        team_id,
-        ROOT_TEAM_SLUG,
-    )
-    .fetch_one(pool)
-    .await?;
-    Ok(is_root || crate::services::access_service::is_gating_team(pool, team_id).await?)
+    crate::services::access_service::is_root_or_gating_team(pool, team_id).await
 }
 
 /// Refuse unless `caller` is a system admin.
@@ -271,7 +262,9 @@ pub async fn create_team(
 
     // --- Auth before writes ---
 
-    // Child team: resolve the parent and require owner/maintainer on it.
+    // Child team: resolve the parent and require owner/maintainer on it. This is the pool
+    // pre-check; the role is read again under the parent's row lock before the link is written.
+    let mut parent_role_recheck = true;
     let parent_id = if let Some(parent_ref) = &req.parent {
         let slug = team_slug(parent_ref);
         let parent = sqlx::query!(
@@ -288,6 +281,7 @@ pub async fn create_team(
         // the gating roster admin-only. A leftover managing row (a demoted admin's) confers nothing.
         if is_root_or_gating(pool, parent_id).await? {
             require_admin_on(pool, authed).await?;
+            parent_role_recheck = false;
         } else {
             match role_on_team(pool, parent_id, creator).await? {
                 Some(role) if can_manage(role) => {}
@@ -336,6 +330,26 @@ pub async fn create_team(
         .begin()
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {e}")))?;
+
+    // Under the parent's row lock (the one every membership writer takes), the parent is still live
+    // and, for a delegate, the creator still manages it: a concurrent demotion, removal or
+    // soft-delete cannot race the link it would have refused (team DAG review G12). Same pattern as
+    // `detach_child`. A system admin's authority is not team-scoped, so there is nothing to re-read.
+    if let Some(parent_id) = parent_id {
+        if !team_membership::lock_team(&mut tx, parent_id).await? {
+            return Err(ApiError::NotFound(
+                "parent team not found or not readable".to_string(),
+            ));
+        }
+        if parent_role_recheck
+            && !matches!(
+                role_on_team_on(&mut tx, parent_id, creator).await?,
+                Some(role) if can_manage(role)
+            )
+        {
+            return Err(ApiError::Forbidden);
+        }
+    }
 
     let row = sqlx::query_as!(
         TeamRow,
@@ -855,7 +869,7 @@ pub async fn remove_member(
 ///   than yourself);
 /// - an owner or maintainer can lower their own role (to hand a team over, grant `owner` to another
 ///   member, then lower yourself), but no one can raise their own;
-/// - on the gating team, only a system admin changes roles;
+/// - on the gating team and `temper-system`, only a system admin changes roles;
 /// - a system admin can make any change.
 ///
 /// `404` if the profile is not a member, `409` on an identity-provider row (C7) or when the change
@@ -2578,6 +2592,156 @@ mod lifecycle_tests {
         ));
         assert_eq!(member_count(&pool, gate).await, 2);
         assert!(membership_events(&pool, gate).await.is_empty());
+    }
+
+    /// Team DAG review G14, bite: with the gating team pointed elsewhere, `temper-system`'s roster
+    /// is still admin-only. Its owner who is not a system admin can neither add, promote, nor
+    /// remove another, nor invite onto it; a system admin still can.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn the_root_roster_is_admin_only_when_it_is_not_the_gating_team(pool: PgPool) {
+        let _gate = mk_gating_team(&pool).await;
+        let root: Uuid = sqlx::query_scalar("SELECT id FROM kb_teams WHERE slug = 'temper-system'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let (owner, member, newcomer) = (
+            mk_profile(&pool, "owner").await,
+            mk_profile(&pool, "member").await,
+            mk_profile(&pool, "newcomer").await,
+        );
+        for (who, role) in [(owner, "owner"), (member, "member")] {
+            sqlx::query(
+                "INSERT INTO kb_team_members (team_id, profile_id, role) \
+                 VALUES ($1, $2, $3::team_role) \
+                 ON CONFLICT (team_id, profile_id) DO UPDATE SET role = EXCLUDED.role",
+            )
+            .bind(root)
+            .bind(who)
+            .bind(role)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query("DELETE FROM kb_team_members WHERE team_id = $1 AND profile_id = $2")
+            .bind(root)
+            .bind(newcomer)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let me = principal(&pool, owner).await;
+
+        let add_req = AddMemberRequest {
+            profile_id: newcomer,
+            role: TeamRole::Watcher,
+        };
+        assert!(matches!(
+            add_member(&pool, &me, root, &add_req).await,
+            Err(ApiError::Forbidden)
+        ));
+        assert!(matches!(
+            change_role(&pool, &me, root, member, TeamRole::Maintainer).await,
+            Err(ApiError::Forbidden)
+        ));
+        assert!(matches!(
+            remove_member(&pool, &me, root, member).await,
+            Err(ApiError::Forbidden)
+        ));
+        assert!(membership_events(&pool, root).await.is_empty());
+
+        // Control: a system admin governs the root roster.
+        let admin = mk_admin(&pool, "admin").await;
+        change_role(
+            &pool,
+            &principal(&pool, admin).await,
+            root,
+            member,
+            TeamRole::Watcher,
+        )
+        .await
+        .expect("a system admin changes the root roster");
+    }
+
+    /// Team DAG review L9, bite: the database refuses a parent link that would make a team its own
+    /// ancestor — two-step and three-step — whoever writes it. A link that closes no cycle (a
+    /// second parent beside the first) is still written.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_team_cannot_be_linked_under_its_own_descendant(pool: PgPool) {
+        let (a, b, c, d) = (
+            mk_team(&pool, "a").await,
+            mk_team(&pool, "b").await,
+            mk_team(&pool, "c").await,
+            mk_team(&pool, "d").await,
+        );
+        let link = |child: Uuid, parent: Uuid| {
+            sqlx::query("INSERT INTO kb_teams_parents (child_id, parent_id) VALUES ($1, $2)")
+                .bind(child)
+                .bind(parent)
+                .execute(&pool)
+        };
+        link(b, a).await.expect("b under a");
+        link(c, b).await.expect("c under b");
+
+        let two = link(a, b)
+            .await
+            .expect_err("a under b closes a two-step cycle");
+        assert!(two.to_string().contains("its own descendants"), "{two}");
+        let three = link(a, c)
+            .await
+            .expect_err("a under c closes a three-step cycle");
+        assert!(three.to_string().contains("its own descendants"), "{three}");
+
+        link(c, d)
+            .await
+            .expect("control: a second parent that closes no cycle");
+    }
+
+    /// Team DAG review G12, bite: `create_team` re-reads the parent role under the parent's row
+    /// lock. A creator demoted between the pool pre-check and the transaction is refused, and no
+    /// team is written. Simulated by holding the parent lock in another transaction, demoting the
+    /// creator there, and committing while `create_team` waits on it.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn create_team_rechecks_the_parent_role_under_its_lock(pool: PgPool) {
+        let parent = mk_team(&pool, "parent").await;
+        let creator = mk_profile(&pool, "creator").await;
+        add(&pool, parent, creator, "maintainer", "native").await;
+        let me = principal(&pool, creator).await;
+
+        let mut blocker = pool.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM kb_teams WHERE id = $1 FOR NO KEY UPDATE")
+            .bind(parent)
+            .execute(&mut *blocker)
+            .await
+            .unwrap();
+
+        let req = TeamCreateRequest {
+            slug: "child".to_string(),
+            name: None,
+            parent: Some("parent".to_string()),
+            auto_join_role: None,
+        };
+        let pool2 = pool.clone();
+        let attempt = tokio::spawn(async move { create_team(&pool2, &me, &req).await });
+
+        // Let create_team pass its pre-check and block on the parent lock, then demote under it.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        sqlx::query(
+            "UPDATE kb_team_members SET role = 'watcher' WHERE team_id = $1 AND profile_id = $2",
+        )
+        .bind(parent)
+        .bind(creator)
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+        blocker.commit().await.unwrap();
+
+        let outcome = attempt.await.unwrap();
+        assert!(matches!(outcome, Err(ApiError::Forbidden)), "{outcome:?}");
+        let child: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM kb_teams WHERE slug = 'child'")
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+        assert!(child.is_none(), "no team may be written");
     }
 
     /// C14, bite: a system admin — not a member of it — changes the gating roster, on the ledger.

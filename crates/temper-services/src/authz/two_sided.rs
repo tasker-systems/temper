@@ -74,7 +74,8 @@ pub(crate) enum TwoSidedAuthority {
     /// A system admin. Bypasses both sides — including the gating-team exclusion, which exists to
     /// keep these acts admin-only in the first place — on any team but a personal one.
     SystemAdmin,
-    /// The caller administers the object AND manages a target team that is not the gating team.
+    /// The caller administers the object AND manages a target team that is neither the root nor
+    /// the gating team.
     Delegated,
     /// Neither.
     None,
@@ -111,9 +112,21 @@ impl ScopedAuthority for TwoSidedAuthority {
     /// transfer of *ownership* into the root team that `context_reassign` independently forbids in
     /// plpgsql, so relaxing the Rust half would split one act across two error paths.
     ///
-    /// Its third sibling, `machine_authz::contain_target_team`, deliberately has no such exclusion.
-    /// All three reasons: spec §6.1 in
+    /// Its third sibling, `machine_authz::contain_target_team`, deliberately has no gating-team
+    /// exclusion. All three reasons: spec §6.1 in
     /// `temper-artifacts:specs/2026-07-22-scoped-authority-policy-layer-design.md`.
+    ///
+    /// ## The root is excluded beside the gating team, for a reason that is still true
+    ///
+    /// `temper-system` is every personal team's parent, and reading inherits down the team tree, so
+    /// an object attached to the root reaches **every profile on the instance**. That is the
+    /// "instance-level escalation" the context reason above once claimed for the gating team, and
+    /// for the root it never stopped being true. The two are the same team only when an instance
+    /// points `gating_team_slug` at `temper-system`; it is NULL by default and may name any shared
+    /// team, and then a non-admin manager of the root would pass this gate into everyone's reach
+    /// (team DAG review G14). Only a system admin attaches to the root, as only a system admin
+    /// grants to it (`access_service::recipient_bar`). `context_reassign`'s plpgsql twin refuses it
+    /// too (`20261112000000`).
     ///
     /// ## A personal team target is its owner's alone
     ///
@@ -133,7 +146,7 @@ impl ScopedAuthority for TwoSidedAuthority {
         if !personal && principal.system_admin(pool).await?.is_some() {
             return Ok(TwoSidedAuthority::SystemAdmin);
         }
-        if access_service::is_gating_team(pool, scope.team_id).await? {
+        if access_service::is_root_or_gating_team(pool, scope.team_id).await? {
             return Ok(TwoSidedAuthority::None);
         }
 

@@ -86,13 +86,14 @@ pub(crate) enum MembershipAuthority {
 }
 
 /// A resolved [`MembershipAuthority`], bound to the team and the caller it was resolved for, with
-/// whether the team is the gating team — the one other fact the rank rule reads about the team.
+/// whether the team is an instance team (the gating team or the root, `temper-system`) — the one
+/// other fact the rank rule reads about the team.
 /// Private fields: only [`MembershipAuthority::resolve`] builds one, so [`authorize`] never decides
 /// on an authority someone wrote down by hand, nor on one resolved for another team or caller.
 #[derive(Debug)]
 pub(crate) struct ResolvedMembership {
     authority: MembershipAuthority,
-    is_gating: bool,
+    is_instance_team: bool,
     is_personal: bool,
     team_id: Uuid,
     caller: ProfileId,
@@ -117,7 +118,7 @@ impl ResolvedMembership {
         admits_caller(
             self.authority.kind(),
             self.caller,
-            self.is_gating,
+            self.is_instance_team,
             act,
             target,
         )
@@ -143,7 +144,7 @@ impl ResolvedMembership {
         let own = admits_caller(
             self.authority.kind(),
             self.caller,
-            self.is_gating,
+            self.is_instance_team,
             MembershipAct::Add { role },
             ProfileId::from(Uuid::nil()),
         )?;
@@ -171,8 +172,11 @@ impl MembershipAuthority {
     /// Resolve the caller's authority over `team_id`'s membership, in this order:
     ///
     /// 1. a system admin, on any team but a personal one → [`Self::SystemAdmin`];
-    /// 2. the gating team → [`Self::SelfOnly`] with the caller's role there, or [`Self::None`]
-    ///    (C14: a role on the gating team confers no membership authority there);
+    /// 2. an instance team — the gating team or the root → [`Self::SelfOnly`] with the caller's
+    ///    role there, or [`Self::None`] (C14: a role on the gating team confers no membership
+    ///    authority there; the root holds the same rule, team DAG review G14, because its roster
+    ///    reaches every profile too and the two are different teams unless an instance makes them
+    ///    one — [`is_root_or_gating_team`](crate::services::access_service::is_root_or_gating_team));
     /// 3. the caller's role on this team alone, with no walk up or down the team DAG (C13):
     ///    owner or maintainer → [`Self::Managing`], member or watcher → [`Self::SelfOnly`], no row →
     ///    [`Self::None`].
@@ -188,13 +192,14 @@ impl MembershipAuthority {
             Err(ApiError::Forbidden) => None,
             Err(other) => return Err(other),
         };
-        let is_gating = crate::services::access_service::is_gating_team_on(conn, team_id).await?;
+        let is_instance_team =
+            crate::services::access_service::is_root_or_gating_team_on(conn, team_id).await?;
         let is_personal = crate::services::team_service::personal_of_on(conn, team_id)
             .await?
             .is_some();
         let bound = |authority| ResolvedMembership {
             authority,
-            is_gating,
+            is_instance_team,
             is_personal,
             team_id,
             caller: caller.profile_id(),
@@ -207,14 +212,14 @@ impl MembershipAuthority {
         let role =
             crate::services::team_service::role_on_team_on(conn, team_id, caller.profile_id())
                 .await?;
-        Ok(bound(Self::non_admin(is_gating, role)))
+        Ok(bound(Self::non_admin(is_instance_team, role)))
     }
 
     /// Arms 2 and 3 of [`Self::resolve`]: the authority a person who is not a system admin holds,
     /// from whether the team is the gating team and their role on it. Shared with
     /// [`inviter_ceiling`], so an inviter is judged by exactly the arms a caller is.
-    fn non_admin(is_gating: bool, role: Option<TeamRole>) -> Self {
-        if is_gating {
+    fn non_admin(is_instance_team: bool, role: Option<TeamRole>) -> Self {
+        if is_instance_team {
             return role.map_or(MembershipAuthority::None, MembershipAuthority::SelfOnly);
         }
         match role {
@@ -315,9 +320,9 @@ pub(crate) const ABOVE_YOUR_RANK: &str =
 /// The refusal for raising your own role, or any self-change by a member or watcher (C3, C3a).
 pub(crate) const RAISE_YOURSELF: &str =
     "you can lower your own role or leave, but not raise it; a member or watcher can only leave";
-/// The refusal for a self-change on the gating team (R11, P14 b).
+/// The refusal for a self-change on an instance team (R11, P14 b; the root since G14).
 pub(crate) const GATING_SELF_CHANGE: &str =
-    "on the gating team only a system admin changes roles; you may leave it";
+    "on the gating team and temper-system only a system admin changes roles; you may leave it";
 /// The refusal when the last-owner guard fires (C6).
 pub(crate) const LAST_OWNER: &str =
     "cannot remove or demote the team's last owner; grant `owner` to another member first";
@@ -337,7 +342,7 @@ struct Decision {
 fn admits_caller(
     authority: AuthorityKind,
     caller: ProfileId,
-    is_gating: bool,
+    is_instance_team: bool,
     act: MembershipAct,
     target: ProfileId,
 ) -> Result<Option<TeamRole>, ApiError> {
@@ -354,7 +359,7 @@ fn admits_caller(
         match act {
             MembershipAct::Remove => {}
             MembershipAct::Change { role } => {
-                if is_gating {
+                if is_instance_team {
                     return Err(ApiError::ForbiddenDetail(GATING_SELF_CHANGE.to_string()));
                 }
                 let manages = matches!(authority, AuthorityKind::Managing(_));
@@ -374,7 +379,7 @@ fn admits_caller(
 /// all. Read off [`admits_caller`] — the function [`ResolvedMembership::authorize_invitation`]
 /// gates on — with an `Add` at the top rank, so the two cannot disagree: whoever it admits may
 /// offer up to their own role, and a system admin anything.
-fn invitation_ceiling(authority: AuthorityKind, is_gating: bool) -> Option<TeamRole> {
+fn invitation_ceiling(authority: AuthorityKind, is_instance_team: bool) -> Option<TeamRole> {
     let top = MembershipAct::Add {
         role: TeamRole::Owner,
     };
@@ -384,7 +389,7 @@ fn invitation_ceiling(authority: AuthorityKind, is_gating: bool) -> Option<TeamR
     match admits_caller(
         authority,
         ProfileId::from(Uuid::from_u128(1)),
-        is_gating,
+        is_instance_team,
         top,
         ProfileId::from(Uuid::nil()),
     ) {
@@ -428,14 +433,15 @@ pub(crate) async fn inviter_ceiling(
     if !standing.access {
         return Ok(None);
     }
-    let is_gating = crate::services::access_service::is_gating_team_on(conn, team_id).await?;
+    let is_instance_team =
+        crate::services::access_service::is_root_or_gating_team_on(conn, team_id).await?;
     let kind = if standing.admin {
         AuthorityKind::Admin
     } else {
         let role = crate::services::team_service::role_on_team_on(conn, team_id, inviter).await?;
-        MembershipAuthority::non_admin(is_gating, role).kind()
+        MembershipAuthority::non_admin(is_instance_team, role).kind()
     };
-    Ok(invitation_ceiling(kind, is_gating))
+    Ok(invitation_ceiling(kind, is_instance_team))
 }
 
 /// Revoke `inviter`'s pending invitations on `team_id` that they could no longer issue
@@ -544,12 +550,12 @@ async fn revoke_invitations_beyond_authority(
 fn decide(
     authority: AuthorityKind,
     caller: ProfileId,
-    is_gating: bool,
+    is_instance_team: bool,
     act: MembershipAct,
     target: &MembershipTarget,
 ) -> Result<Decision, ApiError> {
     // 1–2. Authority; self or other.
-    let caller_role = admits_caller(authority, caller, is_gating, act, target.profile)?;
+    let caller_role = admits_caller(authority, caller, is_instance_team, act, target.profile)?;
     let is_self = target.profile == caller;
 
     // 3. Existence.
@@ -662,7 +668,7 @@ pub(crate) fn authorize(
     let decision = decide(
         resolved.authority.kind(),
         resolved.caller,
-        resolved.is_gating,
+        resolved.is_instance_team,
         act,
         target,
     )?;
@@ -1498,7 +1504,7 @@ mod tests {
     fn an_authority_resolved_on_one_team_cannot_authorize_on_another() {
         let resolved = ResolvedMembership {
             authority: MembershipAuthority::Managing(ManagingRole::Owner),
-            is_gating: false,
+            is_instance_team: false,
             is_personal: false,
             team_id: Uuid::from_u128(11),
             caller: ProfileId::from(CALLER),
@@ -1524,8 +1530,8 @@ mod tests {
             (K::None, None),
         ];
         for (kind, want) in table {
-            for is_gating in [false, true] {
-                assert_eq!(invitation_ceiling(kind, is_gating), want, "{kind:?}");
+            for is_instance_team in [false, true] {
+                assert_eq!(invitation_ceiling(kind, is_instance_team), want, "{kind:?}");
             }
         }
         assert!(may_offer(Some(TeamRole::Maintainer), TeamRole::Maintainer));

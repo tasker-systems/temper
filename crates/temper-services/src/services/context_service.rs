@@ -2031,6 +2031,81 @@ mod tests {
         assert!(matches!(err, ApiError::Forbidden));
     }
 
+    /// Team DAG review G14: when the gating team is some other team, `temper-system` is still every
+    /// profile's ancestor, so a share or reassign into it publishes to the whole instance. A
+    /// non-admin who manages it is refused both, by the Rust gate and by `context_reassign`'s
+    /// plpgsql twin; the same caller shares into an ordinary team they maintain (the control).
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn the_root_is_a_target_for_admins_only_when_it_is_not_the_gating_team(pool: PgPool) {
+        let gate = mk_team(&pool, "gate").await;
+        sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'gate' WHERE id = 1")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let root: Uuid = sqlx::query_scalar("SELECT id FROM kb_teams WHERE slug = 'temper-system'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_ne!(root, gate, "fixture: the root must not be the gating team");
+
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let alice_ctx = mk_personal_context(&pool, "proj", alice).await;
+        add_member(&pool, root, alice, "maintainer").await;
+        let ordinary = mk_team(&pool, "ordinary").await;
+        add_member(&pool, ordinary, alice, "maintainer").await;
+        let authed = crate::test_support::human_principal_for(&pool, alice.uuid()).await;
+
+        let err = share(
+            &pool,
+            &authed,
+            alice_ctx,
+            &ShareContextRequest { team_id: root },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, ApiError::Forbidden),
+            "share into the root: {err:?}"
+        );
+        let err = reassign(&pool, &authed, alice_ctx, root).await.unwrap_err();
+        assert!(
+            matches!(err, ApiError::Forbidden),
+            "reassign into the root: {err:?}"
+        );
+
+        // The plpgsql twin refuses on its own, without the Rust pre-check in front of it.
+        let emitter: Uuid =
+            sqlx::query_scalar("SELECT id FROM kb_entities WHERE name = 'alice@web'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let sql_err = sqlx::query("SELECT context_reassign($1, $2)")
+            .bind(serde_json::json!({
+                "context_id": alice_ctx,
+                "to_owner_table": "kb_teams",
+                "to_owner_id": root,
+            }))
+            .bind(emitter)
+            .execute(&pool)
+            .await
+            .expect_err("context_reassign must refuse the root to a non-admin");
+        assert!(
+            sql_err
+                .to_string()
+                .contains("cannot transfer into temper-system"),
+            "{sql_err}"
+        );
+
+        share(
+            &pool,
+            &authed,
+            alice_ctx,
+            &ShareContextRequest { team_id: ordinary },
+        )
+        .await
+        .expect("control: a share into an ordinary team the caller maintains");
+    }
+
     /// Task 01a19006: attaching a context to someone's personal team, or detaching one from it, is
     /// acting on that team — its owner's alone. A system admin is refused both ways; the owner
     /// shares their own context into it as before.
