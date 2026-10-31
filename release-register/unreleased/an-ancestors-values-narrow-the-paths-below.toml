@@ -14,7 +14,9 @@ A path holds what its ancestors' members hold at it: a member that is an object 
 leaves its value there, and any other member leaves nothing. A path declaring its own `enum` or
 `const` keeps only its members jsonb-equal to one of those. A declared key that no ancestor member
 holds is left the empty set, so no value is admissible there. A path's own `type` stands as
-declared.
+declared. A path declaring no `enum` or `const` of its own lists what its ancestors leave it only
+when every value is a scalar: a path left an object or an array lists no value set, and an ask
+there is admitted as before, while the paths below it are still narrowed.
 
 What changes for a caller: a shape's vocabulary (`GET /api/shapes/{id}`'s `askable`, the MCP
 `get_data_artifact_shape` tool, `temper data-artifact schema show`) now lists `values` at a path
@@ -24,10 +26,9 @@ admitted and matched nothing. Only shapes that declare an `enum` or `const` abov
 `properties` key are affected. No wire field is added: `PathFacts.values` changes only in its
 description text, in OpenAPI, ts-rs and the three generated SDKs.
 
-The parts of a value an ancestor declares are now copied again onto each declared path below it
-that they reach. Sibling paths copy disjoint parts and a path is at most 16 keys deep, so a
-vocabulary holds at most 16 times the bytes of the values its schema declares. An element's values
-(`items`) are not narrowed. Bounding the size of declared values at declare is its own change. No
+No object or array an ancestor declares is copied onto the paths below it, and each scalar inside
+one is listed at one path at most, so a vocabulary holds the values its schema declares plus at
+most one copy of each such scalar. An element's values (`items`) are not narrowed. Bounding the size of declared values at declare is its own change. No
 migration.
 
 Who observes: agents and CLIs asking at a path below a declared value, and readers of a shape's

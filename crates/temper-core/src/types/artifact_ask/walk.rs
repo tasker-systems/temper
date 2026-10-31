@@ -42,14 +42,18 @@
 //! `const` of every node above it, so a path holds only what its ancestors' members hold at it: a
 //! member that is an object holding the key leaves its value there, and any other member leaves
 //! nothing. Each node passes the set it holds to its children, so no path reads further up than
-//! its parent.
+//! its parent. A path lists what it holds when it declares its own `enum` or `const`, or when
+//! everything it holds is a scalar; a path left an object or an array by an ancestor, and declaring
+//! nothing of its own, lists no value set, and still narrows the paths below it.
 //!
 //! **What a vocabulary holds.** A vocabulary copies each path's values onto the wire. A path's own
-//! `enum` and `const` are copied once, but the parts of a value an ancestor declares are copied
-//! again at each declared path below it they reach. Sibling paths copy disjoint parts and a chain
-//! is at most [`MAX_WALK_DEPTH`] deep, so a vocabulary holds at most that many times the bytes of
-//! the values its schema declares — though more values than it, counted one by one. An ask, and a
-//! refusal's teaching until it sends a path, read the values where they sit and copy none.
+//! `enum` and `const` are copied once, as its declaration holds them. Of the values an ancestor
+//! declares, only scalars are listed below it, and each scalar part of a declared value is held at
+//! one path, so it is copied at most once. No object or array an ancestor declares is copied again
+//! below it: copied at each path it reached, one value nested [`MAX_WALK_DEPTH`] deep would be
+//! held that many times over. So a vocabulary holds the values its schema declares, plus at most
+//! one copy of each scalar inside them. An ask, and a refusal's teaching until it sends a path,
+//! read the values where they sit and copy none.
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -195,8 +199,10 @@ pub struct PathFacts {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub types: Option<BTreeSet<JsonType>>,
     /// The values the path may hold: its own `enum` / `const`, narrowed by each ancestor's — an
-    /// ancestor's member leaves a value here only if it holds one at this path. `None`: no value
-    /// set constrains the path. An empty list: no value is admissible. An element's values
+    /// ancestor's member leaves a value here only if it holds one at this path. With no `enum` /
+    /// `const` of its own, a path lists what its ancestors leave it only when every value is a
+    /// scalar. `None`: no value set is listed — none constrains the path, or an ancestor leaves it
+    /// an object or an array. An empty list: no value is admissible. An element's values
     /// ([`PathFacts::items`]) are its own `items` schema's, not narrowed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub values: Option<Vec<Value>>,
@@ -479,16 +485,18 @@ impl<'s> Walk<'s> {
             return Resolved::BeyondBound(BoundKind::Depth);
         }
         let mut node = self.root;
-        let mut inherited = None;
+        let mut held = own_values(node);
         for segment in path {
-            let held = narrowed(inherited, own_values(node));
             let Some(child) = property(node, segment) else {
                 return Resolved::NotDeclared;
             };
             node = child;
-            inherited = held.map(|values| projected(&values, segment));
+            held = narrowed(
+                held.map(|values| projected(&values, segment)),
+                own_values(node),
+            );
         }
-        match self.facts_of(node, inherited, 0) {
+        match self.facts_of(node, held, 0) {
             Some(facts) => Resolved::Declared(facts),
             None => Resolved::NotDeclared,
         }
@@ -543,7 +551,7 @@ impl<'s> Walk<'s> {
         // (the index in `out.paths` of the path a node sits under — none for the root; the node; the
         // values it may hold)
         let mut queue: VecDeque<(Option<usize>, &'s Value, Option<Values<'s>>)> =
-            VecDeque::from([(None, self.root, narrowed(None, own_values(self.root)))]);
+            VecDeque::from([(None, self.root, own_values(self.root))]);
         while let Some((parent, node, held)) = queue.pop_front() {
             let depth = parent.map_or(0, |at| out.paths[at].0.len());
             if depth == self.bounds.max_depth {
@@ -564,7 +572,8 @@ impl<'s> Walk<'s> {
                 let inherited = below
                     .as_ref()
                     .map(|by| Arc::new(by.get(key).cloned().unwrap_or_default()));
-                let Some(facts) = self.facts_of(child, inherited, 0) else {
+                let held = narrowed(inherited, own_values(child));
+                let Some(facts) = self.facts_of(child, held.clone(), 0) else {
                     continue;
                 };
                 if out.paths.len() == self.bounds.max_paths {
@@ -577,24 +586,23 @@ impl<'s> Walk<'s> {
                 let mut path = Vec::with_capacity(prefix.len() + 1);
                 path.extend_from_slice(prefix);
                 path.push(key.to_string());
-                let values = facts.values.clone();
                 out.paths.push((path, keep(facts)));
-                queue.push_back((Some(out.paths.len() - 1), child, values));
+                queue.push_back((Some(out.paths.len() - 1), child, held));
             }
         }
         Ok(())
     }
 
-    /// What a subschema declares at a path's end, `arrays` arrays below it: `None` for `false`;
-    /// for `true`, nothing but the values `inherited` from the path's ancestors; and for an object,
-    /// its own `type`, its `enum` / `const` narrowed by `inherited`, and its element facts. Element
-    /// facts stop at the depth bound, past which an element is unconstrained. An element inherits
-    /// nothing: the array's own value set already holds what an element may be, read as `@>` reads
-    /// it.
+    /// What a subschema declares at a path's end, `arrays` arrays below it, given the values `held`
+    /// there — its own `enum` / `const` narrowed by its ancestors' ([`narrowed`]): `None` for
+    /// `false`; for `true`, nothing but what it [`lists`] of `held`; and for an object, its own
+    /// `type`, what it lists of `held`, and its element facts. Element facts stop at the depth
+    /// bound, past which an element is unconstrained. An element inherits nothing: the array's own
+    /// value set already holds what an element may be, read as `@>` reads it.
     fn facts_of(
         &self,
         node: &'s Value,
-        inherited: Option<Values<'s>>,
+        held: Option<Values<'s>>,
         arrays: usize,
     ) -> Option<Facts<'s>> {
         let map = match node {
@@ -603,7 +611,7 @@ impl<'s> Walk<'s> {
             // `true`. Nothing else sits in a schema position of a schema the walk reads whole.
             _ => {
                 return Some(Facts {
-                    values: inherited,
+                    values: lists(held, false),
                     ..Facts::default()
                 })
             }
@@ -611,18 +619,20 @@ impl<'s> Walk<'s> {
         let items = map
             .get("items")
             .filter(|_| arrays < self.bounds.max_depth)
-            .and_then(|element| match self.facts_of(element, None, arrays + 1) {
-                // `items: false` admits no element at all.
-                None => Some(Arc::new(Facts {
-                    types: Some(BTreeSet::new()),
-                    ..Facts::default()
-                })),
-                Some(facts) if facts.is_unconstrained() => None,
-                Some(facts) => Some(Arc::new(facts)),
-            });
+            .and_then(
+                |element| match self.facts_of(element, own_values(element), arrays + 1) {
+                    // `items: false` admits no element at all.
+                    None => Some(Arc::new(Facts {
+                        types: Some(BTreeSet::new()),
+                        ..Facts::default()
+                    })),
+                    Some(facts) if facts.is_unconstrained() => None,
+                    Some(facts) => Some(Arc::new(facts)),
+                },
+            );
         Some(Facts {
             types: declared_types(map),
-            values: narrowed(inherited, declared_values(map)),
+            values: lists(held, declares_values(map)),
             items,
         })
     }
@@ -687,6 +697,26 @@ fn narrowed<'s>(inherited: Option<Values<'s>>, own: Option<Values<'s>>) -> Optio
             ))
         }
     }
+}
+
+/// What a path's facts list of the values it holds. Where it declares its own `enum` / `const`, all
+/// of them: they are its own members, which its declaration holds once. Otherwise they are parts of
+/// a value an ancestor declares, listed only when every one is a scalar. A part that is an object
+/// or an array would be copied again at each path below it that it reaches, so a path holding one
+/// lists nothing: an ask there meets no value set, though the paths below it are still narrowed by
+/// what it holds. Each scalar part is held at one path, so a vocabulary copies it at most once.
+fn lists<'s>(held: Option<Values<'s>>, declares_own: bool) -> Option<Values<'s>> {
+    held.filter(|values| {
+        declares_own
+            || values
+                .iter()
+                .all(|value| !value.is_object() && !value.is_array())
+    })
+}
+
+/// Whether an object subschema declares a value set of its own: what [`declared_values`] reads.
+fn declares_values(map: &Map<String, Value>) -> bool {
+    map.get("enum").is_some_and(Value::is_array) || map.contains_key("const")
 }
 
 /// What a value set leaves the key below it: each member's value at `key`, from the members that
@@ -1121,7 +1151,8 @@ mod tests {
 
     /// A path holds only what its ancestor's `const` holds at it — a nested value two levels down,
     /// and the empty set at a declared key the `const` lacks — while the path's own `type` stands.
-    /// Bites the narrowing in `reach`: without it each path below `m` is unconstrained.
+    /// `m.n`, left an object, lists nothing, yet still narrows `m.n.deep`. Bites the narrowing in
+    /// `reach`: without it each path below `m` is unconstrained.
     #[test]
     fn an_ancestors_const_narrows_each_path_below_it() {
         let s = json!({ "properties": { "m": {
@@ -1148,6 +1179,42 @@ mod tests {
             })
         );
         assert_eq!(at(&s, &["m", "absent"]), valued(vec![]));
+        assert_eq!(at(&s, &["m", "n"]), untyped());
+    }
+
+    /// An object or array an ancestor declares is never copied onto the paths below it. A `const`
+    /// nested down a chain as deep as the walk reads, over a wide object, would otherwise be copied
+    /// once per level — the vocabulary many times the schema — and a scalar inside it is still
+    /// narrowed at the bottom. Bites `lists`: listing every held set, each path on the chain carries
+    /// the rest of the `const` and the vocabulary outweighs the schema.
+    #[test]
+    fn a_vocabulary_copies_no_object_an_ancestor_declares() {
+        let wide: Map<String, Value> = (0..200).map(|i| (format!("f{i}"), json!(i))).collect();
+        let chain = MAX_WALK_DEPTH - 1;
+        let mut constant = Value::Object(wide);
+        let mut tree = json!({ "properties": { "f7": {} } });
+        for _ in 0..chain {
+            constant = json!({ "k": constant });
+            tree = json!({ "properties": { "k": tree } });
+        }
+        tree["const"] = constant;
+        let schema_bytes = serde_json::to_vec(&tree).expect("serializes").len();
+
+        let vocabulary = enumerate(&tree, &WalkBounds::BUILD);
+        let vocabulary_bytes = serde_json::to_vec(&vocabulary).expect("serializes").len();
+        assert!(
+            vocabulary_bytes < schema_bytes,
+            "{vocabulary_bytes} bytes of vocabulary over {schema_bytes} of schema"
+        );
+        let mut bottom = vec!["k"; chain];
+        bottom.push("f7");
+        assert_eq!(
+            at(&tree, &bottom),
+            PathResolution::Declared(PathFacts {
+                values: Some(vec![json!(7)]),
+                ..PathFacts::default()
+            })
+        );
     }
 
     /// A path's own `enum` keeps only its members jsonb-equal to one an ancestor leaves it, and every
