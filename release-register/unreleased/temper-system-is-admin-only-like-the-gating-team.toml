@@ -22,7 +22,6 @@ admin-only whatever the gating team is (team DAG review G14). Migrations `202611
 - The database refuses a `kb_teams_parents` link that would make a team its own ancestor. No API
   writes one today.
 
-Who observes: a non-admin who holds an owner or maintainer row on `temper-system` — in practice a
-former system admin, whose leftover row from `promote_admin` now confers nothing anywhere. Release
-relevance: signal-only.
+Who observes: a caller who is not a system admin and acts on `temper-system`. Release relevance:
+signal-only.
 '''
