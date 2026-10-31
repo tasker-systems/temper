@@ -165,7 +165,7 @@ module Temper::Generated
     end
 
     # List machine clients
-    # Lists the machine clients the caller may manage, newest first. A system admin sees every machine client; any other caller sees only those owned by a team they own. Revoked clients are omitted unless `include_revoked` is set.
+    # Lists the machine clients the caller may manage, newest first. A system admin sees every machine client but those of someone else's personal team (its roster stays readable through the team's members); any other caller sees only those owned by a team they own. Revoked clients are omitted unless `include_revoked` is set.
     # @param [Hash] opts the optional parameters
     # @option opts [Boolean] :include_revoked Include revoked machine clients. Default &#x60;false&#x60;.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -176,7 +176,7 @@ module Temper::Generated
     end
 
     # List machine clients
-    # Lists the machine clients the caller may manage, newest first. A system admin sees every machine client; any other caller sees only those owned by a team they own. Revoked clients are omitted unless &#x60;include_revoked&#x60; is set.
+    # Lists the machine clients the caller may manage, newest first. A system admin sees every machine client but those of someone else&#39;s personal team (its roster stays readable through the team&#39;s members); any other caller sees only those owned by a team they own. Revoked clients are omitted unless &#x60;include_revoked&#x60; is set.
     # @param [Hash] opts the optional parameters
     # @option opts [Boolean] :include_revoked Include revoked machine clients. Default &#x60;false&#x60;.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.

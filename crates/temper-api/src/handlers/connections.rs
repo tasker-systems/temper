@@ -57,7 +57,7 @@ pub async fn provision(
     get,
     operation_id = "list_connections",
     summary = "List connections",
-    description = "Lists the connections the caller may manage, newest first. A system admin sees every connection; any other caller sees only those owned by a team they own. Revoked connections are omitted unless `include_revoked` is set.",
+    description = "Lists the connections the caller may manage, newest first. A system admin sees every connection but those of someone else's personal team; any other caller sees only those owned by a team they own. Revoked connections are omitted unless `include_revoked` is set.",
     path = "/api/connections",
     tag = "Connections",
     params(ListQuery),

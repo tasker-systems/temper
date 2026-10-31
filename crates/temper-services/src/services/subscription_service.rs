@@ -109,6 +109,7 @@ pub async fn list(
               -- personal team authors, or one delivering into a personal context, is its owner's.
               AND ( ($2 AND NOT EXISTS (SELECT 1 FROM kb_teams pt
                                          WHERE pt.id = s.authoring_team_id
+                                           AND profile_is_person(pt.personal_of)
                                            AND pt.personal_of <> $3)
                         AND NOT (s.subscriber_table = 'kb_contexts'
                                  AND COALESCE(context_personal_owner(s.subscriber_id) <> $3,

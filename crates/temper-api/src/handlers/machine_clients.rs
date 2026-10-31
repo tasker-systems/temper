@@ -104,7 +104,7 @@ pub async fn rebind(
     get,
     operation_id = "list_machine_clients",
     summary = "List machine clients",
-    description = "Lists the machine clients the caller may manage, newest first. A system admin sees every machine client; any other caller sees only those owned by a team they own. Revoked clients are omitted unless `include_revoked` is set.",
+    description = "Lists the machine clients the caller may manage, newest first. A system admin sees every machine client but those of someone else's personal team (its roster stays readable through the team's members); any other caller sees only those owned by a team they own. Revoked clients are omitted unless `include_revoked` is set.",
     path = "/api/machine-clients",
     tag = "Machine Clients",
     params(ListQuery),

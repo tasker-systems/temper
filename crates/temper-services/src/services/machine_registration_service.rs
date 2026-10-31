@@ -414,6 +414,9 @@ pub async fn rebind(
     // inherits — which is why this takes a `&SystemAdmin` proof, NOT `machine_authz`. The proof itself
     // IS the check (admin-authz enclosure, spec §3); do not widen it back to a scoped gate.
     let old = machine_client_service::get(pool, req.from_machine_client_id).await?;
+    // The admin proof does not reach a machine on someone else's personal team: a rebound client id
+    // is a credential into that person's personal space, theirs alone to mint (task `01a191b4`).
+    machine_client_service::require_credential_minter(pool, old.profile_id, *admin.actor()).await?;
 
     // The new client id is the caller's choice, so it may not sit in a namespace temper mints.
     refuse_minted_namespace(&req.client_id)?;

@@ -22,18 +22,35 @@
 -- Bodies are carried verbatim from 20261110000100 (a soft-deleted team confers nothing) apart from
 -- those lines.
 
+-- Personal space is a PERSON's. A machine client's or a connection's agent profile is not one:
+-- a teamless connection homes its context on its own agent profile, which only an admin can reach,
+-- and every profile, an agent's included, gets a personal team. Counting those as personal space
+-- would leave them with no one able to act on them at all.
+CREATE OR REPLACE FUNCTION profile_is_person(p_profile uuid)
+RETURNS boolean LANGUAGE sql STABLE
+SET search_path = public, pg_temp
+AS $$
+    SELECT p_profile IS NOT NULL
+       AND NOT is_machine_profile(p_profile)
+       AND NOT EXISTS (SELECT 1 FROM kb_connections WHERE profile_id = p_profile);
+$$;
+COMMENT ON FUNCTION profile_is_person(uuid) IS
+  'Whether a profile is a person: neither a machine client''s nor a connection''s agent profile.';
+
 CREATE OR REPLACE FUNCTION context_personal_owner(p_context uuid)
 RETURNS uuid LANGUAGE sql STABLE
 SET search_path = public, pg_temp
 AS $$
-    SELECT CASE WHEN c.owner_table = 'kb_profiles' THEN c.owner_id ELSE t.personal_of END
-      FROM kb_contexts c
-      LEFT JOIN kb_teams t ON c.owner_table = 'kb_teams' AND t.id = c.owner_id
-     WHERE c.id = p_context;
+    SELECT CASE WHEN profile_is_person(x.owner) THEN x.owner END
+      FROM (SELECT CASE WHEN c.owner_table = 'kb_profiles' THEN c.owner_id
+                        ELSE t.personal_of END AS owner
+              FROM kb_contexts c
+              LEFT JOIN kb_teams t ON c.owner_table = 'kb_teams' AND t.id = c.owner_id
+             WHERE c.id = p_context) x;
 $$;
 COMMENT ON FUNCTION context_personal_owner(uuid) IS
-  'The profile whose personal space a context is (its owning profile, or its personal team''s '
-  'personal_of), or NULL for a shared context.';
+  'The person whose personal space a context is (its owning profile, or its personal team''s '
+  'personal_of, when that profile is a person), or NULL for a shared context or an agent''s.';
 
 CREATE OR REPLACE FUNCTION context_is_personal(p_context uuid)
 RETURNS boolean LANGUAGE sql STABLE
@@ -325,9 +342,12 @@ BEGIN
 
     -- A personal team is acted on by its owner alone (20261110000000): no one else, an instance admin
     -- included, moves a context into one.
+    -- Nor into another person's own ownership: the Rust door only sends teams, and the admin
+    -- bypass below skips the must-be-a-team check, so this is the line for a direct caller.
     IF EXISTS (SELECT 1 FROM kb_teams t
                 WHERE v_to_table = 'kb_teams' AND t.id = v_to_id
-                  AND t.personal_of IS NOT NULL AND t.personal_of IS DISTINCT FROM v_actor) THEN
+                  AND t.personal_of IS NOT NULL AND t.personal_of IS DISTINCT FROM v_actor)
+       OR (v_to_table = 'kb_profiles' AND v_to_id IS DISTINCT FROM v_actor) THEN
         RAISE EXCEPTION 'context_reassign: cannot transfer into someone else''s personal team'
               USING ERRCODE = '42501';
     END IF;
@@ -398,7 +418,7 @@ $function$;
 SELECT declare_migration(
     20261111000000,
     'additive',
-    'Adds context_personal_owner, context_is_personal, resource_personal_owner and '
+    'Adds profile_is_person, context_personal_owner, context_is_personal, resource_personal_owner and '
     'resource_is_personal, and replaces context_retire, context_restore, '
     'context_rename and context_reassign (signatures unchanged) so their system-admin bypass does not '
     'apply to someone else''s personal context, and context_reassign refuses moving a context into someone else''s '

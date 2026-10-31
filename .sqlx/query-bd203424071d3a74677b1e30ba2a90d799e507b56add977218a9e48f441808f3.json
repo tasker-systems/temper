@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT CASE WHEN profile_is_person(personal_of) THEN personal_of END AS \"owner\"\n             FROM kb_teams WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "owner",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "bd203424071d3a74677b1e30ba2a90d799e507b56add977218a9e48f441808f3"
+}

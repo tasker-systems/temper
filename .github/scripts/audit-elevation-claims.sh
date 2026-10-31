@@ -425,7 +425,7 @@ claim crates/temper-services/src/services/erasure_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/resource_erasure_service.rs 2 is_system_admin
 claim crates/temper-services/src/services/invitation_service.rs 6 team_membership
 claim crates/temper-services/src/services/machine_authz.rs 8 machine,team_membership
-claim crates/temper-services/src/services/machine_client_service.rs 7 machine
+claim crates/temper-services/src/services/machine_client_service.rs 8 machine
 claim crates/temper-services/src/services/machine_registration_service.rs 9 machine
 claim crates/temper-services/src/services/slack_disconnect_service.rs 2 -
 claim crates/temper-services/src/services/saml_provisioning_service.rs 1 team_membership
@@ -436,11 +436,11 @@ gate audit_gate 021f87ca4bed
 gate connection 586029b73345
 gate context_admin 36e336482872
 gate grant 8fca715c38c3
-gate machine 96723c424468
+gate machine 8af8ae7660a9
 gate reconcile_regime 76ead78c03ac
 gate read_gates 6a6ce4847fbc
 gate ledger_subject 89ab4129fe64
-gate subscription bafa42231dce
+gate subscription f45d76e9be69
 gate two_sided c54345d313d3
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d

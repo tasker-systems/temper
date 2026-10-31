@@ -144,8 +144,8 @@ async fn authorize_control(pool: &PgPool, authed: &HumanPrincipal, id: Uuid) -> 
 }
 
 /// List connections visible to `caller`, newest first. Revoked rows are hidden unless asked for.
-/// A system admin sees every row, including teamless ones; a team owner sees only connections
-/// owned by a team they own.
+/// A system admin sees every row but those of someone else's personal team (teamless ones
+/// included); a team owner sees only connections owned by a team they own.
 ///
 /// `EXISTS`, not `array_agg` — an empty scope must DENY, and an aggregate over an empty scope
 /// yields NULL, which falls open.
@@ -170,7 +170,12 @@ pub async fn list(
                   created, revoked_at, revoked_by_profile_id
              FROM kb_connections c
             WHERE ($1 OR c.revoked_at IS NULL)
-              AND ( $2
+              -- The admin arm stops at someone else's personal team (task `01a191b4`), as the
+              -- per-row gate does; its roster stays readable through the team's members.
+              AND ( ($2 AND NOT EXISTS (SELECT 1 FROM kb_teams pt
+                                         WHERE pt.id = c.owner_team_id
+                                           AND profile_is_person(pt.personal_of)
+                                           AND pt.personal_of <> $3))
                     OR ( c.owner_team_id IS NOT NULL
                          AND EXISTS (
                              SELECT 1

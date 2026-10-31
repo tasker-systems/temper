@@ -988,7 +988,7 @@ class ConnectionsApi:
     ) -> List[RemoteConnection]:
         """List connections
 
-        Lists the connections the caller may manage, newest first. A system admin sees every connection; any other caller sees only those owned by a team they own. Revoked connections are omitted unless `include_revoked` is set.
+        Lists the connections the caller may manage, newest first. A system admin sees every connection but those of someone else's personal team; any other caller sees only those owned by a team they own. Revoked connections are omitted unless `include_revoked` is set.
 
         :param include_revoked: Include revoked connections. Default `false`.
         :type include_revoked: bool
@@ -1061,7 +1061,7 @@ class ConnectionsApi:
     ) -> ApiResponse[List[RemoteConnection]]:
         """List connections
 
-        Lists the connections the caller may manage, newest first. A system admin sees every connection; any other caller sees only those owned by a team they own. Revoked connections are omitted unless `include_revoked` is set.
+        Lists the connections the caller may manage, newest first. A system admin sees every connection but those of someone else's personal team; any other caller sees only those owned by a team they own. Revoked connections are omitted unless `include_revoked` is set.
 
         :param include_revoked: Include revoked connections. Default `false`.
         :type include_revoked: bool
@@ -1134,7 +1134,7 @@ class ConnectionsApi:
     ) -> RESTResponseType:
         """List connections
 
-        Lists the connections the caller may manage, newest first. A system admin sees every connection; any other caller sees only those owned by a team they own. Revoked connections are omitted unless `include_revoked` is set.
+        Lists the connections the caller may manage, newest first. A system admin sees every connection but those of someone else's personal team; any other caller sees only those owned by a team they own. Revoked connections are omitted unless `include_revoked` is set.
 
         :param include_revoked: Include revoked connections. Default `false`.
         :type include_revoked: bool

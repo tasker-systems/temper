@@ -1369,7 +1369,7 @@ export interface paths {
         };
         /**
          * List connections
-         * @description Lists the connections the caller may manage, newest first. A system admin sees every connection; any other caller sees only those owned by a team they own. Revoked connections are omitted unless `include_revoked` is set.
+         * @description Lists the connections the caller may manage, newest first. A system admin sees every connection but those of someone else's personal team; any other caller sees only those owned by a team they own. Revoked connections are omitted unless `include_revoked` is set.
          */
         get: operations["list_connections"];
         put?: never;
@@ -2365,7 +2365,7 @@ export interface paths {
         };
         /**
          * List machine clients
-         * @description Lists the machine clients the caller may manage, newest first. A system admin sees every machine client; any other caller sees only those owned by a team they own. Revoked clients are omitted unless `include_revoked` is set.
+         * @description Lists the machine clients the caller may manage, newest first. A system admin sees every machine client but those of someone else's personal team (its roster stays readable through the team's members); any other caller sees only those owned by a team they own. Revoked clients are omitted unless `include_revoked` is set.
          */
         get: operations["list_machine_clients"];
         put?: never;

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, provider, slug, name, owner_team_id, registered_by_profile_id,\n                  profile_id, emitter_entity_id, home_context_id, credential,\n                  webhook_events, tool_manifest, reach_granularity, reach_covers,\n                  reach_affirmed_by, reach_affirmed_at, reach_affirmation,\n                  observed_reach,\n                  created, revoked_at, revoked_by_profile_id\n             FROM kb_connections c\n            WHERE ($1 OR c.revoked_at IS NULL)\n              AND ( $2\n                    OR ( c.owner_team_id IS NOT NULL\n                         AND EXISTS (\n                             SELECT 1\n                               FROM kb_team_members tm\n                               JOIN kb_teams t ON t.id = tm.team_id AND t.is_active\n                              WHERE tm.team_id = c.owner_team_id\n                                AND tm.profile_id = $3\n                                AND tm.role = 'owner'\n                         ) ) )\n            ORDER BY created DESC",
+  "query": "SELECT id, provider, slug, name, owner_team_id, registered_by_profile_id,\n                  profile_id, emitter_entity_id, home_context_id, credential,\n                  webhook_events, tool_manifest, reach_granularity, reach_covers,\n                  reach_affirmed_by, reach_affirmed_at, reach_affirmation,\n                  observed_reach,\n                  created, revoked_at, revoked_by_profile_id\n             FROM kb_connections c\n            WHERE ($1 OR c.revoked_at IS NULL)\n              -- The admin arm stops at someone else's personal team (task `01a191b4`), as the\n              -- per-row gate does; its roster stays readable through the team's members.\n              AND ( ($2 AND NOT EXISTS (SELECT 1 FROM kb_teams pt\n                                         WHERE pt.id = c.owner_team_id\n                                           AND profile_is_person(pt.personal_of)\n                                           AND pt.personal_of <> $3))\n                    OR ( c.owner_team_id IS NOT NULL\n                         AND EXISTS (\n                             SELECT 1\n                               FROM kb_team_members tm\n                               JOIN kb_teams t ON t.id = tm.team_id AND t.is_active\n                              WHERE tm.team_id = c.owner_team_id\n                                AND tm.profile_id = $3\n                                AND tm.role = 'owner'\n                         ) ) )\n            ORDER BY created DESC",
   "describe": {
     "columns": [
       {
@@ -140,5 +140,5 @@
       true
     ]
   },
-  "hash": "7595762b755e4885643c6da99340b7f83ac3b9508d496bb0ad77bdc28b06fb90"
+  "hash": "9ce822ba7d30df36002f95b9f3876b3b261963b49112512b2d4e638ce7ae4b0f"
 }

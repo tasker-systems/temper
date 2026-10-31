@@ -171,10 +171,13 @@ async fn a_system_admin_neither_grants_on_nor_audits_someone_elses_personal_spac
         .await
         .expect("the owner reads their own subject");
     assert_eq!(grant_rows!(owners), 1);
-    let admins = admin_ledger_service::list_by_subject(&pool, &as_admin, subject(resource), 50, 0)
-        .await
-        .unwrap_or_default();
-    assert_eq!(grant_rows!(admins), 0, "{admins:?}");
+    // Either no readable act family (the axis answers 404) or a page without the grant acts; any
+    // other error is a failure, not an empty page.
+    match admin_ledger_service::list_by_subject(&pool, &as_admin, subject(resource), 50, 0).await {
+        Ok(admins) => assert_eq!(grant_rows!(admins), 0, "{admins:?}"),
+        Err(ApiError::NotFound(_)) => {}
+        Err(other) => panic!("the admin's subject read failed: {other:?}"),
+    }
     let audit =
         admin_ledger_service::list_by_actor(&pool, &as_admin, ProfileId::from(owner), 50, 0)
             .await

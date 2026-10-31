@@ -646,7 +646,7 @@ class MachineClientsApi:
     ) -> List[MachineClient]:
         """List machine clients
 
-        Lists the machine clients the caller may manage, newest first. A system admin sees every machine client; any other caller sees only those owned by a team they own. Revoked clients are omitted unless `include_revoked` is set.
+        Lists the machine clients the caller may manage, newest first. A system admin sees every machine client but those of someone else's personal team (its roster stays readable through the team's members); any other caller sees only those owned by a team they own. Revoked clients are omitted unless `include_revoked` is set.
 
         :param include_revoked: Include revoked machine clients. Default `false`.
         :type include_revoked: bool
@@ -719,7 +719,7 @@ class MachineClientsApi:
     ) -> ApiResponse[List[MachineClient]]:
         """List machine clients
 
-        Lists the machine clients the caller may manage, newest first. A system admin sees every machine client; any other caller sees only those owned by a team they own. Revoked clients are omitted unless `include_revoked` is set.
+        Lists the machine clients the caller may manage, newest first. A system admin sees every machine client but those of someone else's personal team (its roster stays readable through the team's members); any other caller sees only those owned by a team they own. Revoked clients are omitted unless `include_revoked` is set.
 
         :param include_revoked: Include revoked machine clients. Default `false`.
         :type include_revoked: bool
@@ -792,7 +792,7 @@ class MachineClientsApi:
     ) -> RESTResponseType:
         """List machine clients
 
-        Lists the machine clients the caller may manage, newest first. A system admin sees every machine client; any other caller sees only those owned by a team they own. Revoked clients are omitted unless `include_revoked` is set.
+        Lists the machine clients the caller may manage, newest first. A system admin sees every machine client but those of someone else's personal team (its roster stays readable through the team's members); any other caller sees only those owned by a team they own. Revoked clients are omitted unless `include_revoked` is set.
 
         :param include_revoked: Include revoked machine clients. Default `false`.
         :type include_revoked: bool

@@ -4824,7 +4824,9 @@ impl Backend for DbBackend {
             ReblockScope::All => sqlx::query_scalar!(
                 r#"SELECT count(*) AS "count!" FROM kb_resources r
                          WHERE r.is_active
-                           AND r.ingest_state = 'in_progress'"#,
+                           AND r.ingest_state = 'in_progress'
+                           AND COALESCE(resource_personal_owner(r.id) = $1, true)"#,
+                *self.profile_id,
             )
             .fetch_one(&self.pool)
             .await

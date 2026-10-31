@@ -31,7 +31,7 @@ impl ScopedAuthority for MachineRegistrationAuthority {
         // The admin arm stops at a personal team (task `01a191b4`): a machine or connection owned by
         // one is its owner's alone. A teamless machine stays admin-only (spec D2).
         let personal = match team {
-            Some(team_id) => team_service::personal_of(pool, team_id)
+            Some(team_id) => team_service::personal_space_owner(pool, team_id)
                 .await?
                 .is_some_and(|owner| owner != caller),
             None => false,
@@ -197,5 +197,143 @@ mod personal_space_tests {
                 .unwrap(),
             SubscriptionAuthority::SystemAdmin
         );
+    }
+
+    /// A teamless connection homes its context on its own agent profile. That is no person's
+    /// personal space, so the admin arm still reaches it: counting it as personal would leave it
+    /// with no one able to act on it.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn an_agents_own_context_is_no_ones_personal_space(pool: PgPool) {
+        use crate::services::subscription_test_support::{seed_admin, seed_connection};
+        let admin = seed_admin(&pool).await;
+        let conn = seed_connection(&pool, None, admin).await;
+        let home: Uuid =
+            sqlx::query_scalar("SELECT home_context_id FROM kb_connections WHERE id = $1")
+                .bind(conn)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let owner: Option<Uuid> = sqlx::query_scalar("SELECT context_personal_owner($1)")
+            .bind(home)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(owner, None, "an agent's home context is not personal space");
+        assert!(
+            !crate::services::context_service::is_others_personal_context(&pool, home, admin)
+                .await
+                .unwrap()
+        );
+    }
+
+    /// A subscription a shared team authors into someone else's personal context (shared to that
+    /// team) is hidden from an admin's list, and its per-row get/revoke refuse the admin too; the
+    /// team's manager keeps both.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_subscription_into_someone_elses_personal_context_is_not_the_admins(pool: PgPool) {
+        use crate::authz::SubscriptionControlAuthority;
+        use crate::services::subscription_test_support::*;
+        use temper_core::types::subscription::SubscriptionSelector;
+
+        let manager = seed_admin(&pool).await;
+        let auditor = seed_admin(&pool).await;
+        let (alice, _) = person(&pool, "sub-alice").await;
+        let team = seed_team(&pool, manager).await;
+        let alices: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+             VALUES ('kb_profiles', $1, 'sub-alices', 'sub-alices') RETURNING id",
+        )
+        .bind(*alice)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO kb_team_contexts (context_id, team_id) VALUES ($1, $2)")
+            .bind(alices)
+            .bind(team)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let conn = seed_connection(&pool, Some(team), manager).await;
+        grant_reach(&pool, manager, conn, team).await;
+        let sub = create_subscription(
+            &pool,
+            manager,
+            "kb_contexts",
+            alices,
+            team,
+            conn,
+            SubscriptionSelector::GitHubRepository {
+                repo: GITHUB_REPO.into(),
+                event_types: vec![],
+            },
+        )
+        .await;
+
+        assert_eq!(
+            SubscriptionControlAuthority::resolve(&pool, Principal::Bare(auditor), sub)
+                .await
+                .unwrap(),
+            SubscriptionControlAuthority::None
+        );
+        assert_eq!(
+            SubscriptionControlAuthority::resolve(&pool, Principal::Bare(manager), sub)
+                .await
+                .unwrap(),
+            SubscriptionControlAuthority::TeamManager
+        );
+    }
+
+    /// A machine on a person's personal team is that person's to mint credentials for, whatever
+    /// shared team owns its row: not a system admin's, not another owner of that team's.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn only_the_person_mints_for_a_machine_on_their_personal_team(pool: PgPool) {
+        use crate::services::machine_client_service::{
+            admitting_person, require_credential_minter,
+        };
+        let (admin, _) = person(&pool, "mint-admin").await;
+        crate::test_support::grant_governance(&pool, *admin).await;
+        let (alice, alices_team) = person(&pool, "mint-alice").await;
+        let (machine, _) = person(&pool, "mint-machine").await;
+        let acme: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_teams (slug, name) VALUES ('mint-acme', 'acme') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO kb_machine_clients (client_id, issuer, label, profile_id, team_id, \
+                                             registered_by_profile_id) \
+             VALUES ('mint-client', 'auth0-m2m', 'm', $1, $2, $3)",
+        )
+        .bind(*machine)
+        .bind(acme)
+        .bind(*alice)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'member')",
+        )
+        .bind(alices_team)
+        .bind(*machine)
+        .execute(&pool)
+        .await
+        .expect("alice's machine joins her personal team");
+
+        assert_eq!(
+            admitting_person(&pool, *machine).await.unwrap(),
+            Some(*alice)
+        );
+        assert!(matches!(
+            require_credential_minter(&pool, *machine, *admin).await,
+            Err(ApiError::NotFound(_))
+        ));
+        require_credential_minter(&pool, *machine, *alice)
+            .await
+            .expect("alice mints for her own machine");
+        let (lonely, _) = person(&pool, "mint-lonely").await;
+        require_credential_minter(&pool, *lonely, *admin)
+            .await
+            .expect("no personal team admits it, so the ordinary gate decides");
     }
 }

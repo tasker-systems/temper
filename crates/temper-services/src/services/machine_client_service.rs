@@ -148,8 +148,8 @@ async fn authorize_control(pool: &PgPool, authed: &HumanPrincipal, id: Uuid) -> 
 }
 
 /// List machine clients visible to `caller` (B2 D5), newest first. Revoked rows are hidden
-/// unless asked for. A system admin sees every row, including teamless ones; a team owner sees
-/// only machines owned by a team they own.
+/// unless asked for. A system admin sees every row but those of someone else's personal team
+/// (teamless ones included); a team owner sees only machines owned by a team they own.
 ///
 /// `EXISTS`, not `array_agg` — an empty scope must DENY, and an aggregate over an empty scope
 /// yields NULL, which falls open.
@@ -171,7 +171,12 @@ pub async fn list(
                   revoked_at, revoked_by_profile_id
              FROM kb_machine_clients mc
             WHERE ($1 OR mc.revoked_at IS NULL)
-              AND ( $2
+              -- The admin arm stops at someone else's personal team (task `01a191b4`), as the
+              -- per-row gate does; its roster stays readable through the team's members.
+              AND ( ($2 AND NOT EXISTS (SELECT 1 FROM kb_teams pt
+                                         WHERE pt.id = mc.team_id
+                                           AND profile_is_person(pt.personal_of)
+                                           AND pt.personal_of <> $3))
                     OR ( mc.team_id IS NOT NULL
                          AND EXISTS (
                              SELECT 1
@@ -269,6 +274,44 @@ async fn has_live_credential(pool: &PgPool, profile: ProfileId) -> ApiResult<boo
     .await?)
 }
 
+/// The person whose personal team admits this machine profile, if any (task `01a191b4`).
+///
+/// A machine's credential is a key to every team it sits on. One that sits on a person's personal
+/// team reads that person's personal space, so minting it a credential (a rotated secret, or a
+/// rebound client id) is that person's act alone, whatever team owns the machine row. Owning a
+/// shared team, or holding a system-admin grant, does not reach it. Revoking is not minting: it
+/// only takes access away, and stays with the row's ordinary control gate.
+pub(crate) async fn admitting_person(pool: &PgPool, profile: Uuid) -> ApiResult<Option<Uuid>> {
+    Ok(sqlx::query_scalar!(
+        r#"SELECT t.personal_of AS "owner!"
+             FROM kb_team_members tm
+             JOIN kb_teams t ON t.id = tm.team_id
+            WHERE tm.profile_id = $1
+              AND profile_is_person(t.personal_of)
+            ORDER BY t.personal_of
+            LIMIT 1"#,
+        profile,
+    )
+    .fetch_optional(pool)
+    .await?)
+}
+
+/// Refuse minting a credential for `profile` unless `caller` is the person whose personal team
+/// admits it, or no personal team does. The refusal is the per-row control gate's own `NotFound`,
+/// so it reveals nothing the caller could not already see.
+pub(crate) async fn require_credential_minter(
+    pool: &PgPool,
+    profile: Uuid,
+    caller: Uuid,
+) -> ApiResult<()> {
+    match admitting_person(pool, profile).await? {
+        Some(owner) if owner != caller => {
+            Err(ApiError::NotFound(MACHINE_CLIENT_REFUSAL.to_string()))
+        }
+        _ => Ok(()),
+    }
+}
+
 /// The longest a rotated-away secret may remain valid. A rotation window is meant to be brief
 /// (issue new → deploy → old expires); an unbounded grace would keep a possibly-compromised old
 /// secret alive far past the rotation's intent, defeating D6's "two live secrets, briefly".
@@ -291,6 +334,9 @@ pub async fn rotate_secret(
     // Auth before writes, keyed on the existing row's owning team (B2 D5). Ahead of the
     // transaction, so a rejected rotation never touches the row.
     authorize_control(pool, authed, id).await?;
+    // A machine on someone's personal team is minted for by that person alone (task `01a191b4`).
+    let row = get(pool, id).await?;
+    require_credential_minter(pool, row.profile_id, authed.profile().id).await?;
 
     if !(0..=MAX_ROTATION_GRACE_SECONDS).contains(&grace_seconds) {
         return Err(ApiError::BadRequest(format!(
