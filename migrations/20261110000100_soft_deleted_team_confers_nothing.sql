@@ -28,7 +28,7 @@
 -- 3. NO WRITES ONTO A DEAD TEAM. context_reassign refuses a dead target team for everyone;
 --    _admin_team_membership_write refuses a dead team as a backstop to the Rust lock helper.
 --    steward_team_contexts and cogmaps_share_a_team read live teams only. The auto-join writers
---    skip dead teams in the next migration (20261110000010), kept apart because it reads
+--    skip dead teams in the next migration (20261110000110), kept apart because it reads
 --    kb_teams.auto_join_role, which temper-substrate's pre-auto-join test baseline omits.
 --
 -- Every function here keeps its signature and return type; each is a body-only CREATE OR REPLACE of
@@ -664,7 +664,7 @@ AS $function$
 $function$;
 
 SELECT declare_migration(
-    20261110000000,
+    20261110000100,
     'additive',
     'New STABLE functions context_is_dead(uuid) and context_is_live(uuid), and body-only CREATE OR REPLACE, signatures and return '
     'types unchanged, of context_reassign, context_rename, context_retire, context_restore, '

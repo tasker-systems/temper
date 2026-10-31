@@ -2,7 +2,7 @@
 -- dead team). auto_join_reconcile, backfill_auto_join_team and ensure_auto_join_memberships each
 -- gain `is_active` on the team they read; nothing else in their bodies changes.
 --
--- Split from 20261110000000 only because these bodies read kb_teams.auto_join_role, which
+-- Split from 20261110000100 only because these bodies read kb_teams.auto_join_role, which
 -- temper-substrate's pre-auto-join test baseline (tests/common/mod.rs) omits, so that harness skips
 -- this file as it skips the other auto-join migrations.
 --
@@ -73,7 +73,7 @@ END;
 $function$;
 
 SELECT declare_migration(
-    20261110000010,
+    20261110000110,
     'additive',
     'Body-only CREATE OR REPLACE, signatures and return types unchanged, of auto_join_reconcile, '
     'backfill_auto_join_team and ensure_auto_join_memberships: each skips a soft-deleted team. No row '

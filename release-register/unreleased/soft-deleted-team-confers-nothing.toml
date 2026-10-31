@@ -4,7 +4,7 @@ classes  = ["behavioral"]
 surfaces = ["http", "mcp", "cli-stdout", "clients"]
 status   = "signal-only"
 body = '''
-Soft-deleting a team now takes away everything the team conferred. Migration `20261110000000`.
+Soft-deleting a team now takes away everything the team conferred. Migration `20261110000100`.
 
 - A former owner or maintainer of a soft-deleted team no longer administers its contexts: share,
   unshare, reassign, rename, retire and restore answer as for any non-administrator (`403` from the
