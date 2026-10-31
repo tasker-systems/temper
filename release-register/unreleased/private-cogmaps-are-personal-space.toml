@@ -24,10 +24,12 @@ deploying, and unbind every `CONFLICT` row it lists.
 - A system admin no longer grants or revokes on, binds or unbinds someone else's personal map. Its
   person keeps every act, and existing grants keep conferring. The admin ledger's actor axis omits
   grant acts on someone else's personal map, as it already did for personal contexts and resources.
-- A credential minted for a machine by anyone but its person (a rotated secret, a rebound client
-  id) now also withdraws the machine's direct grants on anyone else's personal space (a personal
-  map, a personal context, a resource homed in one), each recorded as `grant_revoked`, beside the
-  personal-team severance #1275 shipped. Machine registration by a system admin refuses a cogmap
+- A credential minted for a machine by anyone but its own person (the person who registered it,
+  whose personal team admits it) — a rotated secret, a rebound client id — now also withdraws the
+  machine's direct grants on every personal space but the minter's own (a personal map, a personal
+  context, a resource homed in one), each recorded as `grant_revoked`, beside the personal-team
+  severance #1275 shipped. When the machine's own person rotates or rebinds it, nothing is
+  withdrawn. Machine registration by a system admin refuses a cogmap
   grant on someone else's personal map.
 - Genesis at an existing caller-supplied map id (honoured only for a system admin) answers its
   idempotent no-op only to a caller who reads the map; on someone else's private map the admin gets

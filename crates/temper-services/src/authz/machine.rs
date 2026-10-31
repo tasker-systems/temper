@@ -339,12 +339,16 @@ mod personal_space_tests {
         .execute(&pool)
         .await
         .expect("alice's machine joins her personal team");
-        // A direct grant on alice's personal context and one on a shared team's context (task
-        // `01a1933d`): an admin's credential takes the first and leaves the second.
+        // Direct grants on alice's personal context, on a shared team's context, and on quinn's
+        // personal context (task `01a1933d`). Alice, the machine's own person,
+        // minting withdraws none of them (ruled 2026-10-31); an admin's credential takes both
+        // personal ones and leaves the shared one.
+        let (quinn, _) = person(&pool, "mint-quinn").await;
         let mut contexts = Vec::new();
         for (owner_table, owner_id, slug) in [
             ("kb_profiles", *alice, "mint-alices"),
             ("kb_teams", acme, "mint-acmes"),
+            ("kb_profiles", *quinn, "mint-quinns"),
         ] {
             let ctx: Uuid = sqlx::query_scalar(
                 "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
@@ -410,7 +414,10 @@ mod personal_space_tests {
             .is_empty());
         tx.commit().await.unwrap();
         assert!(on_alices().await);
-        assert!(holds(contexts[0]).await && holds(contexts[1]).await);
+        assert!(
+            holds(contexts[0]).await && holds(contexts[1]).await && holds(contexts[2]).await,
+            "the machine's own person rotating withdraws nothing, quinn's grant included"
+        );
 
         // The admin minting severs it, and the removal is recorded with the admin as actor.
         let mut conn = pool.acquire().await.unwrap();
@@ -436,6 +443,10 @@ mod personal_space_tests {
         assert!(
             !holds(contexts[0]).await,
             "nor her personal space through the machine's own grant"
+        );
+        assert!(
+            !holds(contexts[2]).await,
+            "nor quinn's personal space, whoever granted it"
         );
         assert!(holds(contexts[1]).await, "a shared grant stays");
         let revoked: i64 = sqlx::query_scalar(

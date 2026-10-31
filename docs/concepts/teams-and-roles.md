@@ -45,7 +45,8 @@ before.
 Machines are different: they are principals, and a system admin manages every principal, yours
 included. What protects your personal team is the credential. If anyone but you gives a machine on
 your personal team a new credential (a rotated secret, or a rebound client id), the machine leaves
-your personal team in the same act, so the new credential cannot open it.
+your personal team in the same act, so the new credential cannot open it. It also loses any grant
+it held on someone's personal space. When you rotate your own machine's credential, nothing changes.
 
 ## The role ladder
 

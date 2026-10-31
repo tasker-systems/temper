@@ -305,9 +305,10 @@ pub(crate) async fn others_personal_teams(
 /// owns a machine row may rotate its secret; neither may thereby open someone's personal space. So
 /// a credential minted by anyone but the person whose personal team admits the machine (a rotated
 /// secret, or a rebound client id) costs the machine that team. Each removal is a recorded
-/// `team_membership_changed` (`machine_reach`, the minter as actor). The machine's direct grants on
-/// anyone else's personal space go too, each a recorded `grant_revoked` (task `01a1933d`; ported
-/// from temper#1283). Returns the teams severed.
+/// `team_membership_changed` (`machine_reach`, the minter as actor). Unless the minter is the
+/// machine's own person, its direct grants on anyone else's personal space go too, each a recorded
+/// `grant_revoked` (task `01a1933d`; ported from temper#1283, narrowed by the 2026-10-31 ruling).
+/// Returns the teams severed.
 pub(crate) async fn sever_personal_reach(
     conn: &mut sqlx::PgConnection,
     profile: Uuid,
@@ -332,6 +333,22 @@ pub(crate) async fn sever_personal_reach(
     // grant on a person's private map (a registration's reach) or on their personal context or a
     // resource homed in one would otherwise still open it to whoever holds the new credential.
     // Each is a recorded `grant_revoked`, the minter as revoker. The minter's own space stays.
+    //
+    // Only when the credential leaves its person's hands (ruled 2026-10-31): the machine's own
+    // person — the person who registered it, whose personal team admits it — rotating or
+    // rebinding it withdraws nothing, as the team severance above leaves their own team alone.
+    let own_person = sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM kb_machine_clients
+                           WHERE profile_id = $1 AND registered_by_profile_id = $2
+                             AND profile_is_person($2)) AS "own!: bool""#,
+        profile,
+        *minter,
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    if own_person {
+        return Ok(teams);
+    }
     let grants = sqlx::query!(
         r#"SELECT subject_table AS "subject_table!", subject_id AS "subject_id!"
              FROM kb_access_grants

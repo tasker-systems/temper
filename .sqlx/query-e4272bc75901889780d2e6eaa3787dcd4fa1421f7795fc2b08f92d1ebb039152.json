@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (SELECT 1 FROM kb_machine_clients\n                           WHERE profile_id = $1 AND registered_by_profile_id = $2\n                             AND profile_is_person($2)) AS \"own!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "own!: bool",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "e4272bc75901889780d2e6eaa3787dcd4fa1421f7795fc2b08f92d1ebb039152"
+}
