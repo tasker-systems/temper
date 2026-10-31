@@ -113,7 +113,9 @@ async fn caller(pool: &PgPool, label: &str) -> (Caller, Uuid) {
 /// write into it; every member reads it). Returns the context id.
 async fn team_context(pool: &PgPool, members: &[Uuid]) -> Uuid {
     let team = Uuid::now_v7();
-    let slug = format!("husk-write-team-{}", &team.simple().to_string()[..8]);
+    // The uuid's random tail, not its leading timestamp: two teams made in one millisecond would
+    // otherwise share a slug.
+    let slug = format!("husk-write-team-{}", &team.simple().to_string()[20..]);
     sqlx::query("INSERT INTO kb_teams (id, slug, name) VALUES ($1, $2, $2)")
         .bind(team)
         .bind(&slug)
@@ -1464,14 +1466,16 @@ async fn grant_as(app: &common::TestApp, who: &Caller, resource: Uuid) -> (u16, 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_system_admin_is_refused_on_a_dead_resource(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
-    let (owner_admin, owner_context) = caller(&app.pool, "owner-admin").await;
+    let (owner_admin, _) = caller(&app.pool, "owner-admin").await;
     common::fixtures::make_test_admin(&app.pool, owner_admin.profile).await;
     let (outsider_admin, _) = caller(&app.pool, "outsider-admin").await;
     common::fixtures::make_test_admin(&app.pool, outsider_admin.profile).await;
     let (other, _) = caller(&app.pool, "other").await;
-    // `other`'s resources live in a team context: a system admin's arm does not reach someone
-    // else's personal context (task `01a191b4`), so the live precondition needs a shared home.
+    // Every resource here lives in a team context: a system admin's arm does not reach someone
+    // else's personal context (task `01a191b4`), and is refused there as on a missing id (task
+    // `01a1933d`), so the liveness floor this test measures needs shared homes.
     let other_context = team_context(&app.pool, &[other.profile]).await;
+    let owner_context = team_context(&app.pool, &[owner_admin.profile]).await;
 
     let husk = ingest(&app, &owner_admin, owner_context).await;
     let tombstone = ingest(&app, &other, other_context).await;
