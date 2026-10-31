@@ -123,7 +123,7 @@ pub struct CreateSubscriptionRequest {
     pub subscriber_table: String,
     pub subscriber_id: Uuid,
     /// The team that authorizes this subscription. The caller must own or maintain it (or be a
-    /// system admin), and it must hold read-reach on the connection. For a team subscriber, this
+    /// system admin, unless it is someone else's personal team), and it must hold read-reach on the connection. For a team subscriber, this
     /// equals `subscriber_id`.
     pub authoring_team_id: Uuid,
     pub connection_id: Uuid,

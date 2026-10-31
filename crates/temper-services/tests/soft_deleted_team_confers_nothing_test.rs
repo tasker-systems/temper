@@ -415,11 +415,13 @@ async fn nothing_is_written_onto_a_dead_team(pool: PgPool) {
         "an admin adds no one to a dead team: {by_admin:?}"
     );
 
+    // A context on bob's live team: a system admin's arm does not reach someone else's personal
+    // context (20261113000000), so a personal one would be refused before the dead-team check.
     let bobs: Uuid = sqlx::query_scalar(
         "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
-         VALUES ('kb_profiles', $1, 'sd-bobs', 'sd-bobs') RETURNING id",
+         VALUES ('kb_teams', $1, 'sd-bobs', 'sd-bobs') RETURNING id",
     )
-    .bind(f.bob)
+    .bind(f.partners)
     .fetch_one(&pool)
     .await
     .expect("bob's context");
@@ -448,7 +450,7 @@ async fn nothing_is_written_onto_a_dead_team(pool: PgPool) {
         .fetch_one(&pool)
         .await
         .expect("owner");
-    assert_eq!(owner, f.bob, "bob's context stayed his");
+    assert_eq!(owner, f.partners, "bob's team's context stayed its own");
 }
 
 /// D1: a former owner of a dead team controls none of its connections: they cannot grant a team

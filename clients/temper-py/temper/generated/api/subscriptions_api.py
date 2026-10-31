@@ -60,7 +60,7 @@ class SubscriptionsApi:
     ) -> ConnectionSubscription:
         """Create a subscription
 
-        Declares that a team, context or cogmap wants the events a connection emits that match `selector`. Requires a system admin or an owner or maintainer of `authoring_team_id`, and, for every caller, that the authoring team holds read-reach on the connection. A context or cogmap subscriber must be linked to the authoring team; a team subscriber must be the authoring team itself. A selector that can never match the connection's registered webhook events is refused.
+        Declares that a team, context or cogmap wants the events a connection emits that match `selector`. Requires a system admin (not on someone else's personal team, nor for someone else's personal context as subscriber) or an owner or maintainer of `authoring_team_id`, and, for every caller, that the authoring team holds read-reach on the connection. A context or cogmap subscriber must be linked to the authoring team; a team subscriber must be the authoring team itself. A selector that can never match the connection's registered webhook events is refused.
 
         :param create_subscription_request: (required)
         :type create_subscription_request: CreateSubscriptionRequest
@@ -136,7 +136,7 @@ class SubscriptionsApi:
     ) -> ApiResponse[ConnectionSubscription]:
         """Create a subscription
 
-        Declares that a team, context or cogmap wants the events a connection emits that match `selector`. Requires a system admin or an owner or maintainer of `authoring_team_id`, and, for every caller, that the authoring team holds read-reach on the connection. A context or cogmap subscriber must be linked to the authoring team; a team subscriber must be the authoring team itself. A selector that can never match the connection's registered webhook events is refused.
+        Declares that a team, context or cogmap wants the events a connection emits that match `selector`. Requires a system admin (not on someone else's personal team, nor for someone else's personal context as subscriber) or an owner or maintainer of `authoring_team_id`, and, for every caller, that the authoring team holds read-reach on the connection. A context or cogmap subscriber must be linked to the authoring team; a team subscriber must be the authoring team itself. A selector that can never match the connection's registered webhook events is refused.
 
         :param create_subscription_request: (required)
         :type create_subscription_request: CreateSubscriptionRequest
@@ -212,7 +212,7 @@ class SubscriptionsApi:
     ) -> RESTResponseType:
         """Create a subscription
 
-        Declares that a team, context or cogmap wants the events a connection emits that match `selector`. Requires a system admin or an owner or maintainer of `authoring_team_id`, and, for every caller, that the authoring team holds read-reach on the connection. A context or cogmap subscriber must be linked to the authoring team; a team subscriber must be the authoring team itself. A selector that can never match the connection's registered webhook events is refused.
+        Declares that a team, context or cogmap wants the events a connection emits that match `selector`. Requires a system admin (not on someone else's personal team, nor for someone else's personal context as subscriber) or an owner or maintainer of `authoring_team_id`, and, for every caller, that the authoring team holds read-reach on the connection. A context or cogmap subscriber must be linked to the authoring team; a team subscriber must be the authoring team itself. A selector that can never match the connection's registered webhook events is refused.
 
         :param create_subscription_request: (required)
         :type create_subscription_request: CreateSubscriptionRequest
@@ -364,7 +364,7 @@ class SubscriptionsApi:
     ) -> ConnectionSubscription:
         """Get a subscription
 
-        Returns one subscription. Requires a system admin or an owner or maintainer of the subscription's authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+        Returns one subscription. Requires a system admin (not on someone else's personal team) or an owner or maintainer of the subscription's authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Subscription ID (required)
         :type id: UUID
@@ -438,7 +438,7 @@ class SubscriptionsApi:
     ) -> ApiResponse[ConnectionSubscription]:
         """Get a subscription
 
-        Returns one subscription. Requires a system admin or an owner or maintainer of the subscription's authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+        Returns one subscription. Requires a system admin (not on someone else's personal team) or an owner or maintainer of the subscription's authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Subscription ID (required)
         :type id: UUID
@@ -512,7 +512,7 @@ class SubscriptionsApi:
     ) -> RESTResponseType:
         """Get a subscription
 
-        Returns one subscription. Requires a system admin or an owner or maintainer of the subscription's authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+        Returns one subscription. Requires a system admin (not on someone else's personal team) or an owner or maintainer of the subscription's authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Subscription ID (required)
         :type id: UUID
@@ -650,7 +650,7 @@ class SubscriptionsApi:
     ) -> List[ConnectionSubscription]:
         """List subscriptions
 
-        Lists the subscriptions the caller may manage, newest first. A system admin sees every subscription; any other caller sees only those whose authoring team they own or maintain. Revoked subscriptions are omitted unless `include_revoked` is set.
+        Lists the subscriptions the caller may manage, newest first. A system admin sees every subscription except those inside someone else's personal space; any other caller sees only those whose authoring team they own or maintain. Revoked subscriptions are omitted unless `include_revoked` is set.
 
         :param include_revoked: Include revoked subscriptions. Default `false`.
         :type include_revoked: bool
@@ -727,7 +727,7 @@ class SubscriptionsApi:
     ) -> ApiResponse[List[ConnectionSubscription]]:
         """List subscriptions
 
-        Lists the subscriptions the caller may manage, newest first. A system admin sees every subscription; any other caller sees only those whose authoring team they own or maintain. Revoked subscriptions are omitted unless `include_revoked` is set.
+        Lists the subscriptions the caller may manage, newest first. A system admin sees every subscription except those inside someone else's personal space; any other caller sees only those whose authoring team they own or maintain. Revoked subscriptions are omitted unless `include_revoked` is set.
 
         :param include_revoked: Include revoked subscriptions. Default `false`.
         :type include_revoked: bool
@@ -804,7 +804,7 @@ class SubscriptionsApi:
     ) -> RESTResponseType:
         """List subscriptions
 
-        Lists the subscriptions the caller may manage, newest first. A system admin sees every subscription; any other caller sees only those whose authoring team they own or maintain. Revoked subscriptions are omitted unless `include_revoked` is set.
+        Lists the subscriptions the caller may manage, newest first. A system admin sees every subscription except those inside someone else's personal space; any other caller sees only those whose authoring team they own or maintain. Revoked subscriptions are omitted unless `include_revoked` is set.
 
         :param include_revoked: Include revoked subscriptions. Default `false`.
         :type include_revoked: bool

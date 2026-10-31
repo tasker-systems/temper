@@ -261,7 +261,8 @@ fn map_share_err(action: &str, e: temper_client::error::ClientError) -> TemperEr
         temper_client::error::ClientError::Forbidden => TemperError::Api(format!(
             "not authorized: `context {action}` requires that you administer the context \
              (own it, or manage its owning team) AND manage the target team \
-             (owner/maintainer) — or that you are an instance administrator. Ask an instance \
+             (owner/maintainer) — or that you are an instance administrator, which does not \
+             reach someone else's personal context or team. Ask an instance \
              administrator, or use `context create --owner +<team>` to create a new \
              team-owned context instead."
         )),
@@ -270,7 +271,7 @@ fn map_share_err(action: &str, e: temper_client::error::ClientError) -> TemperEr
 }
 
 /// `temper context share <context_ref> <team>` — share a context into a team's read-reach.
-/// Authorized by the server's `can_share` gate (context-admin + team-manager, or instance-admin).
+/// Authorized by the server's `can_share` gate (context-admin + team-manager, or instance-admin outside someone else's personal space).
 pub async fn share_remote(
     client: &temper_client::TemperClient,
     context: &str,
@@ -323,7 +324,7 @@ fn map_admin_required_err(action: &str, e: temper_client::error::ClientError) ->
         temper_client::error::ClientError::Forbidden => TemperError::Api(format!(
             "not authorized: `context {action}` requires that you administer the context \
              (own it, or manage its owning team as owner/maintainer) — or that you are an \
-             instance administrator."
+             instance administrator and it is not someone else's personal context."
         )),
         other => crate::actions::runtime::client_err_to_temper(other),
     }

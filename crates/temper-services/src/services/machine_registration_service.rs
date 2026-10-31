@@ -445,6 +445,12 @@ pub async fn rebind(
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {e}")))?;
 
+    // A rebound client id is a new credential for the same principal. One minted by anyone but the
+    // person whose personal team admits the machine costs the machine that team (task `01a191b4`):
+    // the admin manages the principal, but its new credential does not open someone's personal
+    // space. First in the transaction, ahead of its writes.
+    machine_client_service::sever_personal_reach(&mut tx, old.profile_id, admin.actor()).await?;
+
     // A second auth link for the same profile, under the new client id.
     sqlx::query!(
         r#"INSERT INTO kb_profile_auth_links
