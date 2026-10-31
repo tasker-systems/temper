@@ -1468,7 +1468,10 @@ async fn a_system_admin_is_refused_on_a_dead_resource(pool: PgPool) {
     common::fixtures::make_test_admin(&app.pool, owner_admin.profile).await;
     let (outsider_admin, _) = caller(&app.pool, "outsider-admin").await;
     common::fixtures::make_test_admin(&app.pool, outsider_admin.profile).await;
-    let (other, other_context) = caller(&app.pool, "other").await;
+    let (other, _) = caller(&app.pool, "other").await;
+    // `other`'s resources live in a team context: a system admin's arm does not reach someone
+    // else's personal context (task `01a191b4`), so the live precondition needs a shared home.
+    let other_context = team_context(&app.pool, &[other.profile]).await;
 
     let husk = ingest(&app, &owner_admin, owner_context).await;
     let tombstone = ingest(&app, &other, other_context).await;
