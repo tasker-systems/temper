@@ -12,7 +12,7 @@
 //!   steps 1–3 refusals a [`ShapeLoad`] carries; the [`RefusalTeaching`] a refusal carries;
 //! - [`session`] — [`AskSession`], the one way an ask is validated: one request's asks against one
 //!   [`ShapeContext`], each shape's walk built once and one membership budget for them all, and
-//!   each shape's [`PathTeaching`] made once;
+//!   each shape's [`validate::PathTeaching`] made once;
 //! - [`mod@reference`] — the Rust reference evaluator the SQL is differential-tested against;
 //! - [`batch`] — the batch read's wire ([`AskRequest`], [`AskResponse`]) and the refusals a page
 //!   earns without its shape.
@@ -41,9 +41,9 @@ pub use batch::{AskOrder, AskRequest, AskResponse, AskedShape, OversizedArtifact
 pub use reference::matches;
 pub use session::AskSession;
 pub use validate::{
-    validate_ask_form, PathTeaching, RefusalTeaching, TeachingElision, ValidatedAsk,
-    MAX_ARTIFACT_PATH_DEPTH, MAX_ARTIFACT_PATH_SEGMENT_BYTES, MAX_ASK_PREDICATES, MAX_ASK_PROBES,
-    MAX_MEMBERSHIP_STEPS, MAX_TEACHING_BYTES,
+    validate_ask_form, RefusalTeaching, TeachingElision, ValidatedAsk, MAX_ARTIFACT_PATH_DEPTH,
+    MAX_ARTIFACT_PATH_SEGMENT_BYTES, MAX_ASK_PREDICATES, MAX_ASK_PROBES, MAX_MEMBERSHIP_STEPS,
+    MAX_TEACHING_BYTES,
 };
 pub use walk::{
     enumerate, is_scalar, reads_whole, resolve, within_schema_bound, AskOperator, AskablePath,

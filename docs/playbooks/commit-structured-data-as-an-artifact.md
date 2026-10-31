@@ -78,7 +78,8 @@ Keywords such as `$ref`, `allOf`, `anyOf`, `oneOf` and `format` are refused at d
 refusal lists what is allowed. A `const` and every `enum` member must be a scalar — a string of at
 most 256 bytes (JSON-escaped), a number, a boolean or `null` — and a shape's schema holds at most
 12,288 JSON values in all, at most 3,072 of them objects, counted with `default` and `examples`
-included. The declare request body is held to 512 KiB. Declaring is a
+included. The two HTTP declare routes hold the request body to 512 KiB; the MCP declare tool is bounded by the
+MCP server's own body limit. Declaring is a
 **separate act** from committing data — you never need to declare a shape to commit an artifact.
 The system persists your data whether or not a shape exists. `never_declared` is a first-class
 state, not a gate.

@@ -793,8 +793,9 @@ fn a_schema_at_both_caps_compiles() {
 
 /// Each synthetic admission profile in `MAX_SHAPE_NODES`'s doc compiles, and each fixture holds
 /// exactly the values and objects its row states, so a fixture that drifts from its row fails
-/// before it compiles. The table's first row, every live shape, is a production read with no
-/// fixed counts, so it has no fixture here. Bites a cap set below an ordinary shape.
+/// before it compiles. The table's first row, every live shape (at most 46 values and 13 objects, from a
+/// production read), is witnessed by `stored_shape_profiles_compile` in this file, so it has no
+/// fixture here. Bites a cap set below an ordinary shape.
 #[test]
 fn every_admission_profile_compiles() {
     let described = json!({ "type": "string", "description": "A field." });
@@ -1180,8 +1181,8 @@ fn the_refusal_names_the_accepted_schema_spellings() {
 fn the_refusal_names_the_value_rule() {
     let sentence = ShapeSchemaUncompilable.to_string();
     let clause = format!(
-        "const and enum members that are strings (at most {MAX_SHAPE_VALUE_STRING_BYTES} bytes, \
-         JSON-escaped), numbers, booleans or null"
+        "const and enum (each member a string of at most {MAX_SHAPE_VALUE_STRING_BYTES} bytes, \
+         JSON-escaped, a number, a boolean or null)"
     );
     assert!(sentence.contains(&clause), "{sentence}");
 }

@@ -32,8 +32,8 @@ use crate::types::query::PlanRefusal;
 ///
 /// **What it keeps, per shape:** the walk — the schema measured and read whole — built on the first
 /// ask that needs it; every path any ask has resolved; and the shape's
-/// [`PathTeaching`](super::PathTeaching), what every path refusal on it teaches beside its own
-/// bound. Paths hold the walk's facts borrowed from the schema, so a session copies none of the
+/// [`PathTeaching`](super::validate::PathTeaching), what every path refusal on it teaches beside
+/// its own bound. Paths hold the walk's facts borrowed from the schema, so a session copies none of the
 /// values the schema declares; the teaching holds only the paths it sends, at most
 /// `MAX_TEACHING_BYTES` of them. A shape row is immutable per id (an amendment mints a new id,
 /// §2.2), so none of it can go stale within a request.

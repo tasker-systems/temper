@@ -16,7 +16,7 @@
 //! `2026-10-27-a-shape-is-a-field-tree-design`, §1 and §2). [`ShapeSchemaUncompilable`]'s sentence
 //! teaches the vocabulary.
 //!
-//! **A `const` and every `enum` member is a scalar.** [`is_shape_value`] holds each to `null`, a
+//! **A `const` and every `enum` member is a scalar.** `is_shape_value` holds each to `null`, a
 //! boolean, a number, or a string of at most [`MAX_SHAPE_VALUE_STRING_BYTES`] JSON-escaped bytes;
 //! an object, an array or a longer string makes the schema uncompilable. `default` and `examples`
 //! stay free-form data: the compile counts them toward the budget but never reads them as a schema.
@@ -83,9 +83,9 @@ impl std::fmt::Display for ShapeSchemaUncompilable {
             "the shape's JSON Schema cannot be compiled: a shape is a field tree — a JSON Schema \
              2020-12 document using only type, properties, required, additionalProperties (true, \
              false or a schema), items (one schema), enum (at most {MAX_ENUM_ENTRIES} strings, or \
-             {MAX_MIXED_ENUM_ENTRIES} values of any other kind), const and enum members that are \
-             strings (at most {MAX_SHAPE_VALUE_STRING_BYTES} bytes, JSON-escaped), numbers, \
-             booleans or null, pattern (at most {MAX_PATTERN_SOURCE_BYTES} bytes of source, \
+             {MAX_MIXED_ENUM_ENTRIES} values of any other kind), const and enum (each member \
+             a string of at most {MAX_SHAPE_VALUE_STRING_BYTES} bytes, JSON-escaped, a number, a \
+             boolean or null), pattern (at most {MAX_PATTERN_SOURCE_BYTES} bytes of source, \
              compiling within {pattern_kib} KiB, at most {MAX_SHAPE_PATTERNS} in a shape, no \
              lookaround or backreferences), minLength, \
              maxLength, minItems, maxItems, minimum, maximum, title, description, $comment, \
@@ -156,7 +156,7 @@ const _: () = assert!(
 /// number or a string) and, for a string, at most [`MAX_SHAPE_VALUE_STRING_BYTES`] bytes
 /// JSON-escaped. The raw length is read first, which is free, and escaping only lengthens a string,
 /// so one past the cap raw is never serialized to be refused.
-pub fn is_shape_value(value: &Value) -> bool {
+fn is_shape_value(value: &Value) -> bool {
     match value {
         Value::String(text) => {
             text.len() <= MAX_SHAPE_VALUE_STRING_BYTES
@@ -346,7 +346,7 @@ pub fn within_node_budget(schema: &Value) -> bool {
 
 /// Whether the document is a field tree: only the allowed keywords, in schema positions, within the
 /// depth, `enum` and `pattern` caps, and with every `const` and `enum` member passing
-/// [`is_shape_value`].
+/// `is_shape_value`.
 ///
 /// A schema position is the root, a `properties` value, an `additionalProperties` that is an object
 /// or a boolean, or an `items` that is an object or a boolean. A boolean is a leaf. Values under
@@ -474,7 +474,7 @@ pub const MAX_PATTERN_DFA_BYTES: usize = 2 << 20;
 /// keyword outside the allowed vocabulary, a `$schema` or `$id` below the root, a `$schema` other
 /// than the bundled 2020-12 spelling (with or without a trailing `#`), a `properties` key or
 /// `required` entry past [`MAX_PROPERTY_NAME_BYTES`], a `const` or `enum` member
-/// [`is_shape_value`] refuses, or a depth, `enum`, `pattern` size or `pattern` count past its cap),
+/// `is_shape_value` refuses, or a depth, `enum`, `pattern` size or `pattern` count past its cap),
 /// is not valid for 2020-12 where the walk leaves a form to meta-validation, or has a pattern that
 /// compiles past [`MAX_PATTERN_BYTES`].
 pub fn compile(schema: &Value) -> Result<Validator, ShapeSchemaUncompilable> {

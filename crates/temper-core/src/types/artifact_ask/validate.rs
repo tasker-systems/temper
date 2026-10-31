@@ -162,26 +162,18 @@ pub struct RefusalTeaching {
 /// to clone: the teaching is shared.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathTeaching {
-    shape: ShapeId,
     teaching: Arc<RefusalTeaching>,
 }
 
 impl PathTeaching {
-    /// `teaching`, what `teaching` made of `shape`'s vocabulary, held with its paths' spare
-    /// capacity released, so what it holds is what it sends.
-    fn new(shape: ShapeId, mut teaching: RefusalTeaching) -> PathTeaching {
+    /// `teaching`, held with its paths' spare capacity released, so what it holds is what it sends.
+    fn new(mut teaching: RefusalTeaching) -> PathTeaching {
         if let Some(vocabulary) = teaching.vocabulary.as_mut() {
             vocabulary.paths.shrink_to_fit();
         }
         PathTeaching {
-            shape,
             teaching: Arc::new(teaching),
         }
-    }
-
-    /// The shape this teaches.
-    pub fn shape(&self) -> ShapeId {
-        self.shape
     }
 
     /// The teaching itself, with no `beyond_bound`.
@@ -915,19 +907,16 @@ fn refuse_paths(sorted: &Sorted<'_, '_>, walk: &mut ShapeWalk<'_>, errs: &mut Ve
 /// offered to [`teaching`] as an [`AskableView`], so the teaching copies only the paths it has
 /// first measured to fit, and `omitted_paths` still counts the rest.
 fn teach_paths(vocabulary: &Enumerated<Facts<'_>>, shape: ShapeId) -> PathTeaching {
-    PathTeaching::new(
+    PathTeaching::new(teaching(
+        vocabulary
+            .paths
+            .iter()
+            .map(|(path, facts)| AskableView::new(path, facts))
+            .collect(),
+        AskableView::into_askable,
+        vocabulary.truncated.clone(),
         shape,
-        teaching(
-            vocabulary
-                .paths
-                .iter()
-                .map(|(path, facts)| AskableView::new(path, facts))
-                .collect(),
-            AskableView::into_askable,
-            vocabulary.truncated.clone(),
-            shape,
-        ),
-    )
+    ))
 }
 
 /// The offending predicates' indices, and a teaching that describes each offending path once:

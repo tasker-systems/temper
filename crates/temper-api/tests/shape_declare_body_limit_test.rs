@@ -197,3 +197,79 @@ async fn listing_shapes_still_answers_on_the_shared_path(pool: PgPool) {
         assert_eq!(res.status(), StatusCode::OK, "{path}: the list GET");
     }
 }
+
+/// A small valid declare body with no credentials is refused on both declare paths with 401
+/// Unauthorized.
+///
+/// Both the tier's `require_auth` and the declare handler's own auth extractor refuse an
+/// unauthenticated request, so this does not witness which tier the routes are mounted in; that is
+/// `declaring_without_system_access_is_refused_on_both_paths`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn declaring_without_credentials_is_refused_on_both_paths(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (_profile, context, _token) = caller(&app).await;
+    let body = declare_body_of_len(1024);
+
+    for path in [
+        format!("/api/contexts/{context}/shapes"),
+        format!("/api/cognitive-maps/{L0_COGMAP}/shapes"),
+    ] {
+        let res = app
+            .client
+            .post(app.url(&path))
+            .header("content-type", "application/json")
+            .body(body.clone())
+            .send()
+            .await
+            .expect("post declare");
+
+        assert_eq!(
+            res.status(),
+            StatusCode::UNAUTHORIZED,
+            "{path}: without credentials the gated tier's auth must answer before the declare handler"
+        );
+    }
+}
+
+/// An authenticated caller whose standing is `denied` is refused on both declare paths with 403,
+/// by the gated tier's `require_system_access` before any handler runs.
+///
+/// Bites: mounting `shape_declare_routes` at a tier without `require_system_access`
+/// (`Tier::AuthOnly` or `Tier::Public`). Only the gated tier checks standing, and the declare
+/// handlers do not, so a mount outside it would let this caller through to a declare.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn declaring_without_system_access_is_refused_on_both_paths(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (profile, context, token) = caller(&app).await;
+    // The fixture approves its profile; return it to the standing a fresh principal is born in.
+    sqlx::query(
+        "INSERT INTO kb_principal_standing (profile_id, state) VALUES ($1, 'denied') \
+         ON CONFLICT (profile_id) DO UPDATE SET state = 'denied', updated = now()",
+    )
+    .bind(profile)
+    .execute(&app.pool)
+    .await
+    .expect("set standing to denied");
+    let body = declare_body_of_len(1024);
+
+    for path in [
+        format!("/api/contexts/{context}/shapes"),
+        format!("/api/cognitive-maps/{L0_COGMAP}/shapes"),
+    ] {
+        let res = app
+            .client
+            .post(app.url(&path))
+            .header("authorization", format!("Bearer {token}"))
+            .header("content-type", "application/json")
+            .body(body.clone())
+            .send()
+            .await
+            .expect("post declare");
+
+        assert_eq!(
+            res.status(),
+            StatusCode::FORBIDDEN,
+            "{path}: a principal without system access must be refused by the gated tier"
+        );
+    }
+}
