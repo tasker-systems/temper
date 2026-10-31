@@ -230,6 +230,14 @@ pub struct TeamChildRef {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TeamUpdateRequest {
+    // Display metadata only, on purpose (team DAG review L3). `update_team` checks only that the
+    // caller manages the team; it runs none of `create_team`'s checks. A `slug` here would bypass
+    // the reserved-prefix and uniqueness rules and could rename a team onto the gating slug; a
+    // `parents` field would be an attach-parent door (review L1: it needs manage on both teams,
+    // admin-only for the root and gating ancestors, and a roster review); an `auto_join_role`
+    // would open an everyone-pool without the admin gate. Each needs its own door with its own
+    // checks, not a field here. (Plain comment, not a doc comment, so it stays out of the API
+    // schema.)
     pub name: Option<String>,
     pub description: Option<String>,
 }

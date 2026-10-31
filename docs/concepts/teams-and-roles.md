@@ -45,8 +45,8 @@ Roles are a rank, and every membership change follows one rule:
   role.
 - **A system admin can make any change**, including repairing a team whose only owner has left —
   on every team except a personal one, which only its owner changes.
-  On the instance's gating team, only a system admin adds, invites, changes or removes another
-  member (any member may still leave it).
+  On the instance's gating team and on `temper-system`, only a system admin adds, invites,
+  changes or removes another member (any member may still leave it).
 
 Invitations follow the same rank: you can invite at any role up to your own, so an owner can
 invite a new owner. An invitation lasts only as long as whoever sent it could still send it. If

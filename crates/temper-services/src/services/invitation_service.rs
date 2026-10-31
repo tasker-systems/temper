@@ -77,8 +77,8 @@ fn mint_token() -> String {
 
 /// Create a pending invitation — the rank rule at invitation granularity (C16, R10): a manager
 /// of the team may offer a role up to their own (an owner can invite at `owner`, a maintainer up
-/// to `maintainer`), and a system admin any role; on the gating team only a system admin invites
-/// (R11). The offered role is not checked against any membership row: an invitation is
+/// to `maintainer`), and a system admin any role; on the gating team and temper-system only a
+/// system admin invites (R11). The offered role is not checked against any membership row: an invitation is
 /// email-keyed, and inviting a profile already on the team is allowed — their acceptance is a
 /// no-op reporting their actual role (P12). A second pending invite for the same
 /// `(team, email)` conflicts (partial unique index `idx_invitations_one_pending`).

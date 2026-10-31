@@ -26,7 +26,7 @@ from pydantic_core import to_jsonable_python
 
 class CreateInvitationRequest(BaseModel):
     """
-    Request body for `POST /api/teams/{id}/invite`.  `role` may be anything up to the inviter's own rank on the team — an owner can invite at `owner` — and on the gating team only a system admin invites (the team-role rank rule, C16/R10).
+    Request body for `POST /api/teams/{id}/invite`.  `role` may be anything up to the inviter's own rank on the team — an owner can invite at `owner` — and on the gating team or temper-system only a system admin invites (the team-role rank rule, C16/R10).
     """ # noqa: E501
     invited_email: StrictStr
     role: TeamRole

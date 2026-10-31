@@ -1,0 +1,27 @@
+title    = "temper-system is admin-only for attaching and roster acts, like the gating team; team parent links refuse cycles"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp", "cli-stdout", "clients"]
+status   = "signal-only"
+body = '''
+`temper-system` is every personal team's parent, so whatever is attached to it, and whoever governs
+its roster, reaches every profile. The gating team has been admin-only for those acts; the two are the
+same team only when an instance points `gating_team_slug` at `temper-system`. Now the root is
+admin-only whatever the gating team is (team DAG review G14). Migrations `20261112000000`,
+`20261112000010`.
+
+- Context share, unshare and reassign, and cognitive-map bind and unbind, whose target is
+  `temper-system`: `403` for anyone who is not a system admin. `context_reassign` refuses the same in
+  SQL.
+- `POST`/`PATCH`/`DELETE /api/teams/{temper-system}/members…` and invitations onto it: refused to a
+  non-admin owner or maintainer of it, as on the gating team (a member may still leave).
+- Connection reach whose target is `temper-system`: `403` for a non-admin. The gating team stays an
+  ordinary reach target.
+- `POST /api/teams` with a `parent`: the caller's role on the parent is re-read under the parent's
+  lock, so a concurrent demotion or soft-delete refuses the create (`403` / `404`).
+- The database refuses a `kb_teams_parents` link that would make a team its own ancestor. No API
+  writes one today.
+
+Who observes: a caller who is not a system admin and acts on `temper-system`. Release relevance:
+signal-only.
+'''

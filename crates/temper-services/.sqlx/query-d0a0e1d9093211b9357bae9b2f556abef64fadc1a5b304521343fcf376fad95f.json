@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kb_system_settings SET gating_team_slug = 'gate'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "d0a0e1d9093211b9357bae9b2f556abef64fadc1a5b304521343fcf376fad95f"
+}

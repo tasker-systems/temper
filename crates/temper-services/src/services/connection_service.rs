@@ -2122,8 +2122,13 @@ mod tests {
         .expect("provision");
 
         // The target IS the gating team, and the caller manages it — the exact principal the two
-        // sibling gates refuse.
-        let gating = seed_managed_team(&pool, "temper-system", owner).await;
+        // sibling gates refuse. A shared team, not `temper-system`: the root is refused to a
+        // non-admin for its own reason (G14, `reach_to_the_root_is_refused_to_a_non_admin`).
+        let gating = seed_managed_team(&pool, "gate", owner).await;
+        sqlx::query!("UPDATE kb_system_settings SET gating_team_slug = 'gate'")
+            .execute(&pool)
+            .await
+            .expect("point the gating slug at the shared team");
 
         // Both halves of "the exact principal the siblings refuse" must be true, or this test
         // pins nothing. A fixture where the gating slug went unconfigured, or where the caller
@@ -2162,6 +2167,40 @@ mod tests {
             reach_grant_exists(&pool, c.id, gating).await,
             "the grant must land; the gating team is an ordinary principal for reach"
         );
+    }
+
+    /// Team DAG review G14: the root is not an ordinary target. `temper-system` is every personal
+    /// team's parent, so a reach grant onto it hands the connection's data to every profile — the
+    /// grant the grant door's recipient bar refuses a delegate. Refused to a non-admin who manages
+    /// the root, with the gating team pointed elsewhere so the gating exemption is not in play.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn reach_to_the_root_is_refused_to_a_non_admin(pool: PgPool) {
+        let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
+            &req("Acme GitHub", Some(team)),
+        )
+        .await
+        .expect("provision");
+        let _gate = seed_team(&pool, "gate").await;
+        sqlx::query!("UPDATE kb_system_settings SET gating_team_slug = 'gate'")
+            .execute(&pool)
+            .await
+            .expect("point the gating slug away from the root");
+        let root = seed_managed_team(&pool, "temper-system", owner).await;
+
+        let err = svc::grant_reach(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
+            c.id,
+            root,
+            None,
+        )
+        .await
+        .expect_err("a non-admin may not grant reach to the root");
+        assert!(matches!(err, ApiError::Forbidden), "{err:?}");
+        assert!(!reach_grant_exists(&pool, c.id, root).await);
     }
 
     /// `kb_access_grants.principal_id` carries NO foreign key, so an unvalidated `team_id` would
