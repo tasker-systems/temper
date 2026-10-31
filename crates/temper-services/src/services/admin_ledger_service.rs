@@ -116,13 +116,28 @@ async fn readable_event_types(
     authed: &HumanPrincipal,
     subject: RefTarget,
 ) -> ApiResult<Vec<&'static str>> {
-    // Admin reads everything; one query, and the common admin path stops here.
+    // Admin reads everything; one query, and the common admin path stops here — except the grant
+    // history of personal space (task `01a191b4`), which an admin reads only as its owner would,
+    // through the `can_administer_grant` arm below. Erasure's records stay readable: erasure is the
+    // one act an admin performs on personal space.
     if crate::authz::Principal::Human(authed)
         .system_admin(pool)
         .await?
         .is_some()
     {
-        return Ok(ADMIN_EVENT_TYPES.to_vec());
+        if !access_service::subject_is_others_personal(pool, subject, authed.profile_id()).await? {
+            return Ok(ADMIN_EVENT_TYPES.to_vec());
+        }
+        let mut readable: Vec<&'static str> = ADMIN_EVENT_TYPES
+            .iter()
+            .copied()
+            .filter(|t| !matches!(*t, "grant_created" | "grant_revoked"))
+            .collect();
+        if access_service::can_administer_grant(pool, Principal::Human(authed), subject).await? {
+            readable.push("grant_created");
+            readable.push("grant_revoked");
+        }
+        return Ok(readable);
     }
 
     let mut readable = Vec::new();
@@ -238,7 +253,7 @@ pub async fn list_by_subject(
     // the fuller object just as well (verified: Bitmap Index Scan under enable_seqscan=off).
     let probe = serde_json::to_value([EventRef::subject(subject)])
         .map_err(|e| ApiError::Internal(format!("subject probe: {e}")))?;
-    fetch(pool, &types, Some(probe), None, limit, offset).await
+    fetch(pool, &types, Some(probe), None, limit, offset, None).await
 }
 
 /// "What did this admin do?"
@@ -295,6 +310,7 @@ pub async fn list_by_actor(
         Some(actor.uuid()),
         limit,
         offset,
+        (actor != caller).then(|| caller.uuid()),
     )
     .await
 }
@@ -320,6 +336,9 @@ async fn fetch(
     actor: Option<Uuid>,
     limit: i64,
     offset: i64,
+    // The auditing caller, when reading another actor's acts: grant rows on someone else's personal
+    // space (not the auditor's own) are left out. `None` for the caller's own history.
+    hide_personal_grants: Option<Uuid>,
 ) -> ApiResult<Vec<AdminLedgerEntry>> {
     // Compile-time-checked. The `$2::jsonb IS NULL OR …` / `$3::uuid IS NULL OR …` shape is a
     // NULL-passthrough parameter, not dynamic SQL: the statement text is a single static literal
@@ -343,6 +362,17 @@ async fn fetch(
             WHERE t.name = ANY($1)
               AND ($2::jsonb IS NULL OR e."references" @> $2::jsonb)
               AND ($3::uuid  IS NULL OR p.id = $3::uuid)
+              -- An audit of someone else's acts does not reach personal space (task `01a191b4`):
+              -- a grant whose subject is a personal context, or a resource homed in one, is its
+              -- owner's business. Only the grant pair names such a subject.
+              AND NOT ($6::uuid IS NOT NULL AND t.name IN ('grant_created', 'grant_revoked')
+                   AND EXISTS (
+                    SELECT 1 FROM jsonb_array_elements(e."references") r
+                     WHERE r->>'rel' = 'subject'
+                       AND ((r->'target'->>'kind' = 'kb_resources'
+                             AND resource_personal_owner((r->'target'->>'id')::uuid) <> $6)
+                         OR (r->'target'->>'kind' = 'kb_contexts'
+                             AND context_personal_owner((r->'target'->>'id')::uuid) <> $6))))
             ORDER BY e.occurred_at DESC, e.id DESC
             LIMIT $4 OFFSET $5"#,
         // The authorized set, NOT ADMIN_EVENT_TYPES. Binding the catalogue here would make the gate
@@ -352,6 +382,7 @@ async fn fetch(
         actor,
         limit,
         offset,
+        hide_personal_grants,
     )
     .fetch_all(pool)
     .await?;

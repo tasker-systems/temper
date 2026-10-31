@@ -4,7 +4,8 @@
 //!
 //! 1. **Who may register** — [`authorize`]: a system admin (under D11 a `kb_principal_governance`
 //!    grant), or the OWNER of the team that will own the machine. Two distinct authorities — a
-//!    governance grant and team ownership — either of which admits.
+//!    governance grant and team ownership — either of which admits, except that on someone
+//!    else's personal team only its owner does (task `01a191b4`; `authz/machine.rs`).
 //! 2. **What reach they may confer** — [`AuthorizedReach`]: a value that only this module can
 //!    construct. `apply_reach` takes it instead of raw specs, so reach cannot be applied
 //!    without having been authorized. The invariant is enforced by the type, not by a comment

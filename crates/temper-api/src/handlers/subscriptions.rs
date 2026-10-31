@@ -4,7 +4,8 @@
 //! family stays in `gated_routes`, apart from the admin group.
 //!
 //! **Authorization lives in the service, not here** — `subscription_service` resolves
-//! `SubscriptionAuthority` (owner/maintainer on the authoring team, or a system admin), and
+//! `SubscriptionAuthority` (owner/maintainer on the authoring team, or a system admin unless the
+//! team is someone else's personal team), and
 //! `create` additionally requires the authoring team to hold a `kb_access_grants` reach grant on
 //! the connection. As with connections, that check is load-bearing rather than
 //! defense-in-depth.
@@ -27,7 +28,7 @@ use temper_core::types::query_params::SubscriptionListQuery as ListQuery;
     post,
     operation_id = "create_subscription",
     summary = "Create a subscription",
-    description = "Declares that a team, context or cogmap wants the events a connection emits that match `selector`. Requires a system admin or an owner or maintainer of `authoring_team_id`, and, for every caller, that the authoring team holds read-reach on the connection. A context or cogmap subscriber must be linked to the authoring team; a team subscriber must be the authoring team itself. A selector that can never match the connection's registered webhook events is refused.",
+    description = "Declares that a team, context or cogmap wants the events a connection emits that match `selector`. Requires a system admin (not on someone else's personal team, nor for someone else's personal context as subscriber) or an owner or maintainer of `authoring_team_id`, and, for every caller, that the authoring team holds read-reach on the connection. A context or cogmap subscriber must be linked to the authoring team; a team subscriber must be the authoring team itself. A selector that can never match the connection's registered webhook events is refused.",
     path = "/api/subscriptions",
     tag = "Subscriptions",
     request_body = CreateSubscriptionRequest,
@@ -54,7 +55,7 @@ pub async fn create(
     get,
     operation_id = "list_subscriptions",
     summary = "List subscriptions",
-    description = "Lists the subscriptions the caller may manage, newest first. A system admin sees every subscription; any other caller sees only those whose authoring team they own or maintain. Revoked subscriptions are omitted unless `include_revoked` is set.",
+    description = "Lists the subscriptions the caller may manage, newest first. A system admin sees every subscription except those inside someone else's personal space; any other caller sees only those whose authoring team they own or maintain. Revoked subscriptions are omitted unless `include_revoked` is set.",
     path = "/api/subscriptions",
     tag = "Subscriptions",
     params(ListQuery),
@@ -80,7 +81,7 @@ pub async fn list(
     get,
     operation_id = "get_subscription",
     summary = "Get a subscription",
-    description = "Returns one subscription. Requires a system admin or an owner or maintainer of the subscription's authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
+    description = "Returns one subscription. Requires a system admin (not on someone else's personal team) or an owner or maintainer of the subscription's authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
     path = "/api/subscriptions/{id}",
     tag = "Subscriptions",
     params(("id" = Uuid, Path, description = "Subscription ID")),

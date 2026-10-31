@@ -28,7 +28,15 @@ impl ScopedAuthority for MachineRegistrationAuthority {
         team: Option<Uuid>,
     ) -> ApiResult<Self> {
         let caller = principal.profile_id();
-        if principal.system_admin(pool).await?.is_some() {
+        // The admin arm stops at a personal team (task `01a191b4`): a machine or connection owned by
+        // one is its owner's alone. A teamless machine stays admin-only (spec D2).
+        let personal = match team {
+            Some(team_id) => team_service::personal_of(pool, team_id)
+                .await?
+                .is_some_and(|owner| owner != caller),
+            None => false,
+        };
+        if !personal && principal.system_admin(pool).await?.is_some() {
             return Ok(MachineRegistrationAuthority::SystemAdmin);
         }
 
@@ -120,5 +128,74 @@ impl ScopedAuthority for MachineClientControlAuthority {
     /// `NotFound`, byte-identical to the missing-row refusal — see the type's doc.
     fn denial() -> ApiError {
         ApiError::NotFound(MACHINE_CLIENT_REFUSAL.to_string())
+    }
+}
+
+#[cfg(all(test, feature = "test-db"))]
+mod personal_space_tests {
+    //! Task 01a191b4: a system admin's arm stops at someone else's personal team, for machines and
+    //! connections (this authority) and for subscriptions (`SubscriptionAuthority`), and keeps the
+    //! admin's own personal team and every shared team.
+
+    use super::*;
+    use crate::authz::SubscriptionAuthority;
+    use temper_core::types::ids::ProfileId;
+
+    async fn person(pool: &PgPool, handle: &str) -> (ProfileId, Uuid) {
+        let id: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_profiles (handle, display_name) VALUES ($1, $1) RETURNING id",
+        )
+        .bind(handle)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let personal: Uuid = sqlx::query_scalar("SELECT id FROM kb_teams WHERE personal_of = $1")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        (ProfileId::from(id), personal)
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn the_admin_arm_stops_at_someone_elses_personal_team(pool: PgPool) {
+        let (admin, admins_own) = person(&pool, "admin").await;
+        let (_owner, theirs) = person(&pool, "owner").await;
+        crate::test_support::grant_governance(&pool, *admin).await;
+        let shared: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_teams (slug, name) VALUES ('acme', 'acme') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let p = || Principal::Bare(admin);
+
+        assert_eq!(
+            MachineRegistrationAuthority::resolve(&pool, p(), Some(theirs))
+                .await
+                .unwrap(),
+            MachineRegistrationAuthority::None
+        );
+        assert_eq!(
+            SubscriptionAuthority::resolve(&pool, p(), theirs)
+                .await
+                .unwrap(),
+            SubscriptionAuthority::None
+        );
+        for team in [Some(shared), Some(admins_own), None] {
+            assert_eq!(
+                MachineRegistrationAuthority::resolve(&pool, p(), team)
+                    .await
+                    .unwrap(),
+                MachineRegistrationAuthority::SystemAdmin,
+                "{team:?}"
+            );
+        }
+        assert_eq!(
+            SubscriptionAuthority::resolve(&pool, p(), shared)
+                .await
+                .unwrap(),
+            SubscriptionAuthority::SystemAdmin
+        );
     }
 }

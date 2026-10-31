@@ -671,6 +671,24 @@ async fn ensure_context_and_team_exist(
     Ok(())
 }
 
+/// Whether a context is someone else's personal space: owned by a profile other than `caller`, or by
+/// a personal team that is not `caller`'s. A system admin's arm does not reach it — only its owner
+/// acts on it, and erasure (task `01a191b4`). The SQL `context_personal_owner` is the one
+/// definition of whose personal space a context is; this calls it.
+pub(crate) async fn is_others_personal_context(
+    pool: &PgPool,
+    context_id: uuid::Uuid,
+    caller: ProfileId,
+) -> ApiResult<bool> {
+    Ok(sqlx::query_scalar!(
+        r#"SELECT COALESCE(context_personal_owner($1) <> $2, false) AS "p!: bool""#,
+        context_id,
+        *caller,
+    )
+    .fetch_one(pool)
+    .await?)
+}
+
 /// Does `caller` administer the context — i.e. own it, or manage its owning team?
 ///
 /// A context is owned by `(owner_table, owner_id)`: a profile owns it directly (caller ==
@@ -754,7 +772,9 @@ fn manage_capable_roles() -> Vec<String> {
 ///    restates `can_manage`'s `Owner | Maintainer` split in SQL; the role list is a bound
 ///    parameter derived from that one Rust function, so a role added there and forgotten here is
 ///    structurally impossible to get out of sync (it just wouldn't be in the bound array);
-/// 3. be a system admin (`access_service::is_system_admin`).
+/// 3. be a system admin (`access_service::is_system_admin`), for any context but a personal one —
+///    a system admin sees that a personal team exists and its roster, nothing of its contexts
+///    (task `01a191b4`).
 ///
 /// **Why arm 3 belongs here.** This is an admin-axis listing — the same category as
 /// `subscription_service::list`, which already ORs a system-admin bool into its own visibility
@@ -817,7 +837,7 @@ pub async fn list_retired_administered(
                  WHERE rh.anchor_table = 'kb_contexts' AND rh.anchor_id = c.id) AS "resource_count!"
           FROM kb_contexts c
          WHERE NOT c.is_active
-           AND ( $3
+           AND ( ($3 AND COALESCE(context_personal_owner(c.id) = $1, true))
                  OR (c.owner_table = 'kb_profiles' AND c.owner_id = $1)
                  OR (
                    c.owner_table = 'kb_teams'
@@ -877,7 +897,7 @@ pub async fn get_retired_administered(
           FROM kb_contexts c
          WHERE c.id = $2
            AND NOT c.is_active
-           AND ( $4
+           AND ( ($4 AND COALESCE(context_personal_owner(c.id) = $1, true))
                  OR (c.owner_table = 'kb_profiles' AND c.owner_id = $1)
                  OR (
                    c.owner_table = 'kb_teams'
@@ -2569,8 +2589,17 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn sql_guard_allows_system_admin_rename_directly(pool: PgPool) {
         let (admin, _member, _gating, _own_ctx) = seed_admin_team_context(&pool).await;
-        let alice = mk_profile_ent(&pool, "alice").await;
-        let ctx = mk_named_personal_context(&pool, "private", "Private", alice).await;
+        // A shared team's context: someone else's personal context is outside the bypass (task
+        // `01a191b4`, pinned by `a_system_admin_does_not_act_on_or_list_someone_elses_personal_context`).
+        let elsewhere = mk_team(&pool, "elsewhere").await;
+        let ctx: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_contexts (slug, name, owner_table, owner_id) \
+             VALUES ('private', 'Private', 'kb_teams', $1) RETURNING id",
+        )
+        .bind(elsewhere)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert!(
             !context_visible(&pool, *admin, ctx).await.unwrap(),
             "fixture precondition: the admin must NOT be able to read this context"
@@ -3061,7 +3090,11 @@ mod tests {
         // other two retired-listing tests do not build, and the one this arm needs.
         crate::test_support::grant_governance(&pool, *root).await;
 
-        let ctx = mk_personal_context(&pool, "priv", owner).await;
+        // A team's context: personal space is outside the admin arm (task `01a191b4`, pinned by
+        // `a_system_admin_does_not_act_on_or_list_someone_elses_personal_context` below).
+        let acme = mk_team(&pool, "acme").await;
+        add_member(&pool, acme, owner, "owner").await;
+        let ctx = mk_team_context(&pool, "priv", acme).await;
         mk_homed_resource(&pool, ctx, owner).await;
 
         retire(
@@ -3096,5 +3129,101 @@ mod tests {
         .expect("a system admin can show a retired context they neither own nor manage");
         assert_eq!(shown.id, ContextId::from(ctx));
         assert!(shown.retired, "the shown row must say retired");
+    }
+
+    /// Task 01a191b4: a system admin does not act on someone else's personal context — a profile's
+    /// own, or one their personal team owns — nor list it once retired. Every door refuses: rename,
+    /// retire, restore, share, unshare and reassign through the services, and the plpgsql twin
+    /// (`context_rename`) on its own. Its owner keeps every one of them.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_system_admin_does_not_act_on_or_list_someone_elses_personal_context(pool: PgPool) {
+        let (admin, _member, _gating, _admin_ctx) = seed_admin_team_context(&pool).await;
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let acme = mk_team(&pool, "acme").await;
+        add_member(&pool, acme, admin, "owner").await;
+        let mine = mk_personal_context(&pool, "journal", alice).await;
+        let personal_team: Uuid =
+            sqlx::query_scalar("SELECT id FROM kb_teams WHERE personal_of = $1")
+                .bind(*alice)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let theirs = mk_team_context(&pool, "drafts", personal_team).await;
+
+        let as_admin = crate::test_support::human_principal_for(&pool, admin.uuid()).await;
+        let admin_caller = crate::test_support::caller_for(&pool, admin.uuid()).await;
+        for ctx in [mine, theirs] {
+            assert!(is_others_personal_context(&pool, ctx, admin).await.unwrap());
+            let err = share(
+                &pool,
+                &as_admin,
+                ctx,
+                &ShareContextRequest { team_id: acme },
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(err, ApiError::Forbidden), "share: {err:?}");
+            let err = reassign(&pool, &as_admin, ctx, acme).await.unwrap_err();
+            assert!(matches!(err, ApiError::Forbidden), "reassign: {err:?}");
+            let err = rename(&pool, &admin_caller, ctx, "Renamed")
+                .await
+                .unwrap_err();
+            assert!(matches!(err, ApiError::NotFound(_)), "rename: {err:?}");
+            let err = retire(&pool, &admin_caller, ctx).await.unwrap_err();
+            assert!(matches!(err, ApiError::NotFound(_)), "retire: {err:?}");
+        }
+
+        // The plpgsql twin refuses on its own: the admin's emitter is no bypass on personal space.
+        let emitter: Uuid =
+            sqlx::query_scalar("SELECT id FROM kb_entities WHERE profile_id = $1 LIMIT 1")
+                .bind(*admin)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let err = sqlx::query_scalar::<_, Uuid>("SELECT context_rename($1, $2)")
+            .bind(serde_json::json!({
+                "context_id": mine, "from_name": "journal", "to_name": "x",
+                "from_slug": "journal", "to_slug": "x"
+            }))
+            .bind(emitter)
+            .fetch_one(&pool)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.as_database_error().and_then(|d| d.code()).as_deref(),
+            Some("42501"),
+            "{err}"
+        );
+
+        // Its owner retires it; the admin neither restores it nor sees it listed.
+        let alice_caller = crate::test_support::caller_for(&pool, alice.uuid()).await;
+        retire(&pool, &alice_caller, mine)
+            .await
+            .expect("the owner retires");
+        let err = restore(&pool, &admin_caller, mine).await.unwrap_err();
+        assert!(matches!(err, ApiError::NotFound(_)), "restore: {err:?}");
+        let listed = list_retired_administered(&pool, &admin_caller)
+            .await
+            .unwrap();
+        assert!(
+            listed.iter().all(|row| row.id != ContextId::from(mine)),
+            "{listed:?}"
+        );
+        let err = get_retired_administered(&pool, &admin_caller, ContextId::from(mine))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ApiError::NotFound(_)), "get: {err:?}");
+
+        // The owner keeps every act.
+        restore(&pool, &alice_caller, mine)
+            .await
+            .expect("the owner restores");
+        rename(&pool, &alice_caller, mine, "Journal")
+            .await
+            .expect("the owner renames");
+        assert_eq!(
+            owner_of_context(&pool, mine).await,
+            ("kb_profiles".to_string(), *alice)
+        );
     }
 }

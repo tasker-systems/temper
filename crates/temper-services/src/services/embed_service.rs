@@ -108,6 +108,52 @@ pub enum ReembedScope {
     All,
 }
 
+/// Whether a re-embed scope aims at someone else's personal space — one resource homed in, or one
+/// context that is, a profile's or a personal team's other than the operator's. A system admin
+/// does not aim at another's personal space (task `01a191b4`); the whole-index sweep still
+/// re-derives its embeddings, so its owner's search keeps working, but does not name it (see
+/// [`unnamed_personal`]).
+pub async fn scope_is_personal(
+    pool: &PgPool,
+    admin: &SystemAdmin,
+    scope: ReembedScope,
+) -> ApiResult<bool> {
+    let operator = admin.actor();
+    Ok(match scope {
+        ReembedScope::Resource(id) => {
+            sqlx::query_scalar!(
+                r#"SELECT COALESCE(resource_personal_owner($1) <> $2, false) AS "p!: bool""#,
+                id,
+                *operator,
+            )
+            .fetch_one(pool)
+            .await?
+        }
+        ReembedScope::Context(id) => {
+            crate::services::context_service::is_others_personal_context(pool, id, operator).await?
+        }
+        ReembedScope::All => false,
+    })
+}
+
+/// The ids of `enqueued` that are not homed in someone else's personal space, in order. The sweep
+/// enqueues personal resources like any others; the operator's receipt names only the rest (task
+/// `01a191b4`).
+pub async fn unnamed_personal(
+    pool: &PgPool,
+    admin: &SystemAdmin,
+    enqueued: Vec<Uuid>,
+) -> ApiResult<Vec<Uuid>> {
+    Ok(sqlx::query_scalar!(
+        r#"SELECT id AS "id!" FROM unnest($1::uuid[]) WITH ORDINALITY AS u(id, n)
+            WHERE COALESCE(resource_personal_owner(id) = $2, true) ORDER BY n"#,
+        &enqueued,
+        *admin.actor(),
+    )
+    .fetch_all(pool)
+    .await?)
+}
+
 /// Enqueue embed jobs for resources holding **stale** chunks in `scope`, up to `limit` resources.
 ///
 /// This is the *trigger* for the re-embed; the drain (`dispatch_tick`, running every minute) is the

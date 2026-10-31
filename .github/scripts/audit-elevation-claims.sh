@@ -418,7 +418,8 @@ claim crates/temper-services/src/services/access_service.rs 9 is_system_admin
 claim crates/temper-services/src/services/cogmap_service.rs 2 two_sided
 claim crates/temper-services/src/services/admin_directory_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/connection_service.rs 11 connection
-claim crates/temper-services/src/services/context_service.rs 15 context_admin
+claim crates/temper-services/src/services/context_service.rs 18 context_admin
+claim crates/temper-services/src/services/embed_service.rs 1 -
 claim crates/temper-services/src/services/erasure_retention_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/erasure_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/resource_erasure_service.rs 2 is_system_admin
@@ -433,14 +434,14 @@ claim crates/temper-services/src/services/subscription_test_support.rs 1 subscri
 claim crates/temper-services/src/services/team_service.rs 25 require_manage_on_team,can_manage,team_membership,is_system_admin
 gate audit_gate 021f87ca4bed
 gate connection 586029b73345
-gate context_admin bce45d31795d
-gate grant 2aa83e237c3e
-gate machine 816fb9e085d6
+gate context_admin 36e336482872
+gate grant 8fca715c38c3
+gate machine b2a33b88119a
 gate reconcile_regime 76ead78c03ac
 gate read_gates 6a6ce4847fbc
-gate ledger_subject 69c2a61e2964
-gate subscription 81f65a7118cf
-gate two_sided 0d0ea9e79fd1
+gate ledger_subject 89ab4129fe64
+gate subscription 2a4315472b67
+gate two_sided c54345d313d3
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e

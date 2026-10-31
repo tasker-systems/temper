@@ -4775,15 +4775,20 @@ impl Backend for DbBackend {
             .into_iter()
             .map(|row| row.id)
             .collect(),
+            // Personal space is enumerated only for its owner (task `01a191b4`): another person's
+            // personal resources would come back as named `denied` rows, telling the operator what
+            // exists there. The deployment-wide arm otherwise rides no visibility at all.
             ReblockScope::All => sqlx::query!(
                 r#"SELECT r.id FROM kb_resources r
                          WHERE r.is_active
                            AND r.ingest_state = 'complete'
                            AND ($1::uuid IS NULL OR r.id > $1)
+                           AND COALESCE(resource_personal_owner(r.id) = $3, true)
                          ORDER BY r.id
                          LIMIT $2"#,
                 cmd.after_id,
                 cmd.limit,
+                *self.profile_id,
             )
             .fetch_all(&self.pool)
             .await

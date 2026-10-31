@@ -325,6 +325,22 @@ async fn an_admin_grants_to_any_live_team_and_no_dangling_one(pool: PgPool) {
     let admin = person(&pool, "rb-admin").await;
     test_support::approved_admin(&pool, admin).await;
     let a = test_support::human_principal_for(&pool, admin).await;
+    // Rehome the resource into a shared team's context: an admin's arm does not reach someone
+    // else's personal space (task `01a191b4`, `personal_space_admin_test`).
+    let shared: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name) \
+         VALUES (uuid_generate_v7(), 'kb_teams', $1, 'rb-shared', 'rb-shared') RETURNING id",
+    )
+    .bind(f.umbrella)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE kb_resource_homes SET anchor_id = $2 WHERE resource_id = $1")
+        .bind(f.resource)
+        .bind(shared)
+        .execute(&pool)
+        .await
+        .unwrap();
 
     access_service::grant_capability(&pool, &a, &grant(f.resource, "kb_teams", f.unrelated))
         .await
