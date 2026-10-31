@@ -243,16 +243,22 @@ impl SchemaVerdict {
 
 /// Step 3's decision, the one every door that decides whether a schema can be asked shares:
 /// measure the schema against the walk's byte bound ([`within_schema_bound`], which reads no
-/// further than the bound), and only within it compile through the no-fetch constructor — on the
-/// blocking pool, under a compile permit. The schema is copied for the blocking task only once it
-/// is known to be within the bound and a permit is held, so the copy is at most 256 KiB and no
-/// request waiting for a permit holds one.
+/// further than the bound), then against the parsed-size budget
+/// ([`shape_schema::within_node_budget`], which reads no further than its caps), and only within
+/// both compile through the no-fetch constructor — on the blocking pool, under a compile permit.
+/// The schema is copied for the blocking task only once it is known to be within both and a
+/// permit is held, so no request waiting for a permit holds a copy. The budget is counted here,
+/// before the permit, because the permit is shared with declare and ask loads: a schema past the
+/// budget is `Uncompilable` without taking one, without the copy and without a compile.
 ///
 /// # Errors
 /// Only if the permits are closed or the blocking task cannot be joined.
 pub async fn judge(schema: &Value) -> ApiResult<SchemaVerdict> {
     if !within_schema_bound(schema) {
         return Ok(SchemaVerdict::TooLarge);
+    }
+    if !shape_schema::within_node_budget(schema) {
+        return Ok(SchemaVerdict::Uncompilable);
     }
     with_schema_off_the_executor(schema, |schema| {
         if shape_schema::compile(schema).is_ok() {

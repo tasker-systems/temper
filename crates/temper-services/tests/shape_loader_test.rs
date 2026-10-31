@@ -44,6 +44,9 @@ use temper_substrate::payloads::{AnchorRef, EnforcementMode, KindOwner};
 use temper_substrate::readback;
 use temper_substrate::scenario::bootseed;
 use temper_substrate::shape_schema::test_support::compiles_tagged;
+use temper_substrate::shape_schema::{
+    count_up_to, ShapeSchemaUncompilable, MAX_SHAPE_NODES, MAX_SHAPE_OBJECTS,
+};
 use temper_substrate::writes::{self, CreateParams, DeclareShapeParams};
 use uuid::Uuid;
 
@@ -224,6 +227,26 @@ fn patterns_past_the_bound(tag: &str) -> serde_json::Value {
     assert!(
         !within_schema_bound(&schema),
         "the fixture is past the bound"
+    );
+    schema
+}
+
+/// A schema within the walk's byte bound but past the parsed-size budget, tagged with `tag`: the
+/// root, its `$comment`, an `examples` array and `MAX_SHAPE_NODES - 2` zeros are
+/// `MAX_SHAPE_NODES + 1` JSON values. The zeros are two bytes each, so the document is about 25 KB
+/// against the 256 KiB byte bound, and the earlier byte check lets it through to the budget.
+fn nodes_past_the_budget(tag: &str) -> serde_json::Value {
+    let schema = json!({
+        "$comment": tag,
+        "examples": vec![0; MAX_SHAPE_NODES - 2],
+    });
+    assert!(
+        within_schema_bound(&schema),
+        "the fixture is within the byte bound"
+    );
+    assert!(
+        count_up_to(&schema, MAX_SHAPE_NODES, MAX_SHAPE_OBJECTS).over,
+        "the fixture is past the node cap"
     );
     schema
 }
@@ -707,6 +730,96 @@ async fn declaring_a_schema_past_the_byte_bound_is_refused_before_it_compiles(po
         load_one(&pool, w.owner, within).await.unwrap(),
         ShapeLoad::Loaded(_)
     ));
+}
+
+// ── The parsed-size budget comes before the permit and the compile ───────────────────────────
+
+/// A stored schema within the byte bound but past the parsed-size budget is `Uncompilable` at the
+/// load and never compiled: the budget is counted in `shape_loader::judge`, before the permit and
+/// the copy. Bites removing the `within_node_budget` return from `judge`: the schema is copied,
+/// takes a permit and reaches `shape_schema::compile`, which refuses it but records it first, so
+/// the count moves.
+#[sqlx::test(migrations = "../../migrations")]
+async fn a_schema_past_the_budget_is_judged_uncompilable_without_a_compile(pool: PgPool) {
+    let w = seed_world(&pool, "loader-past-the-budget").await;
+    let tag = fresh_tag();
+    let id = store(&pool, &w, "measurement", &nodes_past_the_budget(&tag)).await;
+
+    assert_eq!(
+        load_one(&pool, w.owner, id).await.unwrap(),
+        ShapeLoad::Uncompilable
+    );
+    assert_eq!(
+        compiles_tagged(&tag),
+        0,
+        "nothing compiled a schema past the budget"
+    );
+}
+
+/// A stored shape past the parsed-size budget is asked `shape_schema_uncompilable` with the
+/// uncompilable sentence, not the byte-bound one: the schema is within the byte bound, so the
+/// refusal says it does not compile. Bites the budget check answering `TooLarge`: the refusal
+/// would name the byte bound.
+#[sqlx::test(migrations = "../../migrations")]
+async fn a_stored_shape_past_the_budget_is_asked_uncompilable_not_too_large(pool: PgPool) {
+    let w = seed_world(&pool, "loader-ask-past-the-budget").await;
+    let tag = fresh_tag();
+    let id = store(&pool, &w, "measurement", &nodes_past_the_budget(&tag)).await;
+    let uncompilable = ShapeLoad::Uncompilable
+        .loaded()
+        .expect_err("an uncompilable schema is refused");
+
+    let refusals = refusals_for(&pool, w.owner, id).await;
+    assert_eq!(refusals, vec![uncompilable]);
+    assert_eq!(refusals[0].reason, RefusalReason::ShapeSchemaUncompilable);
+    assert_ne!(
+        refusals[0].detail,
+        ShapeLoad::SchemaTooLarge.loaded().unwrap_err().detail,
+        "the schema is within the byte bound"
+    );
+    assert_eq!(compiles_tagged(&tag), 0, "the ask did not compile it");
+}
+
+/// Declare refuses a schema past the parsed-size budget with the compile step's fixed sentence,
+/// which names the budget, and writes no row; the schema is never compiled. Bites removing the
+/// `within_node_budget` return from `judge`: the count moves.
+#[sqlx::test(migrations = "../../migrations")]
+async fn declaring_a_schema_past_the_budget_is_refused_naming_the_budget_before_it_compiles(
+    pool: PgPool,
+) {
+    let w = seed_world(&pool, "declare-past-the-budget").await;
+    let tag = fresh_tag();
+    let oversized = nodes_past_the_budget(&tag);
+
+    let err = shape_service::declare_shape(
+        &pool,
+        DeclareShapeServiceParams {
+            home: AnchorRef::context(ContextId::from(w.context)),
+            kind: "measurement",
+            kind_owner: None,
+            schema: &oversized,
+            enforcement: EnforcementMode::Advisory,
+            principal: w.owner,
+            emitter: w.emitter,
+        },
+    )
+    .await
+    .expect_err("a schema past the budget is refused at declare");
+    let message = match err {
+        ApiError::DataArtifactRefusal(message) => message,
+        other => panic!("the refusal must be the typed data-artifact refusal, got {other:?}"),
+    };
+    assert_eq!(message, ShapeSchemaUncompilable.to_string());
+    assert!(
+        message.contains("holding at most 12288 JSON values in all"),
+        "the refusal names the budget: {message}"
+    );
+    assert_eq!(compiles_tagged(&tag), 0, "declare did not compile it");
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_data_artifact_shapes")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0, "a refused declare writes no row");
 }
 
 // ── A shape read many times is compiled once ────────────────────────────────────────────────
