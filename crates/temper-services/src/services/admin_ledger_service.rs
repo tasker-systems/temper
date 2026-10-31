@@ -154,8 +154,8 @@ async fn readable_event_types(
 
     // team_membership_changed → mirrors the membership WRITE gate (team-role rank spec C12, R5),
     // by CALLING it: `MembershipAuthority::resolve` over this team, admitted when it manages the
-    // team. That is a manager of THIS team and never of its parent (C13), and on the gating team
-    // nobody but a system admin (R11) — who returned above. Being able to leave a team yourself
+    // team. That is a manager of THIS team and never of its parent (C13), and on the gating team and
+    // temper-system nobody but a system admin (R11) — who returned above. Being able to leave a team yourself
     // (`SelfOnly`) does not make you a reader, and the member acted on gets no arm at all: a
     // record names them only as the `principal` reference, which `list_by_subject` never matches
     // (`rel` is pinned to `subject`). Their own self-acts (a leave, a self-lowering) reach them on

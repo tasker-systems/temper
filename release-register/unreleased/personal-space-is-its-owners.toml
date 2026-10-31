@@ -7,7 +7,7 @@ body = '''
 Extends the personal-team rule to everything inside someone's personal space: a context owned by a
 profile or by a personal team, a resource homed in one, and the machines, connections and
 subscriptions a personal team owns. A system admin's arm stops there; only erasure still acts on it
-without its owner. An admin's own personal space is unaffected. Migration `20261111000000`.
+without its owner. An admin's own personal space is unaffected. Migration `20261113000000`.
 
 - Context rename, retire, restore, share, unshare and reassign on someone else's personal context:
   `403` for a system admin, as for anyone else who does not administer it. The database refuses the

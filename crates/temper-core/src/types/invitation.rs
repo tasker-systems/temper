@@ -38,7 +38,8 @@ pub enum InvitationStatus {
 ///
 /// Constraints:
 /// - `role` is at most the inviter's own role on the team — an owner can invite at `owner` —
-///   and on the gating team only a system admin invites (the team-role rank rule)
+///   and on the gating team or temper-system only a system admin invites (the team-role rank
+///   rule)
 /// - One *live pending* invite per email per team (declined/expired/revoked history coexists)
 /// - 7-day default expiry, checked lazily at acceptance time; a lapsed-but-unswept pending
 ///   row is swept to `expired` when the same email is re-invited, so re-invite is never blocked
@@ -127,8 +128,8 @@ pub struct PendingInvitationCounts {
 /// Request body for `POST /api/teams/{id}/invite`.
 ///
 /// `role` may be anything up to the inviter's own rank on the team — an owner can invite at
-/// `owner` — and on the gating team only a system admin invites (the team-role rank rule,
-/// C16/R10).
+/// `owner` — and on the gating team or temper-system only a system admin invites (the team-role
+/// rank rule, C16/R10).
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "invitation.ts"))]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]

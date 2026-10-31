@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT is_active, slug, personal_of FROM kb_teams WHERE id = $1",
+  "query": "SELECT is_active, personal_of FROM kb_teams WHERE id = $1",
   "describe": {
     "columns": [
       {
@@ -10,11 +10,6 @@
       },
       {
         "ordinal": 1,
-        "name": "slug",
-        "type_info": "Text"
-      },
-      {
-        "ordinal": 2,
         "name": "personal_of",
         "type_info": "Uuid"
       }
@@ -26,9 +21,8 @@
     },
     "nullable": [
       false,
-      false,
       true
     ]
   },
-  "hash": "85ae3ab4d05c5237d73a3b8e083a37f00a6715744361c5a82157964b6f963756"
+  "hash": "a030f68a72056189838d99e46115dcc5e0d0f40f6bc8b03e6c46926fc833ab07"
 }

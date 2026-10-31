@@ -306,18 +306,8 @@ pub async fn reassign_team_resources(
         Some(role) if can_manage(role) => {}
         _ => return Err(ApiError::Forbidden),
     }
-    let root_or_gating = sqlx::query_scalar!(
-        r#"SELECT EXISTS (
-             SELECT 1 FROM kb_teams t
-              WHERE t.id = $1
-                AND (t.slug = 'temper-system'
-                     OR t.slug IS NOT DISTINCT FROM
-                        (SELECT s.gating_team_slug FROM kb_system_settings s WHERE s.id = 1)))
-           AS "e!: bool""#,
-        team_id,
-    )
-    .fetch_one(pool)
-    .await?;
+    let root_or_gating =
+        crate::services::access_service::is_root_or_gating_team(pool, team_id).await?;
     if root_or_gating {
         return Err(ApiError::Forbidden);
     }

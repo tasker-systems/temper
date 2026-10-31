@@ -19,7 +19,8 @@
 -- the Rust gate's rule since 20261110000000, which its admin bypass skipped.
 --
 -- Erasure is untouched: the person act and resource erasure never call these four functions.
--- Bodies are carried verbatim from 20261110000100 (a soft-deleted team confers nothing) apart from
+-- Bodies are carried verbatim from 20261110000100 (a soft-deleted team confers nothing), and
+-- context_reassign's from 20261112000000 (only an admin transfers into temper-system), apart from
 -- those lines.
 
 -- Personal space is a PERSON's. A machine client's or a connection's agent profile is not one:
@@ -119,7 +120,7 @@ BEGIN
               USING ERRCODE = '42501';
     END IF;
 
-    -- The admin arm stops at someone else's personal space (20261111000000): only its owner acts
+    -- The admin arm stops at someone else's personal space (20261113000000): only its owner acts
     -- on it, through the ordinary arm below.
     IF NOT is_system_admin(v_actor)
        OR COALESCE(context_personal_owner(v_context) <> v_actor, false) THEN
@@ -183,7 +184,7 @@ BEGIN
               USING ERRCODE = '42501';
     END IF;
 
-    -- The admin arm stops at someone else's personal space (20261111000000): only its owner acts
+    -- The admin arm stops at someone else's personal space (20261113000000): only its owner acts
     -- on it, through the ordinary arm below.
     IF NOT is_system_admin(v_actor)
        OR COALESCE(context_personal_owner(v_context) <> v_actor, false) THEN
@@ -267,7 +268,7 @@ BEGIN
               USING ERRCODE = '42501';
     END IF;
 
-    -- The admin arm stops at someone else's personal space (20261111000000): only its owner acts
+    -- The admin arm stops at someone else's personal space (20261113000000): only its owner acts
     -- on it, through the ordinary arm below.
     IF NOT is_system_admin(v_actor)
        OR COALESCE(context_personal_owner(v_context) <> v_actor, false) THEN
@@ -352,11 +353,13 @@ BEGIN
               USING ERRCODE = '42501';
     END IF;
 
-    -- The admin arm stops at someone else's personal space (20261111000000): only its owner acts
+    -- The admin arm stops at someone else's personal space (20261113000000): only its owner acts
     -- on it, through the ordinary arm below.
     IF NOT is_system_admin(v_actor)
        OR COALESCE(context_personal_owner(v_context) <> v_actor, false) THEN
-        -- Target-team side: must be a team, non-gating, and the actor owner/maintainer on it.
+        -- Target-team side: must be a team, neither the gating team nor the root, and the actor
+        -- owner/maintainer on it. The root (temper-system) reaches every profile, as the gating
+        -- team does, and the two are different teams unless an instance makes them one (G14).
         IF v_to_table IS DISTINCT FROM 'kb_teams' THEN
             RAISE EXCEPTION 'context_reassign: transfer target must be a team'
                   USING ERRCODE = '42501';
@@ -365,6 +368,10 @@ BEGIN
                      JOIN kb_system_settings s ON t.slug = s.gating_team_slug
                     WHERE t.id = v_to_id) THEN
             RAISE EXCEPTION 'context_reassign: cannot transfer into the gating team'
+                  USING ERRCODE = '42501';
+        END IF;
+        IF EXISTS (SELECT 1 FROM kb_teams t WHERE t.id = v_to_id AND t.slug = 'temper-system') THEN
+            RAISE EXCEPTION 'context_reassign: cannot transfer into temper-system'
                   USING ERRCODE = '42501';
         END IF;
         IF NOT EXISTS (SELECT 1 FROM kb_team_members tm
@@ -416,7 +423,7 @@ END;
 $function$;
 
 SELECT declare_migration(
-    20261111000000,
+    20261113000000,
     'additive',
     'Adds profile_is_person, context_personal_owner, context_is_personal, resource_personal_owner and '
     'resource_is_personal, and replaces context_retire, context_restore, '

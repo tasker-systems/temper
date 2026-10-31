@@ -416,7 +416,7 @@ async fn nothing_is_written_onto_a_dead_team(pool: PgPool) {
     );
 
     // A context on bob's live team: a system admin's arm does not reach someone else's personal
-    // context (20261111000000), so a personal one would be refused before the dead-team check.
+    // context (20261113000000), so a personal one would be refused before the dead-team check.
     let bobs: Uuid = sqlx::query_scalar(
         "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
          VALUES ('kb_teams', $1, 'sd-bobs', 'sd-bobs') RETURNING id",

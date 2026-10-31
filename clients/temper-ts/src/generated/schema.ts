@@ -570,7 +570,7 @@ export interface paths {
         };
         /**
          * Read the admin ledger
-         * @description Returns a page of recorded administrative acts, newest first, on exactly one axis. `subject` (`<kind>:<uuid>`, e.g. `kb_resources:<uuid>`) returns the acts performed on that subject, limited to the act families the caller may read about it: a system admin reads all of them except grant acts on someone else's personal context or a resource homed in one, a caller who may administer grants on the subject reads its grant acts, and an owner or maintainer of a team (`kb_teams:<uuid>`) reads that team's membership changes and the linking or detaching of its child teams (on the gating team, only a system admin does). `actor` returns the acts a profile performed: any caller may read their own, and only a system admin may read another's, without the grant acts that fall in someone else's personal space. A read the caller is not allowed is answered 404, not 403, so a refusal reveals nothing about the subject. `epoch` is when recording began; acts before it were not recorded. `limit` defaults to 50 and is capped at 200.
+         * @description Returns a page of recorded administrative acts, newest first, on exactly one axis. `subject` (`<kind>:<uuid>`, e.g. `kb_resources:<uuid>`) returns the acts performed on that subject, limited to the act families the caller may read about it: a system admin reads all of them, a caller who may administer grants on the subject reads its grant acts, and an owner or maintainer of a team (`kb_teams:<uuid>`) reads that team's membership changes and the linking or detaching of its child teams (on the gating team and temper-system, only a system admin does). `actor` returns the acts a profile performed: any caller may read their own, and only a system admin may read another's. A read the caller is not allowed is answered 404, not 403, so a refusal reveals nothing about the subject. `epoch` is when recording began; acts before it were not recorded. `limit` defaults to 50 and is capped at 200.
          */
         get: operations["list_admin_ledger"];
         put?: never;
@@ -1369,13 +1369,13 @@ export interface paths {
         };
         /**
          * List connections
-         * @description Lists the connections the caller may manage, newest first. A system admin sees every connection but those of someone else's personal team; any other caller sees only those owned by a team they own. Revoked connections are omitted unless `include_revoked` is set.
+         * @description Lists the connections the caller may manage, newest first. A system admin sees every connection; any other caller sees only those owned by a team they own. Revoked connections are omitted unless `include_revoked` is set.
          */
         get: operations["list_connections"];
         put?: never;
         /**
          * Provision a connection
-         * @description Provisions a connection to a remote system, with its own agent profile, emitter and home context. It starts with no credential and with no webhook events or tool manifest; each is attached by its own call. Requires a system admin (only its owner, on someone else's personal team) or the owner of `owner_team_id`; a connection with no owning team can only be provisioned by a system admin. Owning a connection does not grant any team read-reach on it.
+         * @description Provisions a connection to a remote system, with its own agent profile, emitter and home context. It starts with no credential and with no webhook events or tool manifest; each is attached by its own call. Requires a system admin or the owner of `owner_team_id`; a connection with no owning team can only be provisioned by a system admin. Owning a connection does not grant any team read-reach on it.
          */
         post: operations["provision_connection"];
         delete?: never;
@@ -1396,14 +1396,14 @@ export interface paths {
         };
         /**
          * Get a connection
-         * @description Returns one connection. Requires a system admin or the owner of the connection's owning team; on someone else's personal team only its owner, a system admin included. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+         * @description Returns one connection. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
          */
         get: operations["get_connection"];
         put?: never;
         post?: never;
         /**
          * Revoke a connection
-         * @description Revokes a connection so temper mints no new tokens for it. Tokens already minted stay valid at the remote system until they expire. The connection's profile, emitter and history are kept. Revoking an already-revoked connection returns it unchanged. Requires a system admin or the owner of the connection's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+         * @description Revokes a connection so temper mints no new tokens for it. Tokens already minted stay valid at the remote system until they expire. The connection's profile, emitter and history are kept. Revoking an already-revoked connection returns it unchanged. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
          */
         delete: operations["revoke_connection"];
         options?: never;
@@ -1425,7 +1425,7 @@ export interface paths {
         put?: never;
         /**
          * Attach a connection credential
-         * @description Attaches the credential reference: a broker and a connector the broker holds the secret for. The body carries no secret. temper mints once to verify the connector and reports what it observed; a connector the broker rejects fails the request, while pending consent, an unconfigured broker, or a broker failure is reported in `verification.note`. The broker's own error text goes to the server log, never to the response. Requires a system admin or the owner of the connection's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+         * @description Attaches the credential reference: a broker and a connector the broker holds the secret for. The body carries no secret. temper mints once to verify the connector and reports what it observed; a connector the broker rejects fails the request, while pending consent, an unconfigured broker, or a broker failure is reported in `verification.note`. The broker's own error text goes to the server log, never to the response. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
          */
         post: operations["attach_connection_credential"];
         delete?: never;
@@ -1448,12 +1448,12 @@ export interface paths {
         put?: never;
         /**
          * Grant a team read-reach on a connection
-         * @description Lets the members of `team` read what the connection receives. Reach is read-only. Requires a system admin (only its owner, on someone else's personal team), or the owner of the connection's owning team who also owns or maintains the receiving team. When the receiving team is a personal team, only its owner qualifies, a system admin included. When the connection declares a remote reach the attach-time verification did not confirm, `affirm_reach` must state why the binding is intended; it is refused when there is nothing to affirm. A caller with system access who does not control the connection is answered 404, exactly as for an id that does not exist.
+         * @description Lets the members of `team` read what the connection receives. Reach is read-only. Requires a system admin, or the owner of the connection's owning team who also owns or maintains the receiving team. When the receiving team is a personal team, only its owner qualifies, a system admin included. When the connection declares a remote reach the attach-time verification did not confirm, `affirm_reach` must state why the binding is intended; it is refused when there is nothing to affirm. A caller with system access who does not control the connection is answered 404, exactly as for an id that does not exist.
          */
         post: operations["grant_connection_reach"];
         /**
          * Revoke a team's read-reach on a connection
-         * @description Removes the read-reach grant for `team`. Revoking an absent grant is a no-op. `affirm_reach` is ignored. Requires a system admin (only its owner, on someone else's personal team) or the owner of the connection's owning team; no role on the receiving team is needed. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+         * @description Removes the read-reach grant for `team`. Revoking an absent grant is a no-op. `affirm_reach` is ignored. Requires a system admin or the owner of the connection's owning team; no role on the receiving team is needed. Any other caller with system access is answered 404, exactly as for an id that does not exist.
          */
         delete: operations["revoke_connection_reach"];
         options?: never;
@@ -1475,7 +1475,7 @@ export interface paths {
         put?: never;
         /**
          * Set connection tool manifest
-         * @description Replaces the declared read-only remote tools. A non-empty manifest makes the connection reach-capable. Requires a system admin or the owner of the connection's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+         * @description Replaces the declared read-only remote tools. A non-empty manifest makes the connection reach-capable. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
          */
         post: operations["set_connection_tool_manifest"];
         delete?: never;
@@ -1498,7 +1498,7 @@ export interface paths {
         put?: never;
         /**
          * Set connection webhook events
-         * @description Replaces the set of remote event types the connection receives. A non-empty set makes the connection ledger-capable. Requires a system admin or the owner of the connection's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+         * @description Replaces the set of remote event types the connection receives. A non-empty set makes the connection ledger-capable. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
          */
         post: operations["set_connection_webhook_events"];
         delete?: never;
@@ -2394,7 +2394,7 @@ export interface paths {
         put?: never;
         /**
          * Issue a machine credential
-         * @description Mints a new machine principal with a temper-issued `client_id` and secret. The `client_secret` in the response is shown once and never stored; only its hash is kept, so it cannot be retrieved later. Requires a system admin (only its owner, on someone else's personal team) or the owner of `owner_team_id`; a machine with no owning team can only be issued by a system admin. A team owner can confer only reach they could grant themselves, and no caller can give a machine a team role above `member`. Where an external identity provider mints this instance's tokens, the credential is returned with `dormant: true`: it authenticates once the instance runs temper's own authorization server.
+         * @description Mints a new machine principal with a temper-issued `client_id` and secret. The `client_secret` in the response is shown once and never stored; only its hash is kept, so it cannot be retrieved later. Requires a system admin or the owner of `owner_team_id`; a machine with no owning team can only be issued by a system admin. A team owner can confer only reach they could grant themselves, and no caller can give a machine a team role above `member`. Where an external identity provider mints this instance's tokens, the credential is returned with `dormant: true`: it authenticates once the instance runs temper's own authorization server.
          */
         post: operations["issue_machine_credential"];
         delete?: never;
@@ -2444,7 +2444,7 @@ export interface paths {
         put?: never;
         /**
          * Rebind a machine client to a new client ID
-         * @description Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction. The path `{id}` names the source client. Requires a system admin. Refused for a temper-issued source client, whose secret is rotated instead, and on an instance that runs temper's own authorization server.
+         * @description Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. The path `{id}` names the source client. Requires a system admin. Refused for a temper-issued source client, whose secret is rotated instead, and on an instance that runs temper's own authorization server.
          */
         post: operations["admin_rebind_machine_client"];
         delete?: never;
@@ -2467,7 +2467,7 @@ export interface paths {
         put?: never;
         /**
          * Rotate a machine client secret
-         * @description Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.
+         * @description Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.
          */
         post: operations["rotate_machine_client_secret"];
         delete?: never;
@@ -3376,13 +3376,13 @@ export interface paths {
         };
         /**
          * List subscriptions
-         * @description Lists the subscriptions the caller may manage, newest first. A system admin sees every subscription except those inside someone else's personal space; any other caller sees only those whose authoring team they own or maintain. Revoked subscriptions are omitted unless `include_revoked` is set.
+         * @description Lists the subscriptions the caller may manage, newest first. A system admin sees every subscription; any other caller sees only those whose authoring team they own or maintain. Revoked subscriptions are omitted unless `include_revoked` is set.
          */
         get: operations["list_subscriptions"];
         put?: never;
         /**
          * Create a subscription
-         * @description Declares that a team, context or cogmap wants the events a connection emits that match `selector`. Requires a system admin (not on someone else's personal team, nor for someone else's personal context as subscriber) or an owner or maintainer of `authoring_team_id`, and, for every caller, that the authoring team holds read-reach on the connection. A context or cogmap subscriber must be linked to the authoring team; a team subscriber must be the authoring team itself. A selector that can never match the connection's registered webhook events is refused.
+         * @description Declares that a team, context or cogmap wants the events a connection emits that match `selector`. Requires a system admin or an owner or maintainer of `authoring_team_id`, and, for every caller, that the authoring team holds read-reach on the connection. A context or cogmap subscriber must be linked to the authoring team; a team subscriber must be the authoring team itself. A selector that can never match the connection's registered webhook events is refused.
          */
         post: operations["create_subscription"];
         delete?: never;
@@ -3403,7 +3403,7 @@ export interface paths {
         };
         /**
          * Get a subscription
-         * @description Returns one subscription. Requires a system admin (not on someone else's personal team) or an owner or maintainer of the subscription's authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+         * @description Returns one subscription. Requires a system admin or an owner or maintainer of the subscription's authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
          */
         get: operations["get_subscription"];
         put?: never;
@@ -5999,8 +5999,8 @@ export interface components {
          * @description Request body for `POST /api/teams/{id}/invite`.
          *
          *     `role` may be anything up to the inviter's own rank on the team — an owner can invite at
-         *     `owner` — and on the gating team only a system admin invites (the team-role rank rule,
-         *     C16/R10).
+         *     `owner` — and on the gating team or temper-system only a system admin invites (the team-role
+         *     rank rule, C16/R10).
          */
         CreateInvitationRequest: {
             invited_email: string;
@@ -6019,7 +6019,7 @@ export interface components {
             /**
              * Format: uuid
              * @description The team that authorizes this subscription. The caller must own or maintain it (or be a
-             *     system admin, unless it is someone else's personal team), and it must hold read-reach on the connection. For a team subscriber, this
+             *     system admin), and it must hold read-reach on the connection. For a team subscriber, this
              *     equals `subscriber_id`.
              */
             authoring_team_id: string;
@@ -11451,7 +11451,8 @@ export interface components {
          *
          *     Constraints:
          *     - `role` is at most the inviter's own role on the team — an owner can invite at `owner` —
-         *       and on the gating team only a system admin invites (the team-role rank rule)
+         *       and on the gating team or temper-system only a system admin invites (the team-role rank
+         *       rule)
          *     - One *live pending* invite per email per team (declined/expired/revoked history coexists)
          *     - 7-day default expiry, checked lazily at acceptance time; a lapsed-but-unswept pending
          *       row is swept to `expired` when the same email is re-invited, so re-invite is never blocked
@@ -16718,7 +16719,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description What is stale in scope, and the resources enqueued (none on `dry_run`). Resources homed in personal space are enqueued by the `all` sweep but not named */
+            /** @description What is stale in scope, and the resources enqueued (none on `dry_run`) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -16745,7 +16746,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin, the scope is a personal context or a resource homed in one (`FORBIDDEN_DETAIL`), or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -21537,7 +21538,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Forbidden (the caller does not manage the team; on the gating team only a system admin invites; on a personal team nobody but its owner, a system admin included); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden (the caller does not manage the team; on the gating team or temper-system only a system admin invites; on a personal team nobody but its owner, a system admin included); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -21597,7 +21598,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Forbidden: the caller is not an owner or maintainer of this team (on the gating team, not a system admin; on a personal team, not its owner — a system admin included); or (`FORBIDDEN_DETAIL`) the role is above the caller's own — a manager grants up to their own role, a system admin any; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden: the caller is not an owner or maintainer of this team (on the gating team or temper-system, not a system admin; on a personal team, not its owner — a system admin included); or (`FORBIDDEN_DETAIL`) the role is above the caller's own — a manager grants up to their own role, a system admin any; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -21648,7 +21649,7 @@ export interface operations {
                     "application/json": components["schemas"]["RemoveMemberOutcome"];
                 };
             };
-            /** @description Forbidden: the caller is neither the member leaving nor an owner or maintainer of this team (on the gating team, not a system admin; on a personal team, not its owner — a system admin included); or (`FORBIDDEN_DETAIL`) the member is an owner other than the caller, or ranks above the caller — only a system admin removes another owner; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden: the caller is neither the member leaving nor an owner or maintainer of this team (on the gating team or temper-system, not a system admin; on a personal team, not its owner — a system admin included); or (`FORBIDDEN_DETAIL`) the member is an owner other than the caller, or ranks above the caller — only a system admin removes another owner; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -21710,7 +21711,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Forbidden: the caller is not an owner or maintainer of this team (on the gating team, not a system admin; on a personal team, not its owner — a system admin included); or (`FORBIDDEN_DETAIL`) the role is above the caller's own, the member is an owner other than the caller or ranks above the caller (only a system admin changes another owner), or the caller is raising their own role; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden: the caller is not an owner or maintainer of this team (on the gating team or temper-system, not a system admin; on a personal team, not its owner — a system admin included); or (`FORBIDDEN_DETAIL`) the role is above the caller's own, the member is an owner other than the caller or ranks above the caller (only a system admin changes another owner), or the caller is raising their own role; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
