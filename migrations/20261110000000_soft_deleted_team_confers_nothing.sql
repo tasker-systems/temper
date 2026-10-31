@@ -15,10 +15,12 @@
 --    is still exempt from the owner side, so an admin can move a dead team's context out: that is
 --    the recovery path.
 --
--- 2. CONTENT. New STABLE `context_is_live(uuid)`: the context is active and, if a team owns it, that
---    team is active. A context owned by a dead team reads as RETIRED. It replaces the retired floor in
---    contexts_readable_by_teams arms 3 (shares) and 4 (grants), context_authorable_by_profile's grant
---    arm and can()'s kb_contexts subject floor. Arm 2 (members of the owner) already held it through
+-- 2. CONTENT. New STABLE `context_is_dead(uuid)`: a context row that is retired, or owned by a team
+--    that is not active; and `context_is_live(uuid)`: the row exists and is not dead. A context owned
+--    by a dead team reads as RETIRED. Each replaces the retired floor it is shaped like:
+--    context_is_dead (no existence requirement) in contexts_readable_by_teams arms 3 (shares) and 4
+--    (grants); context_is_live (row required) in context_authorable_by_profile's grant arm and can()'s
+--    kb_contexts subject floor. Arm 2 (members of the owner) already held it through
 --    profile_reachable_teams, and the authorable team arm through its own `t.is_active`. What
 --    survives is what survives retirement: a resource's home owner, and a grant on the resource
 --    itself (resources_visible_to / can_modify_resource arms that do not go through the context).
@@ -34,21 +36,35 @@
 --
 -- Design: temper-artifacts specs/2026-10-31-soft-deleted-team-confers-nothing-design.md.
 
+CREATE OR REPLACE FUNCTION context_is_dead(p_context uuid)
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE
+AS $$
+    -- A context row that confers nothing through its container: retired (is_active = false), or
+    -- owned by a soft-deleted (or absent) team. FALSE when no row exists at all, exactly as the
+    -- retired floor it replaces (`NOT EXISTS (... AND NOT c.is_active)`) answered for an id with no
+    -- row; the arms that use it never had an existence requirement and do not gain one here.
+    SELECT EXISTS (
+        SELECT 1
+          FROM kb_contexts c
+         WHERE c.id = p_context
+           AND ( NOT c.is_active
+                 OR ( c.owner_table = 'kb_teams'
+                      AND NOT EXISTS (SELECT 1 FROM kb_teams t
+                                       WHERE t.id = c.owner_id AND t.is_active) ) )
+    );
+$$;
+
 CREATE OR REPLACE FUNCTION context_is_live(p_context uuid)
  RETURNS boolean
  LANGUAGE sql
  STABLE
 AS $$
-    -- Retired (is_active = false), or owned by a soft-deleted team: confers nothing through the
-    -- container. A team owner absent from kb_teams cannot happen (owners are checked on write) and
-    -- reads as not live.
-    SELECT EXISTS (
-        SELECT 1
-          FROM kb_contexts c
-         WHERE c.id = p_context AND c.is_active
-           AND ( c.owner_table <> 'kb_teams'
-                 OR EXISTS (SELECT 1 FROM kb_teams t WHERE t.id = c.owner_id AND t.is_active) )
-    );
+    -- The context exists and is not dead (context_is_dead): for the floors that already required a
+    -- live row (`EXISTS (... AND c.is_active)`), which keep that requirement.
+    SELECT EXISTS (SELECT 1 FROM kb_contexts c WHERE c.id = p_context)
+       AND NOT context_is_dead(p_context);
 $$;
 
 CREATE OR REPLACE FUNCTION public.context_reassign(p_payload jsonb, p_emitter uuid, p_metadata jsonb DEFAULT '{}'::jsonb, p_invocation uuid DEFAULT NULL::uuid, p_correlation uuid DEFAULT NULL::uuid)
@@ -563,23 +579,23 @@ AS $function$
 
     UNION
 
-    -- 3. context SHARED to an enclosing team. context_is_live: retired, or owned by a soft-deleted
+    -- 3. context SHARED to an enclosing team. context_is_dead: retired, or owned by a soft-deleted
     --    team, confers nothing through a share (soft-delete design D3).
     SELECT tc.context_id
     FROM kb_team_contexts tc
     WHERE tc.team_id = ANY(p_teams)
-      AND context_is_live(tc.context_id)
+      AND NOT context_is_dead(tc.context_id)
 
     UNION
 
     -- 4. explicit read-grant on the context (profile-anchored, or team-anchored on a reachable team);
-    --    floored by context_is_live like arm 3.
+    --    floored by context_is_dead like arm 3.
     SELECT g.subject_id
     FROM kb_access_grants g
     WHERE g.subject_table = 'kb_contexts' AND g.can_read
       AND ( (g.principal_table = 'kb_profiles' AND g.principal_id = p_profile)
          OR (g.principal_table = 'kb_teams' AND g.principal_id = ANY(p_teams)) )
-      AND context_is_live(g.subject_id);
+      AND NOT context_is_dead(g.subject_id);
 $function$;
 
 CREATE OR REPLACE FUNCTION public.context_authorable_by_profile(p_profile uuid, p_context uuid)
@@ -650,7 +666,7 @@ $function$;
 SELECT declare_migration(
     20261110000000,
     'additive',
-    'New STABLE function context_is_live(uuid) and body-only CREATE OR REPLACE, signatures and return '
+    'New STABLE functions context_is_dead(uuid) and context_is_live(uuid), and body-only CREATE OR REPLACE, signatures and return '
     'types unchanged, of context_reassign, context_rename, context_retire, context_restore, '
     '_admin_team_membership_write, steward_team_contexts, cogmaps_share_a_team, '
     'contexts_readable_by_teams, context_authorable_by_profile and can. Behaviour change, '
