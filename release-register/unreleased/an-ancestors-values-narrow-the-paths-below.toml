@@ -21,8 +21,9 @@ wire field is added: `PathFacts.values` changes only in its description text, in
 the three generated SDKs.
 
 A path with no value-declaring ancestor lists the values it declares, once; a vocabulary holds no
-more values than its schema declares. An element's values (`items`) are not narrowed. The size of declared values is bounded at
-declare, by the scalar rule and the value budget of a shape's schema. No migration.
+more values than its schema declares. An element's values (`items`) are not narrowed. The size of
+declared values is bounded at declare, by the scalar rule and the value budget of a shape's schema.
+No migration.
 
 Who observes: agents and CLIs asking at a path below a declared value, and readers of a shape's
 vocabulary. Release relevance: signal-only.

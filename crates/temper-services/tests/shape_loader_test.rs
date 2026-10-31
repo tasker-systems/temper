@@ -28,7 +28,12 @@ use temper_core::types::artifact_ask::{
 };
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, EntityId, ProfileId, ShapeId};
-use temper_core::types::query::{PlanRefusal, PropertyOp, RefusalReason};
+use temper_core::types::query::{
+    shapes_to_load, ActInvocation, ActName, Composition, Intention, OutcomeDeclaration,
+    PlanRefusal, PropertyOp, RefusalReason, ReturnSpec, StageInput, StageName, StageNode,
+    StageRelation,
+};
+use temper_services::backend::query_read::prepare;
 use temper_services::backend::substrate_read;
 use temper_services::error::ApiError;
 use temper_services::services::shape_loader::test_support::enumerations_tagged;
@@ -843,6 +848,94 @@ async fn a_shape_read_many_times_is_compiled_once(pool: PgPool) {
     assert_eq!(compiles_tagged(&tag), 1, "one compile for six reads");
 }
 
+// ── A path refused at the query door teaches the shape's vocabulary ─────────────────────────
+
+/// A selection asking `shape` at a path its schema does not declare, piped into a returned
+/// `find-exact` — a plan refused `path_outside_shape` at the gate, before any embed.
+fn refusing_a_path(shape: ShapeId) -> Composition {
+    let sel = StageName::parse("sel").unwrap();
+    let hits = StageName::parse("hits").unwrap();
+    Composition {
+        outcome: OutcomeDeclaration {
+            returns: vec![ReturnSpec {
+                stage: hits.clone(),
+                with: vec![],
+            }],
+        },
+        stages: vec![
+            StageNode::Act(ActInvocation {
+                name: sel.clone(),
+                act: ActName::FindResourcesWith,
+                intention: None,
+                inputs: vec![],
+                terms: Default::default(),
+                resource_filter: None,
+                edge_filter: None,
+                properties: vec![],
+                artifact_filter: vec![ArtifactAsk {
+                    shape,
+                    predicates: vec![ArtifactPredicate {
+                        path: vec!["undeclared".to_string()],
+                        op: PropertyOp::HasKey,
+                    }],
+                    intent: vec![],
+                    include_folded: false,
+                    shape_states: vec![],
+                }],
+            }),
+            StageNode::Act(ActInvocation {
+                name: hits,
+                act: ActName::FindExact,
+                intention: Some(Intention {
+                    query: "subject".to_string(),
+                    embedding: None,
+                }),
+                inputs: vec![StageInput::Upstream {
+                    relation: StageRelation::Bound,
+                    stage: sel,
+                }],
+                terms: Default::default(),
+                resource_filter: None,
+                edge_filter: None,
+                properties: vec![],
+                artifact_filter: vec![],
+            }),
+        ],
+    }
+}
+
+/// One request loading its shapes with `load` and validating through `query_read::prepare`, as the
+/// handler does, is refused a path on a stored shape, and the refusal teaches the shape's
+/// vocabulary: its one path, `value`. Bites a path refusal that teaches nothing (in temper-core's
+/// `validate.rs::refuse_paths`, pass `None` for the teaching in place of `Some(teaches)`): the
+/// refusal carries no vocabulary.
+#[sqlx::test(migrations = "../../migrations")]
+async fn a_path_refused_at_the_query_door_teaches_the_shapes_vocabulary(pool: PgPool) {
+    let w = seed_world(&pool, "loader-path-teaching").await;
+    let id = store(&pool, &w, "measurement", &value_schema()).await;
+    let c = refusing_a_path(id);
+
+    let ids = shapes_to_load(&c).expect("within the request caps");
+    let shapes = load(&pool, w.owner, &ids).await.expect("the loader reads");
+    assert!(matches!(shapes.get(&id), Some(ShapeLoad::Loaded(_))));
+    let refused = prepare(c, &shapes)
+        .await
+        .expect_err("the undeclared path is refused");
+
+    assert_eq!(
+        refused.iter().map(|r| r.reason.clone()).collect::<Vec<_>>(),
+        vec![RefusalReason::PathOutsideShape],
+        "{refused:?}"
+    );
+    let taught = refused[0]
+        .teaches
+        .as_ref()
+        .and_then(|t| t.vocabulary.as_ref())
+        .expect("a path refusal teaches the vocabulary");
+    assert_eq!(taught.paths.len(), 1, "{taught:?}");
+    assert_eq!(taught.paths[0].path, vec!["value".to_string()]);
+}
+
 // ── Permit queueing under concurrent by-id misses ───────────────────────────────────────────
 
 /// How many by-id reads miss at once in `permit_queueing_under_concurrent_by_id_misses`.
@@ -918,11 +1011,20 @@ fn nearest_rank(sorted: &[Duration], percent: usize) -> Duration {
 /// changes nothing about them. It prints `available_parallelism` and the permits that implies, so
 /// the wait under one permit can be worked out from the per-call cost.
 ///
-/// After the budget, at `HEAD` of this change, arm64 (M4 Pro), rustc 1.99, release, median of
-/// three runs, on 12 cores and so 6 compile permits: an uncontended `judge` 0.99 ms, an
-/// uncontended `askable` miss 1.76 ms; 8 concurrent misses, latency p50 5.40 ms and p99 6.07 ms,
-/// wait past an uncontended miss p50 3.71 ms and p99 4.37 ms. On one permit the eighth call would
-/// wait for the seven before it, about 7 × 1.76 ≈ 12 ms; that figure is worked out, not measured.
+/// With the node budget, arm64 (M4 Pro), rustc 1.99, release, median of three runs, on 12 cores
+/// and so 6 compile permits: an uncontended `judge` 0.99 ms, an uncontended `askable` miss
+/// 1.76 ms; 8 concurrent misses, latency p50 5.40 ms and p99 6.07 ms, wait past an uncontended
+/// miss p50 3.71 ms and p99 4.37 ms. On one permit the eighth call would wait for the seven before
+/// it, about 7 × 1.76 ≈ 12 ms, in the case where each read's verdict misses too; that figure is
+/// worked out, not measured.
+///
+/// **The number the loader's lack of a vocabulary cache rests on.** That 1.76 ms includes each
+/// fresh shape's compile, which the verdict cache, not a vocabulary cache, spares on a later read.
+/// A by-id read whose verdict is remembered costs a clone and an enumeration: at the budget about
+/// 0.15 ms (`T_clone`, `parse_worst_case_at_the_caps`) plus at most 0.43 ms (`T_enum`,
+/// `vocabulary_paths_worst_case`), about 0.6 ms. On one permit the eighth of eight such reads waits
+/// about 7 × 0.6 ≈ 4 ms, within the 10 ms a vocabulary cache would have to save to be kept, so the
+/// loader keeps none. That figure is worked out, not measured.
 #[sqlx::test(migrations = "../../migrations")]
 #[ignore = "benchmark: run with --release --ignored --nocapture before merge"]
 async fn permit_queueing_under_concurrent_by_id_misses(pool: PgPool) {

@@ -19,16 +19,19 @@
 //!    step for the row their first page named ([`load_one_pinned`]) and carry the successor beside
 //!    the load instead.
 //! 3. **Compiles?** First measured: a schema larger than the walk reads
-//!    ([`within_schema_bound`]) is `SchemaTooLarge` and is never compiled. Within the bound,
-//!    through the no-fetch constructor ([`shape_schema::compile`]); a schema it refuses is
-//!    `Uncompilable`, and the compiler's text goes nowhere.
+//!    ([`within_schema_bound`]) is `SchemaTooLarge` and is never compiled. Within it, a schema
+//!    past the parsed-size budget ([`shape_schema::within_node_budget`]) is `Uncompilable`,
+//!    without a permit, a copy or a compile. Within both, through the no-fetch constructor
+//!    ([`shape_schema::compile`]); a schema it refuses is `Uncompilable`, and the compiler's text
+//!    goes nowhere.
 //!
 //! **One decision for every door that decides whether a schema can be asked** ([`judge`]): the
 //! loader, the by-id read's `askable`, and declare (`shape_service::declare_shape`) measure
 //! against the same bound and compile through the same constructor, so they cannot disagree about
 //! which schemas can be asked, and none of them compiles a schema past the walk's bound. Commit and
 //! reconcile are not among them: they validate artifacts against a stored schema through
-//! [`shape_schema::compile`] directly, whatever its size.
+//! [`shape_schema::compile`] directly, whatever its byte size; the compile itself holds the
+//! parsed-size budget.
 //!
 //! **How often and how widely a schema is compiled is bounded.** Each compile runs on the blocking
 //! pool, under one of a few process-wide permits (`compile_permits`), so a burst of reads queues
@@ -70,11 +73,11 @@ use temper_substrate::shape_schema;
 /// validated against ([`ShapeContext::session`]). One [`load_one`] per id, in id order.
 ///
 /// **What it costs is per distinct shape**, and the caller bounds how many it passes: each id is
-/// one gated read (the stored schema whole), one bounded measurement, at most one compile within
-/// the walk's byte bound, and — once validation teaches its vocabulary — one enumeration, linear in
-/// the schema. The asks then share one budget for membership
-/// ([`AskSession`](temper_core::types::artifact_ask::AskSession)); each path they name is resolved
-/// once per request.
+/// one gated read (the stored schema whole), two bounded measurements (the byte bound and the
+/// parsed-size budget), at most one compile within both, and — once validation teaches its
+/// vocabulary — one enumeration, linear in the schema. The asks then share one budget for
+/// membership ([`AskSession`](temper_core::types::artifact_ask::AskSession)); each path they name
+/// is resolved once per request.
 ///
 /// # Errors
 /// A database fault, never a refusal: every refusal is a [`ShapeLoad`] in the context.
@@ -482,6 +485,34 @@ mod tests {
         drop(held);
         let ran = with_schema_off_the_executor(&schema, |_| 7).await;
         assert_eq!(ran.expect("runs once a permit is free"), 7);
+    }
+
+    /// Every permit held, a schema within the byte bound but past the parsed-size budget is still
+    /// judged `Uncompilable` at once: the budget is counted before `judge` takes a permit or copies
+    /// the schema. Bites the `within_node_budget` check moved into the closure `judge` hands
+    /// `with_schema_off_the_executor` (or removed): `judge` then waits for a permit, and the
+    /// timeout goes red.
+    #[tokio::test]
+    async fn a_schema_past_the_budget_is_judged_without_a_compile_permit() {
+        let schema = serde_json::json!({
+            "examples": Value::Array(vec![Value::from(0); shape_schema::MAX_SHAPE_NODES])
+        });
+        assert!(within_schema_bound(&schema), "within the byte bound");
+        assert!(
+            !shape_schema::within_node_budget(&schema),
+            "past the parsed-size budget"
+        );
+        let permits = u32::try_from(compile_permits()).expect("a handful of permits");
+        let held = COMPILE_PERMITS
+            .acquire_many(permits)
+            .await
+            .expect("the permits are open");
+        let judged = tokio::time::timeout(Duration::from_secs(2), judge(&schema)).await;
+        drop(held);
+        let verdict = judged
+            .expect("judged while every permit is held")
+            .expect("judging faults only on closed permits");
+        assert_eq!(verdict, SchemaVerdict::Uncompilable);
     }
 
     /// The map never holds more than its cap, and a verdict remembered after eviction began reads

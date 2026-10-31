@@ -15,15 +15,12 @@ use temper_services::state::AppState;
 /// The body limit of the two shape declare routes, `POST /api/contexts/{id}/shapes` and
 /// `POST /api/cognitive-maps/{id}/shapes`: 512 KiB, twice `MAX_SCHEMA_BYTES`.
 ///
-/// A declare request is parsed into a `serde_json::Value` (`ShapeDeclareRequest.schema`) after
-/// `require_auth` and before the authority check, so any authenticated caller pays for that parse.
-/// Under the gated tier's `GATED_MAX_BODY_BYTES` (25 MiB) one request could hold about 375 MiB of
-/// `Value` on Vercel, whose bodies stop at 4.5 MB, and about 2.1 GiB self-hosted. At 512 KiB it
-/// holds about 50 MiB. A schema is at most `MAX_SCHEMA_BYTES` compact; the rest of the limit
-/// leaves room for the envelope and for a pretty-printed schema.
+/// A declare request's schema is parsed into a `serde_json::Value` (`ShapeDeclareRequest.schema`)
+/// before the authority check, so the body is held near the size of the schema it carries. A
+/// schema is at most `MAX_SCHEMA_BYTES` compact; the rest of the limit leaves room for the envelope
+/// and for a pretty-printed schema.
 ///
-/// This bounds the parse; it does not count it. The MCP server parses its whole JSON-RPC body
-/// before any of this runs.
+/// This bounds the parse; it does not count it.
 pub const SHAPE_DECLARE_MAX_BODY_BYTES: usize = 512 * 1024;
 
 /// The shape declare POSTs. They share their paths with `list_shapes` and `list_cogmap_shapes`

@@ -19,7 +19,7 @@
 //! **A `const` and every `enum` member is a scalar.** [`is_shape_value`] holds each to `null`, a
 //! boolean, a number, or a string of at most [`MAX_SHAPE_VALUE_STRING_BYTES`] JSON-escaped bytes;
 //! an object, an array or a longer string makes the schema uncompilable. `default` and `examples`
-//! stay free-form data, which the compile never reads.
+//! stay free-form data: the compile counts them toward the budget but never reads them as a schema.
 //!
 //! **A schema's parsed size has a budget.** Before anything else reads the document, [`compile`]
 //! holds it to [`MAX_SHAPE_NODES`] JSON values at every depth, at most [`MAX_SHAPE_OBJECTS`] of
@@ -208,7 +208,7 @@ const ACCEPTED_SCHEMA_URIS: [&str; 2] = [
 ///
 /// | Admission profile | Values | Objects |
 /// |---|---|---|
-/// | Every live shape (a production read) | ≤ ~750 | ≤ ~500 |
+/// | Every stored shape (production read, 2026-10-31) | ≤ 46 | ≤ 13 |
 /// | 1,024 fields `{"type":"string","description":…}` | 3,075 | 1,026 |
 /// | 1,024 array fields `{"type":"array","items":{"type":"string"}}` | 4,099 | 2,050 |
 /// | 1,024 fields `{"type":["string","null"],"title":…,"description":…,"examples":[…]}` | 8,195 | 1,026 |
@@ -247,8 +247,9 @@ pub const MAP_NODE_BYTES: usize = 632;
 ///
 /// At the provisional caps the model weighs 632 × 3,072 + 191 × 12,288 + 262,144 = 4,550,656
 /// bytes, about 4.34 MiB: by the model, the most one read of a stored shape builds. The model errs
-/// high: it charges each object's map node a second time through its members, and a schema it
-/// weighs at about 3 MiB measured 1.37 MB of real heap.
+/// high: it charges each object's map node a second time through its members, and at both caps the
+/// parsed `Value` measured 2.3 MiB of the 4.34 MiB it weighs (`shape_schema_cost_bench.rs`,
+/// `parse_worst_case_at_the_caps`).
 pub const MAX_SHAPE_PARSED_WEIGHT: usize = 9 << 19;
 
 /// What `nodes` JSON values, `objects` of them objects, parsed from `text_bytes` bytes of text,
@@ -472,9 +473,9 @@ pub const MAX_PATTERN_DFA_BYTES: usize = 2 << 20;
 /// more than [`MAX_SHAPE_OBJECTS`] objects ([`within_node_budget`]), is not a field tree (a
 /// keyword outside the allowed vocabulary, a `$schema` or `$id` below the root, a `$schema` other
 /// than the bundled 2020-12 spelling (with or without a trailing `#`), a `properties` key or
-/// `required` entry past [`MAX_PROPERTY_NAME_BYTES`], a `const` or `enum` member that is not an
-/// [`is_shape_value`], or a depth, `enum`, `pattern` size or `pattern` count past its cap), is not
-/// valid for 2020-12 where the walk leaves a form to meta-validation, or has a pattern that
+/// `required` entry past [`MAX_PROPERTY_NAME_BYTES`], a `const` or `enum` member
+/// [`is_shape_value`] refuses, or a depth, `enum`, `pattern` size or `pattern` count past its cap),
+/// is not valid for 2020-12 where the walk leaves a form to meta-validation, or has a pattern that
 /// compiles past [`MAX_PATTERN_BYTES`].
 pub fn compile(schema: &Value) -> Result<Validator, ShapeSchemaUncompilable> {
     #[cfg(feature = "test-support")]
@@ -581,13 +582,20 @@ mod tests {
 
     /// Counting stops at the first container that takes it past a cap, so on a schema ten times
     /// over the budget it counts no more than the cap plus that one container's width. The first
-    /// fixture is a single array ten times the cap wide. The second spreads as many values over
-    /// hundreds of narrow arrays, so a count that walked the whole document before checking passes
-    /// the bound many times over.
+    /// fixture is a single array ten times the cap wide, each element an array of one number, so
+    /// the container that crosses the cap is itself wider than the cap. The second spreads as many
+    /// values over hundreds of narrow arrays. Bites a count that walks the whole document before
+    /// checking, on either fixture: the first then also counts each element's member, and the
+    /// second passes the bound many times over.
     #[test]
     fn counting_stops_at_the_first_container_past_the_cap() {
         let wide = 10 * MAX_SHAPE_NODES;
-        let one_array = json!({ "examples": Value::Array(vec![json!(0); wide]) });
+        let one_array = json!({ "examples": Value::Array(vec![json!([0]); wide]) });
+        let whole = count_up_to(&one_array, usize::MAX, usize::MAX);
+        assert!(
+            whole.nodes > MAX_SHAPE_NODES + wide,
+            "a count of the whole document passes the bound: {whole:?}"
+        );
         let count = count_up_to(&one_array, MAX_SHAPE_NODES, MAX_SHAPE_OBJECTS);
         assert!(count.over, "{count:?}");
         assert!(count.nodes <= MAX_SHAPE_NODES + wide, "{count:?}");

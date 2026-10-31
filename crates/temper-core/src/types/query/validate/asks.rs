@@ -76,9 +76,9 @@ pub const MAX_ASKS_PER_REQUEST: usize = 32;
 /// schema the request holds for its length; a walk built over it; and — when a refusal teaches its
 /// vocabulary — an enumeration of it, linear in its schema.
 ///
-/// **Each refused path enumerates its shape on the async executor**, once per shape per request:
-/// nothing a refusal teaches is kept for a later request. At the budget the heaviest vocabulary
-/// enumerates in about 0.43 ms (`T_enum` of `vocabulary_paths_worst_case`,
+/// **A refused path enumerates its shape's vocabulary on the async executor**, once per shape per
+/// request: nothing a refusal teaches is kept for a later request. At the budget the heaviest
+/// vocabulary enumerates in about 0.43 ms (`T_enum` of `vocabulary_paths_worst_case`,
 /// `shape_schema_cost_bench.rs`; arm64, release), so a refused request naming eight such shapes
 /// holds an executor thread for about 3.4 ms of enumeration. The schemas it holds each weigh at
 /// most `shape_schema::MAX_SHAPE_PARSED_WEIGHT` (4.5 MiB) by the budget's weight model, so eight

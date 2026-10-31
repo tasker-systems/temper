@@ -82,7 +82,7 @@ pub const MAX_WALK_DEPTH: usize = 16;
 ///
 /// The vocabulary is read whole by `schema show`, `GET /api/shapes/{id}` and
 /// `get_data_artifact_shape`, so this bounds a response body. It is far above a shape a person
-/// writes — a record with tens of fields — and below what a schema within the declare budget can
+/// writes — a record with tens of fields — and below what a schema within the node budget can
 /// declare: a shape holds at most 12,288 JSON values, 3,072 of them objects, so about three
 /// thousand empty fields fit in one.
 ///
@@ -1486,10 +1486,13 @@ mod tests {
     /// schema the walk reads is a scalar, which holds nothing at any key. Each case is a schema of
     /// its own, checked through `enumerate` and against `reach`: a child; a grandchild, its own
     /// `type` standing; a child declaring its own `enum`, which lists `[]` and not its members; a
-    /// `true` child; and a child of a node typed `object` whose `const` is a string, which no
-    /// content satisfies. Bites a path below a node with values that is not left the empty set, in
-    /// either descent: without the narrowing the child, the grandchild, the `true` child and the
-    /// child of the object list no value set, and the `enum` child lists its own members.
+    /// `true` child; a child of a node typed `object` whose `const` is a string, which no content
+    /// satisfies; and a child of the root, whose own `const` narrows like any other node's. Bites a
+    /// path below a node with values that is not left the empty set, in either descent: without
+    /// the narrowing the child, the grandchild, the `true` child and the child of the object list
+    /// no value set, and the `enum` child lists its own members. Bites the root's own values
+    /// dropped (`reach`'s `held` seed, or the root's entry in `enumerate_into`'s queue, made
+    /// `None`): the root's child then lists no value set.
     #[test]
     fn below_a_node_with_values_every_path_holds_the_empty_set() {
         let empty = |declared: Option<BTreeSet<JsonType>>| PathFacts {
@@ -1538,6 +1541,12 @@ mod tests {
                 } } }),
                 vec!["m", "unit"],
                 empty(types(&[JsonType::String])),
+            ),
+            (
+                "a child of the root",
+                json!({ "const": "x", "properties": { "a": {} } }),
+                vec!["a"],
+                empty(None),
             ),
         ];
         for (case, s, asked, expected) in cases {

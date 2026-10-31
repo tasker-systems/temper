@@ -96,8 +96,8 @@ A `const` and every `enum` member must be a scalar: a string of at most 256 byte
 number, a boolean or `null`; an object or an array is refused. A shape's schema holds at most 12,288
 JSON values in all, at most 3,072 of them objects, counted across the whole document with `default`
 and `examples` included. That budget can refuse a schema every other cap allows: 48 enums of 256
-strings each fit the per-keyword caps but not the budget. The declare routes also take a request body
-of at most 512 KiB.
+strings each fit the per-keyword caps but not the budget. The HTTP declare routes also take a
+request body of at most 512 KiB.
 `$ref`, `$defs`, `allOf`, `anyOf`, `oneOf`, `not`, `if`, `format` and every other keyword are
 refused at declare, with a sentence that lists this vocabulary. A refused commit, and a recorded
 verdict, name at most one violation, its message cut to 1 KiB.

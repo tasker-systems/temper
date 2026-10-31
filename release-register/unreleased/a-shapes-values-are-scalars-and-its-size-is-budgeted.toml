@@ -26,7 +26,7 @@ The ask walk reads a schema holding a structured `const` or `enum` member as `fa
 nothing, so every path is refused `path_outside_shape` and the vocabulary is empty. No stored shape
 reaches it, because the loader compiles every stored shape first. Below a node that declares values,
 every path holds the empty set: a `contains` ask there is refused `value_outside_shape`, while
-`compare` and `has_key` are admitted.
+`compare`, which reads the declared types only, and `has_key` are admitted.
 
 Stored shapes. A stored schema the new compile refuses can no longer be checked:
 - an `enforcing` family refuses every commit until the shape is amended, a write outage until its
@@ -44,20 +44,26 @@ For each row of `SELECT id, artifact_kind, schema FROM kb_data_artifact_shapes`,
 with `SELECT count(*) FROM jsonb_path_query(schema, 'strict $.**')` and its objects with
 `... 'strict $.** ? (@.type() == "object")'`, and look for structured members with
 `jsonb_path_query(schema, 'strict $.**.const ? (@.type() == "object" || @.type() == "array")', '{}', true)`
-and the same over `$.**.enum[*]`. These over-report (`.**` also reaches data positions and property
-names), so a hit calls for a look at the schema, not for an amendment. A shape that fails needs
-amending first. A self-hosted server's 25 MiB body limit still applies on every other route.
+and the same over `$.**.enum[*]`. Find the longest `const` or `enum` string, in JSON-escaped
+bytes, with
+`SELECT max(octet_length(v::text) - 2) FROM jsonb_path_query(schema, 'strict $.**.const ? (@.type() == "string")', '{}', true) v`
+and the same over `$.**.enum[*] ? (@.type() == "string")`; past 256 fails. These over-report
+(`.**` also reaches data positions and property names), so a hit calls for a look at the schema,
+not for an amendment. A shape that fails needs amending first. A self-hosted server's 25 MiB body
+limit still applies on the other gated routes, on `/api/query` and on `/mcp`.
 
 Rollback. The new compile is the old compile plus refusals, so the previous release accepts every
 schema this one does, and a shape declared under this release is never stranded by rolling back. If
 a deploy leaves shapes uncompilable and the release is rolled back, clear their records: delete the
 `kb_shape_reconcile_uncheckable` rows with `reason = 'schema_uncompilable'` and
-`recorded_at >= <deploy instant>`, then enqueue reconcile for the affected homes. A row from an
-earlier cause recorded in that window is harmless to delete; the next pass records it again.
+`recorded_at >= <deploy instant>`, then enqueue reconcile for the affected homes. A row recorded in
+that window for a shape that fails an older rule is harmless to delete; the next pass records it
+again.
 
-The caps are provisional: the node and object caps and the declare body limit are the shipped
-values. Bounding what one request can make the server parse across many shapes, and measuring other
-routes' bodies before they are parsed, are separate changes. No migration.
+The node and object caps (12,288 and 3,072) and the declare body limit (512 KiB) are this
+release's values; a later release may revise them. Bounding what one request can make the server
+parse across many shapes, and measuring other routes' bodies before they are parsed, are separate
+changes. No migration.
 
 Who observes: shape authors and the agents and CLIs declaring through the doors above, writers
 committing to an `enforcing` family, and agents asking at a path below a declared value. Release

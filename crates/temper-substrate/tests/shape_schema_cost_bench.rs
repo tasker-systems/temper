@@ -184,7 +184,8 @@ fn assert_compact_size_within(value: &Value, floor: usize, ceiling: usize, what:
 /// shape can now hold), arm64 (M4 Pro), rustc 1.99, release, median of three runs: 87 ms (80–91);
 /// max RSS 240 MiB.
 ///
-/// After the budget, at `HEAD` of this change, arm64 (M4 Pro), rustc 1.99, release, median of three runs, with 32 mixed scalars: 38 ms; max RSS 361 MiB.
+/// With the node budget, arm64 (M4 Pro), rustc 1.99, release, median of three runs, with 32 mixed
+/// scalars: 38 ms; max RSS 361 MiB.
 #[test]
 #[ignore = "benchmark: run with --release --ignored --nocapture before merge"]
 fn check_mixed_enum_at_the_cap() {
@@ -491,7 +492,8 @@ fn time_at_the_size_cap(name: &str, schema: &Value) {
 /// | false fields | 5.8 ms | — | 0.49 ms |
 /// | enum-carrying fields | 1.3 ms | — | 0.60 ms |
 ///
-/// After the budget, at `HEAD` of this change, arm64 (M4 Pro), rustc 1.99, release, median of three runs, each fixture filled to the budget (max RSS of the whole test 31 MiB):
+/// With the node budget, arm64 (M4 Pro), rustc 1.99, release, median of three runs, each fixture
+/// filled to the budget (max RSS of the whole test 31 MiB):
 ///
 /// | schema | values / objects | compile | check | enumerate |
 /// |---|---|---|---|---|
@@ -659,9 +661,9 @@ fn tiny_objects_text(chain: usize) -> (String, usize) {
 /// So the parsed `Value` holds 24.2 MiB, and the clone and the compile together 52 MiB more: the
 /// clone is another 24.2, so the compile itself holds about 28 MiB.
 ///
-/// After the budget, at `HEAD` of this change, arm64 (M4 Pro), rustc 1.99, release, median of three runs: the schema is refused; `T_parse` 2.0 ms, `T_clone` 2.35 ms, `T_refuse` 0.02 ms; max
-/// RSS at `measured` 55.8 MiB for either placement, against 83.3 MiB on `main`, because nothing
-/// compiles it.
+/// With the node budget, arm64 (M4 Pro), rustc 1.99, release, median of three runs: the schema is
+/// refused; `T_parse` 2.0 ms, `T_clone` 2.35 ms, `T_refuse` 0.02 ms; max RSS at `measured` 55.8 MiB
+/// for either placement, against 83.3 MiB on `main`, because nothing compiles it.
 #[test]
 #[ignore = "benchmark: run with --release --ignored --nocapture before merge"]
 fn parse_worst_case_at_the_byte_cap() {
@@ -734,10 +736,10 @@ fn at_the_caps_text() -> String {
 /// and `compile` (`T_compile`), and prints the model's weight beside `MAX_SHAPE_PARSED_WEIGHT`, the
 /// target the measured RSS is read against.
 ///
-/// After the budget, at `HEAD` of this change, arm64 (M4 Pro), rustc 1.99, release, median of three runs: `parsed_weight` 4,550,656 bytes against the 4,718,592 target; `T_parse` 0.26 ms,
-/// `T_clone` 0.15 ms, `T_compile` 0.85 ms; max RSS 6.8 MiB at `input`, 9.1 MiB at `parse` (the
-/// parsed `Value` holds 2.3 MiB, half what the model weighs), 16.4 MiB at `measured` (the clone
-/// and the compile hold 7.3 MiB more).
+/// With the node budget, arm64 (M4 Pro), rustc 1.99, release, median of three runs: `parsed_weight`
+/// 4,550,656 bytes against the 4,718,592 target; `T_parse` 0.26 ms, `T_clone` 0.15 ms, `T_compile`
+/// 0.85 ms; max RSS 6.8 MiB at `input`, 9.1 MiB at `parse` (the parsed `Value` holds 2.3 MiB, half
+/// what the model weighs), 16.4 MiB at `measured` (the clone and the compile hold 7.3 MiB more).
 #[test]
 #[ignore = "benchmark: run with --release --ignored --nocapture before merge"]
 fn parse_worst_case_at_the_caps() {
@@ -790,9 +792,10 @@ fn object_of_fields(count: usize, field: &Value) -> Value {
 /// exactly the values and objects its row states, and compiles. The table's first row, every live
 /// shape, is a production read with no fixed counts, so it has no fixture here.
 ///
-/// After the budget, at `HEAD` of this change, arm64 (M4 Pro), rustc 1.99, release, median of three runs: `T_compile` 1.16 ms (1,024 described strings), 0.76 ms (1,024 arrays of strings),
-/// 0.73 ms (1,024 nullable strings with a title, a description and an example), 0.16 ms (200
-/// fields with 32-member enums), 0.26 ms (32 fields with 256-string enums).
+/// With the node budget, arm64 (M4 Pro), rustc 1.99, release, median of three runs: `T_compile`
+/// 1.16 ms (1,024 described strings), 0.76 ms (1,024 arrays of strings), 0.73 ms (1,024 nullable
+/// strings with a title, a description and an example), 0.16 ms (200 fields with 32-member enums),
+/// 0.26 ms (32 fields with 256-string enums).
 #[test]
 #[ignore = "benchmark: run with --release --ignored --nocapture before merge"]
 fn compile_admission_profiles() {
@@ -913,9 +916,10 @@ type Fixture = fn() -> (String, usize);
 /// Times `enumerate` (`T_enum`) and prints the vocabulary's wire bytes. Under `SHAPE_BENCH_CASE`,
 /// runs the fixture of that name alone.
 ///
-/// After the budget, at `HEAD` of this change, arm64 (M4 Pro), rustc 1.99, release, median of three runs: string enums, 47 paths, `T_enum` 0.25 ms, max RSS 7.2 MiB at `parse` and 7.9 MiB at
-/// `measured` (the vocabulary holds 0.75 MiB); spine, 130 paths, `T_enum` 0.18 ms, 7.1 MiB and
-/// 8.1 MiB (1.0 MiB). On `main` the structured worst case held 19.7 MiB.
+/// With the node budget, arm64 (M4 Pro), rustc 1.99, release, median of three runs: string enums,
+/// 47 paths, `T_enum` 0.25 ms, max RSS 7.2 MiB at `parse` and 7.9 MiB at `measured` (the vocabulary
+/// holds 0.75 MiB); spine, 130 paths, `T_enum` 0.18 ms, 7.1 MiB and 8.1 MiB (1.0 MiB). On `main`
+/// the structured worst case held 19.7 MiB.
 #[test]
 #[ignore = "benchmark: run with --release --ignored --nocapture before merge"]
 fn vocabulary_values_worst_case() {
@@ -1043,12 +1047,14 @@ fn long_spine(leaves: usize) -> (Value, usize) {
 /// spine of the longest keys, so `enumerate` copies the whole spine into each path. Times
 /// `enumerate` and prints the vocabulary's wire bytes.
 ///
-/// On `main` at `0ef10cb0d`, arm64 (M4 Pro), rustc 1.99, release, median of three runs: `T_enum` 0.46 ms; max RSS 6.7 MiB once the schema is built,
-/// 11.2 MiB at `measured`, so the vocabulary holds 4.5 MiB; 4,027,856 wire bytes.
+/// On `main` at `0ef10cb0d`, arm64 (M4 Pro), rustc 1.99, release, median of three runs: `T_enum`
+/// 0.46 ms; max RSS 6.7 MiB once the schema is built, 11.2 MiB at `measured`, so the vocabulary
+/// holds 4.5 MiB; 4,027,856 wire bytes.
 ///
-/// After the budget, at `HEAD` of this change, arm64 (M4 Pro), rustc 1.99, release, median of three runs: 1,057 values, 32 objects, within the budget; `T_enum` 0.43 ms; max RSS 6.7 MiB built
-/// and 11.2 MiB at `measured`, so the vocabulary holds 4.5 MiB, unchanged from `main`: the budget
-/// does not bound the paths term.
+/// With the node budget, arm64 (M4 Pro), rustc 1.99, release, median of three runs: 1,057 values,
+/// 32 objects, within the budget; `T_enum` 0.43 ms; max RSS 6.7 MiB built and 11.2 MiB at
+/// `measured`, so the vocabulary holds 4.5 MiB, unchanged from `main`: the budget does not bound
+/// the paths term.
 #[test]
 #[ignore = "benchmark: run with --release --ignored --nocapture before merge"]
 fn vocabulary_paths_worst_case() {
@@ -1123,9 +1129,10 @@ fn zeros_that_fit(empty: usize) -> usize {
 ///   The count adds a container's members, reading each to count its objects, before it checks the
 ///   caps, so it reads this whole array: the widest single read a refusal makes.
 ///
-/// After the budget, at `HEAD` of this change, arm64 (M4 Pro), rustc 1.99, release, median of three runs: `T_refuse` 0.005 ms just over the budget and 0.004 ms with 256 KiB past the stop, so
-/// the count stops where the budget is passed; 0.03–0.05 ms when the excess is one array, which
-/// the count reads whole (one container's width) before it checks.
+/// With the node budget, arm64 (M4 Pro), rustc 1.99, release, median of three runs: `T_refuse`
+/// 0.005 ms just over the budget and 0.004 ms with 256 KiB past the stop, so the count stops where
+/// the budget is passed; 0.03–0.05 ms when the excess is one array, which the count reads whole
+/// (one container's width) before it checks.
 #[test]
 #[ignore = "benchmark: run with --release --ignored --nocapture before merge"]
 fn refuse_past_the_node_budget() {

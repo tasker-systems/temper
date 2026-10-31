@@ -9,11 +9,11 @@ Hardening. The schema walk behind an ask and a shape's vocabulary (`GET /api/sha
 only what a field tree may hold. A schema holding any other construct, or an `enum` or `type` in a
 form the walk does not read, is walked as `false` — it declares nothing, so every path is refused
 `path_outside_shape` and the vocabulary is empty — and is logged at error with the shape's id. It
-is never read as unconstrained; a `const`, or an `enum` member, that is an object, an array or a
-string past 256 JSON-escaped bytes is such a form. No shape reaches it: the loader compiles every
-stored shape before it is asked, and the compile refuses anything outside a field tree, which a test holds to the
-walk's own list. No wire value is added: `BoundKind` keeps its four members, and OpenAPI, ts-rs
-and the three generated SDKs change only in description text.
+is never read as unconstrained; a `const`, or an `enum` member, that is an object or an array is
+such a form. No shape reaches it: the loader compiles every stored shape before it is asked, and
+the compile refuses anything outside a field tree, which a test holds to the walk's own list. No
+wire value is added: `BoundKind` keeps its four members, and OpenAPI, ts-rs and the three
+generated SDKs change only in description text.
 
 The walk has no work budget: with no `$ref` or combinator each schema node is read once, so the
 walk is linear in a schema held to 256 KiB and to 12,288 JSON values (measured under 1 ms to
