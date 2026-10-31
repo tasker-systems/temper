@@ -52,7 +52,7 @@ async fn open_through_the_tool(
         .await
         .expect("the harness profile");
     // L0 is in the admin-only regime: only a system admin authors it, and a write grant there
-    // confers nothing (20261114000000).
+    // confers nothing (20261113000010).
     common::make_system_admin(&app.pool, harness_profile).await;
     let res = temper_mcp::tools::invocations::invocation_manage(
         svc,

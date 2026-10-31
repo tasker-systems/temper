@@ -33,7 +33,7 @@ async fn approved_backend(pool: &PgPool, email: &str) -> (DbBackend, ContextId, 
     let (profile, context) = common::fixtures::create_test_profile_with_context(pool, email).await;
     common::fixtures::approve_standing(pool, profile).await;
     // Self-attributed invocation-open requires authorship of the originating map (F2): an ordinary
-    // map this profile holds a write grant on. (L0 would need a system admin, 20261114000000.)
+    // map this profile holds a write grant on. (L0 would need a system admin, 20261113000010.)
     let map = common::fixtures::authored_map(pool, profile).await;
     (
         DbBackend::new(pool.clone(), ProfileId::from(profile)),

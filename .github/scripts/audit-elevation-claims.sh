@@ -405,7 +405,7 @@ current_gates() {
 # REVIEWED 2026-10-31 (map authorship reads the admin-only regime) — `reconcile_regime`
 # 76ead78c03ac -> 5339d74ce2eb: `authorize_reconcile`'s doc now says the regime covers maps bound to
 # temper-system as well as the gating team. Its arms are unchanged; the regime they read widened to
-# the root in `cogmap_write_requires_admin` (20261114000000), which only narrows who reconciles. The
+# the root in `cogmap_write_requires_admin` (20261113000010), which only narrows who reconciles. The
 # one claim bound to the gate, `handlers/cognitive_maps.rs`'s module doc, now names temper-system too.
 # `access_service.rs` 8 -> 9: `cogmap_write_requires_admin`'s doc says a regime map is authored by a
 # system admin only, which `cogmap_authorable_by_profile` now enforces. `subscription_service.rs`

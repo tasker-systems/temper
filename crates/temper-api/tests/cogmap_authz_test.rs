@@ -155,7 +155,7 @@ async fn a_gating_team_map_refuses_a_non_admin_author(pool: PgPool) {
     );
 }
 
-// ── Content creation reads the regime too (`cogmap_authorable_by_profile`, 20261114000000) ─────
+// ── Content creation reads the regime too (`cogmap_authorable_by_profile`, 20261113000010) ─────
 //
 // Reconcile and the grant door have always asked the regime. These ask the content path, the one
 // most callers take: `create_resource` into a map, which reaches `cogmap_authorable_by_profile`

@@ -57,7 +57,7 @@ async fn open_act_close_read_lifecycle_through_real_server(pool: sqlx::PgPool) {
     common::enable_invite_only(&pool, principal).await;
     // Self-attributed open requires authorship of the originating map (F2). `enable_invite_only`
     // made the principal a system admin, which is what authors L0: it is in the admin-only regime,
-    // where a write grant confers nothing (20261114000000).
+    // where a write grant confers nothing (20261113000010).
 
     // 1. open ────────────────────────────────────────────────────────────────────────
     let ack = app

@@ -6,7 +6,7 @@
 //! Happy path runs against the L0 kernel map (root-joined → readable by any approved profile;
 //! it has a reserved telos resource, so `open` succeeds), opened by a system admin: L0 is in the
 //! admin-only regime, where only a system admin authors and a write grant confers nothing
-//! (`20261114000000`). Deny path runs against a random cogmap the acting profile cannot read
+//! (`20261113000010`). Deny path runs against a random cogmap the acting profile cannot read
 //! (open → Forbidden) and a random invocation id (show → Ok(None), the leak-safe deny/absent
 //! contract).
 //!
@@ -248,7 +248,7 @@ async fn open_on_unreadable_cogmap_is_forbidden(pool: PgPool) {
 /// self-attributed open is denied. Granting explicit cogmap-write then lets the same open succeed.
 /// Closes the reader-posts-inert-envelopes ledger-noise vector.
 ///
-/// On L0 the same grant opens nothing: L0 is in the admin-only regime (`20261114000000`).
+/// On L0 the same grant opens nothing: L0 is in the admin-only regime (`20261113000010`).
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn self_attributed_open_requires_write(pool: PgPool) {
     let profile = common::fixtures::create_test_profile(&pool, "reader@example.com").await;

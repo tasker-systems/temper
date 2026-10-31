@@ -1079,7 +1079,7 @@ async fn an_edge_facet_in_a_readable_unauthorable_map_speaks_the_forbidden_detai
     // Kernel-homed source: the edge's home is L0, so the edge facet's container
     // clause dispatches to the cogmap authority. The HARNESS is a system admin, which
     // is what authors L0 for both the kernel ingest (create-into-cogmap, F1) and the
-    // assert's container clause: L0 is in the admin-only regime (20261114000000).
+    // assert's container clause: L0 is in the admin-only regime (20261113000010).
     common::make_system_admin(&app.pool, harness_id).await;
     let kernel_src = ingest(
         &app,

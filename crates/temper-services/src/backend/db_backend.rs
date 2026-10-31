@@ -1133,7 +1133,7 @@ impl DbBackend {
             return Err(TemperError::Forbidden);
         }
         // A reader is told which capability they lack, and on a map in the admin-only regime that
-        // is not a grant: grants there are inert (`cogmap_authorable_by_profile`, 20261114000000).
+        // is not a grant: grants there are inert (`cogmap_authorable_by_profile`, 20261113000010).
         let admin_only = crate::services::access_service::cogmap_write_requires_admin_on(
             &mut *conn,
             CogmapId::from(cogmap_id),

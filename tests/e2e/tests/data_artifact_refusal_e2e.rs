@@ -580,7 +580,7 @@ async fn an_uncompilable_schema_is_refused_at_declare_over_the_cogmap_route(pool
         .await
         .expect("the harness profile");
     // L0 is in the admin-only regime: only a system admin authors it, and a write grant there
-    // confers nothing (20261114000000).
+    // confers nothing (20261113000010).
     common::make_system_admin(&app.pool, owner_id).await;
     let probe = FetchProbe::bind();
     let rows_before = shape_row_count(&app).await;

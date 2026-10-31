@@ -79,7 +79,7 @@ async fn api_create_and_assert_under_invocation_stamp_authorship(pool: sqlx::PgP
     common::enable_invite_only(&pool, principal).await;
     // Self-attributed open requires authorship of the originating map (F2). `enable_invite_only`
     // made the principal a system admin, which is what authors L0: it is in the admin-only regime,
-    // where a write grant confers nothing (20261114000000).
+    // where a write grant confers nothing (20261113000010).
     app.client
         .contexts()
         .create("act-api", None)
@@ -205,7 +205,7 @@ async fn cli_edge_assert_under_invocation_stamps_authorship(pool: sqlx::PgPool) 
     common::enable_invite_only(&pool, principal).await;
     // Self-attributed open requires authorship of the originating map (F2). `enable_invite_only`
     // made the principal a system admin, which is what authors L0: it is in the admin-only regime,
-    // where a write grant confers nothing (20261114000000).
+    // where a write grant confers nothing (20261113000010).
     app.client
         .contexts()
         .create("act-cli", None)

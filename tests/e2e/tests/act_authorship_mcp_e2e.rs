@@ -43,7 +43,7 @@ async fn mcp_create_under_invocation_stamps_act_with_authorship(pool: sqlx::PgPo
     common::enable_invite_only(&pool, principal).await;
     // Self-attributed open requires authorship of the originating map (F2). `enable_invite_only`
     // made the principal a system admin, which is what authors L0: it is in the admin-only regime,
-    // where a write grant confers nothing (20261114000000).
+    // where a write grant confers nothing (20261113000010).
 
     // A context to create into.
     app.client

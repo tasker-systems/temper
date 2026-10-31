@@ -29,7 +29,7 @@ pub async fn clean_and_seed(_pool: &PgPool) {}
 /// read, not write). Used where a test principal must AUTHOR a map it can otherwise only read
 /// (e.g. opening a self-attributed invocation on a map it reads through a team). A grant on a map in
 /// the admin-only regime (L0, or a map bound to temper-system or the gating team) authors nothing:
-/// only a system admin authors those (`20261114000000`); use [`authored_map`] for an ordinary one.
+/// only a system admin authors those (`20261113000010`); use [`authored_map`] for an ordinary one.
 /// `granted_by` is the grantee itself (a fixture bootstrap standing in for a real delegated grant).
 pub async fn grant_cogmap_write(pool: &PgPool, cogmap: uuid::Uuid, profile: uuid::Uuid) {
     sqlx::query(

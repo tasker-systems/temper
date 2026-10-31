@@ -68,7 +68,7 @@ COMMENT ON FUNCTION public.cogmap_authorable_by_profile(uuid, uuid) IS
   'an explicit write grant (cogmaps have no owner). Membership alone never authors.';
 
 SELECT declare_migration(
-    20261114000000,
+    20261113000010,
     'additive',
     'New function cogmap_write_requires_admin(uuid), and a body-only CREATE OR REPLACE of '
     'cogmap_authorable_by_profile with signature and return type unchanged: a map bound to '

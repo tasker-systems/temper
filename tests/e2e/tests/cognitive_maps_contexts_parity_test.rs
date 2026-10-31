@@ -486,7 +486,7 @@ async fn genesis(
 
 /// Open an invocation envelope for the harness against L0. The F2 write gate requires
 /// authorship of L0, which is in the admin-only regime: only a system admin authors it
-/// (a write grant there confers nothing, `20261114000000`), so the harness is made one.
+/// (a write grant there confers nothing, `20261113000010`), so the harness is made one.
 /// Auto-join membership alone confers read, never write.
 async fn open_invocation_for_harness(
     app: &E2eTestApp,

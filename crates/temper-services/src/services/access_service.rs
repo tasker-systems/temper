@@ -827,7 +827,7 @@ pub async fn revoke_capability(
 /// gating and promotes an admin), or when it is bound to an instance team: temper-system or the
 /// gating team (see [`is_root_or_gating_team`]).
 ///
-/// The SQL function of the same name (`20261114000000`) is the one definition, and this asks it
+/// The SQL function of the same name (`20261113000010`) is the one definition, and this asks it
 /// rather than restating it. `cogmap_authorable_by_profile` reads it too, so a regime map is
 /// authored by a system admin only, on every path that authors into a map. Reconcile's authority
 /// (`DbBackend::authorize_reconcile`) and the grant door (`GrantAuthority`) consult this spelling.

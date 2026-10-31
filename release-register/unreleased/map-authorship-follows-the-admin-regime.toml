@@ -4,7 +4,7 @@ classes  = ["behavioral"]
 surfaces = ["http", "mcp", "cli-stdout", "clients"]
 status   = "signal-only"
 body = '''
-Two write paths now ask the object's own write regime. Migration `20261114000000`.
+Two write paths now ask the object's own write regime. Migration `20261113000010`.
 
 - A cognitive map bound to `temper-system` or to the gating team, or the reserved L0 kernel, is
   authored by a system admin and nobody else. Creating or updating a resource in it, asserting an

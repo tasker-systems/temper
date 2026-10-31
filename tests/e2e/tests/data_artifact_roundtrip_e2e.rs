@@ -803,7 +803,7 @@ async fn cogmap_home_shapes_declare_list_get_round_trip_and_authority_gate(pool:
         .await
         .expect("the harness profile");
     // L0 is in the admin-only regime: only a system admin authors it, and a write grant there
-    // confers nothing (20261114000000).
+    // confers nothing (20261113000010).
     common::make_system_admin(&app.pool, owner_id).await;
 
     let request = ShapeDeclareRequest {

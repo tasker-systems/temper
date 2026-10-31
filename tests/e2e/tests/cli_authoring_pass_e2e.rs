@@ -59,7 +59,7 @@ async fn the_whole_authoring_pass_runs_through_the_cli_alone(pool: sqlx::PgPool)
         .await
         .expect("profile pre-flight");
     // L0 is in the admin-only regime: only a system admin authors it, and a write grant there
-    // confers nothing (20261114000000).
+    // confers nothing (20261113000010).
     common::make_system_admin(&pool, profile.id).await;
 
     let map = L0_COGMAP.to_string();
