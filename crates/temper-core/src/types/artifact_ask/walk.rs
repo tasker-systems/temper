@@ -186,6 +186,14 @@ impl JsonType {
     }
 }
 
+/// Whether a value is a scalar: `null`, a boolean, a number or a string. This is the one
+/// definition of the concept; the walk, the evaluator and the shape compile all call it.
+/// [`JsonType::of`] alone is not that test, because it also returns [`JsonType::Object`] and
+/// [`JsonType::Array`].
+pub fn is_scalar(value: &Value) -> bool {
+    !value.is_object() && !value.is_array()
+}
+
 /// What the schema declares at one path. Each field is `None` when the schema leaves it
 /// unconstrained, so an absent field never reads as "nothing is admitted".
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -706,12 +714,7 @@ fn narrowed<'s>(inherited: Option<Values<'s>>, own: Option<Values<'s>>) -> Optio
 /// lists nothing: an ask there meets no value set, though the paths below it are still narrowed by
 /// what it holds. Each scalar part is held at one path, so a vocabulary copies it at most once.
 fn lists<'s>(held: Option<Values<'s>>, declares_own: bool) -> Option<Values<'s>> {
-    held.filter(|values| {
-        declares_own
-            || values
-                .iter()
-                .all(|value| !value.is_object() && !value.is_array())
-    })
+    held.filter(|values| declares_own || values.iter().copied().all(is_scalar))
 }
 
 /// Whether an object subschema declares a value set of its own: what [`declared_values`] reads.
@@ -1333,6 +1336,23 @@ mod tests {
             })
         );
         assert_eq!(at(&s, &["any"]), typed(&[JsonType::Array]));
+    }
+
+    #[test]
+    fn is_scalar_is_every_kind_but_object_and_array() {
+        for scalar in [
+            json!(null),
+            json!(true),
+            json!(0),
+            json!(-1.5),
+            json!(""),
+            json!("x"),
+        ] {
+            assert!(is_scalar(&scalar), "{scalar} is a scalar");
+        }
+        for container in [json!({}), json!([]), json!({"a": 1}), json!([1])] {
+            assert!(!is_scalar(&container), "{container} is not a scalar");
+        }
     }
 
     #[test]

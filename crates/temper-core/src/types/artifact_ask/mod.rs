@@ -47,8 +47,8 @@ pub use validate::{
     MAX_MEMBERSHIP_STEPS, MAX_TEACHING_BYTES,
 };
 pub use walk::{
-    enumerate, reads_whole, resolve, within_schema_bound, AskOperator, AskablePath, BoundKind,
-    JsonType, PathFacts, PathResolution, Vocabulary, WalkBounds,
+    enumerate, is_scalar, reads_whole, resolve, within_schema_bound, AskOperator, AskablePath,
+    BoundKind, JsonType, PathFacts, PathResolution, Vocabulary, WalkBounds,
 };
 
 /// The selection intents an ask may narrow by — the closed vocabulary of

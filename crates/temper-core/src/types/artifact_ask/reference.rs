@@ -40,6 +40,7 @@ use std::cmp::Ordering;
 
 use serde_json::{Map, Number, Value};
 
+use super::walk::is_scalar;
 use super::ArtifactPredicate;
 use crate::types::query::filter::{OrdOp, PropertyOp};
 
@@ -203,7 +204,7 @@ fn scalar_eq_within(a: &Value, b: &Value, steps: &mut usize) -> Option<bool> {
 }
 
 fn is_container(value: &Value) -> bool {
-    value.is_array() || value.is_object()
+    !is_scalar(value)
 }
 
 /// jsonb scalar equality: same type, numbers equal as decimals, strings byte-equal.
