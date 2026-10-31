@@ -638,7 +638,7 @@
         },
         {
           "const": "shape_schema_uncompilable",
-          "description": "The shape's schema does not compile under the no-fetch compiler, or is larger than the\nwalk reads and so is never compiled (then `teaches.beyond_bound` is `schema_bytes`). The\ndetail is a fixed sentence; the compiler's text is never echoed.",
+          "description": "The shape's schema does not compile under the no-fetch compiler, or is larger than the\nwalk reads and so is never compiled (then `teaches.beyond_bound` is `schema_bytes`). The\ndetail is a fixed sentence, naming for an uncompilable schema the first keyword or cap the\ncompile refused and its schema path — schema text the asker can already read; the\ncompiler's text is never echoed.",
           "type": "string"
         },
         {
