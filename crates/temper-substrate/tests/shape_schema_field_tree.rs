@@ -1045,6 +1045,25 @@ fn stored_shape_profiles_compile() {
         &json!({ "reading": 1.5 }),
         &json!({ "reading": "high" }),
     );
+
+    // A numeric `const` beside a string one, as four stored shapes hold (production read,
+    // 2026-10-31: no stored shape holds an `enum` or a structured value, and none passes 46 values
+    // or 13 objects).
+    let versioned = json!({
+        "$schema": DRAFT_2020_12,
+        "type": "object",
+        "required": ["schema_version", "kind"],
+        "properties": {
+            "schema_version": { "const": 1 },
+            "kind": { "const": "snapshot" },
+            "taken_at": { "type": "string", "minLength": 1 }
+        }
+    });
+    assert_verdicts(
+        &versioned,
+        &json!({ "schema_version": 1, "kind": "snapshot", "taken_at": "2026-10-31" }),
+        &json!({ "schema_version": 2, "kind": "snapshot" }),
+    );
 }
 
 // ── one failure, cut to a bound ──────────────────────────────────────────────────────────────
