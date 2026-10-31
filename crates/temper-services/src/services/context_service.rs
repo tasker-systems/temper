@@ -1653,8 +1653,9 @@ mod tests {
     /// Seed two profiles, a team, and a context owned by profile 1. Profile 1 is made a system
     /// admin — under D11 a `kb_principal_governance` grant (`is_system_admin` reads governance, not
     /// gating-team ownership). The gating-team config is retained because other tests on this
-    /// fixture exercise the `is_gating_team` target guard. Fixture inserts use runtime
-    /// `sqlx::query(...)`, not the compile-time macro, per project convention for test-fixture writes.
+    /// fixture exercise the instance-team target guard (`is_root_or_gating_team`). Fixture inserts
+    /// use runtime `sqlx::query(...)`, not the compile-time macro, per project convention for
+    /// test-fixture writes.
     async fn seed_admin_team_context(pool: &PgPool) -> (ProfileId, ProfileId, Uuid, ContextId) {
         let admin: Uuid = sqlx::query_scalar(
             "INSERT INTO kb_profiles (handle, display_name) VALUES ('admin', 'Admin') \
@@ -1690,7 +1691,7 @@ mod tests {
                 .fetch_one(pool)
                 .await
                 .unwrap();
-        // Promote to `owner` of the gating team (kept for the `is_gating_team` target-guard tests
+        // Promote to `owner` of the gating team (kept for the instance-team target-guard tests
         // that share this fixture) and point the gating slug at it.
         sqlx::query(
             "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'owner') \

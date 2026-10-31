@@ -1,34 +1,36 @@
--- A team is never its own ancestor (team DAG review L9).
+-- A team is never its own ancestor, and temper-system, the root, takes no parent.
 --
 -- kb_teams_parents has refused only the one-step cycle (`CHECK (child_id <> parent_id)`). A longer
--- one — A under B under A — was refused by nothing. team_ancestors still terminates over a cycle
--- (it recurses with UNION), but every team on the cycle becomes every other's ancestor, so each
--- reads everything attached to the others and inherits their grants: mutual full reach that no one
--- granted.
+-- one (A under B under A) was refused by nothing. team_ancestors still terminates over a cycle (it
+-- recurses with UNION), but every team on the cycle becomes every other's ancestor, so each reads
+-- everything attached to the others and inherits their grants. No API writes a cycle today; the
+-- refusal lives here so that every writer meets it, including a future re-parent endpoint and
+-- operator SQL.
 --
--- No API writes a cycle today. The only link writer is create_team, which links a team born in the
--- same transaction (it has no descendants), and the personal-team trigger's structural link under
--- temper-system. A re-parent, attach-parent or second-parent endpoint (review L1) would be the first
--- door able to close one, and operator SQL can already. So the refusal lives here, where every
--- writer meets it, rather than in the endpoint that does not exist yet.
+-- THE CHECK. Before a link (child C, parent P) is written: if C is temper-system it is refused (the
+-- root takes no parent). If P is temper-system the link is allowed without a walk: closing a cycle
+-- would need the root to descend from C, which the first rule forbids. That covers every sign-up's
+-- personal-team link (sync_personal_team), so sign-ups never queue on the lock below. Otherwise,
+-- if C is already an ancestor of P the link is refused. The walk ignores kb_teams.is_active: a cycle
+-- through a soft-deleted team is still a cycle, and would come back whole on a restore.
 --
--- THE CHECK. Before a link (child C, parent P) is written: if C is P, or C is already an ancestor of
--- P, the link would close a cycle, and it is refused with check_violation. The walk follows every
--- link regardless of kb_teams.is_active: a cycle through a soft-deleted team is still a cycle, and
--- would come back whole if that team were restored.
+-- CONCURRENCY. Two transactions linking A under B and B under A each miss the other's uncommitted
+-- row, so the walk runs after one transaction-scoped advisory lock that serializes such links. The
+-- walk is a new statement after the lock, so under READ COMMITTED it sees a link committed while
+-- this transaction waited. Under REPEATABLE READ it would not; no link writer runs at that level.
 --
--- CONCURRENCY. Two transactions linking A under B and B under A each see no cycle in the other's
--- uncommitted row. So the check takes one transaction-scoped advisory lock first, which serializes
--- link writes against each other only. Links are rare (team creation and, later, re-parenting), and
--- the lock is released at commit or rollback.
---
--- EXISTING ROWS. The migration refuses to apply over a cycle already present, and names one team on
--- it, so an operator can untangle it by hand rather than ship a trigger over a broken graph.
+-- EXISTING ROWS. Under a table lock, the migration refuses to apply over a cycle or a parented root.
+
+LOCK TABLE kb_teams_parents IN SHARE ROW EXCLUSIVE MODE;
 
 DO $$
 DECLARE
     v_team uuid;
 BEGIN
+    IF EXISTS (SELECT 1 FROM kb_teams_parents tp JOIN kb_teams t ON t.id = tp.child_id
+                WHERE t.slug = 'temper-system') THEN
+        RAISE EXCEPTION 'temper-system has a parent in kb_teams_parents: remove that link before this migration';
+    END IF;
     WITH RECURSIVE walk(origin, ancestor) AS (
         SELECT child_id, parent_id FROM kb_teams_parents
         UNION
@@ -47,6 +49,14 @@ RETURNS trigger LANGUAGE plpgsql
 SET search_path = public, pg_temp
 AS $$
 BEGIN
+    IF EXISTS (SELECT 1 FROM kb_teams WHERE id = NEW.child_id AND slug = 'temper-system') THEN
+        RAISE EXCEPTION 'temper-system is the root of the team tree and takes no parent'
+            USING ERRCODE = 'check_violation';
+    END IF;
+    -- A link under the root cannot close a cycle while the root has no parent (refused above).
+    IF EXISTS (SELECT 1 FROM kb_teams WHERE id = NEW.parent_id AND slug = 'temper-system') THEN
+        RETURN NEW;
+    END IF;
     PERFORM pg_advisory_xact_lock(hashtext('kb_teams_parents:cycle_check'));
     IF EXISTS (
         WITH RECURSIVE up(team_id) AS (
@@ -65,8 +75,9 @@ BEGIN
 END;
 $$;
 COMMENT ON FUNCTION team_parent_link_refuses_cycle() IS
-  'Refuses a kb_teams_parents link whose child is already an ancestor of its parent (a cycle). '
-  'Walks every link, live or soft-deleted. Serialized by a transaction-scoped advisory lock.';
+  'Refuses a kb_teams_parents link that gives temper-system a parent, or whose child is already an '
+  'ancestor of its parent (a cycle). Links under temper-system skip the walk: they cannot close one. '
+  'Otherwise walks every link, live or soft-deleted, under a transaction-scoped advisory lock.';
 
 CREATE TRIGGER trg_team_parent_link_refuses_cycle
     BEFORE INSERT OR UPDATE OF child_id, parent_id ON kb_teams_parents
@@ -76,6 +87,7 @@ SELECT declare_migration(
     20261112000010,
     'additive',
     'New trigger function team_parent_link_refuses_cycle() and BEFORE INSERT OR UPDATE trigger on '
-    'kb_teams_parents: a link that would make a team its own ancestor is refused. No API writes one '
-    'today; refuses to apply over an existing cycle. No row is rewritten.'
+    'kb_teams_parents: a link that gives temper-system a parent, or makes a team its own ancestor, '
+    'is refused. No API writes one today; refuses to apply over an existing cycle or parented root. '
+    'No row is rewritten.'
 );

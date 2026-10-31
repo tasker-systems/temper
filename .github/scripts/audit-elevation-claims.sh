@@ -382,6 +382,11 @@ current_gates() {
 # `cogmap_service.rs`), and the rest hold. `access_service.rs` 9 -> 8: `is_gating_team`'s doc
 # went with the function. `team_service.rs` 25 -> 27: two test docs (the root roster is admin-only;
 # create_team re-reads the parent role under its lock), each matching the gate it names.
+# REVIEWED 2026-10-31 (same PR, review round): `invitation_service.rs` 6 -> 7 — `create_invitation`'s
+# doc now says only a system admin invites on the gating team and temper-system; the `team_membership`
+# gate, which holds. Other claims bound to the moved gates now name temper-system where they named
+# only the gating team (`admin_ledger.rs`, `admin_ledger_service.rs`, `team_service.rs`,
+# `machine_authz.rs`, the MCP `invitation_manage` description).
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -430,7 +435,7 @@ claim crates/temper-services/src/services/connection_service.rs 11 connection
 claim crates/temper-services/src/services/context_service.rs 15 context_admin
 claim crates/temper-services/src/services/erasure_retention_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/erasure_service.rs 1 is_system_admin
-claim crates/temper-services/src/services/invitation_service.rs 6 team_membership
+claim crates/temper-services/src/services/invitation_service.rs 7 team_membership
 claim crates/temper-services/src/services/machine_authz.rs 8 machine,team_membership
 claim crates/temper-services/src/services/machine_client_service.rs 7 machine
 claim crates/temper-services/src/services/machine_registration_service.rs 9 machine

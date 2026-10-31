@@ -101,7 +101,7 @@ pub(crate) struct ResolvedMembership {
 
 impl ResolvedMembership {
     /// Whether the caller manages this team: a system admin, or an owner or maintainer of it (never
-    /// on the gating team, R11). "May confer something ON this team" — the admin ledger's C12 read
+    /// on the gating team or temper-system, R11 and G14). "May confer something ON this team" — the admin ledger's C12 read
     /// arm and `machine_authz`'s reach bar call this rather than restating it.
     pub(crate) fn manages(&self) -> bool {
         matches!(
@@ -127,8 +127,8 @@ impl ResolvedMembership {
 
     /// The invitation gate (C16, R10): an invitation may offer a role ranked at or below the
     /// inviter's own (C1), and only a manager of the team — or a system admin — may invite. R11
-    /// makes that admin-only on the gating team, which [`MembershipAuthority::resolve`]'s arm
-    /// order already decides: a non-admin row on the gating team resolves to the self-only arm
+    /// makes that admin-only on the gating team and temper-system, which
+    /// [`MembershipAuthority::resolve`]'s arm order already decides: a non-admin row there resolves to the self-only arm
     /// or to none, and a non-manager inviting is refused before anything about the invitation is
     /// learned (S6).
     ///
@@ -216,7 +216,7 @@ impl MembershipAuthority {
     }
 
     /// Arms 2 and 3 of [`Self::resolve`]: the authority a person who is not a system admin holds,
-    /// from whether the team is the gating team and their role on it. Shared with
+    /// from whether the team is an instance team (the gating team or the root) and their role on it. Shared with
     /// [`inviter_ceiling`], so an inviter is judged by exactly the arms a caller is.
     fn non_admin(is_instance_team: bool, role: Option<TeamRole>) -> Self {
         if is_instance_team {

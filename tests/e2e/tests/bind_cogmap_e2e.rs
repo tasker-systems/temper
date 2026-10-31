@@ -454,3 +454,49 @@ async fn bind_to_gating_team_denied_for_non_admin(pool: sqlx::PgPool) {
         "no escalation binding written"
     );
 }
+
+/// The root is admin-only for a bind whatever the gating team is: with the gating slug pointed at a
+/// shared team, a non-admin maintainer of `temper-system` is still refused. The root reaches every
+/// profile, so a binding to it publishes the map to the whole instance.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn bind_to_the_root_denied_for_non_admin_when_it_is_not_the_gating_team(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let admin_id = provision_profile(&app, &app.token).await;
+    common::enable_invite_only(&pool, admin_id).await;
+
+    let (token, second_id) = second_user(&app, &pool).await;
+    let cogmap_id = second_user_creates_map(&app, &token).await; // holds can_grant on their map
+
+    sqlx::query("INSERT INTO kb_teams (slug, name) VALUES ('gate', 'gate')")
+        .execute(&pool)
+        .await
+        .expect("seed a shared gating team");
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'gate' WHERE id = 1")
+        .execute(&pool)
+        .await
+        .expect("point the gating slug away from the root");
+
+    let root_id: Uuid = sqlx::query_scalar("SELECT id FROM kb_teams WHERE slug = 'temper-system'")
+        .fetch_one(&pool)
+        .await
+        .expect("root team id");
+    sqlx::query(
+        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'maintainer') \
+         ON CONFLICT (team_id, profile_id) DO UPDATE SET role = 'maintainer'",
+    )
+    .bind(root_id)
+    .bind(second_id)
+    .execute(&pool)
+    .await
+    .expect("make the second user a maintainer of the root");
+
+    assert_eq!(
+        bind_status(&app, &token, cogmap_id, root_id).await,
+        StatusCode::FORBIDDEN,
+        "binding to temper-system must stay admin-only when it is not the gating team"
+    );
+    assert!(
+        !binding_exists(&pool, cogmap_id, root_id).await,
+        "no binding written"
+    );
+}

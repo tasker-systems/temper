@@ -3,11 +3,12 @@
 //! One policy where `cogmap_service::can_bind` and `context_service::can_share` were the same
 //! policy written twice. They differed in exactly one probe — how the caller's authority over the
 //! *object* is established — and agreed on everything else: the admin short-circuit, the
-//! gating-team exclusion, and the `can_manage` bar on the target team.
+//! instance-team exclusion (the root and the gating team), and the `can_manage` bar on the target
+//! team.
 //!
 //! **In Rust, this is now the only copy. It is not the only copy.** `context_reassign`
 //! (`migrations/20260715000010_context_reassign_fns.sql:77-93`) re-implements the same policy in
-//! plpgsql — admin bypass, non-gating target, owner/maintainer on it, administers-the-context —
+//! plpgsql — admin bypass, a target that is neither the root nor the gating team, owner/maintainer on it, administers-the-context —
 //! because it is the *atomic* enforcement behind [`crate::services::context_service::reassign`]'s
 //! pre-check (`context_service.rs:629` explains the pairing). That copy is deliberate and out of
 //! this module's reach. Anyone tempted to describe this as "the one place the policy lives" should

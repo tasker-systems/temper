@@ -321,7 +321,7 @@ async fn contain_reach(
     // a second copy is what would let the two arms drift apart again.
     // D4 — the membership bar: exactly what `add_member` requires of a human. That is the
     // membership authority's managing arm (team-role rank plan P15), which also refuses a
-    // non-admin on the gating team (R11): a gating-team owner who is not a system admin can no more
+    // non-admin on the gating team or temper-system (R11): an owner there who is not a system admin can no more
     // put a machine on that roster than add a person to it. (The admin arm returned before this
     // function runs; the rank bound is moot, since D4b caps a machine at `member`.)
     // `contain_target_team` keeps `require_manage_on_team`: a reach grant writes no membership.
