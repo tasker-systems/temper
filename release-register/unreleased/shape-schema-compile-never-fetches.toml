@@ -13,12 +13,16 @@ rather than followed, and no refusal carries remote or file content. Declaring a
 `declare_data_artifact_shape` tool and `temper data-artifact schema declare`) now compiles the
 schema after the home's write gate and before any write; one that cannot compile is refused with
 the existing data-artifact refusal (`400`, code `DATA_ARTIFACT_REFUSAL`, MCP `invalid_params`)
-carrying one fixed sentence, and no shape row is written. Only a field tree declares; see
+naming the first keyword that failed and where, then one fixed sentence, and no shape row is
+written; no refusal quotes the compiler's text or a URI's content. A `$ref` or `$schema` held under
+an `x-` key is carried, never read and never fetched. Only a field tree declares; see
 `a-shape-is-a-field-tree`.
 A shape already stored whose schema cannot compile no longer errors at commit: an `enforcing`
 family refuses the commit with the data-artifact refusal and writes nothing, and an `advisory`
 family stores the artifact whole with no verdict, so it reads `declared_not_yet_checked`. Reconcile
-skips such a shape's artifacts without failing the rest of the anchor. Request and response shapes
+skips such a shape's artifacts without failing the rest of the anchor. The community instance
+(temperkb.io) holds no such shape; another deployment should run the field-tree screen named in
+`a-shape-is-a-field-tree` before upgrading. Request and response shapes
 are unchanged and `openapi.json` does not move; no migration. Who observes: shape authors and the
 agents and CLIs declaring through the doors above. Release relevance: signal-only.
 '''

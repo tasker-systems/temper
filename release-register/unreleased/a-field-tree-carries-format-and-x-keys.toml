@@ -1,0 +1,25 @@
+title    = "A shape may carry format and x-* keys as inert annotations, and a refused schema is named by its first failing keyword and path"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "mcp", "cli-stdout"]
+status   = "signal-only"
+body = '''
+Loosening, plus a richer refusal. A data-artifact shape's field tree now accepts `format` (a string)
+in any schema position as an annotation that is never enforced — `"format": "date-time"` documents a
+field, and a string that is not a date-time still conforms — and accepts any key beginning `x-` in
+any schema position, carried as written and never read, whatever it holds. A shape stored with
+either, refused under the previous rule, compiles again: an enforcing family checks commits, an
+advisory one records verdicts, asks read it and reconcile checks it.
+
+A schema that is still not a field tree is refused with the first keyword, cap or form the walk
+refused and the JSON-pointer path of the schema position holding it, before the fixed sentence that
+lists the vocabulary: `the shape's JSON Schema cannot be compiled (keyword allOf at /properties/when):
+a shape is a field tree — …`. The detail is schema text only — never a `const`, `enum`, `default`,
+`examples` or `x-` value, never the compiler's text — and the sentence stays within 1 KiB. Who sees
+it: the declarer at declare (`POST /api/contexts/{id}/shapes`, `POST /api/cognitive-maps/{id}/shapes`,
+MCP `declare_data_artifact_shape`, `temper data-artifact schema declare`); at an ask and a shape's
+by-id read (`unaskable`), the reader, who can already read the shape; at a commit refused because
+the enforcing shape cannot be compiled, the committer only if they can read that shape, and
+otherwise the unchanged fixed sentence. Reason codes, status codes and response shapes are
+unchanged; no migration. Release relevance: signal-only.
+'''

@@ -30,7 +30,7 @@ use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ContextId, EntityId, ProfileId, ShapeId};
 use temper_core::types::workflow_job::{AnchorJobPayload, ClaimedAnchorJob, DispatchType, Persona};
 use temper_substrate::payloads::{AnchorRef, EnforcementMode, KindOwner};
-use temper_substrate::shape_schema::{self, ShapeSchemaUncompilable};
+use temper_substrate::shape_schema;
 use temper_substrate::writes::{self, DataArtifactRefusal, DeclareShapeParams};
 
 /// Lease for a claimed shape-reconcile job. Same reasoning as the region lease: MUST exceed the
@@ -100,10 +100,9 @@ pub async fn declare_shape(pool: &PgPool, p: DeclareShapeServiceParams<'_>) -> A
     }
     match shape_loader::judge(p.schema).await? {
         SchemaVerdict::Compiles => {}
-        SchemaVerdict::Uncompilable => {
-            return Err(ApiError::DataArtifactRefusal(
-                ShapeSchemaUncompilable.to_string(),
-            ))
+        // The declarer wrote the schema, so the refusal names what the compile refused first.
+        SchemaVerdict::Uncompilable(refused) => {
+            return Err(ApiError::DataArtifactRefusal(refused.detailed()))
         }
         SchemaVerdict::TooLarge => return Err(ApiError::DataArtifactRefusal(too_large())),
     }

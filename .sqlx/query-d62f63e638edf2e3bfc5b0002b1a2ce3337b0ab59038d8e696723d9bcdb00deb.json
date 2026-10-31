@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (SELECT 1 FROM shape_by_id($1, $2)) AS \"reads!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "reads!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d62f63e638edf2e3bfc5b0002b1a2ce3337b0ab59038d8e696723d9bcdb00deb"
+}

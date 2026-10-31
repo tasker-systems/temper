@@ -1084,16 +1084,19 @@ pub(crate) async fn project_property_unset(
 }
 
 /// The refusal for a commit into a family whose `enforcing` shape cannot be compiled, whether
-/// the schema is malformed or is not a field tree. A fixed sentence true
-/// of both causes: the compiler's text and any URI in the schema never reach the caller. Typed so
-/// the surfaces render it as the data-artifact refusal rather than the 500-class bridge.
-fn uncompilable_shape_refusal() -> anyhow::Error {
+/// the schema is malformed or is not a field tree. Its `message` is a fixed sentence true of both
+/// causes: the compiler's text and any URI in the schema never reach the caller. It carries the
+/// shape and what the compile refused first beside the message, so a door that knows its reader
+/// can already read that shape may name it ([`crate::writes::DataArtifactRefusal::message_for`]);
+/// this layer does not know the reader, so the message it sets names nothing. Typed so the surfaces
+/// render it as the data-artifact refusal rather than the 500-class bridge.
+fn uncompilable_shape_refusal(
+    shape_id: Uuid,
+    refused: crate::shape_schema::ShapeSchemaUncompilable,
+) -> anyhow::Error {
     anyhow::Error::new(crate::writes::DataArtifactRefusal {
-        message: "data_artifact_commit: the enforcing shape in force for this family cannot be \
-                  compiled — it is not a field tree this server can compile — so the content's \
-                  conformance cannot be checked and the commit is refused; a steward must amend \
-                  the shape"
-            .to_owned(),
+        message: crate::writes::uncompilable_shape_message(None),
+        uncompilable_shape: Some(crate::writes::UncompilableShapeInForce { shape_id, refused }),
     })
 }
 
@@ -1110,6 +1113,7 @@ fn classify_data_artifact_sql_error(e: sqlx::Error) -> anyhow::Error {
         if db.code().as_deref() == Some("P0001") && db.message().starts_with("data_artifact_") {
             return anyhow::Error::new(crate::writes::DataArtifactRefusal {
                 message: db.message().to_string(),
+                uncompilable_shape: None,
             });
         }
     }
@@ -1565,6 +1569,7 @@ pub async fn fire_with(
                                                  to the enforcing shape in force for this family \
                                                  — {path}: {msg}"
                                             ),
+                                            uncompilable_shape: None,
                                         },
                                     ));
                                 }
@@ -1573,8 +1578,11 @@ pub async fn fire_with(
                                 }
                             }
                         }
-                        Err(_) if enforcement == "enforcing" => {
-                            return Err(uncompilable_shape_refusal());
+                        Err(refused) if enforcement == "enforcing" => {
+                            let shape_id = row
+                                .shape_id
+                                .context("shape in force returned null shape_id")?;
+                            return Err(uncompilable_shape_refusal(shape_id, refused));
                         }
                         Err(_) => {
                             tracing::warn!(

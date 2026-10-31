@@ -376,7 +376,9 @@ const READ_SCHEMA_URIS: [&str; 2] = [
 /// walk reads or passes over, with `$schema` (the 2020-12 spelling, with or without a trailing `#`)
 /// and `$id` at the root alone. An `enum` must be an array, and a `type` a name or an array of
 /// names, since the walk would read any other form as declaring nothing. What
-/// `additionalProperties` holds is not walked, so it is not read here.
+/// `additionalProperties` holds is not walked, so it is not read here. A string `format` and any
+/// key beginning `x-` are passed over, as the compile carries them: annotations that declare
+/// nothing of a path, and an `x-` value is never read.
 ///
 /// One pass from an explicit stack, each schema position pushed once, so it is linear in the
 /// schema and never recurses on the Rust stack.
@@ -410,6 +412,10 @@ pub fn reads_whole(schema: &Value) -> bool {
                 | "minimum" | "maximum"
                 // Annotations.
                 | "title" | "description" | "$comment" | "default" | "examples" => {}
+                // An annotation the compile never asserts, so it declares nothing of a path.
+                "format" if value.is_string() => {}
+                // Carried and ignored, as the compile carries them: never read, whatever they hold.
+                extension if extension.starts_with("x-") => {}
                 "$schema"
                     if root
                         && value
@@ -1377,11 +1383,10 @@ mod tests {
             json!({ "oneOf": [{}] }),
             json!({ "not": {} }),
             json!({ "if": {}, "then": {} }),
-            json!({ "format": "date" }),
             json!({ "prefixItems": [{}] }),
             json!({ "patternProperties": { "^a": {} } }),
             json!({ "dependentSchemas": { "z": {} } }),
-            json!({ "x-extension": true }),
+            json!({ "format": 7 }),
             json!({ "$schema": "http://json-schema.org/draft-07/schema#" }),
             json!({ "$schema": "http://json-schema.org/draft/2020-12/schema" }),
             json!({ "$schema": 7 }),
@@ -1435,6 +1440,25 @@ mod tests {
             assert!(!reads_whole(&below), "{below}");
             assert_eq!(at(&below, &["a"]), PathResolution::NotDeclared, "{below}");
         }
+    }
+
+    /// `format` and `x-*` keys are annotations the compile carries (shape rulings R1, R2), so the
+    /// walk passes over them: the paths beside them stay declared, and what an `x-` key holds —
+    /// here a `properties` that would otherwise declare `hidden` — is never read as a schema.
+    #[test]
+    fn format_and_extension_keys_are_passed_over_and_never_read() {
+        let s = json!({
+            "x-ui": {
+                "$ref": "http://169.254.169.254/latest/meta-data",
+                "properties": { "hidden": { "type": "string" } }
+            },
+            "properties": {
+                "a": { "type": "string", "format": "date-time", "x-order": 1 }
+            }
+        });
+        assert!(reads_whole(&s), "{s}");
+        assert_eq!(at(&s, &["a"]), typed(&[JsonType::String]));
+        assert_eq!(at(&s, &["hidden"]), PathResolution::NotDeclared);
     }
 
     #[test]

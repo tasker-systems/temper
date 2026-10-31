@@ -408,7 +408,8 @@ impl ShapeLoad {
     ///
     /// **Fixed sentences.** `shape_not_askable` reads the same for a shape that does not exist and
     /// one the asker cannot read, because they are one arm. `shape_schema_uncompilable` never
-    /// echoes the compiler: its text is the author's material, not the asker's. A schema past the
+    /// echoes the compiler; it names what the compile refused first, when it named something —
+    /// schema text the asker can already read, since the load reached it through the gated read. A schema past the
     /// walk's byte bound is refused with the same reason, its own sentence naming the bound, and
     /// `teaches.beyond_bound: schema_bytes` — the bound as data, never a compiler's words.
     pub fn loaded(&self) -> Result<&LoadedShape, PlanRefusal> {
@@ -430,7 +431,13 @@ impl ShapeLoad {
                 SUPERSEDED_NO_SUCCESSOR,
                 None,
             ),
-            ShapeLoad::Uncompilable => (RefusalReason::ShapeSchemaUncompilable, UNCOMPILABLE, None),
+            ShapeLoad::Uncompilable { refused } => {
+                return Err(refusal(
+                    RefusalReason::ShapeSchemaUncompilable,
+                    uncompilable(refused.as_deref()),
+                    None,
+                ))
+            }
             ShapeLoad::SchemaTooLarge => {
                 return Err(refusal(
                     RefusalReason::ShapeSchemaUncompilable,
@@ -468,6 +475,18 @@ const SUPERSEDED_NO_SUCCESSOR: &str = "the named shape has been amended, and no 
 
 const UNCOMPILABLE: &str =
     "the shape's schema does not compile, so nothing can be asked of it until the shape is amended";
+
+/// The sentence for a schema that does not compile: [`UNCOMPILABLE`], naming what the compile
+/// refused first when it named something.
+fn uncompilable(refused: Option<&str>) -> String {
+    match refused {
+        None => UNCOMPILABLE.to_owned(),
+        Some(refused) => format!(
+            "the shape's schema does not compile ({refused}), so nothing can be asked of it until \
+             the shape is amended"
+        ),
+    }
+}
 
 /// The sentence for a schema past the walk's byte bound: never compiled, so never "does not
 /// compile" — the reason is the size, and the sentence says which.
@@ -1961,9 +1980,28 @@ mod tests {
         assert_eq!(not_askable.reason, RefusalReason::ShapeNotAskable);
         assert_eq!(not_askable.detail, NOT_ASKABLE);
         assert_eq!(not_askable.teaches, None);
-        let uncompilable = ShapeLoad::Uncompilable.loaded().unwrap_err();
+        let uncompilable = ShapeLoad::Uncompilable { refused: None }
+            .loaded()
+            .unwrap_err();
         assert_eq!(uncompilable.reason, RefusalReason::ShapeSchemaUncompilable);
         assert_eq!(uncompilable.detail, UNCOMPILABLE);
+    }
+
+    /// What the compile refused first is named inside the sentence, which still says the shape
+    /// must be amended (shape ruling R4).
+    #[test]
+    fn uncompilable_names_what_the_compile_refused() {
+        let refused = ShapeLoad::Uncompilable {
+            refused: Some("keyword allOf at /properties/when".to_owned()),
+        }
+        .loaded()
+        .unwrap_err();
+        assert_eq!(refused.reason, RefusalReason::ShapeSchemaUncompilable);
+        assert_eq!(
+            refused.detail,
+            "the shape's schema does not compile (keyword allOf at /properties/when), so nothing \
+             can be asked of it until the shape is amended"
+        );
     }
 
     /// A schema past the walk's byte bound is refused at the load with the compile step's reason,

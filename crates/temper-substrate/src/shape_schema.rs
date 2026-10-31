@@ -55,29 +55,105 @@ pub use jsonschema::Validator;
 
 /// The schema is not a field tree this server can compile.
 ///
-/// Carries nothing: the compiler's own error is dropped on purpose. Under a fetching compiler it
-/// describes a remote response, and under any compiler it is the declarer's material, not the
-/// reader's. [`Display`](std::fmt::Display) is one fixed sentence that tells a declarer what to
-/// change.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ShapeSchemaUncompilable;
+/// Carries what the walk refused first, when the walk refused it: one keyword, cap or form, and the
+/// JSON-pointer path of the schema position it sits in (`keyword allOf at /properties/when`). That
+/// is schema text the walk itself chose — a keyword name cut to [`MAX_REFUSED_KEYWORD_BYTES`], a
+/// count, a cap, and the property names on the path to it — never a `const`, `enum`, `default` or
+/// `examples` value, never an `x-*` value, and never the compiler's own error, which is still
+/// dropped on purpose: under a fetching compiler it would describe a remote response.
+///
+/// Who may see it is the door's decision, not this type's. [`Display`](std::fmt::Display) is the
+/// fixed sentence alone, the same for every schema, so a door that forgets to decide shows nothing
+/// of the schema. A door whose reader can already read the shape — the declarer at declare; at
+/// ask, `askable` and an enforcing commit, a reader the gated shape read admits — opts in with
+/// [`detailed`](Self::detailed). Either form fits [`MAX_FAILURE_MESSAGE_BYTES`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ShapeSchemaUncompilable {
+    refused: Option<Box<str>>,
+}
+
+impl ShapeSchemaUncompilable {
+    /// What the walk refused first, as `<what> at <path>`, already bounded; `None` when the walk
+    /// admitted the schema and the build refused it (2020-12 meta-validation, or a pattern that
+    /// compiles past [`MAX_PATTERN_BYTES`]), where the build's position is given instead.
+    #[must_use]
+    pub fn refused(&self) -> Option<&str> {
+        self.refused.as_deref()
+    }
+
+    /// The fixed sentence with what was refused named inside it, for a reader who can already read
+    /// the shape: `the shape's JSON Schema cannot be compiled (keyword allOf at /properties/when):
+    /// a shape is a field tree — …`. The fixed sentence when nothing was named. At most
+    /// [`MAX_FAILURE_MESSAGE_BYTES`].
+    #[must_use]
+    pub fn detailed(&self) -> String {
+        let explanation = self.to_string();
+        let Some(refused) = self.refused() else {
+            return explanation;
+        };
+        let rest = explanation
+            .strip_prefix(UNCOMPILABLE_LEAD)
+            .unwrap_or(&explanation);
+        format!("{UNCOMPILABLE_LEAD} ({refused}){rest}")
+    }
+
+    fn naming(refused: String) -> Self {
+        Self {
+            refused: Some(cut_middle(refused, refused_room()).into_boxed_str()),
+        }
+    }
+}
+
+/// The words every form of the refusal opens with; [`ShapeSchemaUncompilable::detailed`] names
+/// what was refused right after them.
+const UNCOMPILABLE_LEAD: &str = "the shape's JSON Schema cannot be compiled";
+
+/// The most bytes a refused keyword's own name is quoted to. An unknown key can be any length; the
+/// longest 2020-12 keyword (`unevaluatedProperties`) is 21.
+pub const MAX_REFUSED_KEYWORD_BYTES: usize = 64;
+
+/// `text` if it fits in `limit` bytes; otherwise its head and its tail, on char boundaries, with
+/// `…` between, in `limit` bytes. What was refused leads and where it sits ends a refusal, so a
+/// long path loses its middle: `nesting past 16 levels at /properties/a/…/properties/a`.
+fn cut_middle(text: String, limit: usize) -> String {
+    if text.len() <= limit {
+        return text;
+    }
+    let room = limit - '…'.len_utf8();
+    let mut head = room / 2;
+    while !text.is_char_boundary(head) {
+        head -= 1;
+    }
+    let mut tail = text.len() - (room - head);
+    while !text.is_char_boundary(tail) {
+        tail += 1;
+    }
+    format!("{}…{}", &text[..head], &text[tail..])
+}
+
+/// The room [`ShapeSchemaUncompilable::detailed`] leaves for what was refused: the bound, less the
+/// fixed sentence and the ` (` `)` around the insert.
+fn refused_room() -> usize {
+    MAX_FAILURE_MESSAGE_BYTES - ShapeSchemaUncompilable::default().to_string().len() - 3
+}
 
 impl std::fmt::Display for ShapeSchemaUncompilable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "the shape's JSON Schema cannot be compiled: a shape is a field tree — a JSON Schema \
+            "{UNCOMPILABLE_LEAD}: a shape is a field tree — a JSON Schema \
              2020-12 document using only type, properties, required, additionalProperties (true, \
              false or a schema), items (one schema), enum (at most {MAX_ENUM_ENTRIES} strings, or \
              {MAX_MIXED_ENUM_ENTRIES} values of any other kind), const, pattern (at most \
              {MAX_PATTERN_SOURCE_BYTES} bytes of source, compiling within {pattern_kib} KiB, at most \
              {MAX_SHAPE_PATTERNS} in a shape, no lookaround or backreferences), minLength, \
              maxLength, minItems, maxItems, minimum, maximum, title, description, $comment, \
-             default and examples, with property names (in properties and required) of at most \
-             {MAX_PROPERTY_NAME_BYTES} bytes, $schema and $id only at the root ($schema, if \
-             present, spelled {schema_uri} with or without a trailing #), nested at most \
-             {MAX_SHAPE_DEPTH} levels; $ref, $defs, allOf, anyOf, oneOf, not, if, format and \
-             every other keyword are refused",
+             default, examples and format (a string, never enforced), with property names (in \
+             properties and required) of at most {MAX_PROPERTY_NAME_BYTES} bytes, $schema and $id \
+             only at the root ($schema, if present, spelled {schema_uri} with or without a \
+             trailing #), nested at most {MAX_SHAPE_DEPTH} levels; keys beginning x- are carried \
+             and ignored; $ref, $defs, allOf, anyOf, oneOf, not, if and every other keyword are \
+             refused",
             pattern_kib = MAX_PATTERN_BYTES / 1024,
             schema_uri = ACCEPTED_SCHEMA_URIS[0],
         )
@@ -95,7 +171,7 @@ impl Retrieve for RefuseEveryUri {
         &self,
         _uri: &Uri<String>,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-        Err(Box::new(ShapeSchemaUncompilable))
+        Err(Box::new(ShapeSchemaUncompilable::default()))
     }
 }
 
@@ -145,59 +221,155 @@ const ACCEPTED_SCHEMA_URIS: [&str; 2] = [
     "https://json-schema.org/draft/2020-12/schema#",
 ];
 
-/// Whether the document is a field tree: only the allowed keywords, in schema positions, within the
-/// depth, `enum` and `pattern` caps.
+/// One step from a schema position into one nested in it.
+#[derive(Clone, Copy)]
+enum Step<'a> {
+    Property(&'a str),
+    AdditionalProperties,
+    Items,
+}
+
+/// Every schema position the walk has pushed: the position it was reached from (`None` for the
+/// root) and the step into it. A refusal's path is rebuilt from here only when the walk refuses, so
+/// the walk carries one index per position instead of a path.
+struct Positions<'a>(Vec<(Option<usize>, Option<Step<'a>>)>);
+
+impl<'a> Positions<'a> {
+    fn root() -> Self {
+        Positions(vec![(None, None)])
+    }
+
+    fn push(&mut self, from: usize, step: Step<'a>) -> usize {
+        self.0.push((Some(from), Some(step)));
+        self.0.len() - 1
+    }
+
+    /// Where position `at` sits, as `at <JSON pointer>` (`~` and `/` in a name escaped as RFC 6901
+    /// says), or `at the root`.
+    fn at(&self, mut at: usize) -> String {
+        let mut steps = Vec::new();
+        while let (Some(from), Some(step)) = self.0[at] {
+            steps.push(step);
+            at = from;
+        }
+        if steps.is_empty() {
+            return "at the root".to_owned();
+        }
+        let mut pointer = "at ".to_owned();
+        for step in steps.iter().rev() {
+            match step {
+                Step::Property(name) => {
+                    pointer.push_str("/properties/");
+                    pointer.push_str(&name.replace('~', "~0").replace('/', "~1"));
+                }
+                Step::AdditionalProperties => pointer.push_str("/additionalProperties"),
+                Step::Items => pointer.push_str("/items"),
+            }
+        }
+        pointer
+    }
+}
+
+/// A refused keyword's name as a refusal quotes it: cut to [`MAX_REFUSED_KEYWORD_BYTES`].
+fn keyword(key: &str) -> String {
+    cut_to(key.to_owned(), MAX_REFUSED_KEYWORD_BYTES)
+}
+
+/// What makes the document not a field tree, the first thing the walk refuses — `None` when it is
+/// one: only the allowed keywords, in schema positions, within the depth, `enum`, `pattern` and
+/// property-name caps.
 ///
 /// A schema position is the root, a `properties` value, an `additionalProperties` that is an object
 /// or a boolean, or an `items` that is an object or a boolean. A boolean is a leaf. Values under
-/// `const`, `enum`, `default` and `examples` are data and are never walked. Where the form of a
-/// value is not fixed here (a `type` value, a `required` item) the walk leaves it to the build's
-/// meta-validation. Every schema position is pushed once onto an explicit stack, so the walk is
-/// linear in the document's size and never recurses on the Rust stack.
-fn is_field_tree(schema: &Value) -> bool {
-    let mut pending = vec![(schema, 0usize)];
+/// `const`, `enum`, `default` and `examples` are data and are never walked. `format` (a string) is
+/// an annotation the compile never asserts — it turns on no format validation — and a key
+/// beginning `x-` is carried and ignored: its value is never walked, whatever it holds. Where the
+/// form of a value is not fixed here (a `type` value, a `required` item) the walk leaves it to the
+/// build's meta-validation.
+///
+/// **First** is the walk's order: a position's own keywords in the map's key order, then the
+/// positions nested in it, depth first, each before the next. Every schema position is pushed once
+/// onto an explicit stack, so the walk is linear in the document's size and never recurses on the
+/// Rust stack. The refusal is schema text only — a keyword, a count, a cap and the path — and never
+/// quotes a value under a data keyword or an `x-` key.
+fn field_tree_refusal(schema: &Value) -> Option<String> {
+    let mut positions = Positions::root();
+    let mut pending = vec![(schema, 0usize, 0usize)];
     let mut patterns = 0usize;
-    while let Some((node, depth)) = pending.pop() {
+    while let Some((node, depth, at)) = pending.pop() {
         if depth > MAX_SHAPE_DEPTH {
-            return false;
+            return Some(format!(
+                "nesting past {MAX_SHAPE_DEPTH} levels {}",
+                positions.at(at)
+            ));
         }
         let members = match node {
             Value::Bool(_) => continue,
             Value::Object(members) => members,
-            _ => return false,
+            _ => {
+                return Some(format!(
+                    "a value that is not a schema (an object or a boolean) {}",
+                    positions.at(at)
+                ))
+            }
         };
+        let mut nested = Vec::new();
         for (key, value) in members {
-            match key.as_str() {
-                "required" => {
+            let refused = match key.as_str() {
+                "required" => match value {
                     // A non-array `required` is left to the build's meta-validation, as before.
-                    if let Value::Array(names) = value {
-                        let too_long = |name: &Value| {
+                    Value::Array(names)
+                        if names.iter().any(|name| {
                             name.as_str()
                                 .is_some_and(|name| name.len() > MAX_PROPERTY_NAME_BYTES)
-                        };
-                        if names.iter().any(too_long) {
-                            return false;
-                        }
+                        }) =>
+                    {
+                        Some(format!(
+                            "a name in required past {MAX_PROPERTY_NAME_BYTES} bytes"
+                        ))
                     }
-                }
+                    _ => None,
+                },
                 "type" | "const" | "default" | "examples" | "minLength" | "maxLength"
                 | "minItems" | "maxItems" | "minimum" | "maximum" | "title" | "description"
-                | "$comment" => {}
+                | "$comment" => None,
+                // An annotation, never an assertion: the compile turns on no format validation.
+                "format" => {
+                    (!value.is_string()).then(|| "keyword format that is not a string".to_owned())
+                }
+                // Carried and ignored: the value is data, never walked.
+                extension if extension.starts_with("x-") => None,
                 "properties" => match value {
                     Value::Object(fields) => {
                         if fields
                             .keys()
                             .any(|name| name.len() > MAX_PROPERTY_NAME_BYTES)
                         {
-                            return false;
+                            Some(format!(
+                                "a name in properties past {MAX_PROPERTY_NAME_BYTES} bytes"
+                            ))
+                        } else {
+                            nested.extend(
+                                fields
+                                    .iter()
+                                    .map(|(name, field)| (field, Step::Property(name))),
+                            );
+                            None
                         }
-                        pending.extend(fields.values().map(|field| (field, depth + 1)));
                     }
-                    _ => return false,
+                    _ => Some("keyword properties that is not an object".to_owned()),
                 },
                 "additionalProperties" | "items" => match value {
-                    Value::Bool(_) | Value::Object(_) => pending.push((value, depth + 1)),
-                    _ => return false,
+                    Value::Bool(_) | Value::Object(_) => {
+                        let step = if key == "items" {
+                            Step::Items
+                        } else {
+                            Step::AdditionalProperties
+                        };
+                        nested.push((value, step));
+                        None
+                    }
+                    _ => Some(format!("keyword {key} that is not one schema")),
                 },
                 "enum" => match value {
                     Value::Array(entries) => {
@@ -206,32 +378,48 @@ fn is_field_tree(schema: &Value) -> bool {
                         } else {
                             MAX_MIXED_ENUM_ENTRIES
                         };
-                        if entries.len() > cap {
-                            return false;
-                        }
+                        (entries.len() > cap).then(|| {
+                            format!("enum of {} entries, past the cap of {cap},", entries.len())
+                        })
                     }
-                    _ => return false,
+                    _ => Some("keyword enum that is not an array".to_owned()),
                 },
                 "pattern" => match value {
-                    Value::String(source) if source.len() <= MAX_PATTERN_SOURCE_BYTES => {
-                        patterns += 1;
-                        if patterns > MAX_SHAPE_PATTERNS {
-                            return false;
-                        }
+                    Value::String(source) if source.len() > MAX_PATTERN_SOURCE_BYTES => {
+                        Some(format!(
+                            "pattern of {} bytes, past the cap of {MAX_PATTERN_SOURCE_BYTES} \
+                             bytes of source,",
+                            source.len()
+                        ))
                     }
-                    _ => return false,
+                    Value::String(_) => {
+                        patterns += 1;
+                        (patterns > MAX_SHAPE_PATTERNS).then(|| {
+                            format!("pattern past the cap of {MAX_SHAPE_PATTERNS} in a shape")
+                        })
+                    }
+                    _ => Some("keyword pattern that is not a string".to_owned()),
                 },
+                "$schema" if depth > 0 => Some("keyword $schema below the root".to_owned()),
                 "$schema" => match value {
-                    Value::String(uri)
-                        if depth == 0 && ACCEPTED_SCHEMA_URIS.contains(&uri.as_str()) => {}
-                    _ => return false,
+                    Value::String(uri) if ACCEPTED_SCHEMA_URIS.contains(&uri.as_str()) => None,
+                    _ => Some("keyword $schema naming a draft other than 2020-12".to_owned()),
                 },
-                "$id" if depth == 0 => {}
-                _ => return false,
+                "$id" if depth > 0 => Some("keyword $id below the root".to_owned()),
+                "$id" => None,
+                other => Some(format!("keyword {}", keyword(other))),
+            };
+            if let Some(refused) = refused {
+                return Some(format!("{refused} {}", positions.at(at)));
             }
         }
+        // Pushed last-first, so the nested positions are walked in the map's order.
+        for (child, step) in nested.into_iter().rev() {
+            let child_at = positions.push(at, step);
+            pending.push((child, depth + 1, child_at));
+        }
     }
-    true
+    None
 }
 
 /// The most bytes one `pattern` may compile to — the `regex` engine's per-regex `size_limit`, which
@@ -273,8 +461,8 @@ pub const MAX_PATTERN_DFA_BYTES: usize = 2 << 20;
 pub fn compile(schema: &Value) -> Result<Validator, ShapeSchemaUncompilable> {
     #[cfg(feature = "test-support")]
     test_support::record(schema);
-    if !is_field_tree(schema) {
-        return Err(ShapeSchemaUncompilable);
+    if let Some(refused) = field_tree_refusal(schema) {
+        return Err(ShapeSchemaUncompilable::naming(refused));
     }
     let patterns = jsonschema::PatternOptions::regex()
         .size_limit(MAX_PATTERN_BYTES)
@@ -283,7 +471,39 @@ pub fn compile(schema: &Value) -> Result<Validator, ShapeSchemaUncompilable> {
         .with_retriever(RefuseEveryUri)
         .with_pattern_options(patterns)
         .build(schema)
-        .map_err(|_| ShapeSchemaUncompilable)
+        .map_err(|error| ShapeSchemaUncompilable::naming(build_refusal(&error)))
+}
+
+/// What the build refused in a schema the walk admitted, without the build's own words: which of
+/// its two refusals it is, and the position in the schema it names, which is schema text — a JSON
+/// pointer to a keyword. The build's message is dropped, as it always was.
+///
+/// A `pattern` the regex engine will not build — past [`MAX_PATTERN_BYTES`] compiled, or not a
+/// regex at all — is named at the schema position that holds it; any other refusal is 2020-12
+/// meta-validation, named at the keyword whose value it refused.
+fn build_refusal(error: &jsonschema::ValidationError<'_>) -> String {
+    let at = |pointer: String| {
+        if pointer.is_empty() {
+            "at the root".to_owned()
+        } else {
+            format!("at {pointer}")
+        }
+    };
+    match error.kind() {
+        jsonschema::error::ValidationErrorKind::Format { format } if format == "regex" => {
+            let pointer = error.schema_path().to_string();
+            let position = pointer.strip_suffix("/pattern").unwrap_or(&pointer);
+            format!(
+                "pattern past the cap of {} KiB compiled, or not a regex, {}",
+                MAX_PATTERN_BYTES / 1024,
+                at(position.to_owned())
+            )
+        }
+        _ => format!(
+            "a value that is not valid 2020-12 {}",
+            at(error.instance_path().to_string())
+        ),
+    }
 }
 
 /// The most bytes of a violation's path, or of its message, a verdict or a refusal may carry.
@@ -319,10 +539,16 @@ pub fn failure_detail(path: &str, message: &str) -> Value {
 /// `text` if it fits in [`MAX_FAILURE_MESSAGE_BYTES`]; otherwise its longest prefix on a char
 /// boundary within `MAX_FAILURE_MESSAGE_BYTES - 3` bytes, followed by `…` (3 bytes).
 fn cut(text: String) -> String {
-    if text.len() <= MAX_FAILURE_MESSAGE_BYTES {
+    cut_to(text, MAX_FAILURE_MESSAGE_BYTES)
+}
+
+/// `text` if it fits in `limit` bytes; otherwise its longest prefix on a char boundary within
+/// `limit - 3` bytes, followed by `…` (3 bytes).
+fn cut_to(text: String, limit: usize) -> String {
+    if text.len() <= limit {
         return text;
     }
-    let mut end = MAX_FAILURE_MESSAGE_BYTES - '…'.len_utf8();
+    let mut end = limit - '…'.len_utf8();
     while !text.is_char_boundary(end) {
         end -= 1;
     }
