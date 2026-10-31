@@ -247,6 +247,15 @@ pub(crate) enum RevokeWarrant<'a> {
     /// Connection read-reach withdrawal. Minted by `ConnectionControlAuthority`: authority over the
     /// connection, and nothing at all about the team losing the reach.
     ConnectionControl(&'a Authorized<ConnectionControlAuthority>),
+    /// A credential mint's withdrawal of a machine's direct grants on someone else's personal space
+    /// (task `01a1933d`; ported from temper#1283). Sealed by `CredentialSeverance`, which only
+    /// `machine_client_service::sever_personal_reach` constructs: a credential minted by anyone but
+    /// the person costs the machine its personal-team membership, and with it the grants that
+    /// would otherwise still open that person's personal maps, contexts and resources.
+    Severance {
+        _seal: &'a crate::services::machine_client_service::CredentialSeverance,
+        subject: RefTarget,
+    },
 }
 
 impl RevokeWarrant<'_> {
@@ -261,6 +270,7 @@ impl RevokeWarrant<'_> {
                 kind: AnchorTable::Connections,
                 id: proof.subject(),
             },
+            RevokeWarrant::Severance { _seal: _, subject } => *subject,
         }
     }
 }

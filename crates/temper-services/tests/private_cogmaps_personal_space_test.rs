@@ -577,3 +577,54 @@ async fn a_system_admin_does_not_give_a_machine_reach_on_someone_elses_personal_
     .await
     .expect("an admin's own map is theirs to give reach on");
 }
+
+/// Genesis at an existing caller-supplied id (only a system admin's id is honoured) answers its
+/// idempotent no-op only to a caller who reads the map: someone else's private map tells the admin
+/// what they hit, a shared map they are not in is a bare 409, and their own map is the no-op
+/// (ported from temper#1283, with the ruled 403 in place of its concealment).
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn genesis_at_an_existing_id_answers_the_no_op_only_to_a_reader(pool: PgPool) {
+    use temper_core::error::TemperError;
+    let pat = person(&pool, "pat").await;
+    let admin = person(&pool, "admin").await;
+    test_support::approved_admin(&pool, admin).await;
+    let theirs = genesis(&pool, pat, "pat-map").await;
+    let shared = genesis(&pool, pat, "pat-shared").await;
+    let pats_team = team_owned_by(&pool, "pats-team", pat).await;
+    bind_raw(&pool, shared, pats_team).await.unwrap();
+    let mine = genesis(&pool, admin, "admin-map").await;
+
+    let at = |id: Uuid| {
+        let pool = pool.clone();
+        async move {
+            DbBackend::new(pool, ProfileId::from(admin))
+                .create_cognitive_map(CreateCognitiveMap {
+                    request: temper_core::types::reconcile::CreateCogmapRequest {
+                        cogmap_id: Some(id),
+                        telos_resource_id: None,
+                        name: "probe".to_string(),
+                        telos_title: "probe".to_string(),
+                        telos: None,
+                    },
+                    origin: Surface::ApiHttp,
+                })
+                .await
+        }
+    };
+
+    match at(theirs).await {
+        Err(TemperError::ForbiddenDetail(m)) => {
+            assert!(
+                m.starts_with("this cognitive map is @pat's personal space"),
+                "{m}"
+            )
+        }
+        other => panic!("someone else's private map: {other:?}"),
+    }
+    assert!(
+        matches!(at(shared).await, Err(TemperError::Conflict(_))),
+        "a shared map the admin is not in is only taken"
+    );
+    let noop = at(mine).await.expect("the admin's own map is the no-op");
+    assert!(!noop.value.created);
+}
