@@ -24,9 +24,10 @@
 --    itself (resources_visible_to / can_modify_resource arms that do not go through the context).
 --
 -- 3. NO WRITES ONTO A DEAD TEAM. context_reassign refuses a dead target team for everyone;
---    _admin_team_membership_write refuses a dead team as a backstop to the Rust lock helper; the
---    three auto-join writers skip dead teams. steward_team_contexts and cogmaps_share_a_team read
---    live teams only.
+--    _admin_team_membership_write refuses a dead team as a backstop to the Rust lock helper.
+--    steward_team_contexts and cogmaps_share_a_team read live teams only. The auto-join writers
+--    skip dead teams in the next migration (20261110000010), kept apart because it reads
+--    kb_teams.auto_join_role, which temper-substrate's pre-auto-join test baseline omits.
 --
 -- Every function here keeps its signature and return type; each is a body-only CREATE OR REPLACE of
 -- its current definition with the change above and nothing else.
@@ -306,7 +307,6 @@ BEGIN
         RAISE EXCEPTION 'context_restore: context % not found', v_context;
     END IF;
 
-
     IF v_is_active THEN
         RAISE EXCEPTION 'context_restore: context % is already active', v_context
               USING ERRCODE = 'P0002';
@@ -497,70 +497,6 @@ BEGIN
 END;
 $function$;
 
-CREATE OR REPLACE FUNCTION public.auto_join_reconcile()
- RETURNS TABLE(team_slug text, profile_handle text)
- LANGUAGE sql
-AS $function$
-    WITH ins AS (
-        INSERT INTO kb_team_members (team_id, profile_id, role)
-        SELECT t.id, p.id, t.auto_join_role
-          FROM kb_teams t
-         CROSS JOIN kb_profiles p
-         WHERE t.auto_join_role IS NOT NULL AND t.is_active
-           AND has_system_access(p.id)
-           AND NOT EXISTS (SELECT 1 FROM kb_machine_clients mc WHERE mc.profile_id = p.id)
-           AND NOT EXISTS (
-               SELECT 1 FROM kb_team_members m
-                WHERE m.team_id = t.id AND m.profile_id = p.id)
-        ON CONFLICT (team_id, profile_id) DO NOTHING
-        RETURNING team_id, profile_id
-    )
-    SELECT t.slug, pr.handle
-      FROM ins
-      JOIN kb_teams t     ON t.id = ins.team_id
-      JOIN kb_profiles pr ON pr.id = ins.profile_id
-     ORDER BY t.slug, pr.handle;
-$function$;
-
-CREATE OR REPLACE FUNCTION public.backfill_auto_join_team(p_team uuid)
- RETURNS void
- LANGUAGE plpgsql
-AS $function$
-DECLARE
-    v_role team_role;
-BEGIN
-    SELECT auto_join_role INTO v_role FROM kb_teams WHERE id = p_team AND is_active;
-    IF v_role IS NULL THEN
-        RETURN;  -- not a live auto-join team; nothing to backfill
-    END IF;
-    INSERT INTO kb_team_members (team_id, profile_id, role)
-    SELECT p_team, p.id, v_role
-      FROM kb_profiles p
-     WHERE has_system_access(p.id)
-       AND NOT EXISTS (SELECT 1 FROM kb_machine_clients mc WHERE mc.profile_id = p.id)
-    ON CONFLICT (team_id, profile_id) DO NOTHING;
-END;
-$function$;
-
-CREATE OR REPLACE FUNCTION public.ensure_auto_join_memberships(p_profile uuid)
- RETURNS void
- LANGUAGE plpgsql
-AS $function$
-BEGIN
-    IF NOT has_system_access(p_profile) THEN
-        RETURN;  -- not eligible (standing not approved); enroll nothing
-    END IF;
-    IF EXISTS (SELECT 1 FROM kb_machine_clients mc WHERE mc.profile_id = p_profile) THEN
-        RETURN;  -- a machine: auto-join never enrolls one
-    END IF;
-    INSERT INTO kb_team_members (team_id, profile_id, role)
-    SELECT t.id, p_profile, t.auto_join_role
-      FROM kb_teams t
-     WHERE t.auto_join_role IS NOT NULL AND t.is_active
-    ON CONFLICT (team_id, profile_id) DO NOTHING;
-END;
-$function$;
-
 CREATE OR REPLACE FUNCTION public.steward_team_contexts(p_cogmap uuid)
  RETURNS TABLE(context_id uuid)
  LANGUAGE sql
@@ -716,8 +652,7 @@ SELECT declare_migration(
     'additive',
     'New STABLE function context_is_live(uuid) and body-only CREATE OR REPLACE, signatures and return '
     'types unchanged, of context_reassign, context_rename, context_retire, context_restore, '
-    '_admin_team_membership_write, auto_join_reconcile, backfill_auto_join_team, '
-    'ensure_auto_join_memberships, steward_team_contexts, cogmaps_share_a_team, '
+    '_admin_team_membership_write, steward_team_contexts, cogmaps_share_a_team, '
     'contexts_readable_by_teams, context_authorable_by_profile and can. Behaviour change, '
     'deliberate: a soft-deleted team confers no authority over its contexts, a context it owns reads '
     'as retired, and nothing is written onto it. No row is rewritten. Design: temper-artifacts '
