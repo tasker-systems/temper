@@ -24,8 +24,8 @@ impl<'a> SubscriptionsClient<'a> {
         Self { http }
     }
 
-    /// Create a subscription. The two-leg authz gate (authoring-team manage-capable + reach
-    /// grant held) runs server-side before the INSERT.
+    /// Create a subscription. The authz gate (authoring-team manage-capable, reach grant held,
+    /// and authorship of a context or map subscriber) runs server-side before the INSERT.
     pub async fn create(&self, body: &CreateSubscriptionRequest) -> Result<Subscription> {
         let token = self.http.resolve_token()?;
         let op = &ops::CREATE_SUBSCRIPTION;

@@ -570,7 +570,7 @@ async fn an_uncompilable_schema_is_refused_at_declare_over_http(pool: PgPool) {
 /// route and refuses the same schema the same way.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn an_uncompilable_schema_is_refused_at_declare_over_the_cogmap_route(pool: PgPool) {
-    /// The L0 kernel cognitive map reserved id; the harness profile is granted write on it.
+    /// The L0 kernel cognitive map reserved id; the harness profile is made a system admin to author it.
     const L0_COGMAP: uuid::Uuid = uuid::Uuid::from_u128(0x00000000_0000_0000_0005_000000000001);
 
     let app = common::setup(pool).await;
@@ -579,7 +579,9 @@ async fn an_uncompilable_schema_is_refused_at_declare_over_the_cogmap_route(pool
         .fetch_one(&app.pool)
         .await
         .expect("the harness profile");
-    common::grant_cogmap_write(&app.pool, L0_COGMAP, owner_id).await;
+    // L0 is in the admin-only regime: only a system admin authors it, and a write grant there
+    // confers nothing (20261113000010).
+    common::make_system_admin(&app.pool, owner_id).await;
     let probe = FetchProbe::bind();
     let rows_before = shape_row_count(&app).await;
 

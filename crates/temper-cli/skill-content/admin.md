@@ -40,7 +40,7 @@ Consequences worth internalizing before you act:
 | `admin machine` | Machine principals (client_credentials): `provision`, `rebind`, `issue`, `rotate-secret`, `list`, `show`, `revoke`. See below — each verb answers a different failure. |
 | `admin slack` | Account links: `disconnect` (idempotent). |
 | `admin connection` | Provision and configure the authed link to a remote system (GitHub, Linear). See below — capability is derived, not flagged. |
-| `admin subscription` | Point a team/context/cogmap at a connection's events: `create`, `list`, `show`, `revoke`. The two-leg authz gate (authoring-team manage-capable **and** a reach grant on the connection) runs server-side. |
+| `admin subscription` | Point a team/context/cogmap at a connection's events: `create`, `list`, `show`, `revoke`. The authz gate (authoring-team manage-capable, a reach grant on the connection, **and** authorship of a context or map subscriber) runs server-side. |
 | `admin erasure` | Permanent erasure: `resource`, `principal` (by pseudonym UUID), `block-history` (named blocks' revisions), `field` (a leaked title, origin URI or property, while the resource survives). Each **surveys by default** and acts only with `--execute`. See below. |
 | `admin reembed` / `admin reblock` | Corpus maintenance: re-embed stale vectors; run one bounded re-blocking step. Both are survey-first (`--dry-run`) and idempotent by design. |
 
