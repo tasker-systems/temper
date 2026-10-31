@@ -1,6 +1,6 @@
 title    = "A delegate's grant to a machine they registered needs a grant right held in their own name, at the grant door and at machine registration"
 pr       = "self"
-classes  = ["behavioral"]
+classes  = ["additive", "behavioral"]
 surfaces = ["http", "mcp", "cli-stdout", "clients"]
 status   = "signal-only"
 body = '''
