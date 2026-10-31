@@ -1,7 +1,7 @@
 //! Persistence for `kb_subscriptions` — a team/context/cogmap subscribes to an aspect of a
 //! connection.
 //!
-//! Authorization is a **two-leg gate, composed from existing seams** — no new predicate is
+//! Authorization is a **three-leg gate, composed from existing seams** — no new predicate is
 //! invented:
 //!
 //! 1. **The caller manages the authoring team, or is a system admin.**
@@ -20,6 +20,11 @@
 //!    create a parallel permission. The connection's owning team is NOT consulted — owner ≠
 //!    reach (`migrations/20260714000010_connections.sql:60-61`). Cross-team subscription is
 //!    legal when reach was granted.
+//!
+//! 3. **The caller authors the subscriber** (a context or map). Deliveries stamp `touches` onto the
+//!    subscriber, so declaring one writes onto that object, and the object's own write regime
+//!    decides: `context_authorable_by_profile` / `cogmap_authorable_by_profile`. A link to the team
+//!    is not enough, because sharing or binding into a team can confer read only.
 //!
 //! Writes are admin-driven and rare. Nothing here emits a ledger event: declaring a
 //! subscription is internal infra, not a receipt of anything external — the same discipline
@@ -125,7 +130,7 @@ pub async fn list(
     .map_err(Into::into)
 }
 
-/// Create a subscription. The two-leg gate runs before the INSERT; a rejected create writes
+/// Create a subscription. The three-leg gate runs before the INSERT; a rejected create writes
 /// nothing.
 ///
 /// The selector arrives typed (`temper_core::types::subscription::SubscriptionSelector`), so an
@@ -186,6 +191,13 @@ pub async fn create(
         authoring_team,
     )
     .await?;
+
+    // Leg 3: the caller authors the subscriber. Every delivery appends an event that `touches` the
+    // subscriber, so declaring a subscription writes onto that object, and the bar is the object's
+    // own write regime, not the caller's role on a team it is linked to. A context or map shared
+    // into the authoring team for reading is linked, and still refused here.
+    refuse_unless_subscriber_authorable(pool, caller, &req.subscriber_table, req.subscriber_id)
+        .await?;
 
     // A declaration that can never match is refused here, not disclosed forever after. See
     // `refuse_inert_declaration` for what it will and will not conclude.
@@ -374,6 +386,50 @@ async fn validate_subscriber_link(
             "subscriber_table must be one of {:?}, got '{}'",
             SUBSCRIBER_TABLES, subscriber_table
         ))),
+    }
+}
+
+/// Refuse unless `caller` authors the subscriber, by that object's own regime:
+/// `context_authorable_by_profile` for a context, `cogmap_authorable_by_profile` for a map (which
+/// leaves a map in the admin-only regime to a system admin). There is no system-admin exemption:
+/// the admin leg of [`SubscriptionAuthority`] widens who may act for a team, and a system admin
+/// authors an ordinary map or context the way everyone else does. A team subscriber is the
+/// authoring team itself, which leg 1 already proved the caller manages.
+///
+/// Runs after [`validate_subscriber_link`], so the subscriber is linked to a team the caller
+/// manages, and the caller can therefore read it: a `403` here discloses nothing they cannot see.
+async fn refuse_unless_subscriber_authorable(
+    pool: &PgPool,
+    caller: ProfileId,
+    subscriber_table: &str,
+    subscriber_id: Uuid,
+) -> ApiResult<()> {
+    let authorable = match subscriber_table {
+        "kb_teams" => return Ok(()),
+        "kb_contexts" => {
+            sqlx::query_scalar!(
+                r#"SELECT context_authorable_by_profile($1, $2) AS "a!: bool""#,
+                *caller,
+                subscriber_id,
+            )
+            .fetch_one(pool)
+            .await?
+        }
+        "kb_cogmaps" => {
+            sqlx::query_scalar!(
+                r#"SELECT cogmap_authorable_by_profile($1, $2) AS "a!: bool""#,
+                *caller,
+                subscriber_id,
+            )
+            .fetch_one(pool)
+            .await?
+        }
+        _ => false,
+    };
+    if authorable {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden)
     }
 }
 
@@ -1140,6 +1196,23 @@ mod tests {
         assert!(matches!(err, ApiError::BadRequest(_)), "got {err:?}");
     }
 
+    /// Give `profile` an explicit write grant on a context or map (`subject_table`).
+    async fn grant_write(pool: &PgPool, subject_table: &str, subject: Uuid, profile: ProfileId) {
+        sqlx::query!(
+            r#"INSERT INTO kb_access_grants (subject_table, subject_id, principal_table,
+                                            principal_id, can_read, can_write, granted_by_profile_id)
+               VALUES ($1, $2, 'kb_profiles', $3, true, true, $3)"#,
+            subject_table,
+            subject,
+            *profile,
+        )
+        .execute(pool)
+        .await
+        .expect("grant write");
+    }
+
+    /// The subscriber leg binds a system admin as it binds everyone: a map's authorship is its write
+    /// grant, and the admin holds none until one is given. Then the link is all that is checked.
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn kb_cogmaps_subscriber_validates_team_link(pool: PgPool) {
         let admin = seed_admin(&pool).await;
@@ -1149,6 +1222,16 @@ mod tests {
 
         let cogmap_id = seed_cogmap_linked_to_team(&pool, team).await;
 
+        let err = create(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
+            &req("kb_cogmaps", cogmap_id, team, conn),
+        )
+        .await
+        .expect_err("a system admin who does not author the map is refused");
+        assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
+
+        grant_write(&pool, "kb_cogmaps", cogmap_id, admin).await;
         let created = create(
             &pool,
             &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
@@ -1255,5 +1338,84 @@ mod tests {
         .await
         .expect_err("bad subscriber_table should be 400");
         assert!(matches!(err, ApiError::BadRequest(_)), "got {err:?}");
+    }
+
+    /// The subscriber must be authored by the caller, not merely linked to their team. A context owned
+    /// elsewhere and shared into the authoring team for reading is linked, and a maintainer of that
+    /// team may not stamp events onto it. A write grant on the context, which is what authoring it
+    /// means for someone outside its owning team, admits the same call. The bite: delete the
+    /// subscriber-authorship leg in `create`, and the first create succeeds.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_context_shared_in_for_reading_is_not_subscribable(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let maintainer = seed_plain_profile(&pool, "maintainer").await;
+        let team = seed_team_with_maintainer(&pool, maintainer).await;
+        let conn = seed_connection(&pool, Some(team), admin).await;
+        grant_reach(&pool, admin, conn, team).await;
+
+        // Owned by another team the maintainer is not in, then shared into `team`.
+        let elsewhere_owner = seed_plain_profile(&pool, "elsewhere").await;
+        let elsewhere = seed_team(&pool, elsewhere_owner).await;
+        let context_id = seed_context_owned_by_team(&pool, elsewhere).await;
+        sqlx::query!(
+            "INSERT INTO kb_team_contexts (context_id, team_id) VALUES ($1, $2)",
+            context_id,
+            team,
+        )
+        .execute(&pool)
+        .await
+        .expect("share the context into the team");
+
+        let as_maintainer =
+            crate::test_support::human_principal_for(&pool, maintainer.uuid()).await;
+        let err = create(
+            &pool,
+            &as_maintainer,
+            &req("kb_contexts", context_id, team, conn),
+        )
+        .await
+        .expect_err("a context the caller only reads is refused");
+        assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
+
+        grant_write(&pool, "kb_contexts", context_id, maintainer).await;
+        create(
+            &pool,
+            &as_maintainer,
+            &req("kb_contexts", context_id, team, conn),
+        )
+        .await
+        .expect("with write on the context, the same subscription is admitted");
+    }
+
+    /// The map arm of the same leg: a map bound to the team is linked, and its subscriber still needs
+    /// authorship, which for a map is an explicit write grant. The bite: as above.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_map_bound_to_the_team_needs_its_author_to_subscribe(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let maintainer = seed_plain_profile(&pool, "map-maintainer").await;
+        let team = seed_team_with_maintainer(&pool, maintainer).await;
+        let conn = seed_connection(&pool, Some(team), admin).await;
+        grant_reach(&pool, admin, conn, team).await;
+        let cogmap_id = seed_cogmap_linked_to_team(&pool, team).await;
+
+        let as_maintainer =
+            crate::test_support::human_principal_for(&pool, maintainer.uuid()).await;
+        let err = create(
+            &pool,
+            &as_maintainer,
+            &req("kb_cogmaps", cogmap_id, team, conn),
+        )
+        .await
+        .expect_err("a map the caller does not author is refused");
+        assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
+
+        grant_write(&pool, "kb_cogmaps", cogmap_id, maintainer).await;
+        create(
+            &pool,
+            &as_maintainer,
+            &req("kb_cogmaps", cogmap_id, team, conn),
+        )
+        .await
+        .expect("the map's author may subscribe it");
     }
 }

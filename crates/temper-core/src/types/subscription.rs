@@ -34,7 +34,7 @@ pub struct Subscription {
     /// is the subscriber itself.
     // NOT derived from the subscriber: `kb_cogmaps` has no owner team (only `kb_team_cogmaps`
     // links), and `kb_contexts.owner_table` can be `kb_profiles` (no team). The caller names the
-    // team; the two-leg gate checks against it.
+    // team; the gate checks against it.
     pub authoring_team_id: Uuid,
     /// The connection whose events this subscription wants. A revoked connection may still have
     /// live subscriptions against it — the row stays honest about what was declared.
@@ -112,8 +112,8 @@ pub enum SubscriptionSelector {
 }
 
 /// Create a subscription.
-// The two-leg authz gate (authoring-team manage-capable + reach grant held on the connection)
-// runs in the service layer before the INSERT; this request is what the caller supplies, not what
+// The authz gate (authoring-team manage-capable, reach grant held on the connection, and the
+// caller authors a context or map subscriber) runs in the service layer before the INSERT; this request is what the caller supplies, not what
 // the gate checks.
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]

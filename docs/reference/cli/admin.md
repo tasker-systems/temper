@@ -1246,7 +1246,7 @@ Manage subscriptions — a team/context/cogmap subscribes to a connection's even
 Usage: temper admin subscription [OPTIONS] <COMMAND>
 
 Commands:
-  create  Create a subscription. The two-leg authz gate (authoring-team manage-capable + reach grant held on the connection) runs server-side
+  create  Create a subscription. The authz gate (authoring-team manage-capable, a reach grant held on the connection, and authorship of a context or map subscriber) runs server-side
   list    List subscriptions visible to the caller
   show    Show one subscription
   revoke  Revoke a subscription. Rows are never deleted — a revoked subscription stops matching but stays resolvable for the delivery row's research-corpus property
@@ -1263,7 +1263,7 @@ Options:
 #### `temper admin subscription create`
 
 ```text
-Create a subscription. The two-leg authz gate (authoring-team manage-capable + reach grant held on the connection) runs server-side
+Create a subscription. The authz gate (authoring-team manage-capable, a reach grant held on the connection, and authorship of a context or map subscriber) runs server-side
 
 Usage: temper admin subscription create [OPTIONS] --subscriber-table <SUBSCRIBER_TABLE> --subscriber-id <SUBSCRIBER_ID> --authoring-team-id <AUTHORING_TEAM_ID> --connection-id <CONNECTION_ID> --selector <SELECTOR>
 

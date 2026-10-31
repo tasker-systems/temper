@@ -98,8 +98,8 @@ impl ScopedAuthority for TwoSidedAuthority {
     /// the same, and a future reader deciding whether it may be relaxed needs both.
     ///
     /// **Cogmaps — structural, and the load-bearing direction is UNBIND.** A `kb_team_cogmaps` row
-    /// joining a map to the gating team is precisely what `access_service::cogmap_write_requires_admin`
-    /// reads, so the binding does not merely *relate* the map to a team: it *is* the switch that
+    /// joining a map to an instance team (temper-system or the gating team) is precisely what
+    /// `access_service::cogmap_write_requires_admin` reads, so the binding does not merely *relate* the map to a team: it *is* the switch that
     /// puts the map in the admin-write regime. Since one gate serves bind and unbind alike, dropping
     /// the exclusion would let a non-admin holding `can_grant` on the map who manages the gating
     /// team **unbind a protected map** out of that regime. Binding into the gating team is a

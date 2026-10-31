@@ -11,7 +11,8 @@
 //!
 //! **`advance_steward_watermark` is the production case, not a hypothetical.** The steward agent met
 //! this refusal once per run on the L0 kernel map for eight days — L0 is joined to the root team, so
-//! every approved principal reads it, and nobody holds a write grant on it by design. Refused
+//! every approved principal reads it, and nobody holds a write grant on it by design (and since
+//! `20261114000000` a grant there would author nothing: only a system admin authors L0). Refused
 //! opaquely, the agent could not form a corrective hypothesis and probed instead until it found a
 //! genuine authorization bypass. That is what a message costs when it is withheld from someone who
 //! already has standing to hear it.
@@ -55,8 +56,11 @@ fn assert_names_the_missing_capability<T: std::fmt::Debug>(
     let Err(TemperError::ForbiddenDetail(msg)) = result else {
         panic!("{site}: a principal who reads the map must be refused in the disclosing dialect, not the argument-free one: {result:?}");
     };
+    // L0 is in the admin-only regime, where a grant confers nothing (20261114000000): the capability
+    // a reader lacks there is being a system admin, and a refusal that sent them after a grant would
+    // send them after something that cannot help.
     assert!(
-        msg.contains("write grant"),
+        msg.contains("only a system admin authors it"),
         "{site}: the refusal must name the capability that was missing: {msg:?}"
     );
     assert!(

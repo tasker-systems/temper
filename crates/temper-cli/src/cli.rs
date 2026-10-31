@@ -2192,8 +2192,8 @@ pub enum AdminConnectionAction {
 /// Subcommands for `temper admin subscription`.
 #[derive(Subcommand)]
 pub enum AdminSubscriptionAction {
-    /// Create a subscription. The two-leg authz gate (authoring-team manage-capable + reach
-    /// grant held on the connection) runs server-side.
+    /// Create a subscription. The authz gate (authoring-team manage-capable, a reach grant
+    /// held on the connection, and authorship of a context or map subscriber) runs server-side.
     Create {
         /// The subscriber kind: `kb_contexts` | `kb_cogmaps` | `kb_teams`.
         #[arg(long = "subscriber-table")]
