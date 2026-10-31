@@ -14,8 +14,8 @@ is not affected.
 - `POST /api/resources/{id}/grants` and `POST /api/cognitive-maps/{id}/grants` to a machine profile
   the caller registered (revoked clients included): `403`, the same answer as a grant to oneself,
   when the caller's grant right is inherited through a team.
-- `POST /api/machine-clients/issue` and `POST /api/machine-clients` (provision) with a cogmap grant in the reach: `403`, and
-  nothing is minted, under the same condition.
+- `POST /api/machine-clients/issue` with a cogmap grant in the reach: `403`, and nothing is minted,
+  under the same condition.
 - A grant to another person's machine, and a map creator's grant onto their own map, are unchanged.
 
 Who observes: a non-admin who holds a grant right only through a team and grants it to their own

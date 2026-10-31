@@ -682,7 +682,7 @@ async fn is_machine_registered_by(
 /// review S3; ruled 2026-10-31, task `01a19370-dc05-76c1-bdf3-ea2280a4be6c`). Both grant-writing doors
 /// call it: the grant door when the recipient is the caller's machine (`recipient_bar`), and machine
 /// registration for each cogmap grant in the reach (`machine_authz::contain_reach`), where the new
-/// machine is the caller's by construction. A system admin is never asked.
+/// machine is the caller's by construction. A system admin acting as one is never asked.
 ///
 /// The grant is admitted only when the caller holds the grant right on the subject **in their own
 /// name**. That means either a `kb_access_grants` row anchored on the caller's own profile carrying

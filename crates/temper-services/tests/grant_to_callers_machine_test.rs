@@ -274,6 +274,52 @@ async fn an_inherited_grant_right_cannot_reach_the_callers_own_machine(pool: PgP
     .await
     .expect_err("a revoked client's profile is still the caller's machine");
     assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    // Live control on the same revoked machine: an in-person right still reaches it, so the
+    // refusal above is the bar's, not the revocation's.
+    access_service::grant_capability(&pool, &m, &grant("kb_cogmaps", f.own_map, maxs_machine))
+        .await
+        .expect("an in-person right reaches the caller's revoked machine");
+}
+
+/// A row on the caller's own profile counts as in-person only when it carries `can_grant`. Max
+/// holds read+write on `team_map` in his own name, but the grant right only through umbrella, so the
+/// grant to his machine is still refused. Giving that same row `can_grant` admits it.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_own_profile_row_without_the_grant_right_is_not_in_person(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let maxs_machine = machine(&pool, "cm-max-bot", f.max).await;
+    let m = test_support::human_principal_for(&pool, f.max).await;
+    sqlx::query(
+        "INSERT INTO kb_access_grants (id, subject_table, subject_id, principal_table, principal_id, \
+           can_read, can_write, can_grant, granted_by_profile_id) \
+         VALUES (uuid_generate_v7(), 'kb_cogmaps', $1, 'kb_profiles', $2, true, true, false, $3)",
+    )
+    .bind(f.team_map)
+    .bind(f.max)
+    .bind(f.owner)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let refusal =
+        access_service::grant_capability(&pool, &m, &grant("kb_cogmaps", f.team_map, maxs_machine))
+            .await
+            .expect_err("a read+write row on one's own profile does not make the right in-person");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    assert_eq!(rows(&pool, f.team_map, maxs_machine).await, 0);
+
+    sqlx::query(
+        "UPDATE kb_access_grants SET can_grant = true \
+          WHERE subject_id = $1 AND principal_table = 'kb_profiles' AND principal_id = $2",
+    )
+    .bind(f.team_map)
+    .bind(f.max)
+    .execute(&pool)
+    .await
+    .unwrap();
+    access_service::grant_capability(&pool, &m, &grant("kb_cogmaps", f.team_map, maxs_machine))
+        .await
+        .expect("the same row carrying can_grant admits the grant");
 }
 
 /// The grant door, the admitted side: a grant right held in the caller's own name may reach their
