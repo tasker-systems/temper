@@ -1,7 +1,7 @@
 title    = "A private cognitive map is personal space: one person per map, the admin arm stops at it, and an admin refused on personal space is told what they hit"
 pr       = "self"
 classes  = ["additive", "behavioral"]
-surfaces = ["http", "mcp", "cli-stdout", "clients"]
+surfaces = ["http", "mcp", "cli-stdout", "clients", "erasure-policy"]
 status   = "signal-only"
 body = '''
 Extends personal space to cognitive maps, and makes every personal-space refusal to a system admin
