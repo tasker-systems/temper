@@ -503,10 +503,9 @@ async fn revoke_invitations_beyond_authority(
 /// 3. **Existence (P13).** `Add` over an existing row → 409 naming `change_role` (#1070). `Change`
 ///    or `Remove` of an absent row → 404.
 /// 4. **Target kind.** A machine target above `member` → 400, for EVERY authority, admin included
-///    (C5).
-/// 4b. **Personal team.** An `Add` of anyone but the personal team's owner or one of the owner's
-///    machines → 400, for every authority (task `01a19006`). The admin arm never resolves on a
-///    personal team, so in practice this refuses its owner adding another person.
+///    (C5). **4b, personal team:** an `Add` of anyone but the personal team's owner or one of
+///    the owner's machines → 400, for every authority (task `01a19006`). The admin arm never
+///    resolves on a personal team, so in practice this refuses its owner adding another person.
 /// 5. **Target source.** An identity-provider row → 409 (C7).
 /// 6. **Conferral, non-admin.** The new role ranks at or below the caller's (C1) → else 403.
 /// 7. **Reach, non-admin, on another member.** The target ranks at or below the caller **and** is
