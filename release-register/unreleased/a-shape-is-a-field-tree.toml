@@ -24,8 +24,8 @@ every other keyword are refused. Each regex a shape holds must compile within 10
 A shape already stored outside the field tree can no longer be checked: an `enforcing` family
 refuses commits until the shape is amended, an `advisory` family records commits unchecked (they
 read `declared_not_yet_checked`), an ask naming it is answered as uncompilable, and reconcile skips
-its artifacts. The community instance (temperkb.io) has none; another deployment may hold some — a
-held-back enterprise install held 43, most of them using `format` or `x-*`, which now compile.
+its artifacts. The community instance (temperkb.io) has none; another deployment may hold some —
+most commonly `format` or `x-*`, which now compile (`a-field-tree-carries-format-and-x-keys`).
 Before upgrading any other deployment, run the field-tree screen, an exact SQL mirror of these
 rules (temper-artifacts `reviews/2026-10-31-stored-shapes-outside-the-field-tree.md` §3, the v0.6.3
 pre-release review's P8; the read-only runbooks live under temper-artifacts `runbooks/`), and amend
