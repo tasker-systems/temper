@@ -4,8 +4,13 @@
 //!
 //! The allow-list is witnessed against the whole 2020-12 vocabulary in one table, each keyword its
 //! own assertion: removing the walk makes every refused row compile. The data-position tests are
-//! the opposite bite: walking `const`, `enum`, `default` or `examples` as schemas refuses them.
-//! Every cap is pinned on both sides, at the cap (compiles) and one past it (refused).
+//! the opposite bite: walking `default` or `examples` — or a scalar `const` or `enum` member — as a
+//! schema refuses them. Every cap is pinned on both sides, at the cap (compiles) and one past it
+//! (refused).
+//!
+//! A `const` and every `enum` member is a scalar (spec
+//! `2026-10-31-const-and-enum-members-are-scalars-design`, §1.1): an object, an array or a string
+//! past `MAX_SHAPE_VALUE_STRING_BYTES` JSON-escaped bytes is refused wherever a schema can sit.
 //!
 //! Plain `#[test]`s: needs no database, runs in the Unit CI job.
 
@@ -13,7 +18,7 @@ use serde_json::{json, Value};
 use temper_substrate::shape_schema::{
     compile, first_failure, ShapeSchemaUncompilable, MAX_ENUM_ENTRIES, MAX_FAILURE_MESSAGE_BYTES,
     MAX_MIXED_ENUM_ENTRIES, MAX_PATTERN_SOURCE_BYTES, MAX_PROPERTY_NAME_BYTES, MAX_SHAPE_DEPTH,
-    MAX_SHAPE_PATTERNS,
+    MAX_SHAPE_PATTERNS, MAX_SHAPE_VALUE_STRING_BYTES,
 };
 
 const DRAFT_2020_12: &str = "https://json-schema.org/draft/2020-12/schema";
@@ -161,6 +166,29 @@ fn in_both_positions(keyword: &str, value: &str) -> [Value; 2] {
     ]
 }
 
+/// `member` (an object of schema members) as the root, as a `properties` value, as the `items`
+/// schema and as an `additionalProperties` schema: the four positions the compile walks.
+fn in_every_position(member: Value) -> [Value; 4] {
+    [
+        field_tree(member.clone()),
+        field_tree(json!({ "type": "object", "properties": { "a": member.clone() } })),
+        field_tree(json!({ "type": "array", "items": member.clone() })),
+        field_tree(json!({ "type": "object", "additionalProperties": member })),
+    ]
+}
+
+fn assert_refused_in_every_position(member: Value) {
+    for schema in in_every_position(member) {
+        assert_refused(&schema);
+    }
+}
+
+fn assert_compiles_in_every_position(member: Value) {
+    for schema in in_every_position(member) {
+        assert_compiles(&schema);
+    }
+}
+
 /// Every 2020-12 keyword off the allow-list is refused, at the root and nested. One table, so a
 /// keyword cannot go unwitnessed: before it, `dependentSchemas` had a witness of its own while
 /// `dependentRequired` and `dependencies` had none, all three refused by the walk's catch-all
@@ -304,14 +332,132 @@ fn accepts_an_absent_schema_uri() {
 }
 
 /// `const`, `enum`, `default` and `examples` hold data: nothing in them is read as a schema, so a
-/// keyword, a `$ref` or a custom `$schema` inside one is just a value.
+/// keyword, a `$ref` or a custom `$schema` inside one is just a value. `default` and `examples` may
+/// hold structured values; a `const` and an `enum` member are scalars, so the string that looks
+/// like a keyword stands for the rest.
 #[test]
 fn data_positions_are_not_walked() {
-    assert_compiles(&field_tree(json!({ "const": { "anyOf": [] } })));
-    assert_compiles(&field_tree(json!({ "enum": [{ "$ref": "#" }] })));
-    assert_compiles(&field_tree(json!({ "const": { "$schema": "urn:x" } })));
+    assert_compiles(&field_tree(json!({ "default": { "anyOf": [] } })));
+    assert_compiles(&field_tree(json!({ "examples": [{ "$ref": "#" }] })));
+    assert_compiles(&field_tree(json!({ "default": { "$schema": "urn:x" } })));
     assert_compiles(&field_tree(json!({ "default": { "$ref": "#" } })));
     assert_compiles(&field_tree(json!({ "examples": [{ "anyOf": [] }] })));
+    assert_compiles(&field_tree(json!({ "const": "$ref" })));
+    assert_compiles(&field_tree(json!({ "enum": ["$ref", "anyOf"] })));
+}
+
+// ── A const and an enum member are scalars ───────────────────────────────────────────────────
+
+#[test]
+fn an_object_const_is_refused() {
+    assert_refused_in_every_position(json!({ "const": {} }));
+    assert_refused_in_every_position(json!({ "const": { "type": "string" } }));
+}
+
+#[test]
+fn an_array_const_is_refused() {
+    assert_refused_in_every_position(json!({ "const": [] }));
+}
+
+#[test]
+fn an_enum_with_an_object_member_is_refused() {
+    assert_refused_in_every_position(json!({ "enum": ["a", {}] }));
+}
+
+#[test]
+fn an_enum_with_an_array_member_is_refused() {
+    assert_refused_in_every_position(json!({ "enum": ["a", []] }));
+}
+
+/// A string one byte past the cap, in a `const`, in an all-string enum and in a mixed enum.
+#[test]
+fn a_string_past_the_cap_is_refused() {
+    let long = "a".repeat(MAX_SHAPE_VALUE_STRING_BYTES + 1);
+    assert_refused_in_every_position(json!({ "const": long }));
+    assert_refused_in_every_position(json!({ "enum": ["a", long] }));
+    assert_refused_in_every_position(json!({ "enum": [1, long] }));
+}
+
+/// 250 quote characters are under the cap raw and twice that escaped, so a raw-length measure
+/// admits them.
+#[test]
+fn a_string_under_the_cap_raw_but_over_it_escaped_is_refused() {
+    let quotes = "\"".repeat(250);
+    assert!(
+        quotes.len() <= MAX_SHAPE_VALUE_STRING_BYTES,
+        "under the cap raw"
+    );
+    let escaped = serde_json::to_string(&quotes).expect("a string serializes");
+    assert!(
+        escaped.len() - 2 > MAX_SHAPE_VALUE_STRING_BYTES,
+        "over the cap escaped"
+    );
+    assert_refused_in_every_position(json!({ "const": quotes }));
+    assert_refused_in_every_position(json!({ "enum": [quotes] }));
+}
+
+/// 129 two-byte characters are 258 bytes: past the cap in bytes, under it counted as characters.
+#[test]
+fn a_multibyte_string_past_the_cap_in_bytes_is_refused() {
+    let accented = "é".repeat(129);
+    assert!(accented.chars().count() <= MAX_SHAPE_VALUE_STRING_BYTES);
+    assert!(accented.len() > MAX_SHAPE_VALUE_STRING_BYTES);
+    assert_refused_in_every_position(json!({ "const": accented }));
+    assert_refused_in_every_position(json!({ "enum": [accented] }));
+}
+
+/// A string exactly at the cap compiles as a `const`, in an all-string enum and in a mixed enum.
+#[test]
+fn a_string_at_the_cap_compiles() {
+    let at_cap = "a".repeat(MAX_SHAPE_VALUE_STRING_BYTES);
+    assert_compiles_in_every_position(json!({ "const": at_cap }));
+    assert_compiles_in_every_position(json!({ "enum": ["a", at_cap] }));
+    assert_compiles_in_every_position(json!({ "enum": [1, at_cap] }));
+}
+
+#[test]
+fn every_scalar_kind_compiles_as_const_and_as_an_enum_member() {
+    for scalar in [
+        json!(null),
+        json!(true),
+        json!(false),
+        json!(0),
+        json!(-1.5),
+        json!(""),
+    ] {
+        assert_compiles_in_every_position(json!({ "const": scalar }));
+        assert_compiles_in_every_position(json!({ "enum": [scalar] }));
+    }
+}
+
+/// A string is measured as `serde_json` writes it, whatever spelling the document gave it: a
+/// control character written `\u0001` is six bytes escaped, one raw; a letter written `\u0041` is
+/// one byte either way.
+#[test]
+fn a_string_written_with_unicode_escapes_is_measured_as_serde_escapes_it() {
+    let schema_with = |escape: &str, count: usize| -> Value {
+        let text = format!(r#"{{ "const": "{}" }}"#, escape.repeat(count));
+        field_tree(serde_json::from_str(&text).expect("a test schema is JSON"))
+    };
+    let controls_in_cap = MAX_SHAPE_VALUE_STRING_BYTES / 6;
+    assert_compiles(&schema_with(r"\u0001", controls_in_cap));
+    assert_refused(&schema_with(r"\u0001", controls_in_cap + 1));
+    assert_compiles(&schema_with(r"\u0041", MAX_SHAPE_VALUE_STRING_BYTES));
+    assert_refused(&schema_with(r"\u0041", MAX_SHAPE_VALUE_STRING_BYTES + 1));
+}
+
+/// `serde_json` is built without `arbitrary_precision`, so a `Number` is fixed-size and a shape
+/// value that is a number needs no length cap. `reference.rs` (decision P9) rests on the same
+/// assumption. Without the feature a 400-digit integer literal is out of range and fails to parse
+/// (at most 309 digits would parse as a lossy `f64`); with it, the literal parses as a
+/// string-backed `Number` and this test goes red. The likeliest thing to turn it on is
+/// `jsonschema`'s own `arbitrary-precision` feature.
+#[test]
+fn a_four_hundred_digit_number_does_not_parse() {
+    assert!(
+        serde_json::from_str::<Value>(&"9".repeat(400)).is_err(),
+        "serde_json/arbitrary_precision is on: a number is no longer fixed-size"
+    );
 }
 
 #[test]
@@ -746,4 +892,16 @@ fn the_refusal_names_the_accepted_schema_spellings() {
     let sentence = ShapeSchemaUncompilable.to_string();
     assert!(sentence.contains(DRAFT_2020_12), "{sentence}");
     assert!(sentence.contains("trailing #"), "{sentence}");
+}
+
+/// The refusal states the value rule, so a declarer refused for a structured `const` or a long
+/// string is told what a value may be.
+#[test]
+fn the_refusal_names_the_value_rule() {
+    let sentence = ShapeSchemaUncompilable.to_string();
+    let clause = format!(
+        "const and enum members that are strings (at most {MAX_SHAPE_VALUE_STRING_BYTES} bytes, \
+         JSON-escaped), numbers, booleans or null"
+    );
+    assert!(sentence.contains(&clause), "{sentence}");
 }

@@ -16,6 +16,11 @@
 //! `2026-10-27-a-shape-is-a-field-tree-design`, §1 and §2). [`ShapeSchemaUncompilable`]'s sentence
 //! teaches the vocabulary.
 //!
+//! **A `const` and every `enum` member is a scalar.** [`is_shape_value`] holds each to `null`, a
+//! boolean, a number, or a string of at most [`MAX_SHAPE_VALUE_STRING_BYTES`] JSON-escaped bytes;
+//! an object, an array or a longer string makes the schema uncompilable. `default` and `examples`
+//! stay free-form data, which the compile never reads.
+//!
 //! The draft is not left to `jsonschema`'s detection: `$schema` is absent, or it appears only at
 //! the root and is the bundled 2020-12 spelling, with or without a trailing `#`. `$id` is also
 //! root-only. A subschema therefore cannot register a custom meta-schema, and no spelling of
@@ -49,6 +54,8 @@
 
 use jsonschema::{Retrieve, Uri};
 use serde_json::Value;
+use temper_core::types::artifact_ask::is_scalar;
+use temper_core::types::query::filter::{json_string_bytes, MAX_FILTER_STRING_BYTES};
 
 /// The compiled form of a shape's JSON Schema, as [`compile`] returns it.
 pub use jsonschema::Validator;
@@ -69,9 +76,11 @@ impl std::fmt::Display for ShapeSchemaUncompilable {
             "the shape's JSON Schema cannot be compiled: a shape is a field tree — a JSON Schema \
              2020-12 document using only type, properties, required, additionalProperties (true, \
              false or a schema), items (one schema), enum (at most {MAX_ENUM_ENTRIES} strings, or \
-             {MAX_MIXED_ENUM_ENTRIES} values of any other kind), const, pattern (at most \
-             {MAX_PATTERN_SOURCE_BYTES} bytes of source, compiling within {pattern_kib} KiB, at most \
-             {MAX_SHAPE_PATTERNS} in a shape, no lookaround or backreferences), minLength, \
+             {MAX_MIXED_ENUM_ENTRIES} values of any other kind), const and enum members that are \
+             strings (at most {MAX_SHAPE_VALUE_STRING_BYTES} bytes, JSON-escaped), numbers, \
+             booleans or null, pattern (at most {MAX_PATTERN_SOURCE_BYTES} bytes of source, \
+             compiling within {pattern_kib} KiB, at most {MAX_SHAPE_PATTERNS} in a shape, no \
+             lookaround or backreferences), minLength, \
              maxLength, minItems, maxItems, minimum, maximum, title, description, $comment, \
              default and examples, with property names (in properties and required) of at most \
              {MAX_PROPERTY_NAME_BYTES} bytes, $schema and $id only at the root ($schema, if \
@@ -114,14 +123,39 @@ const _: () = assert!(
 /// scan the entries. Any other enum is held to [`MAX_MIXED_ENUM_ENTRIES`].
 pub const MAX_ENUM_ENTRIES: usize = 256;
 
-/// The most entries an `enum` may list when any entry is not a string.
+/// The most entries an `enum` may list when any entry is not a string: every other enum, a
+/// numbers-only enum included.
 ///
 /// `jsonschema` compares such an enum against a value entry by entry, so every checked value costs
-/// a scan of the whole enum. Measured: about 50 ms for 32 scalars checked over 900k integers,
-/// about 184 ms for 32 structured entries over a 4.5 MB body at one level, and about 159 ms for a
-/// 32-entry mixed enum at every one of the 16 levels. The 256 entries a
-/// string-only enum may list would cost eight times that.
+/// a scan of the whole enum. Measured: about 50 ms for 32 scalars checked over 900k integers. The
+/// 256 entries a string-only enum may list would cost eight times that.
 pub const MAX_MIXED_ENUM_ENTRIES: usize = 32;
+
+/// The longest a string may be as a `const` value or an `enum` member, in JSON-escaped bytes, as
+/// the ask surface counts a string it sends. It is a literal, held equal to
+/// [`MAX_FILTER_STRING_BYTES`] by the assert below, so a change to either one fails the build
+/// rather than letting the two drift. [`MAX_PROPERTY_NAME_BYTES`] is also 256, but measures raw
+/// bytes.
+pub const MAX_SHAPE_VALUE_STRING_BYTES: usize = 256;
+
+const _: () = assert!(
+    MAX_SHAPE_VALUE_STRING_BYTES == MAX_FILTER_STRING_BYTES,
+    "a shape's string value cap is the ask surface's string cap, so the ask can name every value"
+);
+
+/// Whether a value may stand as a `const` or an `enum` member: a scalar (`null`, a boolean, a
+/// number or a string) and, for a string, at most [`MAX_SHAPE_VALUE_STRING_BYTES`] bytes
+/// JSON-escaped. The raw length is read first, which is free, and escaping only lengthens a string,
+/// so one past the cap raw is never serialized to be refused.
+pub fn is_shape_value(value: &Value) -> bool {
+    match value {
+        Value::String(text) => {
+            text.len() <= MAX_SHAPE_VALUE_STRING_BYTES
+                && json_string_bytes(text) <= MAX_SHAPE_VALUE_STRING_BYTES
+        }
+        other => is_scalar(other),
+    }
+}
 
 /// The most `pattern` keywords a shape may hold, counting every occurrence in a schema position.
 /// A property *named* `pattern` is not a keyword and is not counted.
@@ -146,13 +180,15 @@ const ACCEPTED_SCHEMA_URIS: [&str; 2] = [
 ];
 
 /// Whether the document is a field tree: only the allowed keywords, in schema positions, within the
-/// depth, `enum` and `pattern` caps.
+/// depth, `enum` and `pattern` caps, and with every `const` and `enum` member passing
+/// [`is_shape_value`].
 ///
 /// A schema position is the root, a `properties` value, an `additionalProperties` that is an object
 /// or a boolean, or an `items` that is an object or a boolean. A boolean is a leaf. Values under
-/// `const`, `enum`, `default` and `examples` are data and are never walked. Where the form of a
-/// value is not fixed here (a `type` value, a `required` item) the walk leaves it to the build's
-/// meta-validation. Every schema position is pushed once onto an explicit stack, so the walk is
+/// `const`, `enum`, `default` and `examples` are data and are never walked; of them a `const` and
+/// each `enum` member must be a shape value, and `default` and `examples` are free. Where the form
+/// of a value is not fixed here (a `type` value, a `required` item) the walk leaves it to the
+/// build's meta-validation. Every schema position is pushed once onto an explicit stack, so the walk is
 /// linear in the document's size and never recurses on the Rust stack.
 fn is_field_tree(schema: &Value) -> bool {
     let mut pending = vec![(schema, 0usize)];
@@ -180,9 +216,13 @@ fn is_field_tree(schema: &Value) -> bool {
                         }
                     }
                 }
-                "type" | "const" | "default" | "examples" | "minLength" | "maxLength"
-                | "minItems" | "maxItems" | "minimum" | "maximum" | "title" | "description"
-                | "$comment" => {}
+                "type" | "default" | "examples" | "minLength" | "maxLength" | "minItems"
+                | "maxItems" | "minimum" | "maximum" | "title" | "description" | "$comment" => {}
+                "const" => {
+                    if !is_shape_value(value) {
+                        return false;
+                    }
+                }
                 "properties" => match value {
                     Value::Object(fields) => {
                         if fields
@@ -206,7 +246,7 @@ fn is_field_tree(schema: &Value) -> bool {
                         } else {
                             MAX_MIXED_ENUM_ENTRIES
                         };
-                        if entries.len() > cap {
+                        if entries.len() > cap || !entries.iter().all(is_shape_value) {
                             return false;
                         }
                     }
@@ -267,7 +307,8 @@ pub const MAX_PATTERN_DFA_BYTES: usize = 2 << 20;
 /// [`ShapeSchemaUncompilable`] when the schema is not a field tree (a keyword outside the allowed
 /// vocabulary, a `$schema` or `$id` below the root, a `$schema` other than the bundled 2020-12
 /// spelling (with or without a trailing `#`), a `properties` key or `required` entry past
-/// [`MAX_PROPERTY_NAME_BYTES`], or a depth, `enum`, `pattern` size or `pattern` count past its cap), is not valid for
+/// [`MAX_PROPERTY_NAME_BYTES`], a `const` or `enum` member that is not an [`is_shape_value`], or a
+/// depth, `enum`, `pattern` size or `pattern` count past its cap), is not valid for
 /// 2020-12 where the walk leaves a form to meta-validation, or has a pattern that compiles past
 /// [`MAX_PATTERN_BYTES`].
 pub fn compile(schema: &Value) -> Result<Validator, ShapeSchemaUncompilable> {
