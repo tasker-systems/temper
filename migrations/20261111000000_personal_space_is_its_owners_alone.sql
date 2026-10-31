@@ -19,7 +19,8 @@
 -- the Rust gate's rule since 20261110000000, which its admin bypass skipped.
 --
 -- Erasure is untouched: the person act and resource erasure never call these four functions.
--- Bodies are carried verbatim from 20261022100000 apart from those lines.
+-- Bodies are carried verbatim from 20261110000100 (a soft-deleted team confers nothing) apart from
+-- those lines.
 
 CREATE OR REPLACE FUNCTION context_personal_owner(p_context uuid)
 RETURNS uuid LANGUAGE sql STABLE
@@ -65,11 +66,10 @@ $$;
 COMMENT ON FUNCTION resource_is_personal(uuid) IS
   'Whether a resource is homed in personal space.';
 
-CREATE OR REPLACE FUNCTION context_retire(p_payload jsonb, p_emitter uuid,
-                               p_metadata jsonb DEFAULT '{}'::jsonb,
-                               p_invocation uuid DEFAULT NULL,
-                               p_correlation uuid DEFAULT NULL)
-RETURNS uuid LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION public.context_retire(p_payload jsonb, p_emitter uuid, p_metadata jsonb DEFAULT '{}'::jsonb, p_invocation uuid DEFAULT NULL::uuid, p_correlation uuid DEFAULT NULL::uuid)
+ RETURNS uuid
+ LANGUAGE plpgsql
+AS $function$
 DECLARE
     v_ev uuid;
     v_context uuid := (p_payload->>'context_id')::uuid;
@@ -114,9 +114,10 @@ BEGIN
                       USING ERRCODE = '42501';
             END IF;
         ELSIF v_owner_table = 'kb_teams' THEN
-            IF NOT EXISTS (SELECT 1 FROM kb_team_members
-                            WHERE team_id = v_owner_id AND profile_id = v_actor
-                              AND role IN ('owner', 'maintainer')) THEN
+            IF NOT EXISTS (SELECT 1 FROM kb_team_members tm
+                             JOIN kb_teams t ON t.id = tm.team_id AND t.is_active
+                            WHERE tm.team_id = v_owner_id AND tm.profile_id = v_actor
+                              AND tm.role IN ('owner', 'maintainer')) THEN
                 RAISE EXCEPTION 'context_retire: actor does not administer the context''s owning team'
                       USING ERRCODE = '42501';
             END IF;
@@ -131,13 +132,12 @@ BEGIN
                           p_correlation => p_correlation);
     RETURN _project_context_retired(v_ev, p_payload);
 END;
-$$;
+$function$;
 
-CREATE OR REPLACE FUNCTION context_restore(p_payload jsonb, p_emitter uuid,
-                                p_metadata jsonb DEFAULT '{}'::jsonb,
-                                p_invocation uuid DEFAULT NULL,
-                                p_correlation uuid DEFAULT NULL)
-RETURNS uuid LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION public.context_restore(p_payload jsonb, p_emitter uuid, p_metadata jsonb DEFAULT '{}'::jsonb, p_invocation uuid DEFAULT NULL::uuid, p_correlation uuid DEFAULT NULL::uuid)
+ RETURNS uuid
+ LANGUAGE plpgsql
+AS $function$
 DECLARE
     v_ev uuid;
     v_context uuid := (p_payload->>'context_id')::uuid;
@@ -154,7 +154,6 @@ BEGIN
     IF NOT FOUND THEN
         RAISE EXCEPTION 'context_restore: context % not found', v_context;
     END IF;
-
 
     IF v_is_active THEN
         RAISE EXCEPTION 'context_restore: context % is already active', v_context
@@ -177,9 +176,10 @@ BEGIN
                       USING ERRCODE = '42501';
             END IF;
         ELSIF v_owner_table = 'kb_teams' THEN
-            IF NOT EXISTS (SELECT 1 FROM kb_team_members
-                            WHERE team_id = v_owner_id AND profile_id = v_actor
-                              AND role IN ('owner', 'maintainer')) THEN
+            IF NOT EXISTS (SELECT 1 FROM kb_team_members tm
+                             JOIN kb_teams t ON t.id = tm.team_id AND t.is_active
+                            WHERE tm.team_id = v_owner_id AND tm.profile_id = v_actor
+                              AND tm.role IN ('owner', 'maintainer')) THEN
                 RAISE EXCEPTION 'context_restore: actor does not administer the context''s owning team'
                       USING ERRCODE = '42501';
             END IF;
@@ -208,13 +208,12 @@ BEGIN
                           p_correlation => p_correlation);
     RETURN _project_context_restored(v_ev, p_payload);
 END;
-$$;
+$function$;
 
-CREATE OR REPLACE FUNCTION context_rename(p_payload jsonb, p_emitter uuid,
-                               p_metadata jsonb DEFAULT '{}'::jsonb,
-                               p_invocation uuid DEFAULT NULL,
-                               p_correlation uuid DEFAULT NULL)
-RETURNS uuid LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION public.context_rename(p_payload jsonb, p_emitter uuid, p_metadata jsonb DEFAULT '{}'::jsonb, p_invocation uuid DEFAULT NULL::uuid, p_correlation uuid DEFAULT NULL::uuid)
+ RETURNS uuid
+ LANGUAGE plpgsql
+AS $function$
 DECLARE
     v_ev uuid;
     v_context uuid := (p_payload->>'context_id')::uuid;
@@ -263,9 +262,10 @@ BEGIN
                       USING ERRCODE = '42501';
             END IF;
         ELSIF v_owner_table = 'kb_teams' THEN
-            IF NOT EXISTS (SELECT 1 FROM kb_team_members
-                            WHERE team_id = v_owner_id AND profile_id = v_actor
-                              AND role IN ('owner', 'maintainer')) THEN
+            IF NOT EXISTS (SELECT 1 FROM kb_team_members tm
+                             JOIN kb_teams t ON t.id = tm.team_id AND t.is_active
+                            WHERE tm.team_id = v_owner_id AND tm.profile_id = v_actor
+                              AND tm.role IN ('owner', 'maintainer')) THEN
                 RAISE EXCEPTION 'context_rename: actor does not administer the context''s owning team'
                       USING ERRCODE = '42501';
             END IF;
@@ -280,13 +280,12 @@ BEGIN
                           p_correlation => p_correlation);
     RETURN _project_context_renamed(v_ev, p_payload);
 END;
-$$;
+$function$;
 
-CREATE OR REPLACE FUNCTION context_reassign(p_payload jsonb, p_emitter uuid,
-                                 p_metadata jsonb DEFAULT '{}'::jsonb,
-                                 p_invocation uuid DEFAULT NULL,
-                                 p_correlation uuid DEFAULT NULL)
-RETURNS uuid LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION public.context_reassign(p_payload jsonb, p_emitter uuid, p_metadata jsonb DEFAULT '{}'::jsonb, p_invocation uuid DEFAULT NULL::uuid, p_correlation uuid DEFAULT NULL::uuid)
+ RETURNS uuid
+ LANGUAGE plpgsql
+AS $function$
 DECLARE
     v_ev uuid;
     v_context uuid := (p_payload->>'context_id')::uuid;
@@ -314,6 +313,16 @@ BEGIN
               USING ERRCODE = '42501';
     END IF;
 
+    -- Nothing is transferred INTO a soft-deleted team, by anyone (soft-delete design D4): a row
+    -- written onto a dead team would come back unreviewed if it were ever restored. A system admin
+    -- may still move a dead team's context OUT (the owner side below exempts them): that is the
+    -- recovery path.
+    IF v_to_table = 'kb_teams'
+       AND NOT EXISTS (SELECT 1 FROM kb_teams WHERE id = v_to_id AND is_active) THEN
+        RAISE EXCEPTION 'context_reassign: target team % not found', v_to_id
+              USING ERRCODE = '42501';
+    END IF;
+
     -- A personal team is acted on by its owner alone (20261110000000): no one else, an instance admin
     -- included, moves a context into one.
     IF EXISTS (SELECT 1 FROM kb_teams t
@@ -338,9 +347,10 @@ BEGIN
             RAISE EXCEPTION 'context_reassign: cannot transfer into the gating team'
                   USING ERRCODE = '42501';
         END IF;
-        IF NOT EXISTS (SELECT 1 FROM kb_team_members
-                        WHERE team_id = v_to_id AND profile_id = v_actor
-                          AND role IN ('owner', 'maintainer')) THEN
+        IF NOT EXISTS (SELECT 1 FROM kb_team_members tm
+                         JOIN kb_teams t ON t.id = tm.team_id AND t.is_active
+                        WHERE tm.team_id = v_to_id AND tm.profile_id = v_actor
+                          AND tm.role IN ('owner', 'maintainer')) THEN
             RAISE EXCEPTION 'context_reassign: actor lacks owner/maintainer on the target team'
                   USING ERRCODE = '42501';
         END IF;
@@ -353,9 +363,10 @@ BEGIN
                       USING ERRCODE = '42501';
             END IF;
         ELSIF v_owner_table = 'kb_teams' THEN
-            IF NOT EXISTS (SELECT 1 FROM kb_team_members
-                            WHERE team_id = v_owner_id AND profile_id = v_actor
-                              AND role IN ('owner', 'maintainer')) THEN
+            IF NOT EXISTS (SELECT 1 FROM kb_team_members tm
+                             JOIN kb_teams t ON t.id = tm.team_id AND t.is_active
+                            WHERE tm.team_id = v_owner_id AND tm.profile_id = v_actor
+                              AND tm.role IN ('owner', 'maintainer')) THEN
                 RAISE EXCEPTION 'context_reassign: actor does not administer the context''s owning team'
                       USING ERRCODE = '42501';
             END IF;
@@ -382,7 +393,7 @@ BEGIN
                           p_correlation => p_correlation);
     RETURN _project_context_reassigned(v_ev, p_payload);
 END;
-$$;
+$function$;
 
 SELECT declare_migration(
     20261111000000,
