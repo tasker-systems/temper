@@ -114,6 +114,16 @@ fn subject(resource: Uuid) -> RefTarget {
     }
 }
 
+/// The grant doors' refusal to a system admin on someone else's personal space, and on a subject
+/// that names nothing: the same `NotFound`, byte for byte.
+#[track_caller]
+fn assert_concealed(refused: &ApiError) {
+    match refused {
+        ApiError::NotFound(message) => assert_eq!(message, access_service::GRANT_SUBJECT_REFUSAL),
+        other => panic!("expected the concealed NotFound, got {other:?}"),
+    }
+}
+
 /// How many grant records a ledger page carries.
 macro_rules! grant_rows {
     ($entries:expr) => {
@@ -143,7 +153,13 @@ async fn a_system_admin_neither_grants_on_nor_audits_someone_elses_personal_spac
     let refused = access_service::grant_capability(&pool, &as_admin, &grant(resource, admin_team))
         .await
         .expect_err("an admin does not grant on someone else's personal space");
-    assert!(matches!(refused, ApiError::Forbidden), "{refused:?}");
+    assert_concealed(&refused);
+    // ...and is told what an id naming nothing would tell them (task `01a1933d`).
+    let missing =
+        access_service::grant_capability(&pool, &as_admin, &grant(Uuid::now_v7(), admin_team))
+            .await
+            .expect_err("an admin's grant on a missing resource is refused");
+    assert_concealed(&missing);
     let refused = access_service::revoke_capability(
         &pool,
         &as_admin,
@@ -156,7 +172,7 @@ async fn a_system_admin_neither_grants_on_nor_audits_someone_elses_personal_spac
     )
     .await
     .expect_err("nor revoke there");
-    assert!(matches!(refused, ApiError::Forbidden), "{refused:?}");
+    assert_concealed(&refused);
     let grants: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kb_access_grants WHERE subject_id = $1 AND principal_table = 'kb_teams'",
     )

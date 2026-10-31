@@ -247,7 +247,8 @@ pub async fn warm(
         (status = 200, description = "What is stale in scope, and the resources enqueued (none on `dry_run`). Resources homed in personal space are enqueued by the `all` sweep but not named", body = ReembedSummary),
         (status = 400, description = "Not exactly one of `resource_id`, `context_id`, `all`", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin, the scope is a personal context or a resource homed in one (`FORBIDDEN_DETAIL`), or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
+        (status = 404, description = "The resource or context does not exist, or is someone else's personal space (a personal context, cognitive map, or a resource homed in one); the two are refused alike", body = ErrorBody),
     )
 )]
 pub async fn reembed(
@@ -272,13 +273,15 @@ pub async fn reembed(
         }
     };
 
-    // A system admin does not aim at personal space (task `01a191b4`). Refused before anything is
-    // read, so the refusal says nothing about what is stale there.
-    if embed_service::scope_is_personal(&state.pool, &admin, scope).await? {
-        return Err(ApiError::ForbiddenDetail(
-            "a re-embed cannot target a personal context or a resource homed in one; the `all` \
-             sweep re-embeds personal space without naming it"
-                .to_string(),
+    // A system admin does not aim at someone else's personal space (task `01a191b4`). Refused
+    // before anything is read, so the refusal says nothing about what is stale there, and refused
+    // as a scope that names nothing is, so it does not confirm the id is personal space (task
+    // `01a1933d`).
+    if !embed_service::scope_exists(&state.pool, scope).await?
+        || embed_service::scope_is_personal(&state.pool, &admin, scope).await?
+    {
+        return Err(ApiError::NotFound(
+            embed_service::REEMBED_SCOPE_REFUSAL.to_string(),
         ));
     }
 

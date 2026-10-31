@@ -26,10 +26,22 @@ Nor does a system admin read your personal space through the side doors: your re
 the grant history on your personal resources, and your subscriptions stay out of their listings.
 A system admin's own personal space is theirs, like anyone's.
 
+A private cognitive map is personal space too. A map you created is yours until you bind it to a
+shared team; a map with no recorded creator is the person's whose personal team it is bound to. A
+system admin cannot grant or revoke on your map or on what is homed in it, bind or unbind it, or
+register a machine with reach onto it. A map is personal to one person at most: a person's
+personal team takes only a map that person created, so to share a map with someone else, bind it
+to a shared team you both belong to.
+
+When a system admin is refused on someone else's personal space by id (a share, reassign, bind,
+grant or re-embed), the answer is the same `404` an id naming nothing gets, so the refusal does
+not reveal that the id exists.
+
 Machines are different: they are principals, and a system admin manages every principal, yours
 included. What protects your personal team is the credential. If anyone but you gives a machine on
 your personal team a new credential (a rotated secret, or a rebound client id), the machine leaves
-your personal team in the same act, so the new credential cannot open it.
+your personal team in the same act, and loses its own grants on your personal contexts, maps and
+resources, so the new credential cannot open them.
 
 ## The role ladder
 

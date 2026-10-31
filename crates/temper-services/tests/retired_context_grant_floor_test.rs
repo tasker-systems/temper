@@ -201,9 +201,11 @@ async fn a_system_admin_cannot_grant_on_a_context_that_does_not_exist(pool: PgPo
     let refusal = access_service::grant_capability(&pool, &principal, &grant_req(absent, holder))
         .await
         .expect_err("an admin grant on an absent context is refused");
+    // The admin's refusal on an id naming nothing is the one they get on someone else's personal
+    // space (task `01a1933d`), so neither confirms what the id is.
     assert!(
-        matches!(refusal, ApiError::Forbidden),
-        "the refusal is the existing 403, got {refusal:?}"
+        matches!(&refusal, ApiError::NotFound(m) if m == access_service::GRANT_SUBJECT_REFUSAL),
+        "the refusal is the concealed 404, got {refusal:?}"
     );
     assert_eq!(grant_rows(&pool, absent, holder).await, 0, "no row written");
 }

@@ -136,6 +136,35 @@ pub async fn scope_is_personal(
     })
 }
 
+/// The re-embed door's refusal on a scope that names nothing or is someone else's personal space —
+/// one sentence for both, so the refusal does not confirm that an id is personal space (task
+/// `01a1933d`).
+pub const REEMBED_SCOPE_REFUSAL: &str = "re-embed scope not found";
+
+/// Whether a re-embed scope names a row at all: a resource or context that exists, whatever its
+/// state. The `all` sweep always does.
+pub async fn scope_exists(pool: &PgPool, scope: ReembedScope) -> ApiResult<bool> {
+    Ok(match scope {
+        ReembedScope::Resource(id) => {
+            sqlx::query_scalar!(
+                r#"SELECT EXISTS(SELECT 1 FROM kb_resources WHERE id = $1) AS "e!: bool""#,
+                id
+            )
+            .fetch_one(pool)
+            .await?
+        }
+        ReembedScope::Context(id) => {
+            sqlx::query_scalar!(
+                r#"SELECT EXISTS(SELECT 1 FROM kb_contexts WHERE id = $1) AS "e!: bool""#,
+                id
+            )
+            .fetch_one(pool)
+            .await?
+        }
+        ReembedScope::All => true,
+    })
+}
+
 /// The ids of `enqueued` that are not homed in someone else's personal space, in order. The sweep
 /// enqueues personal resources like any others; the operator's receipt names only the rest (task
 /// `01a191b4`).

@@ -377,7 +377,7 @@ module Temper::Generated
     end
 
     # Rotate a machine client secret
-    # Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.
+    # Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction, and its direct grants on anyone else's personal space (a personal context or cognitive map, or a resource homed in one) are withdrawn. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.
     # @param id [String] Machine client ID
     # @param rotate_secret_request [RotateSecretRequest] 
     # @param [Hash] opts the optional parameters
@@ -389,7 +389,7 @@ module Temper::Generated
     end
 
     # Rotate a machine client secret
-    # Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for &#x60;grace_seconds&#x60; (0 to 604800). The new &#x60;client_secret&#x60; in the response is shown once and never stored. Requires a system admin or the owner of the machine&#39;s owning team. When the machine sits on a person&#39;s personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance&#39;s tokens, the credential is still &#x60;dormant: true&#x60;.
+    # Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for &#x60;grace_seconds&#x60; (0 to 604800). The new &#x60;client_secret&#x60; in the response is shown once and never stored. Requires a system admin or the owner of the machine&#39;s owning team. When the machine sits on a person&#39;s personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction, and its direct grants on anyone else&#39;s personal space (a personal context or cognitive map, or a resource homed in one) are withdrawn. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance&#39;s tokens, the credential is still &#x60;dormant: true&#x60;.
     # @param id [String] Machine client ID
     # @param rotate_secret_request [RotateSecretRequest] 
     # @param [Hash] opts the optional parameters

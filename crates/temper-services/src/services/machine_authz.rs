@@ -220,12 +220,31 @@ pub(crate) async fn authorize_registration<'a>(
     }
 
     match authority {
-        // Phase A D5: a system admin may confer any reach on a machine.
-        MachineRegistrationAuthority::SystemAdmin => Ok(AuthorizedReach {
-            registrar: authed,
-            teams,
-            grants: AuthorizedReach::seal(grants),
-        }),
+        // Phase A D5: a system admin may confer any reach on a machine, except over someone else's
+        // personal cognitive map (task `01a1933d`): a machine the admin registers with read on it
+        // would read it for them. Refused as a map that does not exist is, and a map that does not
+        // exist is refused here too: the grant row has no foreign key, so it would be written.
+        MachineRegistrationAuthority::SystemAdmin => {
+            for spec in grants {
+                if !cogmap_exists(pool, spec.cogmap_id).await?
+                    || crate::services::cogmap_service::is_others_personal_cogmap(
+                        pool,
+                        spec.cogmap_id,
+                        ProfileId::from(authed.profile().id),
+                    )
+                    .await?
+                {
+                    return Err(ApiError::NotFound(
+                        crate::services::cogmap_service::COGMAP_MISSING.to_string(),
+                    ));
+                }
+            }
+            Ok(AuthorizedReach {
+                registrar: authed,
+                teams,
+                grants: AuthorizedReach::seal(grants),
+            })
+        }
         MachineRegistrationAuthority::TeamOwner => {
             contain_reach(pool, authed, teams, grants).await?;
             Ok(AuthorizedReach {
@@ -238,6 +257,16 @@ pub(crate) async fn authorize_registration<'a>(
         // `_ =>` so that a future arm cannot land here and fall into an authorizing branch.
         MachineRegistrationAuthority::None => Err(ApiError::Forbidden),
     }
+}
+
+/// Does a cognitive map row exist? The admin registration arm's existence floor for a reach grant.
+async fn cogmap_exists(pool: &PgPool, cogmap_id: Uuid) -> ApiResult<bool> {
+    Ok(sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM kb_cogmaps WHERE id = $1) AS "e!: bool""#,
+        cogmap_id
+    )
+    .fetch_one(pool)
+    .await?)
 }
 
 /// Parse a wire role string into a `TeamRole`, the enum's own serde as the single source of
@@ -951,6 +980,51 @@ mod tests {
             .expect("a system admin may grant any reach (Phase A D5)");
         assert_eq!(reach.teams().len(), 1);
         assert_eq!(reach.grants().len(), 1);
+    }
+
+    /// The admin's unchecked reach stops at someone else's private cognitive map (task
+    /// `01a1933d`): a machine the admin registers with read on it would read it for them. Refused
+    /// as a map that does not exist is, and a map that does not exist is refused too.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn system_admin_reach_stops_at_someone_elses_private_map(pool: PgPool) {
+        use temper_workflow::operations::{Backend, CreateCognitiveMap, Surface};
+
+        let owner = mk_profile(&pool, "reach-owner").await;
+        let admin = mk_profile(&pool, "reach-admin").await;
+        crate::test_support::grant_governance(&pool, admin).await;
+        let private = crate::backend::DbBackend::new(pool.clone(), ProfileId::from(owner))
+            .create_cognitive_map(CreateCognitiveMap {
+                request: temper_core::types::reconcile::CreateCogmapRequest {
+                    cogmap_id: None,
+                    telos_resource_id: None,
+                    name: "private".to_string(),
+                    telos_title: "private telos".to_string(),
+                    telos: None,
+                },
+                origin: Surface::ApiHttp,
+            })
+            .await
+            .expect("genesis")
+            .value
+            .cogmap_id;
+
+        let principal = crate::test_support::human_principal_for(&pool, admin).await;
+        for cogmap_id in [private, Uuid::now_v7()] {
+            let grants = vec![GrantSpec {
+                cogmap_id,
+                can_write: false,
+            }];
+            let Err(err) = authorize_registration(&pool, &principal, None, &[], &grants).await
+            else {
+                panic!("an admin's reach onto {cogmap_id} is refused");
+            };
+            match err {
+                ApiError::NotFound(message) => {
+                    assert_eq!(message, crate::services::cogmap_service::COGMAP_MISSING)
+                }
+                other => panic!("expected the missing-map refusal, got {other:?}"),
+            }
+        }
     }
 
     /// An unknown role is a 400 (BadRequest), not a 500 from the downstream enum cast — and it

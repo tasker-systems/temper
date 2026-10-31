@@ -199,6 +199,11 @@ pub async fn get_visible(
 /// the read refusals above rather than a fourth copy of the same defence.
 pub(crate) const CONTEXT_REFUSAL: &str = "context not found or not readable";
 
+/// A missing context's refusal at the share, unshare and reassign doors, and the refusal a system
+/// admin gets there on someone else's personal context (`TwoSidedAuthority`'s concealed arm), so
+/// the two cannot be told apart (task `01a1933d`).
+pub const CONTEXT_MISSING: &str = "context not found";
+
 /// The refusal for restoring a context the person-erasure act erased (migration
 /// `20261022100000`, R7). A 410, not a 404: the caller administers the context (the gate has
 /// already passed), so its existence is no secret from them, and it is gone for good.
@@ -656,7 +661,7 @@ async fn ensure_context_and_team_exist(
     .fetch_one(pool)
     .await?;
     if !context_exists {
-        return Err(ApiError::NotFound("context not found".to_string()));
+        return Err(ApiError::NotFound(CONTEXT_MISSING.to_string()));
     }
     let team_exists = sqlx::query_scalar!(
         r#"SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1 AND is_active) AS "ok!""#,
@@ -2153,10 +2158,15 @@ mod tests {
         let as_admin = crate::test_support::human_principal_for(&pool, admin.uuid()).await;
         let err = share(&pool, &as_admin, *admin_ctx, &req).await.unwrap_err();
         assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
+        // Alice's context is her personal space too, so the admin is refused as on a missing
+        // context (task `01a1933d`).
         let err = unshare(&pool, &as_admin, alice_ctx, personal)
             .await
             .unwrap_err();
-        assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
+        assert!(
+            matches!(&err, ApiError::NotFound(m) if m == CONTEXT_MISSING),
+            "got {err:?}"
+        );
         let shares: i64 =
             sqlx::query_scalar("SELECT count(*) FROM kb_team_contexts WHERE team_id = $1")
                 .bind(personal)
@@ -3239,9 +3249,17 @@ mod tests {
             )
             .await
             .unwrap_err();
-            assert!(matches!(err, ApiError::Forbidden), "share: {err:?}");
+            // Refused as a missing context is, so the refusal does not mark the id as personal
+            // space (task `01a1933d`).
+            assert!(
+                matches!(&err, ApiError::NotFound(m) if m == CONTEXT_MISSING),
+                "share: {err:?}"
+            );
             let err = reassign(&pool, &as_admin, ctx, acme).await.unwrap_err();
-            assert!(matches!(err, ApiError::Forbidden), "reassign: {err:?}");
+            assert!(
+                matches!(&err, ApiError::NotFound(m) if m == CONTEXT_MISSING),
+                "reassign: {err:?}"
+            );
             let err = rename(&pool, &admin_caller, ctx, "Renamed")
                 .await
                 .unwrap_err();

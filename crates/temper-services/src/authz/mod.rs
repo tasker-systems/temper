@@ -634,9 +634,12 @@ mod admin_rung_tests {
         grant_authority_admin_arm_is_minted_from_a_person,
         crate::services::access_service::GrantAuthority,
         crate::services::access_service::GrantAuthority::SystemAdmin,
+        // A subject that exists and is nobody's personal space: the L0 kernel map, seeded by its
+        // migration and bound to the root. An id naming nothing resolves an admin `Concealed`
+        // (task `01a1933d`), which would be a different rung.
         temper_substrate::payloads::RefTarget {
-            kind: temper_substrate::payloads::AnchorTable::Contexts,
-            id: Uuid::now_v7(),
+            kind: temper_substrate::payloads::AnchorTable::Cogmaps,
+            id: Uuid::from_u128(0x00000000_0000_0000_0005_000000000001),
         }
     );
     rung!(

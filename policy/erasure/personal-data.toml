@@ -181,6 +181,7 @@
 
 # ── pseudonymous references; each ceases to identify when the profile is tombstoned ──────────
 "kb_access_grants.granted_by_profile_id"           = { class = "reference", ceiling = "pseudonym", achieved = "-" }
+"kb_cogmaps.created_by_profile_id"                 = { class = "reference", ceiling = "pseudonym", achieved = "-", note = "the map's creator, from the genesis grant (20261114000000); what makes an unshared map its creator's personal space" }
 "kb_blobs.owner_profile_id"                        = { class = "reference", ceiling = "pseudonym", achieved = "-", note = "bytes live in object storage; erasure empties the row, and the erasure fence drains the strike's byte fate through BlobStore::delete — derived from the principal_erased payload verdicts, one batched delete, retried with backoff, age-alerted past a day (20260909000040); home folded into the row (20260903000060)" }
 "kb_blobs.originator_profile_id"                   = { class = "reference", ceiling = "pseudonym", achieved = "-" }
 "kb_blob_uploads.owner_profile_id"                 = { class = "reference", ceiling = "pseudonym", achieved = "-", note = "staged-upload transport state; pre-ledger, no event/replay copy; segments cascade when the session row goes" }

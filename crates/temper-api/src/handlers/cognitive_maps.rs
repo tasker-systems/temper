@@ -331,7 +331,8 @@ pub async fn analytics(
     request_body = BindTeamRequest,
     responses(
         (status = 200, description = "Team bound (or idempotent no-op)", body = BindTeamOutcome),
-        (status = 403, description = "Caller is not a system admin and does not both administer the map and manage the team (on a personal team, a system admin too must be its owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 403, description = "Caller is not a system admin and does not both administer the map and manage the team (on a personal team, or someone else's personal map, a system admin too must be its owner); the team is a person's personal team and the map is not that person's own (`FORBIDDEN_DETAIL`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 404, description = "Map or team not found; a system admin refused on someone else's personal map is answered the same way", body = temper_services::error::ErrorBody),
     )
 )]
 pub async fn bind_team(
@@ -358,7 +359,8 @@ pub async fn bind_team(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Team unbound (or no-op)", body = UnbindTeamOutcome),
-        (status = 403, description = "Caller is not a system admin and does not both administer the map and manage the team (on a personal team, a system admin too must be its owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 403, description = "Caller is not a system admin and does not both administer the map and manage the team (on a personal team, or someone else's personal map, a system admin too must be its owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 404, description = "Map or team not found; a system admin refused on someone else's personal map is answered the same way", body = temper_services::error::ErrorBody),
     )
 )]
 pub async fn unbind_team(
@@ -382,6 +384,7 @@ pub async fn unbind_team(
     responses(
         (status = 200, description = "Grant minted (or updated)", body = GrantOutcome),
         (status = 403, description = "Caller may not administer grants on this map; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 404, description = "A system admin's refusal on a map that does not exist or is someone else's personal map; the two are answered alike", body = temper_services::error::ErrorBody),
     )
 )]
 pub async fn grant(
@@ -418,6 +421,7 @@ pub async fn grant(
     responses(
         (status = 200, description = "Grant revoked (or no-op)", body = RevokeOutcome),
         (status = 403, description = "Caller may not administer grants on this map; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 404, description = "A system admin's refusal on a map that does not exist or is someone else's personal map; the two are answered alike", body = temper_services::error::ErrorBody),
     )
 )]
 pub async fn revoke(

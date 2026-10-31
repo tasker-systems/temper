@@ -141,6 +141,7 @@ MIGRATIONS_DIR="${MIGRATIONS_DIR:-migrations}"
 read -r -d '' BASELINE <<'EOF' || true
 3 crates/temper-services/src/authz/audit_gate.rs
 1 crates/temper-services/src/authz/context_admin.rs
+1 crates/temper-services/src/authz/machine.rs
 1 crates/temper-services/src/backend/db_backend.rs
 1 crates/temper-services/src/backend/write_floor.rs
 1 crates/temper-services/src/services/access_service.rs

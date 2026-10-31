@@ -1,0 +1,36 @@
+title    = "A private cognitive map is its person's alone, and a system admin refused on someone else's personal space gets 404"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "cli-stdout", "clients", "erasure-policy"]
+status   = "signal-only"
+body = '''
+Extends personal space to cognitive maps, and makes a refusal there indistinguishable from a
+missing id. Migration `20261114000000`.
+
+- A map is personal to at most one person: its creator (now recorded as
+  `kb_cogmaps.created_by_profile_id`, backfilled from the genesis grant), or else the one person
+  whose personal team it is bound to. A binding to a live shared team makes it nobody's. A
+  soft-deleted shared team shares nothing.
+- A system admin's arm stops at someone else's private map: `POST`/`DELETE` grants on it or on a
+  resource homed in it, `POST`/`DELETE /api/cognitive-maps/{id}/teams`, and a machine registration
+  carrying reach onto it are refused.
+- Binding a map to a person's personal team is refused for every caller (`403 FORBIDDEN_DETAIL`)
+  unless that person created the map, or the map has no person creator and no other person's
+  personal-team binding. The database refuses it too (SQLSTATE `TC001`).
+- A system admin refused on someone else's personal context, map or resource gets `404`, not `403`,
+  answered exactly as an id naming nothing is: share, unshare and reassign (`context not found`),
+  bind and unbind (`cognitive map not found`), the grant doors (`grant subject not found`), machine
+  registration reach (`cognitive map not found`), and `POST /api/embed/admin/reembed`
+  (`re-embed scope not found`, which replaces the earlier `403 FORBIDDEN_DETAIL`). An id naming
+  nothing now answers that `404` to a system admin at those doors as well: before, bind and the
+  cogmap grant door wrote a row against a missing map, and re-embed answered an empty summary.
+
+- A credential minted for a machine by anyone but its person (a rotated secret, a rebound client
+  id) now also withdraws the machine's direct grants on anyone else's personal space, each a
+  recorded `grant_revoked`, beside the personal-team severance #1275 shipped.
+- Genesis at a caller-supplied cognitive map id that already exists answers the idempotent no-op
+  only to a caller who reads that map; anyone else gets `409`.
+
+Request and response shapes are unchanged. Who observes: system admins, and anyone binding a map
+to another person's personal team. Release relevance: signal-only.
+'''

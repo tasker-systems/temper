@@ -132,7 +132,11 @@ pub async fn bind_team(
         TwoSidedScope::cogmap(cogmap_id, req.team_id),
     )
     .await?;
+    ensure_cogmap_and_team_exist(pool, cogmap_id, req.team_id).await?;
 
+    // The one-person rule (task `01a1933d`) is the database's, for every caller: a binding to a
+    // person's personal team is refused unless that person created the map, or the map has no
+    // person creator and no other person's personal-team binding (`TC001`).
     let inserted = sqlx::query_scalar!(
         r#"
         INSERT INTO kb_team_cogmaps (cogmap_id, team_id)
@@ -144,7 +148,13 @@ pub async fn bind_team(
         req.team_id,
     )
     .fetch_optional(pool)
-    .await?;
+    .await
+    .map_err(|e| match &e {
+        sqlx::Error::Database(db) if db.code().as_deref() == Some("TC001") => {
+            ApiError::ForbiddenDetail(PERSONAL_BINDING_REFUSAL.to_string())
+        }
+        _ => ApiError::from(e),
+    })?;
 
     Ok(BindTeamOutcome {
         cogmap_id,
@@ -186,6 +196,9 @@ pub async fn unbind_team(
         TwoSidedScope::cogmap(cogmap_id, team_id),
     )
     .await?;
+    // The map must exist; the team need not be live, so a map can still be detached from a
+    // soft-deleted team.
+    ensure_cogmap_exists(pool, cogmap_id).await?;
 
     let result = sqlx::query!(
         "DELETE FROM kb_team_cogmaps WHERE cogmap_id = $1 AND team_id = $2",
@@ -200,4 +213,65 @@ pub async fn unbind_team(
         team_id,
         unbound: result.rows_affected() > 0,
     })
+}
+
+/// A missing map's refusal at the bind and unbind doors, and the refusal a system admin gets on
+/// someone else's personal map there (`TwoSidedAuthority`'s concealed arm), so the two cannot be
+/// told apart (task `01a1933d`).
+pub const COGMAP_MISSING: &str = "cognitive map not found";
+
+/// The bind refusal of the one-person rule (`TC001`, migration `20261114000000`).
+pub const PERSONAL_BINDING_REFUSAL: &str =
+    "a cognitive map is bound to a person's personal team only for its own creator; share it with \
+     another person through a shared team";
+
+/// After the gate, the subject must exist: a missing map or team is `NotFound`, the shape
+/// `context_service::ensure_context_and_team_exist` gives share and reassign. The gate admits a
+/// system admin on an id that names nothing, so without this a bind wrote against a missing map.
+async fn ensure_cogmap_and_team_exist(
+    pool: &PgPool,
+    cogmap_id: Uuid,
+    team_id: Uuid,
+) -> ApiResult<()> {
+    ensure_cogmap_exists(pool, cogmap_id).await?;
+    let team_exists = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1 AND is_active) AS "ok!""#,
+        team_id
+    )
+    .fetch_one(pool)
+    .await?;
+    if !team_exists {
+        return Err(ApiError::NotFound("team not found".to_string()));
+    }
+    Ok(())
+}
+
+async fn ensure_cogmap_exists(pool: &PgPool, cogmap_id: Uuid) -> ApiResult<()> {
+    let cogmap_exists = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM kb_cogmaps WHERE id = $1) AS "ok!""#,
+        cogmap_id
+    )
+    .fetch_one(pool)
+    .await?;
+    if !cogmap_exists {
+        return Err(ApiError::NotFound(COGMAP_MISSING.to_string()));
+    }
+    Ok(())
+}
+
+/// Whether a cognitive map is someone else's personal space (task `01a1933d`): the SQL
+/// `cogmap_personal_owner` names a person other than `caller`. A system admin's arm stops there, as
+/// it does at a personal context.
+pub(crate) async fn is_others_personal_cogmap(
+    pool: &PgPool,
+    cogmap_id: Uuid,
+    caller: ProfileId,
+) -> ApiResult<bool> {
+    Ok(sqlx::query_scalar!(
+        r#"SELECT COALESCE(cogmap_personal_owner($1) <> $2, false) AS "p!: bool""#,
+        cogmap_id,
+        *caller,
+    )
+    .fetch_one(pool)
+    .await?)
 }

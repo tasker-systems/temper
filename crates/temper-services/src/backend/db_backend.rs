@@ -3908,6 +3908,22 @@ impl Backend for DbBackend {
         .await
         .map_err(api_err)?
         {
+            // The no-op answers only a caller who reads the map. Anyone else, a system admin
+            // included, is told the id is taken and nothing more: no charter id, and nothing that
+            // tells someone else's private map from a shared map they are not in (task `01a1933d`).
+            let readable = sqlx::query_scalar!(
+                r#"SELECT cogmap_readable_by_profile($1, $2) AS "r!: bool""#,
+                uuid::Uuid::from(self.profile_id),
+                cogmap_uuid,
+            )
+            .fetch_one(&self.pool)
+            .await
+            .map_err(api_err)?;
+            if !readable {
+                return Err(TemperError::Conflict(
+                    "a cognitive map already exists at this id".to_string(),
+                ));
+            }
             return Ok(CommandOutput::new(CreateCogmapOutcome {
                 cogmap_id: cogmap_uuid,
                 telos_resource_id: existing_telos,

@@ -43,6 +43,7 @@ use temper_core::types::query_params::MachineClientListQuery as ListQuery;
         (status = 400, description = "Unknown team role in `teams`, a `client_id` beginning `conn_` or `tmpr_` (namespaces temper mints itself, which cannot be registered by hand), or this instance runs temper's own authorization server", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
         (status = 403, description = "Caller is not a system admin (`FORBIDDEN_DETAIL`), a team role above `member` was requested (refused for every caller), or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
+        (status = 404, description = "A listed cognitive map does not exist, or is someone else's personal map (a system admin's reach stops there); the two are answered alike", body = ErrorBody),
         (status = 409, description = "The `client_id` is already registered", body = ErrorBody),
     )
 )]
@@ -68,7 +69,7 @@ pub async fn provision(
     post,
     operation_id = "admin_rebind_machine_client",
     summary = "Rebind a machine client to a new client ID",
-    description = "Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction. The path `{id}` names the source client. Requires a system admin. Refused for a temper-issued source client, whose secret is rotated instead, and on an instance that runs temper's own authorization server.",
+    description = "Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction, and its direct grants on anyone else's personal space (a personal context or cognitive map, or a resource homed in one) are withdrawn. The path `{id}` names the source client. Requires a system admin. Refused for a temper-issued source client, whose secret is rotated instead, and on an instance that runs temper's own authorization server.",
     path = "/api/machine-clients/{id}/rebind",
     tag = "Admin",
     params(("id" = Uuid, Path, description = "The machine client whose profile the new client id inherits")),
@@ -191,6 +192,7 @@ pub async fn revoke(
         (status = 400, description = "Unknown team role in `teams`", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
         (status = 403, description = "Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
+        (status = 404, description = "A listed cognitive map does not exist, or is someone else's personal map (a system admin's reach stops there); the two are answered alike", body = ErrorBody),
     )
 )]
 pub async fn issue(
@@ -208,7 +210,7 @@ pub async fn issue(
     post,
     operation_id = "rotate_machine_client_secret",
     summary = "Rotate a machine client secret",
-    description = "Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.",
+    description = "Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction, and its direct grants on anyone else's personal space (a personal context or cognitive map, or a resource homed in one) are withdrawn. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.",
     path = "/api/machine-clients/{id}/rotate-secret",
     tag = "Machine Clients",
     params(("id" = Uuid, Path, description = "Machine client ID")),

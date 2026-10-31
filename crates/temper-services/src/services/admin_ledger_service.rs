@@ -363,8 +363,9 @@ async fn fetch(
               AND ($2::jsonb IS NULL OR e."references" @> $2::jsonb)
               AND ($3::uuid  IS NULL OR p.id = $3::uuid)
               -- An audit of someone else's acts does not reach personal space (task `01a191b4`):
-              -- a grant whose subject is a personal context, or a resource homed in one, is its
-              -- owner's business. Only the grant pair names such a subject.
+              -- a grant whose subject is a personal context or cognitive map (task `01a1933d`), or
+              -- a resource homed in one, is its owner's business. Only the grant pair names such a
+              -- subject.
               AND NOT ($6::uuid IS NOT NULL AND t.name IN ('grant_created', 'grant_revoked')
                    AND EXISTS (
                     SELECT 1 FROM jsonb_array_elements(e."references") r
@@ -372,7 +373,9 @@ async fn fetch(
                        AND ((r->'target'->>'kind' = 'kb_resources'
                              AND resource_personal_owner((r->'target'->>'id')::uuid) <> $6)
                          OR (r->'target'->>'kind' = 'kb_contexts'
-                             AND context_personal_owner((r->'target'->>'id')::uuid) <> $6))))
+                             AND context_personal_owner((r->'target'->>'id')::uuid) <> $6)
+                         OR (r->'target'->>'kind' = 'kb_cogmaps'
+                             AND cogmap_personal_owner((r->'target'->>'id')::uuid) <> $6))))
             ORDER BY e.occurred_at DESC, e.id DESC
             LIMIT $4 OFFSET $5"#,
         // The authorized set, NOT ADMIN_EVENT_TYPES. Binding the catalogue here would make the gate

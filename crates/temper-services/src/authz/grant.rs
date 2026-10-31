@@ -1,9 +1,10 @@
 //! Grant administration — may this caller administer grants on this subject?
 //!
-//! The arms and the probe sequence are unchanged from the `grant_authority` this replaces; only
-//! the shape moved. In particular the **short-circuit order is load-bearing**: an admin costs one
-//! query, a denied delegate costs three, and reordering the branches would quietly make every
-//! admin request pay for probes it does not need.
+//! The arms and the probe sequence are those of the `grant_authority` this replaced, with one
+//! addition: the admin arm first asks whether the subject is someone else's personal space or names
+//! nothing (task `01a1933d`), and there resolves through the delegated arm, refusing as
+//! `Concealed`. So an admin costs three queries (four on a resource), a delegate is unchanged, and
+//! the **short-circuit order is still load-bearing**: no delegate pays for the admin's probes.
 
 use async_trait::async_trait;
 use sqlx::PgPool;
@@ -19,7 +20,7 @@ use super::{
 use crate::backend::write_floor;
 use crate::error::{ApiError, ApiResult};
 use crate::services::access_service::{
-    cogmap_write_requires_admin, profile_can_grant, GrantAuthority,
+    cogmap_write_requires_admin, profile_can_grant, GrantAuthority, GRANT_SUBJECT_REFUSAL,
 };
 use crate::services::machine_authz::AuthorizedGrant;
 
@@ -33,13 +34,17 @@ impl ScopedAuthority for GrantAuthority {
         subject: RefTarget,
     ) -> ApiResult<Self> {
         let caller = principal.profile_id();
-        // The admin arm stops at personal space (task `01a191b4`): granting on someone's personal
-        // context or a resource homed in one is acting on it, which only its owner and erasure do.
-        // An admin there resolves like anyone else, through `profile_can_grant` below.
-        if principal.system_admin(pool).await?.is_some()
-            && !crate::services::access_service::subject_is_others_personal(pool, subject, caller)
+        // The admin arm stops at personal space (tasks `01a191b4`, `01a1933d`): granting on
+        // someone's personal context or cognitive map, or a resource homed in one, is acting on it,
+        // which only its owner and erasure do. An admin there resolves like anyone else, through
+        // `profile_can_grant` below — and if that refuses too, is refused as on an id that names
+        // nothing (`Concealed`), so the refusal does not confirm the id is personal space.
+        let admin = principal.system_admin(pool).await?.is_some();
+        let concealed = admin
+            && (crate::services::access_service::subject_is_others_personal(pool, subject, caller)
                 .await?
-        {
+                || !crate::services::access_service::grant_subject_exists(pool, subject).await?);
+        if admin && !concealed {
             // The subject-liveness floor the delegated arm carries inside `can()` (migration
             // `20260902000010`: "both profile branches answer a tombstoned subject identically")
             // applies to the admin arm too, so an admin cannot administer grants on a tombstoned
@@ -54,35 +59,59 @@ impl ScopedAuthority for GrantAuthority {
             });
         }
 
-        // Structural escalation guard (plan Task 5b.4). The admin-only regime (`cogmap_write_requires_admin`) keeps the
-        // reserved L0 kernel and gating-team-joined maps admin-only, but the grant path never
-        // consulted it — so a non-admin `can_grant` holder could mint `can_write` on the kernel,
-        // reaching by the grant axis exactly what the write axis forbids. `machine_authz`'s own
-        // tests seed such a row, so the state is reachable, not hypothetical. Admins already
-        // returned above, so a map in the admin-only regime denies here regardless of any
-        // `can_grant` the caller holds.
-        if subject.kind == AnchorTable::Cogmaps
-            && cogmap_write_requires_admin(pool, CogmapId(subject.id)).await?
-        {
-            return Ok(GrantAuthority::None);
-        }
-
-        Ok(
-            if profile_can_grant(pool, caller, subject.kind.as_str(), subject.id).await? {
-                GrantAuthority::Delegated
-            } else {
-                GrantAuthority::None
-            },
-        )
+        let authority = delegated(pool, caller, subject).await?;
+        Ok(if concealed && authority == GrantAuthority::None {
+            GrantAuthority::Concealed
+        } else {
+            authority
+        })
     }
 
     fn is_denial(&self) -> bool {
-        matches!(self, GrantAuthority::None)
+        matches!(self, GrantAuthority::None | GrantAuthority::Concealed)
     }
 
     fn denial() -> ApiError {
         ApiError::Forbidden
     }
+
+    /// Two dialects: `Concealed` answers [`GRANT_SUBJECT_REFUSAL`], the system admin's refusal on a
+    /// subject that names nothing or is someone else's personal space. Every other refusal is
+    /// `Forbidden`, which a delegate gets on a missing subject too.
+    fn denial_for(&self) -> ApiError {
+        match self {
+            GrantAuthority::Concealed => ApiError::NotFound(GRANT_SUBJECT_REFUSAL.to_string()),
+            _ => Self::denial(),
+        }
+    }
+}
+
+/// The delegated arm: `can_grant` on the subject, outside the admin-only regime.
+async fn delegated(
+    pool: &PgPool,
+    caller: ProfileId,
+    subject: RefTarget,
+) -> ApiResult<GrantAuthority> {
+    // Structural escalation guard (plan Task 5b.4). The admin-only regime (`cogmap_write_requires_admin`) keeps the
+    // reserved L0 kernel and gating-team-joined maps admin-only, but the grant path never
+    // consulted it — so a non-admin `can_grant` holder could mint `can_write` on the kernel,
+    // reaching by the grant axis exactly what the write axis forbids. `machine_authz`'s own
+    // tests seed such a row, so the state is reachable, not hypothetical. Admins already
+    // returned in `resolve`, so a map in the admin-only regime denies here regardless of any
+    // `can_grant` the caller holds.
+    if subject.kind == AnchorTable::Cogmaps
+        && cogmap_write_requires_admin(pool, CogmapId(subject.id)).await?
+    {
+        return Ok(GrantAuthority::None);
+    }
+
+    Ok(
+        if profile_can_grant(pool, caller, subject.kind.as_str(), subject.id).await? {
+            GrantAuthority::Delegated
+        } else {
+            GrantAuthority::None
+        },
+    )
 }
 
 /// The admin arm's subject-liveness floor. A `kb_resources` subject must be live
@@ -230,6 +259,15 @@ pub(crate) enum RevokeWarrant<'a> {
     /// Connection read-reach withdrawal. Minted by `ConnectionControlAuthority`: authority over the
     /// connection, and nothing at all about the team losing the reach.
     ConnectionControl(&'a Authorized<ConnectionControlAuthority>),
+    /// A credential mint's withdrawal of a machine's direct grants on someone else's personal space
+    /// (task `01a1933d`). Sealed by `CredentialSeverance`, which only
+    /// `machine_client_service::sever_personal_reach` constructs: a credential minted by anyone but
+    /// the person costs the machine its personal-team membership, and with it the grants that
+    /// would otherwise still open that person's personal maps, contexts and resources.
+    Severance {
+        _seal: &'a crate::services::machine_client_service::CredentialSeverance,
+        subject: RefTarget,
+    },
 }
 
 impl RevokeWarrant<'_> {
@@ -244,6 +282,7 @@ impl RevokeWarrant<'_> {
                 kind: AnchorTable::Connections,
                 id: proof.subject(),
             },
+            RevokeWarrant::Severance { _seal: _, subject } => *subject,
         }
     }
 }

@@ -174,8 +174,8 @@ pub fn materialize_delta(
     Ok(())
 }
 
-/// `temper cogmap bind <cogmap_ref> <team>` — bind the map to a team (system-admin, or a team
-/// manager who administers the map).
+/// `temper cogmap bind <cogmap_ref> <team>` — bind the map to a team (system-admin outside
+/// someone else's personal space, or a team manager who administers the map).
 ///
 /// The team is resolved to its id CLIENT-SIDE (slug → id via the teams list, or a bare UUID); the
 /// wire shape is id-based (mirroring `team add-member`).
@@ -193,7 +193,8 @@ pub fn bind(cogmap_ref: &str, team: &str, fmt: OutputFormat) -> Result<()> {
 }
 
 /// `temper cogmap unbind <cogmap_ref> <team>` — unbind the map from a team (same authority
-/// as `bind`: system-admin, or a team manager who administers the map).
+/// as `bind`: system-admin outside someone else's personal space, or a team manager who
+/// administers the map).
 pub fn unbind(cogmap_ref: &str, team: &str, fmt: OutputFormat) -> Result<()> {
     let cogmap_id = temper_workflow::operations::parse_ref(cogmap_ref)?.0;
     let team = team.to_owned();

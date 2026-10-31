@@ -407,20 +407,22 @@ claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
 claim crates/temper-api/src/handlers/admin_ledger.rs 2 is_system_admin,read_gates,grant,ledger_subject,team_membership
 claim crates/temper-api/src/handlers/block_history_scrub.rs 5 is_system_admin
-claim crates/temper-api/src/handlers/cognitive_maps.rs 4 reconcile_regime,two_sided
+claim crates/temper-api/src/handlers/cognitive_maps.rs 8 reconcile_regime,two_sided
 claim crates/temper-api/src/handlers/connections.rs 13 connection,machine,require_manage_on_team,can_manage
+claim crates/temper-api/src/handlers/contexts.rs 3 -
 claim crates/temper-api/src/handlers/embed.rs 2 is_system_admin
 claim crates/temper-api/src/handlers/erasure.rs 12 is_system_admin
 claim crates/temper-api/src/handlers/field_scrub.rs 8 is_system_admin
 claim crates/temper-api/src/handlers/invitations.rs 3 team_membership
-claim crates/temper-api/src/handlers/machine_clients.rs 11 is_system_admin,machine,require_manage_on_team,can_manage
+claim crates/temper-api/src/handlers/machine_clients.rs 13 is_system_admin,machine,require_manage_on_team,can_manage
 claim crates/temper-api/src/handlers/reblock.rs 2 is_system_admin
 claim crates/temper-api/src/handlers/resource_erasure.rs 5 is_system_admin
+claim crates/temper-api/src/handlers/resources.rs 2 -
 claim crates/temper-api/src/handlers/slack_disconnect.rs 1 -
 claim crates/temper-api/src/handlers/subscriptions.rs 7 subscription
 claim crates/temper-api/src/handlers/teams.rs 10 team_membership,is_system_admin
 claim crates/temper-api/src/openapi.rs 5 is_system_admin,machine,connection,subscription,read_gates,grant,ledger_subject
-claim crates/temper-cli/src/cli.rs 23 team_membership
+claim crates/temper-cli/src/cli.rs 25 team_membership
 claim crates/temper-cli/src/commands/admin.rs 4 -
 claim crates/temper-cli/src/commands/admin_connection.rs 2 connection
 claim crates/temper-cli/src/commands/admin_erasure.rs 1 -
@@ -443,9 +445,9 @@ claim crates/temper-mcp/src/service.rs 4 -
 claim crates/temper-mcp/src/tools/cognitive_maps.rs 1 is_system_admin
 claim crates/temper-mcp/src/tools/contexts.rs 2 context_admin,two_sided
 claim crates/temper-mcp/src/tools/reblock.rs 3 -
-claim crates/temper-services/src/services/access_service.rs 8 is_system_admin
+claim crates/temper-services/src/services/access_service.rs 10 is_system_admin
 claim crates/temper-services/src/services/admin_directory_service.rs 1 is_system_admin
-claim crates/temper-services/src/services/cogmap_service.rs 2 two_sided
+claim crates/temper-services/src/services/cogmap_service.rs 5 two_sided
 claim crates/temper-services/src/services/connection_service.rs 11 connection
 claim crates/temper-services/src/services/context_service.rs 18 context_admin
 claim crates/temper-services/src/services/embed_service.rs 1 -
@@ -464,12 +466,12 @@ claim crates/temper-services/src/services/team_service.rs 27 require_manage_on_t
 gate audit_gate 021f87ca4bed
 gate connection 586029b73345
 gate context_admin 36e336482872
-gate grant 8fca715c38c3
-gate machine b24fecc74f83
+gate grant 4cfb09bb31c9
+gate machine 80a88397e13e
 gate read_gates 6a6ce4847fbc
 gate ledger_subject 89ab4129fe64
 gate subscription f45d76e9be69
-gate two_sided d72f4d72d122
+gate two_sided 293c34724060
 gate reconcile_regime 76ead78c03ac
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT CASE $1::text\n                    WHEN 'kb_resources'   THEN EXISTS (SELECT 1 FROM kb_resources   WHERE id = $2)\n                    WHEN 'kb_contexts'    THEN EXISTS (SELECT 1 FROM kb_contexts    WHERE id = $2)\n                    WHEN 'kb_cogmaps'     THEN EXISTS (SELECT 1 FROM kb_cogmaps     WHERE id = $2)\n                    WHEN 'kb_connections' THEN EXISTS (SELECT 1 FROM kb_connections WHERE id = $2)\n                    ELSE false\n                  END AS \"e!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "e!: bool",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "93927ceadfbe2fb75bbf5e932ef7f891a8ec58eb66a6f7c4428b41679bdee45a"
+}

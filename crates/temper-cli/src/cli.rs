@@ -1065,8 +1065,8 @@ pub enum ResourceAction {
         #[arg(long)]
         to: String,
     },
-    /// Grant a capability on a resource to a profile or team (system-admin, a can_grant
-    /// holder, or the resource owner).
+    /// Grant a capability on a resource to a profile or team (system-admin outside someone else's
+    /// personal space, a can_grant holder, or the resource owner).
     Grant {
         /// Resource ref: a UUID or the decorated `slug-<uuid>` form.
         r#ref: String,
@@ -1087,7 +1087,8 @@ pub enum ResourceAction {
         #[arg(long)]
         grant: bool,
     },
-    /// Revoke a capability grant on a resource (system-admin, a can_grant holder, or the owner).
+    /// Revoke a capability grant on a resource (system-admin outside someone else's personal space,
+    /// a can_grant holder, or the owner).
     Revoke {
         /// Resource ref: a UUID or the decorated `slug-<uuid>` form.
         r#ref: String,
@@ -2533,9 +2534,10 @@ pub enum CogmapCmd {
         #[arg(long)]
         threshold: Option<i64>,
     },
-    /// Bind a cognitive map to a team. Requires system-admin, OR that you manage the team
-    /// (owner/maintainer) AND administer the map (hold a grant on it). Widens the map's reach to
-    /// the team's shared resources.
+    /// Bind a cognitive map to a team. Requires system-admin (not on someone else's personal map
+    /// or personal team), OR that you manage the team (owner/maintainer) AND administer the map
+    /// (hold a grant on it). A person's personal team takes only that person's own map. The team
+    /// reads the map, and the map reaches what all its teams share.
     Bind {
         /// Cognitive-map ref: a UUID or the decorated `slug-<uuid>` form.
         r#ref: String,
@@ -2549,7 +2551,8 @@ pub enum CogmapCmd {
         /// Team to unbind: a team slug (optionally `+`-prefixed) or a team UUID.
         team: String,
     },
-    /// Grant a capability on a cognitive map (admin or a can_grant holder). Post-Q-A, authoring a
+    /// Grant a capability on a cognitive map (a can_grant holder, or a system admin except on
+    /// someone else's personal map). Post-Q-A, authoring a
     /// map requires an explicit write grant, not team membership.
     Grant {
         /// Cognitive-map ref: a UUID or the decorated `slug-<uuid>` form.
@@ -2571,7 +2574,8 @@ pub enum CogmapCmd {
         #[arg(long)]
         grant: bool,
     },
-    /// Revoke a capability grant on a cognitive map (admin or a can_grant holder).
+    /// Revoke a capability grant on a cognitive map (a can_grant holder, or a system admin except
+    /// on someone else's personal map).
     Revoke {
         /// Cognitive-map ref: a UUID or the decorated `slug-<uuid>` form.
         r#ref: String,

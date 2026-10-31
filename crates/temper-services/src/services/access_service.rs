@@ -82,7 +82,15 @@ pub(crate) enum GrantAuthority {
     Delegated,
     /// May not administer grants on this subject at all.
     None,
+    /// May not, and is a system admin whose subject is someone else's personal space or names
+    /// nothing: refused `NotFound` ([`GRANT_SUBJECT_REFUSAL`]) for both, so the refusal does not
+    /// confirm that an id is personal space (task `01a1933d`).
+    Concealed,
 }
+
+/// A system admin's refusal at the grant doors on a subject that does not exist or is someone else's
+/// personal space — one sentence for both, so the two cannot be told apart (task `01a1933d`).
+pub const GRANT_SUBJECT_REFUSAL: &str = "grant subject not found";
 
 /// Bool projection of `GrantAuthority`'s [`ScopedAuthority`] resolve, kept as the seam
 /// `admin_ledger_service`'s read gate calls (spec 2026-07-16 §5) — it only needs "could you perform
@@ -92,7 +100,9 @@ pub(crate) async fn can_administer_grant(
     caller: Principal<'_>,
     subject: RefTarget,
 ) -> ApiResult<bool> {
-    Ok(GrantAuthority::resolve(pool, caller, subject).await? != GrantAuthority::None)
+    Ok(!GrantAuthority::resolve(pool, caller, subject)
+        .await?
+        .is_denial())
 }
 
 // The grant-administration gate itself — a system admin OR a holder of `can_grant` on the subject
@@ -220,7 +230,7 @@ pub(crate) async fn authorize_capability_grant(
     match proof.authority() {
         // Unreachable: `authorize` refused it above. Enumerated rather than `_ =>` so a future
         // arm cannot land here silently permissive.
-        GrantAuthority::None => Err(ApiError::Forbidden),
+        GrantAuthority::None | GrantAuthority::Concealed => Err(proof.authority().denial_for()),
         GrantAuthority::SystemAdmin => {
             if subject.kind == AnchorTable::Contexts && !context_is_live(pool, subject.id).await? {
                 return Err(ApiError::Forbidden);
@@ -276,9 +286,9 @@ pub(crate) async fn profile_can_grant(
     profile_can(pool, caller, AccessAction::Grant, subject_table, subject_id).await
 }
 
-/// Whether a grant subject is someone else's personal space: a personal context that is not
-/// `caller`'s, or a resource homed in one. The SQL `context_personal_owner` and
-/// `resource_personal_owner` are the one definition.
+/// Whether a grant subject is someone else's personal space: a personal context or cognitive map
+/// that is not `caller`'s, or a resource homed in one. The SQL `context_personal_owner`,
+/// `cogmap_personal_owner` and `resource_personal_owner` are the one definition.
 pub(crate) async fn subject_is_others_personal(
     pool: &PgPool,
     subject: RefTarget,
@@ -298,8 +308,31 @@ pub(crate) async fn subject_is_others_personal(
             .fetch_one(pool)
             .await?
         }
+        temper_substrate::payloads::AnchorTable::Cogmaps => {
+            crate::services::cogmap_service::is_others_personal_cogmap(pool, subject.id, caller)
+                .await?
+        }
         _ => false,
     })
+}
+
+/// Whether a grant subject's row exists at all, whatever its state: a tombstoned resource or a
+/// retired context exists. The grant door's admin arm answers a subject that names nothing as it
+/// answers someone else's personal space ([`GrantAuthority::Concealed`]).
+pub(crate) async fn grant_subject_exists(pool: &PgPool, subject: RefTarget) -> ApiResult<bool> {
+    Ok(sqlx::query_scalar!(
+        r#"SELECT CASE $1::text
+                    WHEN 'kb_resources'   THEN EXISTS (SELECT 1 FROM kb_resources   WHERE id = $2)
+                    WHEN 'kb_contexts'    THEN EXISTS (SELECT 1 FROM kb_contexts    WHERE id = $2)
+                    WHEN 'kb_cogmaps'     THEN EXISTS (SELECT 1 FROM kb_cogmaps     WHERE id = $2)
+                    WHEN 'kb_connections' THEN EXISTS (SELECT 1 FROM kb_connections WHERE id = $2)
+                    ELSE false
+                  END AS "e!: bool""#,
+        subject.kind.as_str(),
+        subject.id,
+    )
+    .fetch_one(pool)
+    .await?)
 }
 
 /// Is `team_id` the root, `temper-system`? Every personal team descends from it, so whatever is

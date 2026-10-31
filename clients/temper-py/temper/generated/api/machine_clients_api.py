@@ -390,6 +390,7 @@ class MachineClientsApi:
             '400': "ErrorBody",
             '401': "ErrorBody",
             '403': "ErrorBody",
+            '404': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -464,6 +465,7 @@ class MachineClientsApi:
             '400': "ErrorBody",
             '401': "ErrorBody",
             '403': "ErrorBody",
+            '404': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -538,6 +540,7 @@ class MachineClientsApi:
             '400': "ErrorBody",
             '401': "ErrorBody",
             '403': "ErrorBody",
+            '404': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -972,6 +975,7 @@ class MachineClientsApi:
             '400': "ErrorBody",
             '401': "ErrorBody",
             '403': "ErrorBody",
+            '404': "ErrorBody",
             '409': "ErrorBody",
         }
         response_data = self.api_client.call_api(
@@ -1047,6 +1051,7 @@ class MachineClientsApi:
             '400': "ErrorBody",
             '401': "ErrorBody",
             '403': "ErrorBody",
+            '404': "ErrorBody",
             '409': "ErrorBody",
         }
         response_data = self.api_client.call_api(
@@ -1122,6 +1127,7 @@ class MachineClientsApi:
             '400': "ErrorBody",
             '401': "ErrorBody",
             '403': "ErrorBody",
+            '404': "ErrorBody",
             '409': "ErrorBody",
         }
         response_data = self.api_client.call_api(
@@ -1517,7 +1523,7 @@ class MachineClientsApi:
     ) -> IssuedMachineCredential:
         """Rotate a machine client secret
 
-        Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.
+        Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction, and its direct grants on anyone else's personal space (a personal context or cognitive map, or a resource homed in one) are withdrawn. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.
 
         :param id: Machine client ID (required)
         :type id: UUID
@@ -1596,7 +1602,7 @@ class MachineClientsApi:
     ) -> ApiResponse[IssuedMachineCredential]:
         """Rotate a machine client secret
 
-        Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.
+        Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction, and its direct grants on anyone else's personal space (a personal context or cognitive map, or a resource homed in one) are withdrawn. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.
 
         :param id: Machine client ID (required)
         :type id: UUID
@@ -1675,7 +1681,7 @@ class MachineClientsApi:
     ) -> RESTResponseType:
         """Rotate a machine client secret
 
-        Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.
+        Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction, and its direct grants on anyone else's personal space (a personal context or cognitive map, or a resource homed in one) are withdrawn. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.
 
         :param id: Machine client ID (required)
         :type id: UUID

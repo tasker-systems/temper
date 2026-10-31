@@ -4753,7 +4753,7 @@ class AdminApi:
     ) -> MachineClient:
         """Rebind a machine client to a new client ID
 
-        Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction. The path `{id}` names the source client. Requires a system admin. Refused for a temper-issued source client, whose secret is rotated instead, and on an instance that runs temper's own authorization server.
+        Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction, and its direct grants on anyone else's personal space (a personal context or cognitive map, or a resource homed in one) are withdrawn. The path `{id}` names the source client. Requires a system admin. Refused for a temper-issued source client, whose secret is rotated instead, and on an instance that runs temper's own authorization server.
 
         :param id: The machine client whose profile the new client id inherits (required)
         :type id: UUID
@@ -4833,7 +4833,7 @@ class AdminApi:
     ) -> ApiResponse[MachineClient]:
         """Rebind a machine client to a new client ID
 
-        Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction. The path `{id}` names the source client. Requires a system admin. Refused for a temper-issued source client, whose secret is rotated instead, and on an instance that runs temper's own authorization server.
+        Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction, and its direct grants on anyone else's personal space (a personal context or cognitive map, or a resource homed in one) are withdrawn. The path `{id}` names the source client. Requires a system admin. Refused for a temper-issued source client, whose secret is rotated instead, and on an instance that runs temper's own authorization server.
 
         :param id: The machine client whose profile the new client id inherits (required)
         :type id: UUID
@@ -4913,7 +4913,7 @@ class AdminApi:
     ) -> RESTResponseType:
         """Rebind a machine client to a new client ID
 
-        Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction. The path `{id}` names the source client. Requires a system admin. Refused for a temper-issued source client, whose secret is rotated instead, and on an instance that runs temper's own authorization server.
+        Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction, and its direct grants on anyone else's personal space (a personal context or cognitive map, or a resource homed in one) are withdrawn. The path `{id}` names the source client. Requires a system admin. Refused for a temper-issued source client, whose secret is rotated instead, and on an instance that runs temper's own authorization server.
 
         :param id: The machine client whose profile the new client id inherits (required)
         :type id: UUID
@@ -5380,6 +5380,7 @@ class AdminApi:
             '400': "ErrorBody",
             '401': "ErrorBody",
             '403': "ErrorBody",
+            '404': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -5454,6 +5455,7 @@ class AdminApi:
             '400': "ErrorBody",
             '401': "ErrorBody",
             '403': "ErrorBody",
+            '404': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -5528,6 +5530,7 @@ class AdminApi:
             '400': "ErrorBody",
             '401': "ErrorBody",
             '403': "ErrorBody",
+            '404': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,

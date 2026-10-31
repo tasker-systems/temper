@@ -400,6 +400,7 @@ class CognitiveMapsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "BindTeamOutcome",
             '403': "ErrorBody",
+            '404': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -475,6 +476,7 @@ class CognitiveMapsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "BindTeamOutcome",
             '403': "ErrorBody",
+            '404': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -550,6 +552,7 @@ class CognitiveMapsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "BindTeamOutcome",
             '403': "ErrorBody",
+            '404': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1272,6 +1275,7 @@ class CognitiveMapsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "GrantOutcome",
             '403': "ErrorBody",
+            '404': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1347,6 +1351,7 @@ class CognitiveMapsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "GrantOutcome",
             '403': "ErrorBody",
+            '404': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1422,6 +1427,7 @@ class CognitiveMapsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "GrantOutcome",
             '403': "ErrorBody",
+            '404': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -3162,6 +3168,7 @@ class CognitiveMapsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "RevokeOutcome",
             '403': "ErrorBody",
+            '404': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -3237,6 +3244,7 @@ class CognitiveMapsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "RevokeOutcome",
             '403': "ErrorBody",
+            '404': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -3312,6 +3320,7 @@ class CognitiveMapsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "RevokeOutcome",
             '403': "ErrorBody",
+            '404': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -3759,6 +3768,7 @@ class CognitiveMapsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "UnbindTeamOutcome",
             '403': "ErrorBody",
+            '404': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -3834,6 +3844,7 @@ class CognitiveMapsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "UnbindTeamOutcome",
             '403': "ErrorBody",
+            '404': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -3909,6 +3920,7 @@ class CognitiveMapsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "UnbindTeamOutcome",
             '403': "ErrorBody",
+            '404': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
