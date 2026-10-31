@@ -19,9 +19,11 @@
 #     ignored here — cargo audit does not fail the build on them by default, so
 #     they stay visible as advisories without gating.
 #
-# Last reconciled against Cargo.lock 2026-10-31: the zip (0367/0368/0369, now
-# zip 9.0.5), lopdf (0187, now 0.45.0) and quinn-proto (0185, now 0.11.19) entries
-# were removed once the lock carried the fixed versions. Five ids remain below.
+# Last reconciled 2026-10-31 (cargo audit 0.22.2, advisory DB of that date): with
+# no ignores, cargo audit reports exactly the four ids below. Removed then, as
+# matching nothing: zip (0367/0368/0369, lock now zip 9.0.5), lopdf (0187, now
+# 0.45.0), quinn-proto (0185, now 0.11.19), and webpki-roots (0381 — the advisory
+# now lists the 0.26.11 shim as unaffected).
 
 [advisories]
 ignore = [
@@ -47,16 +49,4 @@ ignore = [
     "RUSTSEC-2026-0194",
     # quick-xml 0.39.4 → >=0.41.0 (unbounded namespace-decl allocation, DoS).
     "RUSTSEC-2026-0195",
-
-    # ── NOT EXPOSED — a version-matched shim over the patched crate ─────────
-    # webpki-roots 0.26.11 (distrusted emSign intermediates in the bundled roots;
-    # fixed in >=1.0.10). sqlx-core 0.8.6 pins `webpki-roots ^0.26`, and 0.26.11
-    # carries no roots of its own: its whole lib.rs is
-    # `pub use parent::TLS_SERVER_ROOTS;`, with `parent = { package =
-    # "webpki-roots", version = "1" }`, which the lock resolves to 1.0.10 — the
-    # patched set. The advisory matches the shim's version number, not the roots
-    # compiled in. Delete this line when sqlx stops depending on webpki-roots 0.26,
-    # or if a later 0.26.x ships roots of its own (re-check `cargo tree -p
-    # webpki-roots@0.26.11`).
-    "RUSTSEC-2026-0381",
 ]
