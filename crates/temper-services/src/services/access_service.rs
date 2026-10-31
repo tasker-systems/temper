@@ -950,10 +950,14 @@ pub async fn promote_admin(
     let target_team = match team_id {
         Some(id) => {
             let exists: bool =
-                sqlx::query_scalar!("SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1)", id)
-                    .fetch_one(pool)
-                    .await?
-                    .unwrap_or(false);
+                // Live only: nothing is written onto a soft-deleted team (soft-delete design D4).
+                sqlx::query_scalar!(
+                    "SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1 AND is_active)",
+                    id
+                )
+                .fetch_one(pool)
+                .await?
+                .unwrap_or(false);
             if !exists {
                 return Err(ApiError::BadRequest(format!("team '{id}' does not exist")));
             }

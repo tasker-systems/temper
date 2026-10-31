@@ -65,6 +65,9 @@ pub async fn reset_schema(pool: &sqlx::PgPool) {
                 // Caps `kb_teams.auto_join_role` at `member` (a data step and a CHECK on the
                 // column): same post-auto-join world, same missing column.
                 && !n.contains("auto_join_role_capped_at_member")
+                // Auto-join skips a soft-deleted team: same post-auto-join world, same missing
+                // column.
+                && !n.contains("auto_join_skips_soft_deleted_teams")
         })
         .collect();
     migrations.sort();

@@ -115,6 +115,7 @@ pub async fn list(
                                               false)))
                     OR EXISTS (
                         SELECT 1 FROM kb_team_members tm
+                          JOIN kb_teams t ON t.id = tm.team_id AND t.is_active
                          WHERE tm.team_id = s.authoring_team_id
                            AND tm.profile_id = $3
                            AND tm.role IN ('owner', 'maintainer')

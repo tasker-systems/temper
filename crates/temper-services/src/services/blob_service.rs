@@ -1289,8 +1289,9 @@ pub async fn delete_blob(
                 "kb_profiles" => home.owner_id == caller.uuid(),
                 "kb_teams" => sqlx::query_scalar!(
                     r#"SELECT EXISTS (
-                           SELECT 1 FROM kb_team_members
-                            WHERE team_id = $1 AND profile_id = $2 AND role = 'owner'
+                           SELECT 1 FROM kb_team_members tm
+                             JOIN kb_teams t ON t.id = tm.team_id AND t.is_active
+                            WHERE tm.team_id = $1 AND tm.profile_id = $2 AND tm.role = 'owner'
                        )"#,
                     home.owner_id,
                     caller.uuid(),

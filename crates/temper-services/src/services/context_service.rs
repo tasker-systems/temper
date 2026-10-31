@@ -553,10 +553,8 @@ pub async fn resolve_create_owner(
             .fetch_optional(pool)
             .await?
             .ok_or_else(|| ApiError::NotFound(format!("team {slug} not found or not readable")))?;
-            // The role check deliberately gains no filter of its own: an inactive team can no
-            // longer reach this line, and `role_on_team` is `is_active`-blind by design (see its
-            // doc). The gate belongs on the team lookup above; a second copy here would state the
-            // invariant where it cannot be violated and imply that one were optional.
+            // An inactive team cannot reach this line (the lookup above), and `role_on_team`
+            // answers for live teams only (see its doc).
             match team_service::role_on_team(pool, team_id, caller).await? {
                 Some(role) if team_service::can_manage(role) => {}
                 _ => return Err(ApiError::Forbidden),
@@ -641,9 +639,10 @@ pub async fn create(
     Ok(ContextRow { can_write, ..row })
 }
 
-/// Assert both `context_id` and `team_id` exist before a `kb_team_contexts` write —
+/// Assert both `context_id` and a **live** `team_id` exist before a `kb_team_contexts` write —
 /// otherwise a nonexistent id hits the FK constraint and surfaces as an opaque 500
-/// instead of a clean 404. Called AFTER the admin gate (auth stays first) and BEFORE
+/// instead of a clean 404. A soft-deleted team is a 404 too, admins included: nothing is written
+/// onto a dead team (soft-delete design D4). Called AFTER the admin gate (auth stays first) and BEFORE
 /// the INSERT/DELETE.
 async fn ensure_context_and_team_exist(
     pool: &PgPool,
@@ -660,7 +659,7 @@ async fn ensure_context_and_team_exist(
         return Err(ApiError::NotFound("context not found".to_string()));
     }
     let team_exists = sqlx::query_scalar!(
-        r#"SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1) AS "ok!""#,
+        r#"SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1 AND is_active) AS "ok!""#,
         team_id
     )
     .fetch_one(pool)
@@ -843,6 +842,7 @@ pub async fn list_retired_administered(
                    c.owner_table = 'kb_teams'
                    AND EXISTS (
                      SELECT 1 FROM kb_team_members tm
+                       JOIN kb_teams t ON t.id = tm.team_id AND t.is_active
                       WHERE tm.team_id = c.owner_id
                         AND tm.profile_id = $1
                         AND tm.role::text = ANY($2)
@@ -903,6 +903,7 @@ pub async fn get_retired_administered(
                    c.owner_table = 'kb_teams'
                    AND EXISTS (
                      SELECT 1 FROM kb_team_members tm
+                       JOIN kb_teams t ON t.id = tm.team_id AND t.is_active
                       WHERE tm.team_id = c.owner_id
                         AND tm.profile_id = $1
                         AND tm.role::text = ANY($3)
