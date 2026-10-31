@@ -1033,3 +1033,35 @@ fn the_detailed_refusal_is_bounded_and_keeps_the_explanation() {
         );
     }
 }
+
+/// A property name or an unknown key carrying control or bidirectional-formatting characters is
+/// named with them escaped, so a refusal shown to another reader cannot drive a terminal or
+/// reorder the sentence.
+#[test]
+fn control_and_bidi_characters_in_a_named_refusal_are_escaped() {
+    let schema = field_tree(json!({
+        "properties": { "a\u{1b}[31m\n\u{202e}b": { "allOf": [] } }
+    }));
+    let refused = refusal(&schema);
+    assert_eq!(
+        refused,
+        "keyword allOf at /properties/a\\u{1b}[31m\\u{a}\\u{202e}b"
+    );
+    assert!(!refused.chars().any(char::is_control), "{refused:?}");
+    assert_eq!(
+        refusal(&field_tree(json!({ "\u{7}bell": 1 }))),
+        "keyword \\u{7}bell at the root"
+    );
+}
+
+/// The fixed sentence leaves room under the bound to name what was refused. Bites a sentence
+/// grown so long that every refusal would silently name nothing.
+#[test]
+fn the_detailed_refusal_has_room() {
+    use temper_substrate::shape_schema::{refused_room, MIN_REFUSED_ROOM};
+    assert!(
+        refused_room() >= MIN_REFUSED_ROOM,
+        "{} bytes",
+        refused_room()
+    );
+}

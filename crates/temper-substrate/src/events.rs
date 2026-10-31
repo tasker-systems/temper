@@ -1091,12 +1091,14 @@ pub(crate) async fn project_property_unset(
 /// this layer does not know the reader, so the message it sets names nothing. Typed so the surfaces
 /// render it as the data-artifact refusal rather than the 500-class bridge.
 fn uncompilable_shape_refusal(
-    shape_id: Uuid,
+    shape_id: Option<Uuid>,
     refused: crate::shape_schema::ShapeSchemaUncompilable,
 ) -> anyhow::Error {
     anyhow::Error::new(crate::writes::DataArtifactRefusal {
         message: crate::writes::uncompilable_shape_message(None),
-        uncompilable_shape: Some(crate::writes::UncompilableShapeInForce { shape_id, refused }),
+        // With no shape id there is no shape to ask about: the refusal stands, naming nothing.
+        uncompilable_shape: shape_id
+            .map(|shape_id| crate::writes::UncompilableShapeInForce { shape_id, refused }),
     })
 }
 
@@ -1579,10 +1581,7 @@ pub async fn fire_with(
                             }
                         }
                         Err(refused) if enforcement == "enforcing" => {
-                            let shape_id = row
-                                .shape_id
-                                .context("shape in force returned null shape_id")?;
-                            return Err(uncompilable_shape_refusal(shape_id, refused));
+                            return Err(uncompilable_shape_refusal(row.shape_id, refused));
                         }
                         Err(_) => {
                             tracing::warn!(

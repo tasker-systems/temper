@@ -44,8 +44,9 @@
 //!
 //! **Each `pattern` regex is held to a size.** `jsonschema` compiles every distinct `pattern` when
 //! a schema is built, and [`compile`] holds each regex to [`MAX_PATTERN_BYTES`] rather than the
-//! engine's 10 MiB default; one past it makes the schema uncompilable, with the same fixed
-//! sentence, for every caller (declare, commit, reconcile and the shape loader all compile here).
+//! engine's 10 MiB default; one past it makes the schema uncompilable, with the same refusal —
+//! naming the cap and the pattern's position — for every caller (declare, commit, reconcile and
+//! the shape loader all compile here).
 
 use jsonschema::{Retrieve, Uri};
 use serde_json::Value;
@@ -55,10 +56,12 @@ pub use jsonschema::Validator;
 
 /// The schema is not a field tree this server can compile.
 ///
-/// Carries what the walk refused first, when the walk refused it: one keyword, cap or form, and the
-/// JSON-pointer path of the schema position it sits in (`keyword allOf at /properties/when`). That
-/// is schema text the walk itself chose — a keyword name cut to [`MAX_REFUSED_KEYWORD_BYTES`], a
-/// count, a cap, and the property names on the path to it — never a `const`, `enum`, `default` or
+/// Carries what was refused first: the first keyword, cap or form the walk refused and the
+/// JSON-pointer path of the schema position it sits in (`keyword allOf at /properties/when`), or,
+/// for a schema the walk admitted and the build refused, which of the build's two refusals it is
+/// and the position it names. That is schema text — a keyword name cut to
+/// [`MAX_REFUSED_KEYWORD_BYTES`], a count, a cap, and the property names on the path to it, with
+/// control and bidirectional-formatting characters escaped — never a `const`, `enum`, `default` or
 /// `examples` value, never an `x-*` value, and never the compiler's own error, which is still
 /// dropped on purpose: under a fetching compiler it would describe a remote response.
 ///
@@ -73,9 +76,9 @@ pub struct ShapeSchemaUncompilable {
 }
 
 impl ShapeSchemaUncompilable {
-    /// What the walk refused first, as `<what> at <path>`, already bounded; `None` when the walk
-    /// admitted the schema and the build refused it (2020-12 meta-validation, or a pattern that
-    /// compiles past [`MAX_PATTERN_BYTES`]), where the build's position is given instead.
+    /// What was refused first, as `<what> at <path>`, already bounded: the walk's refusal, or the
+    /// build's (2020-12 meta-validation, or a pattern that compiles past [`MAX_PATTERN_BYTES`]).
+    /// `None` only for the retriever's refusal, which no field tree reaches.
     #[must_use]
     pub fn refused(&self) -> Option<&str> {
         self.refused.as_deref()
@@ -98,8 +101,11 @@ impl ShapeSchemaUncompilable {
     }
 
     fn naming(refused: String) -> Self {
+        // A fixed sentence grown past the bound leaves no room, and the refusal then names nothing
+        // rather than breaking the bound; a test pins the room.
+        let room = refused_room();
         Self {
-            refused: Some(cut_middle(refused, refused_room()).into_boxed_str()),
+            refused: (room >= MIN_REFUSED_ROOM).then(|| cut_middle(refused, room).into_boxed_str()),
         }
     }
 }
@@ -132,10 +138,15 @@ fn cut_middle(text: String, limit: usize) -> String {
 }
 
 /// The room [`ShapeSchemaUncompilable::detailed`] leaves for what was refused: the bound, less the
-/// fixed sentence and the ` (` `)` around the insert.
-fn refused_room() -> usize {
-    MAX_FAILURE_MESSAGE_BYTES - ShapeSchemaUncompilable::default().to_string().len() - 3
+/// fixed sentence and the ` (` `)` around the insert, or 0 when the sentence leaves none.
+#[must_use]
+pub fn refused_room() -> usize {
+    MAX_FAILURE_MESSAGE_BYTES
+        .saturating_sub(ShapeSchemaUncompilable::default().to_string().len() + " ()".len())
 }
+
+/// The least room in which a refusal is named at all; below it the refusal names nothing.
+pub const MIN_REFUSED_ROOM: usize = 64;
 
 impl std::fmt::Display for ShapeSchemaUncompilable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -260,7 +271,7 @@ impl<'a> Positions<'a> {
             match step {
                 Step::Property(name) => {
                     pointer.push_str("/properties/");
-                    pointer.push_str(&name.replace('~', "~0").replace('/', "~1"));
+                    pointer.push_str(&printable(&name.replace('~', "~0").replace('/', "~1")));
                 }
                 Step::AdditionalProperties => pointer.push_str("/additionalProperties"),
                 Step::Items => pointer.push_str("/items"),
@@ -270,9 +281,29 @@ impl<'a> Positions<'a> {
     }
 }
 
-/// A refused keyword's name as a refusal quotes it: cut to [`MAX_REFUSED_KEYWORD_BYTES`].
+/// A refused keyword's name as a refusal quotes it: cut to [`MAX_REFUSED_KEYWORD_BYTES`], then
+/// made [`printable`].
 fn keyword(key: &str) -> String {
-    cut_to(key.to_owned(), MAX_REFUSED_KEYWORD_BYTES)
+    printable(&cut_to(key.to_owned(), MAX_REFUSED_KEYWORD_BYTES))
+}
+
+/// `text` with every control character and every bidirectional-formatting character written as a
+/// `\u{…}` escape, so a name a declarer chose cannot drive a reader's terminal or reorder the
+/// sentence it sits in.
+fn printable(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        let bidi = matches!(
+            c,
+            '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+        );
+        if c.is_control() || bidi {
+            out.push_str(&format!("\\u{{{:x}}}", u32::from(c)));
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// What makes the document not a field tree, the first thing the walk refuses — `None` when it is
@@ -434,7 +465,7 @@ fn field_tree_refusal(schema: &Value) -> Option<String> {
 /// for a field fit: a UUID is 2.9 KB, an ISO date-time 1.4 KB, `^\w{1,20}$` 2.9 KB,
 /// `^[\w.-]{1,59}$` 8.7 KB, `^[A-Za-z0-9][A-Za-z0-9._-]{0,57}$` 8.6 KB. A Unicode class such as
 /// `\p{L}` (about 43 KB on its own) does not fit. A `pattern` past it fails to compile, so its
-/// schema is [`ShapeSchemaUncompilable`], with the one fixed sentence, which names this size.
+/// schema is [`ShapeSchemaUncompilable`], whose refusal names this size and the pattern's position.
 pub const MAX_PATTERN_BYTES: usize = 10 << 10;
 
 /// The most bytes the engine's lazy DFA may use as its search cache for one pattern — what

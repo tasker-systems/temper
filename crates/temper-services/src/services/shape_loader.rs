@@ -21,8 +21,8 @@
 //! 3. **Compiles?** First measured: a schema larger than the walk reads
 //!    ([`within_schema_bound`]) is `SchemaTooLarge` and is never compiled. Within the bound,
 //!    through the no-fetch constructor ([`shape_schema::compile`]); a schema it refuses is
-//!    `Uncompilable`, naming the first thing the walk refused and where (schema text, which the
-//!    reader step 1 admitted can already read), and the compiler's own text goes nowhere.
+//!    `Uncompilable`, naming the first thing the compile refused and where (schema text, which
+//!    the reader step 1 admitted can already read), and the compiler's own text goes nowhere.
 //!
 //! **One decision for every door that decides whether a schema can be asked** ([`judge`]): the
 //! loader, the by-id read's `askable`, and declare (`shape_service::declare_shape`) measure
@@ -268,9 +268,9 @@ pub async fn judge(schema: &Value) -> ApiResult<SchemaVerdict> {
 }
 
 /// The most verdicts the process remembers. An entry is a shape id and a verdict — for one that
-/// does not compile, the bounded name of what it refused (`shape_schema::MAX_FAILURE_MESSAGE_BYTES`
-/// less the fixed sentence, about 120 bytes) — so under 1 MiB of map at the cap; past it an arbitrary entry is forgotten, and that shape is judged again when it
-/// is next read.
+/// does not compile, the bounded name of what it refused (at most `shape_schema::refused_room()`,
+/// about 120 bytes) — so under 1 MiB of map at the cap; past it an arbitrary entry is forgotten,
+/// and that shape is judged again when it is next read.
 const MAX_REMEMBERED_VERDICTS: usize = 4096;
 
 /// Each stored shape's verdict, by id, for the life of the process.

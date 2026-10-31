@@ -937,13 +937,18 @@ impl DbBackend {
         else {
             return write_err(e);
         };
+        // A fault on the question leaves the refusal standing with the fixed sentence: it is never
+        // turned into a server error, and it names nothing it has not established it may.
         let message = match refusal.message_for_reader(&mut tx, self.profile_id).await {
             Ok(message) => message,
-            Err(fault) => return tx_err(fault),
+            Err(fault) => {
+                tracing::warn!(error = %fault, "could not ask whether the committer reads the shape");
+                refusal.message_for(false)
+            }
         };
-        if let Err(fault) = tx.rollback().await {
-            return tx_err(fault);
-        }
+        // Dropping the transaction rolls it back as well; an explicit rollback that faults
+        // changes nothing the caller is owed.
+        tx.rollback().await.ok();
         TemperError::DataArtifactRefusal(message)
     }
 
