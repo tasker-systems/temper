@@ -181,7 +181,7 @@ pub async fn revoke(
     post,
     operation_id = "issue_machine_credential",
     summary = "Issue a machine credential",
-    description = "Mints a new machine principal with a temper-issued `client_id` and secret. The `client_secret` in the response is shown once and never stored; only its hash is kept, so it cannot be retrieved later. Requires a system admin (only its owner, on someone else's personal team) or the owner of `owner_team_id`; a machine with no owning team can only be issued by a system admin. A team owner can confer only reach they could grant themselves, and no caller can give a machine a team role above `member`. Where an external identity provider mints this instance's tokens, the credential is returned with `dormant: true`: it authenticates once the instance runs temper's own authorization server.",
+    description = "Mints a new machine principal with a temper-issued `client_id` and secret. The `client_secret` in the response is shown once and never stored; only its hash is kept, so it cannot be retrieved later. Requires a system admin (only its owner, on someone else's personal team) or the owner of `owner_team_id`; a machine with no owning team can only be issued by a system admin. A team owner can confer only reach they could grant themselves, and a cogmap grant only on a map where they hold the grant right in their own name, not through a team. No caller can give a machine a team role above `member`. Where an external identity provider mints this instance's tokens, the credential is returned with `dormant: true`: it authenticates once the instance runs temper's own authorization server.",
     path = "/api/machine-clients/issue",
     tag = "Machine Clients",
     request_body = IssueMachineRequest,

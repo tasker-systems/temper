@@ -402,6 +402,14 @@ current_gates() {
 # REVIEWED 2026-10-31 (PR #1275 merging #1276) — `context_admin`, `grant`, `ledger_subject`,
 # `machine`, `subscription`, `team_membership`, `two_sided`: each fingerprint is now both PRs' change
 # to the gate, each reviewed above; the merge moved no arm of either. No claim count moved.
+# REVIEWED 2026-10-31 (task 01a19370, v0.6.3 review S3) — `machine` b24fecc74f83 -> ce531e4d9d3a:
+# `contain_reach` now holds each delegated cogmap reach grant to `access_service::callers_machine_grant_bar`,
+# the rule the grant door applies to a grant to a machine the caller registered: admitted only on a
+# grant right held in the caller's own name, refused when it reaches them through a team. The gate
+# NARROWED for a non-admin; a system admin is unchanged. Claims bound to `machine` were re-read; the
+# `issue` handler description now says a team owner's cogmap grant needs the right in their own name.
+# `access_service.rs` 8 -> 9: `callers_machine_grant_bar`'s doc says a system admin is never asked,
+# which holds (both callers reach it only on `GrantAuthority::Delegated`).
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -443,7 +451,7 @@ claim crates/temper-mcp/src/service.rs 4 -
 claim crates/temper-mcp/src/tools/cognitive_maps.rs 1 is_system_admin
 claim crates/temper-mcp/src/tools/contexts.rs 2 context_admin,two_sided
 claim crates/temper-mcp/src/tools/reblock.rs 3 -
-claim crates/temper-services/src/services/access_service.rs 8 is_system_admin
+claim crates/temper-services/src/services/access_service.rs 9 is_system_admin
 claim crates/temper-services/src/services/admin_directory_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/cogmap_service.rs 2 two_sided
 claim crates/temper-services/src/services/connection_service.rs 11 connection
@@ -465,7 +473,7 @@ gate audit_gate 021f87ca4bed
 gate connection 586029b73345
 gate context_admin 36e336482872
 gate grant 8fca715c38c3
-gate machine b24fecc74f83
+gate machine ce531e4d9d3a
 gate read_gates 6a6ce4847fbc
 gate ledger_subject 89ab4129fe64
 gate subscription f45d76e9be69

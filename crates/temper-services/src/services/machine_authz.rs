@@ -357,7 +357,7 @@ async fn contain_reach(
         // `apply_reach` confers exactly `read + (write iff spec)`, never delete or grant — so that
         // is what is attenuated here. The admin arm already returned above, so this resolves to
         // Delegated or None in practice.
-        access_service::authorize_capability_grant(
+        let proof = access_service::authorize_capability_grant(
             pool,
             crate::authz::Principal::Human(authed),
             temper_substrate::payloads::RefTarget {
@@ -372,6 +372,15 @@ async fn contain_reach(
             },
         )
         .await?;
+        // v0.6.3 review S3: the machine being registered is the caller's own (it records them as
+        // `registered_by_profile_id`), so a delegated reach grant is held to the bar the grant door
+        // applies to a grant to the caller's machine. One rule, called from both doors. A right
+        // held only through a team is refused, because this row would outlive the caller's
+        // membership. A right held in the caller's own name, such as a map's creator's, is admitted.
+        if matches!(proof.authority(), access_service::GrantAuthority::Delegated) {
+            access_service::callers_machine_grant_bar(pool, authed.profile_id(), proof.subject())
+                .await?;
+        }
     }
 
     Ok(())
