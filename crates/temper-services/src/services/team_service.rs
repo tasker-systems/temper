@@ -47,22 +47,17 @@ fn team_slug(parent_ref: &str) -> &str {
     parent_ref.strip_prefix('+').unwrap_or(parent_ref)
 }
 
-/// Fetch the caller's role on a team, if any.
+/// The caller's role on a **live** team, if any: no row on a soft-deleted team.
 ///
 /// `pub(crate)` so sibling services (e.g. `context_service`'s team-owned-context
 /// gate) reuse the one role check rather than duplicating the authz.
 ///
-/// **Deliberately `is_active`-blind.** It answers *"is there a membership row?"*, not *"is this
-/// team effective?"* — `20260703000001_team_metadata_soft_delete.sql`'s invariant
-/// (*"membership in a soft-deleted team confers nothing anywhere"*) belongs on the **team**, which
-/// is where the SQL chokepoints put it too (`profile_effective_teams` filters `kb_teams`, not
-/// `kb_team_members`). A caller that must not act on a dead team states it on its own team lookup:
-/// `… WHERE slug = $1 AND is_active` in `create_team`'s parent resolution and in
-/// `context_service::{resolve_context_ref, resolve_create_owner}`, the EXISTS in
-/// `reassign_service::reassign_team_resources`. Filtering here instead would restate it where it
-/// cannot be violated, imply those gates were optional, and silently change `delete_team` /
-/// `update_team`, which need the blind answer to tell an already-deleted team from a non-member.
-/// So the rule for a new call site is: gate the team there, not here.
+/// **Live-only, so that a new caller is safe by default.** `20260703000001_team_metadata_soft_delete.sql`
+/// says membership in a soft-deleted team confers nothing anywhere. This probe used to be
+/// `is_active`-blind and left each caller to gate the team, and several authority callers did not
+/// (a former manager kept administering a dead team's contexts, connections and machine clients).
+/// Every authority decision asks this one. The blind lookup is [`membership_row_role`], for the
+/// two callers that must tell an already-deleted team from a non-member.
 pub(crate) async fn role_on_team(
     pool: &PgPool,
     team_id: Uuid,
@@ -73,9 +68,32 @@ pub(crate) async fn role_on_team(
 }
 
 /// [`role_on_team`] on a connection — for a decision made inside a write transaction, under its
-/// locks (team-role rank plan P1). The one query both spellings run, equally `is_active`-blind.
+/// locks (team-role rank plan P1). The one query both spellings run, equally live-only.
 pub(crate) async fn role_on_team_on(
     conn: &mut sqlx::PgConnection,
+    team_id: Uuid,
+    profile_id: ProfileId,
+) -> ApiResult<Option<TeamRole>> {
+    let role = sqlx::query_scalar!(
+        r#"SELECT tm.role AS "role: TeamRole"
+             FROM kb_team_members tm
+             JOIN kb_teams t ON t.id = tm.team_id AND t.is_active
+            WHERE tm.team_id = $1 AND tm.profile_id = $2"#,
+        team_id,
+        *profile_id,
+    )
+    .fetch_optional(&mut *conn)
+    .await?;
+    Ok(role)
+}
+
+/// The caller's membership row on a team, **live or not**. Not an authority answer: a role on a
+/// soft-deleted team confers nothing. Its only callers are [`update_team`] and [`delete_team`],
+/// which pass it to tell a team that is already deleted (their `is_active` write answers
+/// `NotFound`) from one the caller is not on (`Forbidden`). An authority decision asks
+/// [`role_on_team`].
+async fn membership_row_role(
+    pool: &PgPool,
     team_id: Uuid,
     profile_id: ProfileId,
 ) -> ApiResult<Option<TeamRole>> {
@@ -86,7 +104,7 @@ pub(crate) async fn role_on_team_on(
         team_id,
         *profile_id,
     )
-    .fetch_optional(&mut *conn)
+    .fetch_optional(pool)
     .await?;
     Ok(role)
 }
@@ -152,13 +170,14 @@ pub(crate) async fn require_manage_on_team(
     }
 }
 
-/// Assert a team row exists, for callers whose authority skips [`require_manage_on_team`] (a
-/// system admin) and who would otherwise write an unvalidated `principal_id`. `kb_access_grants`
+/// Assert a **live** team row exists, for callers whose authority skips [`require_manage_on_team`] (a
+/// system admin) and who would otherwise write an unvalidated `principal_id`. A soft-deleted team is
+/// refused too: nothing is written onto a dead team, admins included (soft-delete design D4). `kb_access_grants`
 /// carries no FK on `principal_id`, so this is the only thing standing between an admin's typo
 /// and a dangling grant nobody can see or revoke by team name.
 pub(crate) async fn require_team_exists(pool: &PgPool, team_id: Uuid) -> ApiResult<()> {
     let exists = sqlx::query_scalar!(
-        r#"SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1) AS "e!: bool""#,
+        r#"SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1 AND is_active) AS "e!: bool""#,
         team_id,
     )
     .fetch_one(pool)
@@ -589,7 +608,7 @@ pub async fn update_team(
     if is_root_or_gating(pool, team_id).await? {
         require_admin_on(pool, caller).await?;
     } else {
-        match role_on_team(pool, team_id, caller.profile_id()).await? {
+        match membership_row_role(pool, team_id, caller.profile_id()).await? {
             Some(role) if can_manage(role) => {}
             _ => return Err(ApiError::Forbidden),
         }
@@ -637,7 +656,7 @@ pub async fn delete_team(pool: &PgPool, caller: &HumanPrincipal, team_id: Uuid) 
         if is_root_or_gating(pool, team_id).await? {
             return Err(ApiError::Forbidden);
         }
-        match role_on_team(pool, team_id, caller.profile_id()).await? {
+        match membership_row_role(pool, team_id, caller.profile_id()).await? {
             Some(TeamRole::Owner) => {}
             _ => return Err(ApiError::Forbidden),
         }

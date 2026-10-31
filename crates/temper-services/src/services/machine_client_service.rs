@@ -176,6 +176,7 @@ pub async fn list(
                          AND EXISTS (
                              SELECT 1
                                FROM kb_team_members tm
+                               JOIN kb_teams t ON t.id = tm.team_id AND t.is_active
                               WHERE tm.team_id = mc.team_id
                                 AND tm.profile_id = $3
                                 AND tm.role = 'owner'
@@ -929,6 +930,68 @@ mod tests {
             state, "approved",
             "a team owner's revoke must not perform the admin-only standing revoke"
         );
+    }
+
+    /// A former owner of a soft-deleted team controls none of its machines: rotating a secret would
+    /// hand them a working credential that keeps every live membership and grant the machine holds
+    /// (soft-delete design D1). Admitted while the team is live; refused, as for a missing id, once
+    /// it is dead.
+    ///
+    /// FAILS IF `team_service::role_on_team` answers for a dead team again.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_former_owner_of_a_dead_team_cannot_rotate_its_machines_secret(pool: PgPool) {
+        let id = seed_temper_issued(&pool, "tmpr_dead_team", "old-secret").await;
+        let owner_profile = seed_agent_link(&pool, "dead-team-owner").await;
+        let team = team_owned_by(&pool, "dead-machines-team", owner_profile).await;
+        sqlx::query("UPDATE kb_machine_clients SET team_id = $2 WHERE id = $1")
+            .bind(id)
+            .bind(team)
+            .execute(&pool)
+            .await
+            .expect("give the machine an owning team");
+        let owner = crate::test_support::human_principal_for(&pool, owner_profile).await;
+
+        svc::rotate_secret(
+            &pool,
+            &owner,
+            id,
+            0,
+            crate::auth_config::AuthMode::ExternalIdp,
+        )
+        .await
+        .expect("the owner of a live team rotates its machine's secret");
+
+        sqlx::query("UPDATE kb_teams SET is_active = false WHERE id = $1")
+            .bind(team)
+            .execute(&pool)
+            .await
+            .expect("soft-delete the team");
+        let before: Option<String> =
+            sqlx::query_scalar("SELECT secret_hash FROM kb_machine_clients WHERE id = $1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .expect("hash");
+        let err = svc::rotate_secret(
+            &pool,
+            &owner,
+            id,
+            0,
+            crate::auth_config::AuthMode::ExternalIdp,
+        )
+        .await
+        .expect_err("a dead team's former owner rotates nothing");
+        assert!(
+            matches!(err, crate::error::ApiError::NotFound(_)),
+            "refused as for a missing id: {err:?}"
+        );
+        let after: Option<String> =
+            sqlx::query_scalar("SELECT secret_hash FROM kb_machine_clients WHERE id = $1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .expect("hash");
+        assert_eq!(before, after, "the secret is unchanged");
     }
 
     /// The existence oracle, closed: a caller outside a machine's authority gets the **same** error
