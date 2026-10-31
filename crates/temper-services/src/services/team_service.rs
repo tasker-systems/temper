@@ -230,16 +230,17 @@ pub async fn create_team(
         .fetch_optional(pool)
         .await?
         .ok_or_else(|| ApiError::NotFound("parent team not found or not readable".to_string()))?;
+        match role_on_team(pool, parent_id, creator).await? {
+            Some(role) if can_manage(role) => {}
+            _ => return Err(ApiError::Forbidden),
+        }
         // A child's members read everything attached to the parent, so a team under a personal
-        // team would be a second door into it. Refused for its owner too, before the role check.
+        // team would be a second door into it. Refused for its owner too — the one caller the role
+        // check above admits there.
         if personal_of(pool, parent_id).await?.is_some() {
             return Err(ApiError::BadRequest(
                 "a personal team cannot have child teams".to_string(),
             ));
-        }
-        match role_on_team(pool, parent_id, creator).await? {
-            Some(role) if can_manage(role) => {}
-            _ => return Err(ApiError::Forbidden),
         }
         Some(parent_id)
     } else {

@@ -137,14 +137,6 @@ impl ResolvedMembership {
     /// exactly checks 1, 2 and 6 of [`decide`], reached by calling the same functions, so the
     /// refusals and their order cannot drift from the rank rule.
     pub(crate) fn authorize_invitation(&self, role: TeamRole) -> ApiResult<()> {
-        // A personal team admits no other person, so there is nothing to invite anyone to. After
-        // checks 1–2 would be the S6 order, but the owner is the only caller who reaches a personal
-        // team with authority at all, and nobody else learns more from this than from the slug.
-        if self.is_personal {
-            return Err(ApiError::BadRequest(
-                crate::services::team_service::PERSONAL_TEAM_HOLDS_ITS_OWNER.to_string(),
-            ));
-        }
         // Checks 1–2 against an inert stand-in target: `nil` is not a real profile id (they are
         // UUIDv7s), so it can never equal the caller, and an `Add` reads nothing else about its
         // target — existence, machine and source are invitation-specific absences.
@@ -155,6 +147,14 @@ impl ResolvedMembership {
             MembershipAct::Add { role },
             ProfileId::from(Uuid::nil()),
         )?;
+        // A personal team admits no other person, so there is nothing to invite anyone to (task
+        // `01a19006`). After checks 1–2, so only its owner — the one caller with authority there —
+        // learns why.
+        if self.is_personal {
+            return Err(ApiError::BadRequest(
+                crate::services::team_service::PERSONAL_TEAM_HOLDS_ITS_OWNER.to_string(),
+            ));
+        }
         // Check 6 (conferral) — the half of `decide` that needs only the caller's own rank. A
         // `BadRequest`, like the owner refusal this gate replaces (C16): the offer names a role
         // this caller cannot confer here.
