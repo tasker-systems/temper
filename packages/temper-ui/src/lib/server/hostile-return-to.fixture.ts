@@ -1,0 +1,25 @@
+// Every hostile `returnTo` form the sign-in door must refuse, shared by the helper's own tests and
+// by both arms that call it (/auth/login and /auth/callback). Each must land on ARRIVAL.
+export const HOSTILE_RETURN_TO: ReadonlyArray<readonly [label: string, value: string]> = [
+	['an absolute https URL', 'https://evil.example'],
+	['an absolute http URL', 'http://evil.example/vault'],
+	['a javascript: URL', 'javascript:alert(1)'],
+	['a data: URL', 'data:text/html,<script>alert(1)</script>'],
+	['a scheme-relative //host', '//evil.example'],
+	['a scheme-relative //host with a path', '//evil.example/vault'],
+	['a backslash-relative /\\host', '/\\evil.example'],
+	['a double-backslash \\\\host', '\\\\evil.example'],
+	['a backslash after the slash later on', '/\\/evil.example'],
+	['a leading tab before //host', '\t//evil.example'],
+	['a tab inside the leading slashes', '/\t/evil.example'],
+	['a CR inside the leading slashes', '/\r/evil.example'],
+	['an LF inside the leading slashes', '/\n/evil.example'],
+	['a CRLF inside the leading slashes', '/\r\n/evil.example'],
+	['a leading space', ' /vault'],
+	['a NUL byte', '/\u0000/evil.example'],
+	['a dot segment that normalises to //host', '/.//evil.example'],
+	['a dot-dot segment that normalises to //host', '/a/..//evil.example'],
+	['a bare host with no leading slash', 'evil.example'],
+	['a relative path with no leading slash', 'vault'],
+	['an empty string', ''],
+];
