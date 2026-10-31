@@ -1,6 +1,6 @@
 title    = "A shape may carry format and x-* keys as inert annotations, and a refused schema is named by its first failing keyword and path"
 pr       = "self"
-classes  = ["behavioral"]
+classes  = ["additive", "behavioral"]
 surfaces = ["http", "mcp", "cli-stdout"]
 status   = "signal-only"
 body = '''
@@ -21,5 +21,6 @@ MCP `declare_data_artifact_shape`, `temper data-artifact schema declare`); at an
 by-id read (`unaskable`), the reader, who can already read the shape; at a commit refused because
 the enforcing shape cannot be compiled, the committer only if they can read that shape, and
 otherwise the unchanged fixed sentence. Reason codes, status codes and response shapes are
-unchanged; no migration. Release relevance: signal-only.
+unchanged; `openapi.json` moves only in the prose describing `shape_schema_uncompilable` and a
+shape's `unaskable`, which now say the sentence names what was refused; no migration. Release relevance: signal-only.
 '''
