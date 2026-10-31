@@ -288,9 +288,8 @@ pub async fn reassign_team_resources(
     to_profile_id: Uuid,
 ) -> ApiResult<Vec<Uuid>> {
     let caller = caller.profile_id();
-    // A soft-deleted team is inert — it confers no reassignment authority.
-    // (`role_on_team` is is_active-blind; team_service gates is_active at each call
-    // site, so we do the same here.)
+    // A soft-deleted team is inert — it confers no reassignment authority. `role_on_team` is
+    // live-only too; this check stays because it answers `Forbidden` before any lookup by role.
     let team_active = sqlx::query_scalar!(
         r#"SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1 AND is_active) AS "e!: bool""#,
         team_id,

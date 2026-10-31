@@ -444,7 +444,7 @@ gate two_sided 7822960e4ffa
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e
-gate team_membership fa44bdaf7329
+gate team_membership 72219e57e2c8
 EOF
 
 CURRENT="$(current_claims; current_gates)"

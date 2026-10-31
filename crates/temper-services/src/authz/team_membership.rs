@@ -868,8 +868,10 @@ impl AuthorizedMembershipChange {
 /// lock after both (its order since `20261024100000`). Every routed writer takes the team lock first,
 /// so all of them serialize on one team and none can deadlock another over a member row.
 ///
-/// A team with no row is a 404. A caller reaches this only after the pool pre-check admitted them,
-/// so only a system admin can be told a team does not exist.
+/// A team with no row, or a soft-deleted one, is a 404, system admins included: nothing is written
+/// onto a dead team (soft-delete design D4), so a membership row cannot wait there to come back
+/// unreviewed if the team is ever restored. A caller reaches this only after the pool pre-check
+/// admitted them, so only a system admin can be told a team does not exist.
 pub(crate) async fn locked(
     conn: &mut PgConnection,
     team_id: Uuid,
@@ -904,18 +906,18 @@ pub(crate) async fn locked(
 }
 
 /// Take the first of [`locked`]'s locks alone — the team row, `FOR NO KEY UPDATE` — and say
-/// whether the row exists. For a path that must hold the team lock before it touches anything
+/// whether the row exists and is live (a soft-deleted team is locked and answers `false`). For a path that must hold the team lock before it touches anything
 /// else: `accept_invitation` takes it before it claims the invitation row, because
 /// [`membership_write`] revokes invitation rows while holding it, and the reverse order would
 /// deadlock against it.
 pub(crate) async fn lock_team(conn: &mut PgConnection, team_id: Uuid) -> ApiResult<bool> {
-    let team = sqlx::query_scalar!(
-        "SELECT id FROM kb_teams WHERE id = $1 FOR NO KEY UPDATE",
+    let live = sqlx::query_scalar!(
+        "SELECT is_active FROM kb_teams WHERE id = $1 FOR NO KEY UPDATE",
         team_id
     )
     .fetch_optional(&mut *conn)
     .await?;
-    Ok(team.is_some())
+    Ok(live == Some(true))
 }
 
 /// What a recorded membership write did. Every other outcome of the SQL writer is an error.
