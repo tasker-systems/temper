@@ -580,9 +580,7 @@ async fn askable_is_on_the_by_id_read_and_absent_from_the_listing(pool: PgPool) 
 /// A stored shape whose schema does not compile reads `askable` empty, with `unaskable` the very
 /// refusal an ask naming it meets — reason and fixed sentence — and nothing is fetched; read again,
 /// it answers the same. Bites an `askable` derived without the compile (it would read empty with no
-/// reason), a reason of its own beside the ask's, or a vocabulary remembered for a shape that does
-/// not compile (call `remember_vocabulary` for every verdict in `shape_loader::askable`: the second
-/// read answers with no refusal).
+/// reason), or a reason of its own beside the ask's.
 #[sqlx::test(migrations = "../../migrations")]
 async fn an_uncompilable_shape_reads_askable_empty_with_the_reason(pool: PgPool) {
     let w = seed_world(&pool, "loader-askable-uncompilable").await;
@@ -630,8 +628,7 @@ async fn an_uncompilable_shape_reads_askable_empty_with_the_reason(pool: PgPool)
 /// `schema_bytes` with that same refusal as `unaskable`, and `shape_schema::compile` — counted
 /// wherever it is called — never runs on it; read again, it answers the same. Bites removing the
 /// measurement from `shape_loader::judge` (the `if !within_schema_bound(schema)` return of
-/// `TooLarge`): the schema compiles, the count moves, and it loads `Loaded`. Bites, too, a
-/// vocabulary remembered for a shape past the bound: the second read answers with no refusal.
+/// `TooLarge`): the schema compiles, the count moves, and it loads `Loaded`.
 #[sqlx::test(migrations = "../../migrations")]
 async fn a_schema_past_the_byte_bound_is_refused_at_load_and_read_and_never_compiled(pool: PgPool) {
     let w = seed_world(&pool, "loader-past-the-bound").await;
@@ -829,9 +826,8 @@ async fn declaring_a_schema_past_the_budget_is_refused_naming_the_budget_before_
 /// Reads of one stored shape — five by-id reads and a load — compile its schema once: the verdict
 /// is remembered by shape id after the first. Counted at `shape_schema::compile` by the fixture's
 /// tag, so other suites' compiles cannot move it. Bites bypassing the remembered verdict (in
-/// `shape_loader::verdict_of`, delete the `if let Some(verdict) = remembered(id)` return): two
-/// compiles, the first read's and the load's — the later reads find the vocabulary remembered and
-/// ask no verdict.
+/// `shape_loader::verdict_of`, delete the `if let Some(verdict) = remembered(id)` return): six
+/// compiles, one for each read and the load.
 #[sqlx::test(migrations = "../../migrations")]
 async fn a_shape_read_many_times_is_compiled_once(pool: PgPool) {
     let w = seed_world(&pool, "loader-verdict-remembered").await;
@@ -852,40 +848,6 @@ async fn a_shape_read_many_times_is_compiled_once(pool: PgPool) {
         ShapeLoad::Loaded(_)
     ));
     assert_eq!(compiles_tagged(&tag), 1, "one compile for six reads");
-}
-
-/// Five by-id reads of one stored compiling shape enumerate its vocabulary once: the vocabulary is
-/// remembered by shape id after the first, and every read advertises the same one. Counted at
-/// `shape_loader::askable`'s enumeration by the fixture's tag, so other suites' reads cannot move
-/// it. Bites bypassing the remembered vocabulary (in `shape_loader::askable`, delete the
-/// `remembered_vocabulary(row.shape_id)` lookup): five enumerations.
-#[sqlx::test(migrations = "../../migrations")]
-async fn a_shape_read_many_times_is_enumerated_once(pool: PgPool) {
-    let w = seed_world(&pool, "loader-vocabulary-remembered").await;
-    let tag = fresh_tag();
-    let mut schema = value_schema();
-    schema["$comment"] = json!(tag);
-    let id = store(&pool, &w, "measurement", &schema).await;
-
-    let mut reads = Vec::new();
-    for _ in 0..5 {
-        let shown = substrate_read::get_shape(&pool, w.owner, id)
-            .await
-            .unwrap()
-            .expect("the owner reads the shape");
-        reads.push(shown.askable.expect("the by-id read carries askable"));
-    }
-    assert_eq!(reads[0].paths.len(), 1);
-    assert_eq!(reads[0].paths[0].path, vec!["value".to_string()]);
-    assert!(
-        reads.iter().all(|askable| *askable == reads[0]),
-        "every read advertises the same vocabulary"
-    );
-    assert_eq!(
-        enumerations_tagged(&tag),
-        1,
-        "one enumeration for five reads"
-    );
 }
 
 // ── A path refused on one shape across requests is taught from one enumeration ──────────────
@@ -1054,8 +1016,10 @@ fn nearest_rank(sorted: &[Duration], percent: usize) -> Duration {
 /// once (spec `2026-10-31-const-and-enum-members-are-scalars-design`, §5's permit-queueing
 /// measure, §7.6 case 6). Each shape fills the node budget with the heaviest vocabulary a miss
 /// enumerates ([`vocabulary_values_at_the_budget`]) and is a row of its own id under a tag of its
-/// own: the verdict and vocabulary caches key by shape id, so no read finds another's entry, and
-/// the tagged counts show each read compiled and enumerated its own shape once, a miss on both.
+/// own: the verdict cache keys by shape id, so no read finds another's verdict, and the tagged
+/// counts show each read compiled its own shape once, a miss on the verdict, and enumerated it
+/// once, as every by-id read of a compiling shape does. The by-id read remembers no vocabulary, so
+/// what a call costs here is what any by-id read costs under this contention.
 ///
 /// **What it measures.** Nothing in the loader reports how long a call waited for a permit, so this
 /// times each `askable` call whole, from the moment the burst starts, against one uncontended
@@ -1123,11 +1087,7 @@ async fn permit_queueing_under_concurrent_by_id_misses(pool: PgPool) {
         3,
         "two judges, then the read's own compile: a miss on the verdict"
     );
-    assert_eq!(
-        enumerations_tagged(alone_tag),
-        1,
-        "the read enumerated: a miss on the vocabulary"
-    );
+    assert_eq!(enumerations_tagged(alone_tag), 1, "the read enumerated");
     println!("permit queueing: uncontended judge {:.3} ms", ms(judged));
     println!(
         "permit queueing: uncontended askable miss {:.3} ms",
@@ -1159,7 +1119,7 @@ async fn permit_queueing_under_concurrent_by_id_misses(pool: PgPool) {
         assert_eq!(
             enumerations_tagged(tag),
             1,
-            "call {call}: a miss on the vocabulary"
+            "call {call}: the read enumerated"
         );
         println!(
             "permit queueing: call {call}: {:.3} ms, {:.3} ms past an uncontended miss",

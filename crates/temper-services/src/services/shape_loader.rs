@@ -33,25 +33,23 @@
 //! **How often and how widely a schema is compiled is bounded.** Each compile runs on the blocking
 //! pool, under one of a few process-wide permits (`compile_permits`), so a burst of reads queues
 //! rather than taking every core; and a stored shape's verdict is remembered by id, so a shape
-//! read many times is compiled about once per process. The vocabulary a compiling shape's by-id
-//! read advertises is remembered by id as well, bounded by an estimate of the memory it holds
-//! rather than by how many there are, and the read looks it up before the verdict, so the same
-//! shape is enumerated, and judged, about once per process too — while its vocabulary stays
-//! remembered; one heavier than the whole cap is enumerated on each read. What a path refusal on a
-//! shape teaches of its vocabulary ([`PathTeaching`]) is remembered by id in the same way, so a
-//! request refusing a path on a shape an earlier request already taught enumerates nothing. The
-//! constructor holds each `pattern` and `patternProperties` regex to
-//! `shape_schema::MAX_PATTERN_BYTES`. A shape row is immutable per id (amendment mints a new id), so
-//! a remembered verdict, vocabulary or teaching never goes stale. Each is consulted only with a row
-//! a gated read returned — the loader reads its own, and the by-id read is passed only such rows —
-//! and a teaching is remembered only for a shape the request's load returned readable and
-//! compiling (`ShapeLoad::Loaded`), so none answers anything about a shape the caller cannot read.
+//! read many times is compiled about once per process. A compiling shape's by-id read enumerates
+//! its vocabulary on every read, after the verdict, under a permit too. What a path refusal on a
+//! shape teaches of its vocabulary ([`PathTeaching`]) is remembered by id, bounded by an estimate
+//! of the memory it holds rather than by how many there are, so a request refusing a path on a
+//! shape an earlier request already taught enumerates nothing. The constructor holds each
+//! `pattern` and `patternProperties` regex to `shape_schema::MAX_PATTERN_BYTES`. A shape row is
+//! immutable per id (amendment mints a new id), so a remembered verdict or teaching never goes
+//! stale. Each is consulted only with a row a gated read returned — the loader reads its own, and
+//! the by-id read is passed only such rows — and a teaching is remembered only for a shape the
+//! request's load returned readable and compiling (`ShapeLoad::Loaded`), so none answers anything
+//! about a shape the caller cannot read.
 //!
 //! The successor lookup reads only the home and family of the row step 1 returned; no caller text
 //! reaches SQL here except the shape id, bound as a `uuid`.
 
 use std::collections::{BTreeSet, HashMap};
-use std::sync::{Arc, LazyLock, Mutex, PoisonError};
+use std::sync::{LazyLock, Mutex, PoisonError};
 
 use serde_json::Value;
 use sqlx::PgPool;
@@ -276,6 +274,14 @@ pub async fn judge(schema: &Value) -> ApiResult<SchemaVerdict> {
 const MAX_REMEMBERED_VERDICTS: usize = 4096;
 
 /// Each stored shape's verdict, by id, for the life of the process.
+///
+/// # What a hit saves
+///
+/// A compile, under a permit: `T_compile` 0.85 ms for a schema with both caps full, against
+/// `T_parse` 0.26 ms for the same schema, and up to 3.3 ms for one filling the 12,288-value budget
+/// with boolean fields (`shape_schema_cost_bench.rs`, `parse_worst_case_at_the_caps` and
+/// `many_tiny_subschemas_at_the_size_cap`; arm64, release). A compile costs more than three parses
+/// of the same schema, and a read that finds its verdict here spares both it and the permit.
 static VERDICTS: LazyLock<Mutex<HashMap<ShapeId, SchemaVerdict>>> = LazyLock::new(Mutex::default);
 
 /// A stored shape's verdict — remembered, or judged now and remembered. Called only with a row the
@@ -307,62 +313,20 @@ fn remember(id: ShapeId, verdict: SchemaVerdict) {
     verdicts.insert(id, verdict);
 }
 
-/// The most bytes of vocabulary the process remembers, each entry weighed as an estimate of the
-/// memory it holds (`vocabulary_weight`).
-///
-/// # 32 MiB
-///
-/// A count cap would not bound this: what one vocabulary copies is bounded by its schema's size
-/// (`MAX_SCHEMA_BYTES`), not by a count, so in this weight one ranges from a few KiB for an
-/// ordinary shape to several MiB, and past the cap for values built of many small objects. Weighed
-/// instead, 32 MiB holds thousands of ordinary ones, or one of the heaviest that fit. Past the
-/// cap an arbitrary entry is forgotten, and that shape is enumerated again when it is next read; a
-/// vocabulary heavier than the whole cap is never remembered, and is enumerated on each read.
-///
-/// # What the weight bounds
-///
-/// An entry is weighed by what it holds, not by what it serializes to: its place in the map
-/// (`ENTRY_BYTES`); each path its own size, its segments' `String`s and their bytes, and its
-/// operators; each declared value at least `NODE_BYTES` and never less than a `Value`, plus its
-/// text; each node nested in a value at `NODE_BYTES`; and each object in a value the map nodes its
-/// members sit in (`MAP_NODE_BYTES`). A short code that serializes to two bytes is charged as the
-/// `Value` it occupies, and a container as the allocations it holds, so what the map holds in
-/// memory is its weight within a small factor — allocator rounding, the table's spare slots — and
-/// 32 MiB of weight is about that much memory.
-const MAX_REMEMBERED_VOCABULARY_BYTES: usize = 32 << 20;
-
 /// What one entry holds beside what it remembers: its key and value in the map's table, a control
 /// byte, and the `Arc`'s two counts.
 const fn entry_bytes<V>() -> usize {
     size_of::<ShapeId>() + size_of::<(V, usize)>() + 1 + 2 * size_of::<usize>()
 }
 
-/// What one vocabulary entry holds beside its vocabulary (`entry_bytes`).
-const ENTRY_BYTES: usize = entry_bytes::<Arc<Vocabulary>>();
+/// What one `Value` nested in a declared value is weighed at, beside its text: the weight model's
+/// charge for one value ([`shape_schema::VALUE_BYTES`]), not a copy of it. The walk reads only
+/// scalar values, so a declared value nests none.
+const NODE_BYTES: usize = shape_schema::VALUE_BYTES;
 
-/// What one `Value` nested in a declared value is weighed at, beside its text: the `Value` itself
-/// (32 bytes) in a container's slot, and its share of the allocation that holds it.
-///
-/// # 64
-///
-/// An estimate, and low for an object: a copied non-empty map allocates about 630 bytes, which
-/// [`MAP_NODE_BYTES`] adds for each one. The const/enum bound at declare decides whether a value
-/// can nest deeply enough for the difference to matter (task
-/// `01a187e3-f00b-706f-b217-c49022239529`).
-const NODE_BYTES: usize = 64;
-
-/// One leaf node of a JSON object's map: eleven key and value slots and the node's own header. A
-/// non-empty object copied into a vocabulary holds at least one, however few members it has, and
-/// a node other than the root holds at least five members, so an object of `n` members holds at
-/// most `n.div_ceil(5)` nodes. An internal node holds its children's pointers besides, a few dozen
-/// bytes more, which each member's `NODE_BYTES` more than covers. Under serde_json's
-/// `preserve_order` the map is an `IndexMap`, which this estimates about as closely.
-const MAP_NODE_BYTES: usize = 11 * (size_of::<String>() + size_of::<Value>()) + 16;
-
-/// What the process remembers by shape id — a vocabulary, or a path teaching — with each entry's
-/// weight, and what they weigh together. The running total lives beside the map, under one lock,
-/// so it cannot drift from what the map holds. `V` is a shared handle, so reading an entry clones
-/// a pointer.
+/// What the process remembers by shape id — a path teaching — with each entry's weight, and what
+/// they weigh together. The running total lives beside the map, under one lock, so it cannot drift
+/// from what the map holds. `V` is a shared handle, so reading an entry clones a pointer.
 #[derive(Debug)]
 struct RememberedById<V> {
     /// Each entry and its weight.
@@ -378,9 +342,6 @@ impl<V> Default for RememberedById<V> {
         }
     }
 }
-
-/// The vocabularies the by-id read remembers.
-type RememberedVocabularies = RememberedById<Arc<Vocabulary>>;
 
 impl<V: Clone> RememberedById<V> {
     fn get(&self, id: ShapeId) -> Option<V> {
@@ -422,25 +383,6 @@ impl<V: Clone> RememberedById<V> {
     }
 }
 
-/// Each compiling shape's vocabulary, by id, for the life of the process.
-static VOCABULARIES: LazyLock<Mutex<RememberedVocabularies>> = LazyLock::new(Mutex::default);
-
-fn remembered_vocabulary(id: ShapeId) -> Option<Arc<Vocabulary>> {
-    VOCABULARIES
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .get(id)
-}
-
-/// What a vocabulary weighs in the map: an estimate of the memory it holds, in the walk's model
-/// (see `MAX_REMEMBERED_VOCABULARY_BYTES`). Its place in the map, its own size, and each path's.
-/// `truncated` holds at most one of each bound, negligible beside the paths, and is left at the
-/// vocabulary's own size. Paths are weighed by their count, so a vocabulary is remembered with
-/// `paths` shrunk to it.
-fn vocabulary_weight(vocabulary: &Vocabulary) -> usize {
-    ENTRY_BYTES + size_of::<Vocabulary>() + vocabulary.paths.iter().map(path_weight).sum::<usize>()
-}
-
 /// One path: its own size, each segment's `String` and bytes, its operators, and its facts.
 fn path_weight(path: &AskablePath) -> usize {
     size_of::<AskablePath>()
@@ -470,56 +412,38 @@ fn facts_weight(facts: &PathFacts) -> usize {
         + facts.items.as_deref().map_or(0, facts_weight)
 }
 
-/// One declared value, as a vocabulary copies it: at least `NODE_BYTES`, and never less
-/// than the `Value` it occupies; each node nested in it at `NODE_BYTES`; the map nodes of each
-/// object in it; and its compact text, counted through a sink so that weighing a large value
-/// allocates nothing.
+/// One declared value, as a teaching copies it: the weight model's charge for one value
+/// ([`shape_schema::VALUE_BYTES`]); each node nested in it at `NODE_BYTES`; and its compact text,
+/// counted through a sink so that weighing a large value allocates nothing.
 fn value_weight(value: &Value) -> usize {
-    size_of::<Value>().max(NODE_BYTES)
+    shape_schema::VALUE_BYTES
         + NODE_BYTES * property_value_nodes(value)
-        + map_node_weight(value)
         + property_value_bytes(value)
 }
 
-/// The map nodes every non-empty object in `value` holds, at any depth (`MAP_NODE_BYTES`).
-fn map_node_weight(value: &Value) -> usize {
-    match value {
-        Value::Array(xs) => xs.iter().map(map_node_weight).sum(),
-        Value::Object(m) if !m.is_empty() => {
-            MAP_NODE_BYTES * m.len().div_ceil(5) + m.values().map(map_node_weight).sum::<usize>()
-        }
-        _ => 0,
-    }
-}
-
-/// Remember `vocabulary` for `id`, weighing `weight`. What the map lets go of is freed here, after
-/// its lock is released.
-fn remember_vocabulary(id: ShapeId, vocabulary: Arc<Vocabulary>, weight: usize) {
-    if weight > MAX_REMEMBERED_VOCABULARY_BYTES {
-        return;
-    }
-    let let_go = VOCABULARIES
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .insert(id, vocabulary, weight, MAX_REMEMBERED_VOCABULARY_BYTES);
-    drop(let_go);
-}
-
 /// The most bytes of path teaching the process remembers, each entry weighed as an estimate of the
-/// memory it holds, in the vocabulary map's model (`teaching_weight`).
+/// memory it holds (`teaching_weight`).
 ///
 /// # 16 MiB, by weight rather than by count
 ///
 /// A teaching is held to `MAX_TEACHING_BYTES` (16 KiB) on the wire, but what it holds in memory
-/// depends on what its values are built of, so a count cap would bound it only at the worst
-/// case. Weighed as a vocabulary is, a declared value costs at least `NODE_BYTES` plus its text,
-/// and a value with an object in it a map node more (`MAP_NODE_BYTES`): two wire bytes of a short
-/// code weigh about 65, and the eight of a one-member object about 770. So a teaching ranges from
-/// a few KiB of weight for an ordinary shape — dozens of typed paths, a few short enums — to about
-/// 1.8 MiB for the heaviest, 16 KiB of one-member objects. 16 MiB holds about a thousand ordinary
-/// teachings, or eight of the heaviest; a count cap of a thousand would have had to admit 1.8 GiB.
+/// depends on what its values are, so a count cap would bound it only at the worst case. A
+/// declared value weighs the weight model's charge for one value plus its text: the two wire
+/// bytes of a short code weigh about 65. So a teaching ranges from a few KiB of weight for an
+/// ordinary shape — dozens of typed paths, a few short enums — to about half a MiB for the
+/// heaviest, 16 KiB of the shortest codes. 16 MiB holds about a thousand ordinary teachings, or
+/// about thirty of the heaviest; a count cap of a thousand would have had to admit about 500 MiB.
 /// Past the cap an arbitrary entry is forgotten, and that shape is enumerated again the next time a
 /// request refuses a path on it; a teaching heavier than the whole cap is never remembered.
+///
+/// # What the weight bounds
+///
+/// An entry is weighed by what it holds, not by what it serializes to: its place in the map
+/// (`entry_bytes`); each path its own size, its segments' `String`s and their bytes, and its
+/// operators; and each declared value [`shape_schema::VALUE_BYTES`] plus its text. A short code
+/// that serializes to two bytes is charged as the `Value` it occupies, so what the map holds in
+/// memory is its weight within a small factor — allocator rounding, the table's spare slots — and
+/// 16 MiB of weight is about that much memory.
 const MAX_REMEMBERED_TEACHING_BYTES: usize = 16 << 20;
 
 /// Each loaded shape's path teaching, by id, for the life of the process.
@@ -533,11 +457,11 @@ fn remembered_path_teaching(id: ShapeId) -> Option<PathTeaching> {
         .get(id)
 }
 
-/// What a path teaching weighs in the map: an estimate of the memory it holds, in the vocabulary
-/// map's model (`MAX_REMEMBERED_VOCABULARY_BYTES`). Its place in the map, the teaching's own size,
-/// and each path it sends. A non-empty `truncated` set holds one B-tree leaf node, at most one entry
-/// per bound, weighed as one; its elision is inline, left at the teaching's own size; its paths are
-/// held with no spare capacity, so they are weighed by their count.
+/// What a path teaching weighs in the map: an estimate of the memory it holds (see
+/// `MAX_REMEMBERED_TEACHING_BYTES`). Its place in the map, the teaching's own size, and each path
+/// it sends. A non-empty `truncated` set holds one B-tree leaf node, at most one entry per bound,
+/// weighed as one; its elision is inline, left at the teaching's own size; its paths are held with
+/// no spare capacity, so they are weighed by their count.
 fn teaching_weight(teaching: &PathTeaching) -> usize {
     entry_bytes::<PathTeaching>()
         + size_of::<RefusalTeaching>()
@@ -610,26 +534,18 @@ pub(crate) fn remember_session(shapes: &ShapeContext, session: &AskSession<'_>) 
 /// empty). The verdict is the loader's own ([`judge`], remembered by id), so the read and the
 /// loader judge a schema alike.
 ///
-/// A compiling shape's vocabulary is remembered by id too, bounded by bytes
-/// (`MAX_REMEMBERED_VOCABULARY_BYTES`), and it is looked up first: only a compiling shape's is
-/// remembered, so a read that finds one answers it with no refusal, and neither asks the verdict
-/// nor takes a permit. A miss asks the verdict, and for a compiling shape enumerates and weighs
-/// the vocabulary under a permit, off the executor, then remembers it. Two first reads that race
-/// both enumerate; after that, none while it stays remembered. One heavier than the whole cap is
-/// never remembered, and is enumerated on each read. A schema past the bound or not compiling is
-/// not walked, so there is nothing to remember.
+/// Every read asks the verdict first, and for a compiling shape then enumerates the vocabulary
+/// under a compile permit, off the executor (`with_schema_off_the_executor`): a walk of at most
+/// the byte bound, linear in it. A schema past the bound or not compiling is not walked.
 ///
-/// Takes the row the gated read returned, whole, so the id the verdict and the vocabulary are
-/// remembered by and the schema they were derived from are one value's. `askable` is passed only
-/// rows `readback`'s gated reads returned: its one caller, `substrate_read::get_shape`, passes the
-/// row `readback::shape_by_id` gave it.
+/// Takes the row the gated read returned, whole, so the id the verdict is remembered by and the
+/// schema it was derived from are one value's. `askable` is passed only rows `readback`'s gated
+/// reads returned: its one caller, `substrate_read::get_shape`, passes the row
+/// `readback::shape_by_id` gave it.
 ///
 /// # Errors
 /// Only if the permits are closed or a blocking task cannot be joined.
 pub async fn askable(row: &RetrievedShape) -> ApiResult<(Vocabulary, Option<PlanRefusal>)> {
-    if let Some(vocabulary) = remembered_vocabulary(row.shape_id) {
-        return Ok((Vocabulary::clone(&vocabulary), None));
-    }
     let verdict = verdict_of(row.shape_id, &row.schema).await?;
     let vocabulary = match verdict {
         // Within the bound: a walk of at most 256 KiB, linear in it, off the executor.
@@ -637,17 +553,11 @@ pub async fn askable(row: &RetrievedShape) -> ApiResult<(Vocabulary, Option<Plan
             #[cfg(feature = "test-db")]
             test_support::record(&row.schema);
             let shape = row.shape_id;
-            let (vocabulary, weight) = with_schema_off_the_executor(&row.schema, move |schema| {
+            with_schema_off_the_executor(&row.schema, move |schema| {
                 let _shape = tracing::error_span!("askable", %shape).entered();
-                let mut vocabulary = enumerate(schema, &WalkBounds::BUILD);
-                vocabulary.paths.shrink_to_fit();
-                let weight = vocabulary_weight(&vocabulary);
-                (vocabulary, weight)
+                enumerate(schema, &WalkBounds::BUILD)
             })
-            .await?;
-            let vocabulary = Arc::new(vocabulary);
-            remember_vocabulary(row.shape_id, Arc::clone(&vocabulary), weight);
-            Arc::unwrap_or_clone(vocabulary)
+            .await?
         }
         // Past it the walk reads nothing — the measurement stops at the bound — and says why:
         // `truncated: [schema_bytes]`.
@@ -848,142 +758,6 @@ mod tests {
         assert!(held <= MAX_REMEMBERED_VERDICTS, "{held}");
     }
 
-    /// A vocabulary of one path whose single segment is `segment_bytes` long.
-    fn vocabulary_of(segment_bytes: usize) -> Arc<Vocabulary> {
-        Arc::new(Vocabulary {
-            paths: vec![AskablePath {
-                path: vec!["x".repeat(segment_bytes)],
-                facts: PathFacts::default(),
-                operators: vec![],
-            }],
-            truncated: BTreeSet::new(),
-        })
-    }
-
-    /// The vocabulary map holds no more than its byte budget, however many entries are offered,
-    /// the entry offered last reads back, the running total is the sum of the weights held, every
-    /// entry forgotten is handed back to be freed, and an entry heavier than the whole budget is
-    /// not remembered. That a remembered vocabulary spares an enumeration is witnessed by the
-    /// integration test `a_shape_read_many_times_is_enumerated_once`. Bite: delete the
-    /// `extract_if` pass that forgets entries from `RememberedById::insert`; the total passes the
-    /// budget on the fifth entry.
-    #[test]
-    fn the_vocabulary_map_is_capped_by_bytes() {
-        let each = vocabulary_of(1_000);
-        let weight = vocabulary_weight(&each);
-        let budget = 4 * weight + weight / 2;
-        let mut map = RememberedVocabularies::default();
-
-        let mut last = ShapeId::new();
-        let mut let_go = 0;
-        for _ in 0..20 {
-            last = ShapeId::new();
-            let_go += map.insert(last, Arc::clone(&each), weight, budget).len();
-            assert!(map.bytes <= budget, "{} > {budget}", map.bytes);
-        }
-        assert_eq!(map.entries.len(), 4);
-        assert_eq!(let_go, 16, "each entry forgotten is handed back");
-        assert_eq!(
-            map.bytes,
-            map.entries.values().map(|(_, held)| held).sum::<usize>()
-        );
-        assert_eq!(map.get(last).as_deref(), Some(&*each));
-
-        let too_heavy = ShapeId::new();
-        let refused = map.insert(too_heavy, Arc::clone(&each), budget + 1, budget);
-        assert_eq!(refused.len(), 1, "handed back, not held");
-        assert!(map.get(too_heavy).is_none());
-        assert!(map.bytes <= budget);
-        assert!(map.get(last).is_some(), "nothing was forgotten for it");
-    }
-
-    /// An id offered again — two first reads that race both remember — replaces its entry rather
-    /// than counting it twice: the entry count is unchanged, the running total is the sum of the
-    /// weights held, and the replaced vocabulary is handed back. The budget leaves room, so nothing
-    /// is forgotten for it either way. Bite: delete the block in `RememberedById::insert` that
-    /// removes `id`'s entry first; the total counts the weight twice and the sum check goes red.
-    #[test]
-    fn a_vocabulary_remembered_again_is_weighed_once() {
-        let each = vocabulary_of(1_000);
-        let weight = vocabulary_weight(&each);
-        let budget = 10 * weight;
-        let mut map = RememberedVocabularies::default();
-
-        let mut last = ShapeId::new();
-        for _ in 0..3 {
-            last = ShapeId::new();
-            assert!(map
-                .insert(last, Arc::clone(&each), weight, budget)
-                .is_empty());
-        }
-        let replaced = map.insert(last, Arc::clone(&each), weight, budget);
-        assert_eq!(map.entries.len(), 3);
-        assert_eq!(
-            map.bytes,
-            map.entries.values().map(|(_, held)| held).sum::<usize>()
-        );
-        assert_eq!(replaced.len(), 1, "the replaced vocabulary is handed back");
-    }
-
-    /// A vocabulary is weighed by what it holds, not by what it serializes to: one path carrying a
-    /// thousand copies of `0`, two bytes each on the wire, weighs at least a `Value` and at least
-    /// `NODE_BYTES` a copy. Bite: return the compact serialized length from `vocabulary_weight`;
-    /// that is about 2 KiB, and both assertions go red.
-    #[test]
-    fn a_vocabulary_weighs_what_it_holds() {
-        let vocabulary = Vocabulary {
-            paths: vec![AskablePath {
-                path: vec!["code".to_owned()],
-                facts: PathFacts {
-                    values: Some(vec![Value::from(0); 1_000]),
-                    ..PathFacts::default()
-                },
-                operators: vec![],
-            }],
-            truncated: BTreeSet::new(),
-        };
-        let weight = vocabulary_weight(&vocabulary);
-        assert!(weight >= 1_000 * size_of::<Value>(), "{weight}");
-        assert!(weight >= 1_000 * NODE_BYTES, "{weight}");
-    }
-
-    /// An object in a value is weighed with the map node its members sit in, which a copy holds
-    /// however few members it has: one path carrying a thousand copies of `{"a": 0}`, seven bytes
-    /// each on the wire, weighs at least a `Value` and a map node a copy. Bite: drop
-    /// `map_node_weight` from `value_weight`; a copy then weighs about 135 bytes, and the
-    /// assertion goes red.
-    #[test]
-    fn an_object_in_a_value_weighs_its_map_node() {
-        let vocabulary = Vocabulary {
-            paths: vec![AskablePath {
-                path: vec!["point".to_owned()],
-                facts: PathFacts {
-                    values: Some(vec![serde_json::json!({ "a": 0 }); 1_000]),
-                    ..PathFacts::default()
-                },
-                operators: vec![],
-            }],
-            truncated: BTreeSet::new(),
-        };
-        let weight = vocabulary_weight(&vocabulary);
-        assert!(
-            weight >= 1_000 * (size_of::<Value>() + MAP_NODE_BYTES),
-            "{weight}"
-        );
-    }
-
-    /// A wide object is weighed with every map node its members fill, not just one: sixty members
-    /// sit in at least twelve nodes' worth of the estimate. Bite: charge one node per object
-    /// (replace `m.len().div_ceil(5)` with `1` in `map_node_weight`); the object then weighs one
-    /// node, and the assertion goes red.
-    #[test]
-    fn a_wide_object_weighs_every_node() {
-        let wide: serde_json::Map<String, Value> =
-            (0..60).map(|i| (format!("k{i}"), Value::from(0))).collect();
-        let weight = map_node_weight(&Value::Object(wide));
-        assert!(weight >= 12 * MAP_NODE_BYTES, "{weight}");
-    }
-
     // ── Path teachings, remembered by shape id ────────────────────────────────────────────
 
     /// A shape loaded under a fresh id, declaring `schema`.
@@ -1108,9 +882,9 @@ mod tests {
     }
 
     /// A teaching is weighed by what it holds, not by what it sends: one path over an enum of a
-    /// thousand short codes, about four KiB on the wire, weighs at least a `Value` and at least
-    /// `NODE_BYTES` a code. Bite: return the teaching's compact serialized length from
-    /// `teaching_weight`; that is about 4 KiB, and both assertions go red.
+    /// thousand short codes, about four KiB on the wire, weighs at least the weight model's charge
+    /// for a value (`shape_schema::VALUE_BYTES`) a code. Bite: return the teaching's compact
+    /// serialized length from `teaching_weight`; that is about 4 KiB, and the assertion goes red.
     #[test]
     fn a_teaching_weighs_what_it_holds() {
         let codes: Vec<Value> = (0..1_000).map(Value::from).collect();
@@ -1126,8 +900,7 @@ mod tests {
             .sum();
         assert_eq!(sent, 1_000, "the teaching sends every code");
         let weight = teaching_weight(&teaching);
-        assert!(weight >= 1_000 * size_of::<Value>(), "{weight}");
-        assert!(weight >= 1_000 * NODE_BYTES, "{weight}");
+        assert!(weight >= 1_000 * shape_schema::VALUE_BYTES, "{weight}");
     }
 
     /// **A teaching is remembered only for a shape the request loaded live and compiling, under

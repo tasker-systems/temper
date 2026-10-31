@@ -229,10 +229,10 @@ pub const MAX_SHAPE_NODES: usize = 12_288;
 pub const MAX_SHAPE_OBJECTS: usize = 3_072;
 
 /// The weight model's charge for one JSON value: the per-value charge the shape loader weighs a
-/// vocabulary with. A fixed constant of the deployed build, not `size_of`: under `preserve_order`,
-/// which a `--workspace` build unifies in, `Value` is 72 bytes and an object is an `IndexMap` sized
-/// to its entries. Fixed constants keep the model, and the assertion on it, meaning the same thing
-/// in every build.
+/// remembered path teaching's values with. A fixed constant of the deployed build, not `size_of`:
+/// under `preserve_order`, which a `--workspace` build unifies in, `Value` is 72 bytes and an object
+/// is an `IndexMap` sized to its entries. Fixed constants keep the model, and the assertion on it,
+/// meaning the same thing in every build.
 pub const VALUE_BYTES: usize = 64;
 
 /// The weight model's charge for one node of the deployed `serde_json::Map`, a B-tree. Fixed for
