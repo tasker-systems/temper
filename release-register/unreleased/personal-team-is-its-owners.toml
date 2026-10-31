@@ -1,6 +1,6 @@
 title    = "A personal team holds only its owner and the owner's machines; a system admin lists it but does not act on it"
 pr       = "self"
-classes  = ["behavioral"]
+classes  = ["additive", "behavioral"]
 surfaces = ["http", "mcp", "cli-stdout", "clients"]
 status   = "signal-only"
 body = '''
