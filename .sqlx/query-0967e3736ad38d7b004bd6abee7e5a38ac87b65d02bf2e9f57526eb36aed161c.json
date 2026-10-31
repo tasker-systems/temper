@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT context_personal_owner($1) AS \"o\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "o",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "0967e3736ad38d7b004bd6abee7e5a38ac87b65d02bf2e9f57526eb36aed161c"
+}

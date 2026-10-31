@@ -143,7 +143,11 @@ async fn a_system_admin_neither_grants_on_nor_audits_someone_elses_personal_spac
     let refused = access_service::grant_capability(&pool, &as_admin, &grant(resource, admin_team))
         .await
         .expect_err("an admin does not grant on someone else's personal space");
-    assert!(matches!(refused, ApiError::Forbidden), "{refused:?}");
+    assert!(
+        matches!(&refused, ApiError::ForbiddenDetail(m)
+            if m == "this resource is homed in @ps-owner's personal space; the admin arm does not reach it"),
+        "an admin is told what they hit: {refused:?}"
+    );
     let refused = access_service::revoke_capability(
         &pool,
         &as_admin,
@@ -156,7 +160,11 @@ async fn a_system_admin_neither_grants_on_nor_audits_someone_elses_personal_spac
     )
     .await
     .expect_err("nor revoke there");
-    assert!(matches!(refused, ApiError::Forbidden), "{refused:?}");
+    assert!(
+        matches!(&refused, ApiError::ForbiddenDetail(m)
+            if m == "this resource is homed in @ps-owner's personal space; the admin arm does not reach it"),
+        "an admin is told what they hit: {refused:?}"
+    );
     let grants: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kb_access_grants WHERE subject_id = $1 AND principal_table = 'kb_teams'",
     )

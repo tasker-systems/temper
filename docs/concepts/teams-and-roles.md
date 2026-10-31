@@ -26,6 +26,22 @@ Nor does a system admin read your personal space through the side doors: your re
 the grant history on your personal resources, and your subscriptions stay out of their listings.
 A system admin's own personal space is theirs, like anyone's.
 
+A cognitive map can be personal space too. A map you created is yours while it is bound to no
+shared team: unbound, or bound only to your own personal team. Once you bind it to a shared team it
+is shared, and the team's admins and a system admin reach it as they reach any shared map. A map is
+one person's at most: it can be bound to a personal team only when that team's person created it,
+and a map with no person as its creator (one a machine made, or one from before creators were
+recorded) only to one person's personal team. To share a map between
+people, bind it to a shared team. On your personal map a system admin cannot grant or revoke, or
+bind or unbind it. The grants you made on it keep working, and you keep every act.
+
+When a system admin is refused because the target is someone else's personal space, the refusal
+says so: a `403` naming the kind of object and its person's handle, such as "this cognitive map is
+@ana's personal space; the admin arm does not reach it". It never names the content. This is there
+to catch a mistaken act (a wrong id, a stale ref), not to hide that the space exists from someone
+who can already list personal teams. Anyone else who cannot see the target gets the same answers as
+before.
+
 Machines are different: they are principals, and a system admin manages every principal, yours
 included. What protects your personal team is the credential. If anyone but you gives a machine on
 your personal team a new credential (a rotated secret, or a rebound client id), the machine leaves

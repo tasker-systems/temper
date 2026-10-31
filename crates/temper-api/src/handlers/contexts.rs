@@ -157,7 +157,7 @@ pub async fn get(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Context retired (soft-deleted, and its slug freed for reuse)", body = RetireContextOutcome),
-        (status = 403, description = "Caller may read but not administer this context"),
+        (status = 403, description = "Caller may read but not administer this context; or a system admin on someone else's personal context (`FORBIDDEN_DETAIL`: this context is @handle's personal space; the admin arm does not reach it)", body = ErrorBody),
         (status = 404, description = "Context not found (uniform — no existence oracle)"),
     )
 )]
@@ -180,7 +180,7 @@ pub async fn delete(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Context restored", body = RestoreContextOutcome),
-        (status = 403, description = "Caller may read but not administer this context"),
+        (status = 403, description = "Caller may read but not administer this context; or a system admin on someone else's personal context (`FORBIDDEN_DETAIL`: this context is @handle's personal space; the admin arm does not reach it)", body = ErrorBody),
         (status = 404, description = "Context not found, or not retired (uniform — no existence oracle)"),
         (status = 409, description = "The restored address collided under a concurrent write"),
         (status = 410, description = "The context was erased with its owner and cannot be restored"),
@@ -206,7 +206,7 @@ pub async fn restore(
     request_body = ShareContextRequest,
     responses(
         (status = 200, description = "Context shared (or idempotent no-op)", body = ShareContextOutcome),
-        (status = 403, description = "Caller may not share this context into this team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
+        (status = 403, description = "Caller may not share this context into this team (a system admin refused because the context or the team is someone else's personal space is told so: `FORBIDDEN_DETAIL`, naming it and its person's handle); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
     )
 )]
 pub async fn share_team(
@@ -231,7 +231,7 @@ pub async fn share_team(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Context unshared (or no-op)", body = UnshareContextOutcome),
-        (status = 403, description = "Caller may not unshare this context from this team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
+        (status = 403, description = "Caller may not unshare this context from this team (a system admin refused because the context or the team is someone else's personal space is told so: `FORBIDDEN_DETAIL`, naming it and its person's handle); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
     )
 )]
 pub async fn unshare_team(
@@ -253,7 +253,7 @@ pub async fn unshare_team(
     request_body = ReassignContextRequest,
     responses(
         (status = 200, description = "Context ownership transferred (or idempotent no-op)", body = ReassignContextOutcome),
-        (status = 403, description = "Caller may not transfer this context to this team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
+        (status = 403, description = "Caller may not transfer this context to this team (a system admin refused because the context or the team is someone else's personal space is told so: `FORBIDDEN_DETAIL`, naming it and its person's handle); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "Context or team not found"),
         (status = 409, description = "Target team already owns a context with this slug"),
     )
@@ -280,7 +280,7 @@ pub async fn reassign(
     responses(
         (status = 200, description = "Context renamed (or idempotent no-op when the canonical name already matched)", body = RenameContextOutcome),
         (status = 400, description = "The name derives an empty slug (empty, whitespace-only, or no sluggifiable characters)"),
-        (status = 403, description = "Caller may read but not administer this context"),
+        (status = 403, description = "Caller may read but not administer this context; or a system admin on someone else's personal context (`FORBIDDEN_DETAIL`: this context is @handle's personal space; the admin arm does not reach it)", body = ErrorBody),
         (status = 404, description = "Context not found (uniform — no existence oracle for a caller who cannot see it)"),
         (status = 409, description = "Another context under the same owner already holds the derived slug"),
     )

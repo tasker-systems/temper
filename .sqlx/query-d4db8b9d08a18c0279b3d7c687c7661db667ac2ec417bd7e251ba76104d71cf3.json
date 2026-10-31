@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT cogmap_personal_bind_refusal($1, $2) AS \"refusal\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "refusal",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d4db8b9d08a18c0279b3d7c687c7661db667ac2ec417bd7e251ba76104d71cf3"
+}

@@ -417,10 +417,15 @@ async fn an_erased_context_cannot_be_restored_by_anyone(pool: PgPool) {
     let (op, _) = operator(&pool).await;
     let op_proof = temper_services::test_support::caller_for(&pool, op.profile).await;
     for c in [p.me, p.personal_team] {
+        // Still someone else's personal space after erasure, so the admin arm stops there and the
+        // refusal says so (task `01a1933d`; it was a 404 before), without reaching the 410.
         match context_service::restore(&pool, &op_proof, c.uuid()).await {
-            Err(ApiError::NotFound(_)) => {}
+            Err(ApiError::ForbiddenDetail(m)) if m.ends_with("the admin arm does not reach it") => {
+            }
             other => {
-                panic!("the instance admin's restore of {c:?} is refused with 404, got {other:?}")
+                panic!(
+                    "the instance admin's restore of {c:?} is refused as personal space, got {other:?}"
+                )
             }
         }
     }

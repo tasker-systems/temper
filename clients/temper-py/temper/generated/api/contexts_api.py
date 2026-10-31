@@ -1875,7 +1875,7 @@ class ContextsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "RetireContextOutcome",
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
         }
         response_data = self.api_client.call_api(
@@ -1947,7 +1947,7 @@ class ContextsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "RetireContextOutcome",
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
         }
         response_data = self.api_client.call_api(
@@ -2019,7 +2019,7 @@ class ContextsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "RetireContextOutcome",
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
         }
         response_data = self.api_client.call_api(
@@ -3020,7 +3020,7 @@ class ContextsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "RenameContextOutcome",
             '400': None,
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
             '409': None,
         }
@@ -3098,7 +3098,7 @@ class ContextsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "RenameContextOutcome",
             '400': None,
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
             '409': None,
         }
@@ -3176,7 +3176,7 @@ class ContextsApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "RenameContextOutcome",
             '400': None,
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
             '409': None,
         }
@@ -3618,7 +3618,7 @@ class ContextsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "RestoreContextOutcome",
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
             '409': None,
             '410': None,
@@ -3692,7 +3692,7 @@ class ContextsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "RestoreContextOutcome",
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
             '409': None,
             '410': None,
@@ -3766,7 +3766,7 @@ class ContextsApi:
 
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "RestoreContextOutcome",
-            '403': None,
+            '403': "ErrorBody",
             '404': None,
             '409': None,
             '410': None,

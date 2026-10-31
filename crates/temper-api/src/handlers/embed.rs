@@ -247,7 +247,7 @@ pub async fn warm(
         (status = 200, description = "What is stale in scope, and the resources enqueued (none on `dry_run`). Resources homed in personal space are enqueued by the `all` sweep but not named", body = ReembedSummary),
         (status = 400, description = "Not exactly one of `resource_id`, `context_id`, `all`", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin, the scope is a personal context or a resource homed in one (`FORBIDDEN_DETAIL`), or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, the scope is someone else's personal context or a resource homed in one (`FORBIDDEN_DETAIL`: this context is, or this resource is homed in, @handle's personal space; the admin arm does not reach it), or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
     )
 )]
 pub async fn reembed(
@@ -274,12 +274,10 @@ pub async fn reembed(
 
     // A system admin does not aim at personal space (task `01a191b4`). Refused before anything is
     // read, so the refusal says nothing about what is stale there.
-    if embed_service::scope_is_personal(&state.pool, &admin, scope).await? {
-        return Err(ApiError::ForbiddenDetail(
-            "a re-embed cannot target a personal context or a resource homed in one; the `all` \
-             sweep re-embeds personal space without naming it"
-                .to_string(),
-        ));
+    // The `all` sweep still re-embeds personal space, without naming it.
+    if let Some(refusal) = embed_service::personal_scope_refusal(&state.pool, &admin, scope).await?
+    {
+        return Err(refusal);
     }
 
     let (stale_resources, stale_chunks) = embed_service::stale_summary(&state.pool, scope).await?;

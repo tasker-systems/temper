@@ -4044,6 +4044,10 @@ impl Backend for DbBackend {
         .await
         .map_err(|e| TemperError::Api(e.to_string()))?;
 
+        // The map's creator (task `01a1933d`) is recorded from this self-grant by the
+        // `kb_access_grants_records_cogmap_creator` trigger (migration `20261115000000`), in this
+        // transaction: genesis fires as the system actor, so the projection cannot know it.
+
         // COMMIT — serialization failure (40001) → `Conflict` (a genesis race), any other DB error → 500.
         match tx.commit().await {
             Ok(()) => Ok(CommandOutput::new(outcome)),
