@@ -385,8 +385,11 @@ async fn replay_reproduces_the_erased_contexts_from_the_walk(pool: PgPool) {
     assert!(!live.0 .2, "the @me context ends retired");
 }
 
-/// FAILS IF an erased context can come back: an instance admin is refused through the service
-/// (410), and anyone through `context_restore` itself (SQLSTATE TE001). There is no co-admin of a
+/// FAILS IF an erased context can come back: an instance admin is refused through the service,
+/// which does not show them someone else's personal context (404), and through `context_restore`
+/// itself (SQLSTATE 42501: a system admin does not act on someone else's personal context, task
+/// `01a191b4`). The `TE001` erased-context refusal behind that gate stays, for any future caller
+/// who passes it. There is no co-admin of a
 /// personal team to try: a personal team holds only its owner and the owner's machines, and the
 /// database refuses the row that would make one (20261110000000).
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
@@ -415,9 +418,9 @@ async fn an_erased_context_cannot_be_restored_by_anyone(pool: PgPool) {
     let op_proof = temper_services::test_support::caller_for(&pool, op.profile).await;
     for c in [p.me, p.personal_team] {
         match context_service::restore(&pool, &op_proof, c.uuid()).await {
-            Err(ApiError::Gone(_)) => {}
+            Err(ApiError::NotFound(_)) => {}
             other => {
-                panic!("the instance admin's restore of {c:?} is refused with 410, got {other:?}")
+                panic!("the instance admin's restore of {c:?} is refused with 404, got {other:?}")
             }
         }
     }
@@ -437,8 +440,8 @@ async fn an_erased_context_cannot_be_restored_by_anyone(pool: PgPool) {
         .and_then(|d| d.code().map(|c| c.into_owned()));
     assert_eq!(
         code.as_deref(),
-        Some("TE001"),
-        "refused with TE001: {err:#}"
+        Some("42501"),
+        "refused with 42501: {err:#}"
     );
     assert!(
         !context_state(&pool, p.personal_team).await.2,
@@ -973,8 +976,9 @@ async fn a_rename_committing_while_the_act_waits_is_rewritten(pool: PgPool) {
 }
 
 /// FAILS IF an erased context can be moved out of its erased owner's estate, where a later run of
-/// the act could no longer reach its ledger copies: an instance admin, who passes every other gate
-/// on the move, is refused (SQLSTATE TE001). A personal team has no co-admin to try it
+/// the act could no longer reach its ledger copies: an instance admin is refused (SQLSTATE 42501,
+/// since a system admin does not act on someone else's personal context, task `01a191b4`), and the
+/// `TE001` erased-context refusal stays behind that gate. A personal team has no co-admin to try it
 /// (20261110000000).
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn an_erased_context_cannot_be_reassigned(pool: PgPool) {
@@ -1018,8 +1022,8 @@ async fn an_erased_context_cannot_be_reassigned(pool: PgPool) {
         .and_then(|d| d.code().map(|c| c.into_owned()));
     assert_eq!(
         code.as_deref(),
-        Some("TE001"),
-        "refused with TE001: {err:#}"
+        Some("42501"),
+        "refused with 42501: {err:#}"
     );
     let owner: Uuid = sqlx::query_scalar("SELECT owner_id FROM kb_contexts WHERE id = $1")
         .bind(p.personal_team.uuid())

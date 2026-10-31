@@ -34,7 +34,8 @@ use crate::services::context_service::CONTEXT_REFUSAL;
 pub(crate) enum ContextAdminAuthority {
     /// The profile owner of a personal context, or a caller who `can_manage` the owning team.
     Administers,
-    /// A system admin. Admits; confers no ownership.
+    /// A system admin, on any context but a personal one (task `01a191b4`). Admits; confers no
+    /// ownership.
     SystemAdmin,
     /// Visible to the caller, but not administered by them → `403`.
     ReadOnly,
@@ -70,8 +71,11 @@ impl ScopedAuthority for ContextAdminAuthority {
         if context_service::caller_administers_context(pool, caller, context_id).await? {
             return Ok(ContextAdminAuthority::Administers);
         }
-        // 2. System authority admits, and stays its own arm: it never becomes ownership.
-        if principal.system_admin(pool).await?.is_some() {
+        // 2. System authority admits, and stays its own arm: it never becomes ownership. It stops at
+        //    personal space, which only its owner (arm 1) and erasure act on (task `01a191b4`).
+        if principal.system_admin(pool).await?.is_some()
+            && !context_service::is_others_personal_context(pool, context_id, caller).await?
+        {
             return Ok(ContextAdminAuthority::SystemAdmin);
         }
         // 3/4. The one visibility predicate, called through the one Rust spelling of it.
@@ -386,7 +390,11 @@ mod tests {
         let owner = mk_profile(&pool, "owner").await;
         let admin = mk_profile(&pool, "admin").await;
         crate::test_support::grant_governance(&pool, *admin).await;
-        let ctx = mk_personal_context(&pool, "private", owner).await;
+        // A shared team's context: someone else's personal context is outside the admin arm (task
+        // `01a191b4`), asserted at the end.
+        let team = mk_team(&pool, "elsewhere").await;
+        let ctx = mk_team_context(&pool, "private", team).await;
+        let personal = mk_personal_context(&pool, "journal", owner).await;
 
         assert!(
             !context_service::context_visible(&pool, *admin, ctx)
@@ -399,6 +407,13 @@ mod tests {
                 .await
                 .unwrap(),
             ContextAdminAuthority::SystemAdmin
+        );
+        assert_eq!(
+            ContextAdminAuthority::resolve(&pool, Principal::Bare(admin), personal)
+                .await
+                .unwrap(),
+            ContextAdminAuthority::Invisible,
+            "someone else's personal context is not the admin's to administer"
         );
     }
 
@@ -549,10 +564,19 @@ mod tests {
     /// context, which is the same predicate that was false before they acted on it.
     #[sqlx::test(migrations = "../../migrations")]
     async fn system_admin_rename_leaves_no_ownership_residue(pool: PgPool) {
-        let owner = mk_profile(&pool, "owner").await;
         let admin = mk_actor(&pool, "admin").await;
         crate::test_support::grant_governance(&pool, *admin).await;
-        let context = mk_named_personal_context(&pool, "private", "Private", owner).await;
+        // A shared team's context the admin cannot read: personal space is outside the admin arm
+        // (task `01a191b4`).
+        let team = mk_team(&pool, "elsewhere").await;
+        let context: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_contexts (slug, name, owner_table, owner_id) \
+             VALUES ('private', 'Private', 'kb_teams', $1) RETURNING id",
+        )
+        .bind(team)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
         assert!(
             !context_service::context_visible(&pool, *admin, context)
@@ -618,7 +642,7 @@ mod tests {
                 .unwrap();
         assert_eq!(
             ownership,
-            ("kb_profiles".to_string(), *owner),
+            ("kb_teams".to_string(), team),
             "the context's owner is exactly who it was before the rename"
         );
 

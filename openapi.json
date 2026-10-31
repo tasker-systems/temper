@@ -2204,7 +2204,7 @@
           "Admin Ledger"
         ],
         "summary": "Read the admin ledger",
-        "description": "Returns a page of recorded administrative acts, newest first, on exactly one axis. `subject` (`<kind>:<uuid>`, e.g. `kb_resources:<uuid>`) returns the acts performed on that subject, limited to the act families the caller may read about it: a system admin reads all of them, a caller who may administer grants on the subject reads its grant acts, and an owner or maintainer of a team (`kb_teams:<uuid>`) reads that team's membership changes and the linking or detaching of its child teams (on the gating team and temper-system, only a system admin does). `actor` returns the acts a profile performed: any caller may read their own, and only a system admin may read another's. A read the caller is not allowed is answered 404, not 403, so a refusal reveals nothing about the subject. `epoch` is when recording began; acts before it were not recorded. `limit` defaults to 50 and is capped at 200.",
+        "description": "Returns a page of recorded administrative acts, newest first, on exactly one axis. `subject` (`<kind>:<uuid>`, e.g. `kb_resources:<uuid>`) returns the acts performed on that subject, limited to the act families the caller may read about it: a system admin reads all of them except grant acts on someone else's personal context or a resource homed in one, a caller who may administer grants on the subject reads its grant acts, and an owner or maintainer of a team (`kb_teams:<uuid>`) reads that team's membership changes and the linking or detaching of its child teams (on the gating team and temper-system, only a system admin does). `actor` returns the acts a profile performed: any caller may read their own, and only a system admin may read another's, without the grant acts that fall in someone else's personal space. A read the caller is not allowed is answered 404, not 403, so a refusal reveals nothing about the subject. `epoch` is when recording began; acts before it were not recorded. `limit` defaults to 50 and is capped at 200.",
         "operationId": "list_admin_ledger",
         "parameters": [
           {
@@ -5454,7 +5454,7 @@
           "Connections"
         ],
         "summary": "List connections",
-        "description": "Lists the connections the caller may manage, newest first. A system admin sees every connection; any other caller sees only those owned by a team they own. Revoked connections are omitted unless `include_revoked` is set.",
+        "description": "Lists the connections the caller may manage, newest first. A system admin sees every connection but those of someone else's personal team; any other caller sees only those owned by a team they own. Revoked connections are omitted unless `include_revoked` is set.",
         "operationId": "list_connections",
         "parameters": [
           {
@@ -5514,7 +5514,7 @@
           "Connections"
         ],
         "summary": "Provision a connection",
-        "description": "Provisions a connection to a remote system, with its own agent profile, emitter and home context. It starts with no credential and with no webhook events or tool manifest; each is attached by its own call. Requires a system admin or the owner of `owner_team_id`; a connection with no owning team can only be provisioned by a system admin. Owning a connection does not grant any team read-reach on it.",
+        "description": "Provisions a connection to a remote system, with its own agent profile, emitter and home context. It starts with no credential and with no webhook events or tool manifest; each is attached by its own call. Requires a system admin (only its owner, on someone else's personal team) or the owner of `owner_team_id`; a connection with no owning team can only be provisioned by a system admin. Owning a connection does not grant any team read-reach on it.",
         "operationId": "provision_connection",
         "requestBody": {
           "content": {
@@ -5607,7 +5607,7 @@
           "Connections"
         ],
         "summary": "Get a connection",
-        "description": "Returns one connection. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
+        "description": "Returns one connection. Requires a system admin or the owner of the connection's owning team; on someone else's personal team only its owner, a system admin included. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
         "operationId": "get_connection",
         "parameters": [
           {
@@ -5675,7 +5675,7 @@
           "Connections"
         ],
         "summary": "Revoke a connection",
-        "description": "Revokes a connection so temper mints no new tokens for it. Tokens already minted stay valid at the remote system until they expire. The connection's profile, emitter and history are kept. Revoking an already-revoked connection returns it unchanged. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
+        "description": "Revokes a connection so temper mints no new tokens for it. Tokens already minted stay valid at the remote system until they expire. The connection's profile, emitter and history are kept. Revoking an already-revoked connection returns it unchanged. Requires a system admin or the owner of the connection's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
         "operationId": "revoke_connection",
         "parameters": [
           {
@@ -5760,7 +5760,7 @@
           "Connections"
         ],
         "summary": "Attach a connection credential",
-        "description": "Attaches the credential reference: a broker and a connector the broker holds the secret for. The body carries no secret. temper mints once to verify the connector and reports what it observed; a connector the broker rejects fails the request, while pending consent, an unconfigured broker, or a broker failure is reported in `verification.note`. The broker's own error text goes to the server log, never to the response. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
+        "description": "Attaches the credential reference: a broker and a connector the broker holds the secret for. The body carries no secret. temper mints once to verify the connector and reports what it observed; a connector the broker rejects fails the request, while pending consent, an unconfigured broker, or a broker failure is reported in `verification.note`. The broker's own error text goes to the server log, never to the response. Requires a system admin or the owner of the connection's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
         "operationId": "attach_connection_credential",
         "parameters": [
           {
@@ -5875,7 +5875,7 @@
           "Connections"
         ],
         "summary": "Grant a team read-reach on a connection",
-        "description": "Lets the members of `team` read what the connection receives. Reach is read-only. Requires a system admin, or the owner of the connection's owning team who also owns or maintains the receiving team. When the receiving team is a personal team, only its owner qualifies, a system admin included. When the connection declares a remote reach the attach-time verification did not confirm, `affirm_reach` must state why the binding is intended; it is refused when there is nothing to affirm. A caller with system access who does not control the connection is answered 404, exactly as for an id that does not exist.",
+        "description": "Lets the members of `team` read what the connection receives. Reach is read-only. Requires a system admin (only its owner, on someone else's personal team), or the owner of the connection's owning team who also owns or maintains the receiving team. When the receiving team is a personal team, only its owner qualifies, a system admin included. When the connection declares a remote reach the attach-time verification did not confirm, `affirm_reach` must state why the binding is intended; it is refused when there is nothing to affirm. A caller with system access who does not control the connection is answered 404, exactly as for an id that does not exist.",
         "operationId": "grant_connection_reach",
         "parameters": [
           {
@@ -5973,7 +5973,7 @@
           "Connections"
         ],
         "summary": "Revoke a team's read-reach on a connection",
-        "description": "Removes the read-reach grant for `team`. Revoking an absent grant is a no-op. `affirm_reach` is ignored. Requires a system admin or the owner of the connection's owning team; no role on the receiving team is needed. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
+        "description": "Removes the read-reach grant for `team`. Revoking an absent grant is a no-op. `affirm_reach` is ignored. Requires a system admin (only its owner, on someone else's personal team) or the owner of the connection's owning team; no role on the receiving team is needed. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
         "operationId": "revoke_connection_reach",
         "parameters": [
           {
@@ -6068,7 +6068,7 @@
           "Connections"
         ],
         "summary": "Set connection tool manifest",
-        "description": "Replaces the declared read-only remote tools. A non-empty manifest makes the connection reach-capable. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
+        "description": "Replaces the declared read-only remote tools. A non-empty manifest makes the connection reach-capable. Requires a system admin or the owner of the connection's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
         "operationId": "set_connection_tool_manifest",
         "parameters": [
           {
@@ -6173,7 +6173,7 @@
           "Connections"
         ],
         "summary": "Set connection webhook events",
-        "description": "Replaces the set of remote event types the connection receives. A non-empty set makes the connection ledger-capable. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
+        "description": "Replaces the set of remote event types the connection receives. A non-empty set makes the connection ledger-capable. Requires a system admin or the owner of the connection's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
         "operationId": "set_connection_webhook_events",
         "parameters": [
           {
@@ -7624,7 +7624,7 @@
         },
         "responses": {
           "200": {
-            "description": "What is stale in scope, and the resources enqueued (none on `dry_run`)",
+            "description": "What is stale in scope, and the resources enqueued (none on `dry_run`). Resources homed in personal space are enqueued by the `all` sweep but not named",
             "content": {
               "application/json": {
                 "schema": {
@@ -7654,7 +7654,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "description": "Caller is not a system admin, the scope is a personal context or a resource homed in one (`FORBIDDEN_DETAIL`), or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9388,7 +9388,7 @@
           "Machine Clients"
         ],
         "summary": "Issue a machine credential",
-        "description": "Mints a new machine principal with a temper-issued `client_id` and secret. The `client_secret` in the response is shown once and never stored; only its hash is kept, so it cannot be retrieved later. Requires a system admin or the owner of `owner_team_id`; a machine with no owning team can only be issued by a system admin. A team owner can confer only reach they could grant themselves, and no caller can give a machine a team role above `member`. Where an external identity provider mints this instance's tokens, the credential is returned with `dormant: true`: it authenticates once the instance runs temper's own authorization server.",
+        "description": "Mints a new machine principal with a temper-issued `client_id` and secret. The `client_secret` in the response is shown once and never stored; only its hash is kept, so it cannot be retrieved later. Requires a system admin (only its owner, on someone else's personal team) or the owner of `owner_team_id`; a machine with no owning team can only be issued by a system admin. A team owner can confer only reach they could grant themselves, and no caller can give a machine a team role above `member`. Where an external identity provider mints this instance's tokens, the credential is returned with `dormant: true`: it authenticates once the instance runs temper's own authorization server.",
         "operationId": "issue_machine_credential",
         "requestBody": {
           "content": {
@@ -9624,7 +9624,7 @@
           "Admin"
         ],
         "summary": "Rebind a machine client to a new client ID",
-        "description": "Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. The path `{id}` names the source client. Requires a system admin. Refused for a temper-issued source client, whose secret is rotated instead, and on an instance that runs temper's own authorization server.",
+        "description": "Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction. The path `{id}` names the source client. Requires a system admin. Refused for a temper-issued source client, whose secret is rotated instead, and on an instance that runs temper's own authorization server.",
         "operationId": "admin_rebind_machine_client",
         "parameters": [
           {
@@ -9739,7 +9739,7 @@
           "Machine Clients"
         ],
         "summary": "Rotate a machine client secret",
-        "description": "Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.",
+        "description": "Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. When the machine sits on a person's personal team and anyone but that person makes this credential, the machine is removed from that personal team in the same transaction. Any other caller with system access is answered 404, exactly as for an id that does not exist. Where an external identity provider mints this instance's tokens, the credential is still `dormant: true`.",
         "operationId": "rotate_machine_client_secret",
         "parameters": [
           {
@@ -14352,7 +14352,7 @@
           "Subscriptions"
         ],
         "summary": "List subscriptions",
-        "description": "Lists the subscriptions the caller may manage, newest first. A system admin sees every subscription; any other caller sees only those whose authoring team they own or maintain. Revoked subscriptions are omitted unless `include_revoked` is set.",
+        "description": "Lists the subscriptions the caller may manage, newest first. A system admin sees every subscription except those inside someone else's personal space; any other caller sees only those whose authoring team they own or maintain. Revoked subscriptions are omitted unless `include_revoked` is set.",
         "operationId": "list_subscriptions",
         "parameters": [
           {
@@ -14425,7 +14425,7 @@
           "Subscriptions"
         ],
         "summary": "Create a subscription",
-        "description": "Declares that a team, context or cogmap wants the events a connection emits that match `selector`. Requires a system admin or an owner or maintainer of `authoring_team_id`, and, for every caller, that the authoring team holds read-reach on the connection. A context or cogmap subscriber must be linked to the authoring team; a team subscriber must be the authoring team itself. A selector that can never match the connection's registered webhook events is refused.",
+        "description": "Declares that a team, context or cogmap wants the events a connection emits that match `selector`. Requires a system admin (not on someone else's personal team, nor for someone else's personal context as subscriber) or an owner or maintainer of `authoring_team_id`, and, for every caller, that the authoring team holds read-reach on the connection. A context or cogmap subscriber must be linked to the authoring team; a team subscriber must be the authoring team itself. A selector that can never match the connection's registered webhook events is refused.",
         "operationId": "create_subscription",
         "requestBody": {
           "content": {
@@ -14521,7 +14521,7 @@
           "Subscriptions"
         ],
         "summary": "Get a subscription",
-        "description": "Returns one subscription. Requires a system admin or an owner or maintainer of the subscription's authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
+        "description": "Returns one subscription. Requires a system admin (not on someone else's personal team) or an owner or maintainer of the subscription's authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
         "operationId": "get_subscription",
         "parameters": [
           {
@@ -19454,7 +19454,7 @@
           "authoring_team_id": {
             "type": "string",
             "format": "uuid",
-            "description": "The team that authorizes this subscription. The caller must own or maintain it (or be a\nsystem admin), and it must hold read-reach on the connection. For a team subscriber, this\nequals `subscriber_id`."
+            "description": "The team that authorizes this subscription. The caller must own or maintain it (or be a\nsystem admin, unless it is someone else's personal team), and it must hold read-reach on the connection. For a team subscriber, this\nequals `subscriber_id`."
           },
           "connection_id": {
             "type": "string",

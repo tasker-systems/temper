@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"count!\" FROM kb_resources r\n                         WHERE r.is_active\n                           AND r.ingest_state = 'in_progress'\n                           AND COALESCE(resource_personal_owner(r.id) = $1, true)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "4b429a8618a0f01a4c743338f6d766103a17df46ec422ecf7756d2a1ff7e1493"
+}

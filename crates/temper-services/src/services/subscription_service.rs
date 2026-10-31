@@ -36,7 +36,7 @@ use temper_core::types::subscription::{
 use crate::auth::HumanPrincipal;
 use crate::authz::{authorize, Principal, SubscriptionAuthority, SubscriptionControlAuthority};
 use crate::error::{ApiError, ApiResult};
-use crate::services::connection_service;
+use crate::services::{connection_service, context_service, team_service};
 
 /// The admissible subscriber tables. Kept here, not in the migration's CHECK, so the service
 /// layer can match on them without re-parsing strings. The migration's CHECK is the
@@ -105,7 +105,15 @@ pub async fn list(
                   created_by_profile_id, created, revoked_at, revoked_by_profile_id
              FROM kb_subscriptions s
             WHERE ($1 OR s.revoked_at IS NULL)
-              AND ( $2
+              -- The admin arm stops at personal space (task `01a191b4`): a subscription a
+              -- personal team authors, or one delivering into a personal context, is its owner's.
+              AND ( ($2 AND NOT EXISTS (SELECT 1 FROM kb_teams pt
+                                         WHERE pt.id = s.authoring_team_id
+                                           AND profile_is_person(pt.personal_of)
+                                           AND pt.personal_of <> $3)
+                        AND NOT (s.subscriber_table = 'kb_contexts'
+                                 AND COALESCE(context_personal_owner(s.subscriber_id) <> $3,
+                                              false)))
                     OR EXISTS (
                         SELECT 1 FROM kb_team_members tm
                           JOIN kb_teams t ON t.id = tm.team_id AND t.is_active
@@ -162,6 +170,19 @@ pub async fn create(
         authorize::<SubscriptionAuthority>(pool, Principal::Human(authed), req.authoring_team_id)
             .await?;
     let authoring_team = authorized.subject();
+    // A subscription delivering into a personal context writes into personal space, which only its
+    // owner acts on (task `01a191b4`): the admin arm above does not carry it. A manager of the
+    // authoring team the context was shared into still may — they act through that share, as the
+    // context's owner chose.
+    if req.subscriber_table == "kb_contexts"
+        && context_service::is_others_personal_context(pool, req.subscriber_id, caller).await?
+        && !matches!(
+            team_service::role_on_team(pool, authoring_team, caller).await?,
+            Some(role) if team_service::can_manage(role)
+        )
+    {
+        return Err(ApiError::Forbidden);
+    }
 
     // Leg 2: the authoring team holds a read-reach grant on the connection. This is the
     // authorization surface B2 made possible; it does not create a parallel permission.

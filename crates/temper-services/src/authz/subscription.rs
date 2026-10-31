@@ -27,7 +27,8 @@ use crate::services::team_service;
 /// The caller's authority over subscriptions authored by a given team.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SubscriptionAuthority {
-    /// A system admin (a `kb_principal_governance` grant), who reaches every authoring team.
+    /// A system admin (a `kb_principal_governance` grant), who reaches every authoring team but a
+    /// personal one (task `01a191b4`).
     SystemAdmin,
     /// Owner or maintainer of the authoring team — `team_service::can_manage`, the same bar the
     /// human team-management surface uses. **Called, not restated**, so tightening the human
@@ -66,11 +67,19 @@ impl ScopedAuthority for SubscriptionAuthority {
                 return Ok(SubscriptionAuthority::TeamManager);
             }
         }
-        Ok(if principal.system_admin(pool).await?.is_some() {
-            SubscriptionAuthority::SystemAdmin
-        } else {
-            SubscriptionAuthority::None
-        })
+        // The admin arm stops at a personal team: a subscription it authors delivers into its
+        // owner's personal space, which only its owner and erasure act on (task `01a191b4`).
+        Ok(
+            if principal.system_admin(pool).await?.is_some()
+                && team_service::personal_space_owner(pool, authoring_team)
+                    .await?
+                    .is_none_or(|owner| owner == caller)
+            {
+                SubscriptionAuthority::SystemAdmin
+            } else {
+                SubscriptionAuthority::None
+            },
+        )
     }
 
     fn is_denial(&self) -> bool {
@@ -126,6 +135,21 @@ impl ScopedAuthority for SubscriptionControlAuthority {
             )
             .await?
             {
+                // The authoring team's check does not see the subscriber. A subscription delivering
+                // into someone else's personal context is that person's space, which the admin arm
+                // does not reach (task `01a191b4`), matching `subscription_service::list`.
+                SubscriptionAuthority::SystemAdmin
+                    if sub.subscriber_table == "kb_contexts"
+                        && crate::services::context_service::is_others_personal_context(
+                            pool,
+                            sub.subscriber_id,
+                            caller.profile_id(),
+                        )
+                        .await? =>
+                {
+                    super::log_concealed_refusal(caller, "subscription");
+                    SubscriptionControlAuthority::None
+                }
                 SubscriptionAuthority::SystemAdmin => SubscriptionControlAuthority::SystemAdmin,
                 SubscriptionAuthority::TeamManager => SubscriptionControlAuthority::TeamManager,
                 SubscriptionAuthority::None => {

@@ -5,7 +5,7 @@
 //! **Authorization lives in the service, not here** — `connection_service` gates provisioning on
 //! `machine_authz::authorize` and every act on an existing connection on
 //! `authz::ConnectionControlAuthority` (a system admin, or the OWNER of the connection's owning
-//! team; teamless fails closed). A caller without authority over an existing connection is
+//! team; teamless fails closed; on someone else's personal team the admin arm does not apply). A caller without authority over an existing connection is
 //! answered `404`, exactly as for a missing id. As with machine clients, that check is
 //! load-bearing rather than defense-in-depth: since D11, `has_system_access` reads
 //! `kb_principal_standing`
@@ -31,7 +31,7 @@ use temper_core::types::query_params::ConnectionListQuery as ListQuery;
     post,
     operation_id = "provision_connection",
     summary = "Provision a connection",
-    description = "Provisions a connection to a remote system, with its own agent profile, emitter and home context. It starts with no credential and with no webhook events or tool manifest; each is attached by its own call. Requires a system admin or the owner of `owner_team_id`; a connection with no owning team can only be provisioned by a system admin. Owning a connection does not grant any team read-reach on it.",
+    description = "Provisions a connection to a remote system, with its own agent profile, emitter and home context. It starts with no credential and with no webhook events or tool manifest; each is attached by its own call. Requires a system admin (only its owner, on someone else's personal team) or the owner of `owner_team_id`; a connection with no owning team can only be provisioned by a system admin. Owning a connection does not grant any team read-reach on it.",
     path = "/api/connections",
     tag = "Connections",
     request_body = ProvisionConnectionRequest,
@@ -57,7 +57,7 @@ pub async fn provision(
     get,
     operation_id = "list_connections",
     summary = "List connections",
-    description = "Lists the connections the caller may manage, newest first. A system admin sees every connection; any other caller sees only those owned by a team they own. Revoked connections are omitted unless `include_revoked` is set.",
+    description = "Lists the connections the caller may manage, newest first. A system admin sees every connection but those of someone else's personal team; any other caller sees only those owned by a team they own. Revoked connections are omitted unless `include_revoked` is set.",
     path = "/api/connections",
     tag = "Connections",
     params(ListQuery),
@@ -82,7 +82,7 @@ pub async fn list(
     get,
     operation_id = "get_connection",
     summary = "Get a connection",
-    description = "Returns one connection. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
+    description = "Returns one connection. Requires a system admin or the owner of the connection's owning team; on someone else's personal team only its owner, a system admin included. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
     path = "/api/connections/{id}",
     tag = "Connections",
     params(("id" = Uuid, Path, description = "Connection ID")),
@@ -108,7 +108,7 @@ pub async fn get(
     delete,
     operation_id = "revoke_connection",
     summary = "Revoke a connection",
-    description = "Revokes a connection so temper mints no new tokens for it. Tokens already minted stay valid at the remote system until they expire. The connection's profile, emitter and history are kept. Revoking an already-revoked connection returns it unchanged. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
+    description = "Revokes a connection so temper mints no new tokens for it. Tokens already minted stay valid at the remote system until they expire. The connection's profile, emitter and history are kept. Revoking an already-revoked connection returns it unchanged. Requires a system admin or the owner of the connection's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
     path = "/api/connections/{id}",
     tag = "Connections",
     params(("id" = Uuid, Path, description = "Connection ID")),
@@ -136,7 +136,7 @@ pub async fn revoke(
     post,
     operation_id = "attach_connection_credential",
     summary = "Attach a connection credential",
-    description = "Attaches the credential reference: a broker and a connector the broker holds the secret for. The body carries no secret. temper mints once to verify the connector and reports what it observed; a connector the broker rejects fails the request, while pending consent, an unconfigured broker, or a broker failure is reported in `verification.note`. The broker's own error text goes to the server log, never to the response. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
+    description = "Attaches the credential reference: a broker and a connector the broker holds the secret for. The body carries no secret. temper mints once to verify the connector and reports what it observed; a connector the broker rejects fails the request, while pending consent, an unconfigured broker, or a broker failure is reported in `verification.note`. The broker's own error text goes to the server log, never to the response. Requires a system admin or the owner of the connection's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
     path = "/api/connections/{id}/credential",
     tag = "Connections",
     params(("id" = Uuid, Path, description = "Connection ID")),
@@ -178,7 +178,7 @@ pub async fn attach_credential(
     post,
     operation_id = "set_connection_webhook_events",
     summary = "Set connection webhook events",
-    description = "Replaces the set of remote event types the connection receives. A non-empty set makes the connection ledger-capable. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
+    description = "Replaces the set of remote event types the connection receives. A non-empty set makes the connection ledger-capable. Requires a system admin or the owner of the connection's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
     path = "/api/connections/{id}/webhook-events",
     tag = "Connections",
     params(("id" = Uuid, Path, description = "Connection ID")),
@@ -208,7 +208,7 @@ pub async fn set_webhook_events(
     post,
     operation_id = "set_connection_tool_manifest",
     summary = "Set connection tool manifest",
-    description = "Replaces the declared read-only remote tools. A non-empty manifest makes the connection reach-capable. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
+    description = "Replaces the declared read-only remote tools. A non-empty manifest makes the connection reach-capable. Requires a system admin or the owner of the connection's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
     path = "/api/connections/{id}/tool-manifest",
     tag = "Connections",
     params(("id" = Uuid, Path, description = "Connection ID")),
@@ -239,7 +239,7 @@ pub async fn set_tool_manifest(
     post,
     operation_id = "grant_connection_reach",
     summary = "Grant a team read-reach on a connection",
-    description = "Lets the members of `team` read what the connection receives. Reach is read-only. Requires a system admin, or the owner of the connection's owning team who also owns or maintains the receiving team. When the receiving team is a personal team, only its owner qualifies, a system admin included. When the connection declares a remote reach the attach-time verification did not confirm, `affirm_reach` must state why the binding is intended; it is refused when there is nothing to affirm. A caller with system access who does not control the connection is answered 404, exactly as for an id that does not exist.",
+    description = "Lets the members of `team` read what the connection receives. Reach is read-only. Requires a system admin (only its owner, on someone else's personal team), or the owner of the connection's owning team who also owns or maintains the receiving team. When the receiving team is a personal team, only its owner qualifies, a system admin included. When the connection declares a remote reach the attach-time verification did not confirm, `affirm_reach` must state why the binding is intended; it is refused when there is nothing to affirm. A caller with system access who does not control the connection is answered 404, exactly as for an id that does not exist.",
     path = "/api/connections/{id}/reach",
     tag = "Connections",
     params(("id" = Uuid, Path, description = "Connection ID")),
@@ -271,7 +271,7 @@ pub async fn grant_reach(
     delete,
     operation_id = "revoke_connection_reach",
     summary = "Revoke a team's read-reach on a connection",
-    description = "Removes the read-reach grant for `team`. Revoking an absent grant is a no-op. `affirm_reach` is ignored. Requires a system admin or the owner of the connection's owning team; no role on the receiving team is needed. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
+    description = "Removes the read-reach grant for `team`. Revoking an absent grant is a no-op. `affirm_reach` is ignored. Requires a system admin (only its owner, on someone else's personal team) or the owner of the connection's owning team; no role on the receiving team is needed. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
     path = "/api/connections/{id}/reach",
     tag = "Connections",
     params(("id" = Uuid, Path, description = "Connection ID")),
