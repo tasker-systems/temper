@@ -75,7 +75,11 @@ A shape is a field tree — a JSON Schema (draft 2020-12) document that uses onl
 `required`, `additionalProperties`, `items`, `enum`, `const`, `pattern`, the length, item-count and
 numeric bounds, and the annotation keywords — that you declare for a family within a context.
 Keywords such as `$ref`, `allOf`, `anyOf`, `oneOf` and `format` are refused at declare, and the
-refusal lists what is allowed. Declaring is a
+refusal lists what is allowed. A `const` and every `enum` member must be a scalar — a string of at
+most 256 bytes (JSON-escaped), a number, a boolean or `null` — and a shape's schema holds at most
+12,288 JSON values in all, at most 3,072 of them objects, counted with `default` and `examples`
+included. The declare routes hold the request body to 512 KiB, and the MCP declare tool relays
+through them, so the same limit applies to what it declares. Declaring is a
 **separate act** from committing data — you never need to declare a shape to commit an artifact.
 The system persists your data whether or not a shape exists. `never_declared` is a first-class
 state, not a gate.

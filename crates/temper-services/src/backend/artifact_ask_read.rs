@@ -107,7 +107,6 @@ async fn load(
 fn validate(shapes: &ShapeContext, request: &AskRequest) -> ApiResult<ValidatedAsk> {
     let mut session: AskSession<'_> = shapes.session();
     let answer = session.validate(&request.ask);
-    shape_loader::remember_session(shapes, &session);
     let request_refusals = request.refusals();
     match answer {
         Ok(validated) if request_refusals.is_empty() => Ok(validated),

@@ -4,16 +4,26 @@
 //!
 //! The allow-list is witnessed against the whole 2020-12 vocabulary in one table, each keyword its
 //! own assertion: removing the walk makes every refused row compile. The data-position tests are
-//! the opposite bite: walking `const`, `enum`, `default` or `examples` as schemas refuses them.
-//! Every cap is pinned on both sides, at the cap (compiles) and one past it (refused).
+//! the opposite bite: walking `default` or `examples` — or a scalar `const` or `enum` member — as a
+//! schema refuses them. Every cap is pinned on both sides, at the cap (compiles) and one past it
+//! (refused).
+//!
+//! A `const` and every `enum` member is a scalar (spec
+//! `2026-10-31-const-and-enum-members-are-scalars-design`, §1.1): an object, an array or a string
+//! past `MAX_SHAPE_VALUE_STRING_BYTES` JSON-escaped bytes is refused wherever a schema can sit.
+//!
+//! A schema's parsed size has a budget (the same spec, §1.2): at most `MAX_SHAPE_NODES` JSON
+//! values, at most `MAX_SHAPE_OBJECTS` of them objects, data positions included. Each cap is
+//! witnessed alone, at both caps together, and against every admission profile it must fit.
 //!
 //! Plain `#[test]`s: needs no database, runs in the Unit CI job.
 
 use serde_json::{json, Value};
 use temper_substrate::shape_schema::{
-    compile, first_failure, ShapeSchemaUncompilable, MAX_ENUM_ENTRIES, MAX_FAILURE_MESSAGE_BYTES,
-    MAX_MIXED_ENUM_ENTRIES, MAX_PATTERN_SOURCE_BYTES, MAX_PROPERTY_NAME_BYTES, MAX_SHAPE_DEPTH,
-    MAX_SHAPE_PATTERNS,
+    compile, count_up_to, first_failure, NodeCount, ShapeSchemaUncompilable, MAX_ENUM_ENTRIES,
+    MAX_FAILURE_MESSAGE_BYTES, MAX_MIXED_ENUM_ENTRIES, MAX_PATTERN_SOURCE_BYTES,
+    MAX_PROPERTY_NAME_BYTES, MAX_SHAPE_DEPTH, MAX_SHAPE_NODES, MAX_SHAPE_OBJECTS,
+    MAX_SHAPE_PATTERNS, MAX_SHAPE_VALUE_STRING_BYTES,
 };
 
 const DRAFT_2020_12: &str = "https://json-schema.org/draft/2020-12/schema";
@@ -161,6 +171,29 @@ fn in_both_positions(keyword: &str, value: &str) -> [Value; 2] {
     ]
 }
 
+/// `member` (an object of schema members) as the root, as a `properties` value, as the `items`
+/// schema and as an `additionalProperties` schema: the four positions the compile walks.
+fn in_every_position(member: Value) -> [Value; 4] {
+    [
+        field_tree(member.clone()),
+        field_tree(json!({ "type": "object", "properties": { "a": member.clone() } })),
+        field_tree(json!({ "type": "array", "items": member.clone() })),
+        field_tree(json!({ "type": "object", "additionalProperties": member })),
+    ]
+}
+
+fn assert_refused_in_every_position(member: Value) {
+    for schema in in_every_position(member) {
+        assert_refused(&schema);
+    }
+}
+
+fn assert_compiles_in_every_position(member: Value) {
+    for schema in in_every_position(member) {
+        assert_compiles(&schema);
+    }
+}
+
 /// Every 2020-12 keyword off the allow-list is refused, at the root and nested. One table, so a
 /// keyword cannot go unwitnessed: before it, `dependentSchemas` had a witness of its own while
 /// `dependentRequired` and `dependencies` had none, all three refused by the walk's catch-all
@@ -230,6 +263,54 @@ fn the_ask_walk_reads_whole_every_schema_built_of_allowed_keywords() {
                 PathResolution::Declared(_)
             ),
             "{path:?}"
+        );
+    }
+}
+
+/// The compile and the walk agree on every value a shape may declare: each scalar kind, as a
+/// `const` and as an `enum` member — a mixed enum and a string at the cap among them — compiles,
+/// passes `reads_whole`, and resolves to a declared path listing exactly those values. Bites a
+/// `reads_whole` member test that drops a kind: every stored shape holding, say, `const: true`
+/// would then declare nothing, while every other witness passes.
+#[test]
+fn the_ask_walk_reads_whole_every_value_the_compile_admits() {
+    use temper_core::types::artifact_ask::{
+        reads_whole, resolve, PathFacts, PathResolution, WalkBounds,
+    };
+    let at_cap = json!("a".repeat(MAX_SHAPE_VALUE_STRING_BYTES));
+    let mut declarations = Vec::new();
+    for scalar in [
+        json!(null),
+        json!(true),
+        json!(false),
+        json!(0),
+        json!(-1.5),
+        json!(""),
+        at_cap.clone(),
+    ] {
+        declarations.push((json!({ "const": scalar }), vec![scalar.clone()]));
+        declarations.push((json!({ "enum": [scalar] }), vec![scalar]));
+    }
+    let mixed = vec![
+        json!("ms"),
+        json!(7),
+        json!(null),
+        json!(true),
+        json!(2.5),
+        at_cap,
+    ];
+    declarations.push((json!({ "enum": mixed.clone() }), mixed));
+    for (declared, values) in declarations {
+        let schema = field_tree(json!({ "type": "object", "properties": { "a": declared } }));
+        assert_compiles(&schema);
+        assert!(reads_whole(&schema), "{schema}");
+        assert_eq!(
+            resolve(&schema, &["a".to_string()], &WalkBounds::BUILD),
+            PathResolution::Declared(PathFacts {
+                values: Some(values),
+                ..PathFacts::default()
+            }),
+            "{schema}"
         );
     }
 }
@@ -304,14 +385,132 @@ fn accepts_an_absent_schema_uri() {
 }
 
 /// `const`, `enum`, `default` and `examples` hold data: nothing in them is read as a schema, so a
-/// keyword, a `$ref` or a custom `$schema` inside one is just a value.
+/// keyword, a `$ref` or a custom `$schema` inside one is just a value. `default` and `examples` may
+/// hold structured values; a `const` and an `enum` member are scalars, so the string that looks
+/// like a keyword stands for the rest.
 #[test]
 fn data_positions_are_not_walked() {
-    assert_compiles(&field_tree(json!({ "const": { "anyOf": [] } })));
-    assert_compiles(&field_tree(json!({ "enum": [{ "$ref": "#" }] })));
-    assert_compiles(&field_tree(json!({ "const": { "$schema": "urn:x" } })));
+    assert_compiles(&field_tree(json!({ "default": { "anyOf": [] } })));
+    assert_compiles(&field_tree(json!({ "examples": [{ "$ref": "#" }] })));
+    assert_compiles(&field_tree(json!({ "default": { "$schema": "urn:x" } })));
     assert_compiles(&field_tree(json!({ "default": { "$ref": "#" } })));
     assert_compiles(&field_tree(json!({ "examples": [{ "anyOf": [] }] })));
+    assert_compiles(&field_tree(json!({ "const": "$ref" })));
+    assert_compiles(&field_tree(json!({ "enum": ["$ref", "anyOf"] })));
+}
+
+// ── A const and an enum member are scalars ───────────────────────────────────────────────────
+
+#[test]
+fn an_object_const_is_refused() {
+    assert_refused_in_every_position(json!({ "const": {} }));
+    assert_refused_in_every_position(json!({ "const": { "type": "string" } }));
+}
+
+#[test]
+fn an_array_const_is_refused() {
+    assert_refused_in_every_position(json!({ "const": [] }));
+}
+
+#[test]
+fn an_enum_with_an_object_member_is_refused() {
+    assert_refused_in_every_position(json!({ "enum": ["a", {}] }));
+}
+
+#[test]
+fn an_enum_with_an_array_member_is_refused() {
+    assert_refused_in_every_position(json!({ "enum": ["a", []] }));
+}
+
+/// A string one byte past the cap, in a `const`, in an all-string enum and in a mixed enum.
+#[test]
+fn a_string_past_the_cap_is_refused() {
+    let long = "a".repeat(MAX_SHAPE_VALUE_STRING_BYTES + 1);
+    assert_refused_in_every_position(json!({ "const": long }));
+    assert_refused_in_every_position(json!({ "enum": ["a", long] }));
+    assert_refused_in_every_position(json!({ "enum": [1, long] }));
+}
+
+/// 250 quote characters are under the cap raw and twice that escaped, so a raw-length measure
+/// admits them.
+#[test]
+fn a_string_under_the_cap_raw_but_over_it_escaped_is_refused() {
+    let quotes = "\"".repeat(250);
+    assert!(
+        quotes.len() <= MAX_SHAPE_VALUE_STRING_BYTES,
+        "under the cap raw"
+    );
+    let escaped = serde_json::to_string(&quotes).expect("a string serializes");
+    assert!(
+        escaped.len() - 2 > MAX_SHAPE_VALUE_STRING_BYTES,
+        "over the cap escaped"
+    );
+    assert_refused_in_every_position(json!({ "const": quotes }));
+    assert_refused_in_every_position(json!({ "enum": [quotes] }));
+}
+
+/// 129 two-byte characters are 258 bytes: past the cap in bytes, under it counted as characters.
+#[test]
+fn a_multibyte_string_past_the_cap_in_bytes_is_refused() {
+    let accented = "é".repeat(129);
+    assert!(accented.chars().count() <= MAX_SHAPE_VALUE_STRING_BYTES);
+    assert!(accented.len() > MAX_SHAPE_VALUE_STRING_BYTES);
+    assert_refused_in_every_position(json!({ "const": accented }));
+    assert_refused_in_every_position(json!({ "enum": [accented] }));
+}
+
+/// A string exactly at the cap compiles as a `const`, in an all-string enum and in a mixed enum.
+#[test]
+fn a_string_at_the_cap_compiles() {
+    let at_cap = "a".repeat(MAX_SHAPE_VALUE_STRING_BYTES);
+    assert_compiles_in_every_position(json!({ "const": at_cap }));
+    assert_compiles_in_every_position(json!({ "enum": ["a", at_cap] }));
+    assert_compiles_in_every_position(json!({ "enum": [1, at_cap] }));
+}
+
+#[test]
+fn every_scalar_kind_compiles_as_const_and_as_an_enum_member() {
+    for scalar in [
+        json!(null),
+        json!(true),
+        json!(false),
+        json!(0),
+        json!(-1.5),
+        json!(""),
+    ] {
+        assert_compiles_in_every_position(json!({ "const": scalar }));
+        assert_compiles_in_every_position(json!({ "enum": [scalar] }));
+    }
+}
+
+/// A string is measured as `serde_json` writes it, whatever spelling the document gave it: a
+/// control character written `\u0001` is six bytes escaped, one raw; a letter written `\u0041` is
+/// one byte either way.
+#[test]
+fn a_string_written_with_unicode_escapes_is_measured_as_serde_escapes_it() {
+    let schema_with = |escape: &str, count: usize| -> Value {
+        let text = format!(r#"{{ "const": "{}" }}"#, escape.repeat(count));
+        field_tree(serde_json::from_str(&text).expect("a test schema is JSON"))
+    };
+    let controls_in_cap = MAX_SHAPE_VALUE_STRING_BYTES / 6;
+    assert_compiles(&schema_with(r"\u0001", controls_in_cap));
+    assert_refused(&schema_with(r"\u0001", controls_in_cap + 1));
+    assert_compiles(&schema_with(r"\u0041", MAX_SHAPE_VALUE_STRING_BYTES));
+    assert_refused(&schema_with(r"\u0041", MAX_SHAPE_VALUE_STRING_BYTES + 1));
+}
+
+/// `serde_json` is built without `arbitrary_precision`, so a `Number` is fixed-size and a shape
+/// value that is a number needs no length cap. `reference.rs` (decision P9) rests on the same
+/// assumption. Without the feature a 400-digit integer literal is out of range and fails to parse
+/// (at most 309 digits would parse as a lossy `f64`); with it, the literal parses as a
+/// string-backed `Number` and this test goes red. The likeliest thing to turn it on is
+/// `jsonschema`'s own `arbitrary-precision` feature.
+#[test]
+fn a_four_hundred_digit_number_does_not_parse() {
+    assert!(
+        serde_json::from_str::<Value>(&"9".repeat(400)).is_err(),
+        "serde_json/arbitrary_precision is on: a number is no longer fixed-size"
+    );
 }
 
 #[test]
@@ -466,6 +665,215 @@ fn keyword_named_properties_are_names() {
     properties.insert("$schema".to_owned(), json!({ "type": "string" }));
     properties.insert("enum".to_owned(), json!({ "type": "string" }));
     assert_compiles(&schema);
+}
+
+// ── The parsed-size budget ───────────────────────────────────────────────────────────────────
+//
+// These fixtures hold thousands of values, so a failure names the fixture and its count rather
+// than printing the schema.
+
+/// Every value and every object `schema` holds, counted with no cap to stop at.
+fn whole_count(schema: &Value) -> NodeCount {
+    count_up_to(schema, usize::MAX, usize::MAX)
+}
+
+/// `count` zeros, as one array.
+fn zeros(count: usize) -> Value {
+    Value::Array(vec![json!(0); count])
+}
+
+/// `count` empty objects, as one array.
+fn empty_objects(count: usize) -> Value {
+    Value::Array(vec![json!({}); count])
+}
+
+/// An object schema of `count` fields `f0000`, `f0001`, …, each `field`, with only `type` and
+/// `properties` beside them: three values and two objects more than the fields hold.
+fn object_of_fields(count: usize, field: &Value) -> Value {
+    let properties: serde_json::Map<String, Value> = (0..count)
+        .map(|index| (format!("f{index:04}"), field.clone()))
+        .collect();
+    json!({ "type": "object", "properties": properties })
+}
+
+/// A document of exactly `MAX_SHAPE_NODES + 1` values is refused, with the excess in `examples`,
+/// in `default` and in an `additionalProperties` schema, each its own fixture. None holds more than
+/// two objects (the root and the `additionalProperties` schema), so the objects cap is not what
+/// refuses it. Each fixture is one value past the cap, counted whole, so the refusal bites
+/// dropping the node cap while the objects cap holds, a count that skips a position, and a cap
+/// checked with any slack.
+#[test]
+fn the_node_cap_alone_refuses() {
+    // Beside the zeros: the root, `$schema` and the array; in the `additionalProperties`
+    // placement, also `type` and the `additionalProperties` schema.
+    let in_examples = field_tree(json!({ "examples": zeros(MAX_SHAPE_NODES - 2) }));
+    let in_default = field_tree(json!({ "default": zeros(MAX_SHAPE_NODES - 2) }));
+    let in_additional = field_tree(json!({
+        "type": "object",
+        "additionalProperties": { "examples": zeros(MAX_SHAPE_NODES - 4) },
+    }));
+    for (placement, schema, objects) in [
+        ("examples", in_examples, 1),
+        ("default", in_default, 1),
+        ("an additionalProperties schema", in_additional, 2),
+    ] {
+        let count = whole_count(&schema);
+        assert_eq!(
+            (count.nodes, count.objects),
+            (MAX_SHAPE_NODES + 1, objects),
+            "{placement}: the fixture is exactly one value past the cap"
+        );
+        assert_eq!(
+            compile(&schema).err(),
+            Some(ShapeSchemaUncompilable),
+            "{placement}: one past the node cap is refused"
+        );
+    }
+}
+
+/// A document of exactly `MAX_SHAPE_OBJECTS + 1` objects is refused, with the excess as empty
+/// objects in `examples`, in `default` and in an `additionalProperties` schema, each its own
+/// fixture, every one far under the node cap. Each fixture is one object past the cap, counted
+/// whole, so the refusal bites dropping the objects cap, a count that skips a position, and a cap
+/// checked with any slack.
+#[test]
+fn the_objects_cap_alone_refuses() {
+    // Beside the empty objects, `frame` values: the root, `$schema` and the array, the root the
+    // one object among them; in the `additionalProperties` placement, also `type` and the
+    // `additionalProperties` schema, the second object. The empty objects number one fewer there,
+    // so every fixture holds `MAX_SHAPE_OBJECTS + 1` objects.
+    let in_examples = field_tree(json!({ "examples": empty_objects(MAX_SHAPE_OBJECTS) }));
+    let in_default = field_tree(json!({ "default": empty_objects(MAX_SHAPE_OBJECTS) }));
+    let in_additional = field_tree(json!({
+        "type": "object",
+        "additionalProperties": { "examples": empty_objects(MAX_SHAPE_OBJECTS - 1) },
+    }));
+    for (placement, schema, frame) in [
+        ("examples", in_examples, 3),
+        ("default", in_default, 3),
+        ("an additionalProperties schema", in_additional, 4),
+    ] {
+        let count = whole_count(&schema);
+        assert_eq!(
+            (count.nodes, count.objects),
+            (MAX_SHAPE_OBJECTS + frame, MAX_SHAPE_OBJECTS + 1),
+            "{placement}: the fixture is exactly one object past the cap"
+        );
+        assert!(count.nodes < MAX_SHAPE_NODES, "{placement}: {count:?}");
+        assert_eq!(
+            compile(&schema).err(),
+            Some(ShapeSchemaUncompilable),
+            "{placement}: one past the objects cap is refused"
+        );
+    }
+}
+
+/// A schema holding exactly `MAX_SHAPE_NODES` values, exactly `MAX_SHAPE_OBJECTS` of them
+/// objects, compiles. Its `examples` hold the objects the root leaves to reach the objects cap,
+/// then the scalars that reach the node cap. Bites an off-by-one on either cap.
+#[test]
+fn a_schema_at_both_caps_compiles() {
+    // The root is the one object outside `examples`; the root, `$schema` and the `examples`
+    // array are the three values outside its members.
+    let objects = MAX_SHAPE_OBJECTS - 1;
+    let scalars = MAX_SHAPE_NODES - 3 - objects;
+    let mut examples = vec![json!({}); objects];
+    examples.resize(objects + scalars, json!(0));
+    let schema = field_tree(json!({ "examples": Value::Array(examples) }));
+    assert_eq!(
+        count_up_to(&schema, MAX_SHAPE_NODES, MAX_SHAPE_OBJECTS),
+        NodeCount {
+            nodes: MAX_SHAPE_NODES,
+            objects: MAX_SHAPE_OBJECTS,
+            over: false,
+        }
+    );
+    assert!(compile(&schema).is_ok(), "a schema at both caps compiles");
+}
+
+/// Each synthetic admission profile in `MAX_SHAPE_NODES`'s doc compiles, and each fixture holds
+/// exactly the values and objects its row states, so a fixture that drifts from its row fails
+/// before it compiles. The table's first row, every live shape (at most 46 values and 13 objects, from a
+/// production read), is witnessed by `stored_shape_profiles_compile` in this file, so it has no
+/// fixture here. Bites a cap set below an ordinary shape.
+#[test]
+fn every_admission_profile_compiles() {
+    let described = json!({ "type": "string", "description": "A field." });
+    let array_of_strings = json!({ "type": "array", "items": { "type": "string" } });
+    let annotated = json!({
+        "type": ["string", "null"],
+        "title": "Field",
+        "description": "A field.",
+        "examples": ["an example"],
+    });
+    let numbers: Vec<usize> = (0..MAX_MIXED_ENUM_ENTRIES).collect();
+    let numbered = json!({ "type": "integer", "enum": numbers });
+    let codes: Vec<String> = (0..MAX_ENUM_ENTRIES)
+        .map(|code| format!("c{code:03}"))
+        .collect();
+    let coded = json!({ "type": "string", "enum": codes });
+    let profiles = [
+        (
+            "1,024 described strings",
+            object_of_fields(1024, &described),
+            3_075,
+            1_026,
+        ),
+        (
+            "1,024 arrays of strings",
+            object_of_fields(1024, &array_of_strings),
+            4_099,
+            2_050,
+        ),
+        (
+            "1,024 nullable strings with a title, a description and an example",
+            object_of_fields(1024, &annotated),
+            8_195,
+            1_026,
+        ),
+        (
+            "200 fields with 32-member enums",
+            object_of_fields(200, &numbered),
+            7_003,
+            202,
+        ),
+        (
+            "32 fields with 256-string enums",
+            object_of_fields(32, &coded),
+            8_291,
+            34,
+        ),
+    ];
+    for (name, schema, values, objects) in profiles {
+        let count = whole_count(&schema);
+        assert_eq!(
+            (count.nodes, count.objects),
+            (values, objects),
+            "{name}: the fixture holds what its row states"
+        );
+        assert!(compile(&schema).is_ok(), "{name} compiles");
+    }
+}
+
+/// Every `enum` member counts toward the budget, a repeated one each time it appears: 48 fields,
+/// each listing the one string `"a"` `MAX_ENUM_ENTRIES` times, fit every per-keyword cap but not
+/// the node budget. Bites a count of distinct values, which would hold this schema to 147.
+#[test]
+fn duplicate_enum_members_each_count_toward_the_budget() {
+    let repeated = json!({ "enum": vec!["a"; MAX_ENUM_ENTRIES] });
+    let schema = object_of_fields(48, &repeated);
+    let count = whole_count(&schema);
+    assert_eq!(
+        (count.nodes, count.objects),
+        (48 * (MAX_ENUM_ENTRIES + 2) + 3, 50),
+        "{count:?}"
+    );
+    assert!(count.nodes > MAX_SHAPE_NODES, "{count:?}");
+    assert_eq!(
+        compile(&schema).err(),
+        Some(ShapeSchemaUncompilable),
+        "every repeated member counts"
+    );
 }
 
 // ── Forms the walk leaves to meta-validation, and one it fixes ───────────────────────────────
@@ -638,6 +1046,25 @@ fn stored_shape_profiles_compile() {
         &json!({ "reading": 1.5 }),
         &json!({ "reading": "high" }),
     );
+
+    // A numeric `const` beside a string one, as four stored shapes hold (production read,
+    // 2026-10-31: no stored shape holds an `enum` or a structured value, and none passes 46 values
+    // or 13 objects).
+    let versioned = json!({
+        "$schema": DRAFT_2020_12,
+        "type": "object",
+        "required": ["schema_version", "kind"],
+        "properties": {
+            "schema_version": { "const": 1 },
+            "kind": { "const": "snapshot" },
+            "taken_at": { "type": "string", "minLength": 1 }
+        }
+    });
+    assert_verdicts(
+        &versioned,
+        &json!({ "schema_version": 1, "kind": "snapshot", "taken_at": "2026-10-31" }),
+        &json!({ "schema_version": 2, "kind": "snapshot" }),
+    );
 }
 
 // ── one failure, cut to a bound ──────────────────────────────────────────────────────────────
@@ -746,4 +1173,28 @@ fn the_refusal_names_the_accepted_schema_spellings() {
     let sentence = ShapeSchemaUncompilable.to_string();
     assert!(sentence.contains(DRAFT_2020_12), "{sentence}");
     assert!(sentence.contains("trailing #"), "{sentence}");
+}
+
+/// The refusal states the value rule, so a declarer refused for a structured `const` or a long
+/// string is told what a value may be.
+#[test]
+fn the_refusal_names_the_value_rule() {
+    let sentence = ShapeSchemaUncompilable.to_string();
+    let clause = format!(
+        "const and enum (each member a string of at most {MAX_SHAPE_VALUE_STRING_BYTES} bytes, \
+         JSON-escaped, a number, a boolean or null)"
+    );
+    assert!(sentence.contains(&clause), "{sentence}");
+}
+
+/// The refusal states the node budget, and that it can refuse what every other cap allows, so a
+/// declarer refused for a schema too large once parsed is told the bound it passed.
+#[test]
+fn the_refusal_names_the_budget() {
+    let sentence = ShapeSchemaUncompilable.to_string();
+    let clause = format!(
+        "holding at most {MAX_SHAPE_NODES} JSON values in all, at most {MAX_SHAPE_OBJECTS} of \
+         them objects (a budget that can refuse a schema every other cap allows)"
+    );
+    assert!(sentence.contains(&clause), "{sentence}");
 }

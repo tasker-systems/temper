@@ -72,10 +72,11 @@ pub struct DeclareShapeServiceParams<'a> {
 /// The schema is then judged, before any write, by the decision the loader and the by-id read
 /// share ([`shape_loader::judge`]), on the blocking pool under the same compile permits. A schema
 /// larger than the walk reads ([`MAX_SCHEMA_BYTES`]) is refused before it is compiled, with a
-/// sentence naming the bound; one within it that cannot be compiled (malformed, not a field
-/// tree, or with a pattern past `shape_schema::MAX_PATTERN_BYTES`) is
-/// refused with the no-fetch constructor's fixed sentence. Both are a `DataArtifactRefusal`, so
-/// a schema no ask could use is refused when it is declared rather than stored. Before either, a
+/// sentence naming the bound; one within it that cannot be compiled (malformed, past the
+/// parsed-size budget, not a field tree, or with a pattern past
+/// `shape_schema::MAX_PATTERN_BYTES`) is refused with the no-fetch constructor's fixed sentence.
+/// Both are a `DataArtifactRefusal`, so a schema no ask could use is refused when it is declared
+/// rather than stored. Before either, a
 /// family name or a schema holding U+0000, which Postgres cannot store, is refused as one too,
 /// naming the field ([`unstorable_nul`]), where binding it would have failed in the database; and
 /// so is a family name longer than [`MAX_ARTIFACT_KIND_BYTES`], naming its limit
@@ -604,8 +605,10 @@ impl AnchorPass {
 /// `kb_shape_reconcile_uncheckable` (20261108000000).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Uncheckable {
-    /// The shape does not compile ([`shape_schema::compile`]): a shape stored before compile
-    /// refused anything but a field tree.
+    /// The shape does not compile ([`shape_schema::compile`]): its stored schema breaks a rule the
+    /// compile holds, such as the field-tree vocabulary, the scalar rule for `const` and `enum`
+    /// members, or the parsed-size budget. Declare compiles every schema before it stores one, so
+    /// such a row was stored before the rule it breaks.
     SchemaUncompilable,
 }
 

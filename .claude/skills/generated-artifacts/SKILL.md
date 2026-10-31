@@ -2,14 +2,16 @@
 metadata:
   internal: true
 name: generated-artifacts
-description: Regenerating the router-derived artifacts (openapi.json and all three SDKs — the temper-rb gem, temper-ts's schema.ts, temper-py's generated package), the ts-rs TypeScript type trees, and the committed skills/ projection. Use when a response DTO, route, ts-rs-derived Rust type, or shared skill template changes, or when `cargo make check` fails on openapi-check, openapi-rb-drift, openapi-ts-drift, openapi-py-drift, ts-rs-drift, or skills-drift.
+description: Regenerating the router-derived artifacts (openapi.json and all three SDKs — the temper-rb gem, temper-ts's schema.ts, temper-py's generated package), the ts-rs TypeScript type trees, the query-contract JSON-Schema snapshots (crates/temper-core/tests/fixtures/query/), and the committed skills/ projection. Use when a response DTO, route, ts-rs-derived Rust type, a doc comment on one of those types, or a shared skill template changes, or when `cargo make check` fails on openapi-check, openapi-rb-drift, openapi-ts-drift, openapi-py-drift, ts-rs-drift, or skills-drift, or the query_schema test fails on a drifted snapshot.
 ---
 
 # Generated artifacts: OpenAPI SDKs, ts-rs type trees, and the skills/ projection
 
 Three independent codegen pipelines hang off the Rust source. All are gated by
 `cargo make check`, and all fail in ways that read as "you forgot to regenerate"
-when in fact you forgot to `git add` — or, for two of them, to `git commit`.
+when in fact you forgot to `git add` — or, for two of them, to `git commit`. A
+fourth artifact, the query-contract JSON-Schema snapshots, is gated by its own test
+instead (below).
 
 ## OpenAPI + all three SDKs are products of the router
 
@@ -140,6 +142,25 @@ inside one language, which is how PR #498 merged with `tsc` clean and 79/79 test
 while the agent spoke a retired wire contract. It does **not** cover the wire `status`
 tags: those live in temper-api, which has no ts-rs (task
 `019f910b-579b-74c2-bf05-702aaed0a011`).
+
+## The query-contract JSON-Schema snapshots are a fourth artifact, gated by their own test
+
+`crates/temper-core/tests/query_schema.rs` commits one JSON-Schema per query-contract type under
+`crates/temper-core/tests/fixtures/query/`, emitted by schemars from the wire structs. schemars
+writes each doc comment as a `description`, so **a doc-only change restales a snapshot** just as a
+field change does — and the contract reaches further than its own module:
+`plan_refusal.schema.json` carries the ask walk's `PathFacts` (through `PlanRefusal`'s teaching),
+so rewording a `PathFacts` field doc restales it alongside `openapi.json`, the three SDKs and
+the ts-rs bindings.
+
+```bash
+UPDATE_SCHEMA=1 cargo nextest run -p temperkb-core --features mcp --test query_schema
+```
+
+It is not a `cargo make check` task: the test is the gate, and it fails with "query schema drifted
+— re-run with UPDATE_SCHEMA=1". It is pinned to the `mcp` feature on purpose, and compares after
+sorting object keys — the test's header says why. Commit every snapshot it rewrites;
+`no_orphaned_fixtures` fails on a snapshot no `check` claims.
 
 ## `skills/temper-knowledge-base/` is a committed projection of the shared skill templates
 
