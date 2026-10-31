@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id!\" FROM unnest($1::uuid[]) WITH ORDINALITY AS u(id, n)\n            WHERE COALESCE(resource_personal_owner(id) = $2, true) ORDER BY n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c469bd5c5bf531eb51d49ffafc10e943b5351bbc5231f55edc6de6e2b795d4ff"
+}

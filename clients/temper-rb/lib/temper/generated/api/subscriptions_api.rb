@@ -20,7 +20,7 @@ module Temper::Generated
       @api_client = api_client
     end
     # Create a subscription
-    # Declares that a team, context or cogmap wants the events a connection emits that match `selector`. Requires a system admin or an owner or maintainer of `authoring_team_id`, and, for every caller, that the authoring team holds read-reach on the connection. A context or cogmap subscriber must be linked to the authoring team; a team subscriber must be the authoring team itself. A selector that can never match the connection's registered webhook events is refused.
+    # Declares that a team, context or cogmap wants the events a connection emits that match `selector`. Requires a system admin (not on someone else's personal team, nor for someone else's personal context as subscriber) or an owner or maintainer of `authoring_team_id`, and, for every caller, that the authoring team holds read-reach on the connection. A context or cogmap subscriber must be linked to the authoring team; a team subscriber must be the authoring team itself. A selector that can never match the connection's registered webhook events is refused.
     # @param create_subscription_request [CreateSubscriptionRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -31,7 +31,7 @@ module Temper::Generated
     end
 
     # Create a subscription
-    # Declares that a team, context or cogmap wants the events a connection emits that match &#x60;selector&#x60;. Requires a system admin or an owner or maintainer of &#x60;authoring_team_id&#x60;, and, for every caller, that the authoring team holds read-reach on the connection. A context or cogmap subscriber must be linked to the authoring team; a team subscriber must be the authoring team itself. A selector that can never match the connection&#39;s registered webhook events is refused.
+    # Declares that a team, context or cogmap wants the events a connection emits that match &#x60;selector&#x60;. Requires a system admin (not on someone else&#39;s personal team, nor for someone else&#39;s personal context as subscriber) or an owner or maintainer of &#x60;authoring_team_id&#x60;, and, for every caller, that the authoring team holds read-reach on the connection. A context or cogmap subscriber must be linked to the authoring team; a team subscriber must be the authoring team itself. A selector that can never match the connection&#39;s registered webhook events is refused.
     # @param create_subscription_request [CreateSubscriptionRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -95,7 +95,7 @@ module Temper::Generated
     end
 
     # Get a subscription
-    # Returns one subscription. Requires a system admin or an owner or maintainer of the subscription's authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+    # Returns one subscription. Requires a system admin (not on someone else's personal team) or an owner or maintainer of the subscription's authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
     # @param id [String] Subscription ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -106,7 +106,7 @@ module Temper::Generated
     end
 
     # Get a subscription
-    # Returns one subscription. Requires a system admin or an owner or maintainer of the subscription&#39;s authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+    # Returns one subscription. Requires a system admin (not on someone else&#39;s personal team) or an owner or maintainer of the subscription&#39;s authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
     # @param id [String] Subscription ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -165,7 +165,7 @@ module Temper::Generated
     end
 
     # List subscriptions
-    # Lists the subscriptions the caller may manage, newest first. A system admin sees every subscription; any other caller sees only those whose authoring team they own or maintain. Revoked subscriptions are omitted unless `include_revoked` is set.
+    # Lists the subscriptions the caller may manage, newest first. A system admin sees every subscription except those inside someone else's personal space; any other caller sees only those whose authoring team they own or maintain. Revoked subscriptions are omitted unless `include_revoked` is set.
     # @param [Hash] opts the optional parameters
     # @option opts [Boolean] :include_revoked Include revoked subscriptions. Default &#x60;false&#x60;.
     # @option opts [String] :connection_id Optional filter: only subscriptions against this connection.
@@ -177,7 +177,7 @@ module Temper::Generated
     end
 
     # List subscriptions
-    # Lists the subscriptions the caller may manage, newest first. A system admin sees every subscription; any other caller sees only those whose authoring team they own or maintain. Revoked subscriptions are omitted unless &#x60;include_revoked&#x60; is set.
+    # Lists the subscriptions the caller may manage, newest first. A system admin sees every subscription except those inside someone else&#39;s personal space; any other caller sees only those whose authoring team they own or maintain. Revoked subscriptions are omitted unless &#x60;include_revoked&#x60; is set.
     # @param [Hash] opts the optional parameters
     # @option opts [Boolean] :include_revoked Include revoked subscriptions. Default &#x60;false&#x60;.
     # @option opts [String] :connection_id Optional filter: only subscriptions against this connection.

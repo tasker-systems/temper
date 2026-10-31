@@ -66,7 +66,7 @@ class ConnectionsApi:
     ) -> AttachCredentialResponse:
         """Attach a connection credential
 
-        Attaches the credential reference: a broker and a connector the broker holds the secret for. The body carries no secret. temper mints once to verify the connector and reports what it observed; a connector the broker rejects fails the request, while pending consent, an unconfigured broker, or a broker failure is reported in `verification.note`. The broker's own error text goes to the server log, never to the response. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+        Attaches the credential reference: a broker and a connector the broker holds the secret for. The body carries no secret. temper mints once to verify the connector and reports what it observed; a connector the broker rejects fails the request, while pending consent, an unconfigured broker, or a broker failure is reported in `verification.note`. The broker's own error text goes to the server log, never to the response. Requires a system admin or the owner of the connection's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Connection ID (required)
         :type id: UUID
@@ -146,7 +146,7 @@ class ConnectionsApi:
     ) -> ApiResponse[AttachCredentialResponse]:
         """Attach a connection credential
 
-        Attaches the credential reference: a broker and a connector the broker holds the secret for. The body carries no secret. temper mints once to verify the connector and reports what it observed; a connector the broker rejects fails the request, while pending consent, an unconfigured broker, or a broker failure is reported in `verification.note`. The broker's own error text goes to the server log, never to the response. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+        Attaches the credential reference: a broker and a connector the broker holds the secret for. The body carries no secret. temper mints once to verify the connector and reports what it observed; a connector the broker rejects fails the request, while pending consent, an unconfigured broker, or a broker failure is reported in `verification.note`. The broker's own error text goes to the server log, never to the response. Requires a system admin or the owner of the connection's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Connection ID (required)
         :type id: UUID
@@ -226,7 +226,7 @@ class ConnectionsApi:
     ) -> RESTResponseType:
         """Attach a connection credential
 
-        Attaches the credential reference: a broker and a connector the broker holds the secret for. The body carries no secret. temper mints once to verify the connector and reports what it observed; a connector the broker rejects fails the request, while pending consent, an unconfigured broker, or a broker failure is reported in `verification.note`. The broker's own error text goes to the server log, never to the response. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+        Attaches the credential reference: a broker and a connector the broker holds the secret for. The body carries no secret. temper mints once to verify the connector and reports what it observed; a connector the broker rejects fails the request, while pending consent, an unconfigured broker, or a broker failure is reported in `verification.note`. The broker's own error text goes to the server log, never to the response. Requires a system admin or the owner of the connection's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Connection ID (required)
         :type id: UUID
@@ -384,7 +384,7 @@ class ConnectionsApi:
     ) -> RemoteConnection:
         """Get a connection
 
-        Returns one connection. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+        Returns one connection. Requires a system admin or the owner of the connection's owning team; on someone else's personal team only its owner, a system admin included. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Connection ID (required)
         :type id: UUID
@@ -458,7 +458,7 @@ class ConnectionsApi:
     ) -> ApiResponse[RemoteConnection]:
         """Get a connection
 
-        Returns one connection. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+        Returns one connection. Requires a system admin or the owner of the connection's owning team; on someone else's personal team only its owner, a system admin included. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Connection ID (required)
         :type id: UUID
@@ -532,7 +532,7 @@ class ConnectionsApi:
     ) -> RESTResponseType:
         """Get a connection
 
-        Returns one connection. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+        Returns one connection. Requires a system admin or the owner of the connection's owning team; on someone else's personal team only its owner, a system admin included. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Connection ID (required)
         :type id: UUID
@@ -670,7 +670,7 @@ class ConnectionsApi:
     ) -> RemoteConnection:
         """Grant a team read-reach on a connection
 
-        Lets the members of `team` read what the connection receives. Reach is read-only. Requires a system admin, or the owner of the connection's owning team who also owns or maintains the receiving team. When the receiving team is a personal team, only its owner qualifies, a system admin included. When the connection declares a remote reach the attach-time verification did not confirm, `affirm_reach` must state why the binding is intended; it is refused when there is nothing to affirm. A caller with system access who does not control the connection is answered 404, exactly as for an id that does not exist.
+        Lets the members of `team` read what the connection receives. Reach is read-only. Requires a system admin (only its owner, on someone else's personal team), or the owner of the connection's owning team who also owns or maintains the receiving team. When the receiving team is a personal team, only its owner qualifies, a system admin included. When the connection declares a remote reach the attach-time verification did not confirm, `affirm_reach` must state why the binding is intended; it is refused when there is nothing to affirm. A caller with system access who does not control the connection is answered 404, exactly as for an id that does not exist.
 
         :param id: Connection ID (required)
         :type id: UUID
@@ -750,7 +750,7 @@ class ConnectionsApi:
     ) -> ApiResponse[RemoteConnection]:
         """Grant a team read-reach on a connection
 
-        Lets the members of `team` read what the connection receives. Reach is read-only. Requires a system admin, or the owner of the connection's owning team who also owns or maintains the receiving team. When the receiving team is a personal team, only its owner qualifies, a system admin included. When the connection declares a remote reach the attach-time verification did not confirm, `affirm_reach` must state why the binding is intended; it is refused when there is nothing to affirm. A caller with system access who does not control the connection is answered 404, exactly as for an id that does not exist.
+        Lets the members of `team` read what the connection receives. Reach is read-only. Requires a system admin (only its owner, on someone else's personal team), or the owner of the connection's owning team who also owns or maintains the receiving team. When the receiving team is a personal team, only its owner qualifies, a system admin included. When the connection declares a remote reach the attach-time verification did not confirm, `affirm_reach` must state why the binding is intended; it is refused when there is nothing to affirm. A caller with system access who does not control the connection is answered 404, exactly as for an id that does not exist.
 
         :param id: Connection ID (required)
         :type id: UUID
@@ -830,7 +830,7 @@ class ConnectionsApi:
     ) -> RESTResponseType:
         """Grant a team read-reach on a connection
 
-        Lets the members of `team` read what the connection receives. Reach is read-only. Requires a system admin, or the owner of the connection's owning team who also owns or maintains the receiving team. When the receiving team is a personal team, only its owner qualifies, a system admin included. When the connection declares a remote reach the attach-time verification did not confirm, `affirm_reach` must state why the binding is intended; it is refused when there is nothing to affirm. A caller with system access who does not control the connection is answered 404, exactly as for an id that does not exist.
+        Lets the members of `team` read what the connection receives. Reach is read-only. Requires a system admin (only its owner, on someone else's personal team), or the owner of the connection's owning team who also owns or maintains the receiving team. When the receiving team is a personal team, only its owner qualifies, a system admin included. When the connection declares a remote reach the attach-time verification did not confirm, `affirm_reach` must state why the binding is intended; it is refused when there is nothing to affirm. A caller with system access who does not control the connection is answered 404, exactly as for an id that does not exist.
 
         :param id: Connection ID (required)
         :type id: UUID
@@ -1272,7 +1272,7 @@ class ConnectionsApi:
     ) -> RemoteConnection:
         """Provision a connection
 
-        Provisions a connection to a remote system, with its own agent profile, emitter and home context. It starts with no credential and with no webhook events or tool manifest; each is attached by its own call. Requires a system admin or the owner of `owner_team_id`; a connection with no owning team can only be provisioned by a system admin. Owning a connection does not grant any team read-reach on it.
+        Provisions a connection to a remote system, with its own agent profile, emitter and home context. It starts with no credential and with no webhook events or tool manifest; each is attached by its own call. Requires a system admin (only its owner, on someone else's personal team) or the owner of `owner_team_id`; a connection with no owning team can only be provisioned by a system admin. Owning a connection does not grant any team read-reach on it.
 
         :param provision_connection_request: (required)
         :type provision_connection_request: ProvisionConnectionRequest
@@ -1347,7 +1347,7 @@ class ConnectionsApi:
     ) -> ApiResponse[RemoteConnection]:
         """Provision a connection
 
-        Provisions a connection to a remote system, with its own agent profile, emitter and home context. It starts with no credential and with no webhook events or tool manifest; each is attached by its own call. Requires a system admin or the owner of `owner_team_id`; a connection with no owning team can only be provisioned by a system admin. Owning a connection does not grant any team read-reach on it.
+        Provisions a connection to a remote system, with its own agent profile, emitter and home context. It starts with no credential and with no webhook events or tool manifest; each is attached by its own call. Requires a system admin (only its owner, on someone else's personal team) or the owner of `owner_team_id`; a connection with no owning team can only be provisioned by a system admin. Owning a connection does not grant any team read-reach on it.
 
         :param provision_connection_request: (required)
         :type provision_connection_request: ProvisionConnectionRequest
@@ -1422,7 +1422,7 @@ class ConnectionsApi:
     ) -> RESTResponseType:
         """Provision a connection
 
-        Provisions a connection to a remote system, with its own agent profile, emitter and home context. It starts with no credential and with no webhook events or tool manifest; each is attached by its own call. Requires a system admin or the owner of `owner_team_id`; a connection with no owning team can only be provisioned by a system admin. Owning a connection does not grant any team read-reach on it.
+        Provisions a connection to a remote system, with its own agent profile, emitter and home context. It starts with no credential and with no webhook events or tool manifest; each is attached by its own call. Requires a system admin (only its owner, on someone else's personal team) or the owner of `owner_team_id`; a connection with no owning team can only be provisioned by a system admin. Owning a connection does not grant any team read-reach on it.
 
         :param provision_connection_request: (required)
         :type provision_connection_request: ProvisionConnectionRequest
@@ -1573,7 +1573,7 @@ class ConnectionsApi:
     ) -> RemoteConnection:
         """Revoke a connection
 
-        Revokes a connection so temper mints no new tokens for it. Tokens already minted stay valid at the remote system until they expire. The connection's profile, emitter and history are kept. Revoking an already-revoked connection returns it unchanged. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+        Revokes a connection so temper mints no new tokens for it. Tokens already minted stay valid at the remote system until they expire. The connection's profile, emitter and history are kept. Revoking an already-revoked connection returns it unchanged. Requires a system admin or the owner of the connection's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Connection ID (required)
         :type id: UUID
@@ -1647,7 +1647,7 @@ class ConnectionsApi:
     ) -> ApiResponse[RemoteConnection]:
         """Revoke a connection
 
-        Revokes a connection so temper mints no new tokens for it. Tokens already minted stay valid at the remote system until they expire. The connection's profile, emitter and history are kept. Revoking an already-revoked connection returns it unchanged. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+        Revokes a connection so temper mints no new tokens for it. Tokens already minted stay valid at the remote system until they expire. The connection's profile, emitter and history are kept. Revoking an already-revoked connection returns it unchanged. Requires a system admin or the owner of the connection's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Connection ID (required)
         :type id: UUID
@@ -1721,7 +1721,7 @@ class ConnectionsApi:
     ) -> RESTResponseType:
         """Revoke a connection
 
-        Revokes a connection so temper mints no new tokens for it. Tokens already minted stay valid at the remote system until they expire. The connection's profile, emitter and history are kept. Revoking an already-revoked connection returns it unchanged. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+        Revokes a connection so temper mints no new tokens for it. Tokens already minted stay valid at the remote system until they expire. The connection's profile, emitter and history are kept. Revoking an already-revoked connection returns it unchanged. Requires a system admin or the owner of the connection's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Connection ID (required)
         :type id: UUID
@@ -1859,7 +1859,7 @@ class ConnectionsApi:
     ) -> RemoteConnection:
         """Revoke a team's read-reach on a connection
 
-        Removes the read-reach grant for `team`. Revoking an absent grant is a no-op. `affirm_reach` is ignored. Requires a system admin or the owner of the connection's owning team; no role on the receiving team is needed. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+        Removes the read-reach grant for `team`. Revoking an absent grant is a no-op. `affirm_reach` is ignored. Requires a system admin (only its owner, on someone else's personal team) or the owner of the connection's owning team; no role on the receiving team is needed. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Connection ID (required)
         :type id: UUID
@@ -1937,7 +1937,7 @@ class ConnectionsApi:
     ) -> ApiResponse[RemoteConnection]:
         """Revoke a team's read-reach on a connection
 
-        Removes the read-reach grant for `team`. Revoking an absent grant is a no-op. `affirm_reach` is ignored. Requires a system admin or the owner of the connection's owning team; no role on the receiving team is needed. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+        Removes the read-reach grant for `team`. Revoking an absent grant is a no-op. `affirm_reach` is ignored. Requires a system admin (only its owner, on someone else's personal team) or the owner of the connection's owning team; no role on the receiving team is needed. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Connection ID (required)
         :type id: UUID
@@ -2015,7 +2015,7 @@ class ConnectionsApi:
     ) -> RESTResponseType:
         """Revoke a team's read-reach on a connection
 
-        Removes the read-reach grant for `team`. Revoking an absent grant is a no-op. `affirm_reach` is ignored. Requires a system admin or the owner of the connection's owning team; no role on the receiving team is needed. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+        Removes the read-reach grant for `team`. Revoking an absent grant is a no-op. `affirm_reach` is ignored. Requires a system admin (only its owner, on someone else's personal team) or the owner of the connection's owning team; no role on the receiving team is needed. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Connection ID (required)
         :type id: UUID
@@ -2172,7 +2172,7 @@ class ConnectionsApi:
     ) -> RemoteConnection:
         """Set connection tool manifest
 
-        Replaces the declared read-only remote tools. A non-empty manifest makes the connection reach-capable. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+        Replaces the declared read-only remote tools. A non-empty manifest makes the connection reach-capable. Requires a system admin or the owner of the connection's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Connection ID (required)
         :type id: UUID
@@ -2251,7 +2251,7 @@ class ConnectionsApi:
     ) -> ApiResponse[RemoteConnection]:
         """Set connection tool manifest
 
-        Replaces the declared read-only remote tools. A non-empty manifest makes the connection reach-capable. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+        Replaces the declared read-only remote tools. A non-empty manifest makes the connection reach-capable. Requires a system admin or the owner of the connection's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Connection ID (required)
         :type id: UUID
@@ -2330,7 +2330,7 @@ class ConnectionsApi:
     ) -> RESTResponseType:
         """Set connection tool manifest
 
-        Replaces the declared read-only remote tools. A non-empty manifest makes the connection reach-capable. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+        Replaces the declared read-only remote tools. A non-empty manifest makes the connection reach-capable. Requires a system admin or the owner of the connection's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Connection ID (required)
         :type id: UUID
@@ -2488,7 +2488,7 @@ class ConnectionsApi:
     ) -> RemoteConnection:
         """Set connection webhook events
 
-        Replaces the set of remote event types the connection receives. A non-empty set makes the connection ledger-capable. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+        Replaces the set of remote event types the connection receives. A non-empty set makes the connection ledger-capable. Requires a system admin or the owner of the connection's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Connection ID (required)
         :type id: UUID
@@ -2567,7 +2567,7 @@ class ConnectionsApi:
     ) -> ApiResponse[RemoteConnection]:
         """Set connection webhook events
 
-        Replaces the set of remote event types the connection receives. A non-empty set makes the connection ledger-capable. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+        Replaces the set of remote event types the connection receives. A non-empty set makes the connection ledger-capable. Requires a system admin or the owner of the connection's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Connection ID (required)
         :type id: UUID
@@ -2646,7 +2646,7 @@ class ConnectionsApi:
     ) -> RESTResponseType:
         """Set connection webhook events
 
-        Replaces the set of remote event types the connection receives. A non-empty set makes the connection ledger-capable. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
+        Replaces the set of remote event types the connection receives. A non-empty set makes the connection ledger-capable. Requires a system admin or the owner of the connection's owning team; on someone else's personal team, only its owner. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Connection ID (required)
         :type id: UUID

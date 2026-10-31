@@ -29,7 +29,7 @@ class CreateSubscriptionRequest(BaseModel):
     """
     Create a subscription.
     """ # noqa: E501
-    authoring_team_id: UUID = Field(description="The team that authorizes this subscription. The caller must own or maintain it (or be a system admin), and it must hold read-reach on the connection. For a team subscriber, this equals `subscriber_id`.")
+    authoring_team_id: UUID = Field(description="The team that authorizes this subscription. The caller must own or maintain it (or be a system admin, unless it is someone else's personal team), and it must hold read-reach on the connection. For a team subscriber, this equals `subscriber_id`.")
     connection_id: UUID
     selector: SubscriptionSelector = Field(description="The selector. An unknown `kind` or a malformed selector is rejected.")
     subscriber_id: UUID

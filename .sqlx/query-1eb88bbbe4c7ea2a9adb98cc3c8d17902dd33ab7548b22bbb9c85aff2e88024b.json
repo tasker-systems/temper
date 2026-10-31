@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT r.id FROM kb_resources r\n                         WHERE r.is_active\n                           AND r.ingest_state = 'complete'\n                           AND ($1::uuid IS NULL OR r.id > $1)\n                           AND COALESCE(resource_personal_owner(r.id) = $3, true)\n                         ORDER BY r.id\n                         LIMIT $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1eb88bbbe4c7ea2a9adb98cc3c8d17902dd33ab7548b22bbb9c85aff2e88024b"
+}
