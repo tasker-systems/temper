@@ -1602,7 +1602,8 @@ pub enum TeamAction {
         /// Invitation token (from `temper invitations`).
         token: String,
     },
-    /// Invite an email to a team (a manager of the team, or a system admin).
+    /// Invite an email to a team
+    /// (a team manager or a system admin; on a personal team, its owner only).
     Invite {
         /// Team slug (optionally `+`-prefixed) or UUID.
         team: String,
@@ -1618,12 +1619,14 @@ pub enum TeamAction {
         /// Invitation token.
         token: String,
     },
-    /// List pending invitations for a team (a manager of the team, or a system admin).
+    /// List pending invitations for a team
+    /// (a team manager or a system admin; on a personal team, its owner only).
     Invitations {
         /// Team slug (optionally `+`-prefixed) or UUID.
         team: String,
     },
-    /// Revoke (withdraw) a pending invitation (a manager of the team, or a system admin).
+    /// Revoke (withdraw) a pending invitation
+    /// (a team manager or a system admin; on a personal team, its owner only).
     Uninvite {
         /// Team slug (optionally `+`-prefixed) or UUID.
         team: String,
@@ -1647,7 +1650,7 @@ pub enum TeamAction {
         /// Member profile UUID
         profile: String,
     },
-    /// Change a member's role (a team owner or maintainer, or a system admin)
+    /// Change a member's role (a team owner/maintainer or a system admin; personal team: its owner)
     ///
     /// You can set roles up to your own and act on members up to your own rank; only a
     /// system admin changes an owner other than yourself. To hand a team over, grant `owner` to

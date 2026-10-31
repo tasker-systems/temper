@@ -418,33 +418,33 @@ claim crates/temper-services/src/services/access_service.rs 7 is_system_admin
 claim crates/temper-services/src/services/cogmap_service.rs 2 two_sided
 claim crates/temper-services/src/services/admin_directory_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/connection_service.rs 11 connection
-claim crates/temper-services/src/services/context_service.rs 14 context_admin
+claim crates/temper-services/src/services/context_service.rs 15 context_admin
 claim crates/temper-services/src/services/erasure_retention_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/erasure_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/resource_erasure_service.rs 2 is_system_admin
-claim crates/temper-services/src/services/invitation_service.rs 5 team_membership
+claim crates/temper-services/src/services/invitation_service.rs 6 team_membership
 claim crates/temper-services/src/services/machine_authz.rs 8 machine,team_membership
 claim crates/temper-services/src/services/machine_client_service.rs 7 machine
-claim crates/temper-services/src/services/machine_registration_service.rs 8 machine
+claim crates/temper-services/src/services/machine_registration_service.rs 9 machine
 claim crates/temper-services/src/services/slack_disconnect_service.rs 2 -
 claim crates/temper-services/src/services/saml_provisioning_service.rs 1 team_membership
 claim crates/temper-services/src/services/subscription_service.rs 6 subscription
 claim crates/temper-services/src/services/subscription_test_support.rs 1 subscription
-claim crates/temper-services/src/services/team_service.rs 12 require_manage_on_team,can_manage,team_membership
+claim crates/temper-services/src/services/team_service.rs 16 require_manage_on_team,can_manage,team_membership
 gate audit_gate 021f87ca4bed
 gate connection 586029b73345
 gate context_admin bce45d31795d
 gate grant 2aa83e237c3e
-gate machine 5b84b025e3e9
+gate machine 816fb9e085d6
 gate reconcile_regime 76ead78c03ac
 gate read_gates 7d576b5dacc8
 gate ledger_subject c6758faabe32
 gate subscription 81f65a7118cf
-gate two_sided 7822960e4ffa
+gate two_sided 0d0ea9e79fd1
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e
-gate team_membership fa44bdaf7329
+gate team_membership 45841d64fb89
 EOF
 
 CURRENT="$(current_claims; current_gates)"

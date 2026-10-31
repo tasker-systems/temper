@@ -1448,7 +1448,7 @@ export interface paths {
         put?: never;
         /**
          * Grant a team read-reach on a connection
-         * @description Lets the members of `team` read what the connection receives. Reach is read-only. Requires a system admin, or the owner of the connection's owning team who also owns or maintains the receiving team. When the connection declares a remote reach the attach-time verification did not confirm, `affirm_reach` must state why the binding is intended; it is refused when there is nothing to affirm. A caller with system access who does not control the connection is answered 404, exactly as for an id that does not exist.
+         * @description Lets the members of `team` read what the connection receives. Reach is read-only. Requires a system admin, or the owner of the connection's owning team who also owns or maintains the receiving team. When the receiving team is a personal team, only its owner qualifies, a system admin included. When the connection declares a remote reach the attach-time verification did not confirm, `affirm_reach` must state why the binding is intended; it is refused when there is nothing to affirm. A caller with system access who does not control the connection is answered 404, exactly as for an id that does not exist.
          */
         post: operations["grant_connection_reach"];
         /**
@@ -2371,7 +2371,7 @@ export interface paths {
         put?: never;
         /**
          * Register a machine client
-         * @description Registers an externally issued IdP `client_id` as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin. An instance that runs temper's own authorization server refuses it, because an externally issued client id could never authenticate there; issue a credential instead. No caller can give a machine a team role above `member`.
+         * @description Registers an externally issued IdP `client_id` as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin, and a listed personal team must be the caller's own. An instance that runs temper's own authorization server refuses it, because an externally issued client id could never authenticate there; issue a credential instead. No caller can give a machine a team role above `member`.
          */
         post: operations["provision_machine_client"];
         delete?: never;
@@ -15215,7 +15215,7 @@ export interface operations {
                     "application/json": components["schemas"]["BindTeamOutcome"];
                 };
             };
-            /** @description Caller is not a system admin and does not both administer the map and manage the team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller is not a system admin and does not both administer the map and manage the team (on a personal team, a system admin too must be its owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -15252,7 +15252,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnbindTeamOutcome"];
                 };
             };
-            /** @description Caller is not a system admin and does not both administer the map and manage the team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller is not a system admin and does not both administer the map and manage the team (on a personal team, a system admin too must be its owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -21175,7 +21175,7 @@ export interface operations {
                     "application/json": components["schemas"]["TeamRow"];
                 };
             };
-            /** @description The `personal-` slug prefix is reserved for personal teams; `auto_join_role` is above `member` (it may be `member` or `watcher`: a role that governs a team is granted by a person); or the caller is a machine principal (a team's creator becomes its owner, and a machine never governs) */
+            /** @description The `personal-` slug prefix is reserved for personal teams; the parent is a personal team, which takes no children; `auto_join_role` is above `member` (it may be `member` or `watcher`: a role that governs a team is granted by a person); or the caller is a machine principal (a team's creator becomes its owner, and a machine never governs) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -21438,14 +21438,14 @@ export interface operations {
                     "application/json": components["schemas"]["TeamInvitation"];
                 };
             };
-            /** @description The offered role outranks the inviter (`OFFER_ABOVE_YOUR_OWN_ROLE`: an invitation can offer a role up to the inviter's own on the team; only a system admin can offer more) */
+            /** @description The offered role outranks the inviter (`OFFER_ABOVE_YOUR_OWN_ROLE`: an invitation can offer a role up to the inviter's own on the team; only a system admin can offer more); or the team is a personal team, which admits no one to invite */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Forbidden (the caller does not manage the team; on the gating team only a system admin invites); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden (the caller does not manage the team; on the gating team only a system admin invites; on a personal team nobody but its owner, a system admin included); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -21498,14 +21498,14 @@ export interface operations {
                     "application/json": components["schemas"]["TeamMemberRow"];
                 };
             };
-            /** @description The target is a machine principal and the role is above `member` */
+            /** @description The target is a machine principal and the role is above `member`; or the team is a personal team and the target is neither its owner nor one of the owner's machines */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Forbidden: the caller is not an owner or maintainer of this team (on the gating team, not a system admin); or (`FORBIDDEN_DETAIL`) the role is above the caller's own — a manager grants up to their own role, a system admin any; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden: the caller is not an owner or maintainer of this team (on the gating team, not a system admin; on a personal team, not its owner — a system admin included); or (`FORBIDDEN_DETAIL`) the role is above the caller's own — a manager grants up to their own role, a system admin any; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -21556,7 +21556,7 @@ export interface operations {
                     "application/json": components["schemas"]["RemoveMemberOutcome"];
                 };
             };
-            /** @description Forbidden: the caller is neither the member leaving nor an owner or maintainer of this team (on the gating team, not a system admin); or (`FORBIDDEN_DETAIL`) the member is an owner other than the caller, or ranks above the caller — only a system admin removes another owner; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden: the caller is neither the member leaving nor an owner or maintainer of this team (on the gating team, not a system admin; on a personal team, not its owner — a system admin included); or (`FORBIDDEN_DETAIL`) the member is an owner other than the caller, or ranks above the caller — only a system admin removes another owner; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -21618,7 +21618,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Forbidden: the caller is not an owner or maintainer of this team (on the gating team, not a system admin); or (`FORBIDDEN_DETAIL`) the role is above the caller's own, the member is an owner other than the caller or ranks above the caller (only a system admin changes another owner), or the caller is raising their own role; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden: the caller is not an owner or maintainer of this team (on the gating team, not a system admin; on a personal team, not its owner — a system admin included); or (`FORBIDDEN_DETAIL`) the role is above the caller's own, the member is an owner other than the caller or ranks above the caller (only a system admin changes another owner), or the caller is raising their own role; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;

@@ -234,7 +234,7 @@ pub async fn create_context(
 
 /// Share a context into a team's read-reach, through the door. Authorized by the two-sided
 /// `can_share` gate at the API (system-admin, OR the caller administers the context AND manages
-/// the target team) before the write. Idempotent — `shared: false` when the share already existed.
+/// the target team; a personal-team target is its owner's alone, admins included) before the write. Idempotent — `shared: false` when the share already existed.
 pub async fn share_context(
     svc: &TemperMcpService,
     parts: &http::request::Parts,
