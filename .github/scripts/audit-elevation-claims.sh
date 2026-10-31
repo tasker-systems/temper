@@ -399,6 +399,9 @@ current_gates() {
 # the rank rule moved. Claims bound to both gates were re-read: the machine-client handler texts
 # now say a system admin reaches every machine and that a non-owner's credential severs the
 # personal team, which this code does.
+# REVIEWED 2026-10-31 (PR #1275 merging #1276) — `context_admin`, `grant`, `ledger_subject`,
+# `machine`, `subscription`, `team_membership`, `two_sided`: each fingerprint is now both PRs' change
+# to the gate, each reviewed above; the merge moved no arm of either. No claim count moved.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -460,18 +463,18 @@ claim crates/temper-services/src/services/subscription_test_support.rs 1 subscri
 claim crates/temper-services/src/services/team_service.rs 27 require_manage_on_team,can_manage,team_membership,is_system_admin
 gate audit_gate 021f87ca4bed
 gate connection 586029b73345
-gate context_admin bce45d31795d
-gate grant 2aa83e237c3e
-gate machine 587ad9db8bff
+gate context_admin 36e336482872
+gate grant 8fca715c38c3
+gate machine b24fecc74f83
 gate read_gates 6a6ce4847fbc
-gate ledger_subject 69c2a61e2964
-gate subscription 81f65a7118cf
-gate two_sided 4c0447838e54
+gate ledger_subject 89ab4129fe64
+gate subscription f45d76e9be69
+gate two_sided d72f4d72d122
 gate reconcile_regime 76ead78c03ac
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e
-gate team_membership 1be20960eeb1
+gate team_membership 8a31f3610fe8
 EOF
 
 CURRENT="$(current_claims; current_gates)"
