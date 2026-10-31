@@ -210,7 +210,12 @@ export type PathFacts = {
  */
 types?: Array<JsonType> | null, 
 /**
- * The `enum` / `const` values. `None`: no value set constrains the path.
+ * The values the path may hold: its own `enum` / `const`, narrowed by each ancestor's — an
+ * ancestor's member leaves a value here only if it holds one at this path. With no `enum` /
+ * `const` of its own, a path lists what its ancestors leave it only when every value is a
+ * scalar. `None`: no value set is listed — none constrains the path, or an ancestor leaves it
+ * an object or an array. An empty list: no value is admissible. An element's values
+ * ([`PathFacts::items`]) are its own `items` schema's, not narrowed.
  */
 values?: Array<JsonValue> | null, 
 /**

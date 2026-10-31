@@ -22,7 +22,7 @@ module Temper::Generated
     # The declared JSON types. `None`: no `type` constrains the path. An empty set: no value is admissible — a `type` naming no JSON type, or the element of an `items: false` array.
     attr_accessor :types
 
-    # The `enum` / `const` values. `None`: no value set constrains the path.
+    # The values the path may hold: its own `enum` / `const`, narrowed by each ancestor's — an ancestor's member leaves a value here only if it holds one at this path. With no `enum` / `const` of its own, a path lists what its ancestors leave it only when every value is a scalar. `None`: no value set is listed — none constrains the path, or an ancestor leaves it an object or an array. An empty list: no value is admissible. An element's values ([`PathFacts::items`]) are its own `items` schema's, not narrowed.
     attr_accessor :values
 
     # Attribute mapping from ruby-style variable name to JSON key.
