@@ -27,18 +27,18 @@ use temper_workflow::types::managed_meta::ManagedMeta;
 
 mod common;
 
-const L0_COGMAP: Uuid = Uuid::from_u128(0x00000000_0000_0000_0005_000000000001);
-
 /// Grant the profile `approved` standing — the D11 front door (`has_system_access`) so it can act.
-/// L0 is the public kernel map, readable regardless of membership. Same shape as `act_authorship_test`.
-async fn approved_backend(pool: &PgPool, email: &str) -> (DbBackend, ContextId) {
+/// It also authors a map of its own, on which `open_inv` opens. Same shape as `act_authorship_test`.
+async fn approved_backend(pool: &PgPool, email: &str) -> (DbBackend, ContextId, Uuid) {
     let (profile, context) = common::fixtures::create_test_profile_with_context(pool, email).await;
     common::fixtures::approve_standing(pool, profile).await;
-    // Self-attributed invocation-open on L0 now requires WRITE (F2) — grant it so `open_inv` succeeds.
-    common::fixtures::grant_cogmap_write(pool, L0_COGMAP, profile).await;
+    // Self-attributed invocation-open requires authorship of the originating map (F2): an ordinary
+    // map this profile holds a write grant on. (L0 would need a system admin, 20261114000000.)
+    let map = common::fixtures::authored_map(pool, profile).await;
     (
         DbBackend::new(pool.clone(), ProfileId::from(profile)),
         ContextId::from(context),
+        map,
     )
 }
 
@@ -79,16 +79,16 @@ fn create_cmd(context: ContextId, slug: &str) -> CreateResource {
     }
 }
 
-async fn open_inv(backend: &DbBackend) -> InvocationId {
+async fn open_inv(backend: &DbBackend, map: Uuid) -> InvocationId {
     let out = backend
         .open_invocation(OpenInvocation {
             trigger_kind: "manual".to_string(),
-            originating_cogmap: temper_core::types::ids::CogmapId::from(L0_COGMAP),
+            originating_cogmap: temper_core::types::ids::CogmapId::from(map),
             parent_cogmap: None,
             origin: Surface::ApiHttp,
         })
         .await
-        .expect("open against readable L0 must succeed");
+        .expect("open against an authored map must succeed");
     InvocationId::from(out.value)
 }
 
@@ -122,9 +122,9 @@ async fn stamped_event(
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn update_under_invocation_stamps_the_property_act(pool: PgPool) {
-    let (backend, context) = approved_backend(&pool, "update@example.com").await;
+    let (backend, context, map) = approved_backend(&pool, "update@example.com").await;
     let resource = make_resource(&backend, context, "to-update").await;
-    let inv = open_inv(&backend).await;
+    let inv = open_inv(&backend, map).await;
 
     // An open_meta-only update fires a `property_set` sub-event of the update fan-out.
     backend
@@ -160,9 +160,9 @@ async fn update_under_invocation_stamps_the_property_act(pool: PgPool) {
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn delete_under_invocation_stamps_the_delete_act(pool: PgPool) {
-    let (backend, context) = approved_backend(&pool, "delete@example.com").await;
+    let (backend, context, map) = approved_backend(&pool, "delete@example.com").await;
     let resource = make_resource(&backend, context, "to-delete").await;
-    let inv = open_inv(&backend).await;
+    let inv = open_inv(&backend, map).await;
 
     backend
         .delete_resource(DeleteResource {
@@ -188,7 +188,7 @@ async fn delete_under_invocation_stamps_the_delete_act(pool: PgPool) {
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn retype_and_reweight_under_invocation_stamp_the_edge_acts(pool: PgPool) {
-    let (backend, context) = approved_backend(&pool, "edge@example.com").await;
+    let (backend, context, map) = approved_backend(&pool, "edge@example.com").await;
     let src = make_resource(&backend, context, "src").await;
     let tgt = make_resource(&backend, context, "tgt").await;
     let edge = backend
@@ -207,7 +207,7 @@ async fn retype_and_reweight_under_invocation_stamp_the_edge_acts(pool: PgPool) 
         .expect("assert edge")
         .value;
 
-    let inv = open_inv(&backend).await;
+    let inv = open_inv(&backend, map).await;
 
     backend
         .retype_relationship(RetypeRelationship {
@@ -249,7 +249,7 @@ async fn retype_and_reweight_under_invocation_stamp_the_edge_acts(pool: PgPool) 
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn nonauthored_act_claiming_unknown_invocation_is_not_found(pool: PgPool) {
-    let (backend, context) = approved_backend(&pool, "ghost@example.com").await;
+    let (backend, context, _map) = approved_backend(&pool, "ghost@example.com").await;
     let resource = make_resource(&backend, context, "ghost").await;
     let act = ActContext {
         invocation: Some(InvocationId::from(Uuid::now_v7())),
@@ -280,9 +280,9 @@ async fn nonauthored_act_claiming_unknown_invocation_is_not_found(pool: PgPool) 
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn nonauthored_act_on_closed_invocation_is_conflict(pool: PgPool) {
-    let (backend, context) = approved_backend(&pool, "closed@example.com").await;
+    let (backend, context, map) = approved_backend(&pool, "closed@example.com").await;
     let resource = make_resource(&backend, context, "closed").await;
-    let inv = open_inv(&backend).await;
+    let inv = open_inv(&backend, map).await;
     backend
         .close_invocation(CloseInvocation {
             invocation: inv.uuid(),
@@ -313,7 +313,7 @@ async fn nonauthored_act_on_closed_invocation_is_conflict(pool: PgPool) {
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn update_without_act_leaves_invocation_null(pool: PgPool) {
-    let (backend, context) = approved_backend(&pool, "plain@example.com").await;
+    let (backend, context, _map) = approved_backend(&pool, "plain@example.com").await;
     let resource = make_resource(&backend, context, "plain").await;
 
     backend

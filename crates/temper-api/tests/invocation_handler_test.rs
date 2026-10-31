@@ -4,15 +4,17 @@
 //! `cogmap_shape_handler_test`. Full HTTP routing is covered by a later e2e task.
 //!
 //! Happy path runs against the L0 kernel map (root-joined → readable by any approved profile;
-//! it has a reserved telos resource, so `open` succeeds). Deny path runs against a random
-//! cogmap the acting profile cannot read (open → Forbidden) and a random invocation id
-//! (show → Ok(None), the leak-safe deny/absent contract).
+//! it has a reserved telos resource, so `open` succeeds), opened by a system admin: L0 is in the
+//! admin-only regime, where only a system admin authors and a write grant confers nothing
+//! (`20261114000000`). Deny path runs against a random cogmap the acting profile cannot read
+//! (open → Forbidden) and a random invocation id (show → Ok(None), the leak-safe deny/absent
+//! contract).
 //!
 //! **The deny path has two dialects, and this suite carries both poles.** A caller who READS the
 //! map but cannot author it is told which capability it lacks (`ForbiddenDetail`); a caller who
 //! cannot read it at all keeps the argument-free `Forbidden`, because for that caller the map's
-//! existence is itself the secret. L0 makes both reachable in one fixture: any approved profile is
-//! root-joined to it (so it reads), and no profile holds write on it until granted.
+//! existence is itself the secret. The grant cases run on an ordinary map the caller reads through
+//! team membership ([`map_read_through_a_team`]); a write grant there is what authorship means.
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -55,14 +57,71 @@ fn assert_names_the_missing_capability<T: std::fmt::Debug>(
     );
 }
 
+/// The seed's system emitter, under which every cogmap genesis fires.
+async fn system_emitter(pool: &PgPool) -> Uuid {
+    sqlx::query_scalar(
+        "SELECT e.id FROM kb_entities e JOIN kb_profiles p ON p.id = e.profile_id \
+          WHERE p.handle = 'system' AND e.name = 'system'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("system emitter must exist")
+}
+
+/// An ordinary map (outside the admin-only regime) that `reader` reads through membership in a team
+/// it is bound to, and holds no write grant on. Born through `cogmap_genesis`, so it has a telos and
+/// `open` can succeed once the reader authors it.
+async fn map_read_through_a_team(pool: &PgPool, reader: Uuid) -> Uuid {
+    let cogmap = Uuid::now_v7();
+    let telos = Uuid::now_v7();
+    let emitter = system_emitter(pool).await;
+    sqlx::query("SELECT cogmap_genesis($1, $2, $3)")
+        .bind(serde_json::json!({
+            "cogmap_id": cogmap,
+            "name": format!("map-{cogmap}"),
+            "owner_profile_id": reader,
+            "telos": {
+                "resource_id": telos,
+                "title": "telos",
+                "origin_uri": format!("temper://test/{cogmap}/telos"),
+                "blocks": [],
+            },
+        }))
+        .bind(serde_json::json!({}))
+        .bind(emitter)
+        .execute(pool)
+        .await
+        .expect("birth cogmap");
+    let team = Uuid::now_v7();
+    sqlx::query("INSERT INTO kb_teams (id, slug, name) VALUES ($1, $2, $2)")
+        .bind(team)
+        .bind(format!("team-{team}"))
+        .execute(pool)
+        .await
+        .expect("create team");
+    sqlx::query("INSERT INTO kb_team_cogmaps (cogmap_id, team_id) VALUES ($1, $2)")
+        .bind(cogmap)
+        .bind(team)
+        .execute(pool)
+        .await
+        .expect("bind map to team");
+    sqlx::query(
+        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'member')",
+    )
+    .bind(team)
+    .bind(reader)
+    .execute(pool)
+    .await
+    .expect("join team");
+    cogmap
+}
+
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn open_show_close_roundtrip_on_l0(pool: PgPool) {
     let profile = common::fixtures::create_test_profile(&pool, "opener@example.com").await;
-    // Grant `approved` standing (D11 front door). L0 is the public kernel map, so it is readable
-    // regardless of membership; the principal is still read-only on L0 until granted write below.
-    common::fixtures::approve_standing(&pool, profile).await;
-    // Self-attributed open now requires WRITE on the originating map (F2) — read alone is not enough.
-    common::fixtures::grant_cogmap_write(&pool, L0_COGMAP, profile).await;
+    // L0 is in the admin-only regime: a system admin authors it with no grant, and nobody else
+    // authors it with one. Self-attributed open requires authorship of the originating map (F2).
+    common::fixtures::make_test_admin(&pool, profile).await;
     let profile_id = ProfileId::from(profile);
     let backend = DbBackend::new(pool.clone(), profile_id);
 
@@ -185,40 +244,45 @@ async fn open_on_unreadable_cogmap_is_forbidden(pool: PgPool) {
 }
 
 /// F2 — a SELF-ATTRIBUTED open (`parent_cogmap: None`) requires WRITE on the originating map, not just
-/// read. An approved profile is root-joined to L0 (read) but holds no write grant: its self-attributed
-/// open is denied. Granting explicit cogmap-write then lets the same open succeed. Closes the
-/// reader-posts-inert-envelopes ledger-noise vector.
+/// read. A member of a team the map is bound to reads it but holds no write grant: its
+/// self-attributed open is denied. Granting explicit cogmap-write then lets the same open succeed.
+/// Closes the reader-posts-inert-envelopes ledger-noise vector.
+///
+/// On L0 the same grant opens nothing: L0 is in the admin-only regime (`20261114000000`).
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn self_attributed_open_requires_write(pool: PgPool) {
     let profile = common::fixtures::create_test_profile(&pool, "reader@example.com").await;
     common::fixtures::approve_standing(&pool, profile).await;
+    let map = map_read_through_a_team(&pool, profile).await;
     let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
+    let open = |cogmap: Uuid| OpenInvocation {
+        trigger_kind: "manual".to_string(),
+        originating_cogmap: CogmapId::from(cogmap),
+        parent_cogmap: None,
+        origin: Surface::ApiHttp,
+    };
 
-    // Read-only (root-joined) profile → self-attributed open denied.
-    let denied = backend
-        .open_invocation(OpenInvocation {
-            trigger_kind: "manual".to_string(),
-            originating_cogmap: CogmapId::from(L0_COGMAP),
-            parent_cogmap: None,
-            origin: Surface::ApiHttp,
-        })
-        .await;
-    // Still refused — and now the refusal SAYS SO. This principal is root-joined to L0, so it reads
-    // the map; the gate owes it the reason, because withholding one bought no confidentiality and
-    // cost the production steward the fact it needed in order to stop probing.
-    assert_names_the_missing_capability(&denied, L0_COGMAP);
+    // Read-only (team member) profile → self-attributed open denied.
+    let denied = backend.open_invocation(open(map)).await;
+    // Still refused — and the refusal SAYS SO. This principal reads the map; the gate owes it the
+    // reason, because withholding one bought no confidentiality and cost the production steward the
+    // fact it needed in order to stop probing.
+    assert_names_the_missing_capability(&denied, map);
 
     // Grant explicit write → the same open now succeeds.
-    common::fixtures::grant_cogmap_write(&pool, L0_COGMAP, profile).await;
+    common::fixtures::grant_cogmap_write(&pool, map, profile).await;
     backend
-        .open_invocation(OpenInvocation {
-            trigger_kind: "manual".to_string(),
-            originating_cogmap: CogmapId::from(L0_COGMAP),
-            parent_cogmap: None,
-            origin: Surface::ApiHttp,
-        })
+        .open_invocation(open(map))
         .await
         .expect("self-attributed open with write must succeed");
+
+    // The same grant on L0 confers nothing: only a system admin authors a regime map.
+    common::fixtures::grant_cogmap_write(&pool, L0_COGMAP, profile).await;
+    let on_l0 = backend.open_invocation(open(L0_COGMAP)).await;
+    assert!(
+        matches!(&on_l0, Err(TemperError::ForbiddenDetail(msg)) if msg.contains("only a system admin")),
+        "a write grant on L0 must not open an invocation there: {on_l0:?}"
+    );
 }
 
 /// Supplying `parent_cogmap` must NOT downgrade the gate — the regression test for the production
@@ -236,30 +300,33 @@ async fn self_attributed_open_requires_write(pool: PgPool) {
 async fn parent_cogmap_does_not_downgrade_the_open_gate(pool: PgPool) {
     let profile = common::fixtures::create_test_profile(&pool, "delegate@example.com").await;
     common::fixtures::approve_standing(&pool, profile).await;
+    let map = map_read_through_a_team(&pool, profile).await;
     let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
 
     // The exact production manoeuvre: read-only principal, parent == originating. Must be refused.
+    // (Production met it on L0; an ordinary map is used here because on L0 no grant can make the
+    // second half of this test succeed.)
     let denied = backend
         .open_invocation(OpenInvocation {
             trigger_kind: "manual".to_string(),
-            originating_cogmap: CogmapId::from(L0_COGMAP),
-            parent_cogmap: Some(CogmapId::from(L0_COGMAP)),
+            originating_cogmap: CogmapId::from(map),
+            parent_cogmap: Some(CogmapId::from(map)),
             origin: Surface::ApiHttp,
         })
         .await;
     // Refused, in the reader's dialect — and the message is the point of this pairing. The bypass
     // this test guards was FOUND by an agent probing an opaque refusal; a refusal that names the
     // missing grant is what makes the probe pointless rather than merely blocked.
-    assert_names_the_missing_capability(&denied, L0_COGMAP);
+    assert_names_the_missing_capability(&denied, map);
 
     // Self-parenting stays LEGAL, it is merely inert: with write, the identical call succeeds. The fix
     // removes the authorization discount, not the ability to record a (meaningless) self-binding.
-    common::fixtures::grant_cogmap_write(&pool, L0_COGMAP, profile).await;
+    common::fixtures::grant_cogmap_write(&pool, map, profile).await;
     backend
         .open_invocation(OpenInvocation {
             trigger_kind: "manual".to_string(),
-            originating_cogmap: CogmapId::from(L0_COGMAP),
-            parent_cogmap: Some(CogmapId::from(L0_COGMAP)),
+            originating_cogmap: CogmapId::from(map),
+            parent_cogmap: Some(CogmapId::from(map)),
             origin: Surface::ApiHttp,
         })
         .await
