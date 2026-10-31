@@ -19,11 +19,17 @@ import { ARRIVAL } from '$lib/first-view';
 /** A same-origin path: one leading `/`, never followed by `/` or `\`. */
 const SITE_PATH = /^\/(?![/\\])/;
 
-/** C0 controls, space, DEL and backslash — anything a URL parser strips, folds or reinterprets. */
+/**
+ * C0 controls, space and DEL anywhere — a URL parser strips or folds them — and a backslash in the
+ * path, where an http(s) parser reads it as `/`. A backslash after `?` or `#` is left alone: the
+ * parser keeps it literal there, and a hand-typed `/vault?q=C:\path` should still come back.
+ */
 function hasUnsafeChar(value: string): boolean {
+	let inPath = true;
 	for (let i = 0; i < value.length; i++) {
 		const code = value.charCodeAt(i);
-		if (code <= 0x20 || code === 0x7f || code === 0x5c) return true;
+		if (code === 0x3f || code === 0x23) inPath = false;
+		if (code <= 0x20 || code === 0x7f || (inPath && code === 0x5c)) return true;
 	}
 	return false;
 }

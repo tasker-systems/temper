@@ -13,6 +13,7 @@ describe('safeReturnTo honours only a path on this site', () => {
 		['/vault?tasks=24&goals=16', '/vault?tasks=24&goals=16'],
 		['/graph/%40me?q=a%20b', '/graph/%40me?q=a%20b'],
 		['/resource/x#section', '/resource/x#section'],
+		['/vault?q=C:\\path', '/vault?q=C:\\path'],
 	])('keeps the site path %s', (value, expected) => {
 		expect(safeReturnTo(value, ORIGIN)).toBe(expected);
 	});

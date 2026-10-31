@@ -10,6 +10,8 @@ export const HOSTILE_RETURN_TO: ReadonlyArray<readonly [label: string, value: st
 	['a backslash-relative /\\host', '/\\evil.example'],
 	['a double-backslash \\\\host', '\\\\evil.example'],
 	['a backslash after the slash later on', '/\\/evil.example'],
+	['a backslash later in the path', '/x\\..\\..\\/evil.example'],
+	['a tab in the query', '/vault?q=\t//evil.example'],
 	['a leading tab before //host', '\t//evil.example'],
 	['a tab inside the leading slashes', '/\t/evil.example'],
 	['a CR inside the leading slashes', '/\r/evil.example'],
