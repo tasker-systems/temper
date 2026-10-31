@@ -82,9 +82,10 @@ current_counts() {
 # "<count> <path>". Regenerate with UPDATE_BASELINE=1 — and when you do, say in the PR which ignore
 # you added or removed and why. A baseline updated on reflex is the failure this file exists to stop.
 read -r -d '' BASELINE <<'EOF' || true
+1 crates/temper-services/tests/shape_loader_test.rs
 1 crates/temper-substrate/src/cluster.rs
 1 crates/temper-substrate/tests/context_formation_cost.rs
-10 crates/temper-substrate/tests/shape_schema_cost_bench.rs
+14 crates/temper-substrate/tests/shape_schema_cost_bench.rs
 1 crates/temper-substrate/tests/write_lock_measure.rs
 2 tests/e2e/tests/cloud_session_link_e2e_test.rs
 1 tests/e2e/tests/cloud_warmup_e2e_test.rs

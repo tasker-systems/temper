@@ -16,7 +16,9 @@
 #![cfg(feature = "test-db")]
 
 use std::collections::BTreeSet;
+use std::time::{Duration, Instant};
 
+use futures_util::future::join_all;
 use serde_json::json;
 use sqlx::PgPool;
 use temper_core::types::artifact_ask::walk::MAX_SCHEMA_BYTES;
@@ -37,7 +39,7 @@ use temper_services::error::ApiError;
 use temper_services::services::shape_loader::test_support::{
     enumerations_tagged, path_teachings_made_tagged,
 };
-use temper_services::services::shape_loader::{load, load_one};
+use temper_services::services::shape_loader::{askable, judge, load, load_one, SchemaVerdict};
 use temper_services::services::shape_service::{self, DeclareShapeServiceParams};
 use temper_substrate::events::EventContext;
 use temper_substrate::payloads::{AnchorRef, EnforcementMode, KindOwner};
@@ -45,7 +47,7 @@ use temper_substrate::readback;
 use temper_substrate::scenario::bootseed;
 use temper_substrate::shape_schema::test_support::compiles_tagged;
 use temper_substrate::shape_schema::{
-    count_up_to, ShapeSchemaUncompilable, MAX_SHAPE_NODES, MAX_SHAPE_OBJECTS,
+    count_up_to, ShapeSchemaUncompilable, MAX_ENUM_ENTRIES, MAX_SHAPE_NODES, MAX_SHAPE_OBJECTS,
 };
 use temper_substrate::writes::{self, CreateParams, DeclareShapeParams};
 use uuid::Uuid;
@@ -992,5 +994,192 @@ async fn a_shape_refusing_paths_across_requests_is_enumerated_once(pool: PgPool)
         path_teachings_made_tagged(&tag),
         1,
         "one enumeration for three requests"
+    );
+}
+
+// ── Permit queueing under concurrent by-id misses ───────────────────────────────────────────
+
+/// How many by-id reads miss at once in `permit_queueing_under_concurrent_by_id_misses`.
+const CONCURRENT_MISSES: usize = 8;
+
+/// A schema filling the node budget whose vocabulary is the heaviest a by-id read enumerates on a
+/// miss — fields each an `enum` of `MAX_ENUM_ENTRIES` strings — tagged with `tag`, and how many
+/// paths it declares. The `string enums` fixture of `shape_schema_cost_bench.rs`'s
+/// `vocabulary_values_worst_case`, copied, since one integration test cannot import another's
+/// functions; the tag's `$comment` is one value more.
+fn vocabulary_values_at_the_budget(tag: &str) -> (serde_json::Value, usize) {
+    let codes: Vec<String> = (0..MAX_ENUM_ENTRIES).map(|c| format!("c{c:05}")).collect();
+    let field = json!({ "enum": codes });
+    // Beside the fields: the root, `$schema`, `$comment`, `type` and `properties`, the root and
+    // `properties` the objects. Each field is itself, its `enum` array and its members, one object.
+    let per_field = MAX_ENUM_ENTRIES + 2;
+    let fields = ((MAX_SHAPE_NODES - 5) / per_field).min(MAX_SHAPE_OBJECTS - 2);
+    let properties: serde_json::Map<String, serde_json::Value> = (0..fields)
+        .map(|f| (format!("f{f:04}"), field.clone()))
+        .collect();
+    let schema = json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$comment": tag,
+        "type": "object",
+        "properties": properties,
+    });
+    let count = count_up_to(&schema, usize::MAX, usize::MAX);
+    assert_eq!(
+        (count.nodes, count.objects),
+        (5 + fields * per_field, 2 + fields),
+        "{count:?}"
+    );
+    assert!(
+        count.nodes <= MAX_SHAPE_NODES && count.nodes + per_field > MAX_SHAPE_NODES,
+        "{count:?}: the fixture fills the node budget"
+    );
+    assert!(
+        within_schema_bound(&schema),
+        "the fixture is within the byte bound"
+    );
+    (schema, fields)
+}
+
+/// Milliseconds, for printing.
+fn ms(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1000.0
+}
+
+/// The nearest-rank `percent`th of `sorted`, which is ascending and not empty.
+fn nearest_rank(sorted: &[Duration], percent: usize) -> Duration {
+    sorted[(sorted.len() * percent).div_ceil(100) - 1]
+}
+
+/// What a by-id read's miss waits for a compile permit when `CONCURRENT_MISSES` of them arrive at
+/// once (spec `2026-10-31-const-and-enum-members-are-scalars-design`, §5's permit-queueing
+/// measure, §7.6 case 6). Each shape fills the node budget with the heaviest vocabulary a miss
+/// enumerates ([`vocabulary_values_at_the_budget`]) and is a row of its own id under a tag of its
+/// own: the verdict and vocabulary caches key by shape id, so no read finds another's entry, and
+/// the tagged counts show each read compiled and enumerated its own shape once, a miss on both.
+///
+/// **What it measures.** Nothing in the loader reports how long a call waited for a permit, so this
+/// times each `askable` call whole, from the moment the burst starts, against one uncontended
+/// `askable` miss: a call's wait is its latency past the uncontended one. Rows are read before any
+/// timer starts, so no database time is in it. The calls are polled on one thread (`sqlx::test`'s
+/// runtime is current-thread), so what each does on the executor before its permit — measuring
+/// the schema against the byte bound and the budget — runs one call after another, and is in the
+/// wait too. Beside it, an uncontended `judge`: what declare and an ask load's verdict hold a
+/// permit for.
+///
+/// **Permits.** The process has `compile_permits()`, half the cores and at least one, and the test
+/// changes nothing about them. It prints `available_parallelism` and the permits that implies, so
+/// the wait under one permit can be worked out from the per-call cost.
+///
+/// After the budget, at `HEAD` of this change, arm64 (M4 Pro), rustc 1.99, release, median of
+/// three runs, on 12 cores and so 6 compile permits: an uncontended `judge` 0.99 ms, an
+/// uncontended `askable` miss 1.76 ms; 8 concurrent misses, latency p50 5.40 ms and p99 6.07 ms,
+/// wait past an uncontended miss p50 3.71 ms and p99 4.37 ms. On one permit the eighth call would
+/// wait for the seven before it, about 7 × 1.76 ≈ 12 ms; that figure is worked out, not measured.
+#[sqlx::test(migrations = "../../migrations")]
+#[ignore = "benchmark: run with --release --ignored --nocapture before merge"]
+async fn permit_queueing_under_concurrent_by_id_misses(pool: PgPool) {
+    let w = seed_world(&pool, "loader-permit-queueing").await;
+    let cores = std::thread::available_parallelism().map_or(1, |cores| cores.get());
+    println!(
+        "permit queueing: available_parallelism {cores}, so {} compile permits",
+        (cores / 2).max(1)
+    );
+
+    // The first shape is read alone; the rest are the burst.
+    let mut shapes = Vec::new();
+    for _ in 0..=CONCURRENT_MISSES {
+        let tag = fresh_tag();
+        let (schema, paths) = vocabulary_values_at_the_budget(&tag);
+        let id = store(&pool, &w, "measurement", &schema).await;
+        let row = readback::shape_by_id(&pool, w.owner, id)
+            .await
+            .unwrap()
+            .expect("the owner reads the shape");
+        shapes.push((tag, paths, row));
+    }
+    let ((alone_tag, alone_paths, alone), burst) =
+        shapes.split_first().expect("the shapes are stored");
+
+    // The process's first compile builds what the validator keeps for the draft, and its first
+    // permit builds the semaphore; neither belongs to an uncontended call. `judge` remembers
+    // nothing, so the read below still misses.
+    judge(&alone.schema).await.unwrap();
+    let start = Instant::now();
+    let verdict = judge(&alone.schema).await.unwrap();
+    let judged = start.elapsed();
+    assert_eq!(verdict, SchemaVerdict::Compiles);
+
+    let start = Instant::now();
+    let (vocabulary, refusal) = askable(alone).await.unwrap();
+    let uncontended = start.elapsed();
+    assert!(refusal.is_none(), "the shape compiles");
+    assert_eq!(
+        vocabulary.paths.len(),
+        *alone_paths,
+        "every field is a path"
+    );
+    assert_eq!(
+        compiles_tagged(alone_tag),
+        3,
+        "two judges, then the read's own compile: a miss on the verdict"
+    );
+    assert_eq!(
+        enumerations_tagged(alone_tag),
+        1,
+        "the read enumerated: a miss on the vocabulary"
+    );
+    println!("permit queueing: uncontended judge {:.3} ms", ms(judged));
+    println!(
+        "permit queueing: uncontended askable miss {:.3} ms",
+        ms(uncontended)
+    );
+
+    let started = Instant::now();
+    let reads = join_all(burst.iter().map(|(_, _, row)| async move {
+        let read = askable(row).await.unwrap();
+        (started.elapsed(), read)
+    }))
+    .await;
+
+    let mut latencies = Vec::new();
+    for (call, ((tag, paths, _), (latency, (vocabulary, refusal)))) in
+        burst.iter().zip(reads).enumerate()
+    {
+        assert!(refusal.is_none(), "call {call}: the shape compiles");
+        assert_eq!(
+            vocabulary.paths.len(),
+            *paths,
+            "call {call}: every field is a path"
+        );
+        assert_eq!(
+            compiles_tagged(tag),
+            1,
+            "call {call}: a miss on the verdict"
+        );
+        assert_eq!(
+            enumerations_tagged(tag),
+            1,
+            "call {call}: a miss on the vocabulary"
+        );
+        println!(
+            "permit queueing: call {call}: {:.3} ms, {:.3} ms past an uncontended miss",
+            ms(latency),
+            ms(latency.saturating_sub(uncontended))
+        );
+        latencies.push(latency);
+    }
+    latencies.sort_unstable();
+    let p50 = nearest_rank(&latencies, 50);
+    let p99 = nearest_rank(&latencies, 99);
+    println!(
+        "permit queueing: {CONCURRENT_MISSES} concurrent misses: latency p50 {:.3} ms, p99 {:.3} \
+         ms; wait p50 {:.3} ms, p99 {:.3} ms; uncontended askable miss {:.3} ms, uncontended \
+         judge {:.3} ms",
+        ms(p50),
+        ms(p99),
+        ms(p50.saturating_sub(uncontended)),
+        ms(p99.saturating_sub(uncontended)),
+        ms(uncontended),
+        ms(judged)
     );
 }
