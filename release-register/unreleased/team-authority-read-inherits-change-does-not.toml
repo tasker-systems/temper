@@ -1,11 +1,11 @@
-title    = "A team grant confers change only on direct authoring members; the grant door, team lifecycle and reassign are bounded"
+title    = "A team grant confers change only on direct authoring members; grants, team lifecycle and reassign are bounded; a parent sees and can detach its children"
 pr       = "self"
-classes  = ["behavioral"]
-surfaces = ["http", "mcp", "cli-stdout"]
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp", "cli-stdout", "clients"]
 status   = "signal-only"
 body = '''
 Hardening of team authority, under one rule: reading inherits down the team tree, changing things
-does not and is role-gated. Request and response shapes are unchanged.
+does not and is role-gated.
 
 - A grant whose principal is a team still confers read on every member of the team and of every
   team beneath it, at any role. Write and delete now need a direct owner, maintainer or member row
@@ -25,6 +25,15 @@ does not and is role-gated. Request and response shapes are unchanged.
   a context its owner owns, and now include contexts the team owns. A `from` that never belonged to
   the team is `403`. `DELETE /api/teams/{id}/members/{profile_id}`'s residual-reach report uses the
   same scope.
+- Additive: `GET /api/teams/{id}` gains `children` (the team's direct child teams: `id`, `slug`,
+  `name`), filled for a caller who manages the team or is a system admin and empty for everyone
+  else. A direct owner or maintainer of a team's ancestor may now read its detail and roster (never
+  through `temper-system` or the gating team). New `DELETE /api/teams/{id}/children/{child_id}`
+  (204; 403 unless a manager of the parent or a system admin; 404 when not a child) detaches a child,
+  which keeps its roster and stops reaching the parent; client `teams.detach_child`, CLI
+  `temper team detach <parent> <child>`. No MCP action. Linking a child (creating it under a parent)
+  and detaching one are recorded on the admin ledger as `team_parent_link_changed`, readable by the
+  parent's managers. Migration `20261109000010`.
 
 Who observes: team managers and grant delegates. Release relevance: signal-only.
 '''

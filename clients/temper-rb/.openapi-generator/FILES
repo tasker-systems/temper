@@ -477,6 +477,7 @@ lib/temper/generated/models/subscription_selector_one_of2.rb
 lib/temper/generated/models/system_access_details.rb
 lib/temper/generated/models/system_settings.rb
 lib/temper/generated/models/teaching_elision.rb
+lib/temper/generated/models/team_child_ref.rb
 lib/temper/generated/models/team_create_request.rb
 lib/temper/generated/models/team_detail.rb
 lib/temper/generated/models/team_invitation.rb

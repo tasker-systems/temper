@@ -324,6 +324,82 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Detach a child team from this team
+    # Removes the parent link, so the child's members stop reaching what is attached to this team and its ancestors. The child and its roster survive as a parentless team. Recorded on the admin ledger as `team_parent_link_changed`.
+    # @param id [String] Parent team ID
+    # @param child_id [String] Child team ID
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [nil]
+    def detach_child_team(id, child_id, opts = {})
+      detach_child_team_with_http_info(id, child_id, opts)
+      nil
+    end
+
+    # Detach a child team from this team
+    # Removes the parent link, so the child&#39;s members stop reaching what is attached to this team and its ancestors. The child and its roster survive as a parentless team. Recorded on the admin ledger as &#x60;team_parent_link_changed&#x60;.
+    # @param id [String] Parent team ID
+    # @param child_id [String] Child team ID
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(nil, Integer, Hash)>] nil, response status code and response headers
+    def detach_child_team_with_http_info(id, child_id, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: TeamsApi.detach_child_team ...'
+      end
+      # verify the required parameter 'id' is set
+      if @api_client.config.client_side_validation && id.nil?
+        fail ArgumentError, "Missing the required parameter 'id' when calling TeamsApi.detach_child_team"
+      end
+      # verify the required parameter 'child_id' is set
+      if @api_client.config.client_side_validation && child_id.nil?
+        fail ArgumentError, "Missing the required parameter 'child_id' when calling TeamsApi.detach_child_team"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/teams/{id}/children/{child_id}'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E')).sub('{child_id}', CGI.escape(child_id.to_s).gsub('.', '%2E'))
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body]
+
+      # return_type
+      return_type = opts[:debug_return_type]
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"TeamsApi.detach_child_team",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:DELETE, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: TeamsApi#detach_child_team\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # Get one team
     # @param id [String] Team ID
     # @param [Hash] opts the optional parameters

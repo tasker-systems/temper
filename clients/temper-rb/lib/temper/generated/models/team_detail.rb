@@ -18,6 +18,9 @@ module Temper::Generated
   class TeamDetail < ApiModelBase
     attr_accessor :auto_join_role
 
+    # The team's direct child teams. Present (non-empty) only for a caller who manages this team or is a system admin: a child's members reach everything attached to this team, so its managers see which teams hang beneath it (team-authority fixes D3). Empty for everyone else.
+    attr_accessor :children
+
     attr_accessor :created
 
     attr_accessor :description
@@ -56,6 +59,7 @@ module Temper::Generated
     def self.attribute_map
       {
         :'auto_join_role' => :'auto_join_role',
+        :'children' => :'children',
         :'created' => :'created',
         :'description' => :'description',
         :'id' => :'id',
@@ -79,6 +83,7 @@ module Temper::Generated
     def self.openapi_types
       {
         :'auto_join_role' => :'TeamRole',
+        :'children' => :'Array<TeamChildRef>',
         :'created' => :'Time',
         :'description' => :'String',
         :'id' => :'String',
@@ -114,6 +119,12 @@ module Temper::Generated
 
       if attributes.key?(:'auto_join_role')
         self.auto_join_role = attributes[:'auto_join_role']
+      end
+
+      if attributes.key?(:'children')
+        if (value = attributes[:'children']).is_a?(Array)
+          self.children = value
+        end
       end
 
       if attributes.key?(:'created')
@@ -249,6 +260,7 @@ module Temper::Generated
       return true if self.equal?(o)
       self.class == o.class &&
           auto_join_role == o.auto_join_role &&
+          children == o.children &&
           created == o.created &&
           description == o.description &&
           id == o.id &&
@@ -266,7 +278,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [auto_join_role, created, description, id, members, name, slug].hash
+      [auto_join_role, children, created, description, id, members, name, slug].hash
     end
 
     # Builds the object from hash

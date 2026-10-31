@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TeamParentLinkChanged",
+  "description": "`team_parent_link_changed` — a child team linked under, or detached from, a parent team\n(team-authority fixes D3). Written only by `_admin_team_parent_link_write`, in the same statement\nas the `kb_teams_parents` row.\n\nA link is read reach: every member of the child reaches everything attached to the parent and\nits ancestors. So who made a link, and who cut one, is an authority record like a membership\nchange. The parent is the event's `subject` reference and the child its `child` reference; the\nparent's managers read it on the subject axis. The personal-team trigger's structural link under\n`temper-system` is a derived writer and is not recorded.",
+  "type": "object",
+  "properties": {
+    "act": {
+      "$ref": "#/$defs/TeamParentLinkAct"
+    },
+    "actor": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProfileId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "child_team_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "parent_team_id": {
+      "type": "string",
+      "format": "uuid"
+    }
+  },
+  "required": [
+    "parent_team_id",
+    "child_team_id",
+    "act"
+  ],
+  "$defs": {
+    "ProfileId": {
+      "description": "A `kb_profiles.id` value.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "TeamParentLinkAct": {
+      "description": "What happened to a [`TeamParentLinkChanged`] link.",
+      "oneOf": [
+        {
+          "description": "The child was created under the parent.",
+          "type": "string",
+          "const": "linked"
+        },
+        {
+          "description": "The parent's manager (or a system admin) detached the child.",
+          "type": "string",
+          "const": "unlinked"
+        }
+      ]
+    }
+  }
+}

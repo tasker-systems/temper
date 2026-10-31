@@ -23,7 +23,7 @@ use crate::error::{ApiError, ApiResult};
 use temper_core::types::ids::ProfileId;
 use temper_core::types::reassign::{RemoveMemberOutcome, ResidualContext, ResidualOwnedReach};
 use temper_core::types::team::{
-    AddMemberRequest, TeamCreateRequest, TeamDetail, TeamMemberDetail, TeamMemberRow,
+    AddMemberRequest, TeamChildRef, TeamCreateRequest, TeamDetail, TeamMemberDetail, TeamMemberRow,
     TeamMemberSource, TeamRole, TeamRow, TeamUpdateRequest,
 };
 
@@ -306,13 +306,20 @@ pub async fn create_team(
     .await
     .map_err(|e| map_unique_violation(e, "team slug already exists"))?;
 
+    // The parent link is read reach into everything attached to the parent, so it is a recorded act
+    // (team-authority fixes D3): the row and its `team_parent_link_changed` record are one write.
     if let Some(parent_id) = parent_id {
-        sqlx::query!(
-            "INSERT INTO kb_teams_parents (child_id, parent_id) VALUES ($1, $2)",
-            team_id,
+        let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, creator, "web")
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+        sqlx::query_scalar!(
+            r#"SELECT _admin_team_parent_link_write($1, $2, 'link', $3, $4) AS "outcome!""#,
+            emitter.uuid(),
+            *creator,
             parent_id,
+            team_id,
         )
-        .execute(&mut *tx)
+        .fetch_one(&mut *tx)
         .await?;
     }
 
@@ -495,6 +502,35 @@ pub async fn team_detail(pool: &PgPool, caller: &Caller, team_id: Uuid) -> ApiRe
     .fetch_all(pool)
     .await?;
 
+    // The direct children, for a caller who manages this team or is a system admin (team-authority
+    // fixes D3): they are who reaches this team's material from beneath it.
+    // On the root or the gating team only a system admin: every personal team hangs under the root.
+    let admin = crate::authz::Principal::from(caller)
+        .system_admin(pool)
+        .await?
+        .is_some();
+    let manages = admin
+        || (!is_root_or_gating(pool, team_id).await?
+            && matches!(
+                role_on_team(pool, team_id, caller.profile_id()).await?,
+                Some(role) if can_manage(role)
+            ));
+    let children = if manages {
+        sqlx::query_as!(
+            TeamChildRef,
+            r#"SELECT t.id, t.slug, t.name
+                 FROM kb_teams_parents tp
+                 JOIN kb_teams t ON t.id = tp.child_id AND t.is_active
+                WHERE tp.parent_id = $1
+                ORDER BY t.slug"#,
+            team_id,
+        )
+        .fetch_all(pool)
+        .await?
+    } else {
+        Vec::new()
+    };
+
     Ok(TeamDetail {
         id: team.id,
         slug: team.slug,
@@ -503,6 +539,7 @@ pub async fn team_detail(pool: &PgPool, caller: &Caller, team_id: Uuid) -> ApiRe
         created: team.created,
         auto_join_role: team.auto_join_role,
         members,
+        children,
     })
 }
 
@@ -603,6 +640,66 @@ pub async fn delete_team(pool: &PgPool, caller: &HumanPrincipal, team_id: Uuid) 
             ApiError::NotFound("team not found or not readable".to_string())
         });
     }
+    Ok(())
+}
+
+/// Detach `child_id` from its parent `parent_id` (team-authority fixes D3).
+///
+/// Rank stays per team (team-role rank spec R7): a parent's managers have no say in a child's
+/// roster. What they do have, as they would over a member added to the parent directly, is the
+/// means to end the reach: a child's members reach everything attached to the parent and its
+/// ancestors, and this cuts that. The child and its roster survive as a parentless team.
+///
+/// Auth before writes: an `owner` or `maintainer` of the PARENT (direct, live), or a system admin.
+/// The personal-team link under `temper-system` is structural and only a system admin removes it.
+/// A caller who may not manage the parent learns nothing about the link (`Forbidden`); a manager
+/// asking to cut a link that does not exist gets `NotFound`. The row and its
+/// `team_parent_link_changed` record are one write.
+pub async fn detach_child(
+    pool: &PgPool,
+    caller: &HumanPrincipal,
+    parent_id: Uuid,
+    child_id: Uuid,
+) -> ApiResult<()> {
+    let admin = crate::authz::Principal::Human(caller)
+        .system_admin(pool)
+        .await?
+        .is_some();
+    if !admin {
+        let parent_live = sqlx::query_scalar!(
+            r#"SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1 AND is_active) AS "e!: bool""#,
+            parent_id,
+        )
+        .fetch_one(pool)
+        .await?;
+        match role_on_team(pool, parent_id, caller.profile_id()).await? {
+            Some(role) if can_manage(role) && parent_live => {}
+            _ => return Err(ApiError::Forbidden),
+        }
+        if is_root_or_gating(pool, parent_id).await? {
+            return Err(ApiError::Forbidden);
+        }
+    }
+
+    let mut tx = pool.begin().await?;
+    let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let outcome = sqlx::query_scalar!(
+        r#"SELECT _admin_team_parent_link_write($1, $2, 'unlink', $3, $4) AS "outcome!""#,
+        emitter.uuid(),
+        *caller.profile_id(),
+        parent_id,
+        child_id,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if outcome != "unlinked" {
+        return Err(ApiError::NotFound(
+            "that team is not a child of this team".to_string(),
+        ));
+    }
+    tx.commit().await?;
     Ok(())
 }
 

@@ -1808,6 +1808,36 @@ pub struct TeamMembershipChanged {
     pub left_ownerless: bool,
 }
 
+/// `team_parent_link_changed` — a child team linked under, or detached from, a parent team
+/// (team-authority fixes D3). Written only by `_admin_team_parent_link_write`, in the same statement
+/// as the `kb_teams_parents` row.
+///
+/// A link is read reach: every member of the child reaches everything attached to the parent and
+/// its ancestors. So who made a link, and who cut one, is an authority record like a membership
+/// change. The parent is the event's `subject` reference and the child its `child` reference; the
+/// parent's managers read it on the subject axis. The personal-team trigger's structural link under
+/// `temper-system` is a derived writer and is not recorded.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct TeamParentLinkChanged {
+    pub parent_team_id: Uuid,
+    pub child_team_id: Uuid,
+    pub act: TeamParentLinkAct,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<ProfileId>,
+}
+
+/// What happened to a [`TeamParentLinkChanged`] link.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum TeamParentLinkAct {
+    /// The child was created under the parent.
+    Linked,
+    /// The parent's manager (or a system admin) detached the child.
+    Unlinked,
+}
+
 /// `subscription_delivery_disposed` — a steward's judgment on one routed event (S2 chunk C).
 ///
 /// The disposition is an **act**, not a column write. `acted` cites what was authored; `declined`
@@ -1994,7 +2024,7 @@ impl FoldDisposition {
 }
 
 /// The typed event names — the registry-stamping and snapshot surfaces iterate this.
-pub const TYPED_EVENT_NAMES: [&str; 35] = [
+pub const TYPED_EVENT_NAMES: [&str; 36] = [
     "cogmap_seeded",
     "resource_created",
     "relationship_asserted",
@@ -2030,6 +2060,7 @@ pub const TYPED_EVENT_NAMES: [&str; 35] = [
     "block_history_scrubbed",
     "resource_scrubbed",
     "team_membership_changed",
+    "team_parent_link_changed",
 ];
 
 /// FOREIGN event names — registered permissive (NULL `payload_schema`) because their body is a
@@ -2049,7 +2080,7 @@ pub const FOREIGN_EVENT_NAMES: [&str; 1] = ["webhook_received"];
 /// `20260718000020`). The migration stamps these on an existing registry; this const is what
 /// re-stamps them on a path that rebuilds the registry from scratch (`bootseed::seed_system` after
 /// a `reset_schema` truncate), so the classification cannot be lost to a reseed.
-pub const ADMIN_EVENT_NAMES: [&str; 13] = [
+pub const ADMIN_EVENT_NAMES: [&str; 14] = [
     "admin_ledger_opened",
     "grant_created",
     "grant_revoked",
@@ -2063,6 +2094,7 @@ pub const ADMIN_EVENT_NAMES: [&str; 13] = [
     "block_history_scrubbed",
     "resource_scrubbed",
     "team_membership_changed",
+    "team_parent_link_changed",
 ];
 
 /// The event names classified `kb_event_types.category = 'system'` — configuration acts, which are
@@ -2193,6 +2225,9 @@ pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> 
                 }
                 "team_membership_changed" => {
                     serde_json::from_value::<TeamMembershipChanged>(r.payload.clone())?;
+                }
+                "team_parent_link_changed" => {
+                    serde_json::from_value::<TeamParentLinkChanged>(r.payload.clone())?;
                 }
                 // Unlisted types (e.g. taxonomy entries no write path emits yet) are intentionally
                 // not roundtripped here; add an arm when a write path begins emitting one.
@@ -2574,6 +2609,34 @@ mod tests {
             v.get("owner").is_none(),
             "resource_scrubbed carries no top-level `owner`"
         );
+    }
+
+    /// `team_parent_link_changed` (team-authority fixes D3): both acts round-trip, an absent actor
+    /// stays absent on the wire, and no field is a trail join key.
+    #[test]
+    fn team_parent_link_changed_round_trips_both_acts() {
+        let linked = TeamParentLinkChanged {
+            parent_team_id: Uuid::now_v7(),
+            child_team_id: Uuid::now_v7(),
+            act: TeamParentLinkAct::Linked,
+            actor: Some(ProfileId::from(Uuid::now_v7())),
+        };
+        let unlinked = TeamParentLinkChanged {
+            act: TeamParentLinkAct::Unlinked,
+            actor: None,
+            ..linked.clone()
+        };
+        for event in [&linked, &unlinked] {
+            let v = serde_json::to_value(event).unwrap();
+            no_trail_key(&v, "team_parent_link_changed");
+            assert_eq!(
+                &serde_json::from_value::<TeamParentLinkChanged>(v).unwrap(),
+                event
+            );
+        }
+        let v = serde_json::to_value(&unlinked).unwrap();
+        assert_eq!(v["act"], "unlinked");
+        assert!(v.get("actor").is_none());
     }
 
     /// `team_membership_changed` (team-role rank spec C8): the three act shapes round-trip, the

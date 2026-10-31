@@ -1640,6 +1640,17 @@ pub enum TeamAction {
         /// Team slug (optionally `+`-prefixed) or UUID
         team: String,
     },
+    /// Detach a child team from a parent team (an owner or maintainer of the parent, or a system
+    /// admin)
+    ///
+    /// The child keeps its roster and becomes a parentless team; its members stop reaching what is
+    /// attached to the parent. `temper team show <parent>` lists the parent's children.
+    Detach {
+        /// Parent team slug (optionally `+`-prefixed) or UUID
+        parent: String,
+        /// Child team slug, decorated ref, or UUID
+        child: String,
+    },
     /// Remove a member from a team (owner/maintainer)
     RemoveMember {
         /// Team slug or UUID
@@ -1672,7 +1683,7 @@ pub enum TeamAction {
         #[arg(long)]
         description: Option<String>,
     },
-    /// Soft-delete a team (owner only)
+    /// Soft-delete a team (its owner, or a system admin)
     Delete {
         /// Team slug (optionally `+`-prefixed) or UUID
         team: String,

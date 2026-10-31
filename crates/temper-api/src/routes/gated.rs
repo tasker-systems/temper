@@ -147,6 +147,7 @@ pub(super) fn gated_routes() -> OpenApiRouter<AppState> {
             handlers::teams::remove_member,
             handlers::teams::change_role
         ))
+        .routes(routes!(handlers::teams::detach_child))
         .routes(routes!(handlers::ingest::create))
         .routes(routes!(handlers::ingest::update))
         .routes(routes!(

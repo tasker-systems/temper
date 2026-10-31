@@ -30,6 +30,13 @@ pub(crate) const ACTOR_HISTORY_REFUSAL: &str = "actor history not found or not r
 pub(crate) enum TeamReadAuthority {
     /// A member of the team, at any role.
     Member,
+    /// A direct owner or maintainer of an active ANCESTOR of the team (team-authority fixes D3).
+    /// The child's members reach everything attached to the ancestor, so its managers see who they
+    /// are — the roster only: this arm opens team detail, never the child's own contexts, maps or
+    /// grants, and confers no authority over the child's membership (team-role rank spec R7).
+    /// The root (`temper-system`) and the gating team never count as the ancestor: every personal
+    /// team hangs under the root, and a managing row there (a demoted admin's) confers nothing.
+    AncestorManager,
     /// A system admin, who reads every team.
     SystemAdmin,
     /// Not a member and not an admin.
@@ -49,6 +56,25 @@ impl ScopedAuthority for TeamReadAuthority {
             .is_some()
         {
             return Ok(TeamReadAuthority::Member);
+        }
+        let manages_an_ancestor = sqlx::query_scalar!(
+            r#"SELECT EXISTS (
+                 SELECT 1 FROM team_ancestors($1) a
+                   JOIN kb_team_members tm ON tm.team_id = a.team_id
+                   JOIN kb_teams t ON t.id = a.team_id
+                  WHERE a.team_id <> $1 AND tm.profile_id = $2
+                    AND tm.role IN ('owner', 'maintainer')
+                    AND t.slug <> 'temper-system'
+                    AND t.slug IS DISTINCT FROM
+                        (SELECT s.gating_team_slug FROM kb_system_settings s WHERE s.id = 1))
+               AS "e!: bool""#,
+            team_id,
+            *caller,
+        )
+        .fetch_one(pool)
+        .await?;
+        if manages_an_ancestor {
+            return Ok(TeamReadAuthority::AncestorManager);
         }
         Ok(if principal.system_admin(pool).await?.is_some() {
             TeamReadAuthority::SystemAdmin
