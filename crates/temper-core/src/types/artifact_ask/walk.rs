@@ -1541,9 +1541,10 @@ mod tests {
                 "properties": { "i": { "enum": [1, 2] }, "j": true }
             } } }
         } });
-        // Narrowed from the root: an `enum` whose members hold `p` and `q.r` but not `q.t`.
+        // Narrowed from the root: an `enum` whose members hold `p` and `q.r` but not `q.t`, two of
+        // them leaving `q` and `q.r` a value each, in member order.
         let rooted = json!({
-            "enum": [{ "p": "a", "q": { "r": 1 } }, { "p": "b" }, 7],
+            "enum": [{ "p": "a", "q": { "r": 1 } }, { "p": "b", "q": { "r": 2 } }, 7],
             "properties": {
                 "p": { "enum": ["b", "c"] },
                 "q": { "properties": { "r": {}, "t": true } }
