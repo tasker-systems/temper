@@ -199,9 +199,11 @@ const ACCEPTED_SCHEMA_URIS: [&str; 2] = [
 /// cap low enough to bound memory would refuse ordinary schemas of long descriptions, so the
 /// budget counts values instead.
 ///
-/// The two caps are the largest whose weight under [`parsed_weight`], at a text of
-/// `MAX_SCHEMA_BYTES`, stays within [`MAX_SHAPE_PARSED_WEIGHT`]; an assertion beside
-/// [`parsed_weight`] holds them there. Every admission profile fits inside them:
+/// The two caps are multiples of 1,024 whose weight under [`parsed_weight`], at a text of
+/// `MAX_SCHEMA_BYTES`, stays within [`MAX_SHAPE_PARSED_WEIGHT`], and neither can rise by 1,024
+/// while the other holds: at both caps the model leaves 167,936 bytes of headroom, and 1,024 more
+/// values would weigh 195,584, 1,024 more objects 647,168. An assertion beside [`parsed_weight`]
+/// holds the caps within the target. Every admission profile fits inside them:
 ///
 /// | Admission profile | Values | Objects |
 /// |---|---|---|
@@ -243,8 +245,8 @@ pub const MAP_NODE_BYTES: usize = 632;
 ///
 /// # 4.5 MiB, provisional
 ///
-/// At the provisional caps the model weighs 632 × 3,072 + 190 × 12,288 + 262,144 = 4,538,368
-/// bytes, about 4.33 MiB: by the model, the most one read of a stored shape builds. The model errs
+/// At the provisional caps the model weighs 632 × 3,072 + 191 × 12,288 + 262,144 = 4,550,656
+/// bytes, about 4.34 MiB: by the model, the most one read of a stored shape builds. The model errs
 /// high: it charges each object's map node a second time through its members, and a schema it
 /// weighs at about 3 MiB measured 1.37 MB of real heap.
 pub const MAX_SHAPE_PARSED_WEIGHT: usize = 9 << 19;
@@ -252,9 +254,10 @@ pub const MAX_SHAPE_PARSED_WEIGHT: usize = 9 << 19;
 /// What `nodes` JSON values, `objects` of them objects, parsed from `text_bytes` bytes of text,
 /// weigh in the deployed `Value`: a map node of [`MAP_NODE_BYTES`] per object, [`VALUE_BYTES`] per
 /// value plus a fifth of a map node per value (a non-root B-tree node holds at least five keys;
-/// the fifth is integer division, 126 bytes), and the text itself.
+/// the fifth is rounded up to 127 bytes, so the model errs high, and a value weighs 191 bytes in
+/// all), and the text itself.
 pub const fn parsed_weight(nodes: usize, objects: usize, text_bytes: usize) -> usize {
-    objects * MAP_NODE_BYTES + nodes * (VALUE_BYTES + MAP_NODE_BYTES / 5) + text_bytes
+    objects * MAP_NODE_BYTES + nodes * (VALUE_BYTES + MAP_NODE_BYTES.div_ceil(5)) + text_bytes
 }
 
 const _: () = assert!(

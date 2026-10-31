@@ -677,9 +677,14 @@ fn whole_count(schema: &Value) -> NodeCount {
     count_up_to(schema, usize::MAX, usize::MAX)
 }
 
-/// `MAX_SHAPE_NODES + 1` scalars: wherever they sit, the document is past the node cap.
-fn past_the_node_cap() -> Value {
-    Value::Array(vec![json!(0); MAX_SHAPE_NODES + 1])
+/// `count` zeros, as one array.
+fn zeros(count: usize) -> Value {
+    Value::Array(vec![json!(0); count])
+}
+
+/// `count` empty objects, as one array.
+fn empty_objects(count: usize) -> Value {
+    Value::Array(vec![json!({}); count])
 }
 
 /// An object schema of `count` fields `f0000`, `f0001`, …, each `field`, with only `type` and
@@ -691,27 +696,32 @@ fn object_of_fields(count: usize, field: &Value) -> Value {
     json!({ "type": "object", "properties": properties })
 }
 
-/// One past the node cap is refused on its own, with the excess in `examples`, in `default` and
-/// in an `additionalProperties` schema, each its own fixture. None holds more than two objects
-/// (the root and the `additionalProperties` schema), so the objects cap is not what refuses it.
-/// Bites dropping the node cap while the objects cap holds, and a count that skips a position.
+/// A document of exactly `MAX_SHAPE_NODES + 1` values is refused, with the excess in `examples`,
+/// in `default` and in an `additionalProperties` schema, each its own fixture. None holds more than
+/// two objects (the root and the `additionalProperties` schema), so the objects cap is not what
+/// refuses it. Each fixture is one value past the cap, counted whole, so the refusal bites
+/// dropping the node cap while the objects cap holds, a count that skips a position, and a cap
+/// checked with any slack.
 #[test]
 fn the_node_cap_alone_refuses() {
-    let in_examples = field_tree(json!({ "examples": past_the_node_cap() }));
-    let in_default = field_tree(json!({ "default": past_the_node_cap() }));
-    let in_additional_properties = field_tree(json!({
+    // Beside the zeros: the root, `$schema` and the array; in the `additionalProperties`
+    // placement, also `type` and the `additionalProperties` schema.
+    let in_examples = field_tree(json!({ "examples": zeros(MAX_SHAPE_NODES - 2) }));
+    let in_default = field_tree(json!({ "default": zeros(MAX_SHAPE_NODES - 2) }));
+    let in_additional = field_tree(json!({
         "type": "object",
-        "additionalProperties": { "examples": past_the_node_cap() },
+        "additionalProperties": { "examples": zeros(MAX_SHAPE_NODES - 4) },
     }));
-    for (placement, schema) in [
-        ("examples", in_examples),
-        ("default", in_default),
-        ("an additionalProperties schema", in_additional_properties),
+    for (placement, schema, objects) in [
+        ("examples", in_examples, 1),
+        ("default", in_default, 1),
+        ("an additionalProperties schema", in_additional, 2),
     ] {
         let count = whole_count(&schema);
-        assert!(
-            count.nodes > MAX_SHAPE_NODES && count.objects <= 2,
-            "{placement}: {count:?}"
+        assert_eq!(
+            (count.nodes, count.objects),
+            (MAX_SHAPE_NODES + 1, objects),
+            "{placement}: the fixture is exactly one value past the cap"
         );
         assert_eq!(
             compile(&schema).err(),
@@ -721,26 +731,41 @@ fn the_node_cap_alone_refuses() {
     }
 }
 
-/// One past the objects cap is refused on its own: `MAX_SHAPE_OBJECTS + 1` empty objects in
-/// `examples`, with the root, `$schema` and the array beside them, far under the node cap. Bites
-/// dropping the objects cap.
+/// A document of exactly `MAX_SHAPE_OBJECTS + 1` objects is refused, with the excess as empty
+/// objects in `examples`, in `default` and in an `additionalProperties` schema, each its own
+/// fixture, every one far under the node cap. Each fixture is one object past the cap, counted
+/// whole, so the refusal bites dropping the objects cap, a count that skips a position, and a cap
+/// checked with any slack.
 #[test]
 fn the_objects_cap_alone_refuses() {
-    let schema = field_tree(json!({
-        "examples": Value::Array(vec![json!({}); MAX_SHAPE_OBJECTS + 1]),
+    // Beside the empty objects, `frame` values: the root, `$schema` and the array, the root the
+    // one object among them; in the `additionalProperties` placement, also `type` and the
+    // `additionalProperties` schema, the second object. The empty objects number one fewer there,
+    // so every fixture holds `MAX_SHAPE_OBJECTS + 1` objects.
+    let in_examples = field_tree(json!({ "examples": empty_objects(MAX_SHAPE_OBJECTS) }));
+    let in_default = field_tree(json!({ "default": empty_objects(MAX_SHAPE_OBJECTS) }));
+    let in_additional = field_tree(json!({
+        "type": "object",
+        "additionalProperties": { "examples": empty_objects(MAX_SHAPE_OBJECTS - 1) },
     }));
-    let count = whole_count(&schema);
-    assert_eq!(
-        (count.nodes, count.objects),
-        (MAX_SHAPE_OBJECTS + 4, MAX_SHAPE_OBJECTS + 2),
-        "{count:?}"
-    );
-    assert!(count.nodes < MAX_SHAPE_NODES, "{count:?}");
-    assert_eq!(
-        compile(&schema).err(),
-        Some(ShapeSchemaUncompilable),
-        "one past the objects cap is refused"
-    );
+    for (placement, schema, frame) in [
+        ("examples", in_examples, 3),
+        ("default", in_default, 3),
+        ("an additionalProperties schema", in_additional, 4),
+    ] {
+        let count = whole_count(&schema);
+        assert_eq!(
+            (count.nodes, count.objects),
+            (MAX_SHAPE_OBJECTS + frame, MAX_SHAPE_OBJECTS + 1),
+            "{placement}: the fixture is exactly one object past the cap"
+        );
+        assert!(count.nodes < MAX_SHAPE_NODES, "{placement}: {count:?}");
+        assert_eq!(
+            compile(&schema).err(),
+            Some(ShapeSchemaUncompilable),
+            "{placement}: one past the objects cap is refused"
+        );
+    }
 }
 
 /// A schema holding exactly `MAX_SHAPE_NODES` values, exactly `MAX_SHAPE_OBJECTS` of them
