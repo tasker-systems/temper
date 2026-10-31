@@ -513,11 +513,13 @@ pub fn compile(schema: &Value) -> Result<Validator, ShapeSchemaUncompilable> {
 /// regex at all — is named at the schema position that holds it; any other refusal is 2020-12
 /// meta-validation, named at the keyword whose value it refused.
 fn build_refusal(error: &jsonschema::ValidationError<'_>) -> String {
+    // The build's pointer is RFC 6901 already; the property names on it are made `printable`, as
+    // the walk's are.
     let at = |pointer: String| {
         if pointer.is_empty() {
             "at the root".to_owned()
         } else {
-            format!("at {pointer}")
+            format!("at {}", printable(&pointer))
         }
     };
     match error.kind() {

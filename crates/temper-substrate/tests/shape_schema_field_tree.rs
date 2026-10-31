@@ -1065,3 +1065,29 @@ fn the_detailed_refusal_has_room() {
         refused_room()
     );
 }
+
+/// A refusal the build gives — 2020-12 meta-validation, or a pattern the regex engine will not
+/// build — names a position whose property names are escaped as the walk's are. Bites a
+/// `build_refusal` that quotes the build's pointer raw.
+#[test]
+fn control_and_bidi_characters_in_a_build_refusal_are_escaped() {
+    let name = "a\u{1b}[31m\n\u{202e}b";
+    let meta = refusal(&field_tree(
+        json!({ "properties": { name: { "type": 5 } } }),
+    ));
+    assert_eq!(
+        meta,
+        "a value that is not valid 2020-12 at /properties/a\\u{1b}[31m\\u{a}\\u{202e}b/type"
+    );
+    let regex = refusal(&field_tree(
+        json!({ "properties": { name: { "pattern": "(" } } }),
+    ));
+    assert!(
+        regex.ends_with("at /properties/a\\u{1b}[31m\\u{a}\\u{202e}b"),
+        "{regex}"
+    );
+    for refused in [&meta, &regex] {
+        assert!(!refused.chars().any(char::is_control), "{refused:?}");
+        assert!(!refused.contains('\u{202e}'), "{refused:?}");
+    }
+}
