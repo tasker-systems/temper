@@ -34,16 +34,16 @@
 //! pool, under one of a few process-wide permits (`compile_permits`), so a burst of reads queues
 //! rather than taking every core; and a stored shape's verdict is remembered by id, so a shape
 //! read many times is compiled about once per process. A compiling shape's by-id read enumerates
-//! its vocabulary on every read, after the verdict, under a permit too. What a path refusal on a
-//! shape teaches of its vocabulary ([`PathTeaching`]) is remembered by id, bounded by an estimate
-//! of the memory it holds rather than by how many there are, so a request refusing a path on a
-//! shape an earlier request already taught enumerates nothing. The constructor holds each
+//! its vocabulary on every read, after the verdict, under a permit too. The constructor holds each
 //! `pattern` and `patternProperties` regex to `shape_schema::MAX_PATTERN_BYTES`. A shape row is
-//! immutable per id (amendment mints a new id), so a remembered verdict or teaching never goes
-//! stale. Each is consulted only with a row a gated read returned — the loader reads its own, and
-//! the by-id read is passed only such rows — and a teaching is remembered only for a shape the
-//! request's load returned readable and compiling (`ShapeLoad::Loaded`), so none answers anything
-//! about a shape the caller cannot read.
+//! immutable per id (amendment mints a new id), so a remembered verdict never goes stale. It is
+//! consulted only with a row a gated read returned — the loader reads its own, and the by-id read
+//! is passed only such rows — so it answers nothing about a shape the caller cannot read.
+//!
+//! **What a path refusal teaches is made per request.** A request whose ask is refused a path on a
+//! shape enumerates that shape's vocabulary once to teach it, in `temper-core`'s ask session, on
+//! the async executor: at most `MAX_ASKED_SHAPES` shapes a request, each walk linear in a schema
+//! of at most the byte bound.
 //!
 //! The successor lookup reads only the home and family of the row step 1 returned; no caller text
 //! reaches SQL here except the shape id, bound as a `uuid`.
@@ -58,12 +58,10 @@ use tokio::sync::Semaphore;
 use crate::error::{ApiError, ApiResult};
 use temper_core::error::TemperError;
 use temper_core::types::artifact_ask::{
-    enumerate, within_schema_bound, AskOperator, AskSession, AskablePath, BoundKind, JsonType,
-    LoadedShape, PathFacts, PathTeaching, RefusalTeaching, ShapeContext, ShapeLoad, ShapeSuccessor,
+    enumerate, within_schema_bound, LoadedShape, ShapeContext, ShapeLoad, ShapeSuccessor,
     Vocabulary, WalkBounds,
 };
 use temper_core::types::ids::{ProfileId, ShapeId};
-use temper_core::types::query::filter::{property_value_bytes, property_value_nodes};
 use temper_core::types::query::PlanRefusal;
 use temper_substrate::readback::{self, RetrievedShape};
 use temper_substrate::shape_schema;
@@ -73,14 +71,10 @@ use temper_substrate::shape_schema;
 ///
 /// **What it costs is per distinct shape**, and the caller bounds how many it passes: each id is
 /// one gated read (the stored schema whole), one bounded measurement, at most one compile within
-/// the walk's byte bound, and — once validation teaches its vocabulary, if no teaching of it is
-/// remembered — one enumeration, linear in the schema. The asks then share one budget for
-/// membership ([`AskSession`]); each path they name is resolved once per request.
-///
-/// **Each shape loaded live and compiling carries its remembered [`PathTeaching`]**, if the
-/// process remembers one (`remember_path_teachings`), so a path refusal on it teaches without
-/// enumerating. Only such a shape's is looked up: a shape the gated read did not return, or one it
-/// returned folded or not compiling, is never walked, and nothing remembered of it is consulted.
+/// the walk's byte bound, and — once validation teaches its vocabulary — one enumeration, linear in
+/// the schema. The asks then share one budget for membership
+/// ([`AskSession`](temper_core::types::artifact_ask::AskSession)); each path they name is resolved
+/// once per request.
 ///
 /// # Errors
 /// A database fault, never a refusal: every refusal is a [`ShapeLoad`] in the context.
@@ -96,19 +90,9 @@ pub async fn load(
     Ok(context_of(loads))
 }
 
-/// The context of these loads, each shape loaded under its own id carrying the [`PathTeaching`]
-/// the process remembers for it, if any (`remember_path_teachings`). Only a loaded shape's is
-/// looked up: one whose load refused is never walked.
+/// The context of these loads, each filed under the id it was loaded for.
 pub(crate) fn context_of(loads: Vec<(ShapeId, ShapeLoad)>) -> ShapeContext {
-    let taught: Vec<PathTeaching> = loads
-        .iter()
-        .filter(|(_, load)| matches!(load, ShapeLoad::Loaded(_)))
-        .filter_map(|(id, _)| remembered_path_teaching(*id))
-        .collect();
-    let context: ShapeContext = loads.into_iter().collect();
-    taught
-        .into_iter()
-        .fold(context, ShapeContext::with_path_teaching)
+    loads.into_iter().collect()
 }
 
 /// Load one shape for `principal`: refusal steps 1–3 of §3.5, in order (see the module doc).
@@ -313,221 +297,6 @@ fn remember(id: ShapeId, verdict: SchemaVerdict) {
     verdicts.insert(id, verdict);
 }
 
-/// What one entry holds beside what it remembers: its key and value in the map's table, a control
-/// byte, and the `Arc`'s two counts.
-const fn entry_bytes<V>() -> usize {
-    size_of::<ShapeId>() + size_of::<(V, usize)>() + 1 + 2 * size_of::<usize>()
-}
-
-/// What one `Value` nested in a declared value is weighed at, beside its text: the weight model's
-/// charge for one value ([`shape_schema::VALUE_BYTES`]), not a copy of it. The walk reads only
-/// scalar values, so a declared value nests none.
-const NODE_BYTES: usize = shape_schema::VALUE_BYTES;
-
-/// What the process remembers by shape id — a path teaching — with each entry's weight, and what
-/// they weigh together. The running total lives beside the map, under one lock, so it cannot drift
-/// from what the map holds. `V` is a shared handle, so reading an entry clones a pointer.
-#[derive(Debug)]
-struct RememberedById<V> {
-    /// Each entry and its weight.
-    entries: HashMap<ShapeId, (V, usize)>,
-    bytes: usize,
-}
-
-impl<V> Default for RememberedById<V> {
-    fn default() -> Self {
-        RememberedById {
-            entries: HashMap::new(),
-            bytes: 0,
-        }
-    }
-}
-
-impl<V: Clone> RememberedById<V> {
-    fn get(&self, id: ShapeId) -> Option<V> {
-        self.entries
-            .get(&id)
-            .map(|(remembered, _)| remembered.clone())
-    }
-
-    /// Remember `value`, weighing `weight`, forgetting arbitrary entries in one pass over the
-    /// map, stopping as soon as it fits `budget`. One heavier than the whole budget is not
-    /// remembered.
-    ///
-    /// Returns every value it let go of — the ones forgotten, the one `id` held before, or
-    /// `value` itself when it is not remembered — so the caller frees them once the lock is
-    /// released, not while other reads wait on it.
-    #[must_use]
-    fn insert(&mut self, id: ShapeId, value: V, weight: usize, budget: usize) -> Vec<V> {
-        if weight > budget {
-            return vec![value];
-        }
-        let mut let_go = Vec::new();
-        if let Some((replaced, replaced_weight)) = self.entries.remove(&id) {
-            self.bytes -= replaced_weight;
-            let_go.push(replaced);
-        }
-        if self.bytes + weight > budget {
-            // Dropping the pass part-way keeps every entry it has not reached.
-            for (_, (evicted, held)) in self.entries.extract_if(|_, _| true) {
-                self.bytes -= held;
-                let_go.push(evicted);
-                if self.bytes + weight <= budget {
-                    break;
-                }
-            }
-        }
-        self.entries.insert(id, (value, weight));
-        self.bytes += weight;
-        let_go
-    }
-}
-
-/// One path: its own size, each segment's `String` and bytes, its operators, and its facts.
-fn path_weight(path: &AskablePath) -> usize {
-    size_of::<AskablePath>()
-        + path
-            .path
-            .iter()
-            .map(|segment| size_of::<String>() + segment.len())
-            .sum::<usize>()
-        + path.operators.len() * size_of::<AskOperator>()
-        + facts_weight(&path.facts)
-}
-
-/// One path's facts: their own size, the declared types, each declared value, and an element's
-/// facts, as deep as they are reported.
-fn facts_weight(facts: &PathFacts) -> usize {
-    size_of::<PathFacts>()
-        + facts
-            .types
-            .as_ref()
-            .map_or(0, |types| types.len() * size_of::<JsonType>())
-        + facts
-            .values
-            .iter()
-            .flatten()
-            .map(value_weight)
-            .sum::<usize>()
-        + facts.items.as_deref().map_or(0, facts_weight)
-}
-
-/// One declared value, as a teaching copies it: the weight model's charge for one value
-/// ([`shape_schema::VALUE_BYTES`]); each node nested in it at `NODE_BYTES`; and its compact text,
-/// counted through a sink so that weighing a large value allocates nothing.
-fn value_weight(value: &Value) -> usize {
-    shape_schema::VALUE_BYTES
-        + NODE_BYTES * property_value_nodes(value)
-        + property_value_bytes(value)
-}
-
-/// The most bytes of path teaching the process remembers, each entry weighed as an estimate of the
-/// memory it holds (`teaching_weight`).
-///
-/// # 16 MiB, by weight rather than by count
-///
-/// A teaching is held to `MAX_TEACHING_BYTES` (16 KiB) on the wire, but what it holds in memory
-/// depends on what its values are, so a count cap would bound it only at the worst case. A
-/// declared value weighs the weight model's charge for one value plus its text: the two wire
-/// bytes of a short code weigh about 65. So a teaching ranges from a few KiB of weight for an
-/// ordinary shape — dozens of typed paths, a few short enums — to about half a MiB for the
-/// heaviest, 16 KiB of the shortest codes. 16 MiB holds about a thousand ordinary teachings, or
-/// about thirty of the heaviest; a count cap of a thousand would have had to admit about 500 MiB.
-/// Past the cap an arbitrary entry is forgotten, and that shape is enumerated again the next time a
-/// request refuses a path on it; a teaching heavier than the whole cap is never remembered.
-///
-/// # What the weight bounds
-///
-/// An entry is weighed by what it holds, not by what it serializes to: its place in the map
-/// (`entry_bytes`); each path its own size, its segments' `String`s and their bytes, and its
-/// operators; and each declared value [`shape_schema::VALUE_BYTES`] plus its text. A short code
-/// that serializes to two bytes is charged as the `Value` it occupies, so what the map holds in
-/// memory is its weight within a small factor — allocator rounding, the table's spare slots — and
-/// 16 MiB of weight is about that much memory.
-const MAX_REMEMBERED_TEACHING_BYTES: usize = 16 << 20;
-
-/// Each loaded shape's path teaching, by id, for the life of the process.
-static PATH_TEACHINGS: LazyLock<Mutex<RememberedById<PathTeaching>>> =
-    LazyLock::new(Mutex::default);
-
-fn remembered_path_teaching(id: ShapeId) -> Option<PathTeaching> {
-    PATH_TEACHINGS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .get(id)
-}
-
-/// What a path teaching weighs in the map: an estimate of the memory it holds (see
-/// `MAX_REMEMBERED_TEACHING_BYTES`). Its place in the map, the teaching's own size, and each path
-/// it sends. A non-empty `truncated` set holds one B-tree leaf node, at most one entry per bound,
-/// weighed as one; its elision is inline, left at the teaching's own size; its paths are held with
-/// no spare capacity, so they are weighed by their count.
-fn teaching_weight(teaching: &PathTeaching) -> usize {
-    entry_bytes::<PathTeaching>()
-        + size_of::<RefusalTeaching>()
-        + teaching
-            .teaching()
-            .vocabulary
-            .iter()
-            .flat_map(|vocabulary| &vocabulary.paths)
-            .map(path_weight)
-            .sum::<usize>()
-        + teaching
-            .teaching()
-            .vocabulary
-            .as_ref()
-            .filter(|vocabulary| !vocabulary.truncated.is_empty())
-            .map_or(0, |_| TRUNCATED_NODE_BYTES)
-}
-
-/// A B-tree leaf node of a `truncated` set: eleven keys, a parent pointer, and its index and length.
-const TRUNCATED_NODE_BYTES: usize = 11 * size_of::<BoundKind>() + size_of::<usize>() + 4;
-
-/// Remember each path teaching one request's ask session made ([`AskSession::taught`]), by the
-/// shape it teaches, for later requests' contexts ([`load`]). Called once the request's asks are
-/// validated, whether they were admitted or refused — a refusal is what makes a teaching.
-///
-/// **Only a teaching of a shape `shapes` holds as loaded, under that id, is remembered** — one the
-/// request's gated read returned and that compiles. A session makes a teaching only for such a
-/// shape, since it walks no other; the check keeps that true of what this map holds whatever a
-/// caller passes. What the map lets go of is freed here, after its lock is released.
-///
-/// [`AskSession::taught`]: temper_core::types::artifact_ask::AskSession::taught
-pub(crate) fn remember_path_teachings(
-    shapes: &ShapeContext,
-    taught: impl IntoIterator<Item = PathTeaching>,
-) {
-    for teaching in taught {
-        let id = teaching.shape();
-        let loaded_here = matches!(
-            shapes.get(&id),
-            Some(ShapeLoad::Loaded(shape)) if shape.shape_id == id
-        );
-        if !loaded_here {
-            continue;
-        }
-        let weight = teaching_weight(&teaching);
-        if weight > MAX_REMEMBERED_TEACHING_BYTES {
-            continue;
-        }
-        let let_go = PATH_TEACHINGS
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(id, teaching, weight, MAX_REMEMBERED_TEACHING_BYTES);
-        drop(let_go);
-    }
-}
-
-/// Once one request's asks are validated, remember each path teaching its session made, by the
-/// shape it teaches ([`remember_path_teachings`]), whether the asks were admitted or refused — a
-/// refusal is what makes a teaching. Every reader that validates asks calls this with the session
-/// it validated them through: `/api/query`'s `prepare`, and the batch read.
-pub(crate) fn remember_session(shapes: &ShapeContext, session: &AskSession<'_>) {
-    #[cfg(feature = "test-db")]
-    test_support::record_path_teachings(shapes, session.taught().cloned());
-    remember_path_teachings(shapes, session.taught().cloned());
-}
-
 /// What a caller may ask of a shape, for its by-id read (spec §2.5): the vocabulary the walk
 /// enumerates, and the refusal step 3 gives this version's schema when it cannot be walked — past
 /// the byte bound (`askable` then says `truncated: [schema_bytes]`), or not compiling (`askable`
@@ -620,20 +389,17 @@ pub(crate) async fn run_off_the_executor<T: Send + 'static>(
 }
 
 /// What a test reads to see how often [`askable`] enumerated a compiling shape — every enumeration,
-/// whichever read asked for it — and how often a request's ask session made a shape's path
-/// teaching, each one an enumeration of its vocabulary.
+/// whichever read asked for it.
 #[cfg(feature = "test-db")]
 pub mod test_support {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock, PoisonError};
 
     use serde_json::Value;
-    use temper_core::types::artifact_ask::{PathTeaching, ShapeContext, ShapeLoad};
 
     type Tally = OnceLock<Mutex<HashMap<String, usize>>>;
 
     static ENUMERATIONS: Tally = OnceLock::new();
-    static PATH_TEACHINGS_MADE: Tally = OnceLock::new();
 
     /// Count one in `tally` for a schema whose root carries a string `$comment` — the tag a test
     /// gives its fixture, so that suites reading other shapes in parallel cannot move its count.
@@ -667,26 +433,6 @@ pub mod test_support {
     pub fn enumerations_tagged(tag: &str) -> usize {
         read(&ENUMERATIONS, tag)
     }
-
-    /// Count each path teaching a request's ask session made, by the tag of the loaded shape's
-    /// schema it teaches. Called by `remember_session` beside remembering them, and apart from it,
-    /// so a request that remembers nothing is still counted.
-    pub(crate) fn record_path_teachings(
-        shapes: &ShapeContext,
-        made: impl IntoIterator<Item = PathTeaching>,
-    ) {
-        for teaching in made {
-            if let Some(ShapeLoad::Loaded(shape)) = shapes.get(&teaching.shape()) {
-                count(&PATH_TEACHINGS_MADE, &shape.schema);
-            }
-        }
-    }
-
-    /// How many path teachings — each one enumeration of the shape's vocabulary — requests' ask
-    /// sessions have made, in this process, of a schema whose root `$comment` is `tag`.
-    pub fn path_teachings_made_tagged(tag: &str) -> usize {
-        read(&PATH_TEACHINGS_MADE, tag)
-    }
 }
 
 /// A live, compilable row as the pure half reads it.
@@ -712,8 +458,6 @@ fn read_fault(e: anyhow::Error) -> ApiError {
 mod tests {
     use super::*;
     use std::time::Duration;
-    use temper_core::types::artifact_ask::{ArtifactAsk, ArtifactPredicate};
-    use temper_core::types::query::PropertyOp;
 
     /// Every permit held, no shape work runs: the work waits for a permit rather than fanning out
     /// to the blocking pool. Deterministic in the green direction — the work cannot start without
@@ -756,185 +500,5 @@ mod tests {
             .unwrap_or_else(PoisonError::into_inner)
             .len();
         assert!(held <= MAX_REMEMBERED_VERDICTS, "{held}");
-    }
-
-    // ── Path teachings, remembered by shape id ────────────────────────────────────────────
-
-    /// A shape loaded under a fresh id, declaring `schema`.
-    fn loaded_shape(schema: Value) -> LoadedShape {
-        LoadedShape {
-            shape_id: ShapeId::new(),
-            shape_version: 1,
-            home_anchor_table: "kb_contexts".to_owned(),
-            home_anchor_id: uuid::Uuid::nil(),
-            kind_owner_table: "kb_teams".to_owned(),
-            kind_owner_id: uuid::Uuid::nil(),
-            artifact_kind: "measurement".to_owned(),
-            schema,
-        }
-    }
-
-    /// What a path refusal on `shape` teaches, made by an ask session as a request's is.
-    fn teaching_of(shape: &LoadedShape) -> PathTeaching {
-        let context: ShapeContext = [(shape.shape_id, ShapeLoad::Loaded(shape.clone()))]
-            .into_iter()
-            .collect();
-        let mut session = context.session();
-        let ask = ArtifactAsk {
-            shape: shape.shape_id,
-            predicates: vec![ArtifactPredicate {
-                path: vec!["undeclared".to_owned()],
-                op: PropertyOp::HasKey,
-            }],
-            intent: vec![],
-            include_folded: false,
-            shape_states: vec![],
-        };
-        session.validate(&ask).expect_err("the path is refused");
-        let teaching = session
-            .taught()
-            .next()
-            .cloned()
-            .expect("the refusal made the shape's teaching");
-        teaching
-    }
-
-    /// The teaching of a shape declaring one path whose single segment is `segment_bytes` long.
-    fn teaching_of_one_path(segment_bytes: usize) -> PathTeaching {
-        let mut properties = serde_json::Map::new();
-        properties.insert("x".repeat(segment_bytes), serde_json::json!({}));
-        let teaching = teaching_of(&loaded_shape(
-            serde_json::json!({ "properties": properties }),
-        ));
-        assert_eq!(
-            teaching
-                .teaching()
-                .vocabulary
-                .as_ref()
-                .map(|v| v.paths.len()),
-            Some(1),
-            "the one path is taught"
-        );
-        teaching
-    }
-
-    /// The teaching map holds no more than its byte budget, however many entries are offered, the
-    /// entry offered last reads back, the running total is the sum of the weights held, every
-    /// entry forgotten is handed back to be freed, and an entry heavier than the whole budget is
-    /// not remembered. That a remembered teaching spares an enumeration is witnessed by the
-    /// integration test `a_shape_refusing_paths_across_requests_is_enumerated_once`. Bite: delete
-    /// the `extract_if` pass that forgets entries from `RememberedById::insert`; the total passes
-    /// the budget on the fifth entry.
-    #[test]
-    fn the_teaching_map_is_capped_by_bytes() {
-        let each = teaching_of_one_path(200);
-        let weight = teaching_weight(&each);
-        let budget = 4 * weight + weight / 2;
-        let mut map = RememberedById::<PathTeaching>::default();
-
-        let mut last = ShapeId::new();
-        let mut let_go = 0;
-        for _ in 0..20 {
-            last = ShapeId::new();
-            let_go += map.insert(last, each.clone(), weight, budget).len();
-            assert!(map.bytes <= budget, "{} > {budget}", map.bytes);
-        }
-        assert_eq!(map.entries.len(), 4);
-        assert_eq!(let_go, 16, "each entry forgotten is handed back");
-        assert_eq!(
-            map.bytes,
-            map.entries.values().map(|(_, held)| held).sum::<usize>()
-        );
-        assert_eq!(map.get(last).as_ref(), Some(&each));
-
-        let too_heavy = ShapeId::new();
-        let refused = map.insert(too_heavy, each.clone(), budget + 1, budget);
-        assert_eq!(refused.len(), 1, "handed back, not held");
-        assert!(map.get(too_heavy).is_none());
-        assert!(map.bytes <= budget);
-        assert!(map.get(last).is_some(), "nothing was forgotten for it");
-    }
-
-    /// An id offered again — two requests that race both remember — replaces its entry rather than
-    /// counting it twice: the entry count is unchanged, the running total is the sum of the weights
-    /// held, and the replaced teaching is handed back. Bite: delete the block in
-    /// `RememberedById::insert` that removes `id`'s entry first; the total counts the weight twice
-    /// and the sum check goes red.
-    #[test]
-    fn a_teaching_remembered_again_is_weighed_once() {
-        let each = teaching_of_one_path(200);
-        let weight = teaching_weight(&each);
-        let budget = 10 * weight;
-        let mut map = RememberedById::<PathTeaching>::default();
-
-        let mut last = ShapeId::new();
-        for _ in 0..3 {
-            last = ShapeId::new();
-            assert!(map.insert(last, each.clone(), weight, budget).is_empty());
-        }
-        let replaced = map.insert(last, each.clone(), weight, budget);
-        assert_eq!(map.entries.len(), 3);
-        assert_eq!(
-            map.bytes,
-            map.entries.values().map(|(_, held)| held).sum::<usize>()
-        );
-        assert_eq!(replaced.len(), 1, "the replaced teaching is handed back");
-    }
-
-    /// A teaching is weighed by what it holds, not by what it sends: one path over an enum of a
-    /// thousand short codes, about four KiB on the wire, weighs at least the weight model's charge
-    /// for a value (`shape_schema::VALUE_BYTES`) a code. Bite: return the teaching's compact
-    /// serialized length from `teaching_weight`; that is about 4 KiB, and the assertion goes red.
-    #[test]
-    fn a_teaching_weighs_what_it_holds() {
-        let codes: Vec<Value> = (0..1_000).map(Value::from).collect();
-        let teaching = teaching_of(&loaded_shape(serde_json::json!({
-            "properties": { "code": { "enum": codes } }
-        })));
-        let sent: usize = teaching
-            .teaching()
-            .vocabulary
-            .iter()
-            .flat_map(|vocabulary| &vocabulary.paths)
-            .map(|path| path.facts.values.as_ref().map_or(0, Vec::len))
-            .sum();
-        assert_eq!(sent, 1_000, "the teaching sends every code");
-        let weight = teaching_weight(&teaching);
-        assert!(weight >= 1_000 * shape_schema::VALUE_BYTES, "{weight}");
-    }
-
-    /// **A teaching is remembered only for a shape the request loaded live and compiling, under
-    /// its id.** Offered beside the same id loaded as refused — absent or unreadable, folded, not
-    /// compiling, past the byte bound — or loaded under another id, or not loaded at all, it is
-    /// not remembered; beside the shape loaded, it is. Bite: delete the `loaded_here` check in
-    /// `remember_path_teachings`; the first refused load remembers it.
-    #[test]
-    fn only_a_teaching_of_a_shape_loaded_under_its_id_is_remembered() {
-        let shape = loaded_shape(serde_json::json!({ "properties": { "unit": {} } }));
-        let id = shape.shape_id;
-        let teaching = teaching_of(&shape);
-        let mut elsewhere = shape.clone();
-        elsewhere.shape_id = ShapeId::new();
-        for load in [
-            ShapeLoad::NotAskable,
-            ShapeLoad::Superseded { successor: None },
-            ShapeLoad::Uncompilable,
-            ShapeLoad::SchemaTooLarge,
-            ShapeLoad::Loaded(elsewhere),
-        ] {
-            let refusing: ShapeContext = [(id, load)].into_iter().collect();
-            remember_path_teachings(&refusing, [teaching.clone()]);
-            assert_eq!(remembered_path_teaching(id), None, "{refusing:?}");
-        }
-        remember_path_teachings(&ShapeContext::empty(), [teaching.clone()]);
-        assert_eq!(
-            remembered_path_teaching(id),
-            None,
-            "a shape the request did not load"
-        );
-
-        let loaded: ShapeContext = [(id, ShapeLoad::Loaded(shape))].into_iter().collect();
-        remember_path_teachings(&loaded, [teaching.clone()]);
-        assert_eq!(remembered_path_teaching(id), Some(teaching));
     }
 }

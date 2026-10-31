@@ -28,17 +28,10 @@ use temper_core::types::artifact_ask::{
 };
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, EntityId, ProfileId, ShapeId};
-use temper_core::types::query::{
-    shapes_to_load, ActInvocation, ActName, Composition, Intention, OutcomeDeclaration,
-    PlanRefusal, PropertyOp, RefusalReason, ReturnSpec, StageInput, StageName, StageNode,
-    StageRelation,
-};
-use temper_services::backend::query_read::prepare;
+use temper_core::types::query::{PlanRefusal, PropertyOp, RefusalReason};
 use temper_services::backend::substrate_read;
 use temper_services::error::ApiError;
-use temper_services::services::shape_loader::test_support::{
-    enumerations_tagged, path_teachings_made_tagged,
-};
+use temper_services::services::shape_loader::test_support::enumerations_tagged;
 use temper_services::services::shape_loader::{askable, judge, load, load_one, SchemaVerdict};
 use temper_services::services::shape_service::{self, DeclareShapeServiceParams};
 use temper_substrate::events::EventContext;
@@ -848,115 +841,6 @@ async fn a_shape_read_many_times_is_compiled_once(pool: PgPool) {
         ShapeLoad::Loaded(_)
     ));
     assert_eq!(compiles_tagged(&tag), 1, "one compile for six reads");
-}
-
-// ── A path refused on one shape across requests is taught from one enumeration ──────────────
-
-/// A selection asking `shape` at a path its schema does not declare, piped into a returned
-/// `find-exact` — a plan refused `path_outside_shape` at the gate, before any embed.
-fn refusing_a_path(shape: ShapeId) -> Composition {
-    let sel = StageName::parse("sel").unwrap();
-    let hits = StageName::parse("hits").unwrap();
-    Composition {
-        outcome: OutcomeDeclaration {
-            returns: vec![ReturnSpec {
-                stage: hits.clone(),
-                with: vec![],
-            }],
-        },
-        stages: vec![
-            StageNode::Act(ActInvocation {
-                name: sel.clone(),
-                act: ActName::FindResourcesWith,
-                intention: None,
-                inputs: vec![],
-                terms: Default::default(),
-                resource_filter: None,
-                edge_filter: None,
-                properties: vec![],
-                artifact_filter: vec![ArtifactAsk {
-                    shape,
-                    predicates: vec![ArtifactPredicate {
-                        path: vec!["undeclared".to_string()],
-                        op: PropertyOp::HasKey,
-                    }],
-                    intent: vec![],
-                    include_folded: false,
-                    shape_states: vec![],
-                }],
-            }),
-            StageNode::Act(ActInvocation {
-                name: hits,
-                act: ActName::FindExact,
-                intention: Some(Intention {
-                    query: "subject".to_string(),
-                    embedding: None,
-                }),
-                inputs: vec![StageInput::Upstream {
-                    relation: StageRelation::Bound,
-                    stage: sel,
-                }],
-                terms: Default::default(),
-                resource_filter: None,
-                edge_filter: None,
-                properties: vec![],
-                artifact_filter: vec![],
-            }),
-        ],
-    }
-}
-
-/// Three separate requests, each loading its shapes with `load` and validating through
-/// `query_read::prepare` as the handler does, refuse a path on one stored shape: the shape's
-/// vocabulary is enumerated once in all — the first request makes its teaching and `prepare`
-/// remembers it; the later two find it in the context `load` built, and enumerate nothing. Every
-/// request's refusals are byte for byte the first's, and teach the shape's one path. Counted by
-/// the fixture's tag, so other suites' requests cannot move it. Bites remembering skipped (in
-/// `query_read::prepare`, delete the `remember_path_teachings` call): three enumerations.
-#[sqlx::test(migrations = "../../migrations")]
-async fn a_shape_refusing_paths_across_requests_is_enumerated_once(pool: PgPool) {
-    let w = seed_world(&pool, "loader-teaching-remembered").await;
-    let tag = fresh_tag();
-    let mut schema = value_schema();
-    schema["$comment"] = json!(tag);
-    let id = store(&pool, &w, "measurement", &schema).await;
-    let c = refusing_a_path(id);
-
-    let mut refusals: Vec<Vec<PlanRefusal>> = Vec::new();
-    for _ in 0..3 {
-        let ids = shapes_to_load(&c).expect("within the request caps");
-        let shapes = load(&pool, w.owner, &ids).await.expect("the loader reads");
-        assert!(matches!(shapes.get(&id), Some(ShapeLoad::Loaded(_))));
-        refusals.push(
-            prepare(c.clone(), &shapes)
-                .await
-                .expect_err("the undeclared path is refused"),
-        );
-    }
-
-    let refused = &refusals[0];
-    assert_eq!(
-        refused.iter().map(|r| r.reason.clone()).collect::<Vec<_>>(),
-        vec![RefusalReason::PathOutsideShape],
-        "{refused:?}"
-    );
-    let taught = refused[0]
-        .teaches
-        .as_ref()
-        .and_then(|t| t.vocabulary.as_ref())
-        .expect("a path refusal teaches the vocabulary");
-    assert_eq!(taught.paths.len(), 1);
-    assert_eq!(taught.paths[0].path, vec!["value".to_string()]);
-    let wire = |rs: &[PlanRefusal]| serde_json::to_vec(rs).unwrap();
-    assert!(
-        refusals.iter().all(|rs| wire(rs) == wire(refused)),
-        "every request refuses byte for byte as the first did"
-    );
-    assert_eq!(
-        path_teachings_made_tagged(&tag),
-        1,
-        "one enumeration for three requests"
-    );
 }
 
 // ── Permit queueing under concurrent by-id misses ───────────────────────────────────────────

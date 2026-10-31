@@ -707,9 +707,8 @@ pub(super) struct ShapeWalk<'s> {
     /// Built on first use, so an ask refused before the shape is consulted builds nothing.
     walk: Option<Result<Walk<'s>, BoundKind>>,
     resolved: HashMap<Vec<String>, Resolved<'s>>,
-    /// What a path refusal teaches of the shape: the one its context remembered, or the one made
-    /// here on the first path refusal.
-    taught: Option<Taught>,
+    /// What a path refusal teaches of the shape, made here on the first path refusal.
+    taught: Option<PathTeaching>,
     /// Whether this walk enumerated the shape's vocabulary — at most once, to make its teaching.
     enumerated: bool,
 }
@@ -721,28 +720,15 @@ fn walk_of(shape: ShapeId, schema: &Value) -> Result<Walk<'_>, BoundKind> {
     Walk::new(schema, &WalkBounds::BUILD)
 }
 
-/// Where a shape's path teaching came from: its context, which remembered it from an earlier
-/// request, or this walk, which made it.
-#[derive(Debug)]
-enum Taught {
-    Remembered(PathTeaching),
-    Made(PathTeaching),
-}
-
 impl<'s> ShapeWalk<'s> {
-    /// A walk of `schema`, the shape `shape`'s, holding `remembered` — what a path refusal teaches
-    /// of that shape, if its context carried one — so that no refusal enumerates it again.
-    pub(super) fn new(
-        shape: ShapeId,
-        schema: &'s Value,
-        remembered: Option<PathTeaching>,
-    ) -> ShapeWalk<'s> {
+    /// A walk of `schema`, the shape `shape`'s, built on first use.
+    pub(super) fn new(shape: ShapeId, schema: &'s Value) -> ShapeWalk<'s> {
         ShapeWalk {
             shape,
             schema,
             walk: None,
             resolved: HashMap::new(),
-            taught: remembered.map(Taught::Remembered),
+            taught: None,
             enumerated: false,
         }
     }
@@ -767,10 +753,10 @@ impl<'s> ShapeWalk<'s> {
         reached
     }
 
-    /// What a path refusal teaches of this shape: the teaching its context remembered, or — the
-    /// first time one is needed, when there is none — the one `teach` makes from the shape's
-    /// askable vocabulary over borrowed facts ([`Walk::enumerate_borrowed`]), enumerated here once.
-    /// Either is kept for every later refusal; the vocabulary is not.
+    /// What a path refusal teaches of this shape: the first time one is needed, the one `teach`
+    /// makes from the shape's askable vocabulary over borrowed facts
+    /// ([`Walk::enumerate_borrowed`]), enumerated here once. The teaching is kept for every later
+    /// refusal; the vocabulary is not.
     pub(super) fn path_teaching(
         &mut self,
         teach: impl FnOnce(&Enumerated<Facts<'s>>, ShapeId) -> PathTeaching,
@@ -785,7 +771,7 @@ impl<'s> ShapeWalk<'s> {
         } = self;
         let schema: &'s Value = schema;
         let shape = *shape;
-        let taught = taught.get_or_insert_with(|| {
+        taught.get_or_insert_with(|| {
             let vocabulary = match walk.get_or_insert_with(|| walk_of(shape, schema)) {
                 Ok(walk) => {
                     *enumerated = true;
@@ -793,19 +779,8 @@ impl<'s> ShapeWalk<'s> {
                 }
                 Err(at) => Enumerated::unwalked(*at),
             };
-            Taught::Made(teach(&vocabulary, shape))
-        });
-        match taught {
-            Taught::Remembered(teaching) | Taught::Made(teaching) => teaching,
-        }
-    }
-
-    /// The path teaching this walk made, if it made one — never one its context remembered.
-    pub(super) fn made_path_teaching(&self) -> Option<&PathTeaching> {
-        match &self.taught {
-            Some(Taught::Made(teaching)) => Some(teaching),
-            Some(Taught::Remembered(_)) | None => None,
-        }
+            teach(&vocabulary, shape)
+        })
     }
 
     /// Whether this walk enumerated the shape's vocabulary.

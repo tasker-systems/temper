@@ -156,15 +156,10 @@ pub struct RefusalTeaching {
 /// What a `path_outside_shape` refusal teaches of one shape — its askable vocabulary held to
 /// [`MAX_TEACHING_BYTES`], and how many paths were cut — without the bound the refused path met,
 /// which each refusal sets beside it (`beyond_bound`). That is a function of the shape alone: the
-/// vocabulary is enumerated to the walk's own bounds, whatever the request's asks have spent. A
-/// shape row is immutable per id (§2.2), so a caller may remember a teaching by shape id across
-/// requests and hand it back in a later request's [`ShapeContext`](super::ShapeContext)
-/// ([`ShapeContext::with_path_teaching`](super::ShapeContext::with_path_teaching)), whose session
-/// then teaches from it byte for byte as it would have taught from an enumeration, and enumerates
-/// nothing.
+/// vocabulary is enumerated to the walk's own bounds, whatever the request's asks have spent.
 ///
-/// Made only by a session ([`AskSession::taught`](super::AskSession::taught) reports the ones it
-/// made), never from a caller's data. Cheap to clone: the teaching is shared.
+/// Made only by a session's walk of the shape, once per request, never from a caller's data. Cheap
+/// to clone: the teaching is shared.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathTeaching {
     shape: ShapeId,
@@ -189,7 +184,7 @@ impl PathTeaching {
         self.shape
     }
 
-    /// The teaching itself, with no `beyond_bound`: what a holder weighs to remember it.
+    /// The teaching itself, with no `beyond_bound`.
     pub fn teaching(&self) -> &RefusalTeaching {
         &self.teaching
     }
@@ -827,9 +822,8 @@ struct Sorted<'p, 's> {
 /// is what a request's values can make expensive, so it draws on the request's one budget of
 /// [`MAX_MEMBERSHIP_STEPS`]; a predicate past the spent budget is refused `path_outside_shape`
 /// naming `work` — visibly, as every bound is. What a path refusal teaches is the shape's
-/// [`PathTeaching`]: taken from the request's context when its caller remembered one, and
-/// otherwise made once per shape for the request from its enumerated vocabulary, so a spent
-/// request still teaches what it may ask.
+/// [`PathTeaching`], made once per shape for the request from its enumerated vocabulary, so a
+/// spent request still teaches what it may ask.
 ///
 /// No path's values are copied to sort it: the facts stay the walk's, borrowed from the schema. A
 /// refused path's facts are copied only into a teaching, once per distinct path and only as far as
@@ -895,8 +889,8 @@ fn sort<'p, 'c>(
 /// `path_outside_shape`, teaching the askable vocabulary and the bound an asked path met.
 ///
 /// The vocabulary half is the shape's [`PathTeaching`], the same for every refusal on that shape:
-/// the one the request's context remembered, or else made once for the request by
-/// [`teach_paths`] and kept on the walk. Only `beyond_bound` is this refusal's own.
+/// made once for the request by [`teach_paths`] and kept on the walk. Only `beyond_bound` is this
+/// refusal's own.
 fn refuse_paths(sorted: &Sorted<'_, '_>, walk: &mut ShapeWalk<'_>, errs: &mut Vec<PlanRefusal>) {
     if sorted.outside_path.is_empty() {
         return;
