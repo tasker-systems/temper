@@ -163,6 +163,11 @@ const INPUT_TABLES: &[&str] = &[
     "kb_teams",
     "kb_teams_parents",
     "kb_profiles",
+    // Machine registrations restore BEFORE memberships: a personal team admits its owner's machines,
+    // and `personal_team_admits` reads who registered each one (20261110000000). Without them a
+    // restored machine row on its owner's personal team would be refused. They also make
+    // `is_machine_profile` answer in the replay namespace as it does live.
+    "kb_machine_clients",
     "kb_entities",
     "kb_team_members",
     "kb_contexts",

@@ -258,7 +258,8 @@ pub(crate) fn parse_team_role(role: &str) -> ApiResult<TeamRole> {
 /// The bar is `can_manage`, called through the shared `require_manage_on_team` so it cannot drift
 /// from [`contain_reach`]. A system admin is exempt (Phase A D5) but still has the target team's
 /// existence checked — the D5 bypass is about authority, not about writing a `principal_id` that
-/// points at nothing.
+/// points at nothing. The exemption stops at a personal team: there the bar is its owner's, for
+/// every caller (task `01a19006`).
 ///
 /// **There is deliberately NO gating-team exclusion here**, unlike the two other two-sided gates
 /// (`cogmap_service::can_bind`, `context_service::can_share`), which both refuse the gating team as a
@@ -279,6 +280,11 @@ pub(crate) async fn contain_target_team(
     caller: ProfileId,
     team_id: Uuid,
 ) -> ApiResult<()> {
+    // A personal team is acted on by its owner alone (task `01a19006`): binding read-reach to one
+    // is held to the owner's bar whatever the caller's authority on the connection.
+    if team_service::personal_of(pool, team_id).await?.is_some() {
+        return team_service::require_manage_on_team(pool, team_id, caller).await;
+    }
     match authority {
         MachineRegistrationAuthority::SystemAdmin => {
             team_service::require_team_exists(pool, team_id).await

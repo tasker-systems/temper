@@ -2030,6 +2030,45 @@ mod tests {
         assert!(matches!(err, ApiError::Forbidden));
     }
 
+    /// Task 01a19006: attaching a context to someone's personal team, or detaching one from it, is
+    /// acting on that team — its owner's alone. A system admin is refused both ways; the owner
+    /// shares their own context into it as before.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_personal_team_target_is_its_owners_alone(pool: PgPool) {
+        let (admin, _member, _gating, admin_ctx) = seed_admin_team_context(&pool).await;
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let alice_ctx = mk_personal_context(&pool, "proj", alice).await;
+        let personal: Uuid = sqlx::query_scalar("SELECT id FROM kb_teams WHERE personal_of = $1")
+            .bind(*alice)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let req = ShareContextRequest { team_id: personal };
+
+        let as_alice = crate::test_support::human_principal_for(&pool, alice.uuid()).await;
+        assert!(
+            share(&pool, &as_alice, alice_ctx, &req)
+                .await
+                .unwrap()
+                .shared
+        );
+
+        let as_admin = crate::test_support::human_principal_for(&pool, admin.uuid()).await;
+        let err = share(&pool, &as_admin, *admin_ctx, &req).await.unwrap_err();
+        assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
+        let err = unshare(&pool, &as_admin, alice_ctx, personal)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
+        let shares: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM kb_team_contexts WHERE team_id = $1")
+                .bind(personal)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(shares, 1, "only alice's own share stands");
+    }
+
     #[sqlx::test(migrations = "../../migrations")]
     async fn slug_collision_is_conflict(pool: PgPool) {
         let alice = mk_profile_ent(&pool, "alice").await;

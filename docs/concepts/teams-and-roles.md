@@ -12,6 +12,12 @@ or is granted, automatically, through nested teams.
 Every profile also gets a private **personal team** (`personal-<handle>`) automatically — so
 you always belong to at least one team, and your personal contexts live under it.
 
+A personal team is yours alone. It holds you and the machines you registered, and nobody else:
+no other person can be added, invited or mapped from an identity provider into it, and no team
+can be created beneath it. A system admin can list a personal team for audit, but cannot change
+its membership, attach anything to it or detach anything from it. Only erasure acts on it
+without you.
+
 ## The role ladder
 
 A member holds one role per team, from most to least capable:
@@ -37,7 +43,8 @@ Roles are a rank, and every membership change follows one rule:
 - **A team keeps at least one owner.** The last owner cannot leave or step down until someone
   else holds `owner`. To hand a team over, grant `owner` to another member, then lower your own
   role.
-- **A system admin can make any change**, including repairing a team whose only owner has left.
+- **A system admin can make any change**, including repairing a team whose only owner has left —
+  on every team except a personal one, which only its owner changes.
   On the instance's gating team, only a system admin adds, invites, changes or removes another
   member (any member may still leave it).
 

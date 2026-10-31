@@ -32,6 +32,13 @@
 //! transaction, after its locks, so its resolve takes a connection. Its arm order is still
 //! load-bearing (`internal/agents/key-patterns.md`): admin, then the gating-team arm, then the
 //! caller's role on this team alone.
+//!
+//! # Personal teams (task `01a19006`)
+//!
+//! A personal team holds its owner and the owner's machines, and no one else. The admin arm does
+//! not resolve on one — an admin there is whatever their own row makes them, which on anyone
+//! else's personal team is nobody — and an add the database's `personal_team_admits` would refuse
+//! is refused here by name (check 4b of [`decide`]). Erasure has its own path and is unaffected.
 
 use sqlx::PgConnection;
 use uuid::Uuid;
@@ -66,7 +73,8 @@ impl ManagingRole {
 #[derive(Debug)]
 pub(crate) enum MembershipAuthority {
     /// A system admin: unrestricted on rank (R3, C9), and the only authority on the gating team's
-    /// roster (R11, C14). Carries the sealed proof, so this arm cannot be named without one (P16).
+    /// roster (R11, C14). Never resolved on a personal team. Carries the sealed proof, so this arm
+    /// cannot be named without one (P16).
     SystemAdmin(SystemAdmin),
     /// A person holding a managing role on THIS team (C13). Never resolved on the gating team.
     Managing(ManagingRole),
@@ -85,6 +93,7 @@ pub(crate) enum MembershipAuthority {
 pub(crate) struct ResolvedMembership {
     authority: MembershipAuthority,
     is_gating: bool,
+    is_personal: bool,
     team_id: Uuid,
     caller: ProfileId,
 }
@@ -128,6 +137,14 @@ impl ResolvedMembership {
     /// exactly checks 1, 2 and 6 of [`decide`], reached by calling the same functions, so the
     /// refusals and their order cannot drift from the rank rule.
     pub(crate) fn authorize_invitation(&self, role: TeamRole) -> ApiResult<()> {
+        // A personal team admits no other person, so there is nothing to invite anyone to. After
+        // checks 1–2 would be the S6 order, but the owner is the only caller who reaches a personal
+        // team with authority at all, and nobody else learns more from this than from the slug.
+        if self.is_personal {
+            return Err(ApiError::BadRequest(
+                crate::services::team_service::PERSONAL_TEAM_HOLDS_ITS_OWNER.to_string(),
+            ));
+        }
         // Checks 1–2 against an inert stand-in target: `nil` is not a real profile id (they are
         // UUIDv7s), so it can never equal the caller, and an `Add` reads nothing else about its
         // target — existence, machine and source are invitation-specific absences.
@@ -153,7 +170,7 @@ impl ResolvedMembership {
 impl MembershipAuthority {
     /// Resolve the caller's authority over `team_id`'s membership, in this order:
     ///
-    /// 1. a system admin → [`Self::SystemAdmin`];
+    /// 1. a system admin, on any team but a personal one → [`Self::SystemAdmin`];
     /// 2. the gating team → [`Self::SelfOnly`] with the caller's role there, or [`Self::None`]
     ///    (C14: a role on the gating team confers no membership authority there);
     /// 3. the caller's role on this team alone, with no walk up or down the team DAG (C13):
@@ -172,13 +189,19 @@ impl MembershipAuthority {
             Err(other) => return Err(other),
         };
         let is_gating = crate::services::access_service::is_gating_team_on(conn, team_id).await?;
+        let is_personal = crate::services::team_service::personal_of_on(conn, team_id)
+            .await?
+            .is_some();
         let bound = |authority| ResolvedMembership {
             authority,
             is_gating,
+            is_personal,
             team_id,
             caller: caller.profile_id(),
         };
-        if let Some(admin) = admin {
+        // A personal team is acted on by its owner alone (ruled 2026-10-31): the admin arm does not
+        // resolve there, and an admin falls through to their own row like anyone else.
+        if let Some(admin) = admin.filter(|_| !is_personal) {
             return Ok(bound(MembershipAuthority::SystemAdmin(admin)));
         }
         let role =
@@ -247,6 +270,9 @@ pub(crate) struct MembershipTarget {
     /// The target's row on this team, if any.
     current: Option<(TeamRole, TeamMemberSource)>,
     is_machine: bool,
+    /// `personal_team_admits(team, profile)` as read under the locks: false only when the team is
+    /// someone's personal team and the target is neither that someone nor one of their machines.
+    personal_admits: bool,
 }
 
 impl MembershipTarget {
@@ -478,6 +504,9 @@ async fn revoke_invitations_beyond_authority(
 ///    or `Remove` of an absent row → 404.
 /// 4. **Target kind.** A machine target above `member` → 400, for EVERY authority, admin included
 ///    (C5).
+/// 4b. **Personal team.** An `Add` of anyone but the personal team's owner or one of the owner's
+///    machines → 400, for every authority (task `01a19006`). The admin arm never resolves on a
+///    personal team, so in practice this refuses its owner adding another person.
 /// 5. **Target source.** An identity-provider row → 409 (C7).
 /// 6. **Conferral, non-admin.** The new role ranks at or below the caller's (C1) → else 403.
 /// 7. **Reach, non-admin, on another member.** The target ranks at or below the caller **and** is
@@ -511,6 +540,7 @@ async fn revoke_invitations_beyond_authority(
 /// | O | other | change / remove | owner | 403 (R6) |
 /// | Mt | other | change / remove | maintainer | allowed † |
 /// | O / Mt | other | change / remove | member / watcher | allowed |
+/// | O / Mt | other | add | personal team, not owner's machine | 400 (4b) |
 /// | A | any, self included | any | any | allowed, subject to checks 3–5 ‡ (a) |
 fn decide(
     authority: AuthorityKind,
@@ -539,6 +569,13 @@ fn decide(
         if target.is_machine && exceeds_machine_ceiling(role) {
             return Err(ApiError::BadRequest(MACHINE_ROLE_CEILING.to_string()));
         }
+    }
+
+    // 4b. Personal team — every authority. Only its owner and the owner's machines are admitted.
+    if matches!(act, MembershipAct::Add { .. }) && !target.personal_admits {
+        return Err(ApiError::BadRequest(
+            crate::services::team_service::PERSONAL_TEAM_HOLDS_ITS_OWNER.to_string(),
+        ));
     }
 
     // 5. Target source.
@@ -891,15 +928,20 @@ pub(crate) async fn locked(
     .fetch_optional(&mut *conn)
     .await?
     .map(|r| (r.role, r.source));
-    let is_machine =
-        sqlx::query_scalar!(r#"SELECT is_machine_profile($1) AS "m!: bool""#, *profile)
-            .fetch_one(&mut *conn)
-            .await?;
+    let target = sqlx::query!(
+        r#"SELECT is_machine_profile($2) AS "is_machine!: bool",
+                  personal_team_admits($1, $2) AS "personal_admits!: bool""#,
+        team_id,
+        *profile,
+    )
+    .fetch_one(&mut *conn)
+    .await?;
     Ok(MembershipTarget {
         team_id,
         profile,
         current,
-        is_machine,
+        is_machine: target.is_machine,
+        personal_admits: target.personal_admits,
     })
 }
 
@@ -1091,6 +1133,7 @@ mod tests {
             profile: ProfileId::from(who),
             current: current.map(|r| (r, TeamMemberSource::Native)),
             is_machine: false,
+            personal_admits: true,
         }
     }
 
@@ -1326,6 +1369,34 @@ mod tests {
         );
     }
 
+    /// Task 01a19006 (check 4b): adding anyone a personal team does not admit is a 400 for every
+    /// authority; a change or removal of a row already there is the ordinary rule.
+    #[test]
+    fn a_personal_team_admits_no_one_else_for_every_authority() {
+        let outsider = |current| MembershipTarget {
+            personal_admits: false,
+            ..target(OTHER, current)
+        };
+        for authority in [K::Admin, O, MT] {
+            for role in [Owner, Maintainer, Member, Watcher] {
+                assert_eq!(
+                    run(authority, false, Act::Add { role }, outsider(None)),
+                    BadRequest,
+                    "{authority:?} add {role:?}"
+                );
+            }
+        }
+        assert_eq!(
+            run(O, false, Act::Remove, outsider(Some(Member))),
+            Allow(MemberAct)
+        );
+        assert_eq!(
+            run(O, false, Act::Add { role: Member }, target(OTHER, None)),
+            Allow(MemberAct),
+            "the owner's own machine is admitted"
+        );
+    }
+
     /// C5: a machine target above `member` is a 400 for every authority, the admin's included; at
     /// or below `member` it is the ordinary rule. A removal is never refused for being a machine.
     #[test]
@@ -1426,6 +1497,7 @@ mod tests {
         let resolved = ResolvedMembership {
             authority: MembershipAuthority::Managing(ManagingRole::Owner),
             is_gating: false,
+            is_personal: false,
             team_id: Uuid::from_u128(11),
             caller: ProfileId::from(CALLER),
         };
