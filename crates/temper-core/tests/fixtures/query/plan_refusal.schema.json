@@ -36,7 +36,7 @@
       "type": "object"
     },
     "BoundKind": {
-      "description": "Which walk bound was met. A truncated vocabulary and a refusal both name it.",
+      "description": "Which bound reading a shape met. A truncated vocabulary and a refusal both name it.",
       "oneOf": [
         {
           "const": "depth",
@@ -55,7 +55,7 @@
         },
         {
           "const": "work",
-          "description": "Reading the shape spent its work budget — schema visits, or enum membership steps —\nbefore it could say.",
+          "description": "Checking the request's values against the shape's `enum`s spent its membership steps\nbefore it could say.",
           "type": "string"
         }
       ]
@@ -88,7 +88,7 @@
           "description": "What an element of an array at this path declares. `None`: elements are unconstrained.\nReported at most as many arrays deep as the walk's depth bound."
         },
         "types": {
-          "description": "The declared JSON types. `None`: no `type` constrains the path. An empty set: the branches\nthat apply here declare types with nothing in common, so no value is admissible.",
+          "description": "The declared JSON types. `None`: no `type` constrains the path. An empty set: no value is\nadmissible — a `type` naming no JSON type, or the element of an `items: false` array.",
           "items": {
             "$ref": "#/$defs/JsonType"
           },
@@ -99,7 +99,7 @@
           "uniqueItems": true
         },
         "values": {
-          "description": "The `enum` / `const` values. `None`: no value set constrains the path.",
+          "description": "The values the path may hold: its own `enum` / `const`, narrowed by each ancestor's — an\nancestor's member leaves a value here only if it holds one at this path. With no `enum` /\n`const` of its own, a path lists what its ancestors leave it only when every value is a\nscalar. `None`: no value set is listed — none constrains the path, or an ancestor leaves it\nan object or an array. An empty list: no value is admissible. An element's values\n([`PathFacts::items`]) are its own `items` schema's, not narrowed.",
           "items": true,
           "type": [
             "array",
@@ -492,7 +492,7 @@
       "type": "object"
     },
     "Vocabulary": {
-      "description": "What a shape lets a caller ask: its askable paths, and every bound the list was cut at.\n\n`truncated` names each walk bound met, never a silent short list (spec §2.5): a recursive tree\nthrough `properties` is `depth`, a 2^N `$defs` fan-out is `paths`, an oversized schema is\n`schema_bytes` with no paths, and a walk that spent its budget is `work`. Ordered, and at most\none of each.",
+      "description": "What a shape lets a caller ask: its askable paths, and every bound the list was cut at.\n\n`truncated` names each walk bound met, never a silent short list (spec §2.5): a tree nested\ndeeper than the walk descends is `depth`, a shape declaring more paths than are advertised is\n`paths`, and an oversized schema is `schema_bytes` with no paths. Ordered, and at most one of\neach.",
       "properties": {
         "paths": {
           "items": {

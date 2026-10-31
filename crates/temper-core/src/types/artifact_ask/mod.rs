@@ -6,13 +6,14 @@
 //! module decides, with no I/O and no JSON Schema validator, whether an ask is expressible against
 //! its shape, and teaches the shape's own vocabulary when it is not:
 //!
-//! - [`walk`] — the bounded schema walk: what a schema declares at one path ([`walk::resolve`]),
+//! - [`walk`] — the field-tree schema walk: what a schema declares at one path ([`walk::resolve`]),
 //!   and every askable path up to the bounds ([`walk::enumerate`]);
 //! - [`validate`] — refusal step 4 of §3.5, with its shape-free half [`validate_ask_form`]; the
 //!   steps 1–3 refusals a [`ShapeLoad`] carries; the [`RefusalTeaching`] a refusal carries;
 //! - [`session`] — [`AskSession`], the one way an ask is validated: one request's asks against one
-//!   [`ShapeContext`], each shape's walk built once and one work budget for them all, and each
-//!   shape's [`PathTeaching`] made once — or taken from the context, where a caller remembered it;
+//!   [`ShapeContext`], each shape's walk built once and one membership budget for them all, and
+//!   each shape's [`PathTeaching`] made once — or taken from the context, where a caller remembered
+//!   it;
 //! - [`mod@reference`] — the Rust reference evaluator the SQL is differential-tested against;
 //! - [`batch`] — the batch read's wire ([`AskRequest`], [`AskResponse`]) and the refusals a page
 //!   earns without its shape.
@@ -46,8 +47,8 @@ pub use validate::{
     MAX_MEMBERSHIP_STEPS, MAX_TEACHING_BYTES,
 };
 pub use walk::{
-    enumerate, resolve, within_schema_bound, AskOperator, AskablePath, BoundKind, JsonType,
-    PathFacts, PathResolution, Vocabulary, WalkBounds, NODE_BYTES,
+    enumerate, reads_whole, resolve, within_schema_bound, AskOperator, AskablePath, BoundKind,
+    JsonType, PathFacts, PathResolution, Vocabulary, WalkBounds,
 };
 
 /// The selection intents an ask may narrow by — the closed vocabulary of
@@ -263,8 +264,9 @@ pub enum ShapeLoad {
 /// before validation runs and untouched by anything after it.
 ///
 /// What a request derives from these shapes — each one's walk, the paths it has resolved, what a
-/// path refusal teaches of it, each ask's answer — and the work budget its asks share live in the
-/// [`AskSession`] begun from it with [`ShapeContext::session`], which borrows the shapes held here.
+/// path refusal teaches of it, each ask's answer — and the membership budget its asks share live in
+/// the [`AskSession`] begun from it with [`ShapeContext::session`], which borrows the shapes held
+/// here.
 ///
 /// **Beside a loaded shape it may hold that shape's [`PathTeaching`]**, remembered by its caller
 /// from an earlier request ([`ShapeContext::with_path_teaching`]), so that a path refusal on the

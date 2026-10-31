@@ -23,9 +23,8 @@ use serde_json::Value;
 use super::reference::{is_integral, jsonb_contains_within, nested_contains_within};
 use super::session::RequestBudget;
 use super::walk::{
-    json_bytes_up_to, AskablePath, AskableView, BoundKind, Enumerated, Facts, JsonType, Member,
-    Resolved, ShapeWalk, Vocabulary, MAX_SCHEMA_BYTES, MAX_WALK_DEPTH, MAX_WALK_PATHS,
-    MAX_WALK_VISITS,
+    json_bytes_up_to, AskablePath, AskableView, BoundKind, Enumerated, Facts, JsonType, Resolved,
+    ShapeWalk, Vocabulary, MAX_SCHEMA_BYTES, MAX_WALK_DEPTH, MAX_WALK_PATHS,
 };
 use super::{
     ArtifactAsk, ArtifactPredicate, LoadedShape, ShapeHome, ShapeIdentity, ShapeLoad,
@@ -157,9 +156,9 @@ pub struct RefusalTeaching {
 /// What a `path_outside_shape` refusal teaches of one shape — its askable vocabulary held to
 /// [`MAX_TEACHING_BYTES`], and how many paths were cut — without the bound the refused path met,
 /// which each refusal sets beside it (`beyond_bound`). That is a function of the shape alone: the
-/// vocabulary is enumerated under a budget of its own, whatever the request has spent. A shape row
-/// is immutable per id (§2.2), so a caller may remember a teaching by shape id across requests and
-/// hand it back in a later request's [`ShapeContext`](super::ShapeContext)
+/// vocabulary is enumerated to the walk's own bounds, whatever the request's asks have spent. A
+/// shape row is immutable per id (§2.2), so a caller may remember a teaching by shape id across
+/// requests and hand it back in a later request's [`ShapeContext`](super::ShapeContext)
 /// ([`ShapeContext::with_path_teaching`](super::ShapeContext::with_path_teaching)), whose session
 /// then teaches from it byte for byte as it would have taught from an enumeration, and enumerates
 /// nothing.
@@ -299,7 +298,7 @@ pub(super) fn validate_loaded<'c>(
     ask: &ArtifactAsk,
     shape: &LoadedShape,
     walk: &mut ShapeWalk<'c>,
-    budget: &mut RequestBudget<'c>,
+    budget: &mut RequestBudget,
 ) -> Result<ValidatedAsk, Vec<PlanRefusal>> {
     let mut errs = Vec::new();
     let form = check_form(ask, &mut errs);
@@ -772,7 +771,7 @@ fn against_shape<'c>(
     predicates: &[ArtifactPredicate],
     formed: &[bool],
     walk: &mut ShapeWalk<'c>,
-    budget: &mut RequestBudget<'c>,
+    budget: &mut RequestBudget,
     errs: &mut Vec<PlanRefusal>,
 ) -> Vec<ArtifactPredicate> {
     if !formed.contains(&true) {
@@ -822,26 +821,24 @@ struct Sorted<'p, 's> {
 
 /// Every well-formed predicate against the shape.
 ///
-/// **One walk per distinct path, all under the request's budget** (§3.3: the walk "never stalls or
-/// exhausts the server"). A per-predicate budget let one ask spend [`MAX_ASK_PREDICATES`] budgets;
-/// a per-ask budget let one request spend one per ask; memoising by path alone would still let it
-/// spend one per distinct path. Sharing the budget holds what every path of every ask in the
-/// request costs to [`MAX_WALK_VISITS`] however many they name, and the walk's memo makes a path
-/// any ask of the request already named free. A predicate past the spent budget is refused
-/// `path_outside_shape` naming `work` — visibly, as every bound is. What a path refusal teaches is
-/// the shape's [`PathTeaching`]: taken from the request's context when its caller remembered one,
-/// and otherwise made once per shape for the request from a vocabulary enumerated under a budget of
-/// its own, so a spent request still teaches what it may ask.
+/// **One walk per distinct path** (§3.3: the walk "never stalls or exhausts the server"): `sort`'s
+/// slots resolve a path named by several predicates once, and the walk's memo makes a path any ask
+/// of the request already named free. Each resolution reads the schema along its path. Membership
+/// is what a request's values can make expensive, so it draws on the request's one budget of
+/// [`MAX_MEMBERSHIP_STEPS`]; a predicate past the spent budget is refused `path_outside_shape`
+/// naming `work` — visibly, as every bound is. What a path refusal teaches is the shape's
+/// [`PathTeaching`]: taken from the request's context when its caller remembered one, and
+/// otherwise made once per shape for the request from its enumerated vocabulary, so a spent
+/// request still teaches what it may ask.
 ///
-/// No path's values are copied to sort it: the facts stay the walk's, borrowed from the schema, so
-/// a value set several paths share is read once and costs nothing per path after. A refused path's
-/// facts are copied only into a teaching, once per distinct path and only as far as the teaching
-/// keeps them ([`offending`], [`teaching`]).
+/// No path's values are copied to sort it: the facts stay the walk's, borrowed from the schema. A
+/// refused path's facts are copied only into a teaching, once per distinct path and only as far as
+/// the teaching keeps them ([`offending`], [`teaching`]).
 fn sort<'p, 'c>(
     predicates: &'p [ArtifactPredicate],
     formed: &[bool],
     walk: &mut ShapeWalk<'c>,
-    budget: &mut RequestBudget<'c>,
+    budget: &mut RequestBudget,
 ) -> Sorted<'p, 'c> {
     let mut slots: HashMap<&'p [String], usize> = HashMap::new();
     let mut distinct: Vec<&'p [String]> = Vec::new();
@@ -857,10 +854,7 @@ fn sort<'p, 'c>(
             })
         })
         .collect();
-    let resolutions: Vec<Resolved<'c>> = distinct
-        .iter()
-        .map(|path| walk.resolve(path, &mut budget.walk))
-        .collect();
+    let resolutions: Vec<Resolved<'c>> = distinct.iter().map(|path| walk.resolve(path)).collect();
     let mut sorted = Sorted {
         resolved: distinct.into_iter().zip(resolutions).collect(),
         ..Sorted::default()
@@ -907,9 +901,8 @@ fn refuse_paths(sorted: &Sorted<'_, '_>, walk: &mut ShapeWalk<'_>, errs: &mut Ve
     if sorted.outside_path.is_empty() {
         return;
     }
-    let mut rule = "a path is not one the shape declares — only `properties` chains, local \
-                    `$ref`s, `allOf`, `anyOf` and `oneOf` are walked"
-        .to_string();
+    let mut rule =
+        "a path is not one the shape declares — only `properties` chains are walked".to_string();
     if let Some(at) = sorted.beyond {
         rule.push_str(&format!(", and {}", bound_said(at)));
     }
@@ -984,9 +977,8 @@ fn bound_said(at: BoundKind) -> String {
             format!("the walk reads a schema of at most {MAX_SCHEMA_BYTES} bytes")
         }
         BoundKind::Work => format!(
-            "the shapes a request names are read within a bounded amount of work — at most \
-             {MAX_WALK_VISITS} visits and {MAX_MEMBERSHIP_STEPS} membership steps across every \
-             ask in the request"
+            "a request's values are checked against its shapes' enums within a bounded amount of \
+             work — at most {MAX_MEMBERSHIP_STEPS} membership steps across every ask in the request"
         ),
     }
 }
@@ -1112,21 +1104,21 @@ fn element_admitted(
 /// Whether a bound value can match conforming content under the path's enum: some member, as stored
 /// content, contains it — jsonb's `@>` at the top level, so a scalar must equal a member or be an
 /// element of an array member, and a container must be held by a member of its own kind.
-fn member(values: Option<&[Member<'_>]>, bound: &Value, steps: &mut usize) -> Result<bool, Fault> {
+fn member(values: Option<&[&Value]>, bound: &Value, steps: &mut usize) -> Result<bool, Fault> {
     within_enum(values, |m| jsonb_contains_within(m, bound, steps))
 }
 
 /// Whether some member passes a containment test, or `Ok(true)` with no enum. The tests spend
 /// membership steps; running out is [`Fault::Work`].
 fn within_enum(
-    values: Option<&[Member<'_>]>,
+    values: Option<&[&Value]>,
     mut holds: impl FnMut(&Value) -> Option<bool>,
 ) -> Result<bool, Fault> {
     let Some(members) = values else {
         return Ok(true);
     };
-    for m in members {
-        if holds(m.value).ok_or(Fault::Work)? {
+    for &m in members {
+        if holds(m).ok_or(Fault::Work)? {
             return Ok(true);
         }
     }
@@ -1448,66 +1440,19 @@ mod tests {
         assert!(validate_ask(&few, &shape).is_ok());
     }
 
-    /// A shape each of whose `MAX_ASK_PREDICATES` properties references one `allOf` of 2,500
-    /// branches: resolving one property costs about 2,504 visits, so one fits the walk budget and
-    /// all of them — about 80,000 — do not.
-    fn heavy_properties() -> LoadedShape {
-        let branches: Vec<Value> = (0..2_500).map(|_| json!({})).collect();
-        let props: serde_json::Map<String, Value> = (0..MAX_ASK_PREDICATES)
-            .map(|i| (format!("p{i}"), json!({ "$ref": "#/$defs/w" })))
-            .collect();
-        shape_of(json!({ "$defs": { "w": { "allOf": branches } }, "properties": props }))
-    }
-
-    /// An ask's paths are resolved under one budget, so naming more of them does not buy
-    /// more work. Bites the shared budget in `sort`: with a budget per predicate (or per distinct
-    /// path) each of these fits and the ask validates.
-    #[test]
-    fn an_asks_paths_share_one_walk_budget() {
-        let shape = heavy_properties();
-        let one = ask(vec![at(&["p0"], PropertyOp::HasKey)]);
-        assert!(validate_ask(&one, &shape).is_ok(), "one path fits");
-        let every = ask((0..MAX_ASK_PREDICATES)
-            .map(|i| at(&[format!("p{i}").as_str()], PropertyOp::HasKey))
-            .collect());
-        let rs = refusals(&every, &shape);
-        assert_eq!(reasons(&rs), vec![RefusalReason::PathOutsideShape]);
-        assert_eq!(
-            rs[0].teaches.as_ref().and_then(|t| t.beyond_bound),
-            Some(BoundKind::Work)
-        );
-    }
-
     /// A path named by many predicates is resolved once. Two memos give it — `sort`'s slots within
     /// the ask and `ShapeWalk::resolve`'s cache across the request — so the bite removes both:
-    /// resolving the same path once per predicate under the shared budget spends it, and the ask is
-    /// refused.
+    /// the same path is then reached once per predicate.
     #[test]
     fn a_path_named_by_many_predicates_is_walked_once() {
-        let shape = heavy_properties();
+        use crate::types::artifact_ask::walk::paths_reached;
+        let shape = shape_of(json!({ "properties": { "p0": { "type": "string" } } }));
         let same = ask((0..MAX_ASK_PREDICATES)
             .map(|_| at(&["p0"], PropertyOp::HasKey))
             .collect());
-        let v = validate_ask(&same, &shape).expect("one walk of `p0` fits");
-        assert_eq!(v.predicates().len(), MAX_ASK_PREDICATES);
-    }
-
-    /// Every path an ask may name, each over one shared 9,000-member enum, fits
-    /// one ask's budget — the enum is read once, about 18,000 visits, and no path's values are
-    /// copied. Before, each path paid for the set again and for a wire copy, about 18,000 visits a
-    /// path, so the fourth met `work`. Bites the per-budget set memo in `Budget::members`, and
-    /// `ShapeWalk::resolve` copying facts onto the wire.
-    #[test]
-    fn an_ask_may_name_every_path_over_one_large_shared_enum() {
-        let members: Vec<Value> = (0..9_000).map(|i| json!(i)).collect();
-        let props: serde_json::Map<String, Value> = (0..MAX_ASK_PREDICATES)
-            .map(|i| (format!("p{i}"), json!({ "$ref": "#/$defs/e" })))
-            .collect();
-        let shape = shape_of(json!({ "$defs": { "e": { "enum": members } }, "properties": props }));
-        let every = ask((0..MAX_ASK_PREDICATES)
-            .map(|i| at(&[format!("p{i}").as_str()], contains(vec![json!(i)])))
-            .collect());
-        let v = validate_ask(&every, &shape).expect("one read of the enum fits");
+        let before = paths_reached();
+        let v = validate_ask(&same, &shape).expect("`p0` is declared");
+        assert_eq!(paths_reached() - before, 1);
         assert_eq!(v.predicates().len(), MAX_ASK_PREDICATES);
     }
 
@@ -1519,22 +1464,16 @@ mod tests {
         (VALUES_COPIED.with(std::cell::Cell::get) - before, rs)
     }
 
-    /// `$defs.a` is an array whose `enum` holds one
-    /// 200,000-byte string and whose `items` is `a` again, so the facts at `x` carry that one set
-    /// at the path's end and at every one of the 16 items levels below it. `compare` there is not
-    /// feasible, so the refusal teaches `x` — which cannot fit 16 KiB, is measured through the
-    /// borrowed view, elided, and never copied. Bites copying a path before measuring it: that
-    /// clones the string at all 17 levels, 3.4 MB, to throw it away.
+    /// `x` is an array whose `enum` holds one 200,000-byte string. `compare` there is not feasible,
+    /// so the refusal teaches `x` — which cannot fit 16 KiB, is measured through the borrowed view,
+    /// elided, and never copied. Bites copying a path before measuring it: that clones the string,
+    /// 200 KB, to throw it away.
     #[test]
     fn a_teaching_copies_no_path_it_cannot_hold() {
-        let shape = shape_of(json!({
-            "$defs": { "a": {
-                "type": "array",
-                "enum": ["s".repeat(200_000)],
-                "items": { "$ref": "#/$defs/a" }
-            } },
-            "properties": { "x": { "$ref": "#/$defs/a" } }
-        }));
+        let shape = shape_of(json!({ "properties": { "x": {
+            "type": "array",
+            "enum": ["s".repeat(200_000)]
+        } } }));
         let (copied, rs) =
             values_copied_validating(&ask(vec![at(&["x"], compare(json!(1)))]), &shape);
         assert_eq!(reasons(&rs), vec![RefusalReason::OperatorOutsideShape]);
@@ -1551,13 +1490,6 @@ mod tests {
             &small,
         );
         assert_eq!(copied, 2);
-    }
-
-    #[test]
-    fn contains_where_the_branches_share_no_type_refuses_the_value() {
-        let schema = wrapped(&json!({ "allOf": [{ "type": "string" }, { "type": "number" }] }));
-        assert_eq!(verdict(&schema, contains(vec![json!("a")])), V);
-        assert_eq!(verdict(&schema, compare(json!("a"))), O);
     }
 
     #[test]
@@ -1895,6 +1827,31 @@ mod tests {
         );
     }
 
+    /// A value its ancestor's `const` rules out is refused, though the path declares no value set of
+    /// its own, and the value the ancestor leaves it is admitted. Bites the narrowing: read only at
+    /// the path's end, `m.unit` is unconstrained and `"lb"` is admitted.
+    #[test]
+    fn a_value_an_ancestors_const_rules_out_is_outside_the_shape() {
+        let shape = shape_of(json!({ "properties": {
+            "m": { "const": { "unit": "kg" }, "properties": { "unit": { "type": "string" } } }
+        } }));
+        let unit = |value: &str| ask(vec![at(&["m", "unit"], contains(vec![json!(value)]))]);
+        let rs = refusals(&unit("lb"), &shape);
+        assert_eq!(reasons(&rs), vec![RefusalReason::ValueOutsideShape]);
+        assert_eq!(
+            rs[0].teaches.clone().unwrap().vocabulary.map(|v| v.paths),
+            Some(vec![AskablePath::new(
+                vec!["m".to_string(), "unit".to_string()],
+                PathFacts {
+                    types: Some([JsonType::String].into_iter().collect()),
+                    values: Some(vec![json!("kg")]),
+                    items: None,
+                }
+            )])
+        );
+        assert!(validate_ask(&unit("kg"), &shape).is_ok());
+    }
+
     #[test]
     fn a_value_outside_an_enum_teaches_the_declared_values_and_the_route_to_the_rest() {
         let shape = shape_of(json!({ "properties": {
@@ -2197,14 +2154,14 @@ mod tests {
         paths.iter().map(|p| of(&p.facts)).sum()
     }
 
-    /// 200 paths, each over one shared `enum` of 40 small nested objects — the shape whose owned
-    /// vocabulary copies every member into every path (8,000 values) to teach the few that fit.
+    /// 200 paths, each over an `enum` of 40 small nested objects — the shape whose owned
+    /// vocabulary copies every member of every path (8,000 values) to teach the few that fit.
     fn nested_object_enum() -> LoadedShape {
         let members: Vec<Value> = (0..40).map(|i| json!({ "k": { "v": i } })).collect();
         let props: serde_json::Map<String, Value> = (0..200)
-            .map(|i| (format!("p{i:03}"), json!({ "$ref": "#/$defs/e" })))
+            .map(|i| (format!("p{i:03}"), json!({ "enum": members })))
             .collect();
-        shape_of(json!({ "$defs": { "e": { "enum": members } }, "properties": props }))
+        shape_of(json!({ "properties": props }))
     }
 
     /// A `path_outside_shape` refusal copies no more values than its teaching sends, however many
@@ -2236,8 +2193,7 @@ mod tests {
         );
     }
 
-    /// On ordinary schemas — wherever the owned enumeration is not cut by what its copies cost — a
-    /// path refusal teaches byte for byte what teaching from the owned vocabulary taught, which
+    /// A path refusal teaches byte for byte what teaching from the owned vocabulary taught, which
     /// stays reachable here as the oracle. Bites any drift between the borrowed enumeration and the
     /// owned one: a path, a fact, an order or a cut that differs.
     #[test]
@@ -2263,20 +2219,16 @@ mod tests {
                     "tags": { "type": "array", "items": { "enum": ["a", "b"] } }
                 } }
             } }),
-            json!({
-                "$defs": { "code": { "enum": ["ms", 7, null, { "k": [1, 2.5] }] } },
-                "allOf": [
-                    { "properties": { "a": { "$ref": "#/$defs/code" } } },
-                    { "properties": { "b": { "anyOf": [{ "type": "string" }, { "type": "null" }] } } }
-                ]
-            }),
+            json!({ "properties": {
+                "a": { "enum": ["ms", 7, null, { "k": [1, 2.5] }] },
+                "b": { "type": ["string", "null"] }
+            } }),
             json!({ "properties": wide }),
-            json!({
-                "$defs": { "n": { "type": "object", "properties": {
-                    "child": { "$ref": "#/$defs/n" },
+            (0..MAX_WALK_DEPTH + 2).fold(json!({ "type": "object" }), |child, _| {
+                json!({ "type": "object", "properties": {
+                    "child": child,
                     "name": { "type": "string" }
-                } } },
-                "$ref": "#/$defs/n"
+                } })
             }),
             nested_object_enum().schema,
             json!({ "properties": { "p": { "description": "x".repeat(MAX_SCHEMA_BYTES) } } }),
@@ -2301,36 +2253,5 @@ mod tests {
                 "schema {i}"
             );
         }
-    }
-
-    /// The one place the two differ, as ruled: where the owned vocabulary's copy charge is what
-    /// cuts it at `work` — twenty paths over one 5,000-member enum, of which it affords about
-    /// eleven — the borrowed one charges no copy, enumerates all twenty, and is not cut. Neither
-    /// sends a path (one carries 5,000 values, past 16 KiB), so the teaching differs only in what
-    /// it counts: `omitted_paths` is 20, and `truncated` is empty where the owned one said `work`.
-    #[test]
-    fn where_its_copies_cut_the_owned_vocabulary_a_teaching_counts_every_path() {
-        let members: Vec<Value> = (0..5_000).map(|i| json!(i)).collect();
-        let props: serde_json::Map<String, Value> = (0..20)
-            .map(|i| (format!("p{i:02}"), json!({ "$ref": "#/$defs/e" })))
-            .collect();
-        let shape = shape_of(json!({ "$defs": { "e": { "enum": members } }, "properties": props }));
-
-        let owned = enumerate(&shape.schema, &WalkBounds::BUILD);
-        assert!(owned.paths.len() < 20, "{}", owned.paths.len());
-        assert_eq!(owned.truncated, BTreeSet::from([BoundKind::Work]));
-
-        let (copied, rs) =
-            values_copied_validating(&ask(vec![at(&["absent"], PropertyOp::HasKey)]), &shape);
-        let taught = rs[0].teaches.clone().expect("a path refusal teaches");
-        assert_eq!(
-            taught.vocabulary,
-            Some(Vocabulary {
-                paths: vec![],
-                truncated: BTreeSet::new()
-            })
-        );
-        assert_eq!(taught.elided.map(|e| e.omitted_paths), Some(20));
-        assert_eq!(copied, 0, "no path fits, so none is copied");
     }
 }

@@ -1,0 +1,33 @@
+title    = "The ask walk reads only field trees, and its work budget is gone"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp", "cli-stdout", "clients"]
+status   = "signal-only"
+body = '''
+Hardening. The schema walk behind an ask and a shape's vocabulary (`GET /api/shapes/{id}`'s
+`askable`, the MCP `get_data_artifact_shape` tool, `temper data-artifact schema show`) now reads
+only what a field tree may hold. A schema holding any other construct, or an `enum` or `type` in a
+form the walk does not read, is walked as `false` — it declares nothing, so every path is refused
+`path_outside_shape` and the vocabulary is empty — and is logged at error with the shape's id. It
+is never read as unconstrained. No shape reaches it: the loader compiles every stored shape before
+it is asked, and the compile refuses anything outside a field tree, which a test holds to the
+walk's own list. No wire value is added: `BoundKind` keeps its four members, and OpenAPI, ts-rs
+and the three generated SDKs change only in description text.
+
+The walk's 65,536-visit work budget is gone: with no `$ref` or combinator each schema node is read
+once, so the walk is linear in a schema held to 256 KiB (measured under 1 ms to enumerate at that
+size, release build). That changes what one kind of shape returns, always toward answering more:
+a shape whose declared values were heavy enough to spend the budget — more than about 85 fields
+each carrying a full 256-member enum, or a `const` of hundreds of KiB of small nested objects — was
+advertised cut at `truncated: ["work"]`, and an ask over such a value could be refused with
+`beyond_bound: work`. It is now advertised whole and answered. Ordinary shapes stay far below the old
+budget. Bounding the size of declared values at declare is its own change.
+
+`beyond_bound: work` now means only that the request's `contains` values spent its membership
+steps, and its sentence says so. The path refusal's rule now reads "only `properties` chains are
+walked", no longer naming `$ref` or the combinators. The declare refusal's fixed sentence now names
+the accepted `$schema` spelling. No migration.
+
+Who observes: agents and CLIs reading a refusal's sentence or a shape's vocabulary. Release
+relevance: signal-only.
+'''

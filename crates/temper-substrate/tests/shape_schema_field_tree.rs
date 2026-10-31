@@ -2,10 +2,10 @@
 //! `2026-10-27-a-shape-is-a-field-tree-design`, §1 and §4): an allow-list of keywords in schema
 //! positions, one pinned draft, and caps on depth, `enum` size, `pattern` size and `pattern` count.
 //!
-//! Each refused keyword family is its own witness, so that each is falsified on its own: removing
-//! the walk makes every refusal test here compile. The data-position tests are the opposite bite:
-//! walking `const`, `enum`, `default` or `examples` as schemas refuses them. Every cap is pinned on
-//! both sides, at the cap (compiles) and one past it (refused).
+//! The allow-list is witnessed against the whole 2020-12 vocabulary in one table, each keyword its
+//! own assertion: removing the walk makes every refused row compile. The data-position tests are
+//! the opposite bite: walking `const`, `enum`, `default` or `examples` as schemas refuses them.
+//! Every cap is pinned on both sides, at the cap (compiles) and one past it (refused).
 //!
 //! Plain `#[test]`s: needs no database, runs in the Unit CI job.
 
@@ -72,93 +72,171 @@ fn chain(steps: &[Step]) -> Value {
     schema
 }
 
-// ── Refused keyword families, one witness each ───────────────────────────────────────────────
+// ── The allow-list, against the whole 2020-12 vocabulary ─────────────────────────────────────
 
+/// Every keyword the field tree allows, with a value it may take. `$schema` and `$id` are
+/// root-only, so they are witnessed at the root alone (`schema_and_id_compile_at_the_root`).
+const ALLOWED: &[(&str, &str)] = &[
+    ("type", r#""string""#),
+    ("properties", r#"{ "a": { "type": "string" } }"#),
+    ("required", r#"["a"]"#),
+    ("additionalProperties", "false"),
+    ("items", r#"{ "type": "string" }"#),
+    ("enum", r#"["a", "b"]"#),
+    ("const", r#""a""#),
+    ("pattern", r#""^a""#),
+    ("minLength", "1"),
+    ("maxLength", "8"),
+    ("minItems", "1"),
+    ("maxItems", "8"),
+    ("minimum", "0"),
+    ("maximum", "8"),
+    ("title", r#""t""#),
+    ("description", r#""d""#),
+    ("$comment", r#""c""#),
+    ("default", r#""a""#),
+    ("examples", r#"["a"]"#),
+];
+
+/// Every other keyword of the JSON Schema 2020-12 vocabularies — core, applicator, unevaluated,
+/// validation, meta-data, format-annotation and content — and the earlier drafts' spellings of
+/// what they replaced, each with a value it may take there, so that only the allow-list refuses it.
+const REFUSED: &[(&str, &str)] = &[
+    // core
+    ("$ref", r##""#""##),
+    ("$anchor", r#""a""#),
+    ("$dynamicRef", r##""#""##),
+    ("$dynamicAnchor", r#""a""#),
+    ("$vocabulary", "{}"),
+    ("$defs", r#"{ "x": { "type": "string" } }"#),
+    // applicator
+    ("prefixItems", r#"[{ "type": "string" }]"#),
+    ("contains", r#"{ "type": "string" }"#),
+    ("patternProperties", r#"{ "^a": { "type": "string" } }"#),
+    ("dependentSchemas", r#"{ "a": { "required": ["b"] } }"#),
+    ("propertyNames", r#"{ "maxLength": 8 }"#),
+    ("if", r#"{ "type": "string" }"#),
+    ("then", r#"{ "minLength": 1 }"#),
+    ("else", r#"{ "type": "integer" }"#),
+    ("allOf", r#"[{ "type": "object" }]"#),
+    ("anyOf", r#"[{ "type": "string" }]"#),
+    ("oneOf", r#"[{ "type": "string" }]"#),
+    ("not", r#"{ "type": "string" }"#),
+    // unevaluated
+    ("unevaluatedItems", "false"),
+    ("unevaluatedProperties", "false"),
+    // validation
+    ("multipleOf", "2"),
+    ("exclusiveMaximum", "8"),
+    ("exclusiveMinimum", "0"),
+    ("uniqueItems", "true"),
+    ("maxContains", "2"),
+    ("minContains", "1"),
+    ("maxProperties", "8"),
+    ("minProperties", "1"),
+    ("dependentRequired", r#"{ "a": ["b"] }"#),
+    // meta-data
+    ("deprecated", "true"),
+    ("readOnly", "true"),
+    ("writeOnly", "true"),
+    // format-annotation
+    ("format", r#""email""#),
+    // content
+    ("contentEncoding", r#""base64""#),
+    ("contentMediaType", r#""text/plain""#),
+    ("contentSchema", r#"{ "type": "string" }"#),
+    // earlier drafts
+    ("definitions", r#"{ "x": { "type": "string" } }"#),
+    ("dependencies", r#"{ "a": ["b"] }"#),
+    ("$recursiveRef", r##""#""##),
+    ("$recursiveAnchor", "true"),
+];
+
+/// `keyword: value` as the one member of a schema at the root and in a `properties` value.
+fn in_both_positions(keyword: &str, value: &str) -> [Value; 2] {
+    let value: Value = serde_json::from_str(value).expect("a test value is JSON");
+    [
+        field_tree(json!({ keyword: value.clone() })),
+        field_tree(json!({ "type": "object", "properties": { "a": { keyword: value } } })),
+    ]
+}
+
+/// Every 2020-12 keyword off the allow-list is refused, at the root and nested. One table, so a
+/// keyword cannot go unwitnessed: before it, `dependentSchemas` had a witness of its own while
+/// `dependentRequired` and `dependencies` had none, all three refused by the walk's catch-all
+/// arm. It also bites a keyword added to the allow-list without a decision: that keyword's row
+/// here then compiles.
 #[test]
-fn refuses_ref() {
-    // The `$ref` resolves, so only the walk refuses it.
-    assert_refused(&field_tree(
-        json!({ "type": "object", "properties": { "a": { "$ref": "#" } } }),
-    ));
+fn every_keyword_off_the_allow_list_is_refused() {
+    for (keyword, value) in REFUSED {
+        for schema in in_both_positions(keyword, value) {
+            assert_refused(&schema);
+        }
+    }
+}
+
+/// Every keyword on the allow-list compiles, at the root and nested — so a row of [`REFUSED`] that
+/// fails is refused for its keyword, not for its form.
+#[test]
+fn every_keyword_on_the_allow_list_compiles() {
+    for (keyword, value) in ALLOWED {
+        for schema in in_both_positions(keyword, value) {
+            assert_compiles(&schema);
+        }
+    }
+}
+
+/// The two lists are disjoint, so no keyword is both allowed and refused here.
+#[test]
+fn the_allowed_and_refused_lists_are_disjoint() {
+    for (keyword, _) in ALLOWED {
+        assert!(
+            REFUSED.iter().all(|(refused, _)| refused != keyword),
+            "{keyword} is in both lists"
+        );
+    }
+}
+
+/// The ask walk reads every construct a field tree may hold: a schema using every allowed keyword,
+/// in every schema position the walk reads, passes `reads_whole` — so the walk does not read it as
+/// declaring nothing — and its paths are declared. The walk keeps its own list, deliberately
+/// apart from the compile's, so this is the test that bites when the compile's allow-list widens
+/// without a decision on how the walk reads the new keyword.
+#[test]
+fn the_ask_walk_reads_whole_every_schema_built_of_allowed_keywords() {
+    use temper_core::types::artifact_ask::{reads_whole, resolve, PathResolution, WalkBounds};
+    let mut node = serde_json::Map::new();
+    for (keyword, value) in ALLOWED {
+        node.insert(
+            keyword.to_string(),
+            serde_json::from_str(value).expect("a test value is JSON"),
+        );
+    }
+    let node = Value::Object(node);
+    let mut schema = node.clone();
+    schema["$id"] = json!("https://example.com/shape");
+    schema["properties"]["a"] = node.clone();
+    schema["properties"]["a"]["items"] = node;
+    let schema = field_tree(schema);
+    assert_compiles(&schema);
+    assert!(reads_whole(&schema), "{schema}");
+    for path in [
+        vec!["a".to_string()],
+        vec!["a".to_string(), "a".to_string()],
+    ] {
+        assert!(
+            matches!(
+                resolve(&schema, &path, &WalkBounds::BUILD),
+                PathResolution::Declared(_)
+            ),
+            "{path:?}"
+        );
+    }
 }
 
 #[test]
-fn refuses_defs() {
-    assert_refused(&field_tree(
-        json!({ "$defs": { "x": { "type": "string" } } }),
-    ));
-}
-
-#[test]
-fn refuses_all_of() {
-    assert_refused(&field_tree(json!({ "allOf": [{ "type": "object" }] })));
-}
-
-#[test]
-fn refuses_any_of() {
-    assert_refused(&field_tree(json!({ "anyOf": [{ "type": "string" }] })));
-}
-
-#[test]
-fn refuses_one_of() {
-    assert_refused(&field_tree(json!({ "oneOf": [{ "type": "string" }] })));
-}
-
-#[test]
-fn refuses_not() {
-    assert_refused(&field_tree(json!({ "not": { "type": "string" } })));
-}
-
-#[test]
-fn refuses_if_then_else() {
-    assert_refused(&field_tree(json!({
-        "if": { "type": "string" },
-        "then": { "minLength": 1 },
-        "else": { "type": "integer" },
-    })));
-}
-
-#[test]
-fn refuses_pattern_properties() {
-    assert_refused(&field_tree(
-        json!({ "patternProperties": { "^a": { "type": "string" } } }),
-    ));
-}
-
-#[test]
-fn refuses_unique_items() {
-    assert_refused(&field_tree(json!({ "type": "array", "uniqueItems": true })));
-}
-
-#[test]
-fn refuses_format() {
-    assert_refused(&field_tree(json!({ "type": "string", "format": "email" })));
-}
-
-#[test]
-fn refuses_prefix_items() {
-    assert_refused(&field_tree(
-        json!({ "prefixItems": [{ "type": "string" }] }),
-    ));
-}
-
-#[test]
-fn refuses_contains() {
-    assert_refused(&field_tree(
-        json!({ "type": "array", "contains": { "type": "string" } }),
-    ));
-}
-
-#[test]
-fn refuses_dependent_schemas() {
-    assert_refused(&field_tree(json!({
-        "dependentSchemas": { "a": { "required": ["b"] } },
-    })));
-}
-
-#[test]
-fn refuses_unevaluated_properties() {
-    assert_refused(&field_tree(json!({ "unevaluatedProperties": false })));
+fn schema_and_id_compile_at_the_root() {
+    assert_compiles(&field_tree(json!({ "$id": "https://example.com/shape" })));
 }
 
 #[test]
@@ -659,4 +737,13 @@ fn a_property_name_past_the_cap_is_refused() {
 fn a_required_entry_past_the_cap_is_refused() {
     let name = "k".repeat(MAX_PROPERTY_NAME_BYTES + 1);
     assert_refused(&field_tree(json!({ "required": [name] })));
+}
+
+/// The refusal names the one `$schema` a field tree may carry, and that a trailing `#` is allowed,
+/// so a declarer refused for an `http://` or draft-07 spelling is told what to write instead.
+#[test]
+fn the_refusal_names_the_accepted_schema_spellings() {
+    let sentence = ShapeSchemaUncompilable.to_string();
+    assert!(sentence.contains(DRAFT_2020_12), "{sentence}");
+    assert!(sentence.contains("trailing #"), "{sentence}");
 }
