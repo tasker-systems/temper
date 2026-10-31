@@ -19,10 +19,10 @@ Commands:
   analytics          Read a cognitive map's map-level analytics (telos, staleness, regulation)
   materialize        Re-materialize a cognitive map's regions when its event delta clears the threshold
   materialize-delta  Read a map's formation delta since its last materialize — the read peer of `cogmap materialize`: how many formation events are pending, and whether the threshold clears. 404 when the map is absent or unreadable (uniform — no oracle)
-  bind               Bind a cognitive map to a team. Requires system-admin, OR that you manage the team (owner/maintainer) AND administer the map (hold a grant on it). Widens the map's reach to the team's shared resources
+  bind               Bind a cognitive map to a team. Requires system-admin (not on someone else's personal map or personal team), OR that you manage the team (owner/maintainer) AND administer the map (hold a grant on it). A person's personal team takes only that person's own map. The team reads the map, and the map reaches what all its teams share
   unbind             Unbind a cognitive map from a team (same authority as bind)
-  grant              Grant a capability on a cognitive map (admin or a can_grant holder). Post-Q-A, authoring a map requires an explicit write grant, not team membership
-  revoke             Revoke a capability grant on a cognitive map (admin or a can_grant holder)
+  grant              Grant a capability on a cognitive map (a can_grant holder, or a system admin except on someone else's personal map). Post-Q-A, authoring a map requires an explicit write grant, not team membership
+  revoke             Revoke a capability grant on a cognitive map (a can_grant holder, or a system admin except on someone else's personal map)
   help               Print this message or the help of the given subcommand(s)
 
 Options:
@@ -270,7 +270,7 @@ Options:
 ### `temper cogmap bind`
 
 ```text
-Bind a cognitive map to a team. Requires system-admin, OR that you manage the team (owner/maintainer) AND administer the map (hold a grant on it). Widens the map's reach to the team's shared resources
+Bind a cognitive map to a team. Requires system-admin (not on someone else's personal map or personal team), OR that you manage the team (owner/maintainer) AND administer the map (hold a grant on it). A person's personal team takes only that person's own map. The team reads the map, and the map reaches what all its teams share
 
 Usage: temper cogmap bind [OPTIONS] <REF> <TEAM>
 
@@ -308,7 +308,7 @@ Options:
 ### `temper cogmap grant`
 
 ```text
-Grant a capability on a cognitive map (admin or a can_grant holder). Post-Q-A, authoring a map requires an explicit write grant, not team membership
+Grant a capability on a cognitive map (a can_grant holder, or a system admin except on someone else's personal map). Post-Q-A, authoring a map requires an explicit write grant, not team membership
 
 Usage: temper cogmap grant [OPTIONS] <REF>
 
@@ -331,7 +331,7 @@ Options:
 ### `temper cogmap revoke`
 
 ```text
-Revoke a capability grant on a cognitive map (admin or a can_grant holder)
+Revoke a capability grant on a cognitive map (a can_grant holder, or a system admin except on someone else's personal map)
 
 Usage: temper cogmap revoke [OPTIONS] <REF>
 

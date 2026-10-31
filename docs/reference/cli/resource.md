@@ -26,8 +26,8 @@ Commands:
   audit-citation      Record a citation-audit verdict against one (block, source) citation — the block-addressed door (`POST /api/citation-audits`)
   delete              Delete a resource (soft-delete via the API)
   reassign            Reassign a resource's owner (mis-attribution self-fix, or a team admin acting over a resource scoped to their team)
-  grant               Grant a capability on a resource to a profile or team (system-admin, a can_grant holder, or the resource owner)
-  revoke              Revoke a capability grant on a resource (system-admin, a can_grant holder, or the owner)
+  grant               Grant a capability on a resource to a profile or team (system-admin outside someone else's personal space, a can_grant holder, or the resource owner)
+  revoke              Revoke a capability grant on a resource (system-admin outside someone else's personal space, a can_grant holder, or the owner)
   facet               Set a facet property on a resource (cloud-mode-only API write)
   facets              List the live facets of a resource — one row per assert, with weights
   help                Print this message or the help of the given subcommand(s)
@@ -919,7 +919,7 @@ Options:
 ### `temper resource grant`
 
 ```text
-Grant a capability on a resource to a profile or team (system-admin, a can_grant holder, or the resource owner)
+Grant a capability on a resource to a profile or team (system-admin outside someone else's personal space, a can_grant holder, or the resource owner)
 
 Usage: temper resource grant [OPTIONS] <REF>
 
@@ -942,7 +942,7 @@ Options:
 ### `temper resource revoke`
 
 ```text
-Revoke a capability grant on a resource (system-admin, a can_grant holder, or the owner)
+Revoke a capability grant on a resource (system-admin outside someone else's personal space, a can_grant holder, or the owner)
 
 Usage: temper resource revoke [OPTIONS] <REF>
 
