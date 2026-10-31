@@ -582,8 +582,9 @@ async fn open_invocation_for_harness(app: &E2eTestApp) -> Uuid {
         .await
         .expect("profile pre-flight")
         .id;
+    // `enable_invite_only` makes the principal a system admin, which is what authors L0 (the
+    // admin-only regime; a write grant there confers nothing).
     common::enable_invite_only(&app.pool, principal).await;
-    common::grant_cogmap_write(&app.pool, parity::L0_COGMAP, principal).await;
     app.client
         .invocations()
         .open(
@@ -1076,10 +1077,10 @@ async fn an_edge_facet_in_a_readable_unauthorable_map_speaks_the_forbidden_detai
     let (app, svc, parts) = harness(pool).await;
     let harness_id = parity::profile_id_by_email(&app.pool, parity::EMAIL).await;
     // Kernel-homed source: the edge's home is L0, so the edge facet's container
-    // clause dispatches to the cogmap authority. The HARNESS holds the L0 write
-    // grant both the kernel ingest (create-into-cogmap, F1) and the assert's
-    // container clause require.
-    common::grant_cogmap_write(&app.pool, parity::L0_COGMAP, harness_id).await;
+    // clause dispatches to the cogmap authority. The HARNESS is a system admin, which
+    // is what authors L0 for both the kernel ingest (create-into-cogmap, F1) and the
+    // assert's container clause: L0 is in the admin-only regime (20261114000000).
+    common::make_system_admin(&app.pool, harness_id).await;
     let kernel_src = ingest(
         &app,
         "Kernel source",
