@@ -604,21 +604,15 @@ async fn http_remove_member_returns_residual_reach_body(pool: PgPool) {
     .await
     .expect("add leaver");
 
-    // Leaver owns a resource in a personal context shared to the team.
+    // Leaver owns a resource in a context the team owns.
     let ctx: Uuid = sqlx::query_scalar(
         "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
-         VALUES ('kb_profiles', $1, 'off-ctx', 'off-ctx') RETURNING id",
+         VALUES ('kb_teams', $1, 'off-ctx', 'off-ctx') RETURNING id",
     )
-    .bind(leaver)
+    .bind(team)
     .fetch_one(&app.pool)
     .await
     .expect("ctx");
-    sqlx::query("INSERT INTO kb_team_contexts (context_id, team_id) VALUES ($1, $2)")
-        .bind(ctx)
-        .bind(team)
-        .execute(&app.pool)
-        .await
-        .expect("share");
     let rid: Uuid = sqlx::query_scalar(
         "INSERT INTO kb_resources (title, origin_uri) VALUES ('r','r') RETURNING id",
     )
