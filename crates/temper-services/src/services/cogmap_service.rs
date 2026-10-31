@@ -115,7 +115,7 @@ pub async fn show_visible(
 /// Bind a cognitive map to a team (write a `kb_team_cogmaps` row).
 ///
 /// Auth before writes: system-admin, OR a team manager (owner/maintainer) who administers the
-/// map, on a non-gating team. Idempotent — `INSERT … ON CONFLICT DO NOTHING`;
+/// map, on a team that is neither temper-system nor the gating team. Idempotent — `INSERT … ON CONFLICT DO NOTHING`;
 /// `bound: false` when the binding already existed.
 pub async fn bind_team(
     pool: &PgPool,
@@ -167,7 +167,8 @@ pub async fn bind_team(
 /// Unbind a cognitive map from a team (delete the `kb_team_cogmaps` row).
 ///
 /// Auth before writes: the same two-sided gate as [`bind_team`] — system-admin, OR a team manager
-/// (owner/maintainer) who administers the map, on a non-gating team. No-op safe — `unbound: false`
+/// (owner/maintainer) who administers the map, on a team that is neither temper-system nor the
+/// gating team. No-op safe — `unbound: false`
 /// when no binding existed.
 pub async fn unbind_team(
     pool: &PgPool,

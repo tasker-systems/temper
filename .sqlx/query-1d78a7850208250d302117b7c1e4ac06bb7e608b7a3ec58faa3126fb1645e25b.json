@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, subscriber_table, subscriber_id, authoring_team_id,\n                  connection_id, selector,\n                  created_by_profile_id, created, revoked_at, revoked_by_profile_id\n             FROM kb_subscriptions s\n            WHERE ($1 OR s.revoked_at IS NULL)\n              AND ( $2\n                    OR EXISTS (\n                        SELECT 1 FROM kb_team_members tm\n                         WHERE tm.team_id = s.authoring_team_id\n                           AND tm.profile_id = $3\n                           AND tm.role IN ('owner', 'maintainer')\n                    ) )\n              AND ( $4::uuid IS NULL OR s.connection_id = $4 )\n            ORDER BY s.created DESC",
+  "query": "SELECT id, subscriber_table, subscriber_id, authoring_team_id,\n                  connection_id, selector,\n                  created_by_profile_id, created, revoked_at, revoked_by_profile_id\n             FROM kb_subscriptions s\n            WHERE ($1 OR s.revoked_at IS NULL)\n              AND ( $2\n                    OR EXISTS (\n                        SELECT 1 FROM kb_team_members tm\n                          JOIN kb_teams t ON t.id = tm.team_id AND t.is_active\n                         WHERE tm.team_id = s.authoring_team_id\n                           AND tm.profile_id = $3\n                           AND tm.role IN ('owner', 'maintainer')\n                    ) )\n              AND ( $4::uuid IS NULL OR s.connection_id = $4 )\n            ORDER BY s.created DESC",
   "describe": {
     "columns": [
       {
@@ -75,5 +75,5 @@
       true
     ]
   },
-  "hash": "5dae3c5c97f9aef49274419669ed6882a970837c09ad35514e94736178bb1cee"
+  "hash": "1d78a7850208250d302117b7c1e4ac06bb7e608b7a3ec58faa3126fb1645e25b"
 }

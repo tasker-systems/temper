@@ -288,9 +288,8 @@ pub async fn reassign_team_resources(
     to_profile_id: Uuid,
 ) -> ApiResult<Vec<Uuid>> {
     let caller = caller.profile_id();
-    // A soft-deleted team is inert — it confers no reassignment authority.
-    // (`role_on_team` is is_active-blind; team_service gates is_active at each call
-    // site, so we do the same here.)
+    // A soft-deleted team is inert — it confers no reassignment authority. `role_on_team` is
+    // live-only too; this check stays because it answers `Forbidden` before any lookup by role.
     let team_active = sqlx::query_scalar!(
         r#"SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1 AND is_active) AS "e!: bool""#,
         team_id,
@@ -307,18 +306,8 @@ pub async fn reassign_team_resources(
         Some(role) if can_manage(role) => {}
         _ => return Err(ApiError::Forbidden),
     }
-    let root_or_gating = sqlx::query_scalar!(
-        r#"SELECT EXISTS (
-             SELECT 1 FROM kb_teams t
-              WHERE t.id = $1
-                AND (t.slug = 'temper-system'
-                     OR t.slug IS NOT DISTINCT FROM
-                        (SELECT s.gating_team_slug FROM kb_system_settings s WHERE s.id = 1)))
-           AS "e!: bool""#,
-        team_id,
-    )
-    .fetch_one(pool)
-    .await?;
+    let root_or_gating =
+        crate::services::access_service::is_root_or_gating_team(pool, team_id).await?;
     if root_or_gating {
         return Err(ApiError::Forbidden);
     }

@@ -210,12 +210,21 @@ async fn reconcile_pass(
     to_lock.extend(pre.iter().map(|c| c.team_id));
     to_lock.sort();
     to_lock.dedup();
-    let _locked: Vec<Uuid> = sqlx::query_scalar!(
-        r#"SELECT id AS "id!" FROM kb_teams WHERE id = ANY($1) ORDER BY id FOR NO KEY UPDATE"#,
+    let locked = sqlx::query!(
+        r#"SELECT id AS "id!", is_active AS "is_active!"
+             FROM kb_teams WHERE id = ANY($1) ORDER BY id FOR NO KEY UPDATE"#,
         &to_lock[..],
     )
     .fetch_all(&mut *tx)
     .await?;
+    // Nothing is written onto a soft-deleted team (soft-delete design D4): a group mapped to one
+    // is skipped, in both directions, rather than failing the whole login. Its idp rows confer
+    // nothing while the team is dead.
+    let dead: std::collections::HashSet<Uuid> = locked
+        .iter()
+        .filter(|t| !t.is_active)
+        .map(|t| t.id)
+        .collect();
 
     // 2b. Current state under the locks: role + source per team, as it NOW stands.
     let current = sqlx::query!(
@@ -262,6 +271,9 @@ async fn reconcile_pass(
         .iter()
         .map(|(&team_id, &role)| DesiredMembership { team_id, role })
     {
+        if dead.contains(&m.team_id) {
+            continue;
+        }
         if native_teams.contains(&m.team_id) {
             out.skipped_native += 1;
             continue;
@@ -306,7 +318,7 @@ async fn reconcile_pass(
     // `Borrow<&Uuid>` impl, so passing `t` directly would fail to type-check).
     for (&team_id, _) in idp_current
         .iter()
-        .filter(|(t, _)| !desired.contains_key(*t))
+        .filter(|(t, _)| !desired.contains_key(*t) && !dead.contains(*t))
     {
         let target = team_membership::locked(&mut tx, team_id, ProfileId::from(profile_id)).await?;
         let lowers_owner = matches!(target.current(), Some((TeamRole::Owner, _)));

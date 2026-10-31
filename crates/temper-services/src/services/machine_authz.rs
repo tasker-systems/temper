@@ -274,6 +274,12 @@ pub(crate) fn parse_team_role(role: &str) -> ApiResult<TeamRole> {
 /// `connection_service::tests::reach_to_the_gating_team_is_allowed_for_a_non_admin`. Full
 /// reasoning for all three gates:
 /// `temper-artifacts:specs/2026-07-22-scoped-authority-policy-layer-design.md` §6.1.
+///
+/// **The root is different, and is refused to a non-admin** (team DAG review G14). `temper-system`
+/// is every personal team's parent, so a reach grant onto it hands the connection's data to every
+/// profile on the instance. That is publication to the instance, which the grant door already
+/// refuses a delegate for any subject (`access_service::recipient_bar`) — and a reach grant is a
+/// grant row by another door. The gating team keeps its exemption above; only the root is excluded.
 pub(crate) async fn contain_target_team(
     pool: &PgPool,
     authority: MachineRegistrationAuthority,
@@ -290,7 +296,12 @@ pub(crate) async fn contain_target_team(
             team_service::require_team_exists(pool, team_id).await
         }
         MachineRegistrationAuthority::TeamOwner => {
-            team_service::require_manage_on_team(pool, team_id, caller).await
+            team_service::require_manage_on_team(pool, team_id, caller).await?;
+            // After the manage bar, so a caller who manages nothing there learns nothing more.
+            if access_service::is_root_team(pool, team_id).await? {
+                return Err(ApiError::Forbidden);
+            }
+            Ok(())
         }
         // Unreachable for the same reason as `authorize_registration`'s arm, and enumerated for
         // the same reason.
@@ -310,7 +321,7 @@ async fn contain_reach(
     // a second copy is what would let the two arms drift apart again.
     // D4 — the membership bar: exactly what `add_member` requires of a human. That is the
     // membership authority's managing arm (team-role rank plan P15), which also refuses a
-    // non-admin on the gating team (R11): a gating-team owner who is not a system admin can no more
+    // non-admin on the gating team or temper-system (R11): an owner there who is not a system admin can no more
     // put a machine on that roster than add a person to it. (The admin arm returned before this
     // function runs; the rank bound is moot, since D4b caps a machine at `member`.)
     // `contain_target_team` keeps `require_manage_on_team`: a reach grant writes no membership.

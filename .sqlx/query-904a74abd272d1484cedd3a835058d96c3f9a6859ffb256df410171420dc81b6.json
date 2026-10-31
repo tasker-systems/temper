@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1) AS \"ok!\"",
+  "query": "SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1 AND is_active) AS \"ok!\"",
   "describe": {
     "columns": [
       {
@@ -18,5 +18,5 @@
       null
     ]
   },
-  "hash": "a6513855197602a18744484970da1d732f281d55903705446bc78024b305f57f"
+  "hash": "904a74abd272d1484cedd3a835058d96c3f9a6859ffb256df410171420dc81b6"
 }
