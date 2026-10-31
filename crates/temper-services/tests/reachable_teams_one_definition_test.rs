@@ -86,7 +86,7 @@
 //! *before* any team reach is consulted, so an `outsider` who owns the fixture resource passes
 //! every check for a reason that has nothing to do with the expression under test. That is not a
 //! hypothetical — the first draft of this file did exactly that, and
-//! `can_modify_resource_reaches_up_the_chain` (now `can_modify_resource_does_not_inherit_a_write_grant`) failed its own negative control.
+//! `can_modify_resource_reaches_up_the_chain` (now `can_modify_resource_inherits_a_write_grant_only_through_an_authoring_role`) failed its own negative control.
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -154,6 +154,14 @@ const AUTHORITATIVE: &str = "profile_reachable_teams";
 /// The lesson worth keeping: **a stated one-directional error is what stops anyone re-examining a
 /// gate.** The claim was more harmful than the hole.
 const REACH_FORMS: (&str, &str) = ("%profile_effective_teams%", "%kb_team_members%");
+
+/// The one function that walks `team_ancestors` from a profile's memberships and is NOT a copy of
+/// [`AUTHORITATIVE`]: `profile_authoring_teams` (migration `20261109000000`) starts the walk from a
+/// ROLE-FILTERED direct membership (owner|maintainer|member, for write and delete), where the
+/// authoritative relation is role-blind. Routing it through `profile_reachable_teams` would lose
+/// the role on the direct team, which is the whole of what it adds. It is the false positive the
+/// gate's doc anticipates, named here rather than by loosening the gate.
+const ROLE_GATED_REACH: &str = "profile_authoring_teams";
 const ANCESTOR_WALK: &str = "%team_ancestors%";
 
 // =================================================================================================
@@ -187,7 +195,7 @@ async fn the_reachable_teams_expression_has_exactly_one_home(pool: PgPool) -> sq
            JOIN pg_namespace n ON n.oid = p.pronamespace \
            CROSS JOIN LATERAL (SELECT pg_get_functiondef(p.oid) AS def) d \
           WHERE n.nspname = 'public' AND p.prokind = 'f' \
-            AND p.proname NOT IN ($1, 'profile_effective_teams', 'team_ancestors') \
+            AND p.proname NOT IN ($1, 'profile_effective_teams', 'team_ancestors', $5) \
             AND d.def LIKE $2 \
             AND (d.def LIKE $3 OR d.def LIKE $4) \
           ORDER BY 1",
@@ -196,6 +204,7 @@ async fn the_reachable_teams_expression_has_exactly_one_home(pool: PgPool) -> sq
     .bind(ANCESTOR_WALK)
     .bind(calls_pet)
     .bind(inlines_pet)
+    .bind(ROLE_GATED_REACH)
     .fetch_all(&pool)
     .await?;
 
@@ -873,22 +882,23 @@ async fn profile_explicit_grant_reaches_up_the_chain(pool: PgPool) -> sqlx::Resu
     Ok(())
 }
 
-/// The mutation gate does NOT walk the chain (`20261109000000`): a write grant to an ancestor of
-/// dana's direct team confers read on her, never write, while a direct authoring member of the
-/// granted team does modify.
+/// The mutation gate walks the chain only through an AUTHORING role (`20261109000000`): a write grant
+/// to an ancestor of dana's direct team reaches her as a `member`, never a `watcher` beneath it.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn can_modify_resource_does_not_inherit_a_write_grant(pool: PgPool) -> sqlx::Result<()> {
+async fn can_modify_resource_inherits_a_write_grant_only_through_an_authoring_role(
+    pool: PgPool,
+) -> sqlx::Result<()> {
     let o = org(&pool).await?;
     let sec = team_context(&pool, o.security_it_ops, "security-ctx").await?;
     let resource = resource_in(&pool, sec, o.owner, "granted").await?;
     grant_resource_to_team(&pool, resource, o.engineering, o.owner, true).await?;
 
-    let eng_member = profile(&pool, "eng-member").await?;
+    let watcher = profile(&pool, "squad-watcher").await?;
     sqlx::query(
-        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'member')",
+        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'watcher')",
     )
-    .bind(o.engineering)
-    .bind(eng_member)
+    .bind(o.squad_two)
+    .bind(watcher)
     .execute(&pool)
     .await?;
 
@@ -902,22 +912,11 @@ async fn can_modify_resource_does_not_inherit_a_write_grant(pool: PgPool) -> sql
                 .await
         }
     };
-    let dana_reads: bool =
-        sqlx::query_scalar("SELECT profile_explicit_grant($1, 'read', 'kb_resources', $2)")
-            .bind(o.dana)
-            .bind(resource)
-            .fetch_one(&pool)
-            .await?;
-
-    assert!(dana_reads, "read still inherits down the chain");
     assert!(
-        !modify(o.dana).await?,
-        "a write grant to an ancestor team does not reach a member beneath it"
+        modify(o.dana).await?,
+        "a write grant to an ancestor team reaches an authoring member beneath it"
     );
-    assert!(
-        modify(eng_member).await?,
-        "a direct member of the granted team modifies"
-    );
+    assert!(!modify(watcher).await?, "...and never a watcher beneath it");
     assert!(
         !modify(o.outsider).await?,
         "the outsider may modify nothing"
@@ -929,9 +928,10 @@ async fn can_modify_resource_does_not_inherit_a_write_grant(pool: PgPool) -> sql
 /// characterization's assertion.
 ///
 /// **Eight, not nine, since `20261109000000`.** `can_modify_resource` no longer joins
-/// `profile_reachable_teams`: a team-anchored WRITE grant confers mutation only on direct
-/// authoring members of the granted team (`profile_authoring_teams`), so it has no ancestor fold
-/// left to probe. Its negative is pinned by [`can_modify_resource_does_not_inherit_a_write_grant`].
+/// `profile_reachable_teams`: its team arm walks the chain through `profile_authoring_teams`, which
+/// starts from a role-filtered membership ([`ROLE_GATED_REACH`]), so it has no role-blind fold left
+/// to probe. Its behaviour is pinned by
+/// [`can_modify_resource_inherits_a_write_grant_only_through_an_authoring_role`].
 ///
 /// **Shared by both tier-3 gates, deliberately.** They ask different questions — one empties a
 /// single function's fold site, the other flattens the shared relation for all nine — but they ask

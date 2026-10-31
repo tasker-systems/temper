@@ -1,11 +1,12 @@
 #![cfg(feature = "test-db")]
 
-//! A team-anchored grant confers MUTATION only on direct members of the granted team with an
-//! authoring role; READ still inherits down the team DAG at any role
-//! (`migrations/20261109000000_team_grant_mutation_direct_role_gated.sql`).
+//! A team-anchored grant confers MUTATION only through an authoring role, and re-sharing never
+//! inherits (`migrations/20261109000000_team_grant_mutation_role_gated.sql`):
 //!
-//! The rule it pins is the one `context_authorable_by_profile`'s narrowed arm already states:
-//! "Read inherits up the enclosure chain; mutation does not. `watcher` is read-only."
+//! - read: any role, on the granted team or any team beneath it (unchanged);
+//! - write and delete: an owner|maintainer|member row on the granted team or a team beneath it —
+//!   a deliberate delegation down the tree — and never a watcher row;
+//! - grant (re-share): a direct owner|maintainer row on the granted team itself.
 //!
 //! ```text
 //!   umbrella  ─▸ squad          (squad is a child of umbrella)
@@ -215,29 +216,36 @@ async fn a_watcher_on_the_granted_team_reads_but_does_not_mutate(pool: PgPool) -
     Ok(())
 }
 
-/// A grant on an ancestor reaches a descendant's members for READ only — at any role, including
-/// `member`, because mutation does not inherit.
+/// A grant on an ancestor reaches a descendant's AUTHORS for write and delete, its watchers for read
+/// only, and nobody beneath for re-sharing.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn an_ancestor_grant_reaches_descendants_for_read_only(pool: PgPool) -> sqlx::Result<()> {
+async fn an_ancestor_grant_reaches_descendant_authors_but_never_watchers(
+    pool: PgPool,
+) -> sqlx::Result<()> {
     let f = fixture(&pool).await?;
     let elsewhere = team(&pool, "elsewhere").await?;
     let ctx = team_context(&pool, elsewhere, "elsewhere-ctx").await?;
     let resource = resource_in(&pool, ctx, f.owner).await?;
     full_grant_to_team(&pool, "kb_resources", resource, f.umbrella, f.owner).await?;
 
-    for who in [f.wanda, f.mo] {
+    // wanda: a watcher on the child — read only.
+    assert!(explicit(&pool, f.wanda, "read", "kb_resources", resource).await?);
+    assert!(!can_modify(&pool, f.wanda, resource).await?);
+    for action in ["write", "delete", "grant"] {
         assert!(
-            explicit(&pool, who, "read", "kb_resources", resource).await?,
-            "read inherits down the DAG"
+            !explicit(&pool, f.wanda, action, "kb_resources", resource).await?,
+            "a watcher beneath holds no `{action}`"
         );
-        assert!(!can_modify(&pool, who, resource).await?);
-        for action in ["write", "delete", "grant"] {
-            assert!(
-                !explicit(&pool, who, action, "kb_resources", resource).await?,
-                "`{action}` does not inherit from the umbrella's grant"
-            );
-        }
     }
+    // mo: a member of the child — the delegation reaches him for write and delete, not grant.
+    assert!(can_modify(&pool, f.mo, resource).await?);
+    assert!(explicit(&pool, f.mo, "write", "kb_resources", resource).await?);
+    assert!(explicit(&pool, f.mo, "delete", "kb_resources", resource).await?);
+    assert!(!explicit(&pool, f.mo, "grant", "kb_resources", resource).await?);
+    // A maintainer of the child does not re-share the umbrella's grant: grant never inherits.
+    let max = profile(&pool, "max-child").await?;
+    join(&pool, f.squad, max, "maintainer").await?;
+    assert!(!explicit(&pool, max, "grant", "kb_resources", resource).await?);
 
     // Negative control: a profile on neither team holds nothing.
     let outsider = profile(&pool, "outsider").await?;
@@ -246,10 +254,10 @@ async fn an_ancestor_grant_reaches_descendants_for_read_only(pool: PgPool) -> sq
     Ok(())
 }
 
-/// A write grant on a CONTEXT, anchored on an ancestor, does not let a descendant author it — so
-/// the container-write cascade does not open its resources either.
+/// A write grant on a CONTEXT, anchored on an ancestor, makes a descendant member an author (and so
+/// opens its resources through the container cascade), and a descendant watcher never.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn an_ancestor_context_grant_does_not_make_a_descendant_an_author(
+async fn an_ancestor_context_grant_makes_descendant_authors_but_not_watchers(
     pool: PgPool,
 ) -> sqlx::Result<()> {
     let f = fixture(&pool).await?;
@@ -258,10 +266,10 @@ async fn an_ancestor_context_grant_does_not_make_a_descendant_an_author(
     let resource = resource_in(&pool, ctx, f.owner).await?;
     full_grant_to_team(&pool, "kb_contexts", ctx, f.umbrella, f.owner).await?;
 
-    for who in [f.wanda, f.mo] {
-        assert!(!context_authorable(&pool, who, ctx).await?);
-        assert!(!can_modify(&pool, who, resource).await?);
-    }
+    assert!(!context_authorable(&pool, f.wanda, ctx).await?);
+    assert!(!can_modify(&pool, f.wanda, resource).await?);
+    assert!(context_authorable(&pool, f.mo, ctx).await?);
+    assert!(can_modify(&pool, f.mo, resource).await?);
     Ok(())
 }
 

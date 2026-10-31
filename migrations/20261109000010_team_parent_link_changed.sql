@@ -10,7 +10,8 @@
 --
 --   * the admin event type `team_parent_link_changed` (payload: parent, child, `linked` or
 --     `unlinked`, actor). The parent is the `subject` reference, so the parent's managers read it on
---     the subject axis; the child is a `child` reference.
+--     the subject axis; the child is the `principal` reference -- the party the act was done to, as
+--     the member is on `team_membership_changed`, and a rel every ledger decoder already reads.
 --   * `_admin_team_parent_link_write`, which inserts or deletes the row and appends the event, in the
 --     shape of `_admin_team_membership_write` (20261101200000).
 --
@@ -30,7 +31,7 @@ INSERT INTO kb_event_types (name, payload_schema, schema_version, category) VALU
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "TeamParentLinkChanged",
-  "description": "`team_parent_link_changed` — a child team linked under, or detached from, a parent team\n(team-authority fixes D3). Written only by `_admin_team_parent_link_write`, in the same statement\nas the `kb_teams_parents` row.\n\nA link is read reach: every member of the child reaches everything attached to the parent and\nits ancestors. So who made a link, and who cut one, is an authority record like a membership\nchange. The parent is the event's `subject` reference and the child its `child` reference; the\nparent's managers read it on the subject axis. The personal-team trigger's structural link under\n`temper-system` is a derived writer and is not recorded.",
+  "description": "`team_parent_link_changed` — a child team linked under, or detached from, a parent team\n(team-authority fixes D3). Written only by `_admin_team_parent_link_write`, in the same statement\nas the `kb_teams_parents` row.\n\nA link is read reach: every member of the child reaches everything attached to the parent and\nits ancestors. So who made a link, and who cut one, is an authority record like a membership\nchange. The parent is the event's `subject` reference and the child its `principal` reference; the\nparent's managers read it on the subject axis. The personal-team trigger's structural link under\n`temper-system` is a derived writer and is not recorded.",
   "type": "object",
   "properties": {
     "act": {
@@ -126,7 +127,7 @@ BEGIN
             'actor',          p_actor)),
         p_references => jsonb_build_array(
             jsonb_build_object('rel', 'subject', 'target', jsonb_build_object('kind', 'kb_teams', 'id', p_parent)),
-            jsonb_build_object('rel', 'child',   'target', jsonb_build_object('kind', 'kb_teams', 'id', p_child))),
+            jsonb_build_object('rel', 'principal', 'target', jsonb_build_object('kind', 'kb_teams', 'id', p_child))),
         p_correlation => p_correlation);
 
     RETURN CASE p_act WHEN 'link' THEN 'linked' ELSE 'unlinked' END;

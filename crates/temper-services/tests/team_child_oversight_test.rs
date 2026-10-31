@@ -19,8 +19,9 @@
 use sqlx::PgPool;
 use temper_core::types::team::TeamCreateRequest;
 use temper_services::error::ApiError;
-use temper_services::services::team_service;
+use temper_services::services::{admin_ledger_service, team_service};
 use temper_services::test_support;
+use temper_substrate::payloads::{AnchorTable, RefTarget};
 use temper_workflow::operations::Surface;
 use uuid::Uuid;
 
@@ -216,7 +217,7 @@ async fn a_parents_manager_detaches_the_child_and_its_reach_ends(pool: PgPool) {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert!(still, "the child survives as a parentless team");
+    assert!(still, "the child survives its detachment");
     assert_eq!(
         link_events(&pool, f.eng, "unlinked").await,
         1,
@@ -281,4 +282,39 @@ async fn the_root_is_never_the_ancestor_for_a_non_admin(pool: PgPool) {
         .await
         .expect_err("no detaching a personal team from the root");
     assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+}
+
+/// The link and unlink records READ BACK through the admin ledger, on the parent's subject axis and
+/// on the actor's own history — the doors that decode every reference on a page, so a row they
+/// cannot decode fails the whole page. Counting rows in SQL would not see that.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_link_records_read_back_through_the_ledger(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let a = test_support::human_principal_for(&pool, f.alice).await;
+    team_service::detach_child(&pool, &a, f.eng, f.tools)
+        .await
+        .expect("detach");
+
+    let page = admin_ledger_service::list_by_subject(
+        &pool,
+        &a,
+        RefTarget {
+            kind: AnchorTable::Teams,
+            id: f.eng,
+        },
+        50,
+        0,
+    )
+    .await
+    .expect("the parent's managers read its ledger page");
+    let links: Vec<_> = page
+        .iter()
+        .filter(|e| e.event_type == "team_parent_link_changed")
+        .collect();
+    assert_eq!(links.len(), 2, "linked and unlinked: {page:?}");
+
+    let m = test_support::human_principal_for(&pool, f.mallory).await;
+    admin_ledger_service::list_by_actor(&pool, &m, f.mallory.into(), 50, 0)
+        .await
+        .expect("the creator reads their own history, the link included");
 }

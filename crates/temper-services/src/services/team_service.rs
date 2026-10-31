@@ -648,7 +648,7 @@ pub async fn delete_team(pool: &PgPool, caller: &HumanPrincipal, team_id: Uuid) 
 /// Rank stays per team (team-role rank spec R7): a parent's managers have no say in a child's
 /// roster. What they do have, as they would over a member added to the parent directly, is the
 /// means to end the reach: a child's members reach everything attached to the parent and its
-/// ancestors, and this cuts that. The child and its roster survive as a parentless team.
+/// ancestors, and this cuts that. The child and its roster survive; only this link is cut.
 ///
 /// Auth before writes: an `owner` or `maintainer` of the PARENT (direct, live), or a system admin.
 /// The personal-team link under `temper-system` is structural and only a system admin removes it.
@@ -682,6 +682,22 @@ pub async fn detach_child(
     }
 
     let mut tx = pool.begin().await?;
+    // Under the parent's row lock (the one every membership writer takes), re-read the caller's
+    // role, so a concurrent demotion or removal cannot race the detach it would have refused.
+    sqlx::query!(
+        "SELECT id FROM kb_teams WHERE id = $1 FOR NO KEY UPDATE",
+        parent_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    if !admin
+        && !matches!(
+            role_on_team_on(&mut tx, parent_id, caller.profile_id()).await?,
+            Some(role) if can_manage(role)
+        )
+    {
+        return Err(ApiError::Forbidden);
+    }
     let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -1033,9 +1049,8 @@ mod lifecycle_tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn remove_member_surfaces_residual_owned_reach(pool: PgPool) {
-        // owner removes `leaver`, who owns 2 resources in a context carol shared to the team + 0
-        // elsewhere. (A context the leaver owns is never in the team's scope — team-authority
-        // fixes D5 — so the shared context is someone else's.)
+        // owner removes `leaver`, who owns 2 resources in a context the team OWNS + 0 elsewhere. A
+        // context merely shared to the team is out of its scope (team-authority fixes D5).
         let owner = mk_profile(&pool, "owner").await;
         let leaver = mk_profile(&pool, "leaver").await;
         let carol = mk_profile(&pool, "carol").await;
@@ -1043,7 +1058,10 @@ mod lifecycle_tests {
         add(&pool, team, owner, "owner", "native").await;
         add(&pool, team, leaver, "member", "native").await;
 
-        let shared = mk_shared_profile_context(&pool, carol, team, "shared").await;
+        // Out of scope: carol's context shared to the team.
+        let foreign = mk_shared_profile_context(&pool, carol, team, "carols").await;
+        let _r0 = mk_homed_resource(&pool, foreign, leaver).await;
+        let shared = mk_team_context(&pool, team, "shared").await;
         let _r1 = mk_homed_resource(&pool, shared, leaver).await;
         let _r2 = mk_homed_resource(&pool, shared, leaver).await;
 
@@ -1064,22 +1082,20 @@ mod lifecycle_tests {
     }
 
     #[sqlx::test(migrations = "../../migrations")]
-    async fn remove_member_residual_groups_same_slug_contexts_by_identity(pool: PgPool) {
-        // Two DISTINCT contexts sharing the slug "docs" (slug is unique only per-owner),
-        // both shared to the team, both holding leaver-owned resources. Resources are
-        // inserted interleaved (A, B, A); kb_resources.id is uuid_generate_v7 (monotonic),
-        // so `ORDER BY slug, resource_id` yields the non-adjacent sequence A, B, A. The
-        // fold must group by context IDENTITY — an adjacency fold would split A in two.
+    async fn remove_member_residual_groups_by_context_identity(pool: PgPool) {
+        // Two of the team's own contexts, both holding leaver-owned resources, inserted interleaved
+        // (A, B, A). The fold must group by context IDENTITY (`context_id`), not by row adjacency.
+        // (The scope is the team's OWN contexts since team-authority fixes D5, and a slug is unique
+        // per owner, so two in-scope contexts can no longer share a slug; the grouping-by-identity
+        // rule is still what this pins.)
         let owner = mk_profile(&pool, "owner").await;
         let leaver = mk_profile(&pool, "leaver").await;
-        let carol = mk_profile(&pool, "carol").await;
-        let dave = mk_profile(&pool, "dave").await;
         let team = mk_team(&pool, "acme").await;
         add(&pool, team, owner, "owner", "native").await;
         add(&pool, team, leaver, "member", "native").await;
 
-        let ctx_a = mk_shared_profile_context(&pool, carol, team, "docs").await; // @carol/docs
-        let ctx_b = mk_shared_profile_context(&pool, dave, team, "docs").await; // @dave/docs
+        let ctx_a = mk_team_context(&pool, team, "docs-a").await;
+        let ctx_b = mk_team_context(&pool, team, "docs-b").await;
 
         let _r1 = mk_homed_resource(&pool, ctx_a, leaver).await;
         let _r2 = mk_homed_resource(&pool, ctx_b, leaver).await;
@@ -1105,8 +1121,8 @@ mod lifecycle_tests {
             .iter()
             .map(|c| (c.context_ref.as_str(), c.count))
             .collect();
-        assert_eq!(by_ref.get("@carol/docs"), Some(&2));
-        assert_eq!(by_ref.get("@dave/docs"), Some(&1));
+        assert_eq!(by_ref.get("+acme/docs-a"), Some(&2));
+        assert_eq!(by_ref.get("+acme/docs-b"), Some(&1));
     }
 
     #[sqlx::test(migrations = "../../migrations")]

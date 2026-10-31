@@ -527,12 +527,13 @@ pub async fn grant_capability(
 ///
 /// - **team, delegated:** the caller manages it directly (`require_manage_on_team`, which also
 ///   refuses a team that does not exist, without saying so); it is active; it is not `temper-system`
-///   or the gating team; it is not someone else's personal team. `Forbidden` throughout, so the
-///   refusal discloses nothing about the team.
+///   or the gating team; it is no personal team, the caller's own included (a grant to it is a grant
+///   to the caller). `Forbidden` throughout, so the refusal discloses nothing about the team.
 /// - **team, admin:** exists and is active (`NotFound` otherwise) — an admin may grant to any team,
 ///   but never mint a dangling row.
-/// - **profile:** exists (`NotFound`); a delegate may not grant to themselves, which is how an
-///   inherited `can_grant` used to launder into a personal row that outlived the team.
+/// - **profile:** exists (`NotFound` to an admin, `Forbidden` to a delegate, who learns nothing about
+///   which ids exist); a delegate may not grant to themselves, which is how an inherited `can_grant`
+///   used to launder into a personal row that outlived the team.
 async fn recipient_bar(
     pool: &PgPool,
     proof: &crate::authz::Authorized<GrantAuthority>,
@@ -565,8 +566,10 @@ async fn recipient_bar(
             }
             let root_or_gating =
                 team.slug == ROOT_TEAM_SLUG || is_gating_team(pool, principal_id).await?;
-            let others_personal = team.personal_of.is_some_and(|owner| owner != *caller);
-            if root_or_gating || others_personal {
+            // Any personal team, the caller's own included: a delegate's personal team is a second
+            // spelling of a grant to themselves, which outlives their removal from the source team.
+            let personal = team.personal_of.is_some();
+            if root_or_gating || personal {
                 return Err(ApiError::Forbidden);
             }
             Ok(())
@@ -578,8 +581,13 @@ async fn recipient_bar(
             )
             .fetch_one(pool)
             .await?;
+            // A delegate learns nothing about which profile ids exist: absent is the same refusal.
             if !exists {
-                return Err(ApiError::NotFound("profile not found".to_string()));
+                return Err(if delegated {
+                    ApiError::Forbidden
+                } else {
+                    ApiError::NotFound("profile not found".to_string())
+                });
             }
             if delegated && principal_id == *caller {
                 return Err(ApiError::Forbidden);
@@ -594,8 +602,10 @@ async fn recipient_bar(
 
 /// May a DELEGATED caller overwrite or revoke the existing grant row for `(subject, principal)`?
 /// (team-authority fixes D2.) Admitted when there is no row (an insert, or a no-op revoke), when
-/// the caller granted it, when it is anchored on a team the caller manages directly, or when the
-/// caller owns the subject. A system admin is not asked. Locks the row `FOR UPDATE`, so the answer
+/// the caller granted it, when it is anchored on a live team the caller manages directly (never the
+/// root or the gating team), or when the caller owns the subject (a resource's home owner; a
+/// context's owner or a manager of its live owning team; for a cogmap, which has no owner, a holder
+/// of a direct profile-anchored grant right on it). A system admin is not asked. Locks the row `FOR UPDATE`, so the answer
 /// holds until the write commits.
 ///
 /// Before this, the upsert and the delete took the principal from the request and touched any row:
@@ -629,13 +639,28 @@ async fn delegated_may_change_row(
     if granted_by == *caller {
         return Ok(());
     }
-    if principal_table == "kb_teams"
-        && matches!(
-            crate::services::team_service::role_on_team_on(conn, principal_id, caller).await?,
-            Some(role) if crate::services::team_service::can_manage(role)
+    // A manager of the row's team, if that team is live and is neither the root nor the gating team
+    // (a leftover managing row there — a demoted admin's — confers nothing).
+    if principal_table == "kb_teams" {
+        let governable = sqlx::query_scalar!(
+            r#"SELECT EXISTS (
+                 SELECT 1 FROM kb_teams t
+                  WHERE t.id = $1 AND t.is_active AND t.slug <> 'temper-system'
+                    AND t.slug IS DISTINCT FROM
+                        (SELECT s.gating_team_slug FROM kb_system_settings s WHERE s.id = 1))
+               AS "e!: bool""#,
+            principal_id,
         )
-    {
-        return Ok(());
+        .fetch_one(&mut *conn)
+        .await?;
+        if governable
+            && matches!(
+                crate::services::team_service::role_on_team_on(conn, principal_id, caller).await?,
+                Some(role) if crate::services::team_service::can_manage(role)
+            )
+        {
+            return Ok(());
+        }
     }
     let owns_subject = match subject.kind {
         AnchorTable::Resources => {
@@ -657,14 +682,27 @@ async fn delegated_may_change_row(
                        OR (c.owner_table = 'kb_teams' AND EXISTS (
                              SELECT 1 FROM kb_team_members tm
                               WHERE tm.team_id = c.owner_id AND tm.profile_id = $2
-                                AND tm.role IN ('owner', 'maintainer'))))) AS "e!: bool""#,
+                                AND tm.role IN ('owner', 'maintainer')
+                                AND EXISTS (SELECT 1 FROM kb_teams t
+                                             WHERE t.id = c.owner_id AND t.is_active))))) AS "e!: bool""#,
                 subject.id,
                 *caller,
             )
             .fetch_one(&mut *conn)
             .await?
         }
-        // A cogmap has no owner column, so there is no owner arm.
+        // A cogmap has no owner column. The closest thing is a DIRECT, profile-anchored grant right
+        // on the map — a person someone chose to administer it, not one who reached it through a team.
+        AnchorTable::Cogmaps => sqlx::query_scalar!(
+            r#"SELECT EXISTS(SELECT 1 FROM kb_access_grants
+                              WHERE subject_table = 'kb_cogmaps' AND subject_id = $1
+                                AND principal_table = 'kb_profiles' AND principal_id = $2
+                                AND can_grant) AS "e!: bool""#,
+            subject.id,
+            *caller,
+        )
+        .fetch_one(&mut *conn)
+        .await?,
         _ => false,
     };
     if owns_subject {

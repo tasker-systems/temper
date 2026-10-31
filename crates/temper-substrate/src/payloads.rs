@@ -1814,7 +1814,7 @@ pub struct TeamMembershipChanged {
 ///
 /// A link is read reach: every member of the child reaches everything attached to the parent and
 /// its ancestors. So who made a link, and who cut one, is an authority record like a membership
-/// change. The parent is the event's `subject` reference and the child its `child` reference; the
+/// change. The parent is the event's `subject` reference and the child its `principal` reference; the
 /// parent's managers read it on the subject axis. The personal-team trigger's structural link under
 /// `temper-system` is a derived writer and is not recorded.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

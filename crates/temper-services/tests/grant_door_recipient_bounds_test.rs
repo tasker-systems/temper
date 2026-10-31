@@ -231,12 +231,25 @@ async fn a_delegate_grants_only_to_teams_they_manage(pool: PgPool) {
         .await
         .expect("a delegate grants to a team they manage");
 
-    // Refused: the root, a team they do not manage, a nonexistent team, themselves.
+    // Refused: the root, a team they do not manage, a nonexistent team, their own personal team (a
+    // second spelling of themselves), themselves, and a profile that does not exist (the same
+    // refusal, so a delegate learns nothing about which ids exist).
+    let own_personal: Uuid = sqlx::query_scalar("SELECT id FROM kb_teams WHERE personal_of = $1")
+        .bind(f.max)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     for (table, id, why) in [
         ("kb_teams", f.root, "temper-system"),
         ("kb_teams", f.unrelated, "a team they do not manage"),
         ("kb_teams", Uuid::now_v7(), "a team that does not exist"),
+        ("kb_teams", own_personal, "their own personal team"),
         ("kb_profiles", f.max, "themselves"),
+        (
+            "kb_profiles",
+            Uuid::now_v7(),
+            "a profile that does not exist",
+        ),
     ] {
         let refusal = access_service::grant_capability(&pool, &m, &grant(f.resource, table, id))
             .await
@@ -271,6 +284,32 @@ async fn a_delegate_changes_only_their_own_rows(pool: PgPool) {
             .await
             .expect_err("nor overwrite it");
     assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+
+    // Permitted: a row max granted himself, and a row on a team he manages (squad), whoever
+    // granted it.
+    access_service::grant_capability(&pool, &m, &grant(f.resource, "kb_profiles", f.owner))
+        .await
+        .expect("max shares with the owner");
+    access_service::revoke_capability(&pool, &m, &revoke(f.resource, "kb_profiles", f.owner))
+        .await
+        .expect("a delegate withdraws a grant they made");
+    // A row on squad granted by someone else (seeded: the owner does not manage squad, so the door
+    // would refuse them — the two-sided bar).
+    sqlx::query(
+        "INSERT INTO kb_access_grants (id, subject_table, subject_id, principal_table, principal_id, \
+           can_read, granted_by_profile_id) \
+         VALUES (uuid_generate_v7(), 'kb_resources', $1, 'kb_teams', $2, true, $3)",
+    )
+    .bind(f.resource)
+    .bind(f.squad)
+    .bind(f.owner)
+    .execute(&pool)
+    .await
+    .unwrap();
+    access_service::revoke_capability(&pool, &m, &revoke(f.resource, "kb_teams", f.squad))
+        .await
+        .expect("a manager of squad withdraws a grant on squad");
+    assert_eq!(rows(&pool, f.resource, f.squad).await, 0);
 
     // The owner revokes anything, including max's source grant.
     access_service::revoke_capability(&pool, &o, &revoke(f.resource, "kb_teams", f.umbrella))

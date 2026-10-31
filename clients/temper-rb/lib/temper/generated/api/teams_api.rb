@@ -325,7 +325,7 @@ module Temper::Generated
     end
 
     # Detach a child team from this team
-    # Removes the parent link, so the child's members stop reaching what is attached to this team and its ancestors. The child and its roster survive as a parentless team. Recorded on the admin ledger as `team_parent_link_changed`.
+    # Removes the parent link, so the child's members stop reaching what is attached to this team and its ancestors. The child and its roster survive; only this link is cut. Recorded on the admin ledger as `team_parent_link_changed`.
     # @param id [String] Parent team ID
     # @param child_id [String] Child team ID
     # @param [Hash] opts the optional parameters
@@ -337,7 +337,7 @@ module Temper::Generated
     end
 
     # Detach a child team from this team
-    # Removes the parent link, so the child&#39;s members stop reaching what is attached to this team and its ancestors. The child and its roster survive as a parentless team. Recorded on the admin ledger as &#x60;team_parent_link_changed&#x60;.
+    # Removes the parent link, so the child&#39;s members stop reaching what is attached to this team and its ancestors. The child and its roster survive; only this link is cut. Recorded on the admin ledger as &#x60;team_parent_link_changed&#x60;.
     # @param id [String] Parent team ID
     # @param child_id [String] Child team ID
     # @param [Hash] opts the optional parameters
@@ -531,6 +531,7 @@ module Temper::Generated
     end
 
     # Bulk reassign a team's resources
+    # Moves every live resource owned by `from_profile_id` (a current or former member of the team) and homed in a context the team owns to `to_profile_id` (a member). Contexts merely shared to the team are out of scope: a share confers read, never authority over the container.
     # @param id [String] Team ID
     # @param bulk_reassign_request [BulkReassignRequest] 
     # @param [Hash] opts the optional parameters
@@ -542,6 +543,7 @@ module Temper::Generated
     end
 
     # Bulk reassign a team&#39;s resources
+    # Moves every live resource owned by &#x60;from_profile_id&#x60; (a current or former member of the team) and homed in a context the team owns to &#x60;to_profile_id&#x60; (a member). Contexts merely shared to the team are out of scope: a share confers read, never authority over the container.
     # @param id [String] Team ID
     # @param bulk_reassign_request [BulkReassignRequest] 
     # @param [Hash] opts the optional parameters

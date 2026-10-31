@@ -1287,7 +1287,7 @@ class TeamsApi:
     ) -> None:
         """Detach a child team from this team
 
-        Removes the parent link, so the child's members stop reaching what is attached to this team and its ancestors. The child and its roster survive as a parentless team. Recorded on the admin ledger as `team_parent_link_changed`.
+        Removes the parent link, so the child's members stop reaching what is attached to this team and its ancestors. The child and its roster survive; only this link is cut. Recorded on the admin ledger as `team_parent_link_changed`.
 
         :param id: Parent team ID (required)
         :type id: UUID
@@ -1364,7 +1364,7 @@ class TeamsApi:
     ) -> ApiResponse[None]:
         """Detach a child team from this team
 
-        Removes the parent link, so the child's members stop reaching what is attached to this team and its ancestors. The child and its roster survive as a parentless team. Recorded on the admin ledger as `team_parent_link_changed`.
+        Removes the parent link, so the child's members stop reaching what is attached to this team and its ancestors. The child and its roster survive; only this link is cut. Recorded on the admin ledger as `team_parent_link_changed`.
 
         :param id: Parent team ID (required)
         :type id: UUID
@@ -1441,7 +1441,7 @@ class TeamsApi:
     ) -> RESTResponseType:
         """Detach a child team from this team
 
-        Removes the parent link, so the child's members stop reaching what is attached to this team and its ancestors. The child and its roster survive as a parentless team. Recorded on the admin ledger as `team_parent_link_changed`.
+        Removes the parent link, so the child's members stop reaching what is attached to this team and its ancestors. The child and its roster survive; only this link is cut. Recorded on the admin ledger as `team_parent_link_changed`.
 
         :param id: Parent team ID (required)
         :type id: UUID
@@ -2118,6 +2118,7 @@ class TeamsApi:
     ) -> BulkReassignAck:
         """Bulk reassign a team's resources
 
+        Moves every live resource owned by `from_profile_id` (a current or former member of the team) and homed in a context the team owns to `to_profile_id` (a member). Contexts merely shared to the team are out of scope: a share confers read, never authority over the container.
 
         :param id: Team ID (required)
         :type id: UUID
@@ -2193,6 +2194,7 @@ class TeamsApi:
     ) -> ApiResponse[BulkReassignAck]:
         """Bulk reassign a team's resources
 
+        Moves every live resource owned by `from_profile_id` (a current or former member of the team) and homed in a context the team owns to `to_profile_id` (a member). Contexts merely shared to the team are out of scope: a share confers read, never authority over the container.
 
         :param id: Team ID (required)
         :type id: UUID
@@ -2268,6 +2270,7 @@ class TeamsApi:
     ) -> RESTResponseType:
         """Bulk reassign a team's resources
 
+        Moves every live resource owned by `from_profile_id` (a current or former member of the team) and homed in a context the team owns to `to_profile_id` (a member). Contexts merely shared to the team are out of scope: a share confers read, never authority over the container.
 
         :param id: Team ID (required)
         :type id: UUID

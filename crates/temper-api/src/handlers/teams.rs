@@ -219,7 +219,7 @@ pub async fn change_role(
 /// Detach a child team from this team
 ///
 /// Removes the parent link, so the child's members stop reaching what is attached to this team and
-/// its ancestors. The child and its roster survive as a parentless team. Recorded on the admin
+/// its ancestors. The child and its roster survive; only this link is cut. Recorded on the admin
 /// ledger as `team_parent_link_changed`.
 #[utoipa::path(
     delete,

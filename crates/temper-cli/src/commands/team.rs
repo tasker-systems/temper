@@ -209,7 +209,7 @@ pub async fn delete_remote(
 }
 
 /// Detach a child team from a parent team (an owner or maintainer of the parent, or a system
-/// admin). The child keeps its roster and becomes parentless; its members stop reaching what is
+/// admin). The child keeps its roster and only this link is cut; its members stop reaching what is
 /// attached to the parent.
 ///
 /// The child is named by UUID, decorated ref, or slug. A slug is looked up among the parent's own
@@ -254,7 +254,7 @@ pub async fn detach_remote(
 }
 
 /// Bulk-reassign a departing member's team-scoped resources (a manager of the team, or a system admin).
-/// Reassigns every resource owned by `from` and homed in a context shared to the
+/// Reassigns every resource owned by `from` and homed in a context the team owns,
 /// team, over to `to` (who must be a team member). `from`/`to` are profile UUIDs.
 pub async fn reassign_remote(
     client: &temper_client::TemperClient,
