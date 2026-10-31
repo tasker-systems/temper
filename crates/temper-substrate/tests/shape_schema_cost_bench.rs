@@ -789,8 +789,9 @@ fn object_of_fields(count: usize, field: &Value) -> Value {
 
 /// `compile` of each synthetic admission profile in `MAX_SHAPE_NODES`'s doc, the fixtures of
 /// `shape_schema_field_tree.rs`'s `every_admission_profile_compiles`, copied. Each fixture holds
-/// exactly the values and objects its row states, and compiles. The table's first row, every live
-/// shape, is a production read with no fixed counts, so it has no fixture here.
+/// exactly the values and objects its row states, and compiles. The table's first row, the stored
+/// shapes, is witnessed by `stored_shape_profiles_compile` in `shape_schema_field_tree.rs`, so it
+/// has no fixture here.
 ///
 /// With the node budget, arm64 (M4 Pro), rustc 1.99, release, median of three runs: `T_compile`
 /// 1.16 ms (1,024 described strings), 0.76 ms (1,024 arrays of strings), 0.73 ms (1,024 nullable
