@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT cogmap_write_requires_admin($1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "cogmap_write_requires_admin",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "1e89bbf20b0b32bf63bb7035f04e553efb8ad306871085b7c5226298b62f8a3a"
+}

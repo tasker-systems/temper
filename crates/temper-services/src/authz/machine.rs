@@ -266,19 +266,47 @@ mod personal_space_tests {
             .unwrap();
         let conn = seed_connection(&pool, Some(team), manager).await;
         grant_reach(&pool, manager, conn, team).await;
-        let sub = create_subscription(
+        // Seeded directly: since the subscriber must be authored by whoever declares it, no one but
+        // Alice can now declare one into her personal context, and she does not manage `team`. The
+        // question here is who controls such a row once it exists (a pre-existing declaration),
+        // which the create gate does not decide.
+        let declared = crate::services::subscription_service::create(
             &pool,
-            manager,
-            "kb_contexts",
-            alices,
-            team,
-            conn,
-            SubscriptionSelector::GitHubRepository {
-                repo: GITHUB_REPO.into(),
-                event_types: vec![],
+            &crate::test_support::human_principal_for(&pool, *manager).await,
+            &temper_core::types::subscription::CreateSubscriptionRequest {
+                subscriber_table: "kb_contexts".into(),
+                subscriber_id: alices,
+                authoring_team_id: team,
+                connection_id: conn,
+                selector: SubscriptionSelector::GitHubRepository {
+                    repo: GITHUB_REPO.into(),
+                    event_types: vec![],
+                },
             },
         )
         .await;
+        assert!(
+            matches!(declared, Err(crate::error::ApiError::Forbidden)),
+            "the share alone does not let the team's manager declare into Alice's context: {declared:?}"
+        );
+        let selector = serde_json::to_value(SubscriptionSelector::GitHubRepository {
+            repo: GITHUB_REPO.into(),
+            event_types: vec![],
+        })
+        .unwrap();
+        let sub: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_subscriptions (subscriber_table, subscriber_id, authoring_team_id, \
+                                           connection_id, selector, created_by_profile_id) \
+             VALUES ('kb_contexts', $1, $2, $3, $4, $5) RETURNING id",
+        )
+        .bind(alices)
+        .bind(team)
+        .bind(conn)
+        .bind(selector)
+        .bind(*manager)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
         assert_eq!(
             SubscriptionControlAuthority::resolve(&pool, Principal::Bare(auditor), sub)

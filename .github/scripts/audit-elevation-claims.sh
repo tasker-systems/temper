@@ -402,6 +402,20 @@ current_gates() {
 # REVIEWED 2026-10-31 (PR #1275 merging #1276) — `context_admin`, `grant`, `ledger_subject`,
 # `machine`, `subscription`, `team_membership`, `two_sided`: each fingerprint is now both PRs' change
 # to the gate, each reviewed above; the merge moved no arm of either. No claim count moved.
+# REVIEWED 2026-10-31 (map authorship reads the admin-only regime) — `reconcile_regime`
+# 76ead78c03ac -> 5339d74ce2eb: `authorize_reconcile`'s doc now says the regime covers maps bound to
+# temper-system as well as the gating team. Its arms are unchanged; the regime they read widened to
+# the root in `cogmap_write_requires_admin` (20261113000010), which only narrows who reconciles. The
+# one claim bound to the gate, `handlers/cognitive_maps.rs`'s module doc, now names temper-system too.
+# `access_service.rs` 8 -> 9: `cogmap_write_requires_admin`'s doc says a regime map is authored by a
+# system admin only, which `cogmap_authorable_by_profile` now enforces. `subscription_service.rs`
+# 6 -> 9: the subscriber-authorship leg's docs say system admins are held to the same authorship bar;
+# `refuse_unless_subscriber_authorable` has no admin arm, and a test asserts the refusal.
+# REVIEWED 2026-10-31 (same PR, after merging #1275) — `machine` b24fecc74f83 -> 175b6fd6e623: only
+# the test `a_subscription_into_someone_elses_personal_context_is_not_the_admins` moved. Its fixture
+# can no longer declare that subscription through `subscription_service::create`, because the
+# subscriber must now be authored, so it asserts that refusal and seeds the row directly to test
+# who controls it. No arm of `MachineClientControlAuthority` or the registration gate moved.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -443,7 +457,7 @@ claim crates/temper-mcp/src/service.rs 4 -
 claim crates/temper-mcp/src/tools/cognitive_maps.rs 1 is_system_admin
 claim crates/temper-mcp/src/tools/contexts.rs 2 context_admin,two_sided
 claim crates/temper-mcp/src/tools/reblock.rs 3 -
-claim crates/temper-services/src/services/access_service.rs 8 is_system_admin
+claim crates/temper-services/src/services/access_service.rs 9 is_system_admin
 claim crates/temper-services/src/services/admin_directory_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/cogmap_service.rs 2 two_sided
 claim crates/temper-services/src/services/connection_service.rs 11 connection
@@ -458,19 +472,19 @@ claim crates/temper-services/src/services/machine_registration_service.rs 9 mach
 claim crates/temper-services/src/services/resource_erasure_service.rs 2 is_system_admin
 claim crates/temper-services/src/services/saml_provisioning_service.rs 1 team_membership
 claim crates/temper-services/src/services/slack_disconnect_service.rs 2 -
-claim crates/temper-services/src/services/subscription_service.rs 6 subscription
+claim crates/temper-services/src/services/subscription_service.rs 9 subscription
 claim crates/temper-services/src/services/subscription_test_support.rs 1 subscription
 claim crates/temper-services/src/services/team_service.rs 27 require_manage_on_team,can_manage,team_membership,is_system_admin
 gate audit_gate 021f87ca4bed
 gate connection 586029b73345
 gate context_admin 36e336482872
 gate grant 8fca715c38c3
-gate machine b24fecc74f83
+gate machine 175b6fd6e623
 gate read_gates 6a6ce4847fbc
 gate ledger_subject 89ab4129fe64
 gate subscription f45d76e9be69
 gate two_sided d72f4d72d122
-gate reconcile_regime 76ead78c03ac
+gate reconcile_regime 5339d74ce2eb
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e

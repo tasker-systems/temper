@@ -484,16 +484,17 @@ async fn genesis(
     )
 }
 
-/// Open an invocation envelope for the harness against L0 — the authoring grant the
-/// F2 write gate requires is minted explicitly (`grant_cogmap_write`); auto-join
-/// membership alone confers read, never write.
+/// Open an invocation envelope for the harness against L0. The F2 write gate requires
+/// authorship of L0, which is in the admin-only regime: only a system admin authors it
+/// (a write grant there confers nothing, `20261113000010`), so the harness is made one.
+/// Auto-join membership alone confers read, never write.
 async fn open_invocation_for_harness(
     app: &E2eTestApp,
     svc: &TemperMcpService,
     parts: &axum::http::request::Parts,
 ) -> Uuid {
     let harness_profile = parity::profile_id_by_email(&app.pool, parity::EMAIL).await;
-    common::grant_cogmap_write(&app.pool, parity::L0_COGMAP, harness_profile).await;
+    common::make_system_admin(&app.pool, harness_profile).await;
     let res = run_invocation_manage(
         svc,
         parts,
@@ -997,7 +998,7 @@ async fn materialize_below_threshold_is_a_documented_no_op(pool: PgPool) {
 /// Read-but-not-write is the gate's own detailed sentence, prefixed by the tool —
 /// the disclosure dialect: the caller reads the map, and the sentence tells them
 /// what authorship would take. Constructed with the second identity on L0
-/// (auto-join read, no explicit write grant).
+/// (auto-join read, not a system admin), so the reason named is L0's regime.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn materialize_names_the_missing_detail_for_a_reader_who_cannot_author(pool: PgPool) {
     let (app, svc, _parts) = harness(pool).await;
@@ -1010,7 +1011,7 @@ async fn materialize_names_the_missing_detail_for_a_reader_who_cannot_author(poo
         json!({ "cogmap": parity::L0_COGMAP.to_string(), "threshold": 1 }),
     )
     .await
-    .expect_err("a reader without a write grant cannot author");
+    .expect_err("a reader who is not a system admin cannot author L0");
     assert_eq!(
         code_of(&err),
         -32602,
@@ -1021,8 +1022,7 @@ async fn materialize_names_the_missing_detail_for_a_reader_who_cannot_author(poo
         "the tool's prefix: {err}"
     );
     assert!(
-        err.message
-            .contains("authorship requires an explicit write grant"),
+        err.message.contains("only a system admin authors it"),
         "the gate's own sentence: {err}"
     );
     assert!(
@@ -1721,7 +1721,8 @@ async fn invocation_open_against_l0_answers_the_minted_id(pool: PgPool) {
 /// Open against a map the caller can READ but not author refuses with the
 /// DETAILED authorship sentence under INVALID_REQUEST — the disclosure dialect:
 /// the gate decides the caller has standing to hear the reason. The second
-/// identity auto-joins temper-system (read on L0, no write grant).
+/// identity auto-joins temper-system (read on L0, not a system admin), so the reason
+/// named is L0's regime.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn invocation_open_refuses_a_reader_with_the_detailed_authorship_sentence(pool: PgPool) {
     let (app, svc, _parts) = harness(pool).await;
@@ -1738,7 +1739,7 @@ async fn invocation_open_refuses_a_reader_with_the_detailed_authorship_sentence(
         }),
     )
     .await
-    .expect_err("a reader without a write grant cannot open");
+    .expect_err("a reader who is not a system admin cannot open on L0");
     assert_eq!(
         code_of(&err),
         -32600,
@@ -1749,8 +1750,7 @@ async fn invocation_open_refuses_a_reader_with_the_detailed_authorship_sentence(
         "prefixed by the action: {err}"
     );
     assert!(
-        err.message
-            .contains("authorship requires an explicit write grant"),
+        err.message.contains("only a system admin authors it"),
         "the gate's own sentence reaches the agent intact: {err}"
     );
     assert!(

@@ -22,20 +22,17 @@ use temper_core::types::ids::{CogmapId, ProfileId};
 use temper_services::backend::DbBackend;
 use temper_workflow::operations::{Backend, OpenInvocation, Surface};
 
-/// The migration-seeded public kernel cogmap — the originating map `open_invocation` requires.
-const L0_COGMAP: Uuid = Uuid::from_u128(0x00000000_0000_0000_0005_000000000001);
-
 /// Open a REAL invocation for `profile` (the act gate refuses caller-named ids that address
-/// nothing: an unknown invocation is a 404, a closed run a 409). Standing approval plus an L0
-/// write grant are the same front door `act_authorship_test.rs`'s harness uses.
+/// nothing: an unknown invocation is a 404, a closed run a 409). Standing approval plus a map the
+/// profile authors are the same front door `act_authorship_test.rs`'s harness uses.
 async fn open_invocation_for(pool: &PgPool, profile: Uuid) -> Uuid {
     common::fixtures::approve_standing(pool, profile).await;
-    common::fixtures::grant_cogmap_write(pool, L0_COGMAP, profile).await;
+    let map = common::fixtures::authored_map(pool, profile).await;
     let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
     let out = backend
         .open_invocation(OpenInvocation {
             trigger_kind: "manual".to_string(),
-            originating_cogmap: CogmapId::from(L0_COGMAP),
+            originating_cogmap: CogmapId::from(map),
             parent_cogmap: None,
             origin: Surface::ApiHttp,
         })

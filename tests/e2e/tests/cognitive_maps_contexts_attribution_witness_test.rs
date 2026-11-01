@@ -39,8 +39,8 @@ async fn harness(
 }
 
 /// Open an invocation envelope for the harness against L0 through the tool — the
-/// write whose ledger row is the witness. The F2 write gate requires an explicit
-/// write grant on the originating map; auto-join membership alone confers read.
+/// write whose ledger row is the witness. The F2 write gate requires authorship of
+/// the originating map, and on L0 that is a system admin's; auto-join confers read.
 async fn open_through_the_tool(
     app: &common::E2eTestApp,
     svc: &TemperMcpService,
@@ -51,7 +51,9 @@ async fn open_through_the_tool(
         .fetch_one(&app.pool)
         .await
         .expect("the harness profile");
-    common::grant_cogmap_write(&app.pool, L0_COGMAP, harness_profile).await;
+    // L0 is in the admin-only regime: only a system admin authors it, and a write grant there
+    // confers nothing (20261113000010).
+    common::make_system_admin(&app.pool, harness_profile).await;
     let res = temper_mcp::tools::invocations::invocation_manage(
         svc,
         parts,
