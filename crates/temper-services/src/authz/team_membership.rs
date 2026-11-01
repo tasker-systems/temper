@@ -873,6 +873,32 @@ impl AuthorizedMembershipChange {
         }
     }
 
+    /// A machine's removal from a team because the person whose key it carries just left it (S3
+    /// residual route 4; see [`machines_leaving_with`]). It is built only inside
+    /// [`try_membership_write`], from the person's own authorized and written removal (`parent`), so
+    /// it needs no token of its own. It is recorded as `machine_reach` with the parent's actor (none
+    /// for SAML reconcile) and the parent's correlation id. `None` when the machine's row is absent
+    /// or IdP-sourced, which leaves nothing to remove.
+    fn leaving_with_key_holder(
+        target: &MembershipTarget,
+        parent: &AuthorizedMembershipChange,
+    ) -> Option<Self> {
+        match target.current {
+            Some((_, TeamMemberSource::Native)) => Some(Self {
+                team_id: target.team_id,
+                profile: target.profile,
+                act: MembershipAct::Remove,
+                via: MembershipVia::MachineReach,
+                expected: target.current,
+                new_source: TeamMemberSource::Native,
+                actor: parent.actor,
+                invited_by: None,
+                guard_last_owner: true,
+            }),
+            _ => None,
+        }
+    }
+
     /// An identity-provider reconcile write (plan C4, R8): the IdP wins over the last-owner
     /// guard, the system is the actor, and the row's source stays (or becomes) `idp`. `token` is
     /// minted only inside `saml_provisioning_service::reconcile_pass`. `target` is a
@@ -1069,7 +1095,8 @@ pub(crate) async fn membership_write(
 /// derived writer inserted after its locks (S1, C7) and must not mistake any other refusal for one
 /// (task `01a14592-708c`). The `Err` arm is a failure of the write itself.
 ///
-/// **The only Rust call site of `_admin_team_membership_write`** (plan PR C's tripwire pins it).
+/// A person's removal also removes from the team every machine whose key they hold or can still
+/// mint, in the same transaction and under one correlation id ([`machines_leaving_with`]).
 pub(crate) async fn try_membership_write(
     conn: &mut PgConnection,
     emitter: Option<EntityId>,
@@ -1084,6 +1111,106 @@ pub(crate) async fn try_membership_write(
         ),
         (None, None) => None,
     };
+    // A person leaving a team takes off it every machine whose key they hold or can still mint (S3
+    // residual route 4, `machines_leaving_with`). Read
+    // before the write, under the team lock the caller already holds, so the person's event and
+    // each machine's carry one correlation id: an operator reads the departure and what it
+    // deprovisioned as one act.
+    let machines = if matches!(change.act, MembershipAct::Remove) {
+        machines_leaving_with(conn, change.team_id, change.profile).await?
+    } else {
+        Vec::new()
+    };
+    let correlation = (!machines.is_empty()).then(Uuid::now_v7);
+    let written = match write_one(conn, emitter, &change, correlation).await? {
+        Ok(written) => written,
+        Err(refused) => return Ok(Err(refused)),
+    };
+    if written == MembershipOutcome::Removed {
+        for machine in machines {
+            let target = locked(conn, change.team_id, ProfileId::from(machine)).await?;
+            let Some(cascade) =
+                AuthorizedMembershipChange::leaving_with_key_holder(&target, &change)
+            else {
+                continue;
+            };
+            // Under the team lock and a fresh `locked` read, no refusal is possible: a machine never
+            // governs (`MAX_MACHINE_TEAM_ROLE`), so the last-owner guard cannot fire, and the row was
+            // just read. A refusal here means that invariant broke, so it fails the whole removal.
+            if let Err(refused) = write_one(conn, emitter, &cascade, correlation).await? {
+                return Err(ApiError::Internal(format!(
+                    "removing a departing controller's machine from the team was refused: {refused:?}"
+                )));
+            }
+        }
+    }
+    Ok(Ok(written))
+}
+
+/// The machines on `team` that leave it with `person`: every machine whose key `person` holds or can
+/// still mint (S3 residual route 4, closed by Pete's ruling of 2026-11-01 and narrowed to this rule
+/// after two reviews, decision `01a19843-b86b-766f-b06e-65560b0f6f6f`). Your key leaves with you.
+///
+/// Judged over the machine's **live** client rows (`revoked_at IS NULL`). A revoked credential holds
+/// no key, and its history confers nothing. `person` holds a row's key when:
+/// - they minted its current secret: the last rotator (`secret_rotated_by_profile_id`), or the
+///   registrant if it was never rotated (a rotation before that column existed counts as the
+///   registrant's, the conservative reading); or
+/// - they registered it and it was rotated away from them, while the previous secret is still inside
+///   its grace window (`secret_previous_expires_at`). Only the first rotation's previous secret is
+///   the registrant's for certain. Treating every such window as theirs over-removes, and never
+///   under-removes.
+///
+/// `person` **can still mint** one when they own a team that owns the row, other than `team` itself.
+/// They are leaving `team`, so they stop owning it. Any other owned team survives their departure,
+/// and its owner could rotate the machine and take the key after they are gone.
+///
+/// There is no exemption for another person on `team` who also controls the machine. Such a person
+/// can be added to the owning team without their consent, so their presence says nothing about who
+/// holds the key. To keep a machine the team depends on, another owner rotates it before the person
+/// is removed. The key is then theirs, and the machine stays. The "Offboard a Departure" playbook
+/// says so. Empty for a machine profile, which holds no keys here.
+async fn machines_leaving_with(
+    conn: &mut PgConnection,
+    team: Uuid,
+    person: ProfileId,
+) -> ApiResult<Vec<Uuid>> {
+    Ok(sqlx::query_scalar!(
+        r#"SELECT tm.profile_id AS "profile_id!"
+             FROM kb_team_members tm
+            WHERE tm.team_id = $1
+              AND tm.profile_id <> $2
+              AND profile_is_person($2)
+              AND is_machine_profile(tm.profile_id)
+              AND EXISTS (
+                    SELECT 1 FROM kb_machine_clients c
+                     WHERE c.profile_id = tm.profile_id
+                       AND c.revoked_at IS NULL
+                       AND ( COALESCE(c.secret_rotated_by_profile_id, c.registered_by_profile_id) = $2
+                          OR ( c.registered_by_profile_id = $2
+                               AND c.secret_rotated_by_profile_id IS NOT NULL
+                               AND c.secret_previous_expires_at > now() )
+                          OR ( c.team_id IS DISTINCT FROM $1
+                               AND EXISTS (SELECT 1 FROM kb_team_members o
+                                            WHERE o.team_id = c.team_id AND o.profile_id = $2
+                                              AND o.role = 'owner'::team_role) ) ))
+            ORDER BY tm.profile_id"#,
+        team,
+        *person,
+    )
+    .fetch_all(&mut *conn)
+    .await?)
+}
+
+/// One row through `_admin_team_membership_write`, then the invitations the change outranks.
+///
+/// **The only Rust call site of `_admin_team_membership_write`** (plan PR C's tripwire pins it).
+async fn write_one(
+    conn: &mut PgConnection,
+    emitter: Option<EntityId>,
+    change: &AuthorizedMembershipChange,
+    correlation: Option<Uuid>,
+) -> ApiResult<Result<MembershipOutcome, NotWritten>> {
     let (act, role) = match change.act {
         MembershipAct::Add { role } => ("add", Some(role)),
         MembershipAct::Change { role } => ("change", Some(role)),
@@ -1091,7 +1218,7 @@ pub(crate) async fn try_membership_write(
     };
     let outcome = sqlx::query_scalar!(
         r#"SELECT _admin_team_membership_write(
-               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULL) AS "outcome!""#,
+               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) AS "outcome!""#,
         emitter.map(|e| e.uuid()),
         change.actor.map(|a| a.uuid()),
         change.via.as_str(),
@@ -1104,6 +1231,7 @@ pub(crate) async fn try_membership_write(
         Some(change.new_source) as Option<TeamMemberSource>,
         change.guard_last_owner,
         change.invited_by.map(|p| p.uuid()),
+        correlation,
     )
     .fetch_one(&mut *conn)
     .await?;

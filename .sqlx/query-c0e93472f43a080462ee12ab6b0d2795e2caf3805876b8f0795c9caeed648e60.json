@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT tm.profile_id AS \"profile_id!\"\n             FROM kb_team_members tm\n            WHERE tm.team_id = $1\n              AND tm.profile_id <> $2\n              AND profile_is_person($2)\n              AND is_machine_profile(tm.profile_id)\n              AND EXISTS (\n                    SELECT 1 FROM kb_machine_clients c\n                     WHERE c.profile_id = tm.profile_id\n                       AND c.revoked_at IS NULL\n                       AND ( COALESCE(c.secret_rotated_by_profile_id, c.registered_by_profile_id) = $2\n                          OR ( c.registered_by_profile_id = $2\n                               AND c.secret_rotated_by_profile_id IS NOT NULL\n                               AND c.secret_previous_expires_at > now() )\n                          OR ( c.team_id IS DISTINCT FROM $1\n                               AND EXISTS (SELECT 1 FROM kb_team_members o\n                                            WHERE o.team_id = c.team_id AND o.profile_id = $2\n                                              AND o.role = 'owner'::team_role) ) ))\n            ORDER BY tm.profile_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "profile_id!",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c0e93472f43a080462ee12ab6b0d2795e2caf3805876b8f0795c9caeed648e60"
+}

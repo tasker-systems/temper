@@ -171,7 +171,7 @@ pub async fn delete(
     ),
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "Member removed; residual owned-resource reach reported", body = RemoveMemberOutcome),
+        (status = 200, description = "Member removed; residual owned-resource reach reported. A person's machines on the team (ones they registered, rotated, or whose owning team they own) are removed with them, unless the team owns the machine or another person still on it controls it; each is recorded under the same correlation id", body = RemoveMemberOutcome),
         (status = 403, description = "Forbidden: the caller is neither the member leaving nor an owner or maintainer of this team (on the gating team or temper-system, not a system admin; on a personal team, not its owner — a system admin included); or (`FORBIDDEN_DETAIL`) the member is an owner other than the caller, or ranks above the caller — only a system admin removes another owner; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 404, description = "Member not found, or (to a system admin) the team does not exist; told only to a caller who may manage the team"),
         (status = 409, description = "Cannot remove the last owner (grant `owner` to another member first), a SAML-provisioned row, or a profile from its own personal team"),

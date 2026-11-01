@@ -18,7 +18,7 @@ import re  # noqa: F401
 import json
 
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional
 from uuid import UUID
 from typing import Optional, Set
@@ -39,8 +39,9 @@ class MachineClient(BaseModel):
     registered_by_profile_id: UUID
     revoked_at: Optional[datetime] = None
     revoked_by_profile_id: Optional[UUID] = None
+    secret_rotated_by_profile_id: Optional[UUID] = Field(default=None, description="Who minted the current secret by rotation, if it was rotated since this was recorded. With `registered_by_profile_id`, it names who holds or can hold the key: a person leaving a team takes off it every machine whose key they hold. Absent from an older server's response.")
     team_id: Optional[UUID] = None
-    __properties: ClassVar[List[str]] = ["client_id", "created", "id", "issuer", "label", "last_seen_at", "profile_id", "registered_by_profile_id", "revoked_at", "revoked_by_profile_id", "team_id"]
+    __properties: ClassVar[List[str]] = ["client_id", "created", "id", "issuer", "label", "last_seen_at", "profile_id", "registered_by_profile_id", "revoked_at", "revoked_by_profile_id", "secret_rotated_by_profile_id", "team_id"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -96,6 +97,11 @@ class MachineClient(BaseModel):
         if self.revoked_by_profile_id is None and "revoked_by_profile_id" in self.model_fields_set:
             _dict['revoked_by_profile_id'] = None
 
+        # set to None if secret_rotated_by_profile_id (nullable) is None
+        # and model_fields_set contains the field
+        if self.secret_rotated_by_profile_id is None and "secret_rotated_by_profile_id" in self.model_fields_set:
+            _dict['secret_rotated_by_profile_id'] = None
+
         # set to None if team_id (nullable) is None
         # and model_fields_set contains the field
         if self.team_id is None and "team_id" in self.model_fields_set:
@@ -123,6 +129,7 @@ class MachineClient(BaseModel):
             "registered_by_profile_id": obj.get("registered_by_profile_id"),
             "revoked_at": obj.get("revoked_at"),
             "revoked_by_profile_id": obj.get("revoked_by_profile_id"),
+            "secret_rotated_by_profile_id": obj.get("secret_rotated_by_profile_id"),
             "team_id": obj.get("team_id")
         })
         return _obj

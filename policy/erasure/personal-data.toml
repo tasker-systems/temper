@@ -198,6 +198,7 @@
 "kb_machine_clients.profile_id"                    = { class = "reference", ceiling = "pseudonym", achieved = "-" }
 "kb_machine_clients.registered_by_profile_id"      = { class = "reference", ceiling = "pseudonym", achieved = "-" }
 "kb_machine_clients.revoked_by_profile_id"         = { class = "reference", ceiling = "pseudonym", achieved = "-" }
+"kb_machine_clients.secret_rotated_by_profile_id"  = { class = "reference", ceiling = "pseudonym", achieved = "-" }
 "kb_oauth_flow.profile_id"                         = { class = "reference", ceiling = "pseudonym", achieved = "-" }
 "kb_oauth_refresh_replays.profile_id"              = { class = "reference", ceiling = "pseudonym", achieved = "-", note = "evidence a credential was copied; RESTRICTed against retention sweeps" }
 "kb_oauth_refresh_tokens.profile_id"               = { class = "reference", ceiling = "pseudonym", achieved = "-" }

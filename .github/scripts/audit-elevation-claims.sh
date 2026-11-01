@@ -447,6 +447,29 @@ current_gates() {
 # says a team owner's cogmap grant needs the right in their own name. `access_service.rs` 10 -> 11:
 # `callers_machine_grant_bar`'s doc says a system admin acting as one is never asked, which holds,
 # because both callers reach it only on `GrantAuthority::Delegated`.
+# REVIEWED 2026-11-01 (task 01a19826, the S3 residual routes; Pete's rulings, decision 01a19843) —
+# `machine` 87a979ac2050 -> eb4042c5c963 and `connection` 586029b73345 -> 66c36643c716:
+# `contain_target_team` now refuses any personal team to a non-admin, the caller's own included,
+# except for a connection that personal team itself owns, a hold that cannot be lost (route 2 closed;
+# `ConnectionAuthority` passes the connection's owning team so the gate can ask). Before, the personal-team branch asked only
+# `require_manage_on_team`, which an owner passes on their own. The gate NARROWED for a team owner. A
+# system admin onto their own personal team is unchanged, and so is the refusal onto someone else's for
+# every caller. `machine_authz.rs` 8 -> 9: the doc's new sentence says a system admin may still bind
+# to their own personal team, which the `SystemAdmin` arm of that branch enforces. `team_membership`
+# 8a31f3610fe8 -> 9e329c322371: `try_membership_write` now also removes from the team, when a person
+# leaves it, every machine whose key they hold or can still mint (`machines_leaving_with`; route 4,
+# the key-holder rule Pete adopted after the second security review found that "another controller
+# is still on the team" and "the team owns it" exemptions left the departing person a working key).
+# Judged over live client rows only. Each removal goes through the same SQL
+# writer (`write_one`, still its only Rust call site) as a recorded `machine_reach` removal correlated
+# with the person's own. This narrows only. It writes only removals, never an add or a raise, and is
+# reached only after the person's own removal was authorized and written. A refusal on the cascade
+# fails the whole removal (Internal) rather than being dropped. The connection `grant_reach` and
+# team `remove_member` handler descriptions say so. Routes 3 and 5 change `access_service`
+# (`recipient_bar` bars a machine the caller controls: registered, rotated, per the new
+# `secret_rotated_by_profile_id` column of migration 20261115000010, or owner of its owning team;
+# `callers_machine_grant_bar` counts a row on the caller's own live personal team as in person). No
+# claim fingerprint there moved.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -499,7 +522,7 @@ claim crates/temper-services/src/services/embed_service.rs 1 -
 claim crates/temper-services/src/services/erasure_retention_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/erasure_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/invitation_service.rs 7 team_membership
-claim crates/temper-services/src/services/machine_authz.rs 8 machine,team_membership
+claim crates/temper-services/src/services/machine_authz.rs 9 machine,team_membership
 claim crates/temper-services/src/services/machine_client_service.rs 8 machine
 claim crates/temper-services/src/services/machine_registration_service.rs 9 machine
 claim crates/temper-services/src/services/resource_erasure_service.rs 2 is_system_admin
@@ -509,10 +532,10 @@ claim crates/temper-services/src/services/subscription_service.rs 9 subscription
 claim crates/temper-services/src/services/subscription_test_support.rs 1 subscription
 claim crates/temper-services/src/services/team_service.rs 27 require_manage_on_team,can_manage,team_membership,is_system_admin
 gate audit_gate 021f87ca4bed
-gate connection 586029b73345
+gate connection 66c36643c716
 gate context_admin b07eeb1d5289
 gate grant bccea040b6cf
-gate machine 87a979ac2050
+gate machine eb4042c5c963
 gate read_gates 6a6ce4847fbc
 gate ledger_subject 89ab4129fe64
 gate subscription f45d76e9be69
@@ -521,7 +544,7 @@ gate reconcile_regime 5339d74ce2eb
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e
-gate team_membership 8a31f3610fe8
+gate team_membership 9e329c322371
 EOF
 
 CURRENT="$(current_claims; current_gates)"

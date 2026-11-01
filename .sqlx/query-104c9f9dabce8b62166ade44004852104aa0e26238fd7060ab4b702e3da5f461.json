@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT _admin_team_membership_write(\n               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULL) AS \"outcome!\"",
+  "query": "SELECT _admin_team_membership_write(\n               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) AS \"outcome!\"",
   "describe": {
     "columns": [
       {
@@ -66,6 +66,7 @@
           }
         },
         "Bool",
+        "Uuid",
         "Uuid"
       ]
     },
@@ -73,5 +74,5 @@
       null
     ]
   },
-  "hash": "46e96a7ec37e1512cb6acba91db344a9241f124671705cc578c171a1715c4678"
+  "hash": "104c9f9dabce8b62166ade44004852104aa0e26238fd7060ab4b702e3da5f461"
 }

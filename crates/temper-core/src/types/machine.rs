@@ -23,6 +23,11 @@ pub struct MachineClient {
     pub last_seen_at: Option<DateTime<Utc>>,
     pub revoked_at: Option<DateTime<Utc>>,
     pub revoked_by_profile_id: Option<Uuid>,
+    /// Who minted the current secret by rotation, if it was rotated since this was recorded. With
+    /// `registered_by_profile_id`, it names who holds or can hold the key: a person leaving a team
+    /// takes off it every machine whose key they hold. Absent from an older server's response.
+    #[serde(default)]
+    pub secret_rotated_by_profile_id: Option<Uuid>,
 }
 
 /// One team the machine should be enrolled in, with its role.
