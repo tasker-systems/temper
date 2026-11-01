@@ -15,6 +15,7 @@
 
 import { redirect } from '@sveltejs/kit';
 import { exchangeCode, identityClaimsFromTokens } from '$lib/server/oidc';
+import { safeReturnTo } from '$lib/server/return-to';
 import { clearPkce, readPkce, writeSession } from '$lib/server/session';
 import type { RequestHandler } from './$types';
 
@@ -82,6 +83,8 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
 
 	clearPkce(cookies);
 
-	// SvelteKit's `redirect` throws — must be outside try/catch above.
-	throw redirect(303, pkce.returnTo);
+	// Checked again here rather than trusted from the cookie: a cookie written by an older build
+	// may carry a value that was never checked. SvelteKit's `redirect` throws — must be outside
+	// the try/catch above.
+	throw redirect(303, safeReturnTo(pkce.returnTo, url.origin));
 };
