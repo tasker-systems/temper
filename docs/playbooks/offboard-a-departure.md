@@ -151,9 +151,8 @@ team. It also means a workload running on such a machine **stops reaching that t
 leave it**. Check before you run the removal:
 
 ```bash
-temper admin machine list --include-revoked --format json \
-  | jq '.[] | select(.registered_by_profile_id == "<departing-uuid>")
-              | {id, label, profile_id, team_id, last_seen_at, revoked_at}'
+temper admin machine list --include-revoked --format json > machines.json
+jq '.[] | select(.registered_by_profile_id == "<departing-uuid>") | {id, label, team_id, last_seen_at, revoked_at}' machines.json
 ```
 
 That lists what they registered. Machines owned by a team they own, or that they rotated, count
