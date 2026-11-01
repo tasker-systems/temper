@@ -2371,7 +2371,7 @@ export interface paths {
         put?: never;
         /**
          * Register a machine client
-         * @description Registers an externally issued IdP `client_id` as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin, and a listed personal team must be the caller's own. An instance that runs temper's own authorization server refuses it, because an externally issued client id could never authenticate there; issue a credential instead. No caller can give a machine a team role above `member`.
+         * @description Registers an externally issued IdP `client_id` as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin, and a listed personal team must be the caller's own, as must a listed cogmap that is personal space (an admin is told when it is someone else's: `FORBIDDEN_DETAIL`). An instance that runs temper's own authorization server refuses it, because an externally issued client id could never authenticate there; issue a credential instead. No caller can give a machine a team role above `member`.
          */
         post: operations["provision_machine_client"];
         delete?: never;
@@ -14968,7 +14968,7 @@ export interface operations {
                     "application/json": components["schemas"]["GrantOutcome"];
                 };
             };
-            /** @description Caller may not administer grants on this map; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller may not administer grants on this map (a system admin on a map that is someone else's personal space is told so: `FORBIDDEN_DETAIL`, this cognitive map is @handle's personal space; the admin arm does not reach it); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -15007,7 +15007,7 @@ export interface operations {
                     "application/json": components["schemas"]["RevokeOutcome"];
                 };
             };
-            /** @description Caller may not administer grants on this map; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller may not administer grants on this map (a system admin on a map that is someone else's personal space is told so: `FORBIDDEN_DETAIL`, this cognitive map is @handle's personal space; the admin arm does not reach it); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -15294,7 +15294,7 @@ export interface operations {
                     "application/json": components["schemas"]["BindTeamOutcome"];
                 };
             };
-            /** @description Caller is not a system admin and does not both administer the map and manage the team (on a personal team, a system admin too must be its owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller is not a system admin and does not both administer the map and manage the team (on a personal team, or a map that is someone else's personal space, a system admin too must be its person, and is told so: `FORBIDDEN_DETAIL`, this cognitive map is @handle's personal space; the admin arm does not reach it); or the bind breaks the one-person rule, for any caller (`FORBIDDEN_DETAIL`: a map is bound to a personal team only when that team's person created it, and a map with no person as creator to one person's at most); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -15331,7 +15331,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnbindTeamOutcome"];
                 };
             };
-            /** @description Caller is not a system admin and does not both administer the map and manage the team (on a personal team, a system admin too must be its owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller is not a system admin and does not both administer the map and manage the team (on a personal team, or a map that is someone else's personal space, a system admin too must be its person, and is told so: `FORBIDDEN_DETAIL`, naming the personal space and its person's handle); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -16077,12 +16077,14 @@ export interface operations {
                     "application/json": components["schemas"]["RetireContextOutcome"];
                 };
             };
-            /** @description Caller may read but not administer this context */
+            /** @description Caller may read but not administer this context; or a system admin on someone else's personal context (`FORBIDDEN_DETAIL`: this context is @handle's personal space; the admin arm does not reach it) */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
             /** @description Context not found (uniform — no existence oracle) */
             404: {
@@ -16243,7 +16245,7 @@ export interface operations {
                     "application/json": components["schemas"]["ReassignContextOutcome"];
                 };
             };
-            /** @description Caller may not transfer this context to this team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller may not transfer this context to this team (a system admin refused because the context or the team is someone else's personal space is told so: `FORBIDDEN_DETAIL`, naming it and its person's handle); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -16341,12 +16343,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Caller may read but not administer this context */
+            /** @description Caller may read but not administer this context; or a system admin on someone else's personal context (`FORBIDDEN_DETAIL`: this context is @handle's personal space; the admin arm does not reach it) */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
             /** @description Context not found (uniform — no existence oracle for a caller who cannot see it) */
             404: {
@@ -16388,12 +16392,14 @@ export interface operations {
                     "application/json": components["schemas"]["RestoreContextOutcome"];
                 };
             };
-            /** @description Caller may read but not administer this context */
+            /** @description Caller may read but not administer this context; or a system admin on someone else's personal context (`FORBIDDEN_DETAIL`: this context is @handle's personal space; the admin arm does not reach it) */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
             /** @description Context not found, or not retired (uniform — no existence oracle) */
             404: {
@@ -16576,7 +16582,7 @@ export interface operations {
                     "application/json": components["schemas"]["ShareContextOutcome"];
                 };
             };
-            /** @description Caller may not share this context into this team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller may not share this context into this team (a system admin refused because the context or the team is someone else's personal space is told so: `FORBIDDEN_DETAIL`, naming it and its person's handle); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -16613,7 +16619,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnshareContextOutcome"];
                 };
             };
-            /** @description Caller may not unshare this context from this team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller may not unshare this context from this team (a system admin refused because the context or the team is someone else's personal space is told so: `FORBIDDEN_DETAIL`, naming it and its person's handle); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -16774,7 +16780,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin, the scope is a personal context or a resource homed in one (`FORBIDDEN_DETAIL`), or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller is not a system admin, the scope is someone else's personal context or a resource homed in one (`FORBIDDEN_DETAIL`: this context is, or this resource is homed in, @handle's personal space; the admin arm does not reach it), or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -17804,7 +17810,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin (`FORBIDDEN_DETAIL`), a team role above `member` was requested (refused for every caller), or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller is not a system admin (`FORBIDDEN_DETAIL`), a team role above `member` was requested (refused for every caller), a grant on someone else's personal cognitive map was requested (`FORBIDDEN_DETAIL`, naming it), or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -17867,7 +17873,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, a system admin requested a grant on someone else's personal cognitive map (`FORBIDDEN_DETAIL`: this cognitive map is @handle's personal space; the admin arm does not reach it), or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -20198,7 +20204,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller may not administer grants on this resource; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller may not administer grants on this resource (a system admin on a resource homed in someone else's personal space is told so: `FORBIDDEN_DETAIL`, this resource is homed in @handle's personal space; the admin arm does not reach it); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -20255,7 +20261,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller may not administer grants on this resource; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller may not administer grants on this resource (a system admin on a resource homed in someone else's personal space is told so: `FORBIDDEN_DETAIL`, this resource is homed in @handle's personal space; the admin arm does not reach it); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;

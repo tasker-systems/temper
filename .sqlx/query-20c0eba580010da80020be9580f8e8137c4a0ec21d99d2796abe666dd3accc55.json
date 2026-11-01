@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT resource_personal_owner($1) AS \"o\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "o",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "20c0eba580010da80020be9580f8e8137c4a0ec21d99d2796abe666dd3accc55"
+}

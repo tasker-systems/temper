@@ -386,7 +386,8 @@ async fn replay_reproduces_the_erased_contexts_from_the_walk(pool: PgPool) {
 }
 
 /// FAILS IF an erased context can come back: an instance admin is refused through the service,
-/// which does not show them someone else's personal context (404), and through `context_restore`
+/// which tells them they hit someone else's personal space (403 `ForbiddenDetail`, task `01a1933d`),
+/// and through `context_restore`
 /// itself (SQLSTATE 42501: a system admin does not act on someone else's personal context, task
 /// `01a191b4`). The `TE001` erased-context refusal behind that gate stays, for any future caller
 /// who passes it. There is no co-admin of a
@@ -417,10 +418,15 @@ async fn an_erased_context_cannot_be_restored_by_anyone(pool: PgPool) {
     let (op, _) = operator(&pool).await;
     let op_proof = temper_services::test_support::caller_for(&pool, op.profile).await;
     for c in [p.me, p.personal_team] {
+        // Still someone else's personal space after erasure, so the admin arm stops there and the
+        // refusal says so (task `01a1933d`; it was a 404 before), without reaching the 410.
         match context_service::restore(&pool, &op_proof, c.uuid()).await {
-            Err(ApiError::NotFound(_)) => {}
+            Err(ApiError::ForbiddenDetail(m)) if m.ends_with("the admin arm does not reach it") => {
+            }
             other => {
-                panic!("the instance admin's restore of {c:?} is refused with 404, got {other:?}")
+                panic!(
+                    "the instance admin's restore of {c:?} is refused as personal space, got {other:?}"
+                )
             }
         }
     }

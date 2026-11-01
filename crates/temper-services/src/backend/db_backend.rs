@@ -3975,6 +3975,39 @@ impl Backend for DbBackend {
         .await
         .map_err(api_err)?
         {
+            // The no-op answers only a caller who reads the map (task `01a1933d`; ported from
+            // temper#1283): it hands back the charter id. A system admin who named someone else's
+            // private map is told what they hit, as every door tells them; anyone else is told the
+            // id is taken and nothing more.
+            let readable = sqlx::query_scalar!(
+                r#"SELECT cogmap_readable_by_profile($1, $2) AS "r!: bool""#,
+                uuid::Uuid::from(self.profile_id),
+                cogmap_uuid,
+            )
+            .fetch_one(&self.pool)
+            .await
+            .map_err(api_err)?;
+            if !readable {
+                if caller_is_admin {
+                    if let Some(stop) = crate::authz::personal_space::others_personal_space(
+                        &self.pool,
+                        temper_substrate::payloads::RefTarget {
+                            kind: temper_substrate::payloads::AnchorTable::Cogmaps,
+                            id: cogmap_uuid,
+                        },
+                        self.profile_id,
+                    )
+                    .await?
+                    {
+                        return Err(crate::authz::personal_space::refusal(&self.pool, stop)
+                            .await?
+                            .into());
+                    }
+                }
+                return Err(TemperError::Conflict(
+                    "a cognitive map already exists at this id".to_string(),
+                ));
+            }
             return Ok(CommandOutput::new(CreateCogmapOutcome {
                 cogmap_id: cogmap_uuid,
                 telos_resource_id: existing_telos,
@@ -4110,6 +4143,10 @@ impl Backend for DbBackend {
         )
         .await
         .map_err(|e| TemperError::Api(e.to_string()))?;
+
+        // The map's creator (task `01a1933d`) is recorded from this self-grant by the
+        // `kb_access_grants_records_cogmap_creator` trigger (migration `20261115000000`), in this
+        // transaction: genesis fires as the system actor, so the projection cannot know it.
 
         // COMMIT — serialization failure (40001) → `Conflict` (a genesis race), any other DB error → 500.
         match tx.commit().await {

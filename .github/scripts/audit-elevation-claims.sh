@@ -416,13 +416,34 @@ current_gates() {
 # can no longer declare that subscription through `subscription_service::create`, because the
 # subscriber must now be authored, so it asserts that refusal and seeds the row directly to test
 # who controls it. No arm of `MachineClientControlAuthority` or the registration gate moved.
+# REVIEWED 2026-11-01 (task 01a1933d, PR #1285, merged with main after #1277) — `context_admin`
+# 36e336482872 -> b07eeb1d5289, `grant` 8fca715c38c3 -> bccea040b6cf, `two_sided` d72f4d72d122 ->
+# 92995b75cab8: each gains one refusing arm, `AdminStoppedAtPersonalSpace`. It carries a
+# `PersonalSpaceStop` (kind and person) that `authorize` renders as a 403 naming that person's
+# handle. Grant, two-sided and context-admin acts now stop a system admin at someone else's
+# personal map (`cogmap_personal_owner`) as well as at the personal contexts, resources and teams
+# #1275 named. `grant` also gains the sealed `RevokeWarrant::Severance`. No arm widens who may act.
+# `machine` 175b6fd6e623 -> d13497025e12: the admin arm of registration now runs
+# `authorize_capability_grant` on each cogmap reach grant, so it stops at a personal map.
+# `sever_personal_reach` also withdraws the machine's direct grants on personal space other than
+# the minter's own, and skips both withdrawals when the minter is the machine's own registering
+# person (Pete's ruling). Both arms narrow. The fingerprint also holds #1277's test-only change.
+# Claim counts: `handlers/cognitive_maps.rs` 4 -> 6, `handlers/contexts.rs` (new) 6,
+# `handlers/resources.rs` (new) 2, `cogmap_service.rs` 2 -> 4, `context_service.rs` 18 -> 19.
+# Each is a doc or utoipa description that a system admin is refused on someone else's personal
+# space with the 403 naming the person, which the arms above enforce, as the tests in
+# `private_cogmaps_personal_space_test.rs` and `personal_space_admin_test.rs` assert.
+# `access_service.rs` 9 -> 10 is the sum of #1277's +1 (reviewed above) and this PR's +1, the
+# `GrantAuthority` variant's doc, which `can_administer_grant` enforces. `reconcile_regime` is
+# #1277's fingerprint unchanged; this PR does not touch it.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
 claim crates/temper-api/src/handlers/admin_ledger.rs 2 is_system_admin,read_gates,grant,ledger_subject,team_membership
 claim crates/temper-api/src/handlers/block_history_scrub.rs 5 is_system_admin
-claim crates/temper-api/src/handlers/cognitive_maps.rs 4 reconcile_regime,two_sided
+claim crates/temper-api/src/handlers/cognitive_maps.rs 6 reconcile_regime,two_sided
 claim crates/temper-api/src/handlers/connections.rs 13 connection,machine,require_manage_on_team,can_manage
+claim crates/temper-api/src/handlers/contexts.rs 6 context_admin,two_sided
 claim crates/temper-api/src/handlers/embed.rs 2 is_system_admin
 claim crates/temper-api/src/handlers/erasure.rs 12 is_system_admin
 claim crates/temper-api/src/handlers/field_scrub.rs 8 is_system_admin
@@ -430,6 +451,7 @@ claim crates/temper-api/src/handlers/invitations.rs 3 team_membership
 claim crates/temper-api/src/handlers/machine_clients.rs 11 is_system_admin,machine,require_manage_on_team,can_manage
 claim crates/temper-api/src/handlers/reblock.rs 2 is_system_admin
 claim crates/temper-api/src/handlers/resource_erasure.rs 5 is_system_admin
+claim crates/temper-api/src/handlers/resources.rs 2 grant
 claim crates/temper-api/src/handlers/slack_disconnect.rs 1 -
 claim crates/temper-api/src/handlers/subscriptions.rs 7 subscription
 claim crates/temper-api/src/handlers/teams.rs 10 team_membership,is_system_admin
@@ -457,11 +479,11 @@ claim crates/temper-mcp/src/service.rs 4 -
 claim crates/temper-mcp/src/tools/cognitive_maps.rs 1 is_system_admin
 claim crates/temper-mcp/src/tools/contexts.rs 2 context_admin,two_sided
 claim crates/temper-mcp/src/tools/reblock.rs 3 -
-claim crates/temper-services/src/services/access_service.rs 9 is_system_admin
+claim crates/temper-services/src/services/access_service.rs 10 is_system_admin
 claim crates/temper-services/src/services/admin_directory_service.rs 1 is_system_admin
-claim crates/temper-services/src/services/cogmap_service.rs 2 two_sided
+claim crates/temper-services/src/services/cogmap_service.rs 4 two_sided
 claim crates/temper-services/src/services/connection_service.rs 11 connection
-claim crates/temper-services/src/services/context_service.rs 18 context_admin
+claim crates/temper-services/src/services/context_service.rs 19 context_admin
 claim crates/temper-services/src/services/embed_service.rs 1 -
 claim crates/temper-services/src/services/erasure_retention_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/erasure_service.rs 1 is_system_admin
@@ -477,13 +499,13 @@ claim crates/temper-services/src/services/subscription_test_support.rs 1 subscri
 claim crates/temper-services/src/services/team_service.rs 27 require_manage_on_team,can_manage,team_membership,is_system_admin
 gate audit_gate 021f87ca4bed
 gate connection 586029b73345
-gate context_admin 36e336482872
-gate grant 8fca715c38c3
-gate machine 175b6fd6e623
+gate context_admin b07eeb1d5289
+gate grant bccea040b6cf
+gate machine d13497025e12
 gate read_gates 6a6ce4847fbc
 gate ledger_subject 89ab4129fe64
 gate subscription f45d76e9be69
-gate two_sided d72f4d72d122
+gate two_sided 92995b75cab8
 gate reconcile_regime 5339d74ce2eb
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d

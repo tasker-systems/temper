@@ -82,6 +82,11 @@ pub(crate) enum GrantAuthority {
     Delegated,
     /// May not administer grants on this subject at all.
     None,
+    /// A system admin with no ordinary authority over someone else's personal space: a context, a
+    /// resource homed in one, or a cognitive map that is one person's (tasks `01a191b4`,
+    /// `01a1933d`). A denial, like `None`, that tells the admin what they hit
+    /// (`crate::authz::personal_space`).
+    AdminStoppedAtPersonalSpace(crate::authz::personal_space::PersonalSpaceStop),
 }
 
 /// Bool projection of `GrantAuthority`'s [`ScopedAuthority`] resolve, kept as the seam
@@ -92,7 +97,9 @@ pub(crate) async fn can_administer_grant(
     caller: Principal<'_>,
     subject: RefTarget,
 ) -> ApiResult<bool> {
-    Ok(GrantAuthority::resolve(pool, caller, subject).await? != GrantAuthority::None)
+    Ok(!GrantAuthority::resolve(pool, caller, subject)
+        .await?
+        .is_denial())
 }
 
 // The grant-administration gate itself — a system admin OR a holder of `can_grant` on the subject
@@ -220,7 +227,9 @@ pub(crate) async fn authorize_capability_grant(
     match proof.authority() {
         // Unreachable: `authorize` refused it above. Enumerated rather than `_ =>` so a future
         // arm cannot land here silently permissive.
-        GrantAuthority::None => Err(ApiError::Forbidden),
+        GrantAuthority::None | GrantAuthority::AdminStoppedAtPersonalSpace(_) => {
+            Err(ApiError::Forbidden)
+        }
         GrantAuthority::SystemAdmin => {
             if subject.kind == AnchorTable::Contexts && !context_is_live(pool, subject.id).await? {
                 return Err(ApiError::Forbidden);
@@ -277,29 +286,20 @@ pub(crate) async fn profile_can_grant(
 }
 
 /// Whether a grant subject is someone else's personal space: a personal context that is not
-/// `caller`'s, or a resource homed in one. The SQL `context_personal_owner` and
-/// `resource_personal_owner` are the one definition.
+/// `caller`'s, a resource homed in one, or a cognitive map that is someone else's (task
+/// `01a1933d`). The SQL `context_personal_owner`, `resource_personal_owner` and
+/// `cogmap_personal_owner` are the one definition; `authz::personal_space::others_personal_space`
+/// asks them.
 pub(crate) async fn subject_is_others_personal(
     pool: &PgPool,
     subject: RefTarget,
     caller: ProfileId,
 ) -> ApiResult<bool> {
-    Ok(match subject.kind {
-        temper_substrate::payloads::AnchorTable::Contexts => {
-            crate::services::context_service::is_others_personal_context(pool, subject.id, caller)
-                .await?
-        }
-        temper_substrate::payloads::AnchorTable::Resources => {
-            sqlx::query_scalar!(
-                r#"SELECT COALESCE(resource_personal_owner($1) <> $2, false) AS "p!: bool""#,
-                subject.id,
-                *caller,
-            )
-            .fetch_one(pool)
+    Ok(
+        crate::authz::personal_space::others_personal_space(pool, subject, caller)
             .await?
-        }
-        _ => false,
-    })
+            .is_some(),
+    )
 }
 
 /// Is `team_id` the root, `temper-system`? Every personal team descends from it, so whatever is

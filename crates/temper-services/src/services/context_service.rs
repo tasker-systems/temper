@@ -1148,7 +1148,8 @@ async fn inherited_reach(
 /// **Auth before writes**, and before every read: `ContextAdminAuthority` is last in the spec's
 /// refusal table but first in this body. It answers in two dialects — `403` to a caller who reads
 /// the context but does not administer it, `404` to one who cannot see it — which is the whole
-/// reason `ScopedAuthority::denial_for` exists. The `context_rename` SQL function re-runs the same
+/// reason `ScopedAuthority::denial_for` exists. A system admin on someone else's personal context
+/// gets a third answer, a `403` that says so (task `01a1933d`). The `context_rename` SQL function re-runs the same
 /// admission rule as an in-transaction invariant, so this gate is the caller-facing refusal and
 /// that one is the atomic backstop (mapped through `map_context_write_err`).
 ///
@@ -1305,7 +1306,8 @@ pub async fn rename(
 /// its OLD slug forever unless it moves out of the way.
 ///
 /// **Auth before writes**, the same gate as [`rename`]: `ContextAdminAuthority` — own the context,
-/// or manage its owning team, or be an instance administrator.
+/// or manage its owning team, or be an instance administrator outside someone else's personal
+/// space (where the admin is refused with a `403` that names it).
 ///
 /// **No dependents guard.** This supersedes the hard delete of PR #777, whose guard existed only
 /// because a hard delete could strand a resource's home; retirement strands nothing; the whole
@@ -1380,7 +1382,8 @@ pub async fn retire(
 /// mangled slug was chosen only to get out of the way, and is not owed back.
 ///
 /// **Auth before writes**, the same gate as [`retire`]: `ContextAdminAuthority` — own the
-/// context, or manage its owning team, or be an instance administrator.
+/// context, or manage its owning team, or be an instance administrator outside someone else's
+/// personal space (where the admin is refused with a `403` that names it).
 ///
 /// **An erased context is refused with 410**, whoever asks: the person-erasure act erased it,
 /// and erased stays erased. Checked here so the caller gets the refusal before any slug is
@@ -2151,12 +2154,14 @@ mod tests {
         );
 
         let as_admin = crate::test_support::human_principal_for(&pool, admin.uuid()).await;
+        // Refused, and told what they hit (task `01a1933d`).
+        let told = |err: &ApiError| matches!(err, ApiError::ForbiddenDetail(m) if m.starts_with("this team is @alice's personal team"));
         let err = share(&pool, &as_admin, *admin_ctx, &req).await.unwrap_err();
-        assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
+        assert!(told(&err), "got {err:?}");
         let err = unshare(&pool, &as_admin, alice_ctx, personal)
             .await
             .unwrap_err();
-        assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
+        assert!(told(&err), "got {err:?}");
         let shares: i64 =
             sqlx::query_scalar("SELECT count(*) FROM kb_team_contexts WHERE team_id = $1")
                 .bind(personal)
@@ -3239,15 +3244,20 @@ mod tests {
             )
             .await
             .unwrap_err();
-            assert!(matches!(err, ApiError::Forbidden), "share: {err:?}");
+            // Every door refuses with the same sentence (task `01a1933d`).
+            let told = |err: &ApiError| {
+                matches!(err, ApiError::ForbiddenDetail(m)
+                    if m == "this context is @alice's personal space; the admin arm does not reach it")
+            };
+            assert!(told(&err), "share: {err:?}");
             let err = reassign(&pool, &as_admin, ctx, acme).await.unwrap_err();
-            assert!(matches!(err, ApiError::Forbidden), "reassign: {err:?}");
+            assert!(told(&err), "reassign: {err:?}");
             let err = rename(&pool, &admin_caller, ctx, "Renamed")
                 .await
                 .unwrap_err();
-            assert!(matches!(err, ApiError::NotFound(_)), "rename: {err:?}");
+            assert!(told(&err), "rename: {err:?}");
             let err = retire(&pool, &admin_caller, ctx).await.unwrap_err();
-            assert!(matches!(err, ApiError::NotFound(_)), "retire: {err:?}");
+            assert!(told(&err), "retire: {err:?}");
         }
 
         // The plpgsql twin refuses on its own: the admin's emitter is no bypass on personal space.
@@ -3278,7 +3288,10 @@ mod tests {
             .await
             .expect("the owner retires");
         let err = restore(&pool, &admin_caller, mine).await.unwrap_err();
-        assert!(matches!(err, ApiError::NotFound(_)), "restore: {err:?}");
+        assert!(
+            matches!(&err, ApiError::ForbiddenDetail(m) if m.starts_with("this context is @alice's")),
+            "restore: {err:?}"
+        );
         let listed = list_retired_administered(&pool, &admin_caller)
             .await
             .unwrap();

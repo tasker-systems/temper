@@ -1,0 +1,69 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT e.id            AS event_id,\n                  t.name          AS event_type,\n                  p.id            AS actor_profile_id,\n                  p.handle        AS actor_handle,\n                  e.occurred_at   AS occurred_at,\n                  e.payload       AS payload,\n                  e.\"references\"  AS refs,\n                  e.correlation_id AS correlation_id\n             FROM kb_events e\n             JOIN kb_event_types t ON t.id = e.event_type_id\n             JOIN kb_entities   en ON en.id = e.emitter_entity_id\n             JOIN kb_profiles    p ON p.id = en.profile_id\n            WHERE t.name = ANY($1)\n              AND ($2::jsonb IS NULL OR e.\"references\" @> $2::jsonb)\n              AND ($3::uuid  IS NULL OR p.id = $3::uuid)\n              -- An audit of someone else's acts does not reach personal space (task `01a191b4`):\n              -- a grant whose subject is a personal context, a resource homed in one, or a\n              -- personal cognitive map (task `01a1933d`) is its owner's business. Only the grant\n              -- pair names such a subject.\n              AND NOT ($6::uuid IS NOT NULL AND t.name IN ('grant_created', 'grant_revoked')\n                   AND EXISTS (\n                    SELECT 1 FROM jsonb_array_elements(e.\"references\") r\n                     WHERE r->>'rel' = 'subject'\n                       AND ((r->'target'->>'kind' = 'kb_resources'\n                             AND resource_personal_owner((r->'target'->>'id')::uuid) <> $6)\n                         OR (r->'target'->>'kind' = 'kb_contexts'\n                             AND context_personal_owner((r->'target'->>'id')::uuid) <> $6)\n                         OR (r->'target'->>'kind' = 'kb_cogmaps'\n                             AND cogmap_personal_owner((r->'target'->>'id')::uuid) <> $6))))\n            ORDER BY e.occurred_at DESC, e.id DESC\n            LIMIT $4 OFFSET $5",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "event_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "event_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "actor_profile_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "actor_handle",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "occurred_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "payload",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 6,
+        "name": "refs",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 7,
+        "name": "correlation_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Jsonb",
+        "Uuid",
+        "Int8",
+        "Int8",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "eb915539fc9e45eee7bd988cd654ad754d2fdecc67bdba8f0271862472f61161"
+}

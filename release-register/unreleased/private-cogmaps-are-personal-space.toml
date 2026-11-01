@@ -1,0 +1,47 @@
+title    = "A private cognitive map is personal space: one person per map, the admin arm stops at it, and an admin refused on personal space is told what they hit"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp", "cli-stdout", "clients", "erasure-policy"]
+status   = "signal-only"
+body = '''
+Extends personal space to cognitive maps, and makes every personal-space refusal to a system admin
+say what it hit. Migration `20261115000000`.
+
+**Deploy stop.** The migration aborts, changing nothing, while any map is bound to more than one
+person's personal team, or to a personal team whose person is not the map's creator. Run the
+pre-flight `runbooks/2026-10-31-private-cogmaps-one-person-preflight.sql` (temper-artifacts) before
+deploying, and unbind every `CONFLICT` row it lists.
+
+- A map is someone's personal space when it has no binding to a live shared team and either its
+  creator is a person, or (no person creator) it is bound to exactly one person's personal team.
+  `kb_cogmaps.created_by_profile_id` is new: set at genesis, and backfilled from the creator's
+  genesis self-grant (maps from before the grant chokepoint stay NULL). `cogmap_personal_owner`
+  is the one definition.
+- One person per map, for every caller: `POST /api/cognitive-maps/{id}/teams` into a personal team
+  answers `403` (`FORBIDDEN_DETAIL`) unless that team's person created the map, or, on a map with
+  no person as creator, when another person's personal team is already bound. A trigger on
+  `kb_team_cogmaps` refuses the same rows (`42501`) for every writer.
+- A system admin no longer grants or revokes on, binds or unbinds someone else's personal map. Its
+  person keeps every act, and existing grants keep conferring. The admin ledger's actor axis omits
+  grant acts on someone else's personal map, as it already did for personal contexts and resources.
+- A credential minted for a machine by anyone but its own person (the person who registered it,
+  whose personal team admits it) — a rotated secret, a rebound client id — now also withdraws the
+  machine's direct grants on every personal space but the minter's own (a personal map, a personal
+  context, a resource homed in one), each recorded as `grant_revoked`, beside the personal-team
+  severance #1275 shipped. When the machine's own person rotates or rebinds it, nothing is
+  withdrawn. Machine registration by a system admin refuses a cogmap
+  grant on someone else's personal map.
+- Genesis at an existing caller-supplied map id (honoured only for a system admin) answers its
+  idempotent no-op only to a caller who reads the map; on someone else's private map the admin gets
+  the personal-space `403`, on any other unreadable map `409`.
+- Refusals to a system admin on someone else's personal space are a `403` with
+  `FORBIDDEN_DETAIL` naming the kind and the person's handle ("this context is @ana's personal
+  space; the admin arm does not reach it"), across contexts, resources, cognitive maps and personal
+  teams, at share, unshare, reassign, rename, retire, restore, grant, revoke, bind, unbind and
+  re-embed. Behaviour change: context rename, retire and restore answered such an admin `404`, and
+  share, unshare, reassign, grant and revoke a bare `403`; the re-embed refusal's sentence changed.
+  Callers who are not system admins get exactly the answers they did.
+
+Request and response shapes are unchanged. Who observes: system admins, and anyone binding a map
+into a personal team. Release relevance: signal-only, apart from the deploy stop above.
+'''

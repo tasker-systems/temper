@@ -14,7 +14,8 @@ use temper_core::types::ids::{CogmapId, ProfileId, ResourceId};
 use temper_substrate::payloads::{AnchorTable, RefTarget};
 
 use super::{
-    Authorized, ConnectionAuthority, ConnectionControlAuthority, Principal, ScopedAuthority,
+    personal_space, Authorized, ConnectionAuthority, ConnectionControlAuthority, Principal,
+    ScopedAuthority,
 };
 use crate::backend::write_floor;
 use crate::error::{ApiError, ApiResult};
@@ -33,13 +34,17 @@ impl ScopedAuthority for GrantAuthority {
         subject: RefTarget,
     ) -> ApiResult<Self> {
         let caller = principal.profile_id();
-        // The admin arm stops at personal space (task `01a191b4`): granting on someone's personal
-        // context or a resource homed in one is acting on it, which only its owner and erasure do.
-        // An admin there resolves like anyone else, through `profile_can_grant` below.
-        if principal.system_admin(pool).await?.is_some()
-            && !crate::services::access_service::subject_is_others_personal(pool, subject, caller)
-                .await?
-        {
+        // The admin arm stops at personal space (tasks `01a191b4`, `01a1933d`): granting on someone's
+        // personal context, a resource homed in one, or their personal cognitive map is acting on
+        // it, which only its person and erasure do. An admin there resolves like anyone else,
+        // through `profile_can_grant` below, and a refusal tells them what they hit.
+        let admin = principal.system_admin(pool).await?.is_some();
+        let stop = if admin {
+            personal_space::others_personal_space(pool, subject, caller).await?
+        } else {
+            None
+        };
+        if admin && stop.is_none() {
             // The subject-liveness floor the delegated arm carries inside `can()` (migration
             // `20260902000010`: "both profile branches answer a tombstoned subject identically")
             // applies to the admin arm too, so an admin cannot administer grants on a tombstoned
@@ -70,6 +75,8 @@ impl ScopedAuthority for GrantAuthority {
         Ok(
             if profile_can_grant(pool, caller, subject.kind.as_str(), subject.id).await? {
                 GrantAuthority::Delegated
+            } else if let Some(stop) = stop {
+                GrantAuthority::AdminStoppedAtPersonalSpace(stop)
             } else {
                 GrantAuthority::None
             },
@@ -77,11 +84,21 @@ impl ScopedAuthority for GrantAuthority {
     }
 
     fn is_denial(&self) -> bool {
-        matches!(self, GrantAuthority::None)
+        matches!(
+            self,
+            GrantAuthority::None | GrantAuthority::AdminStoppedAtPersonalSpace(_)
+        )
     }
 
     fn denial() -> ApiError {
         ApiError::Forbidden
+    }
+
+    fn personal_space_stop(&self) -> Option<personal_space::PersonalSpaceStop> {
+        match self {
+            GrantAuthority::AdminStoppedAtPersonalSpace(stop) => Some(*stop),
+            _ => None,
+        }
     }
 }
 
@@ -230,6 +247,15 @@ pub(crate) enum RevokeWarrant<'a> {
     /// Connection read-reach withdrawal. Minted by `ConnectionControlAuthority`: authority over the
     /// connection, and nothing at all about the team losing the reach.
     ConnectionControl(&'a Authorized<ConnectionControlAuthority>),
+    /// A credential mint's withdrawal of a machine's direct grants on someone else's personal space
+    /// (task `01a1933d`; ported from temper#1283). Sealed by `CredentialSeverance`, which only
+    /// `machine_client_service::sever_personal_reach` constructs: a credential minted by anyone but
+    /// the person costs the machine its personal-team membership, and with it the grants that
+    /// would otherwise still open that person's personal maps, contexts and resources.
+    Severance {
+        _seal: &'a crate::services::machine_client_service::CredentialSeverance,
+        subject: RefTarget,
+    },
 }
 
 impl RevokeWarrant<'_> {
@@ -244,6 +270,7 @@ impl RevokeWarrant<'_> {
                 kind: AnchorTable::Connections,
                 id: proof.subject(),
             },
+            RevokeWarrant::Severance { _seal: _, subject } => *subject,
         }
     }
 }

@@ -367,6 +367,54 @@ mod personal_space_tests {
         .execute(&pool)
         .await
         .expect("alice's machine joins her personal team");
+        // Direct grants on alice's personal context, on a shared team's context, and on quinn's
+        // personal context (task `01a1933d`). Alice, the machine's own person,
+        // minting withdraws none of them (ruled 2026-10-31); an admin's credential takes both
+        // personal ones and leaves the shared one.
+        let (quinn, _) = person(&pool, "mint-quinn").await;
+        let mut contexts = Vec::new();
+        for (owner_table, owner_id, slug) in [
+            ("kb_profiles", *alice, "mint-alices"),
+            ("kb_teams", acme, "mint-acmes"),
+            ("kb_profiles", *quinn, "mint-quinns"),
+        ] {
+            let ctx: Uuid = sqlx::query_scalar(
+                "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+                 VALUES ($1, $2, $3, $3) RETURNING id",
+            )
+            .bind(owner_table)
+            .bind(owner_id)
+            .bind(slug)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO kb_access_grants (subject_table, subject_id, principal_table, \
+                   principal_id, can_read, granted_by_profile_id) \
+                 VALUES ('kb_contexts', $1, 'kb_profiles', $2, true, $3)",
+            )
+            .bind(ctx)
+            .bind(*machine)
+            .bind(*alice)
+            .execute(&pool)
+            .await
+            .unwrap();
+            contexts.push(ctx);
+        }
+        let holds = |ctx: Uuid| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, bool>(
+                    "SELECT EXISTS (SELECT 1 FROM kb_access_grants WHERE subject_id = $1 \
+                       AND principal_id = $2)",
+                )
+                .bind(ctx)
+                .bind(*machine)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
         let on_alices = || async {
             sqlx::query_scalar::<_, bool>(
                 "SELECT EXISTS (SELECT 1 FROM kb_team_members WHERE team_id = $1 AND profile_id = $2)",
@@ -394,6 +442,10 @@ mod personal_space_tests {
             .is_empty());
         tx.commit().await.unwrap();
         assert!(on_alices().await);
+        assert!(
+            holds(contexts[0]).await && holds(contexts[1]).await && holds(contexts[2]).await,
+            "the machine's own person rotating withdraws nothing, quinn's grant included"
+        );
 
         // The admin minting severs it, and the removal is recorded with the admin as actor.
         let mut conn = pool.acquire().await.unwrap();
@@ -416,6 +468,24 @@ mod personal_space_tests {
             !on_alices().await,
             "the admin's credential does not open alice's personal team"
         );
+        assert!(
+            !holds(contexts[0]).await,
+            "nor her personal space through the machine's own grant"
+        );
+        assert!(
+            !holds(contexts[2]).await,
+            "nor quinn's personal space, whoever granted it"
+        );
+        assert!(holds(contexts[1]).await, "a shared grant stays");
+        let revoked: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+              WHERE t.name = 'grant_revoked' AND e.payload->>'subject_id' = $1::text",
+        )
+        .bind(contexts[0])
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(revoked, 1, "the withdrawal is recorded");
         let recorded: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
               WHERE t.name = 'team_membership_changed' \

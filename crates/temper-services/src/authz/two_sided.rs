@@ -18,7 +18,9 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::{Principal, ScopedAuthority};
+use temper_substrate::payloads::{AnchorTable, RefTarget};
+
+use super::{personal_space, Principal, ScopedAuthority};
 use crate::error::{ApiError, ApiResult};
 use crate::services::{access_service, context_service, team_service};
 
@@ -80,6 +82,11 @@ pub(crate) enum TwoSidedAuthority {
     Delegated,
     /// Neither.
     None,
+    /// A system admin refused because the act reaches someone else's personal space: their
+    /// personal team as the target, or their personal context or personal cognitive map as the
+    /// object (tasks `01a19006`, `01a191b4`, `01a1933d`). A denial that tells the admin what they
+    /// hit (`super::personal_space`).
+    AdminStoppedAtPersonalSpace(personal_space::PersonalSpaceStop),
 }
 
 #[async_trait]
@@ -134,29 +141,52 @@ impl ScopedAuthority for TwoSidedAuthority {
     /// The admin short-circuit does not apply when the target is a personal team (task
     /// `01a19006`, ruled 2026-10-31): attaching an object to someone's personal team, or detaching
     /// one from it, is acting on that team, which only its owner and erasure do. Nor when the
-    /// object is a personal context (task `01a191b4`): sharing, unsharing or reassigning someone's
-    /// personal context is acting on their personal space. The owner passes the ordinary arm below
-    /// — they manage the team and administer the object.
+    /// object is someone else's personal context (task `01a191b4`) or personal cognitive map (task
+    /// `01a1933d`, `cogmap_personal_owner`): sharing, unsharing or reassigning the one, or binding
+    /// or unbinding the other, is acting on their personal space. The owner passes the ordinary arm
+    /// below — they manage the team and administer the object. An admin refused for any of these
+    /// reasons resolves `AdminStoppedAtPersonalSpace`, which tells them what they hit.
     async fn resolve(
         pool: &PgPool,
         principal: Principal<'_>,
         scope: TwoSidedScope,
     ) -> ApiResult<Self> {
         let caller = principal.profile_id();
-        let personal = team_service::personal_of(pool, scope.team_id)
-            .await?
-            .is_some()
-            || match scope.object {
-                TwoSidedObject::Context(context_id) => {
-                    context_service::is_others_personal_context(pool, context_id, caller).await?
-                }
-                TwoSidedObject::Cogmap(_) => false,
-            };
-        if !personal && principal.system_admin(pool).await?.is_some() {
+        // Someone else's personal space on either side: the target is a person's personal team, or
+        // the object is their personal context or personal cognitive map (task `01a1933d`).
+        let stop = match personal_space::others_personal_team(pool, scope.team_id, caller).await? {
+            Some(stop) => Some(stop),
+            None => {
+                let object = match scope.object {
+                    TwoSidedObject::Context(id) => RefTarget {
+                        kind: AnchorTable::Contexts,
+                        id,
+                    },
+                    TwoSidedObject::Cogmap(id) => RefTarget {
+                        kind: AnchorTable::Cogmaps,
+                        id,
+                    },
+                };
+                personal_space::others_personal_space(pool, object, caller).await?
+            }
+        };
+        // Any personal team target drops the bypass, the caller's own included (it is theirs
+        // through the ordinary arm); someone else's personal space on either side does too.
+        let personal = stop.is_some()
+            || team_service::personal_of(pool, scope.team_id)
+                .await?
+                .is_some();
+        let admin = principal.system_admin(pool).await?.is_some();
+        if !personal && admin {
             return Ok(TwoSidedAuthority::SystemAdmin);
         }
+        // An admin refused because the act reaches someone else's personal space is told so.
+        let none = match stop {
+            Some(stop) if admin => TwoSidedAuthority::AdminStoppedAtPersonalSpace(stop),
+            _ => TwoSidedAuthority::None,
+        };
         if access_service::is_root_or_gating_team(pool, scope.team_id).await? {
-            return Ok(TwoSidedAuthority::None);
+            return Ok(none);
         }
 
         // The target-team bar: `can_manage` (Owner|Maintainer) by DIRECT membership. Both gates
@@ -166,7 +196,7 @@ impl ScopedAuthority for TwoSidedAuthority {
             Some(role) if team_service::can_manage(role)
         );
         if !manages_team {
-            return Ok(TwoSidedAuthority::None);
+            return Ok(none);
         }
 
         // The object side — the one probe the two gates genuinely disagreed on. Each arm CALLS the
@@ -183,12 +213,22 @@ impl ScopedAuthority for TwoSidedAuthority {
         Ok(if administers_object {
             TwoSidedAuthority::Delegated
         } else {
-            TwoSidedAuthority::None
+            none
         })
     }
 
     fn is_denial(&self) -> bool {
-        matches!(self, TwoSidedAuthority::None)
+        matches!(
+            self,
+            TwoSidedAuthority::None | TwoSidedAuthority::AdminStoppedAtPersonalSpace(_)
+        )
+    }
+
+    fn personal_space_stop(&self) -> Option<personal_space::PersonalSpaceStop> {
+        match self {
+            TwoSidedAuthority::AdminStoppedAtPersonalSpace(stop) => Some(*stop),
+            _ => None,
+        }
     }
 
     /// `Forbidden`, as all five call sites returned before the collapse. Unlike the read gates in
