@@ -108,6 +108,10 @@ fn a_file_ref_is_refused_and_its_content_never_surfaces() {
         !format!("{error:?}").contains(SENTINEL),
         "the file's content must not appear in the error's Debug"
     );
+    assert!(
+        !error.detailed().contains(SENTINEL),
+        "the file's content must not appear in the detailed refusal"
+    );
 }
 
 /// The error says nothing about where the `$ref` pointed: no host, no port.
@@ -117,7 +121,7 @@ fn the_error_never_names_the_uri_it_refused() {
     let schema = json!({ "$ref": probe.url("x.json") });
 
     let error = compile(&schema).expect_err("refused");
-    for text in [error.to_string(), format!("{error:?}")] {
+    for text in [error.to_string(), format!("{error:?}"), error.detailed()] {
         assert!(
             !text.contains("127.0.0.1") && !text.contains(&probe.port().to_string()),
             "the refusal must not echo the URI, got: {text}"
@@ -125,23 +129,67 @@ fn the_error_never_names_the_uri_it_refused() {
     }
 }
 
-/// Every cause of an uncompilable schema answers the same value, so the text cannot be used to
-/// tell a remote host's behaviour from a malformed schema.
+/// Every cause of an uncompilable schema answers the same fixed sentence, and the detail a reader
+/// who can read the shape is given names only the keyword and its position — the schema's own text
+/// — so neither can be used to tell a remote host's behaviour from a malformed schema.
 #[test]
 fn every_cause_answers_the_one_fixed_error() {
     let probe = FetchProbe::bind();
     let causes = [
-        json!({ "$ref": probe.url("x.json") }),
-        json!({ "$schema": "https://example.invalid/nope" }),
-        json!({ "type": 12 }),
+        (
+            json!({ "$ref": probe.url("x.json") }),
+            "keyword $ref at the root",
+        ),
+        (
+            json!({ "$schema": "https://example.invalid/nope" }),
+            "keyword $schema naming a draft other than 2020-12 at the root",
+        ),
+        (
+            json!({ "type": 12 }),
+            "a value that is not valid 2020-12 at /type",
+        ),
     ];
-    for schema in causes {
-        assert_eq!(
-            compile(&schema).err(),
-            Some(ShapeSchemaUncompilable),
-            "schema {schema} must answer the fixed error"
+    let fixed = ShapeSchemaUncompilable::default().to_string();
+    for (schema, refused) in causes {
+        let error = compile(&schema).expect_err("refused");
+        assert_eq!(error.to_string(), fixed, "schema {schema}");
+        assert_eq!(error.refused(), Some(refused), "schema {schema}");
+        assert!(
+            !error.detailed().contains("example.invalid")
+                && !error.detailed().contains(&probe.port().to_string()),
+            "the detail must not echo a URI, got: {}",
+            error.detailed()
         );
     }
+    assert_eq!(probe.connections(), 0);
+}
+
+/// A key beginning `x-` is carried and never walked (shape ruling R2): a schema-like object under
+/// one — a `$ref` to the probe, a `$schema` naming it, a nested `properties` — compiles, and the
+/// listener sees no connection. Bites a walk that descends an `x-` value, which would refuse the
+/// `$ref`, and a compile that resolves what an annotation holds.
+#[test]
+fn an_extension_key_holding_a_remote_ref_compiles_and_never_connects() {
+    let probe = FetchProbe::bind();
+    let nested = json!({
+        "$ref": probe.url("x.json"),
+        "$schema": probe.url("meta.json"),
+        "properties": { "inner": { "$ref": probe.url("inner.json") } },
+    });
+    let schema = json!({
+        "$schema": DRAFT_2020_12,
+        "type": "object",
+        "x-root": nested.clone(),
+        "properties": { "when": { "type": "string", "x-ui": nested } },
+    });
+
+    let validator = compile(&schema).expect("an x- key is carried, never walked");
+    assert!(validator.is_valid(&json!({ "when": "anything" })));
+    assert_eq!(
+        probe.connections(),
+        0,
+        "the compile must not connect to a host an x- value names"
+    );
 }
 
 /// A 2020-12 `$schema` with local `#/$defs` refs is refused: `$ref` and `$defs` are outside the

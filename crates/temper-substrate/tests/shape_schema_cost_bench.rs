@@ -530,7 +530,7 @@ fn many_tiny_subschemas_at_the_size_cap() {
             .take_while(|&depth| {
                 let schema = rooted(depth);
                 let bytes = serde_json::to_vec(&schema).expect("serializes").len();
-                bytes <= MAX_SCHEMA_BYTES - 128 && within_node_budget(&schema)
+                bytes <= MAX_SCHEMA_BYTES - 128 && within_node_budget(&schema).is_ok()
             })
             .last()
             .expect("one level fits");
@@ -539,7 +539,7 @@ fn many_tiny_subschemas_at_the_size_cap() {
         let (nodes, objects) = counted(&schema);
         println!("{name}: {nodes} values, {objects} objects");
         assert!(
-            within_node_budget(&schema) && !within_node_budget(&rooted(depth + 1)),
+            within_node_budget(&schema).is_ok() && within_node_budget(&rooted(depth + 1)).is_err(),
             "{name}: the deepest complete tree within the budget"
         );
         time_at_the_size_cap(&name, &schema);
@@ -693,9 +693,12 @@ fn parse_worst_case_at_the_byte_cap() {
         if stops_at(Stage::Measured) {
             continue;
         }
-        assert_eq!(
-            compiled.err(),
-            Some(ShapeSchemaUncompilable),
+        assert!(
+            compiled
+                .err()
+                .as_ref()
+                .and_then(ShapeSchemaUncompilable::refused)
+                .is_some_and(|refused| refused.ends_with("in the whole schema")),
             "{name}: {objects} objects are past the node budget"
         );
     }
@@ -1076,7 +1079,7 @@ fn vocabulary_paths_worst_case() {
         "the spine and its leaves"
     );
     assert!(
-        within_node_budget(&schema),
+        within_node_budget(&schema).is_ok(),
         "the paths worst case fits the budget"
     );
     // No parse: the schema is built in code, so the control stops here.
@@ -1153,7 +1156,7 @@ fn refuse_past_the_node_budget() {
         );
         let schema: Value = serde_json::from_str(&text).expect("the schema text parses");
         let start = Instant::now();
-        let within = within_node_budget(&schema);
+        let within = within_node_budget(&schema).is_ok();
         report(
             &format!("refuse past the node budget, {name}: T_refuse"),
             start,

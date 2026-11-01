@@ -74,12 +74,16 @@ The commit returns the artifact with its server-assigned ID, content hash, and s
 A shape is a field tree — a JSON Schema (draft 2020-12) document that uses only `type`, `properties`,
 `required`, `additionalProperties`, `items`, `enum`, `const`, `pattern`, the length, item-count and
 numeric bounds, and the annotation keywords — that you declare for a family within a context.
-Keywords such as `$ref`, `allOf`, `anyOf`, `oneOf` and `format` are refused at declare, and the
-refusal lists what is allowed. A `const` and every `enum` member must be a scalar — a string of at
-most 256 bytes (JSON-escaped), a number, a boolean or `null` — and a shape's schema holds at most
-12,288 JSON values in all, at most 3,072 of them objects, counted with `default` and `examples`
-included. The declare routes hold the request body to 512 KiB, and the MCP declare tool relays
-through them, so the same limit applies to what it declares. Declaring is a
+`format` is one of those annotations: it is accepted but **not enforced**, so `"format":
+"date-time"` documents a field without checking it (use `pattern` to check a form). Keys beginning
+`x-` are carried as written and ignored. Keywords such as `$ref`, `$defs`, `allOf`, `anyOf` and
+`oneOf` are refused at declare; the refusal names the first keyword or cap that failed and where —
+for example `keyword allOf at /properties/when` — and lists what is allowed. A `const` and every
+`enum` member must be a scalar — a string of at most 256 bytes (JSON-escaped), a number, a boolean
+or `null` — and a shape's schema holds at most 12,288 JSON values in all, at most 3,072 of them
+objects, counted with `default`, `examples` and `x-` values included. The declare routes hold the
+request body to 512 KiB, and the MCP declare tool relays through them, so the same limit applies
+to what it declares. Declaring is a
 **separate act** from committing data — you never need to declare a shape to commit an artifact.
 The system persists your data whether or not a shape exists. `never_declared` is a first-class
 state, not a gate.

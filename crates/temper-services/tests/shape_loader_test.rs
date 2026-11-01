@@ -45,7 +45,7 @@ use temper_substrate::readback;
 use temper_substrate::scenario::bootseed;
 use temper_substrate::shape_schema::test_support::compiles_tagged;
 use temper_substrate::shape_schema::{
-    count_up_to, ShapeSchemaUncompilable, MAX_ENUM_ENTRIES, MAX_SHAPE_NODES, MAX_SHAPE_OBJECTS,
+    count_up_to, within_node_budget, MAX_ENUM_ENTRIES, MAX_SHAPE_NODES, MAX_SHAPE_OBJECTS,
 };
 use temper_substrate::writes::{self, CreateParams, DeclareShapeParams};
 use uuid::Uuid;
@@ -462,7 +462,10 @@ async fn a_stored_remote_ref_shape_loads_uncompilable_and_fetches_nothing(pool: 
 
     assert_eq!(
         load_one(&pool, w.owner, id).await.unwrap(),
-        ShapeLoad::Uncompilable
+        ShapeLoad::Uncompilable {
+            refused: Some("keyword $ref at the root".to_owned())
+        },
+        "the owner, who reads the shape, is told what its compile refused"
     );
     assert_eq!(probe.connections(), 0, "the loader must not fetch");
 }
@@ -599,8 +602,17 @@ async fn an_uncompilable_shape_reads_askable_empty_with_the_reason(pool: PgPool)
     assert_eq!(reason.reason, RefusalReason::ShapeSchemaUncompilable);
     assert_eq!(
         Some(reason.clone()),
-        ShapeLoad::Uncompilable.loaded().err(),
-        "the read's reason is the load's refusal"
+        ShapeLoad::Uncompilable {
+            refused: Some("keyword $ref at the root".to_owned())
+        }
+        .loaded()
+        .err(),
+        "the read's reason is the load's refusal, naming what the compile refused"
+    );
+    assert!(
+        !reason.detail.contains(&probe.port().to_string()),
+        "{}",
+        reason.detail
     );
     assert_eq!(refusals_for(&pool, w.owner, id).await, vec![reason]);
 
@@ -744,7 +756,11 @@ async fn a_schema_past_the_budget_is_judged_uncompilable_without_a_compile(pool:
 
     assert_eq!(
         load_one(&pool, w.owner, id).await.unwrap(),
-        ShapeLoad::Uncompilable
+        ShapeLoad::Uncompilable {
+            refused: Some(format!(
+                "more than {MAX_SHAPE_NODES} JSON values in the whole schema"
+            )),
+        }
     );
     assert_eq!(
         compiles_tagged(&tag),
@@ -762,9 +778,13 @@ async fn a_stored_shape_past_the_budget_is_asked_uncompilable_not_too_large(pool
     let w = seed_world(&pool, "loader-ask-past-the-budget").await;
     let tag = fresh_tag();
     let id = store(&pool, &w, "measurement", &nodes_past_the_budget(&tag)).await;
-    let uncompilable = ShapeLoad::Uncompilable
-        .loaded()
-        .expect_err("an uncompilable schema is refused");
+    let uncompilable = ShapeLoad::Uncompilable {
+        refused: Some(format!(
+            "more than {MAX_SHAPE_NODES} JSON values in the whole schema"
+        )),
+    }
+    .loaded()
+    .expect_err("an uncompilable schema is refused");
 
     let refusals = refusals_for(&pool, w.owner, id).await;
     assert_eq!(refusals, vec![uncompilable]);
@@ -806,9 +826,18 @@ async fn declaring_a_schema_past_the_budget_is_refused_naming_the_budget_before_
         ApiError::DataArtifactRefusal(message) => message,
         other => panic!("the refusal must be the typed data-artifact refusal, got {other:?}"),
     };
-    assert_eq!(message, ShapeSchemaUncompilable.to_string());
+    assert_eq!(
+        message,
+        within_node_budget(&oversized)
+            .expect_err("past the budget")
+            .detailed()
+    );
     assert!(
-        message.contains("holding at most 12288 JSON values in all"),
+        message.contains("(more than 12288 JSON values in the whole schema)"),
+        "the refusal names the cap the schema passed: {message}"
+    );
+    assert!(
+        message.contains("within a value budget"),
         "the refusal names the budget: {message}"
     );
     assert_eq!(compiles_tagged(&tag), 0, "declare did not compile it");

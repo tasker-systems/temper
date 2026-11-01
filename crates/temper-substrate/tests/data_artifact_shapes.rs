@@ -1175,3 +1175,75 @@ async fn shape_reads_gate_on_home_visibility(pool: sqlx::PgPool) {
         "a stranger who cannot read the home context must get None from shape_by_id — fail closed"
     );
 }
+
+// ── Who is told what an uncompilable enforcing shape refused (shape ruling R4) ──────────────
+
+/// A commit into an enforcing family whose shape is not a field tree carries the shape and what
+/// its compile refused first beside a fixed message. The detail reaches a reader who can read the
+/// shape — the home's owner here — and nobody else: a stranger, whom the gated `shape_by_id`
+/// does not answer, is given the fixed sentence word for word. Bites a refusal that names the
+/// detail in `message`, and a `message_for_reader` that skips the readability question.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_uncompilable_enforcing_refusal_names_what_failed_only_to_a_reader_of_the_shape(
+    pool: sqlx::PgPool,
+) {
+    let (emitter, home, resource, owner) = world(&pool, "enforcing-detail").await;
+    let kind = "measurement";
+    let schema = serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": { "when": { "allOf": [{ "const": "SENTINEL-const-value" }] } }
+    });
+    let shape = declare(
+        &pool,
+        emitter,
+        AnchorRef::context(home),
+        None,
+        kind,
+        &schema,
+        EnforcementMode::Enforcing,
+    )
+    .await;
+
+    let refusal = commit_refusal(
+        &pool,
+        resource,
+        kind,
+        &serde_json::json!({ "when": "x" }),
+        emitter,
+    )
+    .await;
+    let fixed = writes::uncompilable_shape_message(None);
+    assert_eq!(refusal.message, fixed, "the message itself names nothing");
+    let carried = refusal
+        .uncompilable_shape
+        .as_ref()
+        .expect("the uncompilable shape rides beside the message");
+    assert_eq!(carried.shape_id, shape);
+
+    let mut conn = pool.acquire().await.unwrap();
+    let to_owner = refusal.message_for_reader(&mut conn, owner).await.unwrap();
+    assert_eq!(
+        to_owner,
+        writes::uncompilable_shape_message(Some("keyword allOf at /properties/when"))
+    );
+    assert!(
+        to_owner.contains("a steward must amend the shape"),
+        "{to_owner}"
+    );
+    assert!(!to_owner.contains("SENTINEL"), "{to_owner}");
+    assert!(
+        to_owner.len() <= temper_substrate::shape_schema::MAX_FAILURE_MESSAGE_BYTES,
+        "{to_owner}"
+    );
+
+    let stranger = ProfileId::from(common::insert_profile(&pool, "shape-stranger").await);
+    let to_stranger = refusal
+        .message_for_reader(&mut conn, stranger)
+        .await
+        .unwrap();
+    assert_eq!(
+        to_stranger, fixed,
+        "a reader who cannot read the shape is told nothing of it"
+    );
+}

@@ -24857,7 +24857,7 @@
           },
           {
             "type": "string",
-            "description": "The shape's schema does not compile under the no-fetch compiler, or is larger than the\nwalk reads and so is never compiled (then `teaches.beyond_bound` is `schema_bytes`). The\ndetail is a fixed sentence; the compiler's text is never echoed.",
+            "description": "The shape's schema does not compile under the no-fetch compiler, or is larger than the\nwalk reads and so is never compiled (then `teaches.beyond_bound` is `schema_bytes`). The\ndetail is a fixed sentence, naming for an uncompilable schema the first keyword or cap the\ncompile refused and its schema path — schema text the asker can already read; the\ncompiler's text is never echoed.",
             "enum": [
               "shape_schema_uncompilable"
             ]
@@ -27308,7 +27308,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/PlanRefusal",
-                "description": "Why this version's schema cannot be walked: the refusal step 3 of asking gives it —\n`shape_schema_uncompilable`, with its fixed sentence for a schema that does not compile\nunder the no-fetch compiler, or with a sentence naming the byte bound and\n`teaches.beyond_bound: schema_bytes` for one too large to read, which is never compiled.\nWhat an ask naming this shape is told can differ: an ask naming a folded version is refused\n`shape_superseded` first (`is_folded`). Absent whenever the schema can be walked, and on\nlistings."
+                "description": "Why this version's schema cannot be walked: the refusal step 3 of asking gives it —\n`shape_schema_uncompilable`, with its sentence for a schema that does not compile under the\nno-fetch compiler (naming the first keyword or cap refused and its schema path), or with a sentence naming the byte bound and\n`teaches.beyond_bound: schema_bytes` for one too large to read, which is never compiled.\nWhat an ask naming this shape is told can differ: an ask naming a folded version is refused\n`shape_superseded` first (`is_folded`). Absent whenever the schema can be walked, and on\nlistings."
               },
               {
                 "type": "null"

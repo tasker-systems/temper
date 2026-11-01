@@ -637,7 +637,7 @@ mod tests {
                 RefusalReason::ShapeSuperseded,
             ),
             (
-                ShapeLoad::Uncompilable,
+                ShapeLoad::Uncompilable { refused: None },
                 RefusalReason::ShapeSchemaUncompilable,
             ),
             (

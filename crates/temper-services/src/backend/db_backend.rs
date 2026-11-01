@@ -917,6 +917,41 @@ impl DbBackend {
         }
     }
 
+    /// A refused commit's error, on the commit's own transaction, which it then rolls back.
+    ///
+    /// A commit refused because the enforcing shape in force cannot be compiled names what the
+    /// compile refused first **only to a committer who can already read that shape**, and gives
+    /// anyone else the fixed sentence (shape ruling R4;
+    /// [`writes::DataArtifactRefusal::message_for_reader`]), so the refusal is never a window onto
+    /// a shape its reader could not open. The question is asked on the transaction, never
+    /// `self.pool`, which the open transaction would wait against. Every other error maps as
+    /// [`write_err`] does.
+    async fn commit_refusal(
+        &self,
+        mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
+        e: anyhow::Error,
+    ) -> TemperError {
+        let Some(refusal) = e
+            .downcast_ref::<writes::DataArtifactRefusal>()
+            .filter(|refusal| refusal.uncompilable_shape.is_some())
+        else {
+            return write_err(e);
+        };
+        // A fault on the question leaves the refusal standing with the fixed sentence: it is never
+        // turned into a server error, and it names nothing it has not established it may.
+        let message = match refusal.message_for_reader(&mut tx, self.profile_id).await {
+            Ok(message) => message,
+            Err(fault) => {
+                tracing::warn!(error = %fault, "could not ask whether the committer reads the shape");
+                refusal.message_for(false)
+            }
+        };
+        // Dropping the transaction rolls it back as well; an explicit rollback that faults
+        // changes nothing the caller is owed.
+        tx.rollback().await.ok();
+        TemperError::DataArtifactRefusal(message)
+    }
+
     /// Open an edge-mutation transaction gated at its head: [`Self::check_edge_mutable`] (the
     /// edge's source floor, container-write on its home, its target readable), then the
     /// correlation-integrity check on the act's invocation, both on the transaction — the order
@@ -3281,7 +3316,7 @@ impl Backend for DbBackend {
         let mut tx = self.begin_floored(cmd.resource).await?;
         // Resolved only after the floor admits, on the commit's own transaction.
         let emitter = self.resolve_actor_in_tx(&mut tx, cmd.origin).await?;
-        let artifact_id = writes::commit_data_artifact_in_tx(
+        let committed = writes::commit_data_artifact_in_tx(
             &mut tx,
             writes::CommitDataArtifactParams {
                 resource: cmd.resource,
@@ -3295,8 +3330,11 @@ impl Backend for DbBackend {
             },
             act_ctx,
         )
-        .await
-        .map_err(write_err)?;
+        .await;
+        let artifact_id = match committed {
+            Ok(id) => id,
+            Err(e) => return Err(self.commit_refusal(tx, e).await),
+        };
         tx.commit().await.map_err(tx_err)?;
         // Read back the committed artifact as an ArtifactView for the response.
         let view =

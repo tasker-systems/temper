@@ -423,7 +423,9 @@ pub enum RefusalReason {
     ShapeSuperseded,
     /// The shape's schema does not compile under the no-fetch compiler, or is larger than the
     /// walk reads and so is never compiled (then `teaches.beyond_bound` is `schema_bytes`). The
-    /// detail is a fixed sentence; the compiler's text is never echoed.
+    /// detail is a fixed sentence, naming for an uncompilable schema the first keyword or cap the
+    /// compile refused and its schema path — schema text the asker can already read; the
+    /// compiler's text is never echoed.
     ShapeSchemaUncompilable,
     /// An artifact predicate's path has no segments, so it would address the whole document.
     EmptyArtifactPath,

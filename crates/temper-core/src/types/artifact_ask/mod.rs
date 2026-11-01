@@ -249,8 +249,12 @@ pub enum ShapeLoad {
     /// Folded. `successor` is `None` when no live row holds the home and family (decision P16:
     /// unreachable today, since amendment is the only fold); the refusal then omits it.
     Superseded { successor: Option<ShapeSuccessor> },
-    /// The schema did not compile under the no-fetch compiler.
-    Uncompilable,
+    /// The schema did not compile under the no-fetch compiler. `refused` names the first thing the
+    /// compile refused (`keyword allOf at /properties/when`): schema text, bounded, never a value
+    /// under a data keyword, and `None` when the compile named nothing. The loader reaches this only
+    /// for a row the gated read returned, so the asker can already read the schema it describes
+    /// (shape ruling R4: the detail is never an existence or content oracle).
+    Uncompilable { refused: Option<String> },
     /// The schema is larger than the walk reads ([`walk::MAX_SCHEMA_BYTES`]), so it was never
     /// compiled. Step 3 still: the loader decides compilability (§2.4), and a schema this server
     /// will not read is one it does not compile. Refused `shape_schema_uncompilable` like

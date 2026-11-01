@@ -22,8 +22,9 @@
 //!    ([`within_schema_bound`]) is `SchemaTooLarge` and is never compiled. Within it, a schema
 //!    past the parsed-size budget ([`shape_schema::within_node_budget`]) is `Uncompilable`,
 //!    without a permit, a copy or a compile. Within both, through the no-fetch constructor
-//!    ([`shape_schema::compile`]); a schema it refuses is `Uncompilable`, and the compiler's text
-//!    goes nowhere.
+//!    ([`shape_schema::compile`]); a schema it refuses is `Uncompilable`. Either refusal names the
+//!    first thing refused (schema text, which the reader step 1 admitted can already read), and
+//!    the compiler's own text goes nowhere.
 //!
 //! **One decision for every door that decides whether a schema can be asked** ([`judge`]): the
 //! loader, the by-id read's `askable`, and declare (`shape_service::declare_shape`) measure
@@ -67,7 +68,7 @@ use temper_core::types::artifact_ask::{
 use temper_core::types::ids::{ProfileId, ShapeId};
 use temper_core::types::query::PlanRefusal;
 use temper_substrate::readback::{self, RetrievedShape};
-use temper_substrate::shape_schema;
+use temper_substrate::shape_schema::{self, ShapeSchemaUncompilable};
 
 /// Load every shape one request's asks name, for `principal`, into the context its asks are
 /// validated against ([`ShapeContext::session`]). One [`load_one`] per id, in id order.
@@ -207,20 +208,25 @@ async fn compiled(row: RetrievedShape) -> ApiResult<ShapeLoad> {
 }
 
 /// What a stored or declared schema is, for asking: within the walk's byte bound and compiling,
-/// within it and not compiling, or past it — and then never compiled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// within it and not compiling — with what the compile refused first — or past it, and then never
+/// compiled.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchemaVerdict {
     Compiles,
-    Uncompilable,
+    Uncompilable(ShapeSchemaUncompilable),
     TooLarge,
 }
 
 impl SchemaVerdict {
-    /// The load a schema with this verdict is refused as, or `None` when it compiles.
-    pub fn refusing_load(self) -> Option<ShapeLoad> {
+    /// The load a schema with this verdict is refused as, or `None` when it compiles. An
+    /// uncompilable load names what the compile refused: every load is of a row a gated read
+    /// returned, so its reader can already read the schema the name describes.
+    pub fn refusing_load(&self) -> Option<ShapeLoad> {
         match self {
             SchemaVerdict::Compiles => None,
-            SchemaVerdict::Uncompilable => Some(ShapeLoad::Uncompilable),
+            SchemaVerdict::Uncompilable(refused) => Some(ShapeLoad::Uncompilable {
+                refused: refused.refused().map(str::to_owned),
+            }),
             SchemaVerdict::TooLarge => Some(ShapeLoad::SchemaTooLarge),
         }
     }
@@ -242,22 +248,20 @@ pub async fn judge(schema: &Value) -> ApiResult<SchemaVerdict> {
     if !within_schema_bound(schema) {
         return Ok(SchemaVerdict::TooLarge);
     }
-    if !shape_schema::within_node_budget(schema) {
-        return Ok(SchemaVerdict::Uncompilable);
+    if let Err(refused) = shape_schema::within_node_budget(schema) {
+        return Ok(SchemaVerdict::Uncompilable(refused));
     }
-    with_schema_off_the_executor(schema, |schema| {
-        if shape_schema::compile(schema).is_ok() {
-            SchemaVerdict::Compiles
-        } else {
-            SchemaVerdict::Uncompilable
-        }
+    with_schema_off_the_executor(schema, |schema| match shape_schema::compile(schema) {
+        Ok(_) => SchemaVerdict::Compiles,
+        Err(refused) => SchemaVerdict::Uncompilable(refused),
     })
     .await
 }
 
-/// The most verdicts the process remembers. An entry is a shape id and a byte, about 150 KiB of
-/// map at the cap; past it an arbitrary entry is forgotten, and that shape is judged again when it
-/// is next read.
+/// The most verdicts the process remembers. An entry is a shape id and a verdict — for one that
+/// does not compile, the bounded name of what it refused (at most `shape_schema::refused_room()`,
+/// about 120 bytes) — so under 1 MiB of map at the cap; past it an arbitrary entry is forgotten,
+/// and that shape is judged again when it is next read.
 const MAX_REMEMBERED_VERDICTS: usize = 4096;
 
 /// Each stored shape's verdict, by id, for the life of the process.
@@ -278,7 +282,7 @@ async fn verdict_of(id: ShapeId, schema: &Value) -> ApiResult<SchemaVerdict> {
         return Ok(verdict);
     }
     let verdict = judge(schema).await?;
-    remember(id, verdict);
+    remember(id, verdict.clone());
     Ok(verdict)
 }
 
@@ -287,7 +291,7 @@ fn remembered(id: ShapeId) -> Option<SchemaVerdict> {
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .get(&id)
-        .copied()
+        .cloned()
 }
 
 fn remember(id: ShapeId, verdict: SchemaVerdict) {
@@ -334,7 +338,7 @@ pub async fn askable(row: &RetrievedShape) -> ApiResult<(Vocabulary, Option<Plan
         // Past it the walk reads nothing — the measurement stops at the bound — and says why:
         // `truncated: [schema_bytes]`.
         SchemaVerdict::TooLarge => enumerate(&row.schema, &WalkBounds::BUILD),
-        SchemaVerdict::Uncompilable => Vocabulary::default(),
+        SchemaVerdict::Uncompilable(_) => Vocabulary::default(),
     };
     let refusal = verdict.refusing_load().and_then(|load| load.loaded().err());
     Ok((vocabulary, refusal))
@@ -498,10 +502,7 @@ mod tests {
             "examples": Value::Array(vec![Value::from(0); shape_schema::MAX_SHAPE_NODES])
         });
         assert!(within_schema_bound(&schema), "within the byte bound");
-        assert!(
-            !shape_schema::within_node_budget(&schema),
-            "past the parsed-size budget"
-        );
+        let refused = shape_schema::within_node_budget(&schema).expect_err("past the budget");
         let permits = u32::try_from(compile_permits()).expect("a handful of permits");
         let held = COMPILE_PERMITS
             .acquire_many(permits)
@@ -512,7 +513,7 @@ mod tests {
         let verdict = judged
             .expect("judged while every permit is held")
             .expect("judging faults only on closed permits");
-        assert_eq!(verdict, SchemaVerdict::Uncompilable);
+        assert_eq!(verdict, SchemaVerdict::Uncompilable(refused));
     }
 
     /// The map never holds more than its cap, and a verdict remembered after eviction began reads
@@ -524,8 +525,16 @@ mod tests {
             remember(ShapeId::new(), SchemaVerdict::Compiles);
         }
         let id = ShapeId::new();
-        remember(id, SchemaVerdict::Uncompilable);
-        assert_eq!(remembered(id), Some(SchemaVerdict::Uncompilable));
+        remember(
+            id,
+            SchemaVerdict::Uncompilable(ShapeSchemaUncompilable::default()),
+        );
+        assert_eq!(
+            remembered(id),
+            Some(SchemaVerdict::Uncompilable(
+                ShapeSchemaUncompilable::default()
+            ))
+        );
         let held = VERDICTS
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

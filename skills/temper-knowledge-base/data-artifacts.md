@@ -89,18 +89,28 @@ A field tree uses only `type`, `properties`, `required`, `additionalProperties` 
 schema), `items` (one schema), `enum` (at most 256 strings, or 32 values of any other kind), `const`,
 `pattern` (at most 256 bytes of source, compiling within 10 KiB, at most 32 in a shape, no lookaround or backreferences; a Unicode class such as `\p{L}` is about 43 KB on its own and does not fit), `minLength`,
 `maxLength`, `minItems`, `maxItems`, `minimum`, `maximum`, `title`, `description`, `$comment`,
-`default` and `examples`. Property names (in `properties` and `required`) are at most 256 bytes.
+`default`, `examples` and `format`. Property names (in `properties` and `required`) are at most 256 bytes.
 `$schema` and `$id` may appear only at the root, and `$schema`, if present, must be
 `https://json-schema.org/draft/2020-12/schema` (a trailing `#` is also accepted). A shape may nest at most 16 levels.
 A `const` and every `enum` member must be a scalar: a string of at most 256 bytes (JSON-escaped), a
 number, a boolean or `null`; an object or an array is refused. A shape's schema holds at most 12,288
-JSON values in all, at most 3,072 of them objects, counted across the whole document with `default`
-and `examples` included. That budget can refuse a schema every other cap allows: 48 enums of 256
-strings each fit the per-keyword caps but not the budget. The HTTP declare routes also take a
-request body of at most 512 KiB.
-`$ref`, `$defs`, `allOf`, `anyOf`, `oneOf`, `not`, `if`, `format` and every other keyword are
-refused at declare, with a sentence that lists this vocabulary. A refused commit, and a recorded
-verdict, name at most one violation, its message cut to 1 KiB.
+JSON values in all, at most 3,072 of them objects, counted across the whole document with `default`,
+`examples` and `x-` values included. That budget can refuse a schema every other cap allows: 48
+enums of 256 strings each fit the per-keyword caps but not the budget. The HTTP declare routes also
+take a request body of at most 512 KiB.
+
+**`format` is not enforced.** It is accepted, as a string, wherever a schema sits, and carried as
+an annotation: `"format": "date-time"` documents the field, but a string that is not a date-time
+still conforms. Use `pattern` when the form must be checked. **Keys beginning `x-`** are accepted
+anywhere a schema sits and carried as written; their values are never read, whatever they hold.
+
+`$ref`, `$defs`, `allOf`, `anyOf`, `oneOf`, `not`, `if` and every other keyword are refused at
+declare. The refusal names the first keyword or cap that failed and, for a keyword, the
+JSON-pointer path of the schema position holding it — `(keyword allOf at /properties/when)`, or
+`(more than 12288 JSON values in the whole schema)` — then the sentence that lists this
+vocabulary. A commit refused because its family's enforcing shape cannot be compiled, and an ask
+naming such a shape, name it the same way to a reader who can read the shape. A refused commit,
+and a recorded verdict, name at most one violation, its message cut to 1 KiB.
 
 **Declaring is never required to commit.** The system persists your data whether or not a shape
 exists. `never_declared` is a first-class state, not a gate. If you declare a shape later, the

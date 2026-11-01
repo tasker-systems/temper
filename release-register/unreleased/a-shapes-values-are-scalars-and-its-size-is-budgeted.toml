@@ -19,7 +19,10 @@ compile permit or copies a stored schema. The declare routes (`POST /api/context
 `POST /api/cognitive-maps/{id}/shapes`) take a request body of at most 512 KiB, twice the 256 KiB
 schema cap; the MCP `declare_data_artifact_shape` tool and `temper data-artifact schema declare`
 reach the same compile. Declare's refusal (`400`, code `DATA_ARTIFACT_REFUSAL`, MCP
-`invalid_params`) carries the same fixed sentence, now naming both rules. No wire field is added;
+`invalid_params`) names the first thing refused with the cap it passed — `keyword const that is not
+a scalar of at most 256 bytes at /properties/a`, or `more than 12288 JSON values in the whole
+schema` — then the sentence of rules, which now names both (`enum … and const of scalars`, `within
+a value budget`). No wire field is added;
 OpenAPI, ts-rs and the three generated SDKs change only in description text.
 
 The ask walk reads a schema holding a structured `const` or `enum` member as `false`: it declares
@@ -34,11 +37,11 @@ Stored shapes. A stored schema the new compile refuses can no longer be checked:
 - an `advisory` family records each commit unchecked (`declared_not_yet_checked`);
 - reconcile writes a `kb_shape_reconcile_uncheckable` row with reason `schema_uncompilable` and
   stops selecting the shape;
-- an ask of the shape, and a by-id read of its vocabulary, answer `shape_schema_uncompilable` with a
-  fixed sentence ("the shape's schema does not compile, so nothing can be asked of it until the
-  shape is amended"). That sentence names no rule; re-declaring the shape returns the refusal
-  sentence, which names every rule the compile holds a schema to (a schema past the 256 KiB size
-  cap is refused with a sentence of its own).
+- an ask of the shape, and a by-id read of its vocabulary, answer `shape_schema_uncompilable`,
+  naming the first thing the compile refused, as declare does, to a reader the gated shape read
+  admits. Re-declaring the shape returns the full refusal sentence, which names every rule the
+  compile holds a schema to (a schema past the 256 KiB size cap is refused with a sentence of its
+  own).
 
 Operators of other deployments: before upgrading, check every stored schema against both rules.
 For each row of `SELECT id, artifact_kind, schema FROM kb_data_artifact_shapes`, count its values
