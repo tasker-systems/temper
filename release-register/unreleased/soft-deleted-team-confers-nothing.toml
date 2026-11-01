@@ -12,10 +12,12 @@ Soft-deleting a team now takes away everything the team conferred. Migration `20
   connections or machine clients either: `POST /api/connections/{id}/reach` is refused, and machine
   client get, revoke and secret rotation answer `404`, as for a missing id. Subscriptions authored by
   the team, and blob deletes in its contexts, are refused the same way.
-- A context owned by a soft-deleted team reads as retired. Shares to other teams and grants on the
-  context no longer reach it, and write grants on it no longer author it. A resource's home owner
-  keeps their resource, and a grant on the resource itself still answers. A system admin can still
-  reassign the context to a live team, after which it is live again.
+- A context owned by a soft-deleted team reads as retired. For people and their machines, shares to
+  other teams and grants on the context no longer reach it, and write grants on it no longer author
+  it. A resource's home owner keeps their resource, and a grant on the resource itself still
+  answers. A cognitive map joined to a team the context is shared with still reaches its resources,
+  as it reaches a retired context's. A system admin can still reassign the context to a live team,
+  after which it is live again.
 - Nothing is written onto a soft-deleted team, by a system admin either: adding or changing a
   member, sharing or reassigning a context into it, granting it reach or registering a machine onto
   it, approving a join request for it and `promote_admin --team` on it are refused (`404`; `400` for
