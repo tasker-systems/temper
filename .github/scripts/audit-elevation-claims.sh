@@ -436,6 +436,17 @@ current_gates() {
 # `access_service.rs` 9 -> 10 is the sum of #1277's +1 (reviewed above) and this PR's +1, the
 # `GrantAuthority` variant's doc, which `can_administer_grant` enforces. `reconcile_regime` is
 # #1277's fingerprint unchanged; this PR does not touch it.
+# REVIEWED 2026-11-01 (task 01a19370, v0.6.3 review S3, PR #1282, merged with main after #1285) —
+# `machine` d13497025e12 -> 87a979ac2050, which composes #1285's registration change (reviewed above)
+# with this one: `contain_reach` now holds each DELEGATED cogmap reach grant to
+# `access_service::callers_machine_grant_bar`, the rule the grant door applies to a grant to a machine
+# the caller registered. The grant is admitted only on a grant right held in the caller's own name and
+# refused when that right reaches them through a team. The gate NARROWED for a non-admin. #1285's admin
+# arm asks `authorize_capability_grant` separately and never reaches the bar, so a system admin acting
+# as one is unchanged. Claims bound to `machine` were re-read; the `issue` handler description now
+# says a team owner's cogmap grant needs the right in their own name. `access_service.rs` 10 -> 11:
+# `callers_machine_grant_bar`'s doc says a system admin acting as one is never asked, which holds,
+# because both callers reach it only on `GrantAuthority::Delegated`.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -479,7 +490,7 @@ claim crates/temper-mcp/src/service.rs 4 -
 claim crates/temper-mcp/src/tools/cognitive_maps.rs 1 is_system_admin
 claim crates/temper-mcp/src/tools/contexts.rs 2 context_admin,two_sided
 claim crates/temper-mcp/src/tools/reblock.rs 3 -
-claim crates/temper-services/src/services/access_service.rs 10 is_system_admin
+claim crates/temper-services/src/services/access_service.rs 11 is_system_admin
 claim crates/temper-services/src/services/admin_directory_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/cogmap_service.rs 4 two_sided
 claim crates/temper-services/src/services/connection_service.rs 11 connection
@@ -501,7 +512,7 @@ gate audit_gate 021f87ca4bed
 gate connection 586029b73345
 gate context_admin b07eeb1d5289
 gate grant bccea040b6cf
-gate machine d13497025e12
+gate machine 87a979ac2050
 gate read_gates 6a6ce4847fbc
 gate ledger_subject 89ab4129fe64
 gate subscription f45d76e9be69

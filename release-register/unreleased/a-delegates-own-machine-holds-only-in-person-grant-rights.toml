@@ -1,0 +1,23 @@
+title    = "A delegate's grant to a machine they registered needs a grant right held in their own name, at the grant door and at machine registration"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp", "cli-stdout", "clients"]
+status   = "signal-only"
+body = '''
+A grant to a machine the caller registered is now held to one rule at both doors that write grant
+rows (v0.6.3 review S3). The grant is admitted only when the caller holds the grant right on the
+subject in their own name: a grant row on their own profile (a cognitive map's creator holds one
+from genesis), or ownership of the resource's home. A grant right that reaches the caller only
+through a team is refused, because the machine's row would outlive their membership. A system admin
+is not affected.
+
+- `POST /api/resources/{id}/grants` and `POST /api/cognitive-maps/{id}/grants` to a machine profile
+  the caller registered (revoked clients included): `403`, the same answer as a grant to oneself,
+  when the caller's grant right is inherited through a team.
+- `POST /api/machine-clients/issue` with a cogmap grant in the reach: `403`, and nothing is minted,
+  under the same condition.
+- A grant to another person's machine, and a map creator's grant onto their own map, are unchanged.
+
+Who observes: a non-admin who holds a grant right only through a team and grants it to their own
+machine. Release relevance: signal-only.
+'''

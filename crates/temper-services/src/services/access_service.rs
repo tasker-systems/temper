@@ -584,7 +584,8 @@ pub async fn grant_capability(
 ///   but never mint a dangling row.
 /// - **profile:** exists (`NotFound` to an admin, `Forbidden` to a delegate, who learns nothing about
 ///   which ids exist); a delegate may not grant to themselves, which is how an inherited `can_grant`
-///   used to launder into a personal row that outlived the team.
+///   used to launder into a personal row that outlived the team. A machine the delegate registered
+///   is held to [`callers_machine_grant_bar`]: admitted only on a grant right held in their own name.
 async fn recipient_bar(
     pool: &PgPool,
     proof: &crate::authz::Authorized<GrantAuthority>,
@@ -642,11 +643,79 @@ async fn recipient_bar(
             if delegated && principal_id == *caller {
                 return Err(ApiError::Forbidden);
             }
+            // A machine the caller registered is the caller's own proxy: the grant is held to
+            // `callers_machine_grant_bar`, the rule the registration door applies too.
+            if delegated && is_machine_registered_by(pool, principal_id, caller).await? {
+                callers_machine_grant_bar(pool, caller, proof.subject()).await?;
+            }
             Ok(())
         }
         _ => Err(ApiError::BadRequest(format!(
             "unknown principal_table `{principal_table}`"
         ))),
+    }
+}
+
+/// Is `profile_id` a machine whose client `caller` registered (`kb_machine_clients.registered_by_profile_id`)?
+/// Any client row counts, revoked or not: a revoked credential can be reissued to the same profile,
+/// and the profile is still the caller's.
+///
+/// This is the grant door's half of "a machine you registered is you". The schema states the
+/// same relation for team rows in `personal_team_admits`
+/// (`20261110000000_personal_team_holds_its_owner_and_their_machines.sql`).
+async fn is_machine_registered_by(
+    pool: &PgPool,
+    profile_id: Uuid,
+    caller: ProfileId,
+) -> ApiResult<bool> {
+    Ok(sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM kb_machine_clients
+                           WHERE profile_id = $1 AND registered_by_profile_id = $2) AS "e!: bool""#,
+        profile_id,
+        *caller,
+    )
+    .fetch_one(pool)
+    .await?)
+}
+
+/// The one rule for a DELEGATED caller's grant on `subject` to a machine they registered (v0.6.3
+/// review S3; ruled 2026-10-31, task `01a19370-dc05-76c1-bdf3-ea2280a4be6c`). Both grant-writing doors
+/// call it: the grant door when the recipient is the caller's machine (`recipient_bar`), and machine
+/// registration for each cogmap grant in the reach (`machine_authz::contain_reach`), where the new
+/// machine is the caller's by construction. A system admin acting as one is never asked.
+///
+/// The grant is admitted only when the caller holds the grant right on the subject **in their own
+/// name**. That means either a `kb_access_grants` row anchored on the caller's own profile carrying
+/// `can_grant`, or the structural grant floor (`derived_access_profile`: the owner of a resource's
+/// home). A map's creator holds the first, minted at genesis, so a person can still give their own
+/// machine reach onto a map they made. A grant right that reaches the caller only through a team
+/// grant is refused with the self-grant's `Forbidden`. Removing the caller from that team would end
+/// their right, and the machine's row would outlive it. The machine is a second spelling of the
+/// caller, as a personal team is in `recipient_bar`'s team arm.
+///
+/// Only the grant right is asked. Attenuation (`authorize_capability_grant`) already bounds what
+/// may be conferred.
+pub(crate) async fn callers_machine_grant_bar(
+    pool: &PgPool,
+    caller: ProfileId,
+    subject: RefTarget,
+) -> ApiResult<()> {
+    let in_person = sqlx::query_scalar!(
+        r#"SELECT (EXISTS (SELECT 1 FROM kb_access_grants g
+                            WHERE g.subject_table = $2 AND g.subject_id = $3
+                              AND g.principal_table = 'kb_profiles' AND g.principal_id = $1
+                              AND g.can_grant)
+                   OR derived_access_profile($1, 'grant', $2, $3)) AS "e!: bool""#,
+        *caller,
+        subject.kind.as_str(),
+        subject.id,
+    )
+    .fetch_one(pool)
+    .await?;
+    if in_person {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden)
     }
 }
 
