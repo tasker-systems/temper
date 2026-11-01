@@ -1,0 +1,8 @@
+title    = "temper-ui tells a reader with nothing yet how work arrives, and closes two first-day dead ends"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["internal"]
+status   = "signal-only"
+body = '''
+Web UI only; no API, MCP, CLI or client shape changes, and the vocabulary has no UI surface token, so `internal` stands for it. Three behaviours change for a signed-in reader. First, the first view (`/vault`) leads with a first-run panel when every one of its reads settles empty (no resume, no place changed in, every way in empty, nothing readable). The panel says goals, tasks and sessions are written by an agent working with temper and links to connecting one on temperkb.io. It is never drawn while a read is arriving or over a failed one. Each empty way in and recently updated also say what they hold and how they fill. Second, the graph's too-little-structure rung linked "Browse them as a list" to `/vault/<owner>`, which is no route and rendered a bare 404. It now goes to the addressed context's list, or to `/vault/all`, and a place with nothing in scope says it is empty rather than "you can read 0 resources here, but nothing is linked". Third, the context list (`/vault/<owner>/<context>`) now renders a 404 saying the place is not available to the reader, without saying whether it exists, when the API answers 404 or 403 for a context they cannot see. It previously rendered "500 Internal Error". Observed by new readers on any install, and most by organisational installs, where people join with nothing of their own. Release relevance: signal-only.
+'''
