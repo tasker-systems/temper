@@ -16,6 +16,19 @@
 //! `2026-10-27-a-shape-is-a-field-tree-design`, §1 and §2). [`ShapeSchemaUncompilable`]'s sentence
 //! teaches the vocabulary.
 //!
+//! **A `const` and every `enum` member is a scalar.** `is_shape_value` holds each to `null`, a
+//! boolean, a number, or a string of at most [`MAX_SHAPE_VALUE_STRING_BYTES`] JSON-escaped bytes;
+//! an object, an array or a longer string makes the schema uncompilable. `default`, `examples` and
+//! the value of an `x-` key stay free-form data: the compile counts them toward the budget but never
+//! reads them as a schema.
+//!
+//! **A schema's parsed size has a budget.** Before anything else reads the document, [`compile`]
+//! holds it to [`MAX_SHAPE_NODES`] JSON values at every depth, at most [`MAX_SHAPE_OBJECTS`] of
+//! them objects, `default`, `examples` and `x-` values included ([`within_node_budget`]). One weight model,
+//! [`parsed_weight`], sizes the two caps, and an assertion holds them to
+//! [`MAX_SHAPE_PARSED_WEIGHT`]. The shape loader counts the same budget before it takes a compile
+//! permit or copies a stored schema, so a schema past it is refused without being cloned.
+//!
 //! The draft is not left to `jsonschema`'s detection: `$schema` is absent, or it appears only at
 //! the root and is the bundled 2020-12 spelling, with or without a trailing `#`. `$id` is also
 //! root-only. A subschema therefore cannot register a custom meta-schema, and no spelling of
@@ -50,16 +63,20 @@
 
 use jsonschema::{Retrieve, Uri};
 use serde_json::Value;
+use temper_core::types::artifact_ask::is_scalar;
+use temper_core::types::query::filter::{json_string_bytes, MAX_FILTER_STRING_BYTES};
 
 /// The compiled form of a shape's JSON Schema, as [`compile`] returns it.
 pub use jsonschema::Validator;
 
 /// The schema is not a field tree this server can compile.
 ///
-/// Carries what was refused first: the first keyword, cap or form the walk refused and the
-/// JSON-pointer path of the schema position it sits in (`keyword allOf at /properties/when`), or,
-/// for a schema the walk admitted and the build refused, which of the build's two refusals it is
-/// and the position it names. That is schema text — a keyword name cut to
+/// Carries what was refused first, and with it the number the fixed sentence leaves out (the value
+/// rule's string cap, the budget's caps): for a schema past the parsed-size budget, which of its
+/// two caps the count passed (`more than 12288 JSON values in the whole schema`); otherwise the first
+/// keyword, cap or form the walk refused and the JSON-pointer path of the schema position it sits
+/// in (`keyword allOf at /properties/when`), or, for a schema the walk admitted and the build
+/// refused, which of the build's two refusals it is and the position it names. That is schema text — a keyword name cut to
 /// [`MAX_REFUSED_KEYWORD_BYTES`], a count, a cap, and the property names on the path to it, with
 /// control and bidirectional-formatting characters escaped — never a `const`, `enum`, `default` or
 /// `examples` value, never an `x-*` value, and never the compiler's own error, which is still
@@ -76,8 +93,8 @@ pub struct ShapeSchemaUncompilable {
 }
 
 impl ShapeSchemaUncompilable {
-    /// What was refused first, as `<what> at <path>`, already bounded: the walk's refusal, or the
-    /// build's (2020-12 meta-validation, or a pattern that compiles past [`MAX_PATTERN_BYTES`]).
+    /// What was refused first, already bounded: the budget's cap, or, as `<what> at <path>`, the
+    /// walk's refusal or the build's (2020-12 meta-validation, or a pattern that compiles past [`MAX_PATTERN_BYTES`]).
     /// `None` only for the retriever's refusal, which no field tree reaches.
     #[must_use]
     pub fn refused(&self) -> Option<&str> {
@@ -155,16 +172,16 @@ impl std::fmt::Display for ShapeSchemaUncompilable {
             "{UNCOMPILABLE_LEAD}: a shape is a field tree — a JSON Schema \
              2020-12 document using only type, properties, required, additionalProperties (true, \
              false or a schema), items (one schema), enum (at most {MAX_ENUM_ENTRIES} strings, or \
-             {MAX_MIXED_ENUM_ENTRIES} values of any other kind), const, pattern (at most \
-             {MAX_PATTERN_SOURCE_BYTES} bytes of source, compiling within {pattern_kib} KiB, at most \
-             {MAX_SHAPE_PATTERNS} in a shape, no lookaround or backreferences), minLength, \
+             {MAX_MIXED_ENUM_ENTRIES} values of any other kind) and const of scalars, pattern (at most {MAX_PATTERN_SOURCE_BYTES} bytes of source, \
+             compiling within {pattern_kib} KiB, at most {MAX_SHAPE_PATTERNS} in a shape, no \
+             lookaround or backreferences), minLength, \
              maxLength, minItems, maxItems, minimum, maximum, title, description, $comment, \
              default, examples and format (a string, never enforced), with property names (in \
              properties and required) of at most {MAX_PROPERTY_NAME_BYTES} bytes, $schema and $id \
              only at the root ($schema, if present, spelled {schema_uri} with or without a \
-             trailing #), nested at most {MAX_SHAPE_DEPTH} levels; keys beginning x- are carried \
-             and ignored; $ref, $defs, allOf, anyOf, oneOf, not, if and every other keyword are \
-             refused",
+             trailing #), nested at most {MAX_SHAPE_DEPTH} levels, within a value budget; keys \
+             beginning x- are carried and ignored; $ref, $defs, allOf, anyOf, oneOf, not, if and every other \
+             keyword are refused",
             pattern_kib = MAX_PATTERN_BYTES / 1024,
             schema_uri = ACCEPTED_SCHEMA_URIS[0],
         )
@@ -201,14 +218,39 @@ const _: () = assert!(
 /// scan the entries. Any other enum is held to [`MAX_MIXED_ENUM_ENTRIES`].
 pub const MAX_ENUM_ENTRIES: usize = 256;
 
-/// The most entries an `enum` may list when any entry is not a string.
+/// The most entries an `enum` may list when any entry is not a string: every other enum, a
+/// numbers-only enum included.
 ///
 /// `jsonschema` compares such an enum against a value entry by entry, so every checked value costs
-/// a scan of the whole enum. Measured: about 50 ms for 32 scalars checked over 900k integers,
-/// about 184 ms for 32 structured entries over a 4.5 MB body at one level, and about 159 ms for a
-/// 32-entry mixed enum at every one of the 16 levels. The 256 entries a
-/// string-only enum may list would cost eight times that.
+/// a scan of the whole enum. Measured: about 50 ms for 32 scalars checked over 900k integers. The
+/// 256 entries a string-only enum may list would cost eight times that.
 pub const MAX_MIXED_ENUM_ENTRIES: usize = 32;
+
+/// The longest a string may be as a `const` value or an `enum` member, in JSON-escaped bytes, as
+/// the ask surface counts a string it sends. It is a literal, held equal to
+/// [`MAX_FILTER_STRING_BYTES`] by the assert below, so a change to either one fails the build
+/// rather than letting the two drift. [`MAX_PROPERTY_NAME_BYTES`] is also 256, but measures raw
+/// bytes.
+pub const MAX_SHAPE_VALUE_STRING_BYTES: usize = 256;
+
+const _: () = assert!(
+    MAX_SHAPE_VALUE_STRING_BYTES == MAX_FILTER_STRING_BYTES,
+    "a shape's string value cap is the ask surface's string cap, so the ask can name every value"
+);
+
+/// Whether a value may stand as a `const` or an `enum` member: a scalar (`null`, a boolean, a
+/// number or a string) and, for a string, at most [`MAX_SHAPE_VALUE_STRING_BYTES`] bytes
+/// JSON-escaped. The raw length is read first, which is free, and escaping only lengthens a string,
+/// so one past the cap raw is never serialized to be refused.
+fn is_shape_value(value: &Value) -> bool {
+    match value {
+        Value::String(text) => {
+            text.len() <= MAX_SHAPE_VALUE_STRING_BYTES
+                && json_string_bytes(text) <= MAX_SHAPE_VALUE_STRING_BYTES
+        }
+        other => is_scalar(other),
+    }
+}
 
 /// The most `pattern` keywords a shape may hold, counting every occurrence in a schema position.
 /// A property *named* `pattern` is not a keyword and is not counted.
@@ -231,6 +273,176 @@ const ACCEPTED_SCHEMA_URIS: [&str; 2] = [
     "https://json-schema.org/draft/2020-12/schema",
     "https://json-schema.org/draft/2020-12/schema#",
 ];
+
+/// The most JSON values a shape's schema may hold, counted at every depth: the root, each member
+/// of each object, each array element, containers and data positions alike, `default`, `examples`
+/// and `x-` values included. That is what Postgres's `strict $.**` counts. [`within_node_budget`] holds
+/// a schema to it and to [`MAX_SHAPE_OBJECTS`].
+///
+/// # 12,288, provisional
+///
+/// `MAX_SCHEMA_BYTES` already caps a schema's text, but what parsing it holds runs from about 3.9×
+/// the text's bytes (a described field tree) to about 98× (tiny objects), both measured. A byte
+/// cap low enough to bound memory would refuse ordinary schemas of long descriptions, so the
+/// budget counts values instead.
+///
+/// The two caps are multiples of 1,024 whose weight under [`parsed_weight`], at a text of
+/// `MAX_SCHEMA_BYTES`, stays within [`MAX_SHAPE_PARSED_WEIGHT`], and neither can rise by 1,024
+/// while the other holds: at both caps the model leaves 167,936 bytes of headroom, and 1,024 more
+/// values would weigh 195,584, 1,024 more objects 647,168. An assertion beside [`parsed_weight`]
+/// holds the caps within the target. Every admission profile fits inside them:
+///
+/// | Admission profile | Values | Objects |
+/// |---|---|---|
+/// | Every stored shape (production read, 2026-10-31) | ≤ 46 | ≤ 13 |
+/// | 1,024 fields `{"type":"string","description":…}` | 3,075 | 1,026 |
+/// | 1,024 array fields `{"type":"array","items":{"type":"string"}}` | 4,099 | 2,050 |
+/// | 1,024 fields `{"type":["string","null"],"title":…,"description":…,"examples":[…]}` | 8,195 | 1,026 |
+/// | 200 fields with 32-member enums | 7,003 | 202 |
+/// | 32 fields with 256-string enums ([`MAX_ENUM_ENTRIES`]) | 8,291 | 34 |
+///
+/// The budget can refuse what every other cap allows: 48 enums of [`MAX_ENUM_ENTRIES`] strings
+/// each fit the per-keyword caps, but not this one.
+pub const MAX_SHAPE_NODES: usize = 12_288;
+
+/// The most of a shape schema's JSON values that may be objects. Each object holds at least one
+/// map node of [`MAP_NODE_BYTES`] in the deployed `Value`, which is what makes tiny objects the
+/// heaviest thing per byte a schema can hold.
+///
+/// # 3,072, provisional
+///
+/// Sized with [`MAX_SHAPE_NODES`], by the derivation and admission profiles in its doc.
+pub const MAX_SHAPE_OBJECTS: usize = 3_072;
+
+/// The weight model's charge for one JSON value ([`parsed_weight`]). A fixed constant of the
+/// deployed build, not `size_of`: under `preserve_order`, which a `--workspace` build unifies in,
+/// `Value` is 72 bytes and an object is an `IndexMap` sized to its entries. Fixed constants keep
+/// the model, and the assertion on it, meaning the same thing in every build.
+pub const VALUE_BYTES: usize = 64;
+
+/// The weight model's charge for one node of the deployed `serde_json::Map`, a B-tree. Fixed for
+/// the reason [`VALUE_BYTES`] is.
+pub const MAP_NODE_BYTES: usize = 632;
+
+/// The most a shape's parsed schema may weigh under [`parsed_weight`], with both caps full and a
+/// text of `MAX_SCHEMA_BYTES`. The assertion below holds [`MAX_SHAPE_NODES`] and
+/// [`MAX_SHAPE_OBJECTS`] to it, so raising either cap fails the build unless this target moves
+/// with it.
+///
+/// # 4.5 MiB, provisional
+///
+/// At the provisional caps the model weighs 632 × 3,072 + 191 × 12,288 + 262,144 = 4,550,656
+/// bytes, about 4.34 MiB: by the model, the most one read of a stored shape builds. The model errs
+/// high: it charges each object's map node a second time through its members, and at both caps the
+/// parsed `Value` measured 2.3 MiB of the 4.34 MiB it weighs (`shape_schema_cost_bench.rs`,
+/// `parse_worst_case_at_the_caps`).
+pub const MAX_SHAPE_PARSED_WEIGHT: usize = 9 << 19;
+
+/// What `nodes` JSON values, `objects` of them objects, parsed from `text_bytes` bytes of text,
+/// weigh in the deployed `Value`: a map node of [`MAP_NODE_BYTES`] per object, [`VALUE_BYTES`] per
+/// value plus a fifth of a map node per value (a non-root B-tree node holds at least five keys;
+/// the fifth is rounded up to 127 bytes, so the model errs high, and a value weighs 191 bytes in
+/// all), and the text itself.
+pub const fn parsed_weight(nodes: usize, objects: usize, text_bytes: usize) -> usize {
+    objects * MAP_NODE_BYTES + nodes * (VALUE_BYTES + MAP_NODE_BYTES.div_ceil(5)) + text_bytes
+}
+
+const _: () = assert!(
+    parsed_weight(
+        MAX_SHAPE_NODES,
+        MAX_SHAPE_OBJECTS,
+        temper_core::types::artifact_ask::walk::MAX_SCHEMA_BYTES,
+    ) <= MAX_SHAPE_PARSED_WEIGHT,
+    "a shape at both caps and the byte cap weighs no more than its target: raise the target, \
+     with its reason, or lower a cap"
+);
+
+/// What [`count_up_to`] counted: JSON values and, of them, objects, and whether it stopped past a
+/// cap. When `over` is false the counts are the whole document's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NodeCount {
+    /// JSON values counted, the root included.
+    pub nodes: usize,
+    /// Of those values, the objects.
+    pub objects: usize,
+    /// Whether counting stopped past `max_nodes` or `max_objects`.
+    pub over: bool,
+}
+
+impl NodeCount {
+    /// Count one container's `members`, then, only if both counts are still within their caps,
+    /// push the members that are themselves containers onto `pending`.
+    fn count_members<'a>(
+        &mut self,
+        members: impl ExactSizeIterator<Item = &'a Value> + Clone,
+        pending: &mut Vec<&'a Value>,
+        max_nodes: usize,
+        max_objects: usize,
+    ) {
+        self.nodes += members.len();
+        self.objects += members.clone().filter(|member| member.is_object()).count();
+        self.over = self.nodes > max_nodes || self.objects > max_objects;
+        if !self.over {
+            pending.extend(members.filter(|member| !is_scalar(member)));
+        }
+    }
+}
+
+/// Count `schema`'s JSON values and objects, stopping at the first container that takes either
+/// count past its cap.
+///
+/// A container's members are counted when it is reached, before any of them is pushed, so the
+/// count never passes a cap by more than one container's width, and a wide array past the cap is
+/// never pushed. The walk keeps an explicit stack and never recurses on the Rust stack.
+pub fn count_up_to(schema: &Value, max_nodes: usize, max_objects: usize) -> NodeCount {
+    let mut count = NodeCount {
+        nodes: 0,
+        objects: 0,
+        over: false,
+    };
+    let mut pending = Vec::new();
+    count.count_members(
+        std::slice::from_ref(schema).iter(),
+        &mut pending,
+        max_nodes,
+        max_objects,
+    );
+    while let Some(node) = pending.pop() {
+        match node {
+            Value::Object(members) => {
+                count.count_members(members.values(), &mut pending, max_nodes, max_objects);
+            }
+            Value::Array(items) => {
+                count.count_members(items.iter(), &mut pending, max_nodes, max_objects);
+            }
+            _ => {}
+        }
+        if count.over {
+            break;
+        }
+    }
+    count
+}
+
+/// Hold `schema` to at most [`MAX_SHAPE_NODES`] JSON values, at most [`MAX_SHAPE_OBJECTS`] of them
+/// objects. It reads no more of a schema past either cap than [`count_up_to`] does.
+///
+/// # Errors
+/// [`ShapeSchemaUncompilable`] naming the cap the count passed: the values cap when both are past,
+/// since counting stops at the first container that passes either.
+pub fn within_node_budget(schema: &Value) -> Result<(), ShapeSchemaUncompilable> {
+    let count = count_up_to(schema, MAX_SHAPE_NODES, MAX_SHAPE_OBJECTS);
+    if !count.over {
+        return Ok(());
+    }
+    Err(ShapeSchemaUncompilable::naming(
+        if count.nodes > MAX_SHAPE_NODES {
+            format!("more than {MAX_SHAPE_NODES} JSON values in the whole schema")
+        } else {
+            format!("more than {MAX_SHAPE_OBJECTS} objects in the whole schema")
+        },
+    ))
+}
 
 /// One step from a schema position into one nested in it.
 #[derive(Clone, Copy)]
@@ -308,11 +520,12 @@ fn printable(text: &str) -> String {
 
 /// What makes the document not a field tree, the first thing the walk refuses — `None` when it is
 /// one: only the allowed keywords, in schema positions, within the depth, `enum`, `pattern` and
-/// property-name caps.
+/// property-name caps, and with every `const` and `enum` member passing `is_shape_value`.
 ///
 /// A schema position is the root, a `properties` value, an `additionalProperties` that is an object
 /// or a boolean, or an `items` that is an object or a boolean. A boolean is a leaf. Values under
-/// `const`, `enum`, `default` and `examples` are data and are never walked. `format` (a string) is
+/// `const`, `enum`, `default` and `examples` are data and are never walked; of them a `const` and
+/// each `enum` member must be a shape value, and `default` and `examples` are free. `format` (a string) is
 /// an annotation the compile never asserts — it turns on no format validation — and a key
 /// beginning `x-` is carried and ignored: its value is never walked, whatever it holds. Where the
 /// form of a value is not fixed here (a `type` value, a `required` item) the walk leaves it to the
@@ -361,9 +574,13 @@ fn field_tree_refusal(schema: &Value) -> Option<String> {
                     }
                     _ => None,
                 },
-                "type" | "const" | "default" | "examples" | "minLength" | "maxLength"
-                | "minItems" | "maxItems" | "minimum" | "maximum" | "title" | "description"
-                | "$comment" => None,
+                "type" | "default" | "examples" | "minLength" | "maxLength" | "minItems"
+                | "maxItems" | "minimum" | "maximum" | "title" | "description" | "$comment" => None,
+                "const" => (!is_shape_value(value)).then(|| {
+                    format!(
+                        "keyword const past {MAX_SHAPE_VALUE_STRING_BYTES} bytes or not a scalar"
+                    )
+                }),
                 // An annotation, never an assertion: the compile turns on no format validation.
                 "format" => {
                     (!value.is_string()).then(|| "keyword format that is not a string".to_owned())
@@ -409,9 +626,20 @@ fn field_tree_refusal(schema: &Value) -> Option<String> {
                         } else {
                             MAX_MIXED_ENUM_ENTRIES
                         };
-                        (entries.len() > cap).then(|| {
-                            format!("enum of {} entries, past the cap of {cap},", entries.len())
-                        })
+                        if entries.len() > cap {
+                            Some(format!(
+                                "enum of {} entries, past the cap of {cap},",
+                                entries.len()
+                            ))
+                        } else {
+                            (!entries.iter().all(is_shape_value)).then(|| {
+                                // The cap leads, so a refusal cut to its room keeps it.
+                                format!(
+                                    "keyword enum with a member past \
+                                     {MAX_SHAPE_VALUE_STRING_BYTES} bytes or not a scalar"
+                                )
+                            })
+                        }
                     }
                     _ => Some("keyword enum that is not an array".to_owned()),
                 },
@@ -479,19 +707,22 @@ pub const MAX_PATTERN_BYTES: usize = 10 << 10;
 /// cache keeps an upstream change of default from moving what searching with one pattern may hold.
 pub const MAX_PATTERN_DFA_BYTES: usize = 2 << 20;
 
-/// Compile a shape's JSON Schema into a validator without fetching anything, holding each pattern
-/// to [`MAX_PATTERN_BYTES`].
+/// Compile a shape's JSON Schema into a validator without fetching anything, holding the document
+/// to the node budget before anything else reads it, and each pattern to [`MAX_PATTERN_BYTES`].
 ///
 /// # Errors
-/// [`ShapeSchemaUncompilable`] when the schema is not a field tree (a keyword outside the allowed
-/// vocabulary, a `$schema` or `$id` below the root, a `$schema` other than the bundled 2020-12
-/// spelling (with or without a trailing `#`), a `properties` key or `required` entry past
-/// [`MAX_PROPERTY_NAME_BYTES`], or a depth, `enum`, `pattern` size or `pattern` count past its cap), is not valid for
-/// 2020-12 where the walk leaves a form to meta-validation, or has a pattern that compiles past
-/// [`MAX_PATTERN_BYTES`].
+/// [`ShapeSchemaUncompilable`] when the schema holds more than [`MAX_SHAPE_NODES`] JSON values or
+/// more than [`MAX_SHAPE_OBJECTS`] objects ([`within_node_budget`]), is not a field tree (a
+/// keyword outside the allowed vocabulary, a `$schema` or `$id` below the root, a `$schema` other
+/// than the bundled 2020-12 spelling (with or without a trailing `#`), a `properties` key or
+/// `required` entry past [`MAX_PROPERTY_NAME_BYTES`], a `const` or `enum` member
+/// `is_shape_value` refuses, or a depth, `enum`, `pattern` size or `pattern` count past its cap),
+/// is not valid for 2020-12 where the walk leaves a form to meta-validation, or has a pattern that
+/// compiles past [`MAX_PATTERN_BYTES`].
 pub fn compile(schema: &Value) -> Result<Validator, ShapeSchemaUncompilable> {
     #[cfg(feature = "test-support")]
     test_support::record(schema);
+    within_node_budget(schema)?;
     if let Some(refused) = field_tree_refusal(schema) {
         return Err(ShapeSchemaUncompilable::naming(refused));
     }
@@ -623,5 +854,49 @@ pub mod test_support {
             .get(tag)
             .copied()
             .unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{json, Value};
+
+    use super::{count_up_to, MAX_SHAPE_NODES, MAX_SHAPE_OBJECTS};
+
+    /// Counting stops at the first container that takes it past a cap, so on a schema ten times
+    /// over the budget it counts no more than the cap plus that one container's width. The first
+    /// fixture is a single array ten times the cap wide, each element an array of one number, so
+    /// the container that crosses the cap is itself wider than the cap. The second spreads as many
+    /// values over hundreds of narrow arrays. Bites a count that walks the whole document before
+    /// checking, on either fixture: the first then also counts each element's member, and the
+    /// second passes the bound many times over.
+    #[test]
+    fn counting_stops_at_the_first_container_past_the_cap() {
+        let wide = 10 * MAX_SHAPE_NODES;
+        let one_array = json!({ "examples": Value::Array(vec![json!([0]); wide]) });
+        let whole = count_up_to(&one_array, usize::MAX, usize::MAX);
+        assert!(
+            whole.nodes > MAX_SHAPE_NODES + wide,
+            "a count of the whole document passes the bound: {whole:?}"
+        );
+        let count = count_up_to(&one_array, MAX_SHAPE_NODES, MAX_SHAPE_OBJECTS);
+        assert!(count.over, "{count:?}");
+        assert!(count.nodes <= MAX_SHAPE_NODES + wide, "{count:?}");
+
+        let widest = 352;
+        assert!(
+            widest * widest >= 10 * MAX_SHAPE_NODES,
+            "the narrow arrays hold ten times the cap"
+        );
+        let narrow = Value::Array(vec![json!(0); widest]);
+        let many_arrays = json!({ "examples": Value::Array(vec![narrow; widest]) });
+        let whole = count_up_to(&many_arrays, usize::MAX, usize::MAX);
+        assert!(
+            whole.nodes > MAX_SHAPE_NODES + widest,
+            "a count of the whole document passes the bound: {whole:?}"
+        );
+        let count = count_up_to(&many_arrays, MAX_SHAPE_NODES, MAX_SHAPE_OBJECTS);
+        assert!(count.over, "{count:?}");
+        assert!(count.nodes <= MAX_SHAPE_NODES + widest, "{count:?}");
     }
 }

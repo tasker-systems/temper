@@ -1,0 +1,18 @@
+title    = "Sign-in returns a person only to a path on this site"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["internal"]
+status   = "signal-only"
+body = '''
+`/auth/login?returnTo=<value>` honours `returnTo` only when it is a same-origin path. An absolute
+URL, a scheme-relative `//host`, `/\host`, a value carrying a tab, CR/LF, other control character,
+space or backslash, a path whose dot segments normalise to `//host`, or a value that does not start
+with `/` now lands on the first view (`/vault`) instead. One check (`safeReturnTo`) runs at login,
+for both the already-signed-in redirect and the value stashed in the PKCE cookie, and again at
+`/auth/callback` before the post-sign-in redirect, so a cookie written by an earlier build is not
+trusted. Who observes: anyone following a crafted sign-in link, which no longer forwards them
+off-site after a genuine sign-in; every in-app producer (the app layout's path + query, the fixed
+request-access and admin paths) is unchanged. The logout `returnTo` is the server's own
+`APP_BASE_URL`, not request input, and is untouched. Release relevance: signal-only; a web-UI
+security fix with no wire shape change.
+'''

@@ -6,13 +6,15 @@ status   = "signal-only"
 body = '''
 Hardening. A data-artifact shape is now a field tree: a JSON Schema 2020-12 document using only
 `type`, `properties`, `required`, `additionalProperties` (`true`, `false` or a schema), `items` (one
-schema), `enum` (at most 256 strings, or 32 values of any other kind), `const`, `pattern` (at most
-256 bytes, at most 32 in a shape, no lookaround or backreferences), `minLength`, `maxLength`,
-`minItems`, `maxItems`, `minimum`, `maximum`, `title`, `description`, `$comment`, `default`,
-`examples` and `format` (a string, carried as an annotation and never enforced), with property names (in `properties` and `required`) of at most 256 bytes, `$schema` and
-`$id` only at the root, `$schema` the bundled 2020-12 spelling (with or without a trailing `#`), nested
-at most 16 levels. A key beginning `x-` is accepted anywhere a schema sits, carried as written and
-never read. Declaring a shape
+schema), `enum` (at most 256 strings, or 32 values of any other kind, every member a scalar as for
+`const`), `const` (a scalar; a string at most 256 JSON-escaped bytes), `pattern` (at most 256 bytes,
+at most 32 in a shape, no lookaround or backreferences), `minLength`, `maxLength`, `minItems`,
+`maxItems`, `minimum`, `maximum`, `title`, `description`, `$comment`, `default`, `examples` and
+`format` (a string, carried as an annotation and never enforced), with property names (in
+`properties` and `required`) of at most 256 bytes, `$schema` and `$id` only at the root, `$schema`
+the bundled 2020-12 spelling (with or without a trailing `#`), nested at most 16 levels, holding at
+most 12,288 JSON values in all, at most 3,072 of them objects. A key beginning `x-` is accepted
+anywhere a schema sits, carried as written and never read. Declaring a shape
 (`POST /api/contexts/{id}/shapes`, `POST /api/cognitive-maps/{id}/shapes`, the MCP
 `declare_data_artifact_shape` tool and `temper data-artifact schema declare`) with a schema outside
 it is refused with the existing data-artifact refusal (`400`, code `DATA_ARTIFACT_REFUSAL`, MCP

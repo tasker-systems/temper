@@ -837,6 +837,29 @@ mod tests {
         );
     }
 
+    // `body_hash` is chunk-content identity, not byte identity: chunk content excludes the heading
+    // line, so an edit that only renames (or re-levels) a heading — here the FIRST line — leaves the
+    // merkle unchanged, while an edit to a prose line moves it. `body_hash_for_body` models ONE block,
+    // so this pins the chunk-level half of the documented definition (`ResourceView::body_hash`) on a
+    // one-section body; the multi-section, stored-value half is
+    // `a_first_line_heading_edit_writes_but_keeps_body_hash` (temper-api). If the hash is ever widened
+    // to cover headings, both change, together with that doc and every client twin of the merkle.
+    #[test]
+    fn body_hash_ignores_heading_text_and_tracks_prose() {
+        let before = "## Ruling (Ada): keep it\n\n\
+                      The prose under the ruling.\n";
+        let renamed = "## Ruling (Bea): keep it\n\n\
+                       The prose under the ruling.\n";
+        let relevelled = "### Ruling (Ada): keep it\n\n\
+                          The prose under the ruling.\n";
+        let prose_edit = "## Ruling (Ada): keep it\n\n\
+                          The prose under the ruling, revised.\n";
+
+        assert_eq!(body_hash_for_body(renamed), body_hash_for_body(before));
+        assert_eq!(body_hash_for_body(relevelled), body_hash_for_body(before));
+        assert_ne!(body_hash_for_body(prose_edit), body_hash_for_body(before));
+    }
+
     // Empty chunk set ⇒ sha256_hex("") — the same value body_hash_for_body returns for an empty body.
     #[test]
     fn body_hash_from_empty_chunk_set_matches_empty_body() {

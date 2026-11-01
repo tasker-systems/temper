@@ -17,6 +17,7 @@
 #   public_routes                Public                        (none)                                by-design public: /health
 #   blob_commit_routes           Gated (+ inner body limit)    same stack as gated_routes
 #   blob_segment_routes          Gated (+ inner body limit)    same stack as gated_routes
+#   shape_declare_routes         Gated (+ inner body limit)    same stack as gated_routes
 #   embed_internal_routes        SelfGated                     (none)                                self-gated: EMBED_DISPATCH_SECRET
 #   internal_routes              InternalHmac(Reconcile)       require_internal_signature            HMAC (INTERNAL_RECONCILE_SECRET)
 #   slack_link_internal_routes   InternalHmac(SlackLink)       require_slack_link_signature          HMAC (SLACK_LINK_SECRET)
@@ -102,7 +103,7 @@ APP_BUILDERS='create_app create_internal_app'
 # and to nothing else. That indirection is exactly what makes a bare AUTH_COVERED entry too weak
 # here: the entry asserts a posture, and the posture is a property of where the merge lands. The
 # merge-landing assertion below is what closes that, and it is why this name may sit here at all.
-AUTH_COVERED='auth_only_routes|auth_only_status_routes|gated_routes|admin_routes|query_routes|blob_segment_routes|blob_commit_routes'
+AUTH_COVERED='auth_only_routes|auth_only_status_routes|gated_routes|admin_routes|query_routes|blob_segment_routes|blob_commit_routes|shape_declare_routes'
 # Groups whose routes are NOT behind require_auth — every entry is a reviewed compensating control.
 REVIEW_GROUPS='public_routes|embed_internal_routes|internal_routes|slack_link_internal_routes|slack_mint_internal_routes|slack_link_public_routes|webhook_intake_routes'
 
@@ -230,6 +231,7 @@ require_row 'gated_routes'               'Group { key: "gated_routes", tier: Tie
 require_row 'admin_routes'               'Group { key: "admin_routes", tier: Tier::HumanGated, build: Documented(admin_routes), body_limit: None, serves: Serves::AppOnly },'
 require_row 'blob_commit_routes'         'Group { key: "blob_commit_routes", tier: Tier::Gated, build: Documented(blob_commit_routes), body_limit: Some(BodyLimit::CommitDoor), serves: Serves::AppOnly },'
 require_row 'blob_segment_routes'        'Group { key: "blob_segment_routes", tier: Tier::Gated, build: Documented(blob_segment_routes), body_limit: Some(BodyLimit::Fixed(blob_doors::BLOB_SEGMENT_MAX_BODY_BYTES)), serves: Serves::AppOnly },'
+require_row 'shape_declare_routes'       'Group { key: "shape_declare_routes", tier: Tier::Gated, build: Documented(shape_declare_routes), body_limit: Some(BodyLimit::Fixed(gated::SHAPE_DECLARE_MAX_BODY_BYTES)), serves: Serves::AppOnly },'
 require_row 'internal_routes'            'Group { key: "internal_routes", tier: Tier::InternalHmac(SignatureKind::Reconcile), build: Undocumented(internal_routes), body_limit: None, serves: Serves::BothBuilders },'
 require_row 'slack_link_internal_routes' 'Group { key: "slack_link_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackLink), build: Undocumented(slack_link_internal_routes), body_limit: None, serves: Serves::BothBuilders },'
 require_row 'slack_mint_internal_routes' 'Group { key: "slack_mint_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackMint), build: Undocumented(slack_mint_internal_routes), body_limit: None, serves: Serves::BothBuilders },'

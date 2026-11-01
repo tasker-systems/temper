@@ -71,16 +71,21 @@ pub const MAX_ASKS_PER_REQUEST: usize = 32;
 ///
 /// # 8, sized against what each shape costs
 ///
-/// Every distinct shape is a gated read and a compile of up to `MAX_SCHEMA_BYTES` (256 KiB) before
-/// the gate, a schema the request holds for its length, a walk built over it, and — when a refusal
-/// teaches its vocabulary and no teaching of it is remembered — an enumeration of it, linear in its
-/// schema. The teaching a request makes is remembered by shape id for later requests
-/// (temper-services' `shape_loader`), so each shape is enumerated once per process while its
-/// teaching stays remembered. So the request's walk work is at most eight enumerations of at most
-/// 256 KiB each — none when every shape it names has its teaching remembered — and the schemas it
-/// holds at most 2 MiB of compact JSON. A resource has one home, so a stage's asks name one home's
-/// shapes; asking several homes means several stages combined by `union`, and eight shapes is far
-/// above what one question names.
+/// Every distinct shape is a gated read and at most one compile before the gate, of a schema within
+/// the walk's byte bound (`MAX_SCHEMA_BYTES`, 256 KiB) and temper-substrate's parsed-size budget; a
+/// schema the request holds for its length; a walk built over it; and — when a refusal teaches its
+/// vocabulary — an enumeration of it, linear in its schema.
+///
+/// **A refused path enumerates its shape's vocabulary on the async executor**, once per shape per
+/// request: nothing a refusal teaches is kept for a later request. At the budget the heaviest
+/// vocabulary enumerates in about 0.43 ms (`T_enum` of `vocabulary_paths_worst_case`,
+/// `shape_schema_cost_bench.rs`; arm64, release), so a refused request naming eight such shapes
+/// holds an executor thread for about 3.4 ms of enumeration. The schemas it holds each weigh at
+/// most `shape_schema::MAX_SHAPE_PARSED_WEIGHT` (4.5 MiB) by the budget's weight model, so eight
+/// hold at most 36 MiB by the model, which errs high.
+///
+/// A resource has one home, so a stage's asks name one home's shapes; asking several homes means
+/// several stages combined by `union`, and eight shapes is far above what one question names.
 pub const MAX_ASKED_SHAPES: usize = 8;
 
 /// The shapes a composition's asks name — the ids the handler loads before the gate — or the

@@ -222,7 +222,8 @@ pub const ARTIFACT_READ_CANDIDATE_BYTES: usize = 4_096;
 ///
 /// | Door | Limit | Where |
 /// |---|---|---|
-/// | every `Tier::Gated` route (system-access routes, admin routes) | 25 MB | `GATED_MAX_BODY_BYTES`, `temper-api/src/routes/mod.rs` |
+/// | shape declare (`POST /api/contexts/{id}/shapes`, `POST /api/cognitive-maps/{id}/shapes`) | 512 KiB | `SHAPE_DECLARE_MAX_BODY_BYTES`, `temper-api/src/routes/gated.rs` |
+/// | every other `Tier::Gated` route (system-access routes, admin routes) | 25 MB | `GATED_MAX_BODY_BYTES`, `temper-api/src/routes/mod.rs` |
 /// | `/api/query` | 25 MB | `QUERY_MAX_BODY_BYTES`, `temper-api/src/routes/query.rs` |
 /// | blob segment uploads | 4.5 MB | `BLOB_SEGMENT_MAX_BODY_BYTES`, `temper-api/src/routes/blob_doors.rs` |
 /// | blob commit | the config's single-request threshold | `blob_commit_body_limit`, `temper-api/src/routes/blob_doors.rs` |

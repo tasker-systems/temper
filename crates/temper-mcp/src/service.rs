@@ -239,7 +239,7 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "Get a resource by its ref (UUID or the decorated `slug-<uuid>` form). Set include_content to true to get the full markdown body.",
+        description = "Get a resource by its ref (UUID or the decorated `slug-<uuid>` form). Set include_content to true to get the full markdown body. `body_hash` is the identity of the body's prose chunks as grouped into blocks, not of its bytes. It excludes `#`..`######` heading lines and edge whitespace, so an edit that only changes a heading's text or level (even on the first line) usually leaves it unchanged. Detect an edit by `updated` or the content, never by `body_hash`.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_resource(
@@ -309,7 +309,7 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "Update a resource's title, slug, or content. Only provided fields are changed. New content triggers re-indexing.",
+        description = "Update a resource's title, slug, or content. Only provided fields are changed. New content triggers re-indexing. The returned `body_hash` is prose-chunk identity, not byte identity. A heading-only edit writes the new content and moves `updated`, but usually leaves `body_hash` unchanged. Detect an edit by `updated`, never by `body_hash`.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,

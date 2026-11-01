@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_access_grants (subject_table, subject_id, principal_table,\n                                            principal_id, can_read, can_write, granted_by_profile_id)\n               VALUES ($1, $2, 'kb_profiles', $3, true, true, $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bd8dc26ee29baf55a03d19a2990839e5c9f4c4214327e05307f0440a031b0690"
+}

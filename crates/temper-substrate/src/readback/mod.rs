@@ -529,7 +529,10 @@ pub struct ResourceRowParity {
     pub effort: Option<String>,
     /// `temper-seq` parsed to i64, if present (invariant).
     pub seq: Option<i64>,
-    /// Denormalized body merkle hash (invariant) — `kb_resources.body_hash`.
+    /// Denormalized body merkle hash (invariant) — `kb_resources.body_hash`. A merkle over the
+    /// live chunks' `content_hash`es, which exclude heading lines and edge whitespace, so it is
+    /// NOT byte identity: a heading-only edit on a policy-partitioned resource leaves it unchanged (see
+    /// `temper_core::types::resource_view::ResourceView::body_hash`).
     pub body_hash: Option<String>,
     /// What guarantee the body carries on read — `verbatim` | `derived` (see `ResourceRow::body_storage`).
     /// NOT a parity invariant: it is DERIVED from block content-coverage by the projectors, which replay

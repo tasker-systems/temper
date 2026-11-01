@@ -1,0 +1,26 @@
+title    = "`body_hash` is documented as prose-chunk identity, which a heading-only edit does not move"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["http", "mcp", "clients"]
+status   = "signal-only"
+body = '''
+Only descriptions change. `ResourceView.body_hash` used to say "SHA-256 hash of the resource body".
+It has never been that. It is `kb_resources.body_hash`: a two-level merkle over the live chunks'
+`content_hash`es, grouped by block. The chunker hashes each chunk's text trimmed and without its
+heading line, where a heading is a column-0 `#`..`######` line (code fences included). So, on a
+resource partitioned by the blocking policy, an edit that only renames or re-levels such a heading
+(the first line included), adds or drops one with no prose under it, or changes edge whitespace
+still writes and moves `updated` but leaves `body_hash` unchanged. Regrouping the same chunks into
+different blocks does move it. A resource with no prose carries the sha256 of the empty string,
+not an absent value. The field doc, the `get_resource` and `update_resource` MCP tool descriptions,
+and the regenerated `openapi.json`, SDKs and ts-rs types now say this. The definition is pinned by
+`body_hash_ignores_heading_text_and_tracks_prose` (temper-substrate) and
+`a_first_line_heading_edit_writes_but_keeps_body_hash` (temper-api). No shape, value or behaviour
+moves.
+
+Who observes it: anyone reading `body_hash` over HTTP, MCP or an SDK. Detect an edit with `updated`
+or the content, never with `body_hash`. User-visible: in descriptions only. Release relevance:
+none; recorded so the definition can be found. Two readers inside the server use `body_hash` as a
+"did the body change" signal, so a heading-only change does not reach them: the kernel reconcile's
+unchanged arm and the telos charter diff. This entry does not change them.
+'''

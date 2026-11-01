@@ -27,7 +27,9 @@ pub async fn clean_and_seed(_pool: &PgPool) {}
 /// Grant a profile explicit `can_write` on a cognitive map — the post-Q-A authoring capability
 /// (`cogmap_authorable_by_profile` = an explicit `kb_access_grants` write row; membership confers
 /// read, not write). Used where a test principal must AUTHOR a map it can otherwise only read
-/// (e.g. opening a self-attributed invocation on L0, which read-only root-join does not permit).
+/// (e.g. opening a self-attributed invocation on a map it reads through a team). A grant on a map in
+/// the admin-only regime (L0, or a map bound to temper-system or the gating team) authors nothing:
+/// only a system admin authors those (`20261113000010`); use [`authored_map`] for an ordinary one.
 /// `granted_by` is the grantee itself (a fixture bootstrap standing in for a real delegated grant).
 pub async fn grant_cogmap_write(pool: &PgPool, cogmap: uuid::Uuid, profile: uuid::Uuid) {
     sqlx::query(
@@ -41,6 +43,40 @@ pub async fn grant_cogmap_write(pool: &PgPool, cogmap: uuid::Uuid, profile: uuid
     .execute(pool)
     .await
     .expect("grant cogmap write");
+}
+
+/// Birth an ordinary cognitive map (bound to no team, so outside the admin-only regime) through
+/// `cogmap_genesis`, and grant `author` write on it. Returns the map id. The map has a telos, so
+/// `open_invocation` succeeds on it: this is the fixture for "a map this principal authors", which
+/// L0 stopped being for anyone but a system admin.
+pub async fn authored_map(pool: &PgPool, author: uuid::Uuid) -> uuid::Uuid {
+    let cogmap = uuid::Uuid::now_v7();
+    let emitter: uuid::Uuid = sqlx::query_scalar(
+        "SELECT e.id FROM kb_entities e JOIN kb_profiles p ON p.id = e.profile_id \
+          WHERE p.handle = 'system' AND e.name = 'system'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("system emitter must exist");
+    sqlx::query("SELECT cogmap_genesis($1, $2, $3)")
+        .bind(serde_json::json!({
+            "cogmap_id": cogmap,
+            "name": format!("authored-{cogmap}"),
+            "owner_profile_id": author,
+            "telos": {
+                "resource_id": uuid::Uuid::now_v7(),
+                "title": "telos",
+                "origin_uri": format!("temper://test/{cogmap}/telos"),
+                "blocks": [],
+            },
+        }))
+        .bind(serde_json::json!({}))
+        .bind(emitter)
+        .execute(pool)
+        .await
+        .expect("birth cogmap");
+    grant_cogmap_write(pool, cogmap, author).await;
+    cogmap
 }
 
 /// Create a test profile and return its UUID.

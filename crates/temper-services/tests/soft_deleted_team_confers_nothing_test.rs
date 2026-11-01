@@ -356,6 +356,72 @@ async fn a_dead_teams_context_reads_as_retired(pool: PgPool) {
     );
 }
 
+/// D3, the cognitive-map axis: a dead team's context reads as retired there too, which on this axis
+/// means it stays reachable. `vis_team`'s share arm reaches a retired context's resources so a
+/// steward can curate against its charter (`20260826000110_context_retirement.sql`), and a dead
+/// owner is treated the same way. A map joined to `partners` keeps `doc` while bob, a person on
+/// `partners`, loses it.
+///
+/// FAILS IF `vis_team`'s share arm gains an owner-liveness or `context_is_dead` floor (the map
+/// loses `doc`) without the register entry being revisited, or the profile axis regains the share
+/// (bob sees `doc`).
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_cogmap_axis_reaches_a_dead_teams_context_as_a_retired_one(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let telos: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_resources (title, origin_uri) VALUES ('telos', 'test://sd-telos') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("telos");
+    let map: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_cogmaps (name, telos_resource_id) VALUES ('sd-map', $1) RETURNING id",
+    )
+    .bind(telos)
+    .fetch_one(&pool)
+    .await
+    .expect("map");
+    sqlx::query("INSERT INTO kb_team_cogmaps (cogmap_id, team_id) VALUES ($1, $2)")
+        .bind(map)
+        .bind(f.partners)
+        .execute(&pool)
+        .await
+        .expect("map joined to partners");
+    let map_reaches = |resource: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (SELECT 1 FROM resources_accessible_to_cogmap($1) a \
+                  WHERE a.resource_id = $2)",
+            )
+            .bind(map)
+            .bind(resource)
+            .fetch_one(&pool)
+            .await
+            .expect("cogmap probe")
+        }
+    };
+    assert!(
+        map_reaches(f.doc).await,
+        "precondition: the map reaches doc"
+    );
+
+    kill(&pool, &f).await;
+
+    assert!(
+        map_reaches(f.doc).await,
+        "the map still reaches doc in the dead team's context, as it would a retired one's"
+    );
+    assert!(
+        !sees_resource(&pool, f.bob, f.doc).await,
+        "a person on the same team does not"
+    );
+    assert!(
+        !reads_context(&pool, f.bob, f.plans).await,
+        "nor reads the context"
+    );
+}
+
 /// D2: a system admin moves a dead team's context out to a live team, the recovery path, and it is
 /// live again for that team.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]

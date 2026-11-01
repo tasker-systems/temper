@@ -822,38 +822,36 @@ pub async fn revoke_capability(
     Ok(RevokeOutcome { revoked })
 }
 
-/// The reserved L0 kernel cognitive map (`20260625000001_l0_kernel_cogmap.sql`). Its write gate is
-/// fail-CLOSED and independent of `gating_team_slug`: the kernel is immutable until an operator
-/// intentionally configures gating + promotes an admin. See [`cogmap_write_requires_admin`].
-const L0_KERNEL_COGMAP: CogmapId =
-    CogmapId(Uuid::from_u128(0x00000000_0000_0000_0005_000000000001));
-
-/// Caller-independent: does this cogmap sit in the admin-only regime at all (reserved L0 kernel, or
-/// joined to the gating team)? Reconcile's authority (`DbBackend::authorize_reconcile`) and
-/// `can_administer_grant` both consult it.
+/// Caller-independent: does this cogmap sit in the admin-only regime at all? It does when it is the
+/// reserved L0 kernel (unconditionally, so the kernel is immutable until an operator configures
+/// gating and promotes an admin), or when it is bound to an instance team: temper-system or the
+/// gating team (see [`is_root_or_gating_team`]).
 ///
-/// Extracted so `can_administer_grant` can consult the SAME condition without either restating the
-/// query — a second copy of the policy is a copy that drifts from the gate it exists to mirror — or
-/// swallowing a genuine DB error as a denial (which is what reusing the `Result`-returning form via
-/// `.is_err()` would do).
+/// The SQL function of the same name (`20261113000010`) is the one definition, and this asks it
+/// rather than restating it. `cogmap_authorable_by_profile` reads it too, so a regime map is
+/// authored by a system admin only, on every path that authors into a map. Reconcile's authority
+/// (`DbBackend::authorize_reconcile`) and the grant door (`GrantAuthority`) consult this spelling.
+///
+/// `Result`-returning on purpose: a genuine DB error must surface, never read as a denial.
 pub(crate) async fn cogmap_write_requires_admin(
     pool: &PgPool,
     cogmap_id: CogmapId,
 ) -> ApiResult<bool> {
-    if cogmap_id == L0_KERNEL_COGMAP {
-        return Ok(true); // unconditional, independent of `gating_team_slug` (fail-CLOSED)
-    }
-    Ok(sqlx::query_scalar!(
-        "SELECT EXISTS( \
-           SELECT 1 FROM kb_team_cogmaps tc \
-             JOIN kb_teams t ON t.id = tc.team_id \
-             JOIN kb_system_settings s ON t.slug = s.gating_team_slug \
-            WHERE tc.cogmap_id = $1 )",
-        *cogmap_id,
-    )
-    .fetch_one(pool)
-    .await?
-    .unwrap_or(false))
+    let mut conn = pool.acquire().await?;
+    cogmap_write_requires_admin_on(&mut conn, cogmap_id).await
+}
+
+/// [`cogmap_write_requires_admin`] on a caller-supplied connection, for a gate that decides inside
+/// its own transaction. The one query both spellings run.
+pub(crate) async fn cogmap_write_requires_admin_on(
+    conn: &mut sqlx::PgConnection,
+    cogmap_id: CogmapId,
+) -> ApiResult<bool> {
+    let requires: Option<bool> =
+        sqlx::query_scalar!("SELECT cogmap_write_requires_admin($1)", *cogmap_id)
+            .fetch_one(&mut *conn)
+            .await?;
+    Ok(requires.unwrap_or(true)) // a NULL is not an answer: fail-closed
 }
 
 // ---------------------------------------------------------------------------

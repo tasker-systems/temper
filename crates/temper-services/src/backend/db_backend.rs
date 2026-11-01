@@ -133,7 +133,14 @@ fn write_err(e: anyhow::Error) -> TemperError {
 /// The sentence names the capability and the subject, and stops there. It does **not** name the
 /// mechanism by which the caller holds read (team reach vs. an explicit read grant): no site has
 /// asked, and a refusal stating an unmeasured mechanism is worse than one stating none.
-fn cogmap_authorship_refusal(cogmap_id: uuid::Uuid) -> TemperError {
+fn cogmap_authorship_refusal(cogmap_id: uuid::Uuid, admin_only: bool) -> TemperError {
+    if admin_only {
+        return TemperError::ForbiddenDetail(format!(
+            "cannot author cognitive map {cogmap_id}: it is bound to an instance team (or is the \
+             reserved kernel), so only a system admin authors it, and a write grant on it confers \
+             nothing. You can read this map; reading confers no authorship."
+        ));
+    }
     TemperError::ForbiddenDetail(format!(
         "cannot author cognitive map {cogmap_id}: authorship requires an explicit write grant on \
          the map, which you do not hold. You can read this map; reading confers no authorship."
@@ -793,8 +800,8 @@ struct ReconcileCtx {
 
 impl DbBackend {
     /// Reconcile's authority, decided once: a map in the admin-only regime (the reserved L0 kernel,
-    /// or a map joined to the gating team — `cogmap_write_requires_admin`, which nobody authors by
-    /// design) requires a system admin (the bare-id spelling of `require_system_admin`, as the
+    /// or a map bound to temper-system or the gating team — `cogmap_write_requires_admin`, which
+    /// only a system admin authors, by design) requires a system admin (the bare-id spelling of `require_system_admin`, as the
     /// reblock seam's deployment-wide arm asks it — no middleware sits above this seam); every
     /// other map requires authorship (`check_cogmap_authorable`), a system admin included (ruled
     /// 2026-10-01). Fail-CLOSED on L0: with gating unconfigured `is_system_admin` is false for
@@ -1157,10 +1164,32 @@ impl DbBackend {
         .fetch_one(&mut *conn)
         .await
         .map_err(api_err)?;
-        if readable.unwrap_or(false) {
-            Err(cogmap_authorship_refusal(cogmap_id))
-        } else {
-            Err(TemperError::Forbidden)
+        if !readable.unwrap_or(false) {
+            return Err(TemperError::Forbidden);
+        }
+        // A reader is told which capability they lack, and on a map in the admin-only regime that
+        // is not a grant: grants there are inert (`cogmap_authorable_by_profile`, 20261113000010).
+        let admin_only = crate::services::access_service::cogmap_write_requires_admin_on(
+            &mut *conn,
+            CogmapId::from(cogmap_id),
+        )
+        .await
+        .map_err(TemperError::from)?;
+        Err(cogmap_authorship_refusal(cogmap_id, admin_only))
+    }
+
+    /// The refusal for a caller already proven to READ `cogmap_id` and refused authorship of it,
+    /// worded for the map's regime. A fault reading the regime surfaces as that fault rather than
+    /// as a refusal with the wrong reason.
+    async fn cogmap_refusal_for_reader(&self, cogmap_id: uuid::Uuid) -> TemperError {
+        match crate::services::access_service::cogmap_write_requires_admin(
+            &self.pool,
+            CogmapId::from(cogmap_id),
+        )
+        .await
+        {
+            Ok(admin_only) => cogmap_authorship_refusal(cogmap_id, admin_only),
+            Err(e) => TemperError::from(e),
         }
     }
 
@@ -3796,7 +3825,7 @@ impl Backend for DbBackend {
     ///
     /// **Reconcile requires authorship of the map, by regime** (ruled 2026-10-01), decided once,
     /// HERE, on the shared write path. A map in the admin-only regime (the L0 kernel, or a map
-    /// joined to the gating team — nobody authors those by design;
+    /// bound to temper-system or the gating team — only a system admin authors those, by design;
     /// `access_service::cogmap_write_requires_admin`) requires a system admin. Every other map is
     /// gated by `check_cogmap_authorable` — for a system admin too: reach on an ordinary map comes
     /// from a grant, as everywhere else in the map model. The gate runs first, ahead of the
@@ -4279,7 +4308,7 @@ impl Backend for DbBackend {
             // No read probe here, and none is owed: `anchor_readable_by_profile` is in the WHERE
             // above, so a row reaching this line proves the caller reads the map. This is the
             // refusal the production steward met once per run on L0 and could not act on.
-            return Err(cogmap_authorship_refusal(cmd.cogmap.uuid()));
+            return Err(self.cogmap_refusal_for_reader(cmd.cogmap.uuid()).await);
         }
 
         // Watermark hygiene (issue #459): the advance target must be a real kb_events row within this
@@ -4634,7 +4663,7 @@ impl Backend for DbBackend {
             // The context arm keeps the argument-free refusal: extending the disclosure to
             // `context_authorable_by_profile` is a separate decision, deliberately not taken here.
             return Err(match cmd.anchor {
-                HomeAnchor::Cogmap(cogmap) => cogmap_authorship_refusal(cogmap.uuid()),
+                HomeAnchor::Cogmap(cogmap) => self.cogmap_refusal_for_reader(cogmap.uuid()).await,
                 HomeAnchor::Context(_) => TemperError::Forbidden,
             });
         }
