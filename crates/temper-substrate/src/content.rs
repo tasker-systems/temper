@@ -844,15 +844,13 @@ mod tests {
     // that must change, together with that doc and every client twin of the merkle.
     #[test]
     fn body_hash_ignores_heading_text_and_tracks_prose() {
-        let before = "## Ruling (2026-10-31, Cole): keep the behaviour, correct the wording\n\n\
+        let before = "## Ruling (Ada): keep it\n\n\
                       The prose under the ruling.\n";
-        let renamed = "## Ruling (2026-10-31, Pete): keep the behaviour, correct the wording\n\n\
+        let renamed = "## Ruling (Bea): keep it\n\n\
                        The prose under the ruling.\n";
-        let relevelled =
-            "### Ruling (2026-10-31, Cole): keep the behaviour, correct the wording\n\n\
+        let relevelled = "### Ruling (Ada): keep it\n\n\
                           The prose under the ruling.\n";
-        let prose_edit =
-            "## Ruling (2026-10-31, Cole): keep the behaviour, correct the wording\n\n\
+        let prose_edit = "## Ruling (Ada): keep it\n\n\
                           The prose under the ruling, revised.\n";
 
         assert_eq!(body_hash_for_body(renamed), body_hash_for_body(before));

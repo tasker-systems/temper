@@ -158,15 +158,15 @@ async fn a_first_line_heading_edit_writes_but_keeps_body_hash(pool: PgPool) {
     let id = created["id"].as_str().expect("id missing").to_string();
 
     let tail = "\n\nThe prose under the ruling stays exactly the same.\n";
-    let cole = format!("## Ruling (2026-10-31, Cole): keep the behaviour{tail}");
-    let pete = format!("## Ruling (2026-10-31, Pete): keep the behaviour{tail}");
+    let ada = format!("## Ruling (Ada): keep it{tail}");
+    let bea = format!("## Ruling (Bea): keep it{tail}");
 
-    let first = patch_content(&app, &token, &id, &cole).await;
+    let first = patch_content(&app, &token, &id, &ada).await;
     let hash = first["body_hash"].as_str().expect("body_hash").to_string();
 
-    let renamed = patch_content(&app, &token, &id, &pete).await;
+    let renamed = patch_content(&app, &token, &id, &bea).await;
     assert!(
-        read_markdown(&app, &token, &id).await.contains("Pete"),
+        read_markdown(&app, &token, &id).await.contains("Bea"),
         "the heading-only edit must write the new content"
     );
     assert_ne!(
@@ -179,7 +179,7 @@ async fn a_first_line_heading_edit_writes_but_keeps_body_hash(pool: PgPool) {
         "a heading-only edit leaves the chunk-content merkle unchanged"
     );
 
-    let prose = "## Ruling (2026-10-31, Pete): keep the behaviour\n\nThe prose, revised.\n";
+    let prose = "## Ruling (Bea): keep it\n\nThe prose, revised.\n";
     let revised = patch_content(&app, &token, &id, prose).await;
     assert_ne!(
         revised["body_hash"].as_str(),
