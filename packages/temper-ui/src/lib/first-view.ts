@@ -246,3 +246,50 @@ export function placesInUse(
 		.sort((a, b) => Date.parse(b.lastChangedAt) - Date.parse(a.lastChangedAt));
 	return { rows: all.slice(0, bound), total: all.length };
 }
+
+/**
+ * Where a reader with nothing yet is sent to learn how work arrives. The web cannot create a goal,
+ * task or session; an agent working with temper does. So the first view's only next action for a
+ * new reader is outside it, and this is where that action is explained.
+ *
+ * Absolute, and on the canonical site, deliberately: an organisational install usually runs with
+ * the storefront off (`STOREFRONT_ENABLED=false`), and there the install's own `/using-temper`
+ * redirects to sign-in. An operator-configured target would be better still; until one exists, this
+ * is the one place to change.
+ */
+export const FIRST_RUN_HELP_URL = 'https://temperkb.io/using-temper';
+
+/**
+ * What each way in is and how it fills, said under its empty state. Keyed by the shared way's `id`
+ * (`@tasker-systems/temper-design/ways-in`), and held here rather than in that contract because
+ * only the web says it yet. A way in without an entry still draws its empty state, unexplained.
+ */
+export const WAY_IN_EMPTY_DETAIL: Readonly<Record<string, string>> = {
+	goals:
+		'A goal is an outcome you are working toward. An agent working with temper records one when you set out on a piece of work.',
+	tasks: 'Tasks an agent has started for you appear here while they are in progress.',
+	sessions: 'A session is one sitting of work with an agent, written up as it ends.',
+};
+
+/** What recently updated adds under its empty state: how a reader comes to be able to read anything. */
+export const RECENT_EMPTY_DETAIL =
+	'Once you save something, or are added to a team, what changes there appears here.';
+
+/**
+ * Whether the reader has nothing at all yet: no return, no place changed in, every way in empty and
+ * nothing readable. Only then does the first view lead with how work arrives.
+ *
+ * Settled reads only. A failed or given-up read is not evidence of absence, so it answers `false`:
+ * the regions say what failed, and a "nothing here yet" above them would contradict them. So the
+ * returned promise never rejects.
+ */
+export function isFirstRun(
+	resume: Promise<Resume | null>,
+	places: Promise<{ total: number }>,
+	lists: Promise<{ total: number }>[],
+): Promise<boolean> {
+	return Promise.all([resume, places, ...lists]).then(
+		([r, p, ...ls]) => r === null && p.total === 0 && ls.every((l) => l.total === 0),
+		() => false,
+	);
+}

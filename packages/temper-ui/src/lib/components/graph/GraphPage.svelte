@@ -21,7 +21,13 @@
 	import GraphCanvas from './GraphCanvas.svelte';
 	import NodeRail from './NodeRail.svelte';
 	import WhyThese from './WhyThese.svelte';
-	import { withGraphQuestion, withGraphSelection, withoutGraphWalk } from '$lib/vault-url';
+	import {
+		graphListHref,
+		parseGraphAddress,
+		withGraphQuestion,
+		withGraphSelection,
+		withoutGraphWalk,
+	} from '$lib/vault-url';
 
 	let { data }: { data: GraphViewData } = $props();
 
@@ -267,15 +273,22 @@
 
 				     It renders HERE, inside the read, because it is a verdict about the answer that
 				     came back rather than about the address the reader arrived on. -->
-				<div class="refusal" role="status">
-					<h2>A graph is not the right view for this yet</h2>
-					<p>
-						You can read {tooLittle.inScope}
-						{tooLittle.inScope === 1 ? 'resource' : 'resources'} here, but nothing is linked to
-						anything else — so there is no shape to draw. The list view is the better instrument
-						until things start connecting.
-					</p>
-					<p><a href={`/vault/${data.owner}`}>Browse them as a list →</a></p>
+				<div class="refusal" role="status" data-testid="too-little-structure">
+					{#if tooLittle.inScope === 0}
+						<!-- Nothing readable here at all: "nothing is linked" would describe material the
+						     reader does not have, and a list of nothing is no better instrument. -->
+						<h2>There is nothing here yet</h2>
+						<p>Nothing has been saved here yet. Once it holds work, this is where its shape appears.</p>
+					{:else}
+						<h2>A graph is not the right view for this yet</h2>
+						<p>
+							You can read {tooLittle.inScope}
+							{tooLittle.inScope === 1 ? 'resource' : 'resources'} here, but nothing is linked to
+							anything else — so there is no shape to draw. The list view is the better instrument
+							until things start connecting.
+						</p>
+						<p><a href={graphListHref(parseGraphAddress($page.url))}>Browse them as a list →</a></p>
+					{/if}
 				</div>
 			{:else}
 				<!-- Resolved against what was DRAWN, on the client as on the server: a `sel` this

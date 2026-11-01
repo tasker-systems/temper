@@ -4,12 +4,15 @@ import { render, waitFor } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+	FIRST_RUN_HELP_URL,
 	type FirstViewList,
 	PLACES_ORDER,
 	PLACES_SCOPE,
+	RECENT_EMPTY_DETAIL,
 	RECENT_SCOPE,
 	RESUME_LABEL,
 	type Resume,
+	WAY_IN_EMPTY_DETAIL,
 } from '$lib/first-view';
 import { describeFailure, GaveUp, GIVE_UP_AFTER_MS } from '$lib/server/bounded';
 import type { ContextActivity, ContextRowWithCounts } from '$lib/types';
@@ -322,5 +325,68 @@ describe('work resumes where it was left', () => {
 		const { getByTestId } = await mount(dataWith({ resume: broken() }));
 		expect(getByTestId('resume').querySelector('[data-region="failed"]')).not.toBeNull();
 		expect(getByTestId('places').querySelectorAll('li')).toHaveLength(2);
+	});
+});
+
+/**
+ * A reader with nothing yet. The web cannot make a goal, task or session, so a page of settled
+ * empties with no way forward is a dead end; the first-run panel names the way in. It speaks only
+ * when every read has settled empty, so it never contradicts a region that is arriving or failed.
+ */
+describe('a reader with nothing yet is told how work arrives', () => {
+	const nothing = () =>
+		dataWith({
+			resume: Promise.resolve(null),
+			places: Promise.resolve([]),
+			contexts: [],
+			recent: Promise.resolve(list(0)),
+			ways: WAYS_IN.map(() => Promise.resolve(list(0))),
+		});
+
+	it('leads with how work arrives, and where to learn to connect an agent', async () => {
+		const { getByTestId, container } = await mount(nothing());
+		const panel = getByTestId('first-run');
+		expect(panel.textContent).toMatch(/Nothing here yet/);
+		expect(panel.textContent).toMatch(/agent/);
+		expect(panel.querySelector(`a[href="${FIRST_RUN_HELP_URL}"]`)).not.toBeNull();
+		expect(container.querySelector('header')?.nextElementSibling).toBe(panel);
+	});
+
+	it('says under each empty way in what it is and how it fills', async () => {
+		const { getByTestId } = await mount(nothing());
+		for (const way of WAYS_IN) {
+			const empty = getByTestId(`way-${way.id}`).querySelector('[data-region="empty"]');
+			expect(empty?.textContent).toContain(way.scope);
+			expect(empty?.textContent).toContain(WAY_IN_EMPTY_DETAIL[way.id]);
+		}
+	});
+
+	it('says how recently updated comes to hold anything', async () => {
+		const { getByTestId } = await mount(nothing());
+		const empty = getByTestId('recent').querySelector('[data-region="empty"]');
+		expect(empty?.textContent).toContain(RECENT_SCOPE);
+		expect(empty?.textContent).toContain(RECENT_EMPTY_DETAIL);
+	});
+
+	it('is not drawn once any way in holds something', async () => {
+		const data = nothing();
+		data.ways[1].list = Promise.resolve(list(1));
+		const { queryByTestId } = await mount(data);
+		expect(queryByTestId('first-run')).toBeNull();
+	});
+
+	it('is not drawn over a failed read, which proves no absence', async () => {
+		const data = nothing();
+		data.ways[0].list = broken();
+		const { queryByTestId, getByTestId } = await mount(data);
+		expect(queryByTestId('first-run')).toBeNull();
+		expect(getByTestId('way-goals').querySelector('[data-region="failed"]')).not.toBeNull();
+	});
+
+	it('is not drawn while a read is still arriving', async () => {
+		const data = nothing();
+		data.recent = new Promise(() => {}) as PageData['recent'];
+		const { queryByTestId } = await mount(data);
+		expect(queryByTestId('first-run')).toBeNull();
 	});
 });

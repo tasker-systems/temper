@@ -4,6 +4,7 @@ import {
 	contextGraphHref,
 	contextHref,
 	graphHref,
+	graphListHref,
 	isCogmapHomed,
 	isContextGraphLocation,
 	isContextLocation,
@@ -479,5 +480,31 @@ describe('asking a question ends the walk — grounding and navigation are diffe
 		expect(withGraphQuestion(at('?in=ctx%3A%40me%2Ftemper&from=r1'), 'next')).toBe(
 			'/graph/@me?in=ctx%3A%40me%2Ftemper&q=next',
 		);
+	});
+});
+
+describe('graphListHref', () => {
+	it('is the context list for exactly one context anchor', () => {
+		expect(graphListHref({ anchors: [{ kind: 'context', ref: '@me/notes' }] })).toBe(
+			'/vault/@me/notes',
+		);
+		expect(graphListHref({ anchors: [{ kind: 'context', ref: '+ops/run book' }] })).toBe(
+			'/vault/+ops/run%20book',
+		);
+	});
+
+	it('is the whole grid for no anchor, several, or a cogmap — never the bare owner', () => {
+		expect(graphListHref({ anchors: [] })).toBe('/vault/all');
+		expect(
+			graphListHref({
+				anchors: [
+					{ kind: 'context', ref: '@me/a' },
+					{ kind: 'context', ref: '@me/b' },
+				],
+			}),
+		).toBe('/vault/all');
+		expect(
+			graphListHref({ anchors: [{ kind: 'cogmap', ref: '019f0000-0000-7000-8000-000000000001' }] }),
+		).toBe('/vault/all');
 	});
 });
