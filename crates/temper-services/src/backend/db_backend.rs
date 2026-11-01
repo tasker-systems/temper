@@ -133,7 +133,14 @@ fn write_err(e: anyhow::Error) -> TemperError {
 /// The sentence names the capability and the subject, and stops there. It does **not** name the
 /// mechanism by which the caller holds read (team reach vs. an explicit read grant): no site has
 /// asked, and a refusal stating an unmeasured mechanism is worse than one stating none.
-fn cogmap_authorship_refusal(cogmap_id: uuid::Uuid) -> TemperError {
+fn cogmap_authorship_refusal(cogmap_id: uuid::Uuid, admin_only: bool) -> TemperError {
+    if admin_only {
+        return TemperError::ForbiddenDetail(format!(
+            "cannot author cognitive map {cogmap_id}: it is bound to an instance team (or is the \
+             reserved kernel), so only a system admin authors it, and a write grant on it confers \
+             nothing. You can read this map; reading confers no authorship."
+        ));
+    }
     TemperError::ForbiddenDetail(format!(
         "cannot author cognitive map {cogmap_id}: authorship requires an explicit write grant on \
          the map, which you do not hold. You can read this map; reading confers no authorship."
@@ -793,8 +800,8 @@ struct ReconcileCtx {
 
 impl DbBackend {
     /// Reconcile's authority, decided once: a map in the admin-only regime (the reserved L0 kernel,
-    /// or a map joined to the gating team — `cogmap_write_requires_admin`, which nobody authors by
-    /// design) requires a system admin (the bare-id spelling of `require_system_admin`, as the
+    /// or a map bound to temper-system or the gating team — `cogmap_write_requires_admin`, which
+    /// only a system admin authors, by design) requires a system admin (the bare-id spelling of `require_system_admin`, as the
     /// reblock seam's deployment-wide arm asks it — no middleware sits above this seam); every
     /// other map requires authorship (`check_cogmap_authorable`), a system admin included (ruled
     /// 2026-10-01). Fail-CLOSED on L0: with gating unconfigured `is_system_admin` is false for
@@ -915,6 +922,41 @@ impl DbBackend {
             Ok(()) => Ok(tx),
             Err(refusal) => Err(write_floor::rollback_with(tx, refusal).await),
         }
+    }
+
+    /// A refused commit's error, on the commit's own transaction, which it then rolls back.
+    ///
+    /// A commit refused because the enforcing shape in force cannot be compiled names what the
+    /// compile refused first **only to a committer who can already read that shape**, and gives
+    /// anyone else the fixed sentence (shape ruling R4;
+    /// [`writes::DataArtifactRefusal::message_for_reader`]), so the refusal is never a window onto
+    /// a shape its reader could not open. The question is asked on the transaction, never
+    /// `self.pool`, which the open transaction would wait against. Every other error maps as
+    /// [`write_err`] does.
+    async fn commit_refusal(
+        &self,
+        mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
+        e: anyhow::Error,
+    ) -> TemperError {
+        let Some(refusal) = e
+            .downcast_ref::<writes::DataArtifactRefusal>()
+            .filter(|refusal| refusal.uncompilable_shape.is_some())
+        else {
+            return write_err(e);
+        };
+        // A fault on the question leaves the refusal standing with the fixed sentence: it is never
+        // turned into a server error, and it names nothing it has not established it may.
+        let message = match refusal.message_for_reader(&mut tx, self.profile_id).await {
+            Ok(message) => message,
+            Err(fault) => {
+                tracing::warn!(error = %fault, "could not ask whether the committer reads the shape");
+                refusal.message_for(false)
+            }
+        };
+        // Dropping the transaction rolls it back as well; an explicit rollback that faults
+        // changes nothing the caller is owed.
+        tx.rollback().await.ok();
+        TemperError::DataArtifactRefusal(message)
     }
 
     /// Open an edge-mutation transaction gated at its head: [`Self::check_edge_mutable`] (the
@@ -1122,10 +1164,32 @@ impl DbBackend {
         .fetch_one(&mut *conn)
         .await
         .map_err(api_err)?;
-        if readable.unwrap_or(false) {
-            Err(cogmap_authorship_refusal(cogmap_id))
-        } else {
-            Err(TemperError::Forbidden)
+        if !readable.unwrap_or(false) {
+            return Err(TemperError::Forbidden);
+        }
+        // A reader is told which capability they lack, and on a map in the admin-only regime that
+        // is not a grant: grants there are inert (`cogmap_authorable_by_profile`, 20261113000010).
+        let admin_only = crate::services::access_service::cogmap_write_requires_admin_on(
+            &mut *conn,
+            CogmapId::from(cogmap_id),
+        )
+        .await
+        .map_err(TemperError::from)?;
+        Err(cogmap_authorship_refusal(cogmap_id, admin_only))
+    }
+
+    /// The refusal for a caller already proven to READ `cogmap_id` and refused authorship of it,
+    /// worded for the map's regime. A fault reading the regime surfaces as that fault rather than
+    /// as a refusal with the wrong reason.
+    async fn cogmap_refusal_for_reader(&self, cogmap_id: uuid::Uuid) -> TemperError {
+        match crate::services::access_service::cogmap_write_requires_admin(
+            &self.pool,
+            CogmapId::from(cogmap_id),
+        )
+        .await
+        {
+            Ok(admin_only) => cogmap_authorship_refusal(cogmap_id, admin_only),
+            Err(e) => TemperError::from(e),
         }
     }
 
@@ -3281,7 +3345,7 @@ impl Backend for DbBackend {
         let mut tx = self.begin_floored(cmd.resource).await?;
         // Resolved only after the floor admits, on the commit's own transaction.
         let emitter = self.resolve_actor_in_tx(&mut tx, cmd.origin).await?;
-        let artifact_id = writes::commit_data_artifact_in_tx(
+        let committed = writes::commit_data_artifact_in_tx(
             &mut tx,
             writes::CommitDataArtifactParams {
                 resource: cmd.resource,
@@ -3295,8 +3359,11 @@ impl Backend for DbBackend {
             },
             act_ctx,
         )
-        .await
-        .map_err(write_err)?;
+        .await;
+        let artifact_id = match committed {
+            Ok(id) => id,
+            Err(e) => return Err(self.commit_refusal(tx, e).await),
+        };
         tx.commit().await.map_err(tx_err)?;
         // Read back the committed artifact as an ArtifactView for the response.
         let view =
@@ -3758,7 +3825,7 @@ impl Backend for DbBackend {
     ///
     /// **Reconcile requires authorship of the map, by regime** (ruled 2026-10-01), decided once,
     /// HERE, on the shared write path. A map in the admin-only regime (the L0 kernel, or a map
-    /// joined to the gating team — nobody authors those by design;
+    /// bound to temper-system or the gating team — only a system admin authors those, by design;
     /// `access_service::cogmap_write_requires_admin`) requires a system admin. Every other map is
     /// gated by `check_cogmap_authorable` — for a system admin too: reach on an ordinary map comes
     /// from a grant, as everywhere else in the map model. The gate runs first, ahead of the
@@ -3908,6 +3975,39 @@ impl Backend for DbBackend {
         .await
         .map_err(api_err)?
         {
+            // The no-op answers only a caller who reads the map (task `01a1933d`; ported from
+            // temper#1283): it hands back the charter id. A system admin who named someone else's
+            // private map is told what they hit, as every door tells them; anyone else is told the
+            // id is taken and nothing more.
+            let readable = sqlx::query_scalar!(
+                r#"SELECT cogmap_readable_by_profile($1, $2) AS "r!: bool""#,
+                uuid::Uuid::from(self.profile_id),
+                cogmap_uuid,
+            )
+            .fetch_one(&self.pool)
+            .await
+            .map_err(api_err)?;
+            if !readable {
+                if caller_is_admin {
+                    if let Some(stop) = crate::authz::personal_space::others_personal_space(
+                        &self.pool,
+                        temper_substrate::payloads::RefTarget {
+                            kind: temper_substrate::payloads::AnchorTable::Cogmaps,
+                            id: cogmap_uuid,
+                        },
+                        self.profile_id,
+                    )
+                    .await?
+                    {
+                        return Err(crate::authz::personal_space::refusal(&self.pool, stop)
+                            .await?
+                            .into());
+                    }
+                }
+                return Err(TemperError::Conflict(
+                    "a cognitive map already exists at this id".to_string(),
+                ));
+            }
             return Ok(CommandOutput::new(CreateCogmapOutcome {
                 cogmap_id: cogmap_uuid,
                 telos_resource_id: existing_telos,
@@ -4043,6 +4143,10 @@ impl Backend for DbBackend {
         )
         .await
         .map_err(|e| TemperError::Api(e.to_string()))?;
+
+        // The map's creator (task `01a1933d`) is recorded from this self-grant by the
+        // `kb_access_grants_records_cogmap_creator` trigger (migration `20261115000000`), in this
+        // transaction: genesis fires as the system actor, so the projection cannot know it.
 
         // COMMIT — serialization failure (40001) → `Conflict` (a genesis race), any other DB error → 500.
         match tx.commit().await {
@@ -4204,7 +4308,7 @@ impl Backend for DbBackend {
             // No read probe here, and none is owed: `anchor_readable_by_profile` is in the WHERE
             // above, so a row reaching this line proves the caller reads the map. This is the
             // refusal the production steward met once per run on L0 and could not act on.
-            return Err(cogmap_authorship_refusal(cmd.cogmap.uuid()));
+            return Err(self.cogmap_refusal_for_reader(cmd.cogmap.uuid()).await);
         }
 
         // Watermark hygiene (issue #459): the advance target must be a real kb_events row within this
@@ -4559,7 +4663,7 @@ impl Backend for DbBackend {
             // The context arm keeps the argument-free refusal: extending the disclosure to
             // `context_authorable_by_profile` is a separate decision, deliberately not taken here.
             return Err(match cmd.anchor {
-                HomeAnchor::Cogmap(cogmap) => cogmap_authorship_refusal(cogmap.uuid()),
+                HomeAnchor::Cogmap(cogmap) => self.cogmap_refusal_for_reader(cogmap.uuid()).await,
                 HomeAnchor::Context(_) => TemperError::Forbidden,
             });
         }

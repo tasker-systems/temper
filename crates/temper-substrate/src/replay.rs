@@ -1172,7 +1172,27 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
         }
         tx.commit().await?;
     }
-    restore_table(pool, "kb_team_cogmaps", &snap.team_cogmaps).await?;
+    // A map's creator (20261115000000) is recorded from its genesis self-grant by a trigger on
+    // kb_access_grants, outside the projection, because genesis fires as the system actor; grants
+    // restored above came back before any map existed, so that trigger did nothing here. The
+    // self-grant's event is restored with kb_events, so the creator is re-derived from it, after
+    // every map is projected and
+    // before the bindings come back, so the projection matches the live row.
+    sqlx::query!("UPDATE kb_cogmaps SET created_by_profile_id = cogmap_genesis_creator(id)")
+        .execute(pool)
+        .await?;
+    // The bindings are input the live database already admitted, not new writes, so the one-person
+    // trigger stands aside while they come back: it would judge them against a namespace that does
+    // not restore every table `profile_is_person` reads (kb_connections), and could refuse a binding
+    // the live trigger let through. It is back on before this returns, restore failed or not.
+    sqlx::query!("ALTER TABLE kb_team_cogmaps DISABLE TRIGGER kb_team_cogmaps_one_person")
+        .execute(pool)
+        .await?;
+    let restored = restore_table(pool, "kb_team_cogmaps", &snap.team_cogmaps).await;
+    sqlx::query!("ALTER TABLE kb_team_cogmaps ENABLE TRIGGER kb_team_cogmaps_one_person")
+        .execute(pool)
+        .await?;
+    restored?;
     Ok(())
 }
 

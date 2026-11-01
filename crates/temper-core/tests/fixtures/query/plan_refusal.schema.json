@@ -99,7 +99,7 @@
           "uniqueItems": true
         },
         "values": {
-          "description": "The values the path may hold: its own `enum` / `const`, narrowed by each ancestor's — an\nancestor's member leaves a value here only if it holds one at this path. With no `enum` /\n`const` of its own, a path lists what its ancestors leave it only when every value is a\nscalar. `None`: no value set is listed — none constrains the path, or an ancestor leaves it\nan object or an array. An empty list: no value is admissible. An element's values\n([`PathFacts::items`]) are its own `items` schema's, not narrowed.",
+          "description": "The values the path may hold: its own `enum` / `const`, each a scalar. Below a node that\ndeclares values the list is empty, whatever the path declares of itself: a scalar holds\nnothing at any key, so no value is admissible there. `None`: no `enum` / `const` constrains\nthe path or any node above it. An empty list: no value is admissible — a `contains` ask here\nis refused `value_outside_shape`, while `compare` (as the declared types allow) and\n`has_key` are admitted. An element's values ([`PathFacts::items`]) are its own `items`\nschema's, not narrowed.",
           "items": true,
           "type": [
             "array",
@@ -308,7 +308,7 @@
         },
         {
           "const": "shape_schema_uncompilable",
-          "description": "The shape's schema does not compile under the no-fetch compiler, or is larger than the\nwalk reads and so is never compiled (then `teaches.beyond_bound` is `schema_bytes`). The\ndetail is a fixed sentence; the compiler's text is never echoed.",
+          "description": "The shape's schema does not compile under the no-fetch compiler, or is larger than the\nwalk reads and so is never compiled (then `teaches.beyond_bound` is `schema_bytes`). The\ndetail is a fixed sentence, naming for an uncompilable schema the first keyword or cap the\ncompile refused and its schema path — schema text the asker can already read; the\ncompiler's text is never echoed.",
           "type": "string"
         },
         {

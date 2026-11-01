@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "ALTER TABLE kb_team_cogmaps ENABLE TRIGGER kb_team_cogmaps_one_person",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "716c62b0a53efb37d3a0317a8053591acbb6c4e852f94d216107c23c3e99fea6"
+}

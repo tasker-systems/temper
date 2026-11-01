@@ -2371,7 +2371,7 @@ export interface paths {
         put?: never;
         /**
          * Register a machine client
-         * @description Registers an externally issued IdP `client_id` as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin, and a listed personal team must be the caller's own. An instance that runs temper's own authorization server refuses it, because an externally issued client id could never authenticate there; issue a credential instead. No caller can give a machine a team role above `member`.
+         * @description Registers an externally issued IdP `client_id` as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin, and a listed personal team must be the caller's own, as must a listed cogmap that is personal space (an admin is told when it is someone else's: `FORBIDDEN_DETAIL`). An instance that runs temper's own authorization server refuses it, because an externally issued client id could never authenticate there; issue a credential instead. No caller can give a machine a team role above `member`.
          */
         post: operations["provision_machine_client"];
         delete?: never;
@@ -8266,12 +8266,13 @@ export interface components {
              */
             types?: components["schemas"]["JsonType"][] | null;
             /**
-             * @description The values the path may hold: its own `enum` / `const`, narrowed by each ancestor's — an
-             *     ancestor's member leaves a value here only if it holds one at this path. With no `enum` /
-             *     `const` of its own, a path lists what its ancestors leave it only when every value is a
-             *     scalar. `None`: no value set is listed — none constrains the path, or an ancestor leaves it
-             *     an object or an array. An empty list: no value is admissible. An element's values
-             *     ([`PathFacts::items`]) are its own `items` schema's, not narrowed.
+             * @description The values the path may hold: its own `enum` / `const`, each a scalar. Below a node that
+             *     declares values the list is empty, whatever the path declares of itself: a scalar holds
+             *     nothing at any key, so no value is admissible there. `None`: no `enum` / `const` constrains
+             *     the path or any node above it. An empty list: no value is admissible — a `contains` ask here
+             *     is refused `value_outside_shape`, while `compare` (as the declared types allow) and
+             *     `has_key` are admitted. An element's values ([`PathFacts::items`]) are its own `items`
+             *     schema's, not narrowed.
              */
             values?: unknown[] | null;
         };
@@ -10076,8 +10077,35 @@ export interface components {
          */
         ResourceView: {
             /**
-             * @description SHA-256 hash of the resource body, from `kb_resource_manifests`. `None` when no
-             *     manifest row exists.
+             * @description Content identity of the body's **prose chunks**, as grouped into blocks. It is not a
+             *     hash of the body's bytes. `kb_resources.body_hash`, bare lowercase hex.
+             *
+             *     It is a two-level merkle over the chunker's output. Each chunk's `content_hash` is the
+             *     sha256 of that chunk's text, **trimmed and without its heading line**. A block's hash is
+             *     the sha256 of its live chunks' hashes concatenated in `chunk_index` order, and this is
+             *     the sha256 of the live (unfolded) blocks' hashes concatenated in `seq` order.
+             *
+             *     A "heading" here is what the chunker splits on: a line matching `^#{1,6}\s+.+$`. That is
+             *     an ATX heading starting at column 0, with no Setext headings, no indented headings, and no
+             *     awareness of code fences (a `# comment` line inside a fenced block counts as a heading).
+             *
+             *     On a resource whose blocks already follow its heading sections (every resource created or
+             *     updated under the blocking policy), the hash does **not** move when an edit only:
+             *     - changes such a heading's text or level (1 to 6), even on the first line, because the
+             *       heading lives in the chunk's `header_path`/`heading_depth`, not in its content;
+             *     - adds or removes such a heading with no prose under it;
+             *     - changes whitespace at a chunk's edges, or blank lines between sections.
+             *
+             *     Such an edit still writes: the stored bytes, the read-back body, and `updated` all
+             *     change. The hash **does** move when the chunk sequence changes, and also when the same
+             *     chunks are regrouped into different blocks. That happens on a re-block, or on the first
+             *     whole-body write to a resource whose blocks predate the blocking policy. So read
+             *     `updated` (or compare the content) to detect an edit, never `body_hash`.
+             *
+             *     This is the identity segmented ingest echoes at finalize (`expected_body_hash`) and the
+             *     one the re-block keeps blocks by. The byte-level check of an upload is finalize's
+             *     `expected_content_hash`. A resource with no prose carries the sha256 of the empty string
+             *     (`e3b0c442…`), not an absent value. The field is optional only for version skew.
              */
             body_hash?: string | null;
             body_storage?: components["schemas"]["BodyStorage"] | null;
@@ -14940,7 +14968,7 @@ export interface operations {
                     "application/json": components["schemas"]["GrantOutcome"];
                 };
             };
-            /** @description Caller may not administer grants on this map; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller may not administer grants on this map (a system admin on a map that is someone else's personal space is told so: `FORBIDDEN_DETAIL`, this cognitive map is @handle's personal space; the admin arm does not reach it); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -14979,7 +15007,7 @@ export interface operations {
                     "application/json": components["schemas"]["RevokeOutcome"];
                 };
             };
-            /** @description Caller may not administer grants on this map; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller may not administer grants on this map (a system admin on a map that is someone else's personal space is told so: `FORBIDDEN_DETAIL`, this cognitive map is @handle's personal space; the admin arm does not reach it); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -15266,7 +15294,7 @@ export interface operations {
                     "application/json": components["schemas"]["BindTeamOutcome"];
                 };
             };
-            /** @description Caller is not a system admin and does not both administer the map and manage the team (on a personal team, a system admin too must be its owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller is not a system admin and does not both administer the map and manage the team (on a personal team, or a map that is someone else's personal space, a system admin too must be its person, and is told so: `FORBIDDEN_DETAIL`, this cognitive map is @handle's personal space; the admin arm does not reach it); or the bind breaks the one-person rule, for any caller (`FORBIDDEN_DETAIL`: a map is bound to a personal team only when that team's person created it, and a map with no person as creator to one person's at most); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -15303,7 +15331,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnbindTeamOutcome"];
                 };
             };
-            /** @description Caller is not a system admin and does not both administer the map and manage the team (on a personal team, a system admin too must be its owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller is not a system admin and does not both administer the map and manage the team (on a personal team, or a map that is someone else's personal space, a system admin too must be its person, and is told so: `FORBIDDEN_DETAIL`, naming the personal space and its person's handle); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -16049,12 +16077,14 @@ export interface operations {
                     "application/json": components["schemas"]["RetireContextOutcome"];
                 };
             };
-            /** @description Caller may read but not administer this context */
+            /** @description Caller may read but not administer this context; or a system admin on someone else's personal context (`FORBIDDEN_DETAIL`: this context is @handle's personal space; the admin arm does not reach it) */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
             /** @description Context not found (uniform — no existence oracle) */
             404: {
@@ -16215,7 +16245,7 @@ export interface operations {
                     "application/json": components["schemas"]["ReassignContextOutcome"];
                 };
             };
-            /** @description Caller may not transfer this context to this team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller may not transfer this context to this team (a system admin refused because the context or the team is someone else's personal space is told so: `FORBIDDEN_DETAIL`, naming it and its person's handle); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -16313,12 +16343,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Caller may read but not administer this context */
+            /** @description Caller may read but not administer this context; or a system admin on someone else's personal context (`FORBIDDEN_DETAIL`: this context is @handle's personal space; the admin arm does not reach it) */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
             /** @description Context not found (uniform — no existence oracle for a caller who cannot see it) */
             404: {
@@ -16360,12 +16392,14 @@ export interface operations {
                     "application/json": components["schemas"]["RestoreContextOutcome"];
                 };
             };
-            /** @description Caller may read but not administer this context */
+            /** @description Caller may read but not administer this context; or a system admin on someone else's personal context (`FORBIDDEN_DETAIL`: this context is @handle's personal space; the admin arm does not reach it) */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
             /** @description Context not found, or not retired (uniform — no existence oracle) */
             404: {
@@ -16548,7 +16582,7 @@ export interface operations {
                     "application/json": components["schemas"]["ShareContextOutcome"];
                 };
             };
-            /** @description Caller may not share this context into this team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller may not share this context into this team (a system admin refused because the context or the team is someone else's personal space is told so: `FORBIDDEN_DETAIL`, naming it and its person's handle); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -16585,7 +16619,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnshareContextOutcome"];
                 };
             };
-            /** @description Caller may not unshare this context from this team; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller may not unshare this context from this team (a system admin refused because the context or the team is someone else's personal space is told so: `FORBIDDEN_DETAIL`, naming it and its person's handle); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -16746,7 +16780,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin, the scope is a personal context or a resource homed in one (`FORBIDDEN_DETAIL`), or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller is not a system admin, the scope is someone else's personal context or a resource homed in one (`FORBIDDEN_DETAIL`: this context is, or this resource is homed in, @handle's personal space; the admin arm does not reach it), or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -17776,7 +17810,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin (`FORBIDDEN_DETAIL`), a team role above `member` was requested (refused for every caller), or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller is not a system admin (`FORBIDDEN_DETAIL`), a team role above `member` was requested (refused for every caller), a grant on someone else's personal cognitive map was requested (`FORBIDDEN_DETAIL`, naming it), or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -17839,7 +17873,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, a system admin requested a grant on someone else's personal cognitive map (`FORBIDDEN_DETAIL`: this cognitive map is @handle's personal space; the admin arm does not reach it), or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -20170,7 +20204,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller may not administer grants on this resource; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller may not administer grants on this resource (a system admin on a resource homed in someone else's personal space is told so: `FORBIDDEN_DETAIL`, this resource is homed in @handle's personal space; the admin arm does not reach it); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -20227,7 +20261,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller may not administer grants on this resource; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Caller may not administer grants on this resource (a system admin on a resource homed in someone else's personal space is told so: `FORBIDDEN_DETAIL`, this resource is homed in @handle's personal space; the admin arm does not reach it); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;

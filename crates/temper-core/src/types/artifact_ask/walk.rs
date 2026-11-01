@@ -12,13 +12,15 @@
 //! the declared hole of spec §11, refused as `path_outside_shape` rather than guessed at.
 //!
 //! **Anything else is refused, never read as unconstrained.** Any other keyword, a `$schema` other
-//! than the 2020-12 spelling, a value that is not a schema where a schema sits, or an `enum` or
-//! `type` in a form the walk does not read fails [`reads_whole`], and the walk reads that schema as
-//! `false` — it declares nothing: every path is `NotDeclared` and the vocabulary is empty — and
-//! logs the mismatch. No shape that compiles reaches it while the compile and the walk agree on what
-//! a field tree holds — the keywords `temper-substrate`'s field-tree tests hold them to, and the
-//! forms of `enum` and `type` that the compile's meta-validation refuses besides. If the field tree
-//! is widened, the walk refuses the new construct until someone decides how it reads.
+//! than the 2020-12 spelling, a value that is not a schema where a schema sits, an `enum` or `type`
+//! in a form the walk does not read, or a `const` or `enum` member that is not a scalar
+//! ([`is_scalar`]) fails [`reads_whole`], and the walk reads that schema as `false` — it declares
+//! nothing: every path is `NotDeclared` and the vocabulary is empty — and logs the mismatch. No
+//! shape that compiles reaches it while the compile and the walk agree on what a field tree holds —
+//! the keywords `temper-substrate`'s field-tree tests hold them to, the forms of `enum` and `type`
+//! that the compile's meta-validation refuses besides, and the scalar values the compile admits. If
+//! the field tree is widened, the walk refuses the new construct until someone decides how it
+//! reads.
 //!
 //! The walk's list is its own, not the compile's. The two answer different questions — what a shape
 //! may say, and what the walk has decided how to read — and one shared list would widen the walk
@@ -32,30 +34,25 @@
 //! — the size declare holds a schema to. [`MAX_WALK_PATHS`] bounds the vocabulary a read returns
 //! and [`MAX_WALK_DEPTH`] how deep an ask and a vocabulary reach. Nothing recurses over the schema
 //! but an `items` chain, held to the depth bound. Narrowing by an ancestor's values (below) reads
-//! the values each node holds once — enumerating groups their parts by key for the node's children,
-//! and resolving one path reads the set at each node along it — and compares values only where a
-//! node declares its own. What it reads is part of a value the schema declares, and the nodes that
-//! read parts of one value at the same depth read disjoint parts, so narrowing reads no more than
-//! the depth bound times the schema.
+//! no value: each node passes its children only whether it, or a node above it, declares a value
+//! set.
 //!
 //! **An ancestor's values narrow the paths below it.** Content at a path must satisfy the `enum` /
-//! `const` of every node above it, so a path holds only what its ancestors' members hold at it: a
-//! member that is an object holding the key leaves its value there, and any other member leaves
-//! nothing. Each node passes the set it holds to its children, so no path reads further up than
-//! its parent. A path lists what it holds when it declares its own `enum` or `const`, or when
-//! everything it holds is a scalar; a path left an object or an array by an ancestor, and declaring
-//! nothing of its own, lists no value set, and still narrows the paths below it.
+//! `const` of every node above it, and every value declared in a schema the walk reads is a
+//! scalar, which holds nothing at any key. So below a node that declares values, every path holds the empty
+//! set — whether it declares its own `enum` or `const`, an untyped `{}` or `true` — and no value is
+//! admissible there. The empty set refuses a `contains` ask at such a path (`value_outside_shape`:
+//! no member holds the value). `compare` and `has_key` are admitted there: `compare` is decided by
+//! the declared types alone, and `has_key` reads no value set. Element facts (`items`) are not
+//! narrowed.
 //!
-//! **What a vocabulary holds.** A vocabulary copies each path's values onto the wire. A path's own
-//! `enum` and `const` are copied once, as its declaration holds them. Of the values an ancestor
-//! declares, only scalars are listed below it, and each scalar part of a declared value is held at
-//! one path, so it is copied at most once. No object or array an ancestor declares is copied again
-//! below it: copied at each path it reached, one value nested [`MAX_WALK_DEPTH`] deep would be
-//! held that many times over. So a vocabulary holds the values its schema declares, plus at most
-//! one copy of each scalar inside them. An ask, and a refusal's teaching until it sends a path,
-//! read the values where they sit and copy none.
+//! **What a vocabulary holds.** A vocabulary copies each path's values onto the wire: a path's own
+//! `enum` and `const`, once, as its declaration holds them. A path below a node that declares
+//! values lists the empty set and copies nothing. Each schema node is reached by one path, so a
+//! vocabulary holds no more values than its schema declares. An ask, and a refusal's teaching until
+//! it sends a path, read the values where they sit and copy none.
 
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -85,8 +82,9 @@ pub const MAX_WALK_DEPTH: usize = 16;
 ///
 /// The vocabulary is read whole by `schema show`, `GET /api/shapes/{id}` and
 /// `get_data_artifact_shape`, so this bounds a response body. It is far above a shape a person
-/// writes — a record with tens of fields — and below what a schema at [`MAX_SCHEMA_BYTES`] can
-/// declare: about twenty thousand empty fields fit in one.
+/// writes — a record with tens of fields — and below what a schema within the node budget can
+/// declare: a shape holds at most 12,288 JSON values, 3,072 of them objects, so about three
+/// thousand empty fields fit in one.
 ///
 /// It bounds how many paths, not how large each is. A path's text is at most [`MAX_WALK_DEPTH`]
 /// segments of at most `MAX_ARTIFACT_PATH_SEGMENT_BYTES` — a longer key is never advertised — so
@@ -186,6 +184,14 @@ impl JsonType {
     }
 }
 
+/// Whether a value is a scalar: `null`, a boolean, a number or a string. This is the one
+/// definition of the concept; the walk, the evaluator and the shape compile all call it.
+/// [`JsonType::of`] alone is not that test, because it also returns [`JsonType::Object`] and
+/// [`JsonType::Array`].
+pub fn is_scalar(value: &Value) -> bool {
+    !value.is_object() && !value.is_array()
+}
+
 /// What the schema declares at one path. Each field is `None` when the schema leaves it
 /// unconstrained, so an absent field never reads as "nothing is admitted".
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -198,12 +204,13 @@ pub struct PathFacts {
     /// admissible — a `type` naming no JSON type, or the element of an `items: false` array.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub types: Option<BTreeSet<JsonType>>,
-    /// The values the path may hold: its own `enum` / `const`, narrowed by each ancestor's — an
-    /// ancestor's member leaves a value here only if it holds one at this path. With no `enum` /
-    /// `const` of its own, a path lists what its ancestors leave it only when every value is a
-    /// scalar. `None`: no value set is listed — none constrains the path, or an ancestor leaves it
-    /// an object or an array. An empty list: no value is admissible. An element's values
-    /// ([`PathFacts::items`]) are its own `items` schema's, not narrowed.
+    /// The values the path may hold: its own `enum` / `const`, each a scalar. Below a node that
+    /// declares values the list is empty, whatever the path declares of itself: a scalar holds
+    /// nothing at any key, so no value is admissible there. `None`: no `enum` / `const` constrains
+    /// the path or any node above it. An empty list: no value is admissible — a `contains` ask here
+    /// is refused `value_outside_shape`, while `compare` (as the declared types allow) and
+    /// `has_key` are admitted. An element's values ([`PathFacts::items`]) are its own `items`
+    /// schema's, not narrowed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub values: Option<Vec<Value>>,
     /// What an element of an array at this path declares. `None`: elements are unconstrained.
@@ -375,8 +382,11 @@ const READ_SCHEMA_URIS: [&str; 2] = [
 /// `properties` value and an `items` schema — an object or a boolean, holding only keywords the
 /// walk reads or passes over, with `$schema` (the 2020-12 spelling, with or without a trailing `#`)
 /// and `$id` at the root alone. An `enum` must be an array, and a `type` a name or an array of
-/// names, since the walk would read any other form as declaring nothing. What
-/// `additionalProperties` holds is not walked, so it is not read here.
+/// names, since the walk would read any other form as declaring nothing. A `const` and every
+/// `enum` member must be a scalar ([`is_scalar`]), the only values the walk reads. What
+/// `additionalProperties` holds is not walked, so it is not read here. A string `format` and any
+/// key beginning `x-` are passed over, as the compile carries them: annotations that declare
+/// nothing of a path, and an `x-` value is never read.
 ///
 /// One pass from an explicit stack, each schema position pushed once, so it is linear in the
 /// schema and never recurses on the Rust stack.
@@ -401,15 +411,22 @@ pub fn reads_whole(schema: &Value) -> bool {
                 },
                 // What a path declares, in the forms the walk reads.
                 "type" if is_type_form(value) => {}
-                "enum" if value.is_array() => {}
-                "const"
+                "enum"
+                    if value
+                        .as_array()
+                        .is_some_and(|members| members.iter().all(is_scalar)) => {}
+                "const" if is_scalar(value) => {}
                 // Not walked: a path reachable only through it is not declared.
-                | "additionalProperties"
+                "additionalProperties"
                 // What content must satisfy, which changes nothing a path declares.
                 | "required" | "pattern" | "minLength" | "maxLength" | "minItems" | "maxItems"
                 | "minimum" | "maximum"
                 // Annotations.
                 | "title" | "description" | "$comment" | "default" | "examples" => {}
+                // An annotation the compile never asserts, so it declares nothing of a path.
+                "format" if value.is_string() => {}
+                // Carried and ignored, as the compile carries them: never read, whatever they hold.
+                extension if extension.starts_with("x-") => {}
                 "$schema"
                     if root
                         && value
@@ -491,10 +508,7 @@ impl<'s> Walk<'s> {
                 return Resolved::NotDeclared;
             };
             node = child;
-            held = narrowed(
-                held.map(|values| projected(&values, segment)),
-                own_values(node),
-            );
+            held = held_below(held.as_ref(), node);
         }
         match self.facts_of(node, held, 0) {
             Some(facts) => Resolved::Declared(facts),
@@ -563,16 +577,8 @@ impl<'s> Walk<'s> {
                 }
                 continue;
             }
-            let children = child_properties(node);
-            let below = held
-                .as_ref()
-                .filter(|_| !children.is_empty())
-                .map(|values| by_key(values));
-            for (key, child) in children {
-                let inherited = below
-                    .as_ref()
-                    .map(|by| Arc::new(by.get(key).cloned().unwrap_or_default()));
-                let held = narrowed(inherited, own_values(child));
+            for (key, child) in child_properties(node) {
+                let held = held_below(held.as_ref(), child);
                 let Some(facts) = self.facts_of(child, held.clone(), 0) else {
                     continue;
                 };
@@ -594,9 +600,8 @@ impl<'s> Walk<'s> {
     }
 
     /// What a subschema declares at a path's end, `arrays` arrays below it, given the values `held`
-    /// there — its own `enum` / `const` narrowed by its ancestors' ([`narrowed`]): `None` for
-    /// `false`; for `true`, nothing but what it [`lists`] of `held`; and for an object, its own
-    /// `type`, what it lists of `held`, and its element facts. Element facts stop at the depth
+    /// there ([`held_below`]): `None` for `false`; for `true`, nothing but `held`; and for an
+    /// object, its own `type`, `held`, and its element facts. Element facts stop at the depth
     /// bound, past which an element is unconstrained. An element inherits nothing: the array's own
     /// value set already holds what an element may be, read as `@>` reads it.
     fn facts_of(
@@ -611,7 +616,7 @@ impl<'s> Walk<'s> {
             // `true`. Nothing else sits in a schema position of a schema the walk reads whole.
             _ => {
                 return Some(Facts {
-                    values: lists(held, false),
+                    values: held,
                     ..Facts::default()
                 })
             }
@@ -632,7 +637,7 @@ impl<'s> Walk<'s> {
             );
         Some(Facts {
             types: declared_types(map),
-            values: lists(held, declares_values(map)),
+            values: held,
             items,
         })
     }
@@ -681,61 +686,15 @@ fn own_values(node: &Value) -> Option<Values<'_>> {
     node.as_object().and_then(declared_values)
 }
 
-/// The values a path may hold, given what its ancestors leave it and what it declares of itself:
-/// with both, its own members jsonb-equal to one inherited, since content there must equal both.
-fn narrowed<'s>(inherited: Option<Values<'s>>, own: Option<Values<'s>>) -> Option<Values<'s>> {
-    match (inherited, own) {
-        (None, own) => own,
-        (inherited, None) => inherited,
-        (Some(inherited), Some(own)) => {
-            let inherited: HashSet<String> = inherited.iter().map(|v| canonical(v)).collect();
-            Some(Arc::new(
-                own.iter()
-                    .copied()
-                    .filter(|member| inherited.contains(&canonical(member)))
-                    .collect(),
-            ))
-        }
+/// The values a child holds, given what its parent holds. Every value declared in a schema the walk
+/// reads is a scalar ([`reads_whole`]), and a scalar holds nothing at any key, so below a node
+/// that holds a value set the child holds the empty set — whatever it declares of itself, since
+/// content there must satisfy both. Otherwise it holds its own `enum` / `const`, if it declares one.
+fn held_below<'s>(parent: Option<&Values<'s>>, child: &'s Value) -> Option<Values<'s>> {
+    match parent {
+        Some(_) => Some(Arc::new(Vec::new())),
+        None => own_values(child),
     }
-}
-
-/// What a path's facts list of the values it holds. Where it declares its own `enum` / `const`, all
-/// of them: they are its own members, which its declaration holds once. Otherwise they are parts of
-/// a value an ancestor declares, listed only when every one is a scalar. A part that is an object
-/// or an array would be copied again at each path below it that it reaches, so a path holding one
-/// lists nothing: an ask there meets no value set, though the paths below it are still narrowed by
-/// what it holds. Each scalar part is held at one path, so a vocabulary copies it at most once.
-fn lists<'s>(held: Option<Values<'s>>, declares_own: bool) -> Option<Values<'s>> {
-    held.filter(|values| {
-        declares_own
-            || values
-                .iter()
-                .all(|value| !value.is_object() && !value.is_array())
-    })
-}
-
-/// Whether an object subschema declares a value set of its own: what [`declared_values`] reads.
-fn declares_values(map: &Map<String, Value>) -> bool {
-    map.get("enum").is_some_and(Value::is_array) || map.contains_key("const")
-}
-
-/// What a value set leaves the key below it: each member's value at `key`, from the members that
-/// are objects holding it. A member without the key holds nothing there, so a set none of whose
-/// members holds it leaves the empty set — no value is admissible at the key.
-fn projected<'s>(values: &Values<'s>, key: &str) -> Values<'s> {
-    Arc::new(values.iter().filter_map(|member| member.get(key)).collect())
-}
-
-/// [`projected`] for every key at once: each object member's values grouped by key, in member
-/// order, so a node with many children reads its values once rather than once per child.
-fn by_key<'s>(values: &Values<'s>) -> HashMap<&'s str, Vec<&'s Value>> {
-    let mut by: HashMap<&'s str, Vec<&'s Value>> = HashMap::new();
-    for member in values.iter().filter_map(|member| member.as_object()) {
-        for (key, value) in member {
-            by.entry(key.as_str()).or_default().push(value);
-        }
-    }
-    by
 }
 
 /// One shape's walk as a request reads it: built once, on the first ask that needs it, and kept
@@ -754,9 +713,8 @@ pub(super) struct ShapeWalk<'s> {
     /// Built on first use, so an ask refused before the shape is consulted builds nothing.
     walk: Option<Result<Walk<'s>, BoundKind>>,
     resolved: HashMap<Vec<String>, Resolved<'s>>,
-    /// What a path refusal teaches of the shape: the one its context remembered, or the one made
-    /// here on the first path refusal.
-    taught: Option<Taught>,
+    /// What a path refusal teaches of the shape, made here on the first path refusal.
+    taught: Option<PathTeaching>,
     /// Whether this walk enumerated the shape's vocabulary — at most once, to make its teaching.
     enumerated: bool,
 }
@@ -768,28 +726,15 @@ fn walk_of(shape: ShapeId, schema: &Value) -> Result<Walk<'_>, BoundKind> {
     Walk::new(schema, &WalkBounds::BUILD)
 }
 
-/// Where a shape's path teaching came from: its context, which remembered it from an earlier
-/// request, or this walk, which made it.
-#[derive(Debug)]
-enum Taught {
-    Remembered(PathTeaching),
-    Made(PathTeaching),
-}
-
 impl<'s> ShapeWalk<'s> {
-    /// A walk of `schema`, the shape `shape`'s, holding `remembered` — what a path refusal teaches
-    /// of that shape, if its context carried one — so that no refusal enumerates it again.
-    pub(super) fn new(
-        shape: ShapeId,
-        schema: &'s Value,
-        remembered: Option<PathTeaching>,
-    ) -> ShapeWalk<'s> {
+    /// A walk of `schema`, the shape `shape`'s, built on first use.
+    pub(super) fn new(shape: ShapeId, schema: &'s Value) -> ShapeWalk<'s> {
         ShapeWalk {
             shape,
             schema,
             walk: None,
             resolved: HashMap::new(),
-            taught: remembered.map(Taught::Remembered),
+            taught: None,
             enumerated: false,
         }
     }
@@ -814,10 +759,10 @@ impl<'s> ShapeWalk<'s> {
         reached
     }
 
-    /// What a path refusal teaches of this shape: the teaching its context remembered, or — the
-    /// first time one is needed, when there is none — the one `teach` makes from the shape's
-    /// askable vocabulary over borrowed facts ([`Walk::enumerate_borrowed`]), enumerated here once.
-    /// Either is kept for every later refusal; the vocabulary is not.
+    /// What a path refusal teaches of this shape: the first time one is needed, the one `teach`
+    /// makes from the shape's askable vocabulary over borrowed facts
+    /// ([`Walk::enumerate_borrowed`]), enumerated here once. The teaching is kept for every later
+    /// refusal; the vocabulary is not.
     pub(super) fn path_teaching(
         &mut self,
         teach: impl FnOnce(&Enumerated<Facts<'s>>, ShapeId) -> PathTeaching,
@@ -832,7 +777,7 @@ impl<'s> ShapeWalk<'s> {
         } = self;
         let schema: &'s Value = schema;
         let shape = *shape;
-        let taught = taught.get_or_insert_with(|| {
+        taught.get_or_insert_with(|| {
             let vocabulary = match walk.get_or_insert_with(|| walk_of(shape, schema)) {
                 Ok(walk) => {
                     *enumerated = true;
@@ -840,19 +785,8 @@ impl<'s> ShapeWalk<'s> {
                 }
                 Err(at) => Enumerated::unwalked(*at),
             };
-            Taught::Made(teach(&vocabulary, shape))
-        });
-        match taught {
-            Taught::Remembered(teaching) | Taught::Made(teaching) => teaching,
-        }
-    }
-
-    /// The path teaching this walk made, if it made one — never one its context remembered.
-    pub(super) fn made_path_teaching(&self) -> Option<&PathTeaching> {
-        match &self.taught {
-            Some(Taught::Made(teaching)) => Some(teaching),
-            Some(Taught::Remembered(_)) | None => None,
-        }
+            teach(&vocabulary, shape)
+        })
     }
 
     /// Whether this walk enumerated the shape's vocabulary.
@@ -1149,135 +1083,6 @@ mod tests {
         assert_eq!(at(&s, &["neither"]), valued(vec![]));
     }
 
-    /// A path holds only what its ancestor's `const` holds at it — a nested value two levels down,
-    /// and the empty set at a declared key the `const` lacks — while the path's own `type` stands.
-    /// `m.n`, left an object, lists nothing, yet still narrows `m.n.deep`. Bites the narrowing in
-    /// `reach`: without it each path below `m` is unconstrained.
-    #[test]
-    fn an_ancestors_const_narrows_each_path_below_it() {
-        let s = json!({ "properties": { "m": {
-            "const": { "unit": "kg", "n": { "deep": 1 } },
-            "properties": {
-                "unit": {},
-                "n": { "properties": { "deep": { "type": "integer" } } },
-                "absent": true
-            }
-        } } });
-        let valued = |values: Vec<Value>| {
-            PathResolution::Declared(PathFacts {
-                values: Some(values),
-                ..PathFacts::default()
-            })
-        };
-        assert_eq!(at(&s, &["m", "unit"]), valued(vec![json!("kg")]));
-        assert_eq!(
-            at(&s, &["m", "n", "deep"]),
-            PathResolution::Declared(PathFacts {
-                types: types(&[JsonType::Integer]),
-                values: Some(vec![json!(1)]),
-                items: None,
-            })
-        );
-        assert_eq!(at(&s, &["m", "absent"]), valued(vec![]));
-        assert_eq!(at(&s, &["m", "n"]), untyped());
-    }
-
-    /// A path declaring nothing of its own lists what it inherits only when every value is a
-    /// scalar, through a `true` subschema as through an object. Bites `lists` three ways: with
-    /// `any` for `all`, `p` lists its mixed set; counting an array a scalar, `a` lists `[1]` and
-    /// `[2]`; and with the `true` arm listing everything, `t` lists both objects.
-    #[test]
-    fn a_path_lists_what_it_inherits_only_when_all_of_it_is_scalar() {
-        let s = json!({
-            "enum": [
-                { "p": 1, "a": [1], "t": { "x": 1 }, "s": "u" },
-                { "p": { "x": 2 }, "a": [2], "t": { "x": 3 }, "s": "v" }
-            ],
-            "properties": {
-                "p": { "properties": { "x": {} } },
-                "a": {},
-                "t": true,
-                "s": true
-            }
-        });
-        let valued = |values: Vec<Value>| {
-            PathResolution::Declared(PathFacts {
-                values: Some(values),
-                ..PathFacts::default()
-            })
-        };
-        assert_eq!(at(&s, &["p"]), untyped());
-        assert_eq!(at(&s, &["p", "x"]), valued(vec![json!(2)]));
-        assert_eq!(at(&s, &["a"]), untyped());
-        assert_eq!(at(&s, &["t"]), untyped());
-        assert_eq!(at(&s, &["s"]), valued(vec![json!("u"), json!("v")]));
-    }
-
-    /// An object or array an ancestor declares is never copied onto the paths below it. A `const`
-    /// nested down a chain as deep as the walk reads, over a wide object, would otherwise be copied
-    /// once per level — the vocabulary many times the schema — and a scalar inside it is still
-    /// narrowed at the bottom. Bites `lists`: listing every held set, each path on the chain carries
-    /// the rest of the `const` and the vocabulary outweighs the schema.
-    #[test]
-    fn a_vocabulary_copies_no_object_an_ancestor_declares() {
-        let wide: Map<String, Value> = (0..200).map(|i| (format!("f{i}"), json!(i))).collect();
-        let chain = MAX_WALK_DEPTH - 1;
-        let mut constant = Value::Object(wide);
-        let mut tree = json!({ "properties": { "f7": {} } });
-        for _ in 0..chain {
-            constant = json!({ "k": constant });
-            tree = json!({ "properties": { "k": tree } });
-        }
-        tree["const"] = constant;
-        let schema_bytes = serde_json::to_vec(&tree).expect("serializes").len();
-
-        let vocabulary = enumerate(&tree, &WalkBounds::BUILD);
-        let vocabulary_bytes = serde_json::to_vec(&vocabulary).expect("serializes").len();
-        assert!(
-            vocabulary_bytes < schema_bytes,
-            "{vocabulary_bytes} bytes of vocabulary over {schema_bytes} of schema"
-        );
-        let mut bottom = vec!["k"; chain];
-        bottom.push("f7");
-        assert_eq!(
-            at(&tree, &bottom),
-            PathResolution::Declared(PathFacts {
-                values: Some(vec![json!(7)]),
-                ..PathFacts::default()
-            })
-        );
-    }
-
-    /// A path's own `enum` keeps only its members jsonb-equal to one an ancestor leaves it, and every
-    /// ancestor narrows, the root included. Bites `narrowed` three ways: keeping only the inherited
-    /// set, `m` holds both of the root's members' values; keeping only its own, `{"u":"oz"}` and
-    /// `"x"` besides; and comparing by `==` rather than jsonb equality, `2` is not `2.0` and `m`
-    /// holds nothing.
-    #[test]
-    fn every_ancestors_values_narrow_a_paths_own() {
-        let s = json!({
-            "enum": [{ "m": { "u": "kg" } }, { "m": { "u": "lb", "n": 2.0 } }],
-            "properties": { "m": {
-                "enum": [{ "u": "lb", "n": 2 }, { "u": "oz" }, "x"],
-                "properties": { "u": { "enum": ["lb", "kg"] } }
-            } }
-        });
-        assert_eq!(
-            at(&s, &["m"]),
-            PathResolution::Declared(PathFacts {
-                values: Some(vec![json!({ "u": "lb", "n": 2 })]),
-                ..PathFacts::default()
-            })
-        );
-        assert_eq!(
-            at(&s, &["m", "u"]),
-            PathResolution::Declared(PathFacts {
-                values: Some(vec![json!("lb")]),
-                ..PathFacts::default()
-            })
-        );
-    }
-
     // ── `additionalProperties`, not walked ───────────────────────────────────────────────────
 
     #[test]
@@ -1336,6 +1141,23 @@ mod tests {
     }
 
     #[test]
+    fn is_scalar_is_every_kind_but_object_and_array() {
+        for scalar in [
+            json!(null),
+            json!(true),
+            json!(0),
+            json!(-1.5),
+            json!(""),
+            json!("x"),
+        ] {
+            assert!(is_scalar(&scalar), "{scalar} is a scalar");
+        }
+        for container in [json!({}), json!([]), json!({"a": 1}), json!([1])] {
+            assert!(!is_scalar(&container), "{container} is not a scalar");
+        }
+    }
+
+    #[test]
     fn element_facts_stop_at_the_depth_bound() {
         // An array of arrays of strings, two levels deep, under a depth bound of one.
         let s = json!({ "properties": { "grid": {
@@ -1365,7 +1187,9 @@ mod tests {
     /// including one the rest of the schema declares, is not declared, and the vocabulary is empty.
     /// No compiling shape holds one. Bites `reads_whole`: with it reading
     /// every schema as whole, the `$ref` rows resolve `a` as declared and unconstrained (what the
-    /// walk once did with a `$ref` it did not follow), and the rest resolve `ok` as declared.
+    /// walk once did with a `$ref` it did not follow), and the rest resolve `ok` as declared. A
+    /// `const` and an `enum` member that is an object or an array have rows of their own, because
+    /// the two arms are separate code: either arm admitting any value fails its rows.
     #[test]
     fn a_schema_holding_a_construct_the_walk_does_not_read_declares_nothing() {
         let constructs = [
@@ -1377,17 +1201,20 @@ mod tests {
             json!({ "oneOf": [{}] }),
             json!({ "not": {} }),
             json!({ "if": {}, "then": {} }),
-            json!({ "format": "date" }),
             json!({ "prefixItems": [{}] }),
             json!({ "patternProperties": { "^a": {} } }),
             json!({ "dependentSchemas": { "z": {} } }),
-            json!({ "x-extension": true }),
+            json!({ "format": 7 }),
             json!({ "$schema": "http://json-schema.org/draft-07/schema#" }),
             json!({ "$schema": "http://json-schema.org/draft/2020-12/schema" }),
             json!({ "$schema": 7 }),
             json!({ "enum": "x" }),
             json!({ "type": 7 }),
             json!({ "type": ["string", 7] }),
+            json!({ "const": {} }),
+            json!({ "const": [] }),
+            json!({ "enum": ["a", {}] }),
+            json!({ "enum": [[]] }),
         ];
         for construct in constructs {
             let positions = [
@@ -1437,6 +1264,25 @@ mod tests {
         }
     }
 
+    /// `format` and `x-*` keys are annotations the compile carries (shape rulings R1, R2), so the
+    /// walk passes over them: the paths beside them stay declared, and what an `x-` key holds —
+    /// here a `properties` that would otherwise declare `hidden` — is never read as a schema.
+    #[test]
+    fn format_and_extension_keys_are_passed_over_and_never_read() {
+        let s = json!({
+            "x-ui": {
+                "$ref": "http://169.254.169.254/latest/meta-data",
+                "properties": { "hidden": { "type": "string" } }
+            },
+            "properties": {
+                "a": { "type": "string", "format": "date-time", "x-order": 1 }
+            }
+        });
+        assert!(reads_whole(&s), "{s}");
+        assert_eq!(at(&s, &["a"]), typed(&[JsonType::String]));
+        assert_eq!(at(&s, &["hidden"]), PathResolution::NotDeclared);
+    }
+
     #[test]
     fn a_value_that_is_not_a_schema_where_a_schema_sits_is_refused() {
         for s in [
@@ -1450,17 +1296,16 @@ mod tests {
         }
     }
 
-    /// What `additionalProperties` and the data keywords hold is not a schema the walk reads, so a
-    /// construct there is not refused: a `$ref` as a `default` is a value, and the walk never
-    /// descends `additionalProperties`. Bites a `reads_whole` that pushed every object it met.
+    /// What `additionalProperties` and the data keywords `default` and `examples` hold is not a
+    /// schema the walk reads, so a construct there is not refused: a `$ref` as a `default` is a
+    /// value, and the walk never descends `additionalProperties`. Bites a `reads_whole` that pushed
+    /// every object it met.
     #[test]
     fn data_and_an_unwalked_additional_properties_are_not_read_for_constructs() {
         let s = json!({
             "properties": {
                 "a": {
                     "default": { "$ref": "#" },
-                    "enum": [{ "allOf": [] }],
-                    "const": { "allOf": [] },
                     "examples": [{ "$ref": "#" }]
                 }
             },
@@ -1635,14 +1480,13 @@ mod tests {
                 "e": false
             } },
             "f": { "type": ["string", "null"] },
-            "g": { "const": { "h": { "i": 1 } }, "properties": { "h": {
+            "g": { "const": "x", "properties": { "h": {
                 "properties": { "i": { "enum": [1, 2] }, "j": true }
             } } }
         } });
-        // Narrowed from the root: an `enum` whose members hold `p` and `q.r` but not `q.t`, two of
-        // them leaving `q` and `q.r` a value each, in member order.
+        // Narrowed from the root: an `enum` of scalars leaves every path below it the empty set.
         let rooted = json!({
-            "enum": [{ "p": "a", "q": { "r": 1 } }, { "p": "b", "q": { "r": 2 } }, 7],
+            "enum": ["a", 7],
             "properties": {
                 "p": { "enum": ["b", "c"] },
                 "q": { "properties": { "r": {}, "t": true } }
@@ -1659,6 +1503,91 @@ mod tests {
                     advertised.path
                 );
             }
+        }
+    }
+
+    /// Below a node that declares values, every path holds the empty set: each value declared in a
+    /// schema the walk reads is a scalar, which holds nothing at any key. Each case is a schema of
+    /// its own, checked through `enumerate` and against `reach`: a child; a grandchild, its own
+    /// `type` standing; a child declaring its own `enum`, which lists `[]` and not its members; a
+    /// `true` child; a child of a node typed `object` whose `const` is a string, which no content
+    /// satisfies; and a child of the root, whose own `const` narrows like any other node's. Bites a
+    /// path below a node with values that is not left the empty set, in either descent: without
+    /// the narrowing the child, the grandchild, the `true` child and the child of the object list
+    /// no value set, and the `enum` child lists its own members. Bites the root's own values
+    /// dropped (`reach`'s `held` seed, or the root's entry in `enumerate_into`'s queue, made
+    /// `None`): the root's child then lists no value set.
+    #[test]
+    fn below_a_node_with_values_every_path_holds_the_empty_set() {
+        let empty = |declared: Option<BTreeSet<JsonType>>| PathFacts {
+            types: declared,
+            values: Some(vec![]),
+            items: None,
+        };
+        let cases = [
+            (
+                "a child",
+                json!({ "properties": { "m": {
+                    "const": "kg", "properties": { "unit": {} }
+                } } }),
+                vec!["m", "unit"],
+                empty(None),
+            ),
+            (
+                "a grandchild",
+                json!({ "properties": { "m": {
+                    "enum": ["kg", 7],
+                    "properties": { "n": { "properties": { "deep": { "type": "integer" } } } }
+                } } }),
+                vec!["m", "n", "deep"],
+                empty(types(&[JsonType::Integer])),
+            ),
+            (
+                "a child declaring its own enum",
+                json!({ "properties": { "m": {
+                    "const": "kg", "properties": { "unit": { "enum": ["kg", "lb"] } }
+                } } }),
+                vec!["m", "unit"],
+                empty(None),
+            ),
+            (
+                "a true child",
+                json!({ "properties": { "m": {
+                    "enum": [null, true], "properties": { "any": true }
+                } } }),
+                vec!["m", "any"],
+                empty(None),
+            ),
+            (
+                "a child of an object whose const is a string",
+                json!({ "properties": { "m": {
+                    "type": "object", "const": "x", "properties": { "unit": { "type": "string" } }
+                } } }),
+                vec!["m", "unit"],
+                empty(types(&[JsonType::String])),
+            ),
+            (
+                "a child of the root",
+                json!({ "const": "x", "properties": { "a": {} } }),
+                vec!["a"],
+                empty(None),
+            ),
+        ];
+        for (case, s, asked, expected) in cases {
+            let asked = path(&asked);
+            let walk =
+                Walk::new(&s, &WalkBounds::BUILD).expect("a field tree under the byte bound");
+            let Resolved::Declared(reached) = walk.reach(&asked) else {
+                panic!("{case}: {asked:?} is declared");
+            };
+            assert_eq!(reached.to_wire(), expected, "{case}: reach");
+            let vocabulary = enumerate(&s, &WalkBounds::BUILD);
+            let advertised = vocabulary
+                .paths
+                .iter()
+                .find(|p| p.path == asked)
+                .unwrap_or_else(|| panic!("{case}: {asked:?} is advertised"));
+            assert_eq!(advertised.facts, expected, "{case}: enumerate");
         }
     }
 
@@ -1705,12 +1634,13 @@ mod tests {
     }
 
     /// The borrowed view writes exactly the bytes of the copy it stands for —
-    /// every field present only when set, at every items level, over enum members, a `const`, an
-    /// enum and a `const` together, and `items: false` — so measuring the view measures the copy.
+    /// every field present only when set, at every items level, over enum members of every scalar
+    /// kind, a `const`, an enum and a `const` together, and `items: false` — so measuring the view
+    /// measures the copy.
     /// Bites any drift between `Facts`'s `Serialize` and `PathFacts`'s derived one.
     #[test]
     fn the_borrowed_view_writes_the_wire_bytes() {
-        let codes = json!({ "enum": ["ms", 7, null, { "k": [1, 2.5] }, ["x"]] });
+        let codes = json!({ "enum": ["ms", 7, null, true, 2.5] });
         let s = json!({
             "properties": {
                 "plain": {},

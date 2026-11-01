@@ -115,7 +115,9 @@ pub async fn show_visible(
 /// Bind a cognitive map to a team (write a `kb_team_cogmaps` row).
 ///
 /// Auth before writes: system-admin, OR a team manager (owner/maintainer) who administers the
-/// map, on a team that is neither temper-system nor the gating team. Idempotent — `INSERT … ON CONFLICT DO NOTHING`;
+/// map, on a team that is neither temper-system nor the gating team. The system-admin arm stops at
+/// personal space: a personal team, or a map that is someone else's (task `01a1933d`). Then the
+/// one-person rule, for every caller. Idempotent — `INSERT … ON CONFLICT DO NOTHING`;
 /// `bound: false` when the binding already existed.
 pub async fn bind_team(
     pool: &PgPool,
@@ -133,6 +135,22 @@ pub async fn bind_team(
     )
     .await?;
 
+    // One person per map (task `01a1933d`), for every caller: a map is bound to a person's personal
+    // team only when that person created it, and a map with no person as creator to one person's at
+    // most. The SQL `cogmap_personal_bind_refusal` is the one statement of the rule, read here for
+    // the refusal; the `kb_team_cogmaps` trigger applies the same function to every writer, and
+    // holds the map row so two concurrent binds decide one after the other.
+    if let Some(refusal) = sqlx::query_scalar!(
+        r#"SELECT cogmap_personal_bind_refusal($1, $2) AS "refusal""#,
+        cogmap_id,
+        req.team_id,
+    )
+    .fetch_one(pool)
+    .await?
+    {
+        return Err(ApiError::ForbiddenDetail(refusal));
+    }
+
     let inserted = sqlx::query_scalar!(
         r#"
         INSERT INTO kb_team_cogmaps (cogmap_id, team_id)
@@ -144,7 +162,8 @@ pub async fn bind_team(
         req.team_id,
     )
     .fetch_optional(pool)
-    .await?;
+    .await
+    .map_err(one_person_refusal)?;
 
     Ok(BindTeamOutcome {
         cogmap_id,
@@ -164,11 +183,24 @@ pub async fn bind_team(
 // as a seam with nothing on either side of it. The predicate itself is untouched and still enforced;
 // see `db_backend::cogmap_authorship_refusal`.
 
+/// The `kb_team_cogmaps` trigger's refusal (`42501`, a bind that lost a race to another), rendered
+/// as the same `403` the pre-check above gives; any other database error passes through.
+fn one_person_refusal(e: sqlx::Error) -> ApiError {
+    if let Some(db) = e.as_database_error() {
+        if db.code().as_deref() == Some("42501") {
+            if let Some(reason) = db.message().strip_prefix("kb_team_cogmaps: ") {
+                return ApiError::ForbiddenDetail(reason.to_string());
+            }
+        }
+    }
+    ApiError::from(e)
+}
+
 /// Unbind a cognitive map from a team (delete the `kb_team_cogmaps` row).
 ///
 /// Auth before writes: the same two-sided gate as [`bind_team`] — system-admin, OR a team manager
 /// (owner/maintainer) who administers the map, on a team that is neither temper-system nor the
-/// gating team. No-op safe — `unbound: false`
+/// gating team; the system-admin arm stops at personal space. No-op safe — `unbound: false`
 /// when no binding existed.
 pub async fn unbind_team(
     pool: &PgPool,

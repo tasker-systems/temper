@@ -1,0 +1,23 @@
+title    = "A map bound to temper-system or the gating team is authored by system admins only; a subscription needs authorship of the context or map it names"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "mcp", "cli-stdout", "clients"]
+status   = "signal-only"
+body = '''
+Two write paths now ask the object's own write regime. Migration `20261113000010`.
+
+- A cognitive map bound to `temper-system` or to the gating team, or the reserved L0 kernel, is
+  authored by a system admin and nobody else. Creating or updating a resource in it, asserting an
+  edge, adding a blob or shape, opening an invocation or advancing the steward watermark answers
+  `403` to anyone else, whatever write grant they hold. Grants on such a map stay in place and
+  author again if an admin unbinds it. A system admin authors such a map without a grant. Reconcile
+  and the grant door already worked this way, and now also count a map bound to `temper-system`
+  when the gating slug names another team.
+- `POST /api/subscriptions` (and `temper admin subscription create`) naming a context or map as the
+  subscriber answers `403` unless the caller authors it: for a context, owner of a personal context
+  or an owner, maintainer or member of its owning team, or an explicit write grant; for a map, as
+  above. A system admin is held to the same bar. Team subscribers are unchanged.
+
+Who observes: a holder of a write grant on a map bound to an instance team, and a team manager
+subscribing a context or map they read but do not author. Release relevance: signal-only.
+'''

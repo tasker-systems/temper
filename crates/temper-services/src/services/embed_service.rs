@@ -136,6 +136,33 @@ pub async fn scope_is_personal(
     })
 }
 
+/// The refusal for a re-embed aimed at someone else's personal space, or `None` when it is not. The
+/// same sentence every door gives an admin stopped at personal space (task `01a1933d`): it names
+/// the kind and the person, never what is stale there.
+pub async fn personal_scope_refusal(
+    pool: &PgPool,
+    admin: &SystemAdmin,
+    scope: ReembedScope,
+) -> ApiResult<Option<ApiError>> {
+    let subject = match scope {
+        ReembedScope::Resource(id) => temper_substrate::payloads::RefTarget {
+            kind: temper_substrate::payloads::AnchorTable::Resources,
+            id,
+        },
+        ReembedScope::Context(id) => temper_substrate::payloads::RefTarget {
+            kind: temper_substrate::payloads::AnchorTable::Contexts,
+            id,
+        },
+        ReembedScope::All => return Ok(None),
+    };
+    match crate::authz::personal_space::others_personal_space(pool, subject, admin.actor()).await? {
+        Some(stop) => Ok(Some(
+            crate::authz::personal_space::refusal(pool, stop).await?,
+        )),
+        None => Ok(None),
+    }
+}
+
 /// The ids of `enqueued` that are not homed in someone else's personal space, in order. The sweep
 /// enqueues personal resources like any others; the operator's receipt names only the rest (task
 /// `01a191b4`).

@@ -138,9 +138,21 @@ MIGRATIONS_DIR="${MIGRATIONS_DIR:-migrations}"
 #                 `resource_husk_held_by`.
 #   ATTENUATION — `can_read=true` and nothing else; the other capability columns keep their
 #                 `false` defaults. Not a self-grant: grantee and granter are distinct profiles.
+# REVIEWED 2026-10-31 (subscriber authorship) — `services/subscription_service.rs` is a NEW entry
+# and is TEST-ONLY. The insert is `grant_write`, inside the `#[cfg(all(test, feature = "test-db"))]
+# mod tests`, in an ephemeral per-test database. It mints the one fact the subscriber-authorship leg
+# turns on: an explicit write grant on the subscribing context or map, so a test can show the same
+# create refused without it and admitted with it.
+#   AUTHORITY   — n/a: no production grantor; the fixture writes the row directly. The subscription
+#                 service grants nothing; it only READS this table, through
+#                 `context_authorable_by_profile` / `cogmap_authorable_by_profile`.
+#   ATTENUATION — `can_read` + `can_write`, no delete or grant. `granted_by` is the grantee, a
+#                 fixture bootstrap in the shape of temper-api's `grant_cogmap_write`; nothing
+#                 in the shipped binary can reach it.
 read -r -d '' BASELINE <<'EOF' || true
 3 crates/temper-services/src/authz/audit_gate.rs
 1 crates/temper-services/src/authz/context_admin.rs
+1 crates/temper-services/src/authz/machine.rs
 1 crates/temper-services/src/backend/db_backend.rs
 1 crates/temper-services/src/backend/write_floor.rs
 1 crates/temper-services/src/services/access_service.rs
@@ -150,6 +162,7 @@ read -r -d '' BASELINE <<'EOF' || true
 1 crates/temper-services/src/services/machine_registration_service.rs
 2 crates/temper-services/src/services/materialize_service.rs
 1 crates/temper-services/src/services/steward_service.rs
+1 crates/temper-services/src/services/subscription_service.rs
 1 crates/temper-substrate/src/scenario/access/loader.rs
 EOF
 

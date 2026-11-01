@@ -16,7 +16,9 @@
 #![cfg(feature = "test-db")]
 
 use std::collections::BTreeSet;
+use std::time::{Duration, Instant};
 
+use futures_util::future::join_all;
 use serde_json::json;
 use sqlx::PgPool;
 use temper_core::types::artifact_ask::walk::MAX_SCHEMA_BYTES;
@@ -34,16 +36,17 @@ use temper_core::types::query::{
 use temper_services::backend::query_read::prepare;
 use temper_services::backend::substrate_read;
 use temper_services::error::ApiError;
-use temper_services::services::shape_loader::test_support::{
-    enumerations_tagged, path_teachings_made_tagged,
-};
-use temper_services::services::shape_loader::{load, load_one};
+use temper_services::services::shape_loader::test_support::enumerations_tagged;
+use temper_services::services::shape_loader::{askable, judge, load, load_one, SchemaVerdict};
 use temper_services::services::shape_service::{self, DeclareShapeServiceParams};
 use temper_substrate::events::EventContext;
 use temper_substrate::payloads::{AnchorRef, EnforcementMode, KindOwner};
 use temper_substrate::readback;
 use temper_substrate::scenario::bootseed;
 use temper_substrate::shape_schema::test_support::compiles_tagged;
+use temper_substrate::shape_schema::{
+    count_up_to, within_node_budget, MAX_ENUM_ENTRIES, MAX_SHAPE_NODES, MAX_SHAPE_OBJECTS,
+};
 use temper_substrate::writes::{self, CreateParams, DeclareShapeParams};
 use uuid::Uuid;
 
@@ -224,6 +227,26 @@ fn patterns_past_the_bound(tag: &str) -> serde_json::Value {
     assert!(
         !within_schema_bound(&schema),
         "the fixture is past the bound"
+    );
+    schema
+}
+
+/// A schema within the walk's byte bound but past the parsed-size budget, tagged with `tag`: the
+/// root, its `$comment`, an `examples` array and `MAX_SHAPE_NODES - 2` zeros are
+/// `MAX_SHAPE_NODES + 1` JSON values. The zeros are two bytes each, so the document is about 25 KB
+/// against the 256 KiB byte bound, and the earlier byte check lets it through to the budget.
+fn nodes_past_the_budget(tag: &str) -> serde_json::Value {
+    let schema = json!({
+        "$comment": tag,
+        "examples": vec![0; MAX_SHAPE_NODES - 2],
+    });
+    assert!(
+        within_schema_bound(&schema),
+        "the fixture is within the byte bound"
+    );
+    assert!(
+        count_up_to(&schema, MAX_SHAPE_NODES, MAX_SHAPE_OBJECTS).over,
+        "the fixture is past the node cap"
     );
     schema
 }
@@ -439,7 +462,10 @@ async fn a_stored_remote_ref_shape_loads_uncompilable_and_fetches_nothing(pool: 
 
     assert_eq!(
         load_one(&pool, w.owner, id).await.unwrap(),
-        ShapeLoad::Uncompilable
+        ShapeLoad::Uncompilable {
+            refused: Some("keyword $ref at the root".to_owned())
+        },
+        "the owner, who reads the shape, is told what its compile refused"
     );
     assert_eq!(probe.connections(), 0, "the loader must not fetch");
 }
@@ -555,9 +581,7 @@ async fn askable_is_on_the_by_id_read_and_absent_from_the_listing(pool: PgPool) 
 /// A stored shape whose schema does not compile reads `askable` empty, with `unaskable` the very
 /// refusal an ask naming it meets — reason and fixed sentence — and nothing is fetched; read again,
 /// it answers the same. Bites an `askable` derived without the compile (it would read empty with no
-/// reason), a reason of its own beside the ask's, or a vocabulary remembered for a shape that does
-/// not compile (call `remember_vocabulary` for every verdict in `shape_loader::askable`: the second
-/// read answers with no refusal).
+/// reason), or a reason of its own beside the ask's.
 #[sqlx::test(migrations = "../../migrations")]
 async fn an_uncompilable_shape_reads_askable_empty_with_the_reason(pool: PgPool) {
     let w = seed_world(&pool, "loader-askable-uncompilable").await;
@@ -578,8 +602,17 @@ async fn an_uncompilable_shape_reads_askable_empty_with_the_reason(pool: PgPool)
     assert_eq!(reason.reason, RefusalReason::ShapeSchemaUncompilable);
     assert_eq!(
         Some(reason.clone()),
-        ShapeLoad::Uncompilable.loaded().err(),
-        "the read's reason is the load's refusal"
+        ShapeLoad::Uncompilable {
+            refused: Some("keyword $ref at the root".to_owned())
+        }
+        .loaded()
+        .err(),
+        "the read's reason is the load's refusal, naming what the compile refused"
+    );
+    assert!(
+        !reason.detail.contains(&probe.port().to_string()),
+        "{}",
+        reason.detail
     );
     assert_eq!(refusals_for(&pool, w.owner, id).await, vec![reason]);
 
@@ -605,8 +638,7 @@ async fn an_uncompilable_shape_reads_askable_empty_with_the_reason(pool: PgPool)
 /// `schema_bytes` with that same refusal as `unaskable`, and `shape_schema::compile` — counted
 /// wherever it is called — never runs on it; read again, it answers the same. Bites removing the
 /// measurement from `shape_loader::judge` (the `if !within_schema_bound(schema)` return of
-/// `TooLarge`): the schema compiles, the count moves, and it loads `Loaded`. Bites, too, a
-/// vocabulary remembered for a shape past the bound: the second read answers with no refusal.
+/// `TooLarge`): the schema compiles, the count moves, and it loads `Loaded`.
 #[sqlx::test(migrations = "../../migrations")]
 async fn a_schema_past_the_byte_bound_is_refused_at_load_and_read_and_never_compiled(pool: PgPool) {
     let w = seed_world(&pool, "loader-past-the-bound").await;
@@ -709,14 +741,120 @@ async fn declaring_a_schema_past_the_byte_bound_is_refused_before_it_compiles(po
     ));
 }
 
+// ── The parsed-size budget comes before the permit and the compile ───────────────────────────
+
+/// A stored schema within the byte bound but past the parsed-size budget is `Uncompilable` at the
+/// load and never compiled: the budget is counted in `shape_loader::judge`, before the permit and
+/// the copy. Bites removing the `within_node_budget` return from `judge`: the schema is copied,
+/// takes a permit and reaches `shape_schema::compile`, which refuses it but records it first, so
+/// the count moves.
+#[sqlx::test(migrations = "../../migrations")]
+async fn a_schema_past_the_budget_is_judged_uncompilable_without_a_compile(pool: PgPool) {
+    let w = seed_world(&pool, "loader-past-the-budget").await;
+    let tag = fresh_tag();
+    let id = store(&pool, &w, "measurement", &nodes_past_the_budget(&tag)).await;
+
+    assert_eq!(
+        load_one(&pool, w.owner, id).await.unwrap(),
+        ShapeLoad::Uncompilable {
+            refused: Some(format!(
+                "more than {MAX_SHAPE_NODES} JSON values in the whole schema"
+            )),
+        }
+    );
+    assert_eq!(
+        compiles_tagged(&tag),
+        0,
+        "nothing compiled a schema past the budget"
+    );
+}
+
+/// A stored shape past the parsed-size budget is asked `shape_schema_uncompilable` with the
+/// uncompilable sentence, not the byte-bound one: the schema is within the byte bound, so the
+/// refusal says it does not compile. Bites the budget check answering `TooLarge`: the refusal
+/// would name the byte bound.
+#[sqlx::test(migrations = "../../migrations")]
+async fn a_stored_shape_past_the_budget_is_asked_uncompilable_not_too_large(pool: PgPool) {
+    let w = seed_world(&pool, "loader-ask-past-the-budget").await;
+    let tag = fresh_tag();
+    let id = store(&pool, &w, "measurement", &nodes_past_the_budget(&tag)).await;
+    let uncompilable = ShapeLoad::Uncompilable {
+        refused: Some(format!(
+            "more than {MAX_SHAPE_NODES} JSON values in the whole schema"
+        )),
+    }
+    .loaded()
+    .expect_err("an uncompilable schema is refused");
+
+    let refusals = refusals_for(&pool, w.owner, id).await;
+    assert_eq!(refusals, vec![uncompilable]);
+    assert_eq!(refusals[0].reason, RefusalReason::ShapeSchemaUncompilable);
+    assert_ne!(
+        refusals[0].detail,
+        ShapeLoad::SchemaTooLarge.loaded().unwrap_err().detail,
+        "the schema is within the byte bound"
+    );
+    assert_eq!(compiles_tagged(&tag), 0, "the ask did not compile it");
+}
+
+/// Declare refuses a schema past the parsed-size budget with the compile step's fixed sentence,
+/// which names the budget, and writes no row; the schema is never compiled. Bites removing the
+/// `within_node_budget` return from `judge`: the count moves.
+#[sqlx::test(migrations = "../../migrations")]
+async fn declaring_a_schema_past_the_budget_is_refused_naming_the_budget_before_it_compiles(
+    pool: PgPool,
+) {
+    let w = seed_world(&pool, "declare-past-the-budget").await;
+    let tag = fresh_tag();
+    let oversized = nodes_past_the_budget(&tag);
+
+    let err = shape_service::declare_shape(
+        &pool,
+        DeclareShapeServiceParams {
+            home: AnchorRef::context(ContextId::from(w.context)),
+            kind: "measurement",
+            kind_owner: None,
+            schema: &oversized,
+            enforcement: EnforcementMode::Advisory,
+            principal: w.owner,
+            emitter: w.emitter,
+        },
+    )
+    .await
+    .expect_err("a schema past the budget is refused at declare");
+    let message = match err {
+        ApiError::DataArtifactRefusal(message) => message,
+        other => panic!("the refusal must be the typed data-artifact refusal, got {other:?}"),
+    };
+    assert_eq!(
+        message,
+        within_node_budget(&oversized)
+            .expect_err("past the budget")
+            .detailed()
+    );
+    assert!(
+        message.contains("(more than 12288 JSON values in the whole schema)"),
+        "the refusal names the cap the schema passed: {message}"
+    );
+    assert!(
+        message.contains("within a value budget"),
+        "the refusal names the budget: {message}"
+    );
+    assert_eq!(compiles_tagged(&tag), 0, "declare did not compile it");
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_data_artifact_shapes")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0, "a refused declare writes no row");
+}
+
 // ── A shape read many times is compiled once ────────────────────────────────────────────────
 
 /// Reads of one stored shape — five by-id reads and a load — compile its schema once: the verdict
 /// is remembered by shape id after the first. Counted at `shape_schema::compile` by the fixture's
 /// tag, so other suites' compiles cannot move it. Bites bypassing the remembered verdict (in
-/// `shape_loader::verdict_of`, delete the `if let Some(verdict) = remembered(id)` return): two
-/// compiles, the first read's and the load's — the later reads find the vocabulary remembered and
-/// ask no verdict.
+/// `shape_loader::verdict_of`, delete the `if let Some(verdict) = remembered(id)` return): six
+/// compiles, one for each read and the load.
 #[sqlx::test(migrations = "../../migrations")]
 async fn a_shape_read_many_times_is_compiled_once(pool: PgPool) {
     let w = seed_world(&pool, "loader-verdict-remembered").await;
@@ -739,41 +877,7 @@ async fn a_shape_read_many_times_is_compiled_once(pool: PgPool) {
     assert_eq!(compiles_tagged(&tag), 1, "one compile for six reads");
 }
 
-/// Five by-id reads of one stored compiling shape enumerate its vocabulary once: the vocabulary is
-/// remembered by shape id after the first, and every read advertises the same one. Counted at
-/// `shape_loader::askable`'s enumeration by the fixture's tag, so other suites' reads cannot move
-/// it. Bites bypassing the remembered vocabulary (in `shape_loader::askable`, delete the
-/// `remembered_vocabulary(row.shape_id)` lookup): five enumerations.
-#[sqlx::test(migrations = "../../migrations")]
-async fn a_shape_read_many_times_is_enumerated_once(pool: PgPool) {
-    let w = seed_world(&pool, "loader-vocabulary-remembered").await;
-    let tag = fresh_tag();
-    let mut schema = value_schema();
-    schema["$comment"] = json!(tag);
-    let id = store(&pool, &w, "measurement", &schema).await;
-
-    let mut reads = Vec::new();
-    for _ in 0..5 {
-        let shown = substrate_read::get_shape(&pool, w.owner, id)
-            .await
-            .unwrap()
-            .expect("the owner reads the shape");
-        reads.push(shown.askable.expect("the by-id read carries askable"));
-    }
-    assert_eq!(reads[0].paths.len(), 1);
-    assert_eq!(reads[0].paths[0].path, vec!["value".to_string()]);
-    assert!(
-        reads.iter().all(|askable| *askable == reads[0]),
-        "every read advertises the same vocabulary"
-    );
-    assert_eq!(
-        enumerations_tagged(&tag),
-        1,
-        "one enumeration for five reads"
-    );
-}
-
-// ── A path refused on one shape across requests is taught from one enumeration ──────────────
+// ── A path refused at the query door teaches the shape's vocabulary ─────────────────────────
 
 /// A selection asking `shape` at a path its schema does not declare, piped into a returned
 /// `find-exact` — a plan refused `path_outside_shape` at the gate, before any embed.
@@ -829,35 +933,24 @@ fn refusing_a_path(shape: ShapeId) -> Composition {
     }
 }
 
-/// Three separate requests, each loading its shapes with `load` and validating through
-/// `query_read::prepare` as the handler does, refuse a path on one stored shape: the shape's
-/// vocabulary is enumerated once in all — the first request makes its teaching and `prepare`
-/// remembers it; the later two find it in the context `load` built, and enumerate nothing. Every
-/// request's refusals are byte for byte the first's, and teach the shape's one path. Counted by
-/// the fixture's tag, so other suites' requests cannot move it. Bites remembering skipped (in
-/// `query_read::prepare`, delete the `remember_path_teachings` call): three enumerations.
+/// One request loading its shapes with `load` and validating through `query_read::prepare`, as the
+/// handler does, is refused a path on a stored shape, and the refusal teaches the shape's
+/// vocabulary: its one path, `value`. Bites a path refusal that teaches nothing (in temper-core's
+/// `validate.rs::refuse_paths`, pass `None` for the teaching in place of `Some(teaches)`): the
+/// refusal carries no vocabulary.
 #[sqlx::test(migrations = "../../migrations")]
-async fn a_shape_refusing_paths_across_requests_is_enumerated_once(pool: PgPool) {
-    let w = seed_world(&pool, "loader-teaching-remembered").await;
-    let tag = fresh_tag();
-    let mut schema = value_schema();
-    schema["$comment"] = json!(tag);
-    let id = store(&pool, &w, "measurement", &schema).await;
+async fn a_path_refused_at_the_query_door_teaches_the_shapes_vocabulary(pool: PgPool) {
+    let w = seed_world(&pool, "loader-path-teaching").await;
+    let id = store(&pool, &w, "measurement", &value_schema()).await;
     let c = refusing_a_path(id);
 
-    let mut refusals: Vec<Vec<PlanRefusal>> = Vec::new();
-    for _ in 0..3 {
-        let ids = shapes_to_load(&c).expect("within the request caps");
-        let shapes = load(&pool, w.owner, &ids).await.expect("the loader reads");
-        assert!(matches!(shapes.get(&id), Some(ShapeLoad::Loaded(_))));
-        refusals.push(
-            prepare(c.clone(), &shapes)
-                .await
-                .expect_err("the undeclared path is refused"),
-        );
-    }
+    let ids = shapes_to_load(&c).expect("within the request caps");
+    let shapes = load(&pool, w.owner, &ids).await.expect("the loader reads");
+    assert!(matches!(shapes.get(&id), Some(ShapeLoad::Loaded(_))));
+    let refused = prepare(c, &shapes)
+        .await
+        .expect_err("the undeclared path is refused");
 
-    let refused = &refusals[0];
     assert_eq!(
         refused.iter().map(|r| r.reason.clone()).collect::<Vec<_>>(),
         vec![RefusalReason::PathOutsideShape],
@@ -868,16 +961,200 @@ async fn a_shape_refusing_paths_across_requests_is_enumerated_once(pool: PgPool)
         .as_ref()
         .and_then(|t| t.vocabulary.as_ref())
         .expect("a path refusal teaches the vocabulary");
-    assert_eq!(taught.paths.len(), 1);
+    assert_eq!(taught.paths.len(), 1, "{taught:?}");
     assert_eq!(taught.paths[0].path, vec!["value".to_string()]);
-    let wire = |rs: &[PlanRefusal]| serde_json::to_vec(rs).unwrap();
+}
+
+// ── Permit queueing under concurrent by-id misses ───────────────────────────────────────────
+
+/// How many by-id reads miss at once in `permit_queueing_under_concurrent_by_id_misses`.
+const CONCURRENT_MISSES: usize = 8;
+
+/// A schema filling the node budget whose vocabulary is the heaviest a by-id read enumerates on a
+/// miss — fields each an `enum` of `MAX_ENUM_ENTRIES` strings — tagged with `tag`, and how many
+/// paths it declares. The `string enums` fixture of `shape_schema_cost_bench.rs`'s
+/// `vocabulary_values_worst_case`, copied, since one integration test cannot import another's
+/// functions; the tag's `$comment` is one value more.
+fn vocabulary_values_at_the_budget(tag: &str) -> (serde_json::Value, usize) {
+    let codes: Vec<String> = (0..MAX_ENUM_ENTRIES).map(|c| format!("c{c:05}")).collect();
+    let field = json!({ "enum": codes });
+    // Beside the fields: the root, `$schema`, `$comment`, `type` and `properties`, the root and
+    // `properties` the objects. Each field is itself, its `enum` array and its members, one object.
+    let per_field = MAX_ENUM_ENTRIES + 2;
+    let fields = ((MAX_SHAPE_NODES - 5) / per_field).min(MAX_SHAPE_OBJECTS - 2);
+    let properties: serde_json::Map<String, serde_json::Value> = (0..fields)
+        .map(|f| (format!("f{f:04}"), field.clone()))
+        .collect();
+    let schema = json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$comment": tag,
+        "type": "object",
+        "properties": properties,
+    });
+    let count = count_up_to(&schema, usize::MAX, usize::MAX);
+    assert_eq!(
+        (count.nodes, count.objects),
+        (5 + fields * per_field, 2 + fields),
+        "{count:?}"
+    );
     assert!(
-        refusals.iter().all(|rs| wire(rs) == wire(refused)),
-        "every request refuses byte for byte as the first did"
+        count.nodes <= MAX_SHAPE_NODES && count.nodes + per_field > MAX_SHAPE_NODES,
+        "{count:?}: the fixture fills the node budget"
+    );
+    assert!(
+        within_schema_bound(&schema),
+        "the fixture is within the byte bound"
+    );
+    (schema, fields)
+}
+
+/// Milliseconds, for printing.
+fn ms(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1000.0
+}
+
+/// The nearest-rank `percent`th of `sorted`, which is ascending and not empty.
+fn nearest_rank(sorted: &[Duration], percent: usize) -> Duration {
+    sorted[(sorted.len() * percent).div_ceil(100) - 1]
+}
+
+/// What a by-id read's miss waits for a compile permit when `CONCURRENT_MISSES` of them arrive at
+/// once (spec `2026-10-31-const-and-enum-members-are-scalars-design`, §5's permit-queueing
+/// measure, §7.6 case 6). Each shape fills the node budget with the heaviest vocabulary a miss
+/// enumerates ([`vocabulary_values_at_the_budget`]) and is a row of its own id under a tag of its
+/// own: the verdict cache keys by shape id, so no read finds another's verdict, and the tagged
+/// counts show each read compiled its own shape once, a miss on the verdict, and enumerated it
+/// once, as every by-id read of a compiling shape does. The by-id read remembers no vocabulary, so
+/// what a call costs here is what any by-id read costs under this contention.
+///
+/// **What it measures.** Nothing in the loader reports how long a call waited for a permit, so this
+/// times each `askable` call whole, from the moment the burst starts, against one uncontended
+/// `askable` miss: a call's wait is its latency past the uncontended one. Rows are read before any
+/// timer starts, so no database time is in it. The calls are polled on one thread (`sqlx::test`'s
+/// runtime is current-thread), so what each does on the executor before its permit — measuring
+/// the schema against the byte bound and the budget — runs one call after another, and is in the
+/// wait too. Beside it, an uncontended `judge`: what declare and an ask load's verdict hold a
+/// permit for.
+///
+/// **Permits.** The process has `compile_permits()`, half the cores and at least one, and the test
+/// changes nothing about them. It prints `available_parallelism` and the permits that implies, so
+/// the wait under one permit can be worked out from the per-call cost.
+///
+/// With the node budget, arm64 (M4 Pro), rustc 1.99, release, median of three runs, on 12 cores
+/// and so 6 compile permits: an uncontended `judge` 0.99 ms, an uncontended `askable` miss
+/// 1.76 ms; 8 concurrent misses, latency p50 5.40 ms and p99 6.07 ms, wait past an uncontended
+/// miss p50 3.71 ms and p99 4.37 ms. On one permit the eighth call would wait for the seven before
+/// it, about 7 × 1.76 ≈ 12 ms, in the case where each read's verdict misses too; that figure is
+/// worked out, not measured.
+///
+/// **The number the loader's lack of a vocabulary cache rests on.** That 1.76 ms includes each
+/// fresh shape's compile, which the verdict cache, not a vocabulary cache, spares on a later read.
+/// A by-id read whose verdict is remembered costs a clone and an enumeration: at the budget about
+/// 0.15 ms (`T_clone`, `parse_worst_case_at_the_caps`) plus at most 0.43 ms (`T_enum`,
+/// `vocabulary_paths_worst_case`), about 0.6 ms. On one permit the eighth of eight such reads waits
+/// about 7 × 0.6 ≈ 4 ms, within the 10 ms a vocabulary cache would have to save to be kept, so the
+/// loader keeps none. That figure is worked out, not measured.
+#[sqlx::test(migrations = "../../migrations")]
+#[ignore = "benchmark: run with --release --ignored --nocapture before merge"]
+async fn permit_queueing_under_concurrent_by_id_misses(pool: PgPool) {
+    let w = seed_world(&pool, "loader-permit-queueing").await;
+    let cores = std::thread::available_parallelism().map_or(1, |cores| cores.get());
+    println!(
+        "permit queueing: available_parallelism {cores}, so {} compile permits",
+        (cores / 2).max(1)
+    );
+
+    // The first shape is read alone; the rest are the burst.
+    let mut shapes = Vec::new();
+    for _ in 0..=CONCURRENT_MISSES {
+        let tag = fresh_tag();
+        let (schema, paths) = vocabulary_values_at_the_budget(&tag);
+        let id = store(&pool, &w, "measurement", &schema).await;
+        let row = readback::shape_by_id(&pool, w.owner, id)
+            .await
+            .unwrap()
+            .expect("the owner reads the shape");
+        shapes.push((tag, paths, row));
+    }
+    let ((alone_tag, alone_paths, alone), burst) =
+        shapes.split_first().expect("the shapes are stored");
+
+    // The process's first compile builds what the validator keeps for the draft, and its first
+    // permit builds the semaphore; neither belongs to an uncontended call. `judge` remembers
+    // nothing, so the read below still misses.
+    judge(&alone.schema).await.unwrap();
+    let start = Instant::now();
+    let verdict = judge(&alone.schema).await.unwrap();
+    let judged = start.elapsed();
+    assert_eq!(verdict, SchemaVerdict::Compiles);
+
+    let start = Instant::now();
+    let (vocabulary, refusal) = askable(alone).await.unwrap();
+    let uncontended = start.elapsed();
+    assert!(refusal.is_none(), "the shape compiles");
+    assert_eq!(
+        vocabulary.paths.len(),
+        *alone_paths,
+        "every field is a path"
     );
     assert_eq!(
-        path_teachings_made_tagged(&tag),
-        1,
-        "one enumeration for three requests"
+        compiles_tagged(alone_tag),
+        3,
+        "two judges, then the read's own compile: a miss on the verdict"
+    );
+    assert_eq!(enumerations_tagged(alone_tag), 1, "the read enumerated");
+    println!("permit queueing: uncontended judge {:.3} ms", ms(judged));
+    println!(
+        "permit queueing: uncontended askable miss {:.3} ms",
+        ms(uncontended)
+    );
+
+    let started = Instant::now();
+    let reads = join_all(burst.iter().map(|(_, _, row)| async move {
+        let read = askable(row).await.unwrap();
+        (started.elapsed(), read)
+    }))
+    .await;
+
+    let mut latencies = Vec::new();
+    for (call, ((tag, paths, _), (latency, (vocabulary, refusal)))) in
+        burst.iter().zip(reads).enumerate()
+    {
+        assert!(refusal.is_none(), "call {call}: the shape compiles");
+        assert_eq!(
+            vocabulary.paths.len(),
+            *paths,
+            "call {call}: every field is a path"
+        );
+        assert_eq!(
+            compiles_tagged(tag),
+            1,
+            "call {call}: a miss on the verdict"
+        );
+        assert_eq!(
+            enumerations_tagged(tag),
+            1,
+            "call {call}: the read enumerated"
+        );
+        println!(
+            "permit queueing: call {call}: {:.3} ms, {:.3} ms past an uncontended miss",
+            ms(latency),
+            ms(latency.saturating_sub(uncontended))
+        );
+        latencies.push(latency);
+    }
+    latencies.sort_unstable();
+    let p50 = nearest_rank(&latencies, 50);
+    let p99 = nearest_rank(&latencies, 99);
+    println!(
+        "permit queueing: {CONCURRENT_MISSES} concurrent misses: latency p50 {:.3} ms, p99 {:.3} \
+         ms; wait p50 {:.3} ms, p99 {:.3} ms; uncontended askable miss {:.3} ms, uncontended \
+         judge {:.3} ms",
+        ms(p50),
+        ms(p99),
+        ms(p50.saturating_sub(uncontended)),
+        ms(p99.saturating_sub(uncontended)),
+        ms(uncontended),
+        ms(judged)
     );
 }

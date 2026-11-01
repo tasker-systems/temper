@@ -21,7 +21,9 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::{Principal, ScopedAuthority};
+use temper_substrate::payloads::{AnchorTable, RefTarget};
+
+use super::{personal_space, Principal, ScopedAuthority};
 use crate::error::{ApiError, ApiResult};
 use crate::services::context_service;
 use crate::services::context_service::CONTEXT_REFUSAL;
@@ -41,6 +43,10 @@ pub(crate) enum ContextAdminAuthority {
     ReadOnly,
     /// Not visible to the caller at all → `404`.
     Invisible,
+    /// A system admin who does not administer someone else's personal context → `403` that says so
+    /// (task `01a1933d`): the admin arm does not reach it, and the admin is told what they hit
+    /// rather than sent hunting for a missing row (`super::personal_space`).
+    AdminStoppedAtPersonalSpace(personal_space::PersonalSpaceStop),
 }
 
 #[async_trait]
@@ -72,11 +78,19 @@ impl ScopedAuthority for ContextAdminAuthority {
             return Ok(ContextAdminAuthority::Administers);
         }
         // 2. System authority admits, and stays its own arm: it never becomes ownership. It stops at
-        //    personal space, which only its owner (arm 1) and erasure act on (task `01a191b4`).
-        if principal.system_admin(pool).await?.is_some()
-            && !context_service::is_others_personal_context(pool, context_id, caller).await?
-        {
-            return Ok(ContextAdminAuthority::SystemAdmin);
+        //    personal space, which only its owner (arm 1) and erasure act on (task `01a191b4`), and
+        //    an admin stopped there is told what they hit (task `01a1933d`).
+        if principal.system_admin(pool).await?.is_some() {
+            let subject = RefTarget {
+                kind: AnchorTable::Contexts,
+                id: context_id,
+            };
+            return Ok(
+                match personal_space::others_personal_space(pool, subject, caller).await? {
+                    Some(stop) => ContextAdminAuthority::AdminStoppedAtPersonalSpace(stop),
+                    None => ContextAdminAuthority::SystemAdmin,
+                },
+            );
         }
         // 3/4. The one visibility predicate, called through the one Rust spelling of it.
         Ok(
@@ -92,8 +106,17 @@ impl ScopedAuthority for ContextAdminAuthority {
     fn is_denial(&self) -> bool {
         matches!(
             self,
-            ContextAdminAuthority::ReadOnly | ContextAdminAuthority::Invisible
+            ContextAdminAuthority::ReadOnly
+                | ContextAdminAuthority::Invisible
+                | ContextAdminAuthority::AdminStoppedAtPersonalSpace(_)
         )
+    }
+
+    fn personal_space_stop(&self) -> Option<personal_space::PersonalSpaceStop> {
+        match self {
+            ContextAdminAuthority::AdminStoppedAtPersonalSpace(stop) => Some(*stop),
+            _ => None,
+        }
     }
 
     /// The **safe fallback**: the more withholding of this domain's two refusals.
@@ -412,8 +435,13 @@ mod tests {
             ContextAdminAuthority::resolve(&pool, Principal::Bare(admin), personal)
                 .await
                 .unwrap(),
-            ContextAdminAuthority::Invisible,
-            "someone else's personal context is not the admin's to administer"
+            ContextAdminAuthority::AdminStoppedAtPersonalSpace(
+                personal_space::PersonalSpaceStop::new(
+                    personal_space::PersonalSpaceKind::Context,
+                    owner
+                )
+            ),
+            "someone else's personal context is not the admin's to administer, and says so"
         );
     }
 

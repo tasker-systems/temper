@@ -24,21 +24,20 @@ use temper_workflow::types::managed_meta::ManagedMeta;
 
 mod common;
 
-const L0_COGMAP: Uuid = Uuid::from_u128(0x00000000_0000_0000_0005_000000000001);
-
 /// Grant the profile `approved` standing — the D11 front door (`has_system_access`) so it can act.
-/// L0 is the public kernel map, readable regardless of membership; write is granted below (F2).
-async fn approved_backend(pool: &PgPool, email: &str) -> (DbBackend, ProfileId, ContextId) {
+/// It also authors a map of its own, on which `open_inv` opens (F2).
+async fn approved_backend(pool: &PgPool, email: &str) -> (DbBackend, ProfileId, ContextId, Uuid) {
     let (profile, context) = common::fixtures::create_test_profile_with_context(pool, email).await;
     common::fixtures::approve_standing(pool, profile).await;
-    // Self-attributed invocation-open on L0 now requires WRITE (F2), not just the read root-join
-    // confers — grant it so `open_inv` succeeds.
-    common::fixtures::grant_cogmap_write(pool, L0_COGMAP, profile).await;
+    // Self-attributed invocation-open requires authorship of the originating map (F2): an ordinary
+    // map this profile holds a write grant on. (L0 would need a system admin, 20261113000010.)
+    let map = common::fixtures::authored_map(pool, profile).await;
     let profile_id = ProfileId::from(profile);
     (
         DbBackend::new(pool.clone(), profile_id),
         profile_id,
         ContextId::from(context),
+        map,
     )
 }
 
@@ -71,23 +70,23 @@ fn create_cmd(context: ContextId, slug: &str, act: ActContext) -> CreateResource
     }
 }
 
-async fn open_inv(backend: &DbBackend) -> InvocationId {
+async fn open_inv(backend: &DbBackend, map: Uuid) -> InvocationId {
     let out = backend
         .open_invocation(OpenInvocation {
             trigger_kind: "manual".to_string(),
-            originating_cogmap: temper_core::types::ids::CogmapId::from(L0_COGMAP),
+            originating_cogmap: temper_core::types::ids::CogmapId::from(map),
             parent_cogmap: None,
             origin: Surface::ApiHttp,
         })
         .await
-        .expect("open against readable L0 must succeed");
+        .expect("open against an authored map must succeed");
     InvocationId::from(out.value)
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn authored_create_under_invocation_stamps_metadata_and_invocation(pool: PgPool) {
-    let (backend, _profile, context) = approved_backend(&pool, "author@example.com").await;
-    let inv = open_inv(&backend).await;
+    let (backend, _profile, context, map) = approved_backend(&pool, "author@example.com").await;
+    let inv = open_inv(&backend, map).await;
 
     let act = ActContext {
         invocation: Some(inv),
@@ -128,8 +127,8 @@ async fn authored_create_under_invocation_stamps_metadata_and_invocation(pool: P
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn authored_assert_under_invocation_stamps_the_edge_act(pool: PgPool) {
-    let (backend, _profile, context) = approved_backend(&pool, "edge@example.com").await;
-    let inv = open_inv(&backend).await;
+    let (backend, _profile, context, map) = approved_backend(&pool, "edge@example.com").await;
+    let inv = open_inv(&backend, map).await;
 
     // Two resources to connect (un-stamped — only the edge act is under test).
     let src = backend
@@ -182,7 +181,7 @@ async fn authored_assert_under_invocation_stamps_the_edge_act(pool: PgPool) {
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn act_claiming_unknown_invocation_is_not_found(pool: PgPool) {
-    let (backend, _profile, context) = approved_backend(&pool, "ghost@example.com").await;
+    let (backend, _profile, context, _map) = approved_backend(&pool, "ghost@example.com").await;
     // A random invocation id the caller cannot read (it does not exist) → uniform 404, no oracle.
     let act = ActContext {
         invocation: Some(InvocationId::from(Uuid::now_v7())),
@@ -200,8 +199,8 @@ async fn act_claiming_unknown_invocation_is_not_found(pool: PgPool) {
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn act_on_closed_invocation_is_conflict(pool: PgPool) {
-    let (backend, _profile, context) = approved_backend(&pool, "closed@example.com").await;
-    let inv = open_inv(&backend).await;
+    let (backend, _profile, context, map) = approved_backend(&pool, "closed@example.com").await;
+    let inv = open_inv(&backend, map).await;
     backend
         .close_invocation(CloseInvocation {
             invocation: inv.uuid(),
@@ -228,7 +227,7 @@ async fn act_on_closed_invocation_is_conflict(pool: PgPool) {
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn create_without_act_leaves_invocation_null(pool: PgPool) {
-    let (backend, _profile, context) = approved_backend(&pool, "plain@example.com").await;
+    let (backend, _profile, context, _map) = approved_backend(&pool, "plain@example.com").await;
     // The default (empty) ActContext — a keyboard-holder act: no correlation, no authorship.
     backend
         .create_resource(create_cmd(context, "plain", ActContext::default()))

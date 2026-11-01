@@ -19,8 +19,9 @@
 //! The rest are controls or property pins. A local `#/$defs` or `#/definitions` ref and a recursive
 //! pointer `$ref` are refused as outside the field tree; a custom or off-list `$schema` is refused
 //! wherever it sits as a schema keyword, including one the schema defines for itself; and a custom
-//! `$schema` string inside data (a `const`, an `enum`) is not a schema keyword and compiles.
-//! Controls pin that a standard `$schema` inside a `const` and a property named `$schema` compile.
+//! `$schema` string inside data (`examples`, which may hold structured values) is not a schema
+//! keyword and compiles. Controls pin that a standard `$schema` inside `examples`, a scalar `const`
+//! holding that URI string (enforced), and a property named `$schema` compile.
 //!
 //! These are plain `#[test]`s on purpose: the blocking fetch a default compile makes panics inside
 //! a tokio runtime instead of connecting, so the async suites' zero-connection assertions are not
@@ -107,6 +108,10 @@ fn a_file_ref_is_refused_and_its_content_never_surfaces() {
         !format!("{error:?}").contains(SENTINEL),
         "the file's content must not appear in the error's Debug"
     );
+    assert!(
+        !error.detailed().contains(SENTINEL),
+        "the file's content must not appear in the detailed refusal"
+    );
 }
 
 /// The error says nothing about where the `$ref` pointed: no host, no port.
@@ -116,7 +121,7 @@ fn the_error_never_names_the_uri_it_refused() {
     let schema = json!({ "$ref": probe.url("x.json") });
 
     let error = compile(&schema).expect_err("refused");
-    for text in [error.to_string(), format!("{error:?}")] {
+    for text in [error.to_string(), format!("{error:?}"), error.detailed()] {
         assert!(
             !text.contains("127.0.0.1") && !text.contains(&probe.port().to_string()),
             "the refusal must not echo the URI, got: {text}"
@@ -124,23 +129,67 @@ fn the_error_never_names_the_uri_it_refused() {
     }
 }
 
-/// Every cause of an uncompilable schema answers the same value, so the text cannot be used to
-/// tell a remote host's behaviour from a malformed schema.
+/// Every cause of an uncompilable schema answers the same fixed sentence, and the detail a reader
+/// who can read the shape is given names only the keyword and its position — the schema's own text
+/// — so neither can be used to tell a remote host's behaviour from a malformed schema.
 #[test]
 fn every_cause_answers_the_one_fixed_error() {
     let probe = FetchProbe::bind();
     let causes = [
-        json!({ "$ref": probe.url("x.json") }),
-        json!({ "$schema": "https://example.invalid/nope" }),
-        json!({ "type": 12 }),
+        (
+            json!({ "$ref": probe.url("x.json") }),
+            "keyword $ref at the root",
+        ),
+        (
+            json!({ "$schema": "https://example.invalid/nope" }),
+            "keyword $schema naming a draft other than 2020-12 at the root",
+        ),
+        (
+            json!({ "type": 12 }),
+            "a value that is not valid 2020-12 at /type",
+        ),
     ];
-    for schema in causes {
-        assert_eq!(
-            compile(&schema).err(),
-            Some(ShapeSchemaUncompilable),
-            "schema {schema} must answer the fixed error"
+    let fixed = ShapeSchemaUncompilable::default().to_string();
+    for (schema, refused) in causes {
+        let error = compile(&schema).expect_err("refused");
+        assert_eq!(error.to_string(), fixed, "schema {schema}");
+        assert_eq!(error.refused(), Some(refused), "schema {schema}");
+        assert!(
+            !error.detailed().contains("example.invalid")
+                && !error.detailed().contains(&probe.port().to_string()),
+            "the detail must not echo a URI, got: {}",
+            error.detailed()
         );
     }
+    assert_eq!(probe.connections(), 0);
+}
+
+/// A key beginning `x-` is carried and never walked (shape ruling R2): a schema-like object under
+/// one — a `$ref` to the probe, a `$schema` naming it, a nested `properties` — compiles, and the
+/// listener sees no connection. Bites a walk that descends an `x-` value, which would refuse the
+/// `$ref`, and a compile that resolves what an annotation holds.
+#[test]
+fn an_extension_key_holding_a_remote_ref_compiles_and_never_connects() {
+    let probe = FetchProbe::bind();
+    let nested = json!({
+        "$ref": probe.url("x.json"),
+        "$schema": probe.url("meta.json"),
+        "properties": { "inner": { "$ref": probe.url("inner.json") } },
+    });
+    let schema = json!({
+        "$schema": DRAFT_2020_12,
+        "type": "object",
+        "x-root": nested.clone(),
+        "properties": { "when": { "type": "string", "x-ui": nested } },
+    });
+
+    let validator = compile(&schema).expect("an x- key is carried, never walked");
+    assert!(validator.is_valid(&json!({ "when": "anything" })));
+    assert_eq!(
+        probe.connections(),
+        0,
+        "the compile must not connect to a host an x- value names"
+    );
 }
 
 /// A 2020-12 `$schema` with local `#/$defs` refs is refused: `$ref` and `$defs` are outside the
@@ -462,33 +511,48 @@ fn a_custom_schema_uri_under_a_loosely_spelled_array_index_is_refused() {
     }
 }
 
-/// A custom `$schema` string inside a `const` value compiles: `const` holds data, and with no
-/// `$ref` nothing can make data a schema, so the walk never reads it as a `$schema` keyword.
+/// A custom `$schema` string inside an `examples` value compiles: `examples` holds data, and with
+/// no `$ref` nothing can make data a schema, so the walk never reads it as a `$schema` keyword.
 #[test]
-fn a_custom_schema_uri_inside_a_const_value_compiles() {
+fn a_custom_schema_uri_inside_an_examples_value_compiles() {
     let schema = json!({
         "$schema": DRAFT_2020_12,
-        "const": { "$schema": "urn:x", "kind": "example" },
+        "examples": [{ "$schema": "urn:x", "kind": "example" }],
     });
 
     assert!(
         compile(&schema).is_ok(),
-        "a custom $schema inside a const is data and must compile"
+        "a custom $schema inside an examples value is data and must compile"
     );
 }
 
-/// Control: a `const` holding a STANDARD-draft `$schema` string compiles, and the `const` is
-/// enforced. The rule refuses only `$schema` strings no standard draft answers to.
+/// Control: an `examples` value holding a STANDARD-draft `$schema` string compiles. The rule
+/// refuses only `$schema` strings no standard draft answers to.
+#[test]
+fn a_standard_schema_uri_inside_an_examples_value_still_compiles() {
+    let schema = json!({
+        "$schema": DRAFT_2020_12,
+        "examples": [{ "$schema": DRAFT_2020_12, "kind": "example" }],
+    });
+
+    assert!(
+        compile(&schema).is_ok(),
+        "an examples value holding a standard $schema is data and must compile"
+    );
+}
+
+/// Control: a scalar `const` whose value is the standard `$schema` URI string compiles, and the
+/// `const` is enforced.
 #[test]
 fn a_standard_schema_uri_inside_a_const_value_still_compiles() {
     let schema = json!({
         "$schema": DRAFT_2020_12,
-        "const": { "$schema": DRAFT_2020_12, "kind": "example" },
+        "const": DRAFT_2020_12,
     });
 
-    let validator = compile(&schema).expect("a const holding a standard $schema compiles");
-    assert!(validator.is_valid(&json!({ "$schema": DRAFT_2020_12, "kind": "example" })));
-    assert!(!validator.is_valid(&json!({ "kind": "other" })));
+    let validator = compile(&schema).expect("a const holding the URI string compiles");
+    assert!(validator.is_valid(&json!(DRAFT_2020_12)));
+    assert!(!validator.is_valid(&json!("other")));
 }
 
 /// Control: a property merely NAMED `$schema` is not a meta-schema declaration, because it is a
@@ -508,14 +572,14 @@ fn a_property_named_schema_is_not_mistaken_for_a_meta_schema_declaration() {
 }
 
 /// A custom `$schema` object nested inside an array inside an array compiles: it sits under
-/// `enum`, a data position the walk never enters.
+/// `examples`, a data position the walk never enters.
 #[test]
 fn a_custom_schema_uri_inside_nested_arrays_compiles() {
-    let schema = json!({ "type": "object", "enum": [[{ "$schema": "urn:example:custom" }]] });
+    let schema = json!({ "type": "object", "examples": [[{ "$schema": "urn:example:custom" }]] });
 
     assert!(
         compile(&schema).is_ok(),
-        "a custom $schema inside an enum's nested arrays is data and must compile"
+        "a custom $schema inside an examples value's nested arrays is data and must compile"
     );
 }
 

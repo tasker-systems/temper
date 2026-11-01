@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kb_cogmaps SET created_by_profile_id = cogmap_genesis_creator(id)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "e761d6403006e190c6d9cbe62ac13800e0dc98de749cc0705577da92a6b5afa8"
+}

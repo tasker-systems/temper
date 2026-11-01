@@ -23,6 +23,7 @@ mod query;
 mod slack_link_public;
 mod webhook_intake;
 
+pub use gated::SHAPE_DECLARE_MAX_BODY_BYTES;
 pub use query::QUERY_MAX_BODY_BYTES;
 
 use axum::extract::DefaultBodyLimit;
@@ -38,7 +39,7 @@ use admin::admin_routes;
 use auth_only::{auth_only_routes, auth_only_status_routes};
 use blob_doors::{blob_commit_body_limit, blob_commit_routes, blob_segment_routes};
 use embed_internal::embed_internal_routes;
-use gated::gated_routes;
+use gated::{gated_routes, shape_declare_routes};
 use internal::{internal_routes, slack_link_internal_routes, slack_mint_internal_routes};
 use public::public_routes;
 use slack_link_public::slack_link_public_routes;
@@ -163,6 +164,10 @@ fn route_table() -> Vec<Group> {
         // (4.5 MB), not the config — the staging ceiling is enforced with its own
         // vocabulary in the service.
         Group { key: "blob_segment_routes", tier: Tier::Gated, build: Documented(blob_segment_routes), body_limit: Some(BodyLimit::Fixed(blob_doors::BLOB_SEGMENT_MAX_BODY_BYTES)), serves: Serves::AppOnly },
+        // The shape declare POSTs, at the gated tier with their own body limit INNER to the tier
+        // stack, so a schema-sized 512 KiB wins over the inherited 25 MiB on these two routes.
+        // They share their paths with the list GETs in `gated_routes`; the routers merge by method.
+        Group { key: "shape_declare_routes", tier: Tier::Gated, build: Documented(shape_declare_routes), body_limit: Some(BodyLimit::Fixed(gated::SHAPE_DECLARE_MAX_BODY_BYTES)), serves: Serves::AppOnly },
         // The three internal HMAC groups — one scheme, three secrets, three routers.
         // Signature gates mount in BOTH builders; losing one mount is not a downgrade
         // to authenticated-but-broad, it is the group served ungated on that surface.

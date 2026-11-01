@@ -46,7 +46,7 @@ module Temper::Generated
     # The chain depth of the assert/fold lineage — 1 for the first declaration, N for the Nth.
     attr_accessor :shape_version
 
-    # Why this version's schema cannot be walked: the refusal step 3 of asking gives it — `shape_schema_uncompilable`, with its fixed sentence for a schema that does not compile under the no-fetch compiler, or with a sentence naming the byte bound and `teaches.beyond_bound: schema_bytes` for one too large to read, which is never compiled. What an ask naming this shape is told can differ: an ask naming a folded version is refused `shape_superseded` first (`is_folded`). Absent whenever the schema can be walked, and on listings.
+    # Why this version's schema cannot be walked: the refusal step 3 of asking gives it — `shape_schema_uncompilable`, with its sentence for a schema that does not compile under the no-fetch compiler (naming the first keyword or cap refused and its schema path), or with a sentence naming the byte bound and `teaches.beyond_bound: schema_bytes` for one too large to read, which is never compiled. What an ask naming this shape is told can differ: an ask naming a folded version is refused `shape_superseded` first (`is_folded`). Absent whenever the schema can be walked, and on listings.
     attr_accessor :unaskable
 
     class EnumAttributeValidator

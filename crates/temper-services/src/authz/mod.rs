@@ -30,6 +30,7 @@ mod connection;
 mod context_admin;
 mod grant;
 mod machine;
+pub(crate) mod personal_space;
 mod read_gates;
 mod subscription;
 pub(crate) mod team_membership;
@@ -227,6 +228,18 @@ pub(crate) trait ScopedAuthority: Sized + Copy + Debug {
     fn denial_for(&self) -> ApiError {
         Self::denial()
     }
+
+    /// When this arm is a system admin stopped at someone else's personal space, which kind and
+    /// whose — so [`authorize`] can tell the admin what they hit (task `01a1933d`, see
+    /// [`personal_space`]). `None` for every other arm, and for every authority that has no such arm.
+    ///
+    /// This is the one refusal that names something about its subject, and only for a caller who
+    /// is a system admin: the arm carries no content, only the kind and the person, whose handle a
+    /// system admin may already list for audit. It sits beside `denial_for` rather than in it
+    /// because the handle is looked up, and a refusal voice takes no pool.
+    fn personal_space_stop(&self) -> Option<personal_space::PersonalSpaceStop> {
+        None
+    }
 }
 
 /// Proof that `authority` was resolved for `subject`, and that it is not a denial.
@@ -271,6 +284,9 @@ pub(crate) async fn authorize<A: ScopedAuthority>(
 ) -> ApiResult<Authorized<A>> {
     let authority = A::resolve(pool, caller, subject).await?;
     if authority.is_denial() {
+        if let Some(stop) = authority.personal_space_stop() {
+            return Err(personal_space::refusal(pool, stop).await?);
+        }
         return Err(authority.denial_for());
     }
     Ok(Authorized { authority, subject })
@@ -517,6 +533,44 @@ mod tests {
             ApiError::NotFound(message) => assert_eq!(message, CONTEXT_REFUSAL),
             other => panic!("Invisible must render NotFound(CONTEXT_REFUSAL), got {other:?}"),
         }
+    }
+
+    // ── (d) the personal-space stop ───────────────────────────────────────────
+    //
+    // A third answer, rendered by `authorize` rather than by `denial_for`: an arm that is a system
+    // admin stopped at someone else's personal space carries the kind and the person, and
+    // `authorize` looks up the handle (task `01a1933d`). Its `denial_for` stays the domain's static
+    // voice, so (a) above keeps holding for every arm, and a path that refuses without `authorize`
+    // falls back to the more withholding answer. The behavioral guarantee — every door says the
+    // sentence — is `tests/private_cogmaps_personal_space_test.rs`'s. This asserts the mechanism:
+    // each stop arm is a denial, carries its stop, and no other arm carries one.
+    #[test]
+    fn the_personal_space_stop_arms_are_denials_that_carry_their_stop() {
+        use personal_space::{PersonalSpaceKind, PersonalSpaceStop};
+        let stop = PersonalSpaceStop::new(
+            PersonalSpaceKind::Cogmap,
+            ProfileId::from(uuid::Uuid::nil()),
+        );
+
+        let grant = GrantAuthority::AdminStoppedAtPersonalSpace(stop);
+        assert!(grant.is_denial());
+        assert_eq!(grant.personal_space_stop(), Some(stop));
+        let two_sided = TwoSidedAuthority::AdminStoppedAtPersonalSpace(stop);
+        assert!(two_sided.is_denial());
+        assert_eq!(two_sided.personal_space_stop(), Some(stop));
+        let context = ContextAdminAuthority::AdminStoppedAtPersonalSpace(stop);
+        assert!(context.is_denial());
+        assert_eq!(context.personal_space_stop(), Some(stop));
+        assert_one_voice("GrantAuthority", grant);
+        assert_one_voice("TwoSidedAuthority", two_sided);
+        assert!(matches!(context.denial_for(), ApiError::NotFound(_)));
+
+        for none in [GrantAuthority::None, GrantAuthority::SystemAdmin] {
+            assert_eq!(none.personal_space_stop(), None);
+        }
+        assert_eq!(TwoSidedAuthority::None.personal_space_stop(), None);
+        assert_eq!(ContextAdminAuthority::Invisible.personal_space_stop(), None);
+        assert_eq!(ContextAdminAuthority::ReadOnly.personal_space_stop(), None);
     }
 
     // `ConnectionAuthority` is the second deliberate two-dialect authority. Its behavioral guarantee

@@ -17,7 +17,8 @@
 //! and the machine surface tightens with it — there is no second copy of the policy to drift.
 //!
 //! The **role bar** is deliberately NOT part of containment (D4b). Containment asks whether the
-//! reach is a subset of the caller's own, and D3 answers "unchecked" for an admin; whether a
+//! reach is a subset of the caller's own, and D3 answers "unchecked" for an admin (outside
+//! someone else's personal cognitive map, which the grant door stops it at); whether a
 //! machine may hold a given role at all is a different question, answered `no` for every caller
 //! above [`MAX_MACHINE_TEAM_ROLE`]. So it runs in [`authorize_registration`], on both arms.
 
@@ -64,7 +65,8 @@ pub(crate) fn exceeds_machine_ceiling(role: TeamRole) -> bool {
 /// The caller's authority over a machine registration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MachineRegistrationAuthority {
-    /// A system admin (a `kb_principal_governance` grant). Full, unchecked reach (Phase A D5).
+    /// A system admin (a `kb_principal_governance` grant). Full, unchecked reach (Phase A D5),
+    /// except a cogmap grant on someone else's personal map (task `01a1933d`).
     SystemAdmin,
     /// Owner of the team that owns (or will own) the machine. Reach is contained.
     TeamOwner,
@@ -220,12 +222,35 @@ pub(crate) async fn authorize_registration<'a>(
     }
 
     match authority {
-        // Phase A D5: a system admin may confer any reach on a machine.
-        MachineRegistrationAuthority::SystemAdmin => Ok(AuthorizedReach {
-            registrar: authed,
-            teams,
-            grants: AuthorizedReach::seal(grants),
-        }),
+        // Phase A D5: a system admin may confer any reach on a machine — but not on someone
+        // else's personal cognitive map (task `01a1933d`). A reach grant is a grant on the map,
+        // so it asks the grant door's own decision, which stops the admin arm there and tells the
+        // admin what they hit. Everywhere else that decision resolves `SystemAdmin`, unattenuated,
+        // so D3's "reach unchecked for admins" holds outside personal space.
+        MachineRegistrationAuthority::SystemAdmin => {
+            for grant in grants {
+                access_service::authorize_capability_grant(
+                    pool,
+                    crate::authz::Principal::Human(authed),
+                    temper_substrate::payloads::RefTarget {
+                        kind: temper_substrate::payloads::AnchorTable::Cogmaps,
+                        id: grant.cogmap_id,
+                    },
+                    access_service::RequestedCapabilities {
+                        read: true,
+                        write: grant.can_write,
+                        delete: false,
+                        grant: false,
+                    },
+                )
+                .await?;
+            }
+            Ok(AuthorizedReach {
+                registrar: authed,
+                teams,
+                grants: AuthorizedReach::seal(grants),
+            })
+        }
         MachineRegistrationAuthority::TeamOwner => {
             contain_reach(pool, authed, teams, grants).await?;
             Ok(AuthorizedReach {
@@ -355,8 +380,8 @@ async fn contain_reach(
         // admin-only guard. Sharing the decision is what stops it recurring.
         //
         // `apply_reach` confers exactly `read + (write iff spec)`, never delete or grant — so that
-        // is what is attenuated here. The admin arm already returned above, so this resolves to
-        // Delegated or None in practice.
+        // is what is attenuated here. The admin arm asks the same decision separately, so this
+        // resolves to Delegated or None in practice.
         let proof = access_service::authorize_capability_grant(
             pool,
             crate::authz::Principal::Human(authed),

@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT cogmap_personal_owner($1) AS \"o\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "o",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "27680c4a1eec226721bb2f850ccbadd3ad782bd1236ddeb2f76cb8c403cfd8a8"
+}

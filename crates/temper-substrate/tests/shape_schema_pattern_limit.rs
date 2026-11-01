@@ -33,10 +33,22 @@ fn a_pattern_past_the_per_pattern_size_limit_does_not_compile() {
         jsonschema::validator_for(&schema).is_ok(),
         "control: the pattern compiles under the engine's default limit"
     );
+    let error =
+        compile(&schema).expect_err("a pattern past the bound makes the schema uncompilable");
     assert_eq!(
-        compile(&schema).err(),
-        Some(ShapeSchemaUncompilable),
-        "a pattern past {MAX_PATTERN_BYTES} bytes makes the schema uncompilable"
+        error.to_string(),
+        ShapeSchemaUncompilable::default().to_string()
+    );
+    assert_eq!(
+        error.refused(),
+        Some(
+            format!(
+                "pattern past the cap of {} KiB compiled, or not a regex, at /properties/code",
+                MAX_PATTERN_BYTES / 1024
+            )
+            .as_str()
+        ),
+        "the refusal names the cap and the schema position holding the pattern"
     );
 }
 

@@ -235,7 +235,7 @@ pub async fn create_context(
 /// Share a context into a team's read-reach, through the door. Authorized by the two-sided
 /// `can_share` gate at the API (system-admin, OR the caller administers the context AND manages
 /// the target team; a personal-team target, or someone else's personal context, is its owner's
-/// alone, admins included) before the write. Idempotent — `shared: false` when the share already existed.
+/// alone, admins included, and an admin refused there is told so) before the write. Idempotent — `shared: false` when the share already existed.
 pub async fn share_context(
     svc: &TemperMcpService,
     parts: &http::request::Parts,
@@ -311,7 +311,8 @@ pub async fn unshare_context(
 
 /// Rename a context — the one act that moves its `(name, slug)` identity pair in place.
 /// Authorized by the one-sided `ContextAdminAuthority` gate at the API (you administer the
-/// context, or you are an instance admin); this tool adds no authorization of its own. The slug is
+/// context, or you are an instance admin and it is not someone else's personal space, which
+/// refuses an admin with a sentence naming it); this tool adds no authorization of its own. The slug is
 /// **derived** from the name, so a rename **re-addresses** the context — the outcome carries the
 /// composed `context_ref` to use from now on. Idempotent — `renamed: false` when the canonical
 /// name already equalled the stored one.

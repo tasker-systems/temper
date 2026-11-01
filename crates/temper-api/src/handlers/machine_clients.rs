@@ -33,7 +33,7 @@ use temper_core::types::query_params::MachineClientListQuery as ListQuery;
     post,
     operation_id = "provision_machine_client",
     summary = "Register a machine client",
-    description = "Registers an externally issued IdP `client_id` as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin, and a listed personal team must be the caller's own. An instance that runs temper's own authorization server refuses it, because an externally issued client id could never authenticate there; issue a credential instead. No caller can give a machine a team role above `member`.",
+    description = "Registers an externally issued IdP `client_id` as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin, and a listed personal team must be the caller's own, as must a listed cogmap that is personal space (an admin is told when it is someone else's: `FORBIDDEN_DETAIL`). An instance that runs temper's own authorization server refuses it, because an externally issued client id could never authenticate there; issue a credential instead. No caller can give a machine a team role above `member`.",
     path = "/api/machine-clients",
     tag = "Machine Clients",
     request_body = ProvisionMachineRequest,
@@ -42,7 +42,7 @@ use temper_core::types::query_params::MachineClientListQuery as ListQuery;
         (status = 200, description = "The registered machine client", body = MachineClient),
         (status = 400, description = "Unknown team role in `teams`, a `client_id` beginning `conn_` or `tmpr_` (namespaces temper mints itself, which cannot be registered by hand), or this instance runs temper's own authorization server", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin (`FORBIDDEN_DETAIL`), a team role above `member` was requested (refused for every caller), or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin (`FORBIDDEN_DETAIL`), a team role above `member` was requested (refused for every caller), a grant on someone else's personal cognitive map was requested (`FORBIDDEN_DETAIL`, naming it), or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 409, description = "The `client_id` is already registered", body = ErrorBody),
     )
 )]
@@ -190,7 +190,7 @@ pub async fn revoke(
         (status = 200, description = "The new machine client and its one-time `client_secret`", body = IssuedMachineCredential),
         (status = 400, description = "Unknown team role in `teams`", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
+        (status = 403, description = "Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, a system admin requested a grant on someone else's personal cognitive map (`FORBIDDEN_DETAIL`: this cognitive map is @handle's personal space; the admin arm does not reach it), or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
     )
 )]
 pub async fn issue(

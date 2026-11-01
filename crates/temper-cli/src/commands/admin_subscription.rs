@@ -34,7 +34,7 @@ fn parse_selector(raw: &str) -> Result<SubscriptionSelector> {
     })
 }
 
-/// Create a subscription. The two-leg authz gate runs server-side.
+/// Create a subscription. The authz gate runs server-side.
 pub async fn create_remote(
     client: &temper_client::TemperClient,
     subscriber_table: &str,
