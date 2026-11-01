@@ -456,10 +456,11 @@ current_gates() {
 # system admin onto their own personal team is unchanged, and so is the refusal onto someone else's for
 # every caller. `machine_authz.rs` 8 -> 9: the doc's new sentence says a system admin may still bind
 # to their own personal team, which the `SystemAdmin` arm of that branch enforces. `team_membership`
-# 8a31f3610fe8 -> 90ecb2a16777: `try_membership_write` now also removes from the team, when a person
-# leaves it, the machines they control (registered, rotated, or own the owning team of) that the
-# team no longer answers for (`machines_leaving_with`; route 4, widened after the security review
-# found a throwaway-team bypass of a personal-only rule). Each removal goes through the same SQL
+# 8a31f3610fe8 -> 9e329c322371: `try_membership_write` now also removes from the team, when a person
+# leaves it, every machine whose key they hold or can still mint (`machines_leaving_with`; route 4,
+# the key-holder rule Pete adopted after the second security review found that "another controller
+# is still on the team" and "the team owns it" exemptions left the departing person a working key).
+# Judged over live client rows only. Each removal goes through the same SQL
 # writer (`write_one`, still its only Rust call site) as a recorded `machine_reach` removal correlated
 # with the person's own. This narrows only. It writes only removals, never an add or a raise, and is
 # reached only after the person's own removal was authorized and written. A refusal on the cascade
@@ -543,7 +544,7 @@ gate reconcile_regime 5339d74ce2eb
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e
-gate team_membership 90ecb2a16777
+gate team_membership 9e329c322371
 EOF
 
 CURRENT="$(current_claims; current_gates)"

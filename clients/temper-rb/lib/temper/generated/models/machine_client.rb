@@ -36,6 +36,9 @@ module Temper::Generated
 
     attr_accessor :revoked_by_profile_id
 
+    # Who minted the current secret by rotation, if it was rotated since this was recorded. With `registered_by_profile_id`, it names who holds or can hold the key: a person leaving a team takes off it every machine whose key they hold. Absent from an older server's response.
+    attr_accessor :secret_rotated_by_profile_id
+
     attr_accessor :team_id
 
     # Attribute mapping from ruby-style variable name to JSON key.
@@ -51,6 +54,7 @@ module Temper::Generated
         :'registered_by_profile_id' => :'registered_by_profile_id',
         :'revoked_at' => :'revoked_at',
         :'revoked_by_profile_id' => :'revoked_by_profile_id',
+        :'secret_rotated_by_profile_id' => :'secret_rotated_by_profile_id',
         :'team_id' => :'team_id'
       }
     end
@@ -78,6 +82,7 @@ module Temper::Generated
         :'registered_by_profile_id' => :'String',
         :'revoked_at' => :'Time',
         :'revoked_by_profile_id' => :'String',
+        :'secret_rotated_by_profile_id' => :'String',
         :'team_id' => :'String'
       }
     end
@@ -88,6 +93,7 @@ module Temper::Generated
         :'last_seen_at',
         :'revoked_at',
         :'revoked_by_profile_id',
+        :'secret_rotated_by_profile_id',
         :'team_id'
       ])
     end
@@ -160,6 +166,10 @@ module Temper::Generated
 
       if attributes.key?(:'revoked_by_profile_id')
         self.revoked_by_profile_id = attributes[:'revoked_by_profile_id']
+      end
+
+      if attributes.key?(:'secret_rotated_by_profile_id')
+        self.secret_rotated_by_profile_id = attributes[:'secret_rotated_by_profile_id']
       end
 
       if attributes.key?(:'team_id')
@@ -302,6 +312,7 @@ module Temper::Generated
           registered_by_profile_id == o.registered_by_profile_id &&
           revoked_at == o.revoked_at &&
           revoked_by_profile_id == o.revoked_by_profile_id &&
+          secret_rotated_by_profile_id == o.secret_rotated_by_profile_id &&
           team_id == o.team_id
     end
 
@@ -314,7 +325,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [client_id, created, id, issuer, label, last_seen_at, profile_id, registered_by_profile_id, revoked_at, revoked_by_profile_id, team_id].hash
+      [client_id, created, id, issuer, label, last_seen_at, profile_id, registered_by_profile_id, revoked_at, revoked_by_profile_id, secret_rotated_by_profile_id, team_id].hash
     end
 
     # Builds the object from hash

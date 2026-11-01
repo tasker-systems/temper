@@ -150,7 +150,9 @@ pub enum MembershipVia {
     TeamGenesis,
     /// A system admin approving an access request (`access_service::review_request`).
     AccessApproval,
-    /// A machine registration's team reach (`machine_registration_service::apply_reach`).
+    /// A change to a machine's team reach that no person made directly: a registration's reach
+    /// (`machine_registration_service::apply_reach`), a credential severance (a non-owner mint), or a
+    /// machine leaving a team with the person whose key it carries (the removal cascade).
     MachineReach,
     /// SAML reconcile of identity-provider rows. The system is the actor.
     IdpReconcile,

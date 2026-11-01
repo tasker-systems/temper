@@ -17,12 +17,13 @@ The residual routes from the v0.6.3 security review's S3 finding, each ruled by 
 - The same grant doors and `POST /api/machine-clients/issue`: a grant right held on the caller's
   own live personal team now counts as held in person (it was refused as "through a team").
 - Team membership: when a person's row on a team is removed (`DELETE /api/teams/{id}/members/{profile_id}`,
-  their own leave, or SAML reconcile), every machine on that team they control is removed in the same
-  transaction, unless the team owns it or another person still on the team controls it. Control
-  means they registered it, rotated its secret, or own its owning team. Each removal is a
-  `team_membership_changed` event with `via` `machine_reach`, sharing the person's event's
-  `correlation_id`.
-- `kb_machine_clients` gains `secret_rotated_by_profile_id`, set by a secret rotation. The rotator
+  their own leave, or SAML reconcile), every machine on that team whose key they hold or can still
+  mint is removed in the same transaction. That is a machine whose live credential they minted (or
+  whose rotation away from them is still in its grace window), or one owned by a team they still
+  own. Each removal is a `team_membership_changed` event with `via` `machine_reach`, sharing the
+  person's event's `correlation_id`.
+- `kb_machine_clients` gains `secret_rotated_by_profile_id`, set by a secret rotation, and the
+  `MachineClient` response (`GET /api/machine-clients`, `.../{id}`) carries it as an optional field. The rotator
   counts as controlling the machine at the grant door even after they leave its owning team.
   The erasure policy declares it as a profile reference (`pseudonym` ceiling), like the column's
   `registered_by_profile_id` and `revoked_by_profile_id` siblings.

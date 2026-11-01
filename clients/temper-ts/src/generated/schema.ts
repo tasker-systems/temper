@@ -2394,7 +2394,7 @@ export interface paths {
         put?: never;
         /**
          * Issue a machine credential
-         * @description Mints a new machine principal with a temper-issued `client_id` and secret. The `client_secret` in the response is shown once and never stored; only its hash is kept, so it cannot be retrieved later. Requires a system admin (only its owner, on someone else's personal team) or the owner of `owner_team_id`; a machine with no owning team can only be issued by a system admin. A team owner can confer only reach they could grant themselves, and a cogmap grant only on a map where they hold the grant right in their own name, not through a team. No caller can give a machine a team role above `member`. Where an external identity provider mints this instance's tokens, the credential is returned with `dormant: true`: it authenticates once the instance runs temper's own authorization server.
+         * @description Mints a new machine principal with a temper-issued `client_id` and secret. The `client_secret` in the response is shown once and never stored; only its hash is kept, so it cannot be retrieved later. Requires a system admin (only its owner, on someone else's personal team) or the owner of `owner_team_id`; a machine with no owning team can only be issued by a system admin. A team owner can confer only reach they could grant themselves, and a cogmap grant only on a map where they hold the grant right in their own name (on their profile or their own personal team), not through a shared team. No caller can give a machine a team role above `member`. Where an external identity provider mints this instance's tokens, the credential is returned with `dormant: true`: it authenticates once the instance runs temper's own authorization server.
          */
         post: operations["issue_machine_credential"];
         delete?: never;
@@ -7903,6 +7903,13 @@ export interface components {
             revoked_at?: string | null;
             /** Format: uuid */
             revoked_by_profile_id?: string | null;
+            /**
+             * Format: uuid
+             * @description Who minted the current secret by rotation, if it was rotated since this was recorded. With
+             *     `registered_by_profile_id`, it names who holds or can hold the key: a person leaving a team
+             *     takes off it every machine whose key they hold. Absent from an older server's response.
+             */
+            secret_rotated_by_profile_id?: string | null;
             /** Format: uuid */
             team_id?: string | null;
         };

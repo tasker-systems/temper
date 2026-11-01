@@ -136,35 +136,45 @@ disagree — which turns the removal into a check: nothing reported means the re
 everything it could. If the departing member is the team's only `owner`, the removal is refused
 until another owner exists; promote a successor first.
 
-#### The machines they control leave with them
+#### Machines whose key they hold leave with them
 
 When a person's row on a team is removed by `remove-member`, by their own leave, or by SAML
-reconcile, the machines they **control** on that team are removed in the same transaction. They
-control a machine if they registered it, minted its current secret by rotation, or own the team that
-owns it. Two kinds of machine stay:
+reconcile, every machine on that team whose key they hold, or can still mint, is removed in the same
+transaction. Your key leaves with you. Over the machine's live (unrevoked) credentials, that means
+any of these:
 
-- one the team itself owns (registered with `--owner-team` set to this team), and
-- one that another person still on the team also controls.
+- they minted its current secret: they registered it and nobody has rotated it since, or they
+  rotated it last;
+- they registered it, and a rotation away from them is still inside its grace window;
+- they own the team that owns it, other than the team they are leaving, so they could rotate it
+  later.
 
-This keeps a credential the departing person holds, or can mint, from outliving their place on the
-team. It also means a workload running on such a machine **stops reaching that team the moment they
+Nothing else keeps such a machine on the team. That includes another owner of its owning team
+still being on the team, and the team owning the machine itself, if the departing person minted
+its key.
+
+This also means a workload running on such a machine **stops reaching that team the moment they
 leave it**. Check before you run the removal:
 
 ```bash
 temper admin machine list --include-revoked --format json > machines.json
-jq '.[] | select(.registered_by_profile_id == "<departing-uuid>") | {id, label, team_id, last_seen_at, revoked_at}' machines.json
+jq '.[] | select(.revoked_at == null) | select(.registered_by_profile_id == "<departing-uuid>" or .secret_rotated_by_profile_id == "<departing-uuid>") | {id, label, profile_id, team_id, last_seen_at}' machines.json
 ```
 
-That lists what they registered. Machines owned by a team they own, or that they rotated, count
-too: check the owning teams' rosters for them. A recent `last_seen_at` means the machine is in use.
-If a team depends on one, don't let it fall with the person:
+`team_id` there is the machine's **owning** team, not the teams it sits on. Machines owned by a team
+the person owns count too: list those owning teams' machines the same way. A recent `last_seen_at`
+means the machine is in use. To keep one the team depends on:
 
-- **Hand it to the team.** A team owner registers a replacement owned by the team, with
-  `temper admin machine issue --owner-team <team>`, and the workload switches credentials. A
-  machine the team owns stays when its registrant leaves. Its owners rotate it.
+- **Take its key first.** Have an owner of its owning team who is staying rotate it, with
+  `temper admin machine rotate-secret <id>`, before the person is removed, and redeploy the new
+  secret. The key is then theirs, and the machine stays. This does not help when the departing
+  person owns its owning team and stays an owner there. Remove them from that team too, or move
+  the workload.
+- **Or replace it.** A staying owner registers a new machine owned by the team, with its reach:
+  `temper admin machine issue --label "<label>" --owner-team <team> --team <team>`.
 - **Tell its users first.** Removal is immediate, and nothing warns the machine.
 
-Each machine removed this way is recorded as its own `team_membership_changed` entry with `via`
+Each machine removed this way is recorded as its own `team_membership_changed` entry, with `via`
 `machine_reach`, the same actor as the person's removal (none for SAML reconcile), and the **same
 `correlation_id`**. Read the departure and everything it deprovisioned as one act:
 

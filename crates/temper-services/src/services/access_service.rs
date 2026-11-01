@@ -584,7 +584,9 @@ pub async fn grant_capability(
 ///   ruled by Pete 2026-11-01, decision `01a19843-b86b-766f-b06e-65560b0f6f6f`). Sharing with a team
 ///   you manage is what delegation is for. The row is listed on the subject, and the subject's owner
 ///   can revoke it (`delegated_may_change_row`). Whether the team has anyone but the delegate on it
-///   is not asked: a one-member shared team is an accepted residual. Its members keep the grant after the delegate leaves the team the right came from. That
+///   is not asked. A one-member shared team is an accepted residual (ruled 2026-11-01, task
+///   `01a198dc-5c1d-709c-94b5-b9e60e7457fc`): with the delegate's own machine on it, the grant
+///   reaches the machine without this door's machine bar. Its members keep the grant after the delegate leaves the team the right came from. That
 ///   is delegation's ordinary residue, accepted. Refusing it would end delegated sharing between
 ///   teams. A personal team and the caller's own machine stay refused: each is the caller under
 ///   another name.
@@ -593,7 +595,7 @@ pub async fn grant_capability(
 /// - **profile:** exists (`NotFound` to an admin, `Forbidden` to a delegate, who learns nothing about
 ///   which ids exist); a delegate may not grant to themselves, which is how an inherited `can_grant`
 ///   used to launder into a personal row that outlived the team. A machine the delegate controls
-///   (registered it, or owns a team that owns it and so could rotate its credential) is held to
+///   (registered it, rotated its secret, or owns a team that owns it and so could rotate it) is held to
 ///   [`callers_machine_grant_bar`]: admitted only on a grant right held in their own name.
 async fn recipient_bar(
     pool: &PgPool,

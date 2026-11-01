@@ -37,7 +37,7 @@ pub async fn lookup_by_client_id(
         MachineClient,
         r#"SELECT id, client_id, issuer, label, profile_id, team_id,
                   registered_by_profile_id, created, last_seen_at,
-                  revoked_at, revoked_by_profile_id
+                  revoked_at, revoked_by_profile_id, secret_rotated_by_profile_id
              FROM kb_machine_clients
             WHERE client_id = $1"#,
         client_id,
@@ -114,7 +114,7 @@ pub async fn get(pool: &PgPool, id: Uuid) -> ApiResult<MachineClient> {
         MachineClient,
         r#"SELECT id, client_id, issuer, label, profile_id, team_id,
                   registered_by_profile_id, created, last_seen_at,
-                  revoked_at, revoked_by_profile_id
+                  revoked_at, revoked_by_profile_id, secret_rotated_by_profile_id
              FROM kb_machine_clients WHERE id = $1"#,
         id,
     )
@@ -169,7 +169,7 @@ pub async fn list(
         MachineClient,
         r#"SELECT id, client_id, issuer, label, profile_id, team_id,
                   registered_by_profile_id, created, last_seen_at,
-                  revoked_at, revoked_by_profile_id
+                  revoked_at, revoked_by_profile_id, secret_rotated_by_profile_id
              FROM kb_machine_clients mc
             WHERE ($1 OR mc.revoked_at IS NULL)
               AND ( $2

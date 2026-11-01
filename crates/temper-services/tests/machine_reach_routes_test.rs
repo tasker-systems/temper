@@ -427,66 +427,127 @@ async fn a_grant_to_a_machine_the_caller_controls_but_did_not_register_needs_an_
     .expect("a machine the caller does not control is an ordinary recipient");
 }
 
-/// Route 4, **closed**: when a person leaves a team, the machines they control leave it with them,
-/// unless the team still answers for the machine. Controls means they registered it, rotated its
-/// secret, or own its owning team. Covered: a machine owned by their personal team, one owned by a
-/// throwaway shared team only they own, removal by an owner, and their own leave. Staying: a machine
-/// the team itself owns, and one another person still on the team controls. Each removal is a
-/// recorded `team_membership_changed` (`machine_reach`), correlated with the person's own event.
+/// Route 4, **closed**: when a person leaves a team, every machine on it whose key they hold or can
+/// still mint leaves with them. That covers a machine they registered (owned by their personal team,
+/// or by a throwaway team), one they only rotated, and one owned by a team they still own, even when
+/// a teammate co-owns it. A machine the team owns stays once another owner has rotated it. A machine
+/// whose only row in the person's name is revoked stays too. Removal by an owner and the person's own
+/// leave are both covered. Each removal is a recorded `team_membership_changed` (`machine_reach`),
+/// correlated with the person's own event.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn machines_a_person_controls_leave_a_team_with_them(pool: PgPool) {
+async fn every_machine_whose_key_a_person_holds_leaves_a_team_with_them(pool: PgPool) {
     let f = fixture(&pool).await;
     join(&pool, f.umbrella, f.owner, "owner").await;
     let m = test_support::human_principal_for(&pool, f.max).await;
+    let o = test_support::human_principal_for(&pool, f.owner).await;
     let own_personal = personal(&pool, f.max).await;
     // A throwaway shared team only max owns.
     let throwaway = team(&pool, "mr-throwaway").await;
     join(&pool, throwaway, f.max, "owner").await;
-    // A shared team max co-owns with someone who is also on umbrella.
+    // A team max owns with a teammate who is also on umbrella.
     let ops = team(&pool, "mr-ops").await;
     join(&pool, ops, f.max, "owner").await;
     let ops_peer = person(&pool, "mr-ops-peer").await;
     join(&pool, ops, ops_peer, "owner").await;
-    join(&pool, f.umbrella, ops_peer, "member").await;
-    let issue = |label: &'static str, owner_team: Uuid, teams: Vec<TeamSpec>| {
-        let (pool, m) = (&pool, &m);
-        async move {
-            machine_registration_service::issue(
-                pool,
-                m,
-                &register(label, owner_team, teams, vec![]),
-                AuthMode::TemperAs,
-            )
-            .await
-            .unwrap_or_else(|e| panic!("{label}: {e:?}"))
-            .client
-            .profile_id
-        }
-    };
+    join(&pool, f.umbrella, ops_peer, "maintainer").await;
+    let p = test_support::human_principal_for(&pool, ops_peer).await;
+    async fn issue(
+        pool: &PgPool,
+        who: &temper_services::auth::HumanPrincipal,
+        label: &str,
+        owner_team: Uuid,
+        teams: Vec<TeamSpec>,
+    ) -> (Uuid, Uuid) {
+        let c = machine_registration_service::issue(
+            pool,
+            who,
+            &register(label, owner_team, teams, vec![]),
+            AuthMode::TemperAs,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{label}: {e:?}"))
+        .client;
+        (c.id, c.profile_id)
+    }
 
-    let personal_bot = issue("mr-p-bot", own_personal, vec![member_of(f.umbrella)]).await;
-    let throwaway_bot = issue("mr-t-bot", throwaway, vec![member_of(f.umbrella)]).await;
-    let peer_governed = issue("mr-ops-bot", ops, vec![member_of(f.umbrella)]).await;
+    let (_, personal_bot) = issue(
+        &pool,
+        &m,
+        "mr-p-bot",
+        own_personal,
+        vec![member_of(f.umbrella)],
+    )
+    .await;
+    let (_, throwaway_bot) = issue(
+        &pool,
+        &m,
+        "mr-t-bot",
+        throwaway,
+        vec![member_of(f.umbrella)],
+    )
+    .await;
+    // Registered by the teammate, on a team max still owns: max can mint its key after he leaves.
+    let (_, co_owned_bot) = issue(&pool, &p, "mr-co-bot", ops, vec![member_of(f.umbrella)]).await;
+    // Registered by the teammate, rotated by max: max holds its current key.
+    let (rotated_client, rotated_bot) =
+        issue(&pool, &p, "mr-r-bot", ops, vec![member_of(f.umbrella)]).await;
+    machine_client_service::rotate_secret(&pool, &m, rotated_client, 0, AuthMode::TemperAs)
+        .await
+        .expect("max rotates the teammate's bot");
+    // Owned by umbrella and registered by its owner: max holds nothing of it.
+    let (_, umbrellas_bot) = issue(
+        &pool,
+        &o,
+        "mr-u-bot",
+        f.umbrella,
+        vec![member_of(f.umbrella)],
+    )
+    .await;
+    // A machine whose only row in max's name is revoked; its live row is the owner's.
+    let (old_client, revoked_bot) = issue(&pool, &m, "mr-old-bot", own_personal, vec![]).await;
+    sqlx::query("UPDATE kb_machine_clients SET revoked_at = now(), revoked_by_profile_id = $1 WHERE id = $2")
+        .bind(f.max)
+        .bind(old_client)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO kb_machine_clients (client_id, label, profile_id, team_id, registered_by_profile_id) \
+         VALUES ('mr-old-bot-live', 'test', $1, $2, $3)",
+    )
+    .bind(revoked_bot)
+    .bind(f.umbrella)
+    .bind(f.owner)
+    .execute(&pool)
+    .await
+    .unwrap();
+    join(&pool, f.umbrella, revoked_bot, "member").await;
     assert!(can(&pool, throwaway_bot, "write", "kb_resources", f.resource).await);
 
-    let o = test_support::human_principal_for(&pool, f.owner).await;
     team_service::remove_member(&pool, &o, f.umbrella, f.max)
         .await
         .expect("the owner removes max");
-    for (name, bot) in [("personal", personal_bot), ("throwaway", throwaway_bot)] {
+    for (name, bot) in [
+        ("personal", personal_bot),
+        ("throwaway", throwaway_bot),
+        ("co-owned", co_owned_bot),
+        ("rotated", rotated_bot),
+    ] {
         assert!(
             !is_member(&pool, f.umbrella, bot).await,
-            "{name}: a machine only max answers for leaves with him"
-        );
-        assert!(
-            !can(&pool, bot, "write", "kb_resources", f.resource).await,
-            "{name}"
+            "{name}: max holds or can mint its key, so it leaves with him"
         );
     }
-    assert!(
-        is_member(&pool, f.umbrella, peer_governed).await,
-        "ops's other owner is still on umbrella and answers for it"
-    );
+    assert!(!can(&pool, throwaway_bot, "write", "kb_resources", f.resource).await);
+    for (name, bot) in [
+        ("umbrella's own", umbrellas_bot),
+        ("revoked row", revoked_bot),
+    ] {
+        assert!(
+            is_member(&pool, f.umbrella, bot).await,
+            "{name}: max holds no key to it"
+        );
+    }
 
     let events: Vec<(Uuid, Option<Uuid>, String)> = sqlx::query_as(
         "SELECT (e.payload->>'profile_id')::uuid, e.correlation_id, e.payload->>'via' \
@@ -502,30 +563,29 @@ async fn machines_a_person_controls_leave_a_team_with_them(pool: PgPool) {
     let maxs = corr(f.max)
         .flatten()
         .expect("max's removal carries a correlation id");
-    for bot in [personal_bot, throwaway_bot] {
+    for bot in [personal_bot, throwaway_bot, co_owned_bot, rotated_bot] {
         assert_eq!(corr(bot), Some(Some(maxs)), "correlated with max's removal");
         assert!(events.iter().any(|e| e.0 == bot && e.2 == "machine_reach"));
     }
 
-    // The person's own leave takes them too, except a machine the team itself owns, even one max
-    // registered and put on his personal team.
-    let leaver = issue("mr-ops-leaver", own_personal, vec![member_of(ops)]).await;
-    let ops_owned = issue(
-        "mr-ops-own",
-        ops,
-        vec![member_of(ops), member_of(own_personal)],
-    )
-    .await;
+    // The person's own leave. A machine ops owns, which max registered, leaves with him. One whose
+    // key the teammate took over by rotating it before max left stays.
+    let (_, ops_unrotated) = issue(&pool, &m, "mr-ops-own", ops, vec![member_of(ops)]).await;
+    let (handed_client, ops_handed) =
+        issue(&pool, &m, "mr-ops-kept", ops, vec![member_of(ops)]).await;
+    machine_client_service::rotate_secret(&pool, &p, handed_client, 0, AuthMode::TemperAs)
+        .await
+        .expect("the teammate rotates it first");
     team_service::remove_member(&pool, &m, ops, f.max)
         .await
         .expect("max leaves ops");
     assert!(
-        !is_member(&pool, ops, leaver).await,
-        "a self-leave takes the machine too"
+        !is_member(&pool, ops, ops_unrotated).await,
+        "max minted its key, so it leaves with him"
     );
     assert!(
-        is_member(&pool, ops, ops_owned).await,
-        "ops owns this one, so it stays on ops"
+        is_member(&pool, ops, ops_handed).await,
+        "the teammate holds its key now, so it stays on ops"
     );
 }
 
@@ -621,4 +681,15 @@ async fn a_grant_right_on_the_callers_own_personal_team_counts_as_in_person(pool
             .expect_err("a soft-deleted personal team's right is not in person");
     assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
     assert_eq!(rows(&pool, map, bot).await, 0, "nothing written");
+
+    // Live control: the umbrella-held right still admits a recipient max does not control, so the
+    // refusal above is the in-person bar's.
+    let stranger = person(&pool, "mr-stranger").await;
+    access_service::grant_capability(
+        &pool,
+        &m,
+        &grant("kb_cogmaps", map, "kb_profiles", stranger),
+    )
+    .await
+    .expect("the delegated right still reaches an ordinary recipient");
 }

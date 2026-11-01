@@ -873,6 +873,32 @@ impl AuthorizedMembershipChange {
         }
     }
 
+    /// A machine's removal from a team because the person whose key it carries just left it (S3
+    /// residual route 4; see [`machines_leaving_with`]). It is built only inside
+    /// [`try_membership_write`], from the person's own authorized and written removal (`parent`), so
+    /// it needs no token of its own. It is recorded as `machine_reach` with the parent's actor (none
+    /// for SAML reconcile) and the parent's correlation id. `None` when the machine's row is absent
+    /// or IdP-sourced, which leaves nothing to remove.
+    fn leaving_with_key_holder(
+        target: &MembershipTarget,
+        parent: &AuthorizedMembershipChange,
+    ) -> Option<Self> {
+        match target.current {
+            Some((_, TeamMemberSource::Native)) => Some(Self {
+                team_id: target.team_id,
+                profile: target.profile,
+                act: MembershipAct::Remove,
+                via: MembershipVia::MachineReach,
+                expected: target.current,
+                new_source: TeamMemberSource::Native,
+                actor: parent.actor,
+                invited_by: None,
+                guard_last_owner: true,
+            }),
+            _ => None,
+        }
+    }
+
     /// An identity-provider reconcile write (plan C4, R8): the IdP wins over the last-owner
     /// guard, the system is the actor, and the row's source stays (or becomes) `idp`. `token` is
     /// minted only inside `saml_provisioning_service::reconcile_pass`. `target` is a
@@ -1069,8 +1095,8 @@ pub(crate) async fn membership_write(
 /// derived writer inserted after its locks (S1, C7) and must not mistake any other refusal for one
 /// (task `01a14592-708c`). The `Err` arm is a failure of the write itself.
 ///
-/// A person's removal also removes from the team the machines they control that the team no longer
-/// answers for, in the same transaction and under one correlation id ([`machines_leaving_with`]).
+/// A person's removal also removes from the team every machine whose key they hold or can still
+/// mint, in the same transaction and under one correlation id ([`machines_leaving_with`]).
 pub(crate) async fn try_membership_write(
     conn: &mut PgConnection,
     emitter: Option<EntityId>,
@@ -1085,8 +1111,8 @@ pub(crate) async fn try_membership_write(
         ),
         (None, None) => None,
     };
-    // A person leaving a team takes the machines they control off it, unless the team still answers
-    // for them (S3 residual route 4, `machines_leaving_with`). Read
+    // A person leaving a team takes off it every machine whose key they hold or can still mint (S3
+    // residual route 4, `machines_leaving_with`). Read
     // before the write, under the team lock the caller already holds, so the person's event and
     // each machine's carry one correlation id: an operator reads the departure and what it
     // deprovisioned as one act.
@@ -1103,19 +1129,10 @@ pub(crate) async fn try_membership_write(
     if written == MembershipOutcome::Removed {
         for machine in machines {
             let target = locked(conn, change.team_id, ProfileId::from(machine)).await?;
-            let Some((_, TeamMemberSource::Native)) = target.current else {
+            let Some(cascade) =
+                AuthorizedMembershipChange::leaving_with_key_holder(&target, &change)
+            else {
                 continue;
-            };
-            let cascade = AuthorizedMembershipChange {
-                team_id: change.team_id,
-                profile: target.profile,
-                act: MembershipAct::Remove,
-                via: MembershipVia::MachineReach,
-                expected: target.current,
-                new_source: TeamMemberSource::Native,
-                actor: change.actor,
-                invited_by: None,
-                guard_last_owner: true,
             };
             // Under the team lock and a fresh `locked` read, no refusal is possible: a machine never
             // governs (`MAX_MACHINE_TEAM_ROLE`), so the last-owner guard cannot fire, and the row was
@@ -1130,55 +1147,53 @@ pub(crate) async fn try_membership_write(
     Ok(Ok(written))
 }
 
-/// The machines on `team` that leave it with `person` (S3 residual route 4, closed by Pete's ruling
-/// of 2026-11-01 and widened after review, decision `01a19843-b86b-766f-b06e-65560b0f6f6f`).
+/// The machines on `team` that leave it with `person`: every machine whose key `person` holds or can
+/// still mint (S3 residual route 4, closed by Pete's ruling of 2026-11-01 and narrowed to this rule
+/// after two reviews, decision `01a19843-b86b-766f-b06e-65560b0f6f6f`). Your key leaves with you.
 ///
-/// A machine leaves when `person` **controls** it and, once they are gone, nothing on `team` still
-/// answers for it. Controls means they registered one of its clients, minted its current secret by
-/// rotation, or own a team that owns one of its clients. That is the relation the grant door holds
-/// to the in-person bar (`access_service::is_machine_controlled_by`). Such a machine is the person
-/// under another name: they hold or can take its credential, so its reach onto a team they no
-/// longer hold would outlive their membership.
+/// Judged over the machine's **live** client rows (`revoked_at IS NULL`). A revoked credential holds
+/// no key, and its history confers nothing. `person` holds a row's key when:
+/// - they minted its current secret: the last rotator (`secret_rotated_by_profile_id`), or the
+///   registrant if it was never rotated (a rotation before that column existed counts as the
+///   registrant's, the conservative reading); or
+/// - they registered it and it was rotated away from them, while the previous secret is still inside
+///   its grace window (`secret_previous_expires_at`). Only the first rotation's previous secret is
+///   the registrant's for certain. Treating every such window as theirs over-removes, and never
+///   under-removes.
 ///
-/// It stays when `team` itself owns one of its clients (it is the team's, and the team's owners
-/// rotate it), or when another person still on `team` controls it. A person-scoped test alone
-/// ("owned by their personal team") could be sidestepped by a throwaway shared team the person owns.
-/// Asking whether `team` still holds the machine's controller cannot. Empty for a machine profile,
-/// which controls nothing here.
+/// `person` **can still mint** one when they own a team that owns the row, other than `team` itself.
+/// They are leaving `team`, so they stop owning it. Any other owned team survives their departure,
+/// and its owner could rotate the machine and take the key after they are gone.
+///
+/// There is no exemption for another person on `team` who also controls the machine. Such a person
+/// can be added to the owning team without their consent, so their presence says nothing about who
+/// holds the key. To keep a machine the team depends on, another owner rotates it before the person
+/// is removed. The key is then theirs, and the machine stays. The "Offboard a Departure" playbook
+/// says so. Empty for a machine profile, which holds no keys here.
 async fn machines_leaving_with(
     conn: &mut PgConnection,
     team: Uuid,
     person: ProfileId,
 ) -> ApiResult<Vec<Uuid>> {
     Ok(sqlx::query_scalar!(
-        r#"WITH controls AS (
-             SELECT mc.profile_id AS machine, mc.registered_by_profile_id AS controller
-               FROM kb_machine_clients mc
-             UNION
-             SELECT mc.profile_id, mc.secret_rotated_by_profile_id
-               FROM kb_machine_clients mc
-              WHERE mc.secret_rotated_by_profile_id IS NOT NULL
-             UNION
-             SELECT mc.profile_id, o.profile_id
-               FROM kb_machine_clients mc
-               JOIN kb_team_members o ON o.team_id = mc.team_id AND o.role = 'owner'::team_role
-           )
-           SELECT tm.profile_id AS "profile_id!"
+        r#"SELECT tm.profile_id AS "profile_id!"
              FROM kb_team_members tm
             WHERE tm.team_id = $1
               AND tm.profile_id <> $2
               AND profile_is_person($2)
               AND is_machine_profile(tm.profile_id)
-              AND EXISTS (SELECT 1 FROM controls c
-                           WHERE c.machine = tm.profile_id AND c.controller = $2)
-              AND NOT EXISTS (SELECT 1 FROM kb_machine_clients own
-                               WHERE own.profile_id = tm.profile_id AND own.team_id = $1)
-              AND NOT EXISTS (SELECT 1 FROM controls c
-                                JOIN kb_team_members other
-                                  ON other.team_id = $1 AND other.profile_id = c.controller
-                               WHERE c.machine = tm.profile_id
-                                 AND c.controller NOT IN ($2, tm.profile_id)
-                                 AND profile_is_person(c.controller))
+              AND EXISTS (
+                    SELECT 1 FROM kb_machine_clients c
+                     WHERE c.profile_id = tm.profile_id
+                       AND c.revoked_at IS NULL
+                       AND ( COALESCE(c.secret_rotated_by_profile_id, c.registered_by_profile_id) = $2
+                          OR ( c.registered_by_profile_id = $2
+                               AND c.secret_rotated_by_profile_id IS NOT NULL
+                               AND c.secret_previous_expires_at > now() )
+                          OR ( c.team_id IS DISTINCT FROM $1
+                               AND EXISTS (SELECT 1 FROM kb_team_members o
+                                            WHERE o.team_id = c.team_id AND o.profile_id = $2
+                                              AND o.role = 'owner'::team_role) ) ))
             ORDER BY tm.profile_id"#,
         team,
         *person,
