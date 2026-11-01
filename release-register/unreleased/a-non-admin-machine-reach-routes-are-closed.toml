@@ -1,0 +1,32 @@
+title    = "A non-admin can no longer bind connection reach to their own personal team, grant an inherited right to a machine they control, or leave a team with their machines still on it"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp", "cli-stdout", "clients"]
+status   = "signal-only"
+body = '''
+The residual routes from the v0.6.3 security review's S3 finding, each ruled by the owner (decision
+`01a19843-b86b-766f-b06e-65560b0f6f6f`). A system admin is not affected unless a line says so.
+
+- `POST /api/connections/{id}/reach`: binding read-reach to the caller's **own** personal team is
+  now `403` for a team owner who is not a system admin. It was already refused onto anyone else's
+  personal team. A system admin may still bind to their own, and so may anyone for a connection
+  their personal team owns.
+- `POST /api/resources/{id}/grants` and `POST /api/cognitive-maps/{id}/grants`: a machine the caller
+  **controls** is now held to the in-person grant right. Controls means they registered it, or they
+  own a team that owns it, or rotated its secret. Before, only a machine they registered was. A right held only through a team now answers `403`, as a grant to oneself does.
+- The same grant doors and `POST /api/machine-clients/issue`: a grant right held on the caller's
+  own live personal team now counts as held in person (it was refused as "through a team").
+- Team membership: when a person's row on a team is removed (`DELETE /api/teams/{id}/members/{profile_id}`,
+  their own leave, or SAML reconcile), every machine on that team they control is removed in the same
+  transaction, unless the team owns it or another person still on the team controls it. Control
+  means they registered it, rotated its secret, or own its owning team. Each removal is a
+  `team_membership_changed` event with `via` `machine_reach`, sharing the person's event's
+  `correlation_id`.
+- `kb_machine_clients` gains `secret_rotated_by_profile_id`, set by a secret rotation. The rotator
+  counts as controlling the machine at the grant door even after they leave its owning team.
+- Unchanged, by design: a delegate's grant to a shared team they manage.
+
+Who observes: a non-admin team owner binding connection reach to their personal team; a co-owner
+granting an inherited right to a team's machine; an operator whose departing user ran a workload on
+a personal machine (see the "Offboard a Departure" playbook). Release relevance: signal-only.
+'''

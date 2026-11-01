@@ -136,6 +136,48 @@ disagree — which turns the removal into a check: nothing reported means the re
 everything it could. If the departing member is the team's only `owner`, the removal is refused
 until another owner exists; promote a successor first.
 
+#### The machines they control leave with them
+
+When a person's row on a team is removed by `remove-member`, by their own leave, or by SAML
+reconcile, the machines they **control** on that team are removed in the same transaction. They
+control a machine if they registered it, minted its current secret by rotation, or own the team that
+owns it. Two kinds of machine stay:
+
+- one the team itself owns (registered with `--owner-team` set to this team), and
+- one that another person still on the team also controls.
+
+This keeps a credential the departing person holds, or can mint, from outliving their place on the
+team. It also means a workload running on such a machine **stops reaching that team the moment they
+leave it**. Check before you run the removal:
+
+```bash
+temper admin machine list --include-revoked --format json \
+  | jq '.[] | select(.registered_by_profile_id == "<departing-uuid>")
+              | {id, label, profile_id, team_id, last_seen_at, revoked_at}'
+```
+
+That lists what they registered. Machines owned by a team they own, or that they rotated, count
+too: check the owning teams' rosters for them. A recent `last_seen_at` means the machine is in use.
+If a team depends on one, don't let it fall with the person:
+
+- **Hand it to the team.** A team owner registers a replacement owned by the team, with
+  `temper admin machine issue --owner-team <team>`, and the workload switches credentials. A
+  machine the team owns stays when its registrant leaves. Its owners rotate it.
+- **Tell its users first.** Removal is immediate, and nothing warns the machine.
+
+Each machine removed this way is recorded as its own `team_membership_changed` entry with `via`
+`machine_reach`, the same actor as the person's removal (none for SAML reconcile), and the **same
+`correlation_id`**. Read the departure and everything it deprovisioned as one act:
+
+```bash
+temper admin ledger --subject kb_teams:<team-uuid>
+```
+
+> [!NOTE]
+> `temper admin access revoke` (step 1) ends the person's admission and drops their auto-join rows
+> without passing through this removal. Their machines keep their teams and credentials until the
+> removals above run, or until you revoke each machine (`temper admin machine revoke <id>`).
+
 **`idp`** — created by SAML reconcile from a mapped group. `remove-member` refuses it, by
 design: those rows belong to reconcile. Remove the person from the mapped group at your IdP,
 which reconcile applies if they ever sign in again. The row grants nothing meanwhile — step 1

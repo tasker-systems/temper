@@ -211,7 +211,17 @@ impl ScopedAuthority for ConnectionAuthority {
         // precondition failure about the target, not this domain's denial, and collapsing it into
         // one would turn "that team does not exist" into "you may not" — a real behavior change
         // pinned by `granting_reach_to_a_nonexistent_team_writes_no_dangling_row`.
-        match machine_authz::contain_target_team(pool, machine, caller, scope.target_team_id).await
+        let owning_team = connection_service::get(pool, scope.connection_id)
+            .await?
+            .owner_team_id;
+        match machine_authz::contain_target_team(
+            pool,
+            machine,
+            caller,
+            scope.target_team_id,
+            owning_team,
+        )
+        .await
         {
             Ok(()) => Ok(match control {
                 ConnectionControlAuthority::SystemAdmin => ConnectionAuthority::SystemAdmin,

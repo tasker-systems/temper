@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH controls AS (\n             SELECT mc.profile_id AS machine, mc.registered_by_profile_id AS controller\n               FROM kb_machine_clients mc\n             UNION\n             SELECT mc.profile_id, mc.secret_rotated_by_profile_id\n               FROM kb_machine_clients mc\n              WHERE mc.secret_rotated_by_profile_id IS NOT NULL\n             UNION\n             SELECT mc.profile_id, o.profile_id\n               FROM kb_machine_clients mc\n               JOIN kb_team_members o ON o.team_id = mc.team_id AND o.role = 'owner'::team_role\n           )\n           SELECT tm.profile_id AS \"profile_id!\"\n             FROM kb_team_members tm\n            WHERE tm.team_id = $1\n              AND tm.profile_id <> $2\n              AND profile_is_person($2)\n              AND is_machine_profile(tm.profile_id)\n              AND EXISTS (SELECT 1 FROM controls c\n                           WHERE c.machine = tm.profile_id AND c.controller = $2)\n              AND NOT EXISTS (SELECT 1 FROM kb_machine_clients own\n                               WHERE own.profile_id = tm.profile_id AND own.team_id = $1)\n              AND NOT EXISTS (SELECT 1 FROM controls c\n                                JOIN kb_team_members other\n                                  ON other.team_id = $1 AND other.profile_id = c.controller\n                               WHERE c.machine = tm.profile_id\n                                 AND c.controller NOT IN ($2, tm.profile_id)\n                                 AND profile_is_person(c.controller))\n            ORDER BY tm.profile_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "profile_id!",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c52be79294f0e2b9ba1fbb80a14aa9acbc6ffd6a5876619cdfd0c90cb2e0c500"
+}

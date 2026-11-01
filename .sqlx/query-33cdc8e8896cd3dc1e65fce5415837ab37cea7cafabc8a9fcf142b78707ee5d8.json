@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n             SELECT 1 FROM kb_machine_clients mc\n              WHERE mc.profile_id = $1\n                AND ( mc.registered_by_profile_id = $2\n                   OR mc.secret_rotated_by_profile_id = $2\n                   OR EXISTS (SELECT 1 FROM kb_team_members tm\n                               WHERE tm.team_id = mc.team_id AND tm.profile_id = $2\n                                 AND tm.role = 'owner'::team_role))) AS \"e!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "e!: bool",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "33cdc8e8896cd3dc1e65fce5415837ab37cea7cafabc8a9fcf142b78707ee5d8"
+}

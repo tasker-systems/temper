@@ -1069,7 +1069,8 @@ pub(crate) async fn membership_write(
 /// derived writer inserted after its locks (S1, C7) and must not mistake any other refusal for one
 /// (task `01a14592-708c`). The `Err` arm is a failure of the write itself.
 ///
-/// **The only Rust call site of `_admin_team_membership_write`** (plan PR C's tripwire pins it).
+/// A person's removal also removes from the team the machines they control that the team no longer
+/// answers for, in the same transaction and under one correlation id ([`machines_leaving_with`]).
 pub(crate) async fn try_membership_write(
     conn: &mut PgConnection,
     emitter: Option<EntityId>,
@@ -1084,6 +1085,117 @@ pub(crate) async fn try_membership_write(
         ),
         (None, None) => None,
     };
+    // A person leaving a team takes the machines they control off it, unless the team still answers
+    // for them (S3 residual route 4, `machines_leaving_with`). Read
+    // before the write, under the team lock the caller already holds, so the person's event and
+    // each machine's carry one correlation id: an operator reads the departure and what it
+    // deprovisioned as one act.
+    let machines = if matches!(change.act, MembershipAct::Remove) {
+        machines_leaving_with(conn, change.team_id, change.profile).await?
+    } else {
+        Vec::new()
+    };
+    let correlation = (!machines.is_empty()).then(Uuid::now_v7);
+    let written = match write_one(conn, emitter, &change, correlation).await? {
+        Ok(written) => written,
+        Err(refused) => return Ok(Err(refused)),
+    };
+    if written == MembershipOutcome::Removed {
+        for machine in machines {
+            let target = locked(conn, change.team_id, ProfileId::from(machine)).await?;
+            let Some((_, TeamMemberSource::Native)) = target.current else {
+                continue;
+            };
+            let cascade = AuthorizedMembershipChange {
+                team_id: change.team_id,
+                profile: target.profile,
+                act: MembershipAct::Remove,
+                via: MembershipVia::MachineReach,
+                expected: target.current,
+                new_source: TeamMemberSource::Native,
+                actor: change.actor,
+                invited_by: None,
+                guard_last_owner: true,
+            };
+            // Under the team lock and a fresh `locked` read, no refusal is possible: a machine never
+            // governs (`MAX_MACHINE_TEAM_ROLE`), so the last-owner guard cannot fire, and the row was
+            // just read. A refusal here means that invariant broke, so it fails the whole removal.
+            if let Err(refused) = write_one(conn, emitter, &cascade, correlation).await? {
+                return Err(ApiError::Internal(format!(
+                    "removing a departing controller's machine from the team was refused: {refused:?}"
+                )));
+            }
+        }
+    }
+    Ok(Ok(written))
+}
+
+/// The machines on `team` that leave it with `person` (S3 residual route 4, closed by Pete's ruling
+/// of 2026-11-01 and widened after review, decision `01a19843-b86b-766f-b06e-65560b0f6f6f`).
+///
+/// A machine leaves when `person` **controls** it and, once they are gone, nothing on `team` still
+/// answers for it. Controls means they registered one of its clients, minted its current secret by
+/// rotation, or own a team that owns one of its clients. That is the relation the grant door holds
+/// to the in-person bar (`access_service::is_machine_controlled_by`). Such a machine is the person
+/// under another name: they hold or can take its credential, so its reach onto a team they no
+/// longer hold would outlive their membership.
+///
+/// It stays when `team` itself owns one of its clients (it is the team's, and the team's owners
+/// rotate it), or when another person still on `team` controls it. A person-scoped test alone
+/// ("owned by their personal team") could be sidestepped by a throwaway shared team the person owns.
+/// Asking whether `team` still holds the machine's controller cannot. Empty for a machine profile,
+/// which controls nothing here.
+async fn machines_leaving_with(
+    conn: &mut PgConnection,
+    team: Uuid,
+    person: ProfileId,
+) -> ApiResult<Vec<Uuid>> {
+    Ok(sqlx::query_scalar!(
+        r#"WITH controls AS (
+             SELECT mc.profile_id AS machine, mc.registered_by_profile_id AS controller
+               FROM kb_machine_clients mc
+             UNION
+             SELECT mc.profile_id, mc.secret_rotated_by_profile_id
+               FROM kb_machine_clients mc
+              WHERE mc.secret_rotated_by_profile_id IS NOT NULL
+             UNION
+             SELECT mc.profile_id, o.profile_id
+               FROM kb_machine_clients mc
+               JOIN kb_team_members o ON o.team_id = mc.team_id AND o.role = 'owner'::team_role
+           )
+           SELECT tm.profile_id AS "profile_id!"
+             FROM kb_team_members tm
+            WHERE tm.team_id = $1
+              AND tm.profile_id <> $2
+              AND profile_is_person($2)
+              AND is_machine_profile(tm.profile_id)
+              AND EXISTS (SELECT 1 FROM controls c
+                           WHERE c.machine = tm.profile_id AND c.controller = $2)
+              AND NOT EXISTS (SELECT 1 FROM kb_machine_clients own
+                               WHERE own.profile_id = tm.profile_id AND own.team_id = $1)
+              AND NOT EXISTS (SELECT 1 FROM controls c
+                                JOIN kb_team_members other
+                                  ON other.team_id = $1 AND other.profile_id = c.controller
+                               WHERE c.machine = tm.profile_id
+                                 AND c.controller NOT IN ($2, tm.profile_id)
+                                 AND profile_is_person(c.controller))
+            ORDER BY tm.profile_id"#,
+        team,
+        *person,
+    )
+    .fetch_all(&mut *conn)
+    .await?)
+}
+
+/// One row through `_admin_team_membership_write`, then the invitations the change outranks.
+///
+/// **The only Rust call site of `_admin_team_membership_write`** (plan PR C's tripwire pins it).
+async fn write_one(
+    conn: &mut PgConnection,
+    emitter: Option<EntityId>,
+    change: &AuthorizedMembershipChange,
+    correlation: Option<Uuid>,
+) -> ApiResult<Result<MembershipOutcome, NotWritten>> {
     let (act, role) = match change.act {
         MembershipAct::Add { role } => ("add", Some(role)),
         MembershipAct::Change { role } => ("change", Some(role)),
@@ -1091,7 +1203,7 @@ pub(crate) async fn try_membership_write(
     };
     let outcome = sqlx::query_scalar!(
         r#"SELECT _admin_team_membership_write(
-               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULL) AS "outcome!""#,
+               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) AS "outcome!""#,
         emitter.map(|e| e.uuid()),
         change.actor.map(|a| a.uuid()),
         change.via.as_str(),
@@ -1104,6 +1216,7 @@ pub(crate) async fn try_membership_write(
         Some(change.new_source) as Option<TeamMemberSource>,
         change.guard_last_owner,
         change.invited_by.map(|p| p.uuid()),
+        correlation,
     )
     .fetch_one(&mut *conn)
     .await?;

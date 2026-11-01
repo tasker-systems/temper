@@ -285,7 +285,13 @@ pub(crate) fn parse_team_role(role: &str) -> ApiResult<TeamRole> {
 /// from [`contain_reach`]. A system admin is exempt (Phase A D5) but still has the target team's
 /// existence checked — the D5 bypass is about authority, not about writing a `principal_id` that
 /// points at nothing. The exemption stops at a personal team: there the bar is its owner's, for
-/// every caller (task `01a19006`).
+/// every caller (task `01a19006`). A personal team is refused outright to a non-admin, their own
+/// included. A team owner's own personal team is them under another name, as at the grant door, so
+/// read-reach bound to it would outlive their hold on the connection's owning team (S3 residual
+/// route 2, closed 2026-11-01, decision `01a19843-b86b-766f-b06e-65560b0f6f6f`). Two cases stay
+/// open. A system admin may still bind to their own personal team. A team owner may bind a
+/// connection their personal team itself owns (`owning_team`) to that same team, because that hold
+/// cannot be lost.
 ///
 /// **There is deliberately NO gating-team exclusion here**, unlike the two other two-sided gates
 /// (`cogmap_service::can_bind`, `context_service::can_share`), which both refuse the gating team as a
@@ -311,11 +317,26 @@ pub(crate) async fn contain_target_team(
     authority: MachineRegistrationAuthority,
     caller: ProfileId,
     team_id: Uuid,
+    owning_team: Option<Uuid>,
 ) -> ApiResult<()> {
     // A personal team is acted on by its owner alone (task `01a19006`): binding read-reach to one
-    // is held to the owner's bar whatever the caller's authority on the connection.
+    // is held to the owner's bar whatever the caller's authority on the connection. And only a
+    // system admin's authority on the connection reaches even their own (S3 residual route 2,
+    // closed by Pete's ruling of 2026-11-01, decision `01a19843-b86b-766f-b06e-65560b0f6f6f`): for a
+    // team owner, their personal team is a second spelling of themselves, as at the grant door
+    // (`access_service::recipient_bar`), so the reach would outlive their hold on the owning team.
     if team_service::personal_of(pool, team_id).await?.is_some() {
-        return team_service::require_manage_on_team(pool, team_id, caller).await;
+        team_service::require_manage_on_team(pool, team_id, caller).await?;
+        return match authority {
+            MachineRegistrationAuthority::SystemAdmin => Ok(()),
+            // A connection the personal team itself owns is the one case left open: its owner can
+            // never lose that hold, so nothing outlives anything, and without reach they could not
+            // read their own connection at all.
+            MachineRegistrationAuthority::TeamOwner if owning_team == Some(team_id) => Ok(()),
+            MachineRegistrationAuthority::TeamOwner | MachineRegistrationAuthority::None => {
+                Err(ApiError::Forbidden)
+            }
+        };
     }
     match authority {
         MachineRegistrationAuthority::SystemAdmin => {

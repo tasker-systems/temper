@@ -171,7 +171,7 @@ module Temper::Generated
     end
 
     # Grant a team read-reach on a connection
-    # Lets the members of `team` read what the connection receives. Reach is read-only. Requires a system admin (only its owner, on someone else's personal team), or the owner of the connection's owning team who also owns or maintains the receiving team. When the receiving team is a personal team, only its owner qualifies, a system admin included. When the connection declares a remote reach the attach-time verification did not confirm, `affirm_reach` must state why the binding is intended; it is refused when there is nothing to affirm. A caller with system access who does not control the connection is answered 404, exactly as for an id that does not exist.
+    # Lets the members of `team` read what the connection receives. Reach is read-only. Requires a system admin (only its owner, on someone else's personal team), or the owner of the connection's owning team who also owns or maintains the receiving team. No one may bind reach to someone else's personal team. A team owner who is not a system admin may bind it to their own personal team only when that personal team owns the connection. When the connection declares a remote reach the attach-time verification did not confirm, `affirm_reach` must state why the binding is intended; it is refused when there is nothing to affirm. A caller with system access who does not control the connection is answered 404, exactly as for an id that does not exist.
     # @param id [String] Connection ID
     # @param grant_connection_reach_request [GrantConnectionReachRequest] 
     # @param [Hash] opts the optional parameters
@@ -183,7 +183,7 @@ module Temper::Generated
     end
 
     # Grant a team read-reach on a connection
-    # Lets the members of &#x60;team&#x60; read what the connection receives. Reach is read-only. Requires a system admin (only its owner, on someone else&#39;s personal team), or the owner of the connection&#39;s owning team who also owns or maintains the receiving team. When the receiving team is a personal team, only its owner qualifies, a system admin included. When the connection declares a remote reach the attach-time verification did not confirm, &#x60;affirm_reach&#x60; must state why the binding is intended; it is refused when there is nothing to affirm. A caller with system access who does not control the connection is answered 404, exactly as for an id that does not exist.
+    # Lets the members of &#x60;team&#x60; read what the connection receives. Reach is read-only. Requires a system admin (only its owner, on someone else&#39;s personal team), or the owner of the connection&#39;s owning team who also owns or maintains the receiving team. No one may bind reach to someone else&#39;s personal team. A team owner who is not a system admin may bind it to their own personal team only when that personal team owns the connection. When the connection declares a remote reach the attach-time verification did not confirm, &#x60;affirm_reach&#x60; must state why the binding is intended; it is refused when there is nothing to affirm. A caller with system access who does not control the connection is answered 404, exactly as for an id that does not exist.
     # @param id [String] Connection ID
     # @param grant_connection_reach_request [GrantConnectionReachRequest] 
     # @param [Hash] opts the optional parameters

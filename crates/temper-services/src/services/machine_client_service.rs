@@ -461,11 +461,13 @@ pub async fn rotate_secret(
               SET secret_hash_previous       = secret_hash,
                   secret_previous_expires_at = now() + make_interval(secs => $2),
                   secret_hash                = $3,
-                  secret_rotated_at          = now()
+                  secret_rotated_at          = now(),
+                  secret_rotated_by_profile_id = $4
             WHERE id = $1"#,
         id,
         grace_seconds as f64,
         secret.hash,
+        authed.profile().id,
     )
     .execute(&mut *tx)
     .await?;
