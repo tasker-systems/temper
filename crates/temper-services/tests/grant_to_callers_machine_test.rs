@@ -392,3 +392,36 @@ async fn registration_holds_reach_grants_to_the_same_rule(pool: PgPool) {
             .expect("a map's creator registers a machine with reach onto it");
     assert_eq!(rows(&pool, f.own_map, issued.client.profile_id).await, 1);
 }
+
+/// A machine profile whose client rows name two registrars (an admin rebind adds a second row under
+/// another name) is each of theirs. Each registrar is held to the bar on their own grant right: max,
+/// whose right on the resource comes through umbrella, is refused; the owner, who holds it in their
+/// own name, is admitted to the same profile.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_machine_with_two_registrars_holds_each_to_their_own_right(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let shared = machine(&pool, "cm-shared-bot", f.max).await;
+    sqlx::query(
+        "INSERT INTO kb_machine_clients (client_id, label, profile_id, registered_by_profile_id) \
+         VALUES ('client-cm-shared-bot-2', 'test', $1, $2)",
+    )
+    .bind(shared)
+    .bind(f.owner)
+    .execute(&pool)
+    .await
+    .expect("seed second client row");
+
+    let m = test_support::human_principal_for(&pool, f.max).await;
+    let refusal =
+        access_service::grant_capability(&pool, &m, &grant("kb_resources", f.resource, shared))
+            .await
+            .expect_err("max registered it and holds the right only through a team");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    assert_eq!(rows(&pool, f.resource, shared).await, 0);
+
+    let o = test_support::human_principal_for(&pool, f.owner).await;
+    access_service::grant_capability(&pool, &o, &grant("kb_resources", f.resource, shared))
+        .await
+        .expect("the owner also registered it and holds the right in their own name");
+    assert_eq!(rows(&pool, f.resource, shared).await, 1);
+}
