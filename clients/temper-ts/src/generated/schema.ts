@@ -10077,8 +10077,35 @@ export interface components {
          */
         ResourceView: {
             /**
-             * @description SHA-256 hash of the resource body, from `kb_resource_manifests`. `None` when no
-             *     manifest row exists.
+             * @description Content identity of the body's **prose chunks**, as grouped into blocks. It is not a
+             *     hash of the body's bytes. `kb_resources.body_hash`, bare lowercase hex.
+             *
+             *     It is a two-level merkle over the chunker's output. Each chunk's `content_hash` is the
+             *     sha256 of that chunk's text, **trimmed and without its heading line**. A block's hash is
+             *     the sha256 of its live chunks' hashes concatenated in `chunk_index` order, and this is
+             *     the sha256 of the live (unfolded) blocks' hashes concatenated in `seq` order.
+             *
+             *     A "heading" here is what the chunker splits on: a line matching `^#{1,6}\s+.+$`. That is
+             *     an ATX heading starting at column 0, with no Setext headings, no indented headings, and no
+             *     awareness of code fences (a `# comment` line inside a fenced block counts as a heading).
+             *
+             *     On a resource whose blocks already follow its heading sections (every resource created or
+             *     updated under the blocking policy), the hash does **not** move when an edit only:
+             *     - changes such a heading's text or level (1 to 6), even on the first line, because the
+             *       heading lives in the chunk's `header_path`/`heading_depth`, not in its content;
+             *     - adds or removes such a heading with no prose under it;
+             *     - changes whitespace at a chunk's edges, or blank lines between sections.
+             *
+             *     Such an edit still writes: the stored bytes, the read-back body, and `updated` all
+             *     change. The hash **does** move when the chunk sequence changes, and also when the same
+             *     chunks are regrouped into different blocks. That happens on a re-block, or on the first
+             *     whole-body write to a resource whose blocks predate the blocking policy. So read
+             *     `updated` (or compare the content) to detect an edit, never `body_hash`.
+             *
+             *     This is the identity segmented ingest echoes at finalize (`expected_body_hash`) and the
+             *     one the re-block keeps blocks by. The byte-level check of an upload is finalize's
+             *     `expected_content_hash`. A resource with no prose carries the sha256 of the empty string
+             *     (`e3b0c442…`), not an absent value. The field is optional only for version skew.
              */
             body_hash?: string | null;
             body_storage?: components["schemas"]["BodyStorage"] | null;
