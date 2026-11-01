@@ -38,6 +38,26 @@ export function contextGraphHref(ownerRef: string, slug: string): string {
 	return graphHref(ownerRef, { anchors: [{ kind: 'context', ref: `${ownerRef}/${slug}` }] });
 }
 
+/**
+ * The list view for what a graph address asks about: the graph's way back to the grid when a graph
+ * is not the right instrument.
+ *
+ * One context anchor has a list of its own, `contextHref`. Anything else (no anchor, several, or a
+ * cogmap) has none that would hold exactly those places, so it is the whole grid. That widens, and
+ * says so by being "All resources"; narrowing to one of several would silently drop the others.
+ *
+ * There is no `/vault/[owner]` route, so the owner alone is never a list. `[found — 2026-11-01]` the
+ * graph's "Browse them as a list" was spelled that way and led to a bare 404 with no way back.
+ */
+export function graphListHref(address: Pick<GraphAddress, 'anchors'>): string {
+	const [only, ...rest] = address.anchors;
+	if (only && rest.length === 0 && only.kind === 'context') {
+		const at = only.ref.indexOf('/');
+		if (at > 0) return contextHref(only.ref.slice(0, at), only.ref.slice(at + 1));
+	}
+	return '/vault/all';
+}
+
 /** SvelteKit's `page.params` for the routes that can address a context. */
 export interface ContextLocationParams {
 	owner?: string;

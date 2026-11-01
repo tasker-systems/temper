@@ -372,6 +372,32 @@ describe('a refusal is a refusal, never a widened answer', () => {
 		expect(container.querySelector('svg')).toBeNull();
 	});
 
+	// `[found — 2026-11-01]` the door was `/vault/${owner}`, which is no route: a reader who opened
+	// their one context's graph and followed it landed on a bare 404 with no way back.
+	it("rung 2's door is the addressed context's own list, a route that exists", async () => {
+		setPage('/graph/@nadia?in=ctx%3A%40nadia%2Fnotes', { owner: '@nadia' });
+		await rungTwo(3);
+		const door = screen.getByText(/Browse them as a list/).closest('a');
+		expect(door?.getAttribute('href')).toBe('/vault/@nadia/notes');
+	});
+
+	it("rung 2's door is the whole grid when no single context is addressed", async () => {
+		setPage('/graph/@me', { owner: '@me' });
+		await rungTwo(3);
+		const door = screen.getByText(/Browse them as a list/).closest('a');
+		expect(door?.getAttribute('href')).toBe('/vault/all');
+	});
+
+	it('says a place with nothing readable in it is empty, not unlinked', async () => {
+		render(GraphPage, {
+			data: view({ tooLittleStructure: { kind: 'too-little-structure', inScope: 0 } }),
+		});
+		await screen.findByText(/There is nothing here yet/);
+		expect(screen.queryByText(/not the right view/)).toBeNull();
+		expect(screen.queryByText(/nothing is linked/)).toBeNull();
+		expect(screen.queryByText(/0 resources/)).toBeNull();
+	});
+
 	it('the rung is VISIBLE — it does not render like the other refusals', async () => {
 		// "A reader on rung 2 is looking at a different claim than one on rung 1. Swapping silently
 		// is `legibility-is-never-bought-with-silent-omission`."
@@ -1482,24 +1508,19 @@ describe('the /dev/graph harness renders every scenario it offers', () => {
 		expect(container.querySelector('[data-testid="bound-line"]')).not.toBeNull();
 	});
 
-	it('rung 2 replaces the canvas with the sentence, rather than drawing an empty one', async () => {
-		render(GraphPage, { data: viewFor(bundle, 'entryTooLittleStructure') });
-		const said = await screen.findByText(/A graph is not the right view for this yet/);
-		expect(said).not.toBeNull();
+	it('rung 2 replaces the canvas with a sentence, rather than drawing an empty one', async () => {
+		const { container } = render(GraphPage, { data: viewFor(bundle, 'entryTooLittleStructure') });
+		await screen.findByTestId('too-little-structure');
+		expect(container.querySelector('svg')).toBeNull();
 	});
 
-	it('and on THIS fixture the sentence reads "0 resources" — declared, not fixed here', async () => {
+	it('and on THIS fixture, where nothing is in scope, it says the place is empty', async () => {
 		// `[found — 2026-08-22]` The only anchor on the corpus that reaches `eligible === 0` also has
-		// `in_scope === 0`, so the sentence rung 2 exists to say — *"you can read N resources here,
-		// but nothing is linked"* — renders with N = 0 and becomes *"you can read 0 resources here,
-		// but nothing is linked to anything else"*. That tells a reader with nothing that they have
-		// nothing, in the words written for a reader who has plenty.
-		//
-		// Asserted rather than repaired, and NOT presented as coverage of rung 2: the fixture says so
-		// in its own `_does_not_witness`, and the harness prints that above the frame. Repairing the
-		// sentence is a different change from building the place to look at it.
+		// `in_scope === 0`, and rung 2 used to tell that reader "you can read 0 resources here, but
+		// nothing is linked to anything else": the words written for a reader with plenty, told to
+		// one with nothing. `[fixed — 2026-11-01]` A zero in scope now says the place is empty.
 		render(GraphPage, { data: viewFor(bundle, 'entryTooLittleStructure') });
-		const said = await screen.findByText(/You can read/);
-		expect(sentenceOf(said)).toMatch(/You can read 0 resources here, but nothing is linked/);
+		await screen.findByText(/There is nothing here yet/);
+		expect(screen.queryByText(/You can read/)).toBeNull();
 	});
 });
