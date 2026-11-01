@@ -79816,7 +79816,7 @@
 	},
 	"entryTooLittleStructure": {
 		"_why": "The entry read on an anchor with nothing eligible — the ONLY branch that reaches rung 2.",
-		"_does_not_witness": "Rung 2 with MATERIAL. `in_scope` is 0 here, so this renders the degenerate sentence (\"you have nothing\") rather than the one rung 2 exists for (\"you have N, and too little structure to draw them\"). No readable anchor on this corpus has eligible === 0 AND in_scope > 0 — measured at capture time across every anchor, not assumed.",
+		"_does_not_witness": "Rung 2 with MATERIAL. `in_scope` is 0 here, so this renders the empty-place sentence (\"there is nothing here yet\") rather than the one rung 2 exists for (\"you have N, and too little structure to draw them\"). No readable anchor on this corpus has eligible === 0 AND in_scope > 0 — measured at capture time across every anchor, not assumed.",
 		"entry": {
 			"nodes": [],
 			"edges": [],

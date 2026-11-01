@@ -151,3 +151,18 @@ export function searchFailureMessage(status: number | null): string {
 	}
 	return `The search could not be performed — the vault rejected the request (HTTP ${status}).`;
 }
+
+/**
+ * What a reader is told when the place a vault address names is not one they can read.
+ *
+ * The API answers 404 for a context the caller cannot see (`resolve_context_ref` is gated on
+ * visibility), so it never says whether the place exists, and neither does this. Uncaught, that
+ * 404 escaped the context route's load as an unexpected error and the page said "500 Internal
+ * Error", which reads as temper being broken to the reader most likely to arrive here: someone new,
+ * following a link a colleague shared before they were added to the team that holds the place.
+ *
+ * Here rather than beside that load because a `+page.server.ts` may export only SvelteKit's own
+ * names: a constant there fails every request to the route.
+ */
+export const PLACE_NOT_AVAILABLE =
+	"This place isn't available to you. It may not exist, or you haven't been added to the team that holds it yet. Ask whoever shared the link to add you.";

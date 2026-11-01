@@ -14,13 +14,17 @@
 	import MarkdownRenderer from '$lib/components/MarkdownRenderer.svelte';
 	import ResourceLink from '$lib/components/ResourceLink.svelte';
 	import {
+		FIRST_RUN_HELP_URL,
 		type FirstViewList,
+		isFirstRun,
 		PLACES_ORDER,
 		PLACES_SCOPE,
 		type PlacesList,
 		placesInUse,
+		RECENT_EMPTY_DETAIL,
 		RECENT_SCOPE,
 		RESUME_LABEL,
+		WAY_IN_EMPTY_DETAIL,
 		WAY_IN_MAX,
 		wayInMoreHref,
 	} from '$lib/first-view';
@@ -45,6 +49,11 @@
 		joined.catch(() => {});
 		return joined;
 	});
+
+	/** Whether the reader has nothing yet, from the same reads the regions draw (`isFirstRun`). */
+	const firstRun: Promise<boolean> = $derived(
+		isFirstRun(data.resume, places, [...data.ways.map((w) => w.list), data.recent]),
+	);
 </script>
 
 <svelte:head>
@@ -92,6 +101,36 @@
 		<h1 class="text-lg text-tp-text">Home</h1>
 		<p class="text-xs text-tp-text-subtle">Where your own work stands.</p>
 	</header>
+
+	<!-- A reader with nothing yet is told how work arrives, since nothing on this page can make
+	     any. Drawn only once every read has settled empty: while one is arriving, or when one
+	     failed, the regions below speak for themselves, and claiming "nothing yet" over a failed
+	     read would contradict them. No pending arm and no wrapper, so for every other reader this
+	     adds nothing to the page. -->
+	{#await firstRun then nothingYet}
+		{#if nothingYet}
+			<section
+				aria-labelledby="first-run-heading"
+				data-testid="first-run"
+				class="rounded border border-tp-rule bg-tp-surface p-4 text-sm text-tp-text"
+			>
+				<h2 id="first-run-heading" class="mb-1 text-base text-tp-text">
+					Nothing here yet — temper fills as you and your agents work.
+				</h2>
+				<p class="text-tp-text-muted">
+					Goals, tasks and sessions are written by an agent working with temper: Claude Code with
+					the temper skill, the temper desktop app, or the <code>temper</code> CLI. Each one appears
+					here the moment it is saved.
+				</p>
+				<a
+					href={FIRST_RUN_HELP_URL}
+					class="mt-2 inline-block text-xs text-tp-accent hover:text-tp-text"
+				>
+					How to connect an agent →
+				</a>
+			</section>
+		{/if}
+	{/await}
 
 	<!-- Resume: the work the reader last changed, when they changed it — never `updated`, which a
 	     teammate's write moves — and its opening. A reader who has changed nothing gets no region at
@@ -184,7 +223,7 @@
 					<RegionState state="arriving" label={way.scope} />
 				{:then got}
 					{#if got.total === 0}
-						<RegionState state="empty" label={way.scope} />
+						<RegionState state="empty" label={way.scope} detail={WAY_IN_EMPTY_DETAIL[way.id]} />
 					{:else}
 						{@render rows(got.rows)}
 						{@render foot(got, way.scope)}
@@ -217,7 +256,7 @@
 			<RegionState state="arriving" label="recently updated" />
 		{:then recent}
 			{#if recent.total === 0}
-				<RegionState state="empty" label="resources you can read" />
+				<RegionState state="empty" label={RECENT_SCOPE} detail={RECENT_EMPTY_DETAIL} />
 			{:else}
 				{@render rows(recent.rows)}
 				{@render foot(recent, RECENT_SCOPE)}

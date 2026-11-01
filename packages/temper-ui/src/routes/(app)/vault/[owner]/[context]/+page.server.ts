@@ -1,9 +1,10 @@
-import { apiGet } from '$lib/server/api';
+import { error } from '@sveltejs/kit';
+import { ApiError, apiGet } from '$lib/server/api';
 import { bounded } from '$lib/server/bounded';
 import type { ResourceListResponse } from '$lib/types';
 import type { ShapeView } from '$lib/types/generated/data_artifact_shape';
 import { doorParams } from '$lib/vault-filters';
-import { toVaultList } from '$lib/vault-list';
+import { PLACE_NOT_AVAILABLE, toVaultList } from '$lib/vault-list';
 import type { PageServerLoad } from './$types';
 
 const DEFAULT_LIMIT = 50;
@@ -19,7 +20,12 @@ export const load: PageServerLoad = async ({ locals, url, params: routeParams, p
 	const resources = await apiGet<ResourceListResponse>(
 		`/api/resources?${params}`,
 		locals.accessToken!,
-	);
+	).catch((err: unknown) => {
+		if (err instanceof ApiError && (err.status === 404 || err.status === 403)) {
+			throw error(404, PLACE_NOT_AVAILABLE);
+		}
+		throw err;
+	});
 
 	// Governance is context-scoped, and this route addresses the context by ref while the shapes
 	// door addresses it by id. The layout's `/n` read already carries every visible context's row,

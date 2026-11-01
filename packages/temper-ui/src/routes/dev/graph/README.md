@@ -150,8 +150,8 @@ Keep the raw `.local.json` locally; it is gitignored.
   the URL above any read, and a fixture is an answer that already came back. The component suite
   covers both.
 - **Rung 2 with material.** `entryTooLittleStructure` reaches `eligible === 0` and also has
-  `in_scope === 0`, so it renders the degenerate sentence — *"You can read 0 resources here, but
-  nothing is linked to anything else"* — rather than the one the rung exists for. **No readable
+  `in_scope === 0`, so it renders the empty-place sentence — *"There is nothing here yet"* — rather
+  than the one the rung exists for. **No readable
   anchor on the corpus has `eligible === 0` and `in_scope > 0`**; that was measured across every
   anchor at capture time, not assumed. Declared in the fixture's own `_does_not_witness`, which the
   harness prints above the frame.
