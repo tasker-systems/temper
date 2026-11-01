@@ -172,5 +172,11 @@ jobs:
       - name: Type check
         run: cd packages/temper-cloud && bun run typecheck
 
+      # The check above uses temper-cloud's tsconfig; Vercel's builder uses none, and resolves
+      # @types from the repo root. That difference let TS2580/TS2307 ship on every production
+      # build while this job stayed green. The script header has the mechanism.
+      - name: Type check api/*.ts as Vercel does (per entrypoint, no tsconfig)
+        run: bash .github/scripts/check-vercel-api-types.sh
+
       - name: Lint and format check
         run: cd packages/temper-cloud && bun run check

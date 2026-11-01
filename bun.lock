@@ -4,6 +4,7 @@
   "workspaces": {
     "": {
       "devDependencies": {
+        "@types/node": "^22",
         "@vercel/blob": "^2",
         "typescript": "^5.8",
       },
