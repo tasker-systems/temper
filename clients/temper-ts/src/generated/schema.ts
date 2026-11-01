@@ -10076,8 +10076,25 @@ export interface components {
          */
         ResourceView: {
             /**
-             * @description SHA-256 hash of the resource body, from `kb_resource_manifests`. `None` when no
-             *     manifest row exists.
+             * @description Content identity of the body's **prose chunks** — not a hash of the body's bytes.
+             *     `kb_resources.body_hash`, bare lowercase hex.
+             *
+             *     It is a two-level merkle over the chunker's output. Each chunk's `content_hash` is the
+             *     sha256 of that chunk's text, **trimmed and without its heading line**. A block's hash is
+             *     the sha256 of its live chunks' hashes concatenated in `chunk_index` order, and this is
+             *     the sha256 of the live (unfolded) blocks' hashes concatenated in `seq` order.
+             *
+             *     So the hash does **not** move when an edit only:
+             *     - changes a heading's text or level, even on the first line (a heading lives in the
+             *       chunk's `header_path`/`heading_depth`, not its content);
+             *     - adds or removes a heading that has no prose under it;
+             *     - changes whitespace at a chunk's edges, or blank lines between sections.
+             *
+             *     Such an edit still writes: the stored bytes, the read-back body, and `updated` all
+             *     change. Read `updated` (or compare the content) to detect an edit, not `body_hash`. This
+             *     is the identity segmented ingest echoes at finalize (`expected_body_hash`) and the one the
+             *     re-block keeps blocks by; a byte-level check of an upload is `source_hash`'s job. `None`
+             *     for a metadata-only resource with no body.
              */
             body_hash?: string | null;
             body_storage?: components["schemas"]["BodyStorage"] | null;

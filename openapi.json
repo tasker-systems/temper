@@ -26262,7 +26262,7 @@
               "string",
               "null"
             ],
-            "description": "SHA-256 hash of the resource body, from `kb_resource_manifests`. `None` when no\nmanifest row exists."
+            "description": "Content identity of the body's **prose chunks** — not a hash of the body's bytes.\n`kb_resources.body_hash`, bare lowercase hex.\n\nIt is a two-level merkle over the chunker's output. Each chunk's `content_hash` is the\nsha256 of that chunk's text, **trimmed and without its heading line**. A block's hash is\nthe sha256 of its live chunks' hashes concatenated in `chunk_index` order, and this is\nthe sha256 of the live (unfolded) blocks' hashes concatenated in `seq` order.\n\nSo the hash does **not** move when an edit only:\n- changes a heading's text or level, even on the first line (a heading lives in the\n  chunk's `header_path`/`heading_depth`, not its content);\n- adds or removes a heading that has no prose under it;\n- changes whitespace at a chunk's edges, or blank lines between sections.\n\nSuch an edit still writes: the stored bytes, the read-back body, and `updated` all\nchange. Read `updated` (or compare the content) to detect an edit, not `body_hash`. This\nis the identity segmented ingest echoes at finalize (`expected_body_hash`) and the one the\nre-block keeps blocks by; a byte-level check of an upload is `source_hash`'s job. `None`\nfor a metadata-only resource with no body."
           },
           "body_storage": {
             "oneOf": [

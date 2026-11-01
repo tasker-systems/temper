@@ -837,6 +837,29 @@ mod tests {
         );
     }
 
+    // `body_hash` is chunk-content identity, not byte identity: chunk content excludes the heading
+    // line, so an edit that only renames (or re-levels) a heading — here the FIRST line — leaves the
+    // merkle unchanged, while an edit to a prose line moves it. This pins the documented definition
+    // (`ResourceView::body_hash`); if the hash is ever widened to cover headings, this test is the one
+    // that must change, together with that doc and every client twin of the merkle.
+    #[test]
+    fn body_hash_ignores_heading_text_and_tracks_prose() {
+        let before = "## Ruling (2026-10-31, Cole): keep the behaviour, correct the wording\n\n\
+                      The prose under the ruling.\n";
+        let renamed = "## Ruling (2026-10-31, Pete): keep the behaviour, correct the wording\n\n\
+                       The prose under the ruling.\n";
+        let relevelled =
+            "### Ruling (2026-10-31, Cole): keep the behaviour, correct the wording\n\n\
+                          The prose under the ruling.\n";
+        let prose_edit =
+            "## Ruling (2026-10-31, Cole): keep the behaviour, correct the wording\n\n\
+                          The prose under the ruling, revised.\n";
+
+        assert_eq!(body_hash_for_body(renamed), body_hash_for_body(before));
+        assert_eq!(body_hash_for_body(relevelled), body_hash_for_body(before));
+        assert_ne!(body_hash_for_body(prose_edit), body_hash_for_body(before));
+    }
+
     // Empty chunk set ⇒ sha256_hex("") — the same value body_hash_for_body returns for an empty body.
     #[test]
     fn body_hash_from_empty_chunk_set_matches_empty_body() {

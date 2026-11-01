@@ -9,8 +9,9 @@
 //! the retired `kb_resource_manifests` table directly and were removed once that store was
 //! dropped (WS6 #166); their coverage lives in the e2e tests above.
 //!
-//! This file retains only the metadata-only `body_hash`-in-response check, which needs no
-//! ONNX (test-db only).
+//! This file retains the metadata-only `body_hash`-in-response check and the pin on what
+//! `body_hash` covers (a first-line heading edit keeps it), both of which need no ONNX
+//! (test-db only).
 #![cfg(feature = "test-db")]
 
 mod common;
@@ -93,5 +94,96 @@ async fn update_response_includes_body_hash(pool: PgPool) {
     assert_eq!(
         body["body_hash"], stored_hash,
         "body_hash must be preserved (and returned) across a managed-only PATCH"
+    );
+}
+
+/// PATCH `content` with the full body, `body_hash` read from the PATCH response.
+async fn patch_content(app: &common::TestApp, token: &str, id: &str, content: &str) -> Value {
+    let resp = app
+        .client
+        .patch(app.url(&format!("/api/resources/{id}")))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&json!({ "content": content }))
+        .send()
+        .await
+        .expect("content PATCH failed");
+    assert_eq!(resp.status().as_u16(), 200, "content PATCH must succeed");
+    resp.json().await.expect("content PATCH JSON")
+}
+
+async fn read_markdown(app: &common::TestApp, token: &str, id: &str) -> String {
+    let body: Value = app
+        .client
+        .get(app.url(&format!("/api/resources/{id}/content")))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("content GET failed")
+        .json()
+        .await
+        .expect("content GET JSON");
+    body["markdown"].as_str().expect("markdown").to_string()
+}
+
+/// `body_hash` is the identity of the body's prose chunks, which exclude heading lines (see
+/// `ResourceView::body_hash`). A whole-body update that only changes the FIRST line, a heading,
+/// therefore writes the new content and moves `updated` while `body_hash` stays put; an edit to a
+/// prose line moves it. This is the observed 2026-11-01 behaviour, pinned as the definition.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_first_line_heading_edit_writes_but_keeps_body_hash(pool: PgPool) {
+    let app = common::setup_test_app(pool.clone()).await;
+
+    let email = format!("body-hash-heading-{}@example.com", Uuid::new_v4());
+    let (profile_id, context_id) =
+        common::fixtures::create_test_profile_with_context(&pool, &email).await;
+    let token = common::generate_test_jwt(&format!("test|{profile_id}"), &email);
+
+    let created: Value = app
+        .client
+        .post(app.url("/api/resources"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&json!({
+            "kb_context_id": context_id.to_string(),
+            "doc_type": "research",
+            "origin_uri": format!("test://body-hash-heading-{}", Uuid::new_v4()),
+            "title": "Heading Edit",
+            "slug": null
+        }))
+        .send()
+        .await
+        .expect("create failed")
+        .json()
+        .await
+        .expect("create JSON");
+    let id = created["id"].as_str().expect("id missing").to_string();
+
+    let tail = "\n\nThe prose under the ruling stays exactly the same.\n";
+    let cole = format!("## Ruling (2026-10-31, Cole): keep the behaviour{tail}");
+    let pete = format!("## Ruling (2026-10-31, Pete): keep the behaviour{tail}");
+
+    let first = patch_content(&app, &token, &id, &cole).await;
+    let hash = first["body_hash"].as_str().expect("body_hash").to_string();
+
+    let renamed = patch_content(&app, &token, &id, &pete).await;
+    assert!(
+        read_markdown(&app, &token, &id).await.contains("Pete"),
+        "the heading-only edit must write the new content"
+    );
+    assert_ne!(
+        renamed["updated"], first["updated"],
+        "the heading-only edit must move `updated`"
+    );
+    assert_eq!(
+        renamed["body_hash"].as_str(),
+        Some(hash.as_str()),
+        "a heading-only edit leaves the chunk-content merkle unchanged"
+    );
+
+    let prose = "## Ruling (2026-10-31, Pete): keep the behaviour\n\nThe prose, revised.\n";
+    let revised = patch_content(&app, &token, &id, prose).await;
+    assert_ne!(
+        revised["body_hash"].as_str(),
+        Some(hash.as_str()),
+        "a prose edit must move body_hash"
     );
 }
