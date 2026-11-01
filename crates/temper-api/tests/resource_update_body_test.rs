@@ -157,7 +157,10 @@ async fn a_first_line_heading_edit_writes_but_keeps_body_hash(pool: PgPool) {
         .expect("create JSON");
     let id = created["id"].as_str().expect("id missing").to_string();
 
-    let tail = "\n\nThe prose under the ruling stays exactly the same.\n";
+    // Two sections, so the write path partitions into two blocks: the rename must keep the same
+    // partition (and so the same merkle), not only the same chunks.
+    let tail = "\n\nThe prose under the ruling stays exactly the same.\n\n\
+                ## Rationale\n\nA second section, also untouched.\n";
     let ada = format!("## Ruling (Ada): keep it{tail}");
     let bea = format!("## Ruling (Bea): keep it{tail}");
 
@@ -179,8 +182,8 @@ async fn a_first_line_heading_edit_writes_but_keeps_body_hash(pool: PgPool) {
         "a heading-only edit leaves the chunk-content merkle unchanged"
     );
 
-    let prose = "## Ruling (Bea): keep it\n\nThe prose, revised.\n";
-    let revised = patch_content(&app, &token, &id, prose).await;
+    let prose = bea.replace("also untouched", "now revised");
+    let revised = patch_content(&app, &token, &id, &prose).await;
     assert_ne!(
         revised["body_hash"].as_str(),
         Some(hash.as_str()),

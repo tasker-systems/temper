@@ -839,9 +839,11 @@ mod tests {
 
     // `body_hash` is chunk-content identity, not byte identity: chunk content excludes the heading
     // line, so an edit that only renames (or re-levels) a heading — here the FIRST line — leaves the
-    // merkle unchanged, while an edit to a prose line moves it. This pins the documented definition
-    // (`ResourceView::body_hash`); if the hash is ever widened to cover headings, this test is the one
-    // that must change, together with that doc and every client twin of the merkle.
+    // merkle unchanged, while an edit to a prose line moves it. `body_hash_for_body` models ONE block,
+    // so this pins the chunk-level half of the documented definition (`ResourceView::body_hash`) on a
+    // one-section body; the multi-section, stored-value half is
+    // `a_first_line_heading_edit_writes_but_keeps_body_hash` (temper-api). If the hash is ever widened
+    // to cover headings, both change, together with that doc and every client twin of the merkle.
     #[test]
     fn body_hash_ignores_heading_text_and_tracks_prose() {
         let before = "## Ruling (Ada): keep it\n\n\
