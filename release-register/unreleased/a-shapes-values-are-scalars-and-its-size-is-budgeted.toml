@@ -9,18 +9,18 @@ through (declare, commit, reconcile and the shape loader).
 
 Values are scalars. A `const`, and every `enum` member, must be a string of at most 256 bytes
 (JSON-escaped), a number, a boolean or `null`; an object, an array or a longer string makes the
-schema uncompilable. `default` and `examples` stay free-form.
+schema uncompilable. `default`, `examples` and the values of `x-` keys stay free-form.
 
 A schema's parsed size has a budget. A shape's schema holds at most 12,288 JSON values, at most
-3,072 of them objects, counted at every depth across the whole document with `default` and
-`examples` included. The budget can refuse a schema every other cap allows: 48 enums of 256 strings
+3,072 of them objects, counted at every depth across the whole document with `default`,
+`examples` and `x-` values included. The budget can refuse a schema every other cap allows: 48 enums of 256 strings
 each fit the per-keyword caps but not the budget. The shape loader counts it before it takes a
 compile permit or copies a stored schema. The declare routes (`POST /api/contexts/{id}/shapes`,
 `POST /api/cognitive-maps/{id}/shapes`) take a request body of at most 512 KiB, twice the 256 KiB
 schema cap; the MCP `declare_data_artifact_shape` tool and `temper data-artifact schema declare`
 reach the same compile. Declare's refusal (`400`, code `DATA_ARTIFACT_REFUSAL`, MCP
-`invalid_params`) names the first thing refused with the cap it passed — `keyword const that is not
-a scalar of at most 256 bytes at /properties/a`, or `more than 12288 JSON values in the whole
+`invalid_params`) names the first thing refused with the cap it passed — `keyword const past 256 bytes or
+not a scalar at /properties/a`, or `more than 12288 JSON values in the whole
 schema` — then the sentence of rules, which now names both (`enum … and const of scalars`, `within
 a value budget`). No wire field is added;
 OpenAPI, ts-rs and the three generated SDKs change only in description text.

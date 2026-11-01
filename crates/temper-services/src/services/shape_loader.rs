@@ -260,7 +260,7 @@ pub async fn judge(schema: &Value) -> ApiResult<SchemaVerdict> {
 
 /// The most verdicts the process remembers. An entry is a shape id and a verdict — for one that
 /// does not compile, the bounded name of what it refused (at most `shape_schema::refused_room()`,
-/// about 120 bytes) — so under 1 MiB of map at the cap; past it an arbitrary entry is forgotten,
+/// 84 bytes) — so under 1 MiB of map at the cap; past it an arbitrary entry is forgotten,
 /// and that shape is judged again when it is next read.
 const MAX_REMEMBERED_VERDICTS: usize = 4096;
 

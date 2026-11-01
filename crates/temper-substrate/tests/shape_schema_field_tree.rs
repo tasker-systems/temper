@@ -500,8 +500,7 @@ fn a_refused_value_is_named_by_its_keyword_and_position() {
             "properties": { "a": { "const": { "k": "a structured value" } } }
         }))),
         format!(
-            "keyword const that is not a scalar of at most {MAX_SHAPE_VALUE_STRING_BYTES} bytes \
-             at /properties/a"
+            "keyword const past {MAX_SHAPE_VALUE_STRING_BYTES} bytes or not a scalar at /properties/a"
         )
     );
     let long = "v".repeat(MAX_SHAPE_VALUE_STRING_BYTES + 1);
@@ -511,10 +510,38 @@ fn a_refused_value_is_named_by_its_keyword_and_position() {
             "items": { "enum": ["a", long] }
         }))),
         format!(
-            "keyword enum with a member not a scalar of at most {MAX_SHAPE_VALUE_STRING_BYTES} \
-             bytes at /items"
+            "keyword enum with a member past {MAX_SHAPE_VALUE_STRING_BYTES} bytes or not a scalar \
+             at /items"
         )
     );
+}
+
+/// On a path long enough that the refusal is cut to its room, the cap the fixed sentence leaves
+/// out is still named: a cut keeps a refusal's head and its path's tail. Bites a refusal that puts
+/// the cap in its middle, where the cut falls.
+#[test]
+fn a_cut_value_refusal_still_names_the_cap() {
+    let cap = MAX_SHAPE_VALUE_STRING_BYTES.to_string();
+    let nested = |member: Value| {
+        field_tree(json!({ "properties": { "address": { "properties": {
+            "country": { "properties": { "subdivision": member } }
+        } } } }))
+    };
+    for schema in [
+        nested(json!({ "const": [] })),
+        nested(json!({ "enum": ["a", {}] })),
+    ] {
+        let refused = refusal(&schema);
+        assert!(refused.contains('…'), "the refusal is cut: {refused}");
+        assert!(
+            refused.contains(&cap),
+            "the cap survives the cut: {refused}"
+        );
+        assert!(
+            refused.ends_with("/properties/subdivision"),
+            "the path's tail survives the cut: {refused}"
+        );
+    }
 }
 
 #[test]
@@ -615,6 +642,21 @@ fn mixed_enum_at_the_cap_compiles() {
     assert_compiles(&field_tree(
         json!({ "enum": mixed_enum(MAX_MIXED_ENUM_ENTRIES) }),
     ));
+}
+
+/// An enum past its cap and holding a member that is not a scalar is refused for the cap, which
+/// the walk checks first. Bites the two checks swapped.
+#[test]
+fn an_enum_past_its_cap_is_refused_for_the_cap_before_its_members() {
+    let mut entries = mixed_enum(MAX_MIXED_ENUM_ENTRIES + 1);
+    entries.push(json!({}));
+    assert_eq!(
+        refusal(&field_tree(json!({ "enum": entries }))),
+        format!(
+            "enum of {} entries, past the cap of {MAX_MIXED_ENUM_ENTRIES}, at the root",
+            MAX_MIXED_ENUM_ENTRIES + 2
+        )
+    );
 }
 
 #[test]
@@ -746,7 +788,7 @@ fn object_of_fields(count: usize, field: &Value) -> Value {
 }
 
 /// A document of exactly `MAX_SHAPE_NODES + 1` values is refused, with the excess in `examples`,
-/// in `default` and in an `additionalProperties` schema, each its own fixture. None holds more than
+/// in `default`, under an `x-` key and in an `additionalProperties` schema, each its own fixture. None holds more than
 /// two objects (the root and the `additionalProperties` schema), so the objects cap is not what
 /// refuses it. Each fixture is one value past the cap, counted whole, so the refusal bites
 /// dropping the node cap while the objects cap holds, a count that skips a position, and a cap
@@ -757,6 +799,7 @@ fn the_node_cap_alone_refuses() {
     // placement, also `type` and the `additionalProperties` schema.
     let in_examples = field_tree(json!({ "examples": zeros(MAX_SHAPE_NODES - 2) }));
     let in_default = field_tree(json!({ "default": zeros(MAX_SHAPE_NODES - 2) }));
+    let in_extension = field_tree(json!({ "x-data": zeros(MAX_SHAPE_NODES - 2) }));
     let in_additional = field_tree(json!({
         "type": "object",
         "additionalProperties": { "examples": zeros(MAX_SHAPE_NODES - 4) },
@@ -764,6 +807,7 @@ fn the_node_cap_alone_refuses() {
     for (placement, schema, objects) in [
         ("examples", in_examples, 1),
         ("default", in_default, 1),
+        ("an x- key", in_extension, 1),
         ("an additionalProperties schema", in_additional, 2),
     ] {
         let count = whole_count(&schema);
@@ -781,7 +825,7 @@ fn the_node_cap_alone_refuses() {
 }
 
 /// A document of exactly `MAX_SHAPE_OBJECTS + 1` objects is refused, with the excess as empty
-/// objects in `examples`, in `default` and in an `additionalProperties` schema, each its own
+/// objects in `examples`, in `default`, under an `x-` key and in an `additionalProperties` schema, each its own
 /// fixture, every one far under the node cap. Each fixture is one object past the cap, counted
 /// whole, so the refusal bites dropping the objects cap, a count that skips a position, and a cap
 /// checked with any slack.
@@ -793,6 +837,7 @@ fn the_objects_cap_alone_refuses() {
     // so every fixture holds `MAX_SHAPE_OBJECTS + 1` objects.
     let in_examples = field_tree(json!({ "examples": empty_objects(MAX_SHAPE_OBJECTS) }));
     let in_default = field_tree(json!({ "default": empty_objects(MAX_SHAPE_OBJECTS) }));
+    let in_extension = field_tree(json!({ "x-data": empty_objects(MAX_SHAPE_OBJECTS) }));
     let in_additional = field_tree(json!({
         "type": "object",
         "additionalProperties": { "examples": empty_objects(MAX_SHAPE_OBJECTS - 1) },
@@ -800,6 +845,7 @@ fn the_objects_cap_alone_refuses() {
     for (placement, schema, frame) in [
         ("examples", in_examples, 3),
         ("default", in_default, 3),
+        ("an x- key", in_extension, 3),
         ("an additionalProperties schema", in_additional, 4),
     ] {
         let count = whole_count(&schema);

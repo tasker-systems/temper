@@ -105,8 +105,8 @@ still conforms. Use `pattern` when the form must be checked. **Keys beginning `x
 anywhere a schema sits and carried as written; their values are never read, whatever they hold.
 
 `$ref`, `$defs`, `allOf`, `anyOf`, `oneOf`, `not`, `if` and every other keyword are refused at
-declare. The refusal names the first keyword or cap that failed and, for a keyword, the
-JSON-pointer path of the schema position holding it — `(keyword allOf at /properties/when)`, or
+declare. The refusal names the first keyword or cap that failed and, for all but the value budget,
+the JSON-pointer path of the schema position holding it — `(keyword allOf at /properties/when)`, or
 `(more than 12288 JSON values in the whole schema)` — then the sentence that lists this
 vocabulary. A commit refused because its family's enforcing shape cannot be compiled, and an ask
 naming such a shape, name it the same way to a reader who can read the shape. A refused commit,

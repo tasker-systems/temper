@@ -578,8 +578,7 @@ fn field_tree_refusal(schema: &Value) -> Option<String> {
                 | "maxItems" | "minimum" | "maximum" | "title" | "description" | "$comment" => None,
                 "const" => (!is_shape_value(value)).then(|| {
                     format!(
-                        "keyword const that is not a scalar of at most \
-                         {MAX_SHAPE_VALUE_STRING_BYTES} bytes"
+                        "keyword const past {MAX_SHAPE_VALUE_STRING_BYTES} bytes or not a scalar"
                     )
                 }),
                 // An annotation, never an assertion: the compile turns on no format validation.
@@ -634,9 +633,10 @@ fn field_tree_refusal(schema: &Value) -> Option<String> {
                             ))
                         } else {
                             (!entries.iter().all(is_shape_value)).then(|| {
+                                // The cap leads, so a refusal cut to its room keeps it.
                                 format!(
-                                    "keyword enum with a member not a scalar of at most \
-                                     {MAX_SHAPE_VALUE_STRING_BYTES} bytes"
+                                    "keyword enum with a member past \
+                                     {MAX_SHAPE_VALUE_STRING_BYTES} bytes or not a scalar"
                                 )
                             })
                         }
