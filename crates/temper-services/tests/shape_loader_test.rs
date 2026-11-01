@@ -439,7 +439,10 @@ async fn a_stored_remote_ref_shape_loads_uncompilable_and_fetches_nothing(pool: 
 
     assert_eq!(
         load_one(&pool, w.owner, id).await.unwrap(),
-        ShapeLoad::Uncompilable
+        ShapeLoad::Uncompilable {
+            refused: Some("keyword $ref at the root".to_owned())
+        },
+        "the owner, who reads the shape, is told what its compile refused"
     );
     assert_eq!(probe.connections(), 0, "the loader must not fetch");
 }
@@ -578,8 +581,17 @@ async fn an_uncompilable_shape_reads_askable_empty_with_the_reason(pool: PgPool)
     assert_eq!(reason.reason, RefusalReason::ShapeSchemaUncompilable);
     assert_eq!(
         Some(reason.clone()),
-        ShapeLoad::Uncompilable.loaded().err(),
-        "the read's reason is the load's refusal"
+        ShapeLoad::Uncompilable {
+            refused: Some("keyword $ref at the root".to_owned())
+        }
+        .loaded()
+        .err(),
+        "the read's reason is the load's refusal, naming what the compile refused"
+    );
+    assert!(
+        !reason.detail.contains(&probe.port().to_string()),
+        "{}",
+        reason.detail
     );
     assert_eq!(refusals_for(&pool, w.owner, id).await, vec![reason]);
 

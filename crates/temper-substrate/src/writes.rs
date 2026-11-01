@@ -500,7 +500,80 @@ impl std::error::Error for BlockAddressError {}
 /// (a-declined-act-teaches-its-vocabulary).
 #[derive(Debug)]
 pub struct DataArtifactRefusal {
+    /// The words every reader may see.
     pub message: String,
+    /// Set only on a commit refused because the enforcing shape in force cannot be compiled: the
+    /// shape, and what its compile refused first. `message` never names it; a door names it only
+    /// through [`DataArtifactRefusal::message_for`], having asked whether its reader can already
+    /// read the shape.
+    pub uncompilable_shape: Option<UncompilableShapeInForce>,
+}
+
+/// The enforcing shape in force that a commit could not be checked against, and what its compile
+/// refused first.
+#[derive(Debug, Clone)]
+pub struct UncompilableShapeInForce {
+    pub shape_id: uuid::Uuid,
+    pub refused: crate::shape_schema::ShapeSchemaUncompilable,
+}
+
+impl DataArtifactRefusal {
+    /// The refusal's words for a reader: `message`, or — when the refusal is an uncompilable
+    /// enforcing shape and `reads_shape` says this reader can already read that shape (the gated
+    /// `shape_by_id` returns it to them) — the same sentence naming what the compile refused first
+    /// (shape ruling R4). A committer who cannot read the shape learns nothing of it here that the
+    /// fixed sentence does not already say.
+    #[must_use]
+    pub fn message_for(&self, reads_shape: bool) -> String {
+        match &self.uncompilable_shape {
+            Some(shape) if reads_shape => uncompilable_shape_message(shape.refused.refused()),
+            _ => self.message.clone(),
+        }
+    }
+
+    /// The refusal's words for `reader`, asking on `conn` — the refused commit's own transaction,
+    /// which this refusal leaves usable, since it is raised in Rust after every statement
+    /// succeeded — whether `reader` can read the uncompilable shape through the gated
+    /// `shape_by_id`, the read `schema show` makes. Only an uncompilable-shape refusal asks;
+    /// every other answers `message` without a query.
+    ///
+    /// A writer who passed the commit's modify floor can ordinarily read the resource's home,
+    /// where the shape in force lives; the fixed sentence holds for any path where that is not so.
+    ///
+    /// # Errors
+    /// A database fault on the question.
+    pub async fn message_for_reader(
+        &self,
+        conn: &mut sqlx::PgConnection,
+        reader: ProfileId,
+    ) -> Result<String> {
+        let Some(shape) = &self.uncompilable_shape else {
+            return Ok(self.message.clone());
+        };
+        let reads_shape = sqlx::query_scalar!(
+            r#"SELECT EXISTS (SELECT 1 FROM shape_by_id($1, $2)) AS "reads!""#,
+            reader.uuid(),
+            shape.shape_id,
+        )
+        .fetch_one(conn)
+        .await?;
+        Ok(self.message_for(reads_shape))
+    }
+}
+
+/// The sentence refusing a commit into a family whose enforcing shape cannot be compiled, naming
+/// what the compile refused first when `refused` is given. Bounded: `refused` is at most the room
+/// [`crate::shape_schema::ShapeSchemaUncompilable`] leaves under the failure-message bound.
+#[must_use]
+pub fn uncompilable_shape_message(refused: Option<&str>) -> String {
+    let named = refused
+        .map(|refused| format!(" ({refused})"))
+        .unwrap_or_default();
+    format!(
+        "data_artifact_commit: the enforcing shape in force for this family cannot be \
+         compiled{named} — it is not a field tree this server can compile — so the content's \
+         conformance cannot be checked and the commit is refused; a steward must amend the shape"
+    )
 }
 
 impl std::fmt::Display for DataArtifactRefusal {

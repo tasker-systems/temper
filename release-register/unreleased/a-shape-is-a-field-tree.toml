@@ -8,23 +8,28 @@ Hardening. A data-artifact shape is now a field tree: a JSON Schema 2020-12 docu
 `type`, `properties`, `required`, `additionalProperties` (`true`, `false` or a schema), `items` (one
 schema), `enum` (at most 256 strings, or 32 values of any other kind), `const`, `pattern` (at most
 256 bytes, at most 32 in a shape, no lookaround or backreferences), `minLength`, `maxLength`,
-`minItems`, `maxItems`, `minimum`, `maximum`, `title`, `description`, `$comment`, `default` and
-`examples`, with property names (in `properties` and `required`) of at most 256 bytes, `$schema` and
+`minItems`, `maxItems`, `minimum`, `maximum`, `title`, `description`, `$comment`, `default`,
+`examples` and `format` (a string, carried as an annotation and never enforced), with property names (in `properties` and `required`) of at most 256 bytes, `$schema` and
 `$id` only at the root, `$schema` the bundled 2020-12 spelling (with or without a trailing `#`), nested
-at most 16 levels. Declaring a shape
+at most 16 levels. A key beginning `x-` is accepted anywhere a schema sits, carried as written and
+never read. Declaring a shape
 (`POST /api/contexts/{id}/shapes`, `POST /api/cognitive-maps/{id}/shapes`, the MCP
 `declare_data_artifact_shape` tool and `temper data-artifact schema declare`) with a schema outside
 it is refused with the existing data-artifact refusal (`400`, code `DATA_ARTIFACT_REFUSAL`, MCP
-`invalid_params`), carrying one fixed sentence that lists this vocabulary; no shape row is written.
-`$ref`, `$defs`, `allOf`, `anyOf`, `oneOf`, `not`, `if`, `format` and every other keyword are
-refused. Each regex a shape holds must compile within 10 KiB.
+`invalid_params`), naming the first keyword or cap that failed and the JSON-pointer path of the
+schema position holding it (`keyword allOf at /properties/when`), then the sentence that lists this
+vocabulary; no shape row is written. `$ref`, `$defs`, `allOf`, `anyOf`, `oneOf`, `not`, `if` and
+every other keyword are refused. Each regex a shape holds must compile within 10 KiB.
 
 A shape already stored outside the field tree can no longer be checked: an `enforcing` family
 refuses commits until the shape is amended, an `advisory` family records commits unchecked (they
 read `declared_not_yet_checked`), an ask naming it is answered as uncompilable, and reconcile skips
-its artifacts. The production instance has none. Before upgrading any other deployment, read
-`SELECT artifact_kind, schema FROM kb_data_artifact_shapes WHERE NOT is_folded` and compile each
-schema against the rules above; any that fails needs amending first.
+its artifacts. The community instance (temperkb.io) has none; another deployment may hold some —
+most commonly `format` or `x-*`, which now compile (`a-field-tree-carries-format-and-x-keys`).
+Before upgrading any other deployment, run the field-tree screen, an exact SQL mirror of these
+rules (temper-artifacts `reviews/2026-10-31-stored-shapes-outside-the-field-tree.md` §3, the v0.6.3
+pre-release review's P8; the read-only runbooks live under temper-artifacts `runbooks/`), and amend
+every enforcing shape it returns first. An enforcing shape that still fails keeps refusing commits.
 
 A refused commit, and a recorded verdict, now name at most one violation, its message cut to 1 KiB.
 Request and response shapes are unchanged; no migration. Who observes: shape authors and the agents

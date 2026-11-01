@@ -151,6 +151,10 @@ async fn declaring_a_schema_that_needs_a_fetch_is_refused_and_writes_nothing(poo
         "the refusal must carry the fixed sentence, got: {message}"
     );
     assert!(
+        message.contains("(keyword $ref at the root)"),
+        "the declarer is told the first keyword refused and where, got: {message}"
+    );
+    assert!(
         !message.contains("127.0.0.1") && !message.contains(&probe.port().to_string()),
         "the refusal must not echo the URI the schema names, got: {message}"
     );
@@ -178,6 +182,19 @@ async fn declaring_a_schema_that_needs_a_fetch_is_refused_and_writes_nothing(poo
         count(&pool, "SELECT count(*) FROM kb_data_artifact_shapes").await,
         1
     );
+
+    // `format` and an `x-` key holding the same remote `$ref` are annotations (rulings R1, R2):
+    // the schema declares, and nothing is fetched.
+    let annotated = serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "x-source": remote,
+        "properties": { "when": { "type": "string", "format": "date-time" } }
+    });
+    shape_service::declare_shape(&pool, service_params(&w, w.owner, "event", &annotated))
+        .await
+        .expect("format and x- keys are carried as annotations");
+    assert_eq!(probe.connections(), 0, "an x- value is never fetched");
 }
 
 /// The authority gate runs first: a principal who cannot author the home is answered `Forbidden`
