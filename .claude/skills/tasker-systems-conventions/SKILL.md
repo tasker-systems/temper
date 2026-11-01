@@ -75,7 +75,7 @@ Statuses for **temper**:
 | CONC-DB-3 | convention: transaction scope is judged in review |
 | CONC-FAIL-1 | practiced |
 | CONC-FAIL-2 | convention: span-per-act is a code-quality.md review rule; spawns are not named |
-| CONC-FAIL-3 | uncovered: shape_loader.rs recovers poisoned locks at six production sites with no comment |
+| CONC-FAIL-3 | uncovered: shape_loader.rs recovers poisoned locks at two production sites (the verdict cache) with no comment |
 | CONS-1 | gated: .github/workflows/quality-gate.yml#conventions |
 | CONS-2 | gated: .github/workflows/quality-gate.yml#conventions |
 | CONS-3 | gated: .github/workflows/quality-gate.yml#conventions |

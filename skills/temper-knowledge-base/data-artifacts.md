@@ -92,6 +92,12 @@ schema), `items` (one schema), `enum` (at most 256 strings, or 32 values of any 
 `default`, `examples` and `format`. Property names (in `properties` and `required`) are at most 256 bytes.
 `$schema` and `$id` may appear only at the root, and `$schema`, if present, must be
 `https://json-schema.org/draft/2020-12/schema` (a trailing `#` is also accepted). A shape may nest at most 16 levels.
+A `const` and every `enum` member must be a scalar: a string of at most 256 bytes (JSON-escaped), a
+number, a boolean or `null`; an object or an array is refused. A shape's schema holds at most 12,288
+JSON values in all, at most 3,072 of them objects, counted across the whole document with `default`,
+`examples` and `x-` values included. That budget can refuse a schema every other cap allows: 48
+enums of 256 strings each fit the per-keyword caps but not the budget. The HTTP declare routes also
+take a request body of at most 512 KiB.
 
 **`format` is not enforced.** It is accepted, as a string, wherever a schema sits, and carried as
 an annotation: `"format": "date-time"` documents the field, but a string that is not a date-time
@@ -99,10 +105,11 @@ still conforms. Use `pattern` when the form must be checked. **Keys beginning `x
 anywhere a schema sits and carried as written; their values are never read, whatever they hold.
 
 `$ref`, `$defs`, `allOf`, `anyOf`, `oneOf`, `not`, `if` and every other keyword are refused at
-declare. The refusal names the first keyword or cap that failed and the JSON-pointer path of the
-schema position holding it — `(keyword allOf at /properties/when)` — then the sentence that lists
-this vocabulary. A commit refused because its family's enforcing shape cannot be compiled, and an
-ask naming such a shape, name it the same way to a reader who can read the shape. A refused commit,
+declare. The refusal names the first keyword or cap that failed and, for all but the value budget,
+the JSON-pointer path of the schema position holding it — `(keyword allOf at /properties/when)`, or
+`(more than 12288 JSON values in the whole schema)` — then the sentence that lists this
+vocabulary. A commit refused because its family's enforcing shape cannot be compiled, and an ask
+naming such a shape, name it the same way to a reader who can read the shape. A refused commit,
 and a recorded verdict, name at most one violation, its message cut to 1 KiB.
 
 **Declaring is never required to commit.** The system persists your data whether or not a shape
@@ -163,6 +170,13 @@ artifacts satisfies **all** of that ask's predicates. So "an artifact with `unit
   nothing matches. Its `teaches` carries the declared values and the route: ask `has_key` at the
   path with `shape_states: ["declared_not_satisfied", "declared_not_yet_checked"]` in the batch
   read, which returns those artifacts whole.
+- **Below a path that declares values, a `contains` ask is refused.** A shape's `const` and `enum`
+  members are scalars, which hold nothing at any key, so every path below a node that declares values
+  holds the empty set: a `contains` ask there is refused `value_outside_shape`, while `compare` and
+  `has_key` are admitted. A shape whose schema the compile refuses cannot be asked: the ask answers
+  `shape_schema_uncompilable` until the shape is amended; re-declaring it returns the refusal
+  sentence, which names every rule the compile holds a schema to (a schema past the 256 KiB size
+  cap is refused with a sentence of its own).
 - **An ask ranges over its shape's home.** It reads the live artifacts of that shape's family on
   resources homed there that you can see and that have finished ingesting. Anchor the stage to that
   home or leave it unanchored; asks of shapes in two homes cannot share a stage (`ask_scope_conflict`)

@@ -40,6 +40,7 @@ use std::cmp::Ordering;
 
 use serde_json::{Map, Number, Value};
 
+use super::walk::is_scalar;
 use super::ArtifactPredicate;
 use crate::types::query::filter::{OrdOp, PropertyOp};
 
@@ -203,7 +204,7 @@ fn scalar_eq_within(a: &Value, b: &Value, steps: &mut usize) -> Option<bool> {
 }
 
 fn is_container(value: &Value) -> bool {
-    value.is_array() || value.is_object()
+    !is_scalar(value)
 }
 
 /// jsonb scalar equality: same type, numbers equal as decimals, strings byte-equal.
@@ -218,8 +219,8 @@ fn scalar_eq(a: &Value, b: &Value) -> bool {
 }
 
 /// A text equal for two values exactly when they are jsonb-equal: `5` and `5.0` alike, object keys
-/// in byte order, array order kept. The walk keys `enum` members by it, so value sets intersect and
-/// union in linear time.
+/// in byte order, array order kept. The walk keeps the `enum` members jsonb-equal to a `const`
+/// beside it by comparing their texts.
 pub(super) fn canonical(value: &Value) -> String {
     let mut out = String::new();
     write_canonical(value, &mut out);
@@ -555,6 +556,25 @@ mod tests {
             contains_at(&["m"], vec![json!({ "n": { "z": 1 } })]),
             content
         ));
+    }
+
+    /// A container probe is held only by stored content of its own kind that contains it: an
+    /// object by an object holding each of its keys, an array by an array holding each of its
+    /// elements, and `{}` by any object and by no array. Validation's enum membership runs this
+    /// same containment (`jsonb_contains_within`), so these are its container arms, read over
+    /// content of any shape. Bites a container arm that admits by kind alone, or that crosses kinds.
+    #[test]
+    fn a_container_probe_is_held_only_by_content_of_its_own_kind() {
+        let object = json!({ "p": { "k": 1, "z": 2 } });
+        let array = json!({ "p": ["a", "b"] });
+        let held =
+            |probe: Value, content: &Value| one(contains_at(&["p"], vec![probe]), content.clone());
+        assert!(held(json!({ "z": 2 }), &object));
+        assert!(!held(json!({ "k": 2 }), &object));
+        assert!(held(json!(["b"]), &array));
+        assert!(!held(json!(["c"]), &array));
+        assert!(held(json!({}), &object));
+        assert!(!held(json!({}), &json!({ "p": ["a"] })));
     }
 
     #[test]
