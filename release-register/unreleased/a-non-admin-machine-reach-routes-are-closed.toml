@@ -1,7 +1,7 @@
 title    = "A non-admin can no longer bind connection reach to their own personal team, grant an inherited right to a machine they control, or leave a team with their machines still on it"
 pr       = "self"
 classes  = ["additive", "behavioral"]
-surfaces = ["http", "mcp", "cli-stdout", "clients"]
+surfaces = ["http", "mcp", "cli-stdout", "clients", "erasure-policy"]
 status   = "signal-only"
 body = '''
 The residual routes from the v0.6.3 security review's S3 finding, each ruled by the owner (decision
@@ -24,6 +24,8 @@ The residual routes from the v0.6.3 security review's S3 finding, each ruled by 
   `correlation_id`.
 - `kb_machine_clients` gains `secret_rotated_by_profile_id`, set by a secret rotation. The rotator
   counts as controlling the machine at the grant door even after they leave its owning team.
+  The erasure policy declares it as a profile reference (`pseudonym` ceiling), like the column's
+  `registered_by_profile_id` and `revoked_by_profile_id` siblings.
 - Unchanged, by design: a delegate's grant to a shared team they manage.
 
 Who observes: a non-admin team owner binding connection reach to their personal team; a co-owner
