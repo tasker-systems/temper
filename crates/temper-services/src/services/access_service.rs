@@ -1148,6 +1148,37 @@ pub async fn promote_admin(
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {e}")))?;
 
+    // D11: admin-ness IS a governance grant, and the invariant "admin implies Approved" is
+    // maintained here, at promotion (is_system_admin never ANDs standing in at read time). So a
+    // promotion writes the governance grant that makes `is_system_admin` true and — unless the
+    // profile is already `approved` — the standing that makes `has_system_access` true, atomically
+    // with the team row. Without the standing half a promoted admin would pass the admin predicate
+    // yet fail the front door.
+    //
+    // The standing half is judged FIRST, before any write, and through the transition table on
+    // the person's locked current standing: a promotion is not a way round it. From Deactivated
+    // it refuses and names `Reactivate`, the only act that lifts a deactivation — promoting a
+    // deactivated person used to approve them silently (task 01a19967 recommends refusing). A
+    // refusal returns before the first write, so the team row and the grant are never written.
+    let profile = ProfileId::from(profile_id);
+    let current = standing_service::lock_conn(&mut tx, profile).await?;
+    if current != Some(temper_principal::Standing::Approved) {
+        let judged = standing_service::judge_and_apply_conn(
+            &mut tx,
+            ApplyStandingParams {
+                subject: profile,
+                act: Act::Approve,
+                actor: Some(admin.actor()),
+                authority: ActorAuthority::Admin,
+            },
+            Some("system admin promotion".to_string()),
+        )
+        .await?;
+        if let standing_service::Judged::Refused { current, refusal } = judged {
+            return Err(promotion_refused(current, &refusal));
+        }
+    }
+
     let row = sqlx::query_as!(
         TeamMemberRow,
         r#"
@@ -1162,12 +1193,7 @@ pub async fn promote_admin(
     .fetch_one(&mut *tx)
     .await?;
 
-    // D11: admin-ness IS a governance grant, and the invariant "admin implies Approved" is
-    // maintained here, at promotion (is_system_admin never ANDs standing in at read time). So a
-    // promotion writes both, atomically with the team row: the governance grant that makes
-    // `is_system_admin` true, and — unless the profile is already `approved` — the standing that
-    // makes `has_system_access` true. Without the standing half a promoted admin would pass the
-    // admin predicate yet fail the front door.
+    // The governance half of the promotion (the standing half was judged and written above).
     sqlx::query_scalar!(
         "SELECT principal_governance_set($1, true, $2, 'system admin promotion')",
         profile_id,
@@ -1176,27 +1202,32 @@ pub async fn promote_admin(
     .fetch_one(&mut *tx)
     .await?;
 
-    let current: Option<String> = sqlx::query_scalar!(
-        "SELECT state FROM kb_principal_standing WHERE profile_id = $1",
-        profile_id
-    )
-    .fetch_optional(&mut *tx)
-    .await?;
-    if current.as_deref() != Some("approved") {
-        sqlx::query_scalar!(
-            "SELECT principal_standing_apply($1,'approve','approved',$2,'system admin promotion')",
-            profile_id,
-            Some(*admin.actor()),
-        )
-        .fetch_one(&mut *tx)
-        .await?;
-    }
-
     tx.commit()
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to commit transaction: {e}")))?;
 
     Ok(row)
+}
+
+/// The refusal for promoting a person whose standing no approval may move. Names the standing they
+/// are in and, for a deactivation, the act that lifts it.
+fn promotion_refused(
+    current: Option<temper_principal::Standing>,
+    refusal: &temper_principal::Refusal,
+) -> ApiError {
+    match current {
+        Some(temper_principal::Standing::Deactivated) => ApiError::Conflict(format!(
+            "this person is deactivated, and promotion does not lift a deactivation ({}) — \
+             reactivate them first with `temper admin access reactivate`, then promote. Nothing \
+             was written.",
+            refusal.reason()
+        )),
+        _ => ApiError::Conflict(format!(
+            "this person's standing cannot be approved, so they cannot be promoted ({}). Nothing \
+             was written.",
+            refusal.reason()
+        )),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1219,8 +1250,10 @@ pub async fn promote_admin(
 // ---------------------------------------------------------------------------
 
 /// Approve a principal directly — the machine/direct-grant door, legal from `Denied` (D14) and
-/// `Revoked` (D16) as well as `Requested`. Distinct from `review_request`'s approval, which also
-/// closes a join-request record; a direct grant touches no request row. Both doors confer the
+/// `Revoked` (D16) as well as `Requested`. Distinct from `review_request`'s approval, which decides
+/// a join-request record. A direct grant from `Requested` closes the person's pending gating-team
+/// request too, as approved, in the same transaction (`standing_service::judge_and_apply_conn`), so
+/// the queue never keeps a row its decision has already answered. Both doors confer the
 /// same standing, and the auto-join pool enrollment both imply is materialized by the standing
 /// committer itself (`20260923000010`) — it is never this function's or review_request's job.
 pub async fn admin_approve(
@@ -1979,6 +2012,22 @@ pub async fn review_request(
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {e}")))?;
 
+    // WHO THE DECISION IS ABOUT, then THEIR STANDING LOCK, before any row of the request's is
+    // taken. Every standing act locks the subject's standing row first (`standing_service::apply`),
+    // and a direct approval then closes this person's pending request — so taking the request row
+    // first here would invert that order and let the two deadlock. An unlocked read is enough to
+    // learn the requester: the `UPDATE … AND status = 'pending'` below re-checks the row under its
+    // own lock, so a request decided concurrently still answers 404.
+    let requester = sqlx::query_scalar!(
+        "SELECT requesting_profile_id FROM kb_join_requests WHERE id = $1 AND status = 'pending'",
+        params.request_id,
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .map(ProfileId::from)
+    .ok_or_else(|| ApiError::NotFound("join request not found".to_string()))?;
+    let standing_now = standing_service::lock_conn(&mut tx, requester).await?;
+
     let row = sqlx::query_as!(
         JoinRequest,
         r#"
@@ -2005,66 +2054,76 @@ pub async fn review_request(
     .await?
     .ok_or_else(|| ApiError::NotFound("join request not found".to_string()))?;
 
-    // THE TEAM LOCK BEFORE ANY STANDING WRITE (plan C3): both branches call
+    // THE TEAM LOCK BEFORE ANY STANDING WRITE (plan C3): the standing write below runs
     // `principal_standing_apply`, whose `ensure_auto_join_memberships` inserts member rows.
     // Taking the team row lock first — the same lock a member act holds — means this transaction
     // cannot deadlock with a concurrent `add_member` holding the team lock and waiting on those
-    // uncommitted rows. The join-request row was already this transaction's, so the lock order is
-    // request row → team row → member row, the same shape the accept path holds. `locked` also
-    // reads the requester's row and machine-ness: the act's target, and the machine skip.
-    let target = team_membership::locked(
+    // uncommitted rows. The lock order is standing row → request row → team row → member row.
+    // `locked` also reads the requester's row and machine-ness: the act's target, and the machine
+    // skip.
+    let target = team_membership::locked(&mut tx, row.team_id, requester).await?;
+
+    // THE DECISION MOVES STANDING ONLY BY A LEGAL TRANSITION. A join request can outlive the
+    // standing it was filed under — the person was revoked, deactivated or approved directly while
+    // it sat pending — and deciding such a row must not do what the admin did not mean: reject a
+    // Revoked person into Denied (the laundering D15 forbids, after which they may file afresh),
+    // lift a deactivation that only `Reactivate` may lift, or write a no-op approval. So the write
+    // goes through the transition table on the requester's locked current standing, and an
+    // illegal move refuses the WHOLE decision: returning drops `tx`, the request row stays
+    // pending, and no standing row or event is written.
+    //
+    // Under D11 access IS an `approved` `kb_principal_standing` row (`has_system_access` reads
+    // nothing else), so the decision and the standing it confers are one transaction. On approval
+    // the committer's enrollment arm materializes the auto-join mirror in this same transaction
+    // (`20260923000010`). Rejection returns standing to `Denied` so the principal may re-request
+    // (spec §5; `join_request_rejection_allows_resubmit` pins this) — rejection is deliberately not
+    // a standing state of its own; the request record keeps the `decision_note`.
+    //
+    // One cell is legal in the table and still refused here: approving the request of a person
+    // who is now Revoked. `Approve` from Revoked is readmission (D16), a deliberate act with its
+    // own door (`temper admin access approve`). Arriving at it by working through an old queue
+    // row is exactly the mistake this guard exists for, so the join-request door does not readmit.
+    if params.decision == JoinRequestStatus::Approved
+        && standing_now == Some(temper_principal::Standing::Revoked)
+    {
+        return Err(stale_join_decision(params.decision, standing_now, None));
+    }
+    let act = if params.decision == JoinRequestStatus::Approved {
+        Act::Approve
+    } else {
+        Act::Reject
+    };
+    let judged = standing_service::judge_and_apply_conn(
         &mut tx,
-        row.team_id,
-        ProfileId::from(row.requesting_profile_id),
+        ApplyStandingParams {
+            subject: requester,
+            act,
+            actor: Some(admin.actor()),
+            authority: ActorAuthority::Admin,
+        },
+        params.decision_note.clone(),
     )
     .await?;
+    if let standing_service::Judged::Refused { current, refusal } = judged {
+        return Err(stale_join_decision(
+            params.decision,
+            current,
+            Some(refusal.reason()),
+        ));
+    }
 
-    // On approval, grant the requester access. Under D11 access IS an `approved`
-    // `kb_principal_standing` row (`has_system_access` reads nothing else), so the decision and the
-    // standing it confers must be one transaction. `Approve` is legal from the requester's born
-    // `Denied` state (transition.rs, D14); the raw committer on the tx is the machine-door pattern —
-    // it keeps the standing write atomic with the decision, which `standing_service::apply` (a
-    // `&PgPool` call) could not. `has_system_access` is now true, so the committer's enrollment
-    // arm materializes the auto-join mirror right here in this transaction.
-    if params.decision == JoinRequestStatus::Approved {
-        sqlx::query_scalar!(
-            "SELECT principal_standing_apply($1,'approve','approved',$2,$3)",
-            row.requesting_profile_id,
-            *admin.actor(),
-            params.decision_note,
-        )
-        .fetch_one(&mut *tx)
-        .await?;
-
+    if params.decision == JoinRequestStatus::Approved && !target.is_machine() {
         // Retain the gating-team membership the pre-D11 model wrote (harmless team-role churn now
         // that access rides standing, not this row) so team-scoped visibility is unchanged. Never
         // for a machine principal: a machine joins no team nobody chose for it (ruled 2026-10-09).
         // The human's `watcher` row is a recorded act (plan C3): `access_approval`, admin as
         // actor, idempotent through the writer's noop.
-        if !target.is_machine() {
-            let change = team_membership::AuthorizedMembershipChange::from_system_admin(
-                admin,
-                row.team_id,
-                ProfileId::from(row.requesting_profile_id),
-            );
-            team_membership::membership_write(&mut tx, None, change).await?;
-        }
-        // No separate auto-join enrollment here: `principal_standing_apply` above materializes
-        // the mirror in this same transaction (`20260923000010`), for every door alike.
-    } else {
-        // Rejection returns standing to `Denied` so the principal may re-request (spec §5;
-        // `join_request_rejection_allows_resubmit` pins this). Raw on the tx (machine-door pattern),
-        // atomic with the decision, matching Approve; `Reject` is legal from the requester's
-        // `Requested` state (transition.rs). Rejection is deliberately NOT a standing state of its
-        // own — the request record keeps the `decision_note`.
-        sqlx::query_scalar!(
-            "SELECT principal_standing_apply($1,'reject','denied',$2,$3)",
-            row.requesting_profile_id,
-            *admin.actor(),
-            params.decision_note,
-        )
-        .fetch_one(&mut *tx)
-        .await?;
+        let change = team_membership::AuthorizedMembershipChange::from_system_admin(
+            admin,
+            row.team_id,
+            requester,
+        );
+        team_membership::membership_write(&mut tx, None, change).await?;
     }
 
     tx.commit()
@@ -2072,6 +2131,57 @@ pub async fn review_request(
         .map_err(|e| ApiError::Internal(format!("Failed to commit transaction: {e}")))?;
 
     Ok(row)
+}
+
+/// The refusal an admin gets for deciding a join request whose requester has since moved. A `409`
+/// that names the standing the person is in NOW and the act that actually moves them from it, so
+/// the admin learns what they hit rather than only that the decision failed. Insulation from a
+/// mistaken act (a stale row, an old queue), not a defence against the admin.
+fn stale_join_decision(
+    decision: JoinRequestStatus,
+    current: Option<temper_principal::Standing>,
+    table_reason: Option<String>,
+) -> ApiError {
+    use temper_principal::Standing;
+    let verb = if decision == JoinRequestStatus::Approved {
+        "approved"
+    } else {
+        "rejected"
+    };
+    let (now, instead) = match current {
+        Some(Standing::Revoked) => (
+            "revoked",
+            "a revocation is reconsidered with `temper admin reviews`, and a deliberate \
+             readmission is `temper admin access approve`",
+        ),
+        Some(Standing::Deactivated) => (
+            "deactivated",
+            "only `temper admin access reactivate` lifts a deactivation; decide the request after \
+             reactivating them",
+        ),
+        Some(Standing::Approved) => (
+            "already approved",
+            "there is nothing left for this request to decide",
+        ),
+        Some(Standing::Denied) => (
+            "denied with no request in force",
+            "a rejection has nothing to move; approve the request to admit them",
+        ),
+        Some(Standing::Requested) | None => ("not in a state this decision can move", ""),
+    };
+    let mut msg = format!(
+        "this join request cannot be {verb}: the person is now {now}, and a pending join request \
+         cannot change that"
+    );
+    if let Some(reason) = table_reason {
+        msg.push_str(&format!(" ({reason})"));
+    }
+    if !instead.is_empty() {
+        msg.push_str(" — ");
+        msg.push_str(instead);
+    }
+    msg.push_str(". Nothing was written; the request is still pending.");
+    ApiError::Conflict(msg)
 }
 
 // ---------------------------------------------------------------------------

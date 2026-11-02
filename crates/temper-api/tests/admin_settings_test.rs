@@ -14,6 +14,17 @@ async fn admin_proof(pool: &sqlx::PgPool) -> temper_services::auth::SystemAdmin 
     test_support::system_admin_proof(pool).await
 }
 
+/// Put a fixture person (born `approved` by `create_test_profile`) into `requested` — the standing a
+/// pending join request is filed under. A decision on the request is judged against it, so an
+/// already-approved requester's request is refused as stale.
+async fn mark_requested(pool: &sqlx::PgPool, profile: Uuid) {
+    sqlx::query("UPDATE kb_principal_standing SET state = 'requested' WHERE profile_id = $1")
+        .bind(profile)
+        .execute(pool)
+        .await
+        .expect("requested standing");
+}
+
 /// Seed the singleton settings row to a known baseline (the seed migration
 /// inserts `id=1` already, but be explicit so the test is self-contained).
 async fn reset_settings(pool: &sqlx::PgPool) {
@@ -403,6 +414,7 @@ async fn approval_enrolls_into_other_auto_join_teams(pool: sqlx::PgPool) {
         .expect("invite_only");
 
     let joiner = common::fixtures::create_test_profile(&pool, "joiner@test.example.com").await;
+    mark_requested(&pool, joiner).await;
 
     // Joiner submits a request for the gating team.
     let request_id: Uuid = sqlx::query_scalar(
@@ -460,6 +472,7 @@ async fn approval_records_one_access_approval_event_and_a_rejection_records_none
     let admin = admin_proof(&pool).await;
 
     let joiner = common::fixtures::create_test_profile(&pool, "watcher@test.example.com").await;
+    mark_requested(&pool, joiner).await;
     let request_id: Uuid = sqlx::query_scalar(
         "INSERT INTO kb_join_requests (id, team_id, requesting_profile_id, status, source) \
          VALUES (gen_random_uuid(), $1, $2, 'pending', 'test') RETURNING id",
@@ -497,6 +510,7 @@ async fn approval_records_one_access_approval_event_and_a_rejection_records_none
 
     // A rejection moves standing only — no membership row, no event.
     let second = common::fixtures::create_test_profile(&pool, "denied@test.example.com").await;
+    mark_requested(&pool, second).await;
     let rejected_id: Uuid = sqlx::query_scalar(
         "INSERT INTO kb_join_requests (id, team_id, requesting_profile_id, status, source) \
          VALUES (gen_random_uuid(), $1, $2, 'pending', 'test') RETURNING id",

@@ -107,6 +107,12 @@ jobs:
       - name: Security tripwire — handler-side authz drift
         run: bash .github/scripts/audit-handler-authz-drift.sh
 
+      # The standing committer writes whatever state it is handed; `standing_service` is what
+      # judges the act against the person's locked current standing. Pins the reviewed set of raw
+      # callers so a new writer that skips the transition table is a reviewed decision.
+      - name: Security tripwire — raw standing writers outside standing_service
+        run: bash .github/scripts/audit-raw-standing-writers.sh
+
       # Two triggers over one baseline, and the second is the reason it exists: a claim-only
       # baseline stays GREEN when a gate widens, which is how six of eight measured over-claims got
       # in. Binding each claim file to the gate it describes is what makes the widening commit the

@@ -4208,6 +4208,7 @@ class AdminApi:
             '400': "ErrorBody",
             '401': "ErrorBody",
             '403': "ErrorBody",
+            '409': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -4282,6 +4283,7 @@ class AdminApi:
             '400': "ErrorBody",
             '401': "ErrorBody",
             '403': "ErrorBody",
+            '409': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -4356,6 +4358,7 @@ class AdminApi:
             '400': "ErrorBody",
             '401': "ErrorBody",
             '403': "ErrorBody",
+            '409': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -5968,6 +5971,7 @@ class AdminApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
+            '409': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -6047,6 +6051,7 @@ class AdminApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
+            '409': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -6126,6 +6131,7 @@ class AdminApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
+            '409': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,

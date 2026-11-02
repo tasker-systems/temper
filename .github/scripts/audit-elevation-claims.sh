@@ -470,6 +470,16 @@ current_gates() {
 # `secret_rotated_by_profile_id` column of migration 20261115000010, or owner of its owning team;
 # `callers_machine_grant_bar` counts a row on the caller's own live personal team as in person). No
 # claim fingerprint there moved.
+# REVIEWED 2026-11-01 (task 01a19967, surface-map lead 5: a join-request decision moves standing only
+# by a legal transition) — new claim file `standing_service.rs` 2, unbound (`-`). Neither line is a
+# claim about who may act: one names the log reason "system admin promotion" that `promote_admin`
+# records, the other says a join request is closed by "a promotion to system admin". The gate for
+# both acts is unchanged — the `&SystemAdmin` proof on `review_request`, `admin_approve` and
+# `promote_admin`. What changed is what an authorized admin's act may write: the standing half of a
+# join decision and of a promotion is now judged by the transition table on the person's locked
+# standing (`standing_service::judge_and_apply_conn`), and refused with a 409 when illegal. That
+# narrows the acts' effect, never who may take them. `access_service.rs` stays 11; no fingerprint
+# moved.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -528,6 +538,7 @@ claim crates/temper-services/src/services/machine_registration_service.rs 9 mach
 claim crates/temper-services/src/services/resource_erasure_service.rs 2 is_system_admin
 claim crates/temper-services/src/services/saml_provisioning_service.rs 1 team_membership
 claim crates/temper-services/src/services/slack_disconnect_service.rs 2 -
+claim crates/temper-services/src/services/standing_service.rs 2 -
 claim crates/temper-services/src/services/subscription_service.rs 9 subscription
 claim crates/temper-services/src/services/subscription_test_support.rs 1 subscription
 claim crates/temper-services/src/services/team_service.rs 27 require_manage_on_team,can_manage,team_membership,is_system_admin

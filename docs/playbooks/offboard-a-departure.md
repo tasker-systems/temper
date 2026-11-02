@@ -65,6 +65,13 @@ every live state and reaches the same place:
 temper admin access deactivate <departing-uuid>
 ```
 
+**Decide a pending join request before you deactivate.** If the person has a join request open
+(`temper admin requests list`), decide it first with `temper admin requests review <id>
+--approve` or `--reject`. Deactivation leaves the request pending, and while the person is
+deactivated it cannot be decided: Temper refuses the decision with a `409` that names the
+deactivation, because only `temper admin access reactivate` lifts it. A request left open stays
+parked until someone reactivates them.
+
 **This is a standing act.** It moves the principal's *admission* to a deactivated state that
 `temper admin access reactivate` restores from — and it is the same act the SAML playbook's
 [deactivating an account](./self-host-with-saml.md#deactivating-an-account-authn-control)
