@@ -11,6 +11,7 @@
 
 use crate::error::{ApiError, ApiResult};
 use sqlx::PgPool;
+use temper_core::types::access_gate::JoinRequestStatus;
 use temper_core::types::ids::ProfileId;
 use temper_principal::{
     admit as pure_admit, transition, Act, ActorAuthority, AdmittedPrincipal, Provisioner, Refusal,
@@ -119,12 +120,67 @@ pub async fn admit(pool: &PgPool, profile_id: ProfileId) -> Result<AdmittedPrinc
 ///      governance alone). Sharing one transaction makes the pair atomic — both land or neither.
 pub async fn apply(pool: &PgPool, params: ApplyStandingParams) -> ApiResult<Standing> {
     let mut tx = pool.begin().await?;
+    let resulting = apply_conn(&mut tx, params).await?;
+    tx.commit().await?;
+    Ok(resulting)
+}
+
+/// Connection-taking twin of [`apply`], for a caller whose standing write must be atomic with
+/// writes of its own — a join-request decision, an admin promotion. Same lock, same decision, same
+/// commit and demotion; the caller owns the transaction and its commit. A refusal is mapped with
+/// the interim [`refusal_to_api_error`]; a caller that must word the refusal itself uses
+/// [`judge_and_apply_conn`].
+pub(crate) async fn apply_conn(
+    conn: &mut sqlx::PgConnection,
+    params: ApplyStandingParams,
+) -> ApiResult<Standing> {
+    match judge_and_apply_conn(conn, params, None).await? {
+        Judged::Moved(resulting) => Ok(resulting),
+        Judged::Refused { refusal, .. } => Err(refusal_to_api_error(refusal)),
+    }
+}
+
+/// What [`judge_and_apply_conn`] decided. `Refused` carries the standing the refusal was judged
+/// against, so a caller can tell the person what they hit ("this person is now Revoked") rather
+/// than only which act was illegal.
+pub(crate) enum Judged {
+    Moved(Standing),
+    Refused {
+        current: Option<Standing>,
+        refusal: Refusal,
+    },
+}
+
+/// Lock the subject's standing row in the caller's transaction, ahead of any other row the caller
+/// is about to take. Standing is the first lock every standing act takes ([`apply`] reads it
+/// `FOR UPDATE` before anything else), so a caller that locks other rows before reaching
+/// [`apply_conn`] must take this one first or invert the order against a concurrent `apply` on
+/// the same subject.
+pub(crate) async fn lock_conn(
+    conn: &mut sqlx::PgConnection,
+    subject: ProfileId,
+) -> ApiResult<Option<Standing>> {
+    load_locked(conn, subject).await
+}
+
+/// The body of [`apply`] on the caller's connection: lock, judge, and — only when the transition
+/// is legal — commit. **A refusal writes nothing**, so the caller may return an error and let its
+/// transaction roll back with no standing row, log entry or event behind it.
+///
+/// `note` is free text recorded as the log entry's reason for an act that carries none of its own
+/// — a join decision's note, "system admin promotion". `Revoke`'s reason is the act's, and wins.
+pub(crate) async fn judge_and_apply_conn(
+    conn: &mut sqlx::PgConnection,
+    params: ApplyStandingParams,
+    note: Option<String>,
+) -> ApiResult<Judged> {
+    let tx = conn;
 
     // Lock the subject's standing row for the life of the transaction, then read it. A concurrent
     // `apply` on the same subject blocks here until we commit.
-    let current = load_locked(&mut tx, params.subject).await?;
-    // (`&mut tx` deref-coerces to `&mut PgConnection` — the loader takes a bare connection so
-    // both the pooled and transactional callers share one body.)
+    let current = load_locked(&mut *tx, params.subject).await?;
+    // (The loader takes a bare connection so both the pooled and transactional callers share one
+    // body; a caller that already took this lock through [`lock_conn`] simply holds it already.)
 
     // `Reactivate` is THE ONLY data-dependent target in the machine (spec §6), so it is the only
     // act that needs a read before the decision. Treat a second such act as a design smell until
@@ -148,13 +204,16 @@ pub async fn apply(pool: &PgPool, params: ApplyStandingParams) -> ApiResult<Stan
     // caller and the test both need, so the reason rides `BadRequest`/`Conflict`. The one contract
     // we must preserve NOW is the 409 the DB unique index used to give a duplicate join request
     // (D12 makes `requested` standing the duplicate guard, so the index no longer fires) — the
-    // deployed CLI's "you already have a pending request" branch keys on it. A refusal drops `tx`
-    // unmoved, so nothing is written.
-    let resulting = transition(current, &act, params.authority).map_err(refusal_to_api_error)?;
+    // deployed CLI's "you already have a pending request" branch keys on it. A refusal returns
+    // before the first write, so nothing is written; the caller's transaction rolls back clean.
+    let resulting = match transition(current, &act, params.authority) {
+        Ok(resulting) => resulting,
+        Err(refusal) => return Ok(Judged::Refused { current, refusal }),
+    };
 
     let reason = match &act {
         Act::Revoke { reason } => Some(reason.clone()),
-        _ => None,
+        _ => note,
     };
 
     let committed: Option<String> = sqlx::query_scalar!(
@@ -274,10 +333,69 @@ pub async fn apply(pool: &PgPool, params: ApplyStandingParams) -> ApiResult<Stan
         }
     }
 
-    tx.commit().await?;
+    // An admission decision taken from `Requested` answers the person's open join request, in
+    // this same transaction, so a pending row can never outlive the standing it was filed under.
+    // Without this a direct `admin approve` (or a promotion) left the request pending; a later
+    // revoke then made it a stale row whose rejection would have laundered Revoked into Denied.
+    //
+    // Approve and Reject only — the admin's admission decisions. `Withdraw` is the person's own
+    // act and its door closes its own row. `Deactivate` deliberately does NOT close it:
+    // `Reactivate` restores `Requested`, and a request closed on the way down would come back as
+    // a `Requested` person with nothing in the admin queue. A deactivated person's pending request
+    // is instead parked — deciding it is refused until the person is reactivated.
+    //
+    // Only the GATING team's request: that is the one an admission decision answers. A pending
+    // row on some other team (a gating team since changed) is left for its own decision rather
+    // than marked approved without the membership an approval of it would write.
+    //
+    // `review_request` closes its own row before it reaches here; for that door this matches
+    // nothing unless the person also holds a second pending gating-team row, which the
+    // per-(team, profile) unique index forbids.
+    if current == Some(Standing::Requested) {
+        let closed_as = match &act {
+            Act::Approve => Some(JoinRequestStatus::Approved),
+            Act::Reject => Some(JoinRequestStatus::Rejected),
+            Act::Provision { .. }
+            | Act::Request
+            | Act::Withdraw
+            | Act::Revoke { .. }
+            | Act::Deactivate
+            | Act::Reactivate { .. }
+            | Act::RequestReview => None,
+        };
+        if let Some(status) = closed_as {
+            sqlx::query!(
+                r#"
+                UPDATE kb_join_requests
+                   SET status = $2,
+                       reviewed_by_profile_id = $3,
+                       reviewed_at = now(),
+                       decision_note = $4,
+                       updated = now()
+                 WHERE requesting_profile_id = $1
+                   AND status = 'pending'
+                   AND team_id = (SELECT t.id
+                                    FROM kb_teams t
+                                    JOIN kb_system_settings s ON s.gating_team_slug = t.slug
+                                   WHERE s.id = 1)
+                "#,
+                *params.subject,
+                status as JoinRequestStatus,
+                params.actor.map(|a| *a),
+                JOIN_REQUEST_CLOSED_BY_STANDING_DECISION,
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
 
-    Ok(resulting)
+    Ok(Judged::Moved(resulting))
 }
+
+/// Recorded on a join request that an admission decision answered outside the request itself — a
+/// direct `admin approve`, or a promotion to system admin.
+pub const JOIN_REQUEST_CLOSED_BY_STANDING_DECISION: &str =
+    "closed by a direct admission decision — the person's standing was decided outside this request";
 
 /// The database literal for an act. Exhaustive, no catchall — adding an act is a compile error.
 fn act_name(act: &Act) -> &'static str {

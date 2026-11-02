@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT requesting_profile_id FROM kb_join_requests WHERE id = $1 AND status = 'pending'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "requesting_profile_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7f7ad76204cf4eb5201160a4b76d382a0470ba22989c586778b738c7b150ab8b"
+}

@@ -252,6 +252,7 @@ pub async fn count_pending(
         (status = 401, description = "Authentication required", body = ErrorBody),
         (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
         (status = 404, description = "No such join request", body = ErrorBody),
+        (status = 409, description = "The requester's standing has moved since the request was filed (revoked, deactivated, or already approved), so this decision is not a legal transition. The body names the current standing and the act that moves it. Nothing is written and the request stays pending", body = ErrorBody),
 )
 )]
 pub async fn review_request(
@@ -441,6 +442,7 @@ pub async fn update_settings(
         (status = 400, description = "The profile or team cannot be promoted into, or the profile is a machine principal (a machine never governs)", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
         (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = ErrorBody),
+        (status = 409, description = "The profile's standing cannot be approved — it is deactivated (reactivate it first) or has no standing — so it cannot be promoted. Nothing is written", body = ErrorBody),
 )
 )]
 pub async fn promote_admin(

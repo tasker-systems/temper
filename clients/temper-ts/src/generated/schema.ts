@@ -12338,6 +12338,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description The profile's standing cannot be approved — it is deactivated (reactivate it first) or has no standing — so it cannot be promoted. Nothing is written */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
         };
     };
     admin_list_join_requests: {
@@ -12479,6 +12488,15 @@ export interface operations {
             };
             /** @description No such join request */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The requester's standing has moved since the request was filed (revoked, deactivated, or already approved), so this decision is not a legal transition. The body names the current standing and the act that moves it. Nothing is written and the request stays pending */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

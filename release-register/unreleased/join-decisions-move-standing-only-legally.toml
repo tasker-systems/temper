@@ -1,0 +1,32 @@
+title    = "A join-request decision or a promotion moves standing only by a legal transition"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "clients", "cli-stdout"]
+status   = "signal-only"
+body = '''
+An admin's decision on a join request (`PATCH /api/access/admin/requests/{id}`, `temper admin
+requests review`) now judges its standing write against the requester's current standing, locked,
+through the same transition table every other standing act uses. Before, it wrote `approved` or
+`denied` from whatever state the person was in. A pending request can outlive the standing it was
+filed under, so deciding a stale one could reject a revoked person into `denied` (after which they
+could file a fresh request), lift a deactivation, or write a no-op approval. Those decisions are
+now refused with a `409` that names the person's current standing and the act that moves it from
+there. Nothing is written and the request stays pending. Approving a revoked person's request is
+refused too, although the table allows readmission: readmission is the deliberate
+`temper admin access approve`, never a side effect of an old queue row.
+
+Promotion to system admin (`POST /api/access/admin/promote`) goes through the same table. Promoting
+a deactivated person used to approve them silently; it is now a `409` that names
+`temper admin access reactivate`. Promoting a profile with no standing row is also refused.
+
+An admission decision taken from `requested` by another door — `temper admin access approve`, or
+a promotion — now closes the person's pending join request in the same transaction, as
+approved, with a note saying it was decided outside the request. Only the gating team's request
+is closed. Deactivation does not close
+it, because reactivation restores `requested`; the request stays parked until then.
+
+Who observes: system admins, who get a `409` where a stale decision used to succeed, and who stop
+seeing requests in `temper admin requests list` once the person is approved directly.
+User-visible: yes, for admins. Release relevance: behavioral (an admin act that used to succeed is
+refused); additive on the wire (two documented `409` responses, no shape removed or narrowed).
+'''

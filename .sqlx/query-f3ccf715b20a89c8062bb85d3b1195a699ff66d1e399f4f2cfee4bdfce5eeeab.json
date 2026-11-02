@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE kb_join_requests\n                   SET status = $2,\n                       reviewed_by_profile_id = $3,\n                       reviewed_at = now(),\n                       decision_note = $4,\n                       updated = now()\n                 WHERE requesting_profile_id = $1\n                   AND status = 'pending'\n                   AND team_id = (SELECT t.id\n                                    FROM kb_teams t\n                                    JOIN kb_system_settings s ON s.gating_team_slug = t.slug\n                                   WHERE s.id = 1)\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        {
+          "Custom": {
+            "name": "join_request_status",
+            "kind": {
+              "Enum": [
+                "pending",
+                "approved",
+                "rejected",
+                "withdrawn"
+              ]
+            }
+          }
+        },
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f3ccf715b20a89c8062bb85d3b1195a699ff66d1e399f4f2cfee4bdfce5eeeab"
+}
