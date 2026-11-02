@@ -68,7 +68,9 @@ current() {
     find crates -path '*/src/*' -name '*.rs' -not -path "$SEAM" -print 2>/dev/null \
     | sort \
     | while IFS= read -r f; do
-        awk -v f="$f" -v pat="$PATTERN" '
+        # The pattern rides ENVIRON, not `-v`: `-v` escape-processes its value, so gawk turns
+        # `\(` into a bare `(` (an invalid regex) where mawk keeps it.
+        SCAN_PAT="$PATTERN" awk -v f="$f" '
           # A test gate cuts the scan only when the item it gates is a MODULE: an item-level
           # `#[cfg(test)] use …` near the top of a production file must not hide the rest of it.
           pending && /^[[:space:]]*$/ { next }
@@ -76,8 +78,8 @@ current() {
           { pending = 0 }
           /^[[:space:]]*#\[cfg\((all\()?test/ { pending = 1; next }
           /^[[:space:]]*\/\// { next }
-          $0 ~ pat { print f }
-        ' "$f"
+          $0 ~ ENVIRON["SCAN_PAT"] { print f }
+        ' "$f" || echo "SCAN-ERROR $f"
       done
     # Operator-run SQL templates. `--` comment lines dropped.
     if [ -d migrations/templates ]; then
@@ -93,6 +95,14 @@ current() {
 }
 
 CURRENT="$(current)"
+
+# An awk that dies on a file must FAIL the scan, never shrink it: a silently skipped file is a
+# writer this guard stopped seeing.
+if grep -q 'SCAN-ERROR' <<< "$CURRENT"; then
+  echo "audit-raw-standing-writers: FAIL — the scan errored on:" >&2
+  grep 'SCAN-ERROR' <<< "$CURRENT" >&2
+  exit 1
+fi
 
 if [[ "${1:-}" == "--list" ]]; then
   echo "$CURRENT"
