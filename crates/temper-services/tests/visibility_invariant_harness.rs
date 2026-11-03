@@ -1855,6 +1855,10 @@ const ENROLLED: &[&str] = &[
     // `the_change_readers_answer_exactly_their_visible_sets`.
     "resources_changed_by",
     "contexts_changed_by",
+    // context_changes_after (the change feed, 20261116000010): an answer exactly for the contexts
+    // in contexts_readable_by, each serving its own change — driven by
+    // `the_change_feed_answers_exactly_the_readable_contexts`.
+    "context_changes_after",
     // search doors (wrappers over the gated query_* machines)
     "search_exact",
     "search_wide",
@@ -2461,6 +2465,128 @@ async fn the_change_readers_answer_exactly_their_visible_sets(pool: PgPool) -> s
     assert!(
         violations.is_empty(),
         "{} change-reader violation(s) over seed {}:\n  - {}\n\n{}",
+        violations.len(),
+        seed,
+        violations.join("\n  - "),
+        w.render()
+    );
+    Ok(())
+}
+
+/// `context_changes_after` (the change feed) answers a profile for a context exactly when that
+/// context is in `contexts_readable_by`, and NULL otherwise: refusal, never an empty answer that
+/// would confirm the context exists. Every world context is given one change, so a readable context's
+/// answer must serve it. An answer that is non-NULL but empty would be a gate that admits and then
+/// hides, which this also reports.
+///
+/// The feed serves only settled rows (R5: the horizon is cluster-wide), so the read waits until the
+/// changes inserted here are below it.
+///
+/// Bite: replacing `context_readable_by_profile(p_profile, p_context)` in the function with `true`
+/// makes this report I9 for every profile that cannot read some world context.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_change_feed_answers_exactly_the_readable_contexts(pool: PgPool) -> sqlx::Result<()> {
+    let seed = harness_seed();
+    let w = insert_world(&pool, &Plan::generate(seed)).await?;
+
+    let changed: Uuid =
+        sqlx::query_scalar("SELECT id FROM kb_event_types WHERE name = 'resource_updated'")
+            .fetch_one(&pool)
+            .await?;
+    let entity: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_entities (profile_id, name) VALUES ($1, 'harness@web') RETURNING id",
+    )
+    .bind(w.profiles[0])
+    .fetch_one(&pool)
+    .await?;
+    for &context in &w.contexts {
+        sqlx::query(
+            "INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, \
+                                    producing_anchor_id) \
+             VALUES ($1, $2, 'kb_contexts', $3)",
+        )
+        .bind(changed)
+        .bind(entity)
+        .bind(context)
+        .execute(&pool)
+        .await?;
+    }
+    let target: String = sqlx::query_scalar("SELECT pg_snapshot_xmax(pg_current_snapshot())::text")
+        .fetch_one(&pool)
+        .await?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    while !sqlx::query_scalar::<_, bool>(
+        "SELECT pg_snapshot_xmin(pg_current_snapshot()) >= $1::text::xid8",
+    )
+    .bind(&target)
+    .fetch_one(&pool)
+    .await?
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the horizon did not settle"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    let mut violations = Vec::new();
+    // Anti-vacuity counts the world, not the function's answers, so a gate widened to `true` reports
+    // as I9 rather than as a vacuous world.
+    let mut unreadable_pairs = 0;
+    let mut readable_pairs = 0;
+    for (p_idx, &profile) in w.profiles.iter().enumerate() {
+        let who = PROFILE_HANDLES[p_idx];
+        let readable = scalar_set(
+            &pool,
+            "SELECT context_id FROM contexts_readable_by($1) ORDER BY 1",
+            profile,
+        )
+        .await?;
+        for &context in &w.contexts {
+            let answer: Option<serde_json::Value> =
+                sqlx::query_scalar("SELECT context_changes_after($1, $2, '0'::xid8, 0, 1000)")
+                    .bind(profile)
+                    .bind(context)
+                    .fetch_one(&pool)
+                    .await?;
+            let may = readable.contains(&context);
+            if may {
+                readable_pairs += 1;
+            } else {
+                unreadable_pairs += 1;
+            }
+            match (&answer, may) {
+                (None, false) => {}
+                (Some(a), true) => {
+                    if a["entries"].as_array().is_none_or(|e| e.is_empty()) {
+                        violations.push(format!(
+                            "I9: context_changes_after[{who}, {context}] admitted a readable \
+                             context but served none of its change: {a}"
+                        ));
+                    }
+                }
+                (Some(a), false) => violations.push(format!(
+                    "I9: context_changes_after[{who}, {context}] answered a context outside \
+                     contexts_readable_by: {a}"
+                )),
+                (None, true) => violations.push(format!(
+                    "I9: context_changes_after[{who}, {context}] refused a context in \
+                     contexts_readable_by"
+                )),
+            }
+        }
+    }
+    assert!(
+        unreadable_pairs > 0,
+        "anti-vacuity: every profile can read every world context"
+    );
+    assert!(
+        readable_pairs > 0,
+        "anti-vacuity: no profile can read any world context"
+    );
+    assert!(
+        violations.is_empty(),
+        "{} change-feed violation(s) over seed {}:\n  - {}\n\n{}",
         violations.len(),
         seed,
         violations.join("\n  - "),

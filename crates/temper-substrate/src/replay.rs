@@ -558,7 +558,18 @@ async fn restore_table(pool: &PgPool, table: &str, rows: &serde_json::Value) -> 
     let q = format!(
         "INSERT INTO {table} SELECT * FROM jsonb_populate_recordset(NULL::{table}, $1){conflict}"
     );
-    sqlx::query(&q).bind(rows).execute(pool).await?;
+    // kb_events restores verbatim, including the recorded `xact_id`/`seq` and the NULLs of rows
+    // that predate them (R5, migration 20261116000010). `kb_events_order_recorded` refuses both a
+    // NULL order and a foreign transaction id outside replay, so the restore runs under the
+    // transaction-local `temper.replaying`, as the walk below does.
+    let mut tx = pool.begin().await?;
+    if table == "kb_events" {
+        sqlx::query_scalar!("SELECT set_config('temper.replaying', 'on', true)")
+            .fetch_one(&mut *tx)
+            .await?;
+    }
+    sqlx::query(&q).bind(rows).execute(&mut *tx).await?;
+    tx.commit().await?;
     Ok(())
 }
 
