@@ -15,11 +15,14 @@
 mod common;
 
 use sqlx::PgPool;
+use temper_core::types::facet_requests::ANCHORED_AT_PROPERTY_KEY;
 use temper_core::types::ids::EntityId;
+use temper_core::types::property_owner::PropertyOwner;
+use temper_substrate::affinity::EdgeKind;
 use temper_substrate::content::IncomingChunk;
-use temper_substrate::events::{fire, EventContext, SeedAction};
-use temper_substrate::ids::{ContextId, ProfileId, ResourceId};
-use temper_substrate::payloads::AnchorRef;
+use temper_substrate::events::{fire, EdgeHome, EventContext, SeedAction};
+use temper_substrate::ids::{ContextId, EdgeId, ProfileId, ResourceId};
+use temper_substrate::payloads::{AnchorRef, EdgePolarity};
 use temper_substrate::writes::{self, CreateParams};
 use uuid::Uuid;
 
@@ -445,13 +448,15 @@ async fn no_entry_carries_content(pool: PgPool) {
 }
 
 /// `the-feed-never-discloses-what-erasure-removed`. Before erasure the feed names an open meta key.
-/// After erasure the same events are served with `"key": null, "redacted": true`, and the key's text
-/// appears nowhere.
+/// After erasure the key's text appears nowhere: the erased resource is inactive, so the subject
+/// filter withholds every entry about it. A scrub redacts a key on a resource that stays readable:
+/// the same entry is then served with `"key": null, "redacted": true`, and neither the key nor the
+/// sentinel the scrub wrote into the payload reaches the reader.
 ///
-/// FAILS IF: the key is read from anywhere erasure does not rewrite (`kb_properties`), or a redaction
-/// row is ignored.
+/// FAILS IF: the key is read from anywhere erasure does not rewrite (`kb_properties`), a redaction
+/// row is ignored, or the rewritten payload value is served as the key.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn erasure_removes_key_names_from_the_feed(pool: PgPool) {
+async fn erasure_and_scrub_remove_key_names_from_the_feed(pool: PgPool) {
     let (owner, emitter, home) = setup(&pool).await;
     let props = vec![("secretkeyzq".to_string(), serde_json::json!("v"))];
     let r = create(&pool, owner, emitter, home, "to-erase", "body", &props).await;
@@ -464,11 +469,11 @@ async fn erasure_removes_key_names_from_the_feed(pool: PgPool) {
         "before erasure the key is named, so the witness below can see it go"
     );
 
-    let (_, operator) = system_actor(&pool).await;
+    let (operator, operator_entity) = system_actor(&pool).await;
     sqlx::query_scalar::<_, serde_json::Value>("SELECT resource_erasure_execute($1,$2,$3,$4)")
         .bind(r.uuid())
-        .bind(operator)
-        .bind(operator)
+        .bind(operator_entity)
+        .bind(operator_entity)
         .bind(Uuid::now_v7())
         .fetch_one(&pool)
         .await
@@ -480,24 +485,83 @@ async fn erasure_removes_key_names_from_the_feed(pool: PgPool) {
         !text.contains("secretkeyzq"),
         "an erased key name came back: {text}"
     );
-    let redacted: Vec<_> = after
-        .iter()
-        .filter(|e| e["kind"] == "property_set" && e["subject"]["id"] == r.uuid().to_string())
-        .filter(|e| e["redacted"] == true)
-        .collect();
+
+    // A scrub on a live resource: a lone unset of a key, then the scrub of that key's family.
+    let live = create(&pool, owner, emitter, home, "to-scrub", "body", &[]).await;
+    let mut tx = pool.begin().await.unwrap();
+    fire(
+        &mut tx,
+        SeedAction::PropertyUnset {
+            resource: live,
+            key: "scrubkeyzq",
+            emitter,
+        },
+    )
+    .await
+    .expect("the unset fires");
+    tx.commit().await.unwrap();
+    let (named, _) = drain(&pool, owner, home, (BEGINNING.0.into(), BEGINNING.1), 1000).await;
     assert!(
-        !redacted.is_empty(),
-        "the erased key is served as redacted: {after:?}"
+        serde_json::to_string(&named)
+            .unwrap()
+            .contains("scrubkeyzq"),
+        "before the scrub the key is named"
     );
-    assert!(redacted
+    let unset_event: Uuid = sqlx::query_scalar(
+        "SELECT e.id FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE et.name = 'property_unset' AND e.payload->>'property_key' = 'scrubkeyzq'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT resource_field_scrub_execute($1, 'property', $2, false, $3, $4, $5)",
+    )
+    .bind(live.uuid())
+    .bind(unset_event)
+    .bind(operator.uuid())
+    .bind(operator_entity)
+    .bind(Uuid::now_v7())
+    .fetch_one(&pool)
+    .await
+    .expect("the scrub completes");
+    let rewritten: String =
+        sqlx::query_scalar("SELECT payload->>'property_key' FROM kb_events WHERE id = $1")
+            .bind(unset_event)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    let (scrubbed, _) = drain(&pool, owner, home, (BEGINNING.0.into(), BEGINNING.1), 1000).await;
+    let text = serde_json::to_string(&scrubbed).unwrap();
+    assert!(
+        !text.contains("scrubkeyzq"),
+        "a scrubbed key came back: {text}"
+    );
+    assert!(
+        !text.contains(&rewritten),
+        "the scrub's sentinel {rewritten} was served as a key: {text}"
+    );
+    let redacted: Vec<_> = scrubbed
         .iter()
-        .all(|e| e["key"].is_null() || e.get("key").is_none()));
+        .filter(|e| e["kind"] == "property_unset" && e["subject"]["id"] == live.uuid().to_string())
+        .collect();
+    assert_eq!(
+        redacted.len(),
+        1,
+        "the scrubbed unset is still served: {scrubbed:?}"
+    );
+    assert_eq!(redacted[0]["redacted"], true);
+    assert!(redacted[0].get("key").is_none() || redacted[0]["key"].is_null());
 }
 
 /// R5 for rows written before cutover, and for rows that would lie about their order. A row with no
 /// recorded order is refused outside replay, and admitted under `temper.replaying`, where replay
 /// restores legacy rows. The feed never serves such a row. A row naming a transaction id other than
 /// its own is refused.
+///
+/// The planted row names no subject, so it is about the context itself and the subject filter would
+/// serve it. Only its missing order withholds it.
 ///
 /// FAILS IF: the insert trigger is missing or admits a NULL or forged order, or the feed serves an
 /// unordered row.
@@ -508,7 +572,7 @@ async fn rows_without_a_truthful_order_are_refused_or_never_served(pool: PgPool)
         sqlx::query(
             "INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, \
              producing_anchor_id, payload, category, xact_id, seq) \
-             SELECT id, $1, 'kb_contexts', $2, jsonb_build_object('resource_id', gen_random_uuid()), \
+             SELECT id, $1, 'kb_contexts', $2, '{}'::jsonb, \
                     category, $3::text::xid8, $4 \
                FROM kb_event_types WHERE name = 'resource_deleted'",
         )
@@ -601,4 +665,273 @@ async fn seq_follows_append_order_within_a_transaction(pool: PgPool) {
     .await
     .unwrap();
     assert_eq!(xacts, 1, "one transaction, one xact_id");
+}
+
+async fn edge(
+    pool: &PgPool,
+    emitter: EntityId,
+    home: ContextId,
+    source: ResourceId,
+    target: ResourceId,
+) -> EdgeId {
+    writes::assert_anchored_edge_with(
+        pool,
+        writes::AssertAnchoredEdgeParams {
+            source: AnchorRef::resource(source),
+            target: AnchorRef::resource(target),
+            kind: EdgeKind::LeadsTo,
+            polarity: EdgePolarity::Forward,
+            label: Some("rel"),
+            weight: 1.0,
+            home: EdgeHome::Context(home),
+            emitter,
+        },
+        EventContext::default(),
+    )
+    .await
+    .expect("assert the edge")
+}
+
+/// `a-change-says-what-changed`, for the property kinds whose payload names its owner as an
+/// `AnchorRef` and carries no key or no live property row. An unset names the resource it unset a
+/// key on. A retraction names the edge that owned the retracted row, and the key that row held.
+///
+/// FAILS IF: the owner is read as anything but `{table, id}` (then an unset names the context), or a
+/// retraction's key is not taken from the asserting event.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn unset_and_retracted_entries_name_their_owner(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let r = create(&pool, owner, emitter, home, "unset-me", "a", &[]).await;
+    let r2 = create(&pool, owner, emitter, home, "other-end", "b", &[]).await;
+    set(&pool, emitter, r, "dropkey", "v").await;
+    let e = edge(&pool, emitter, home, r, r2).await;
+    let address = serde_json::json!({
+        "endpoint": "source",
+        "address": format!("{r}#{}", Uuid::now_v7()),
+    });
+    let property = writes::assert_keyed_property_with(
+        &pool,
+        PropertyOwner::Edge { id: e },
+        ANCHORED_AT_PROPERTY_KEY,
+        &address,
+        1.0,
+        emitter,
+        EventContext::default(),
+    )
+    .await
+    .unwrap();
+    let (_, pos) = drain(&pool, owner, home, (BEGINNING.0.into(), BEGINNING.1), 1000).await;
+
+    let mut tx = pool.begin().await.unwrap();
+    fire(
+        &mut tx,
+        SeedAction::PropertyUnset {
+            resource: r,
+            key: "dropkey",
+            emitter,
+        },
+    )
+    .await
+    .expect("the unset fires");
+    tx.commit().await.unwrap();
+    writes::retract_property_with(&pool, e, property, emitter, EventContext::default())
+        .await
+        .unwrap();
+
+    let (got, _) = drain(&pool, owner, home, pos, 1000).await;
+    let unset: Vec<_> = got
+        .iter()
+        .filter(|x| x["kind"] == "property_unset")
+        .collect();
+    assert_eq!(unset.len(), 1, "one unset: {got:?}");
+    assert_eq!(unset[0]["subject"]["table"], "kb_resources");
+    assert_eq!(unset[0]["subject"]["id"], r.uuid().to_string());
+    assert_eq!(unset[0]["key"], "dropkey");
+    let retracted: Vec<_> = got
+        .iter()
+        .filter(|x| x["kind"] == "property_retracted")
+        .collect();
+    assert_eq!(retracted.len(), 1, "one retraction: {got:?}");
+    assert_eq!(retracted[0]["subject"]["table"], "kb_edges");
+    assert_eq!(retracted[0]["subject"]["id"], e.uuid().to_string());
+    assert_eq!(retracted[0]["key"], ANCHORED_AT_PROPERTY_KEY);
+}
+
+/// The subject filter (ruled 2026-11-03, task 01a1a1a5-773a-7599-a157-6128705ef71e). A reader of
+/// context A is served no entry about a subject they cannot read now, though every one of these
+/// events is anchored on A:
+///   - an edge homed in A whose target lives in a context the reader cannot read;
+///   - a resource created in A and since moved to that context;
+///   - a resource deleted in A.
+/// None of their key names reaches the reader either. An edge between two readable resources is
+/// served, and so is its retraction (fold is a currency predicate, not a read gate). Withheld rows
+/// never move the answer: paging with bound 1 serves exactly what one unbounded read serves, and a
+/// page says more exists only when it holds an entry.
+///
+/// FAILS IF: the read gates on the context alone, or tests an edge without both endpoints, or a
+/// resource without `resources_visible_to` (and so without the soft-delete floor), or filters after
+/// the page bound (then a withheld row sets `through` or `has_more`).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_feed_withholds_subjects_the_reader_cannot_read_now(pool: PgPool) {
+    let (owner, emitter, _) = setup(&pool).await;
+    let team = common::create_team(&pool, "feed-team").await;
+    let reader = ProfileId::from(common::create_profile(&pool, "reader@example.test").await);
+    common::add_team_member(&pool, team, reader.uuid()).await;
+    let shared = ContextId::from(
+        common::insert_context(&pool, "kb_teams", team, "shared", "shared")
+            .await
+            .unwrap(),
+    );
+    let private = ContextId::from(
+        common::insert_context(&pool, "kb_profiles", owner.uuid(), "private", "private")
+            .await
+            .unwrap(),
+    );
+
+    let a1 = create(&pool, owner, emitter, shared, "a1", "a1", &[]).await;
+    let a2 = create(&pool, owner, emitter, shared, "a2", "a2", &[]).await;
+    let p1 = create(&pool, owner, emitter, private, "p1", "p1", &[]).await;
+    let served_edge = edge(&pool, emitter, shared, a1, a2).await;
+    let hidden_edge = edge(&pool, emitter, shared, a1, p1).await;
+    let mut tx = pool.begin().await.unwrap();
+    fire(
+        &mut tx,
+        SeedAction::RelationshipFold {
+            edge: served_edge,
+            reason: None,
+            emitter,
+        },
+    )
+    .await
+    .expect("the fold fires");
+    tx.commit().await.unwrap();
+
+    let moved = create(
+        &pool,
+        owner,
+        emitter,
+        shared,
+        "moved",
+        "m",
+        &[("movedkeyzq".to_string(), serde_json::json!("v"))],
+    )
+    .await;
+    let mut tx = pool.begin().await.unwrap();
+    fire(
+        &mut tx,
+        SeedAction::ResourceRehome {
+            resource: moved,
+            home: AnchorRef::context(private),
+            emitter,
+        },
+    )
+    .await
+    .expect("the rehome fires");
+    tx.commit().await.unwrap();
+
+    let deleted = create(
+        &pool,
+        owner,
+        emitter,
+        shared,
+        "deleted",
+        "d",
+        &[("deletedkeyzq".to_string(), serde_json::json!("v"))],
+    )
+    .await;
+    writes::delete_resource(&pool, deleted, emitter)
+        .await
+        .unwrap();
+
+    let (whole, _) = drain(
+        &pool,
+        reader,
+        shared,
+        (BEGINNING.0.into(), BEGINNING.1),
+        1000,
+    )
+    .await;
+
+    // Anti-vacuity: each withheld subject has events anchored on the shared context, in order, that
+    // the context gate alone would serve.
+    for (what, id) in [
+        ("hidden edge", hidden_edge.uuid()),
+        ("moved resource", moved.uuid()),
+        ("deleted resource", deleted.uuid()),
+    ] {
+        let anchored: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM kb_events WHERE producing_anchor_table = 'kb_contexts' \
+               AND producing_anchor_id = $1 AND xact_id IS NOT NULL AND category = 'domain' \
+               AND (payload->>'edge_id' = $2::text OR payload->>'resource_id' = $2::text \
+                    OR payload->'owner'->>'id' = $2::text)",
+        )
+        .bind(shared.uuid())
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(anchored > 0, "the {what} has events on the shared context");
+    }
+
+    let named: Vec<&str> = whole
+        .iter()
+        .map(|e| e["subject"]["id"].as_str().unwrap())
+        .collect();
+    for (what, id) in [
+        ("hidden edge", hidden_edge.uuid()),
+        ("moved resource", moved.uuid()),
+        ("deleted resource", deleted.uuid()),
+        ("private resource", p1.uuid()),
+    ] {
+        assert!(
+            !named.contains(&id.to_string().as_str()),
+            "the {what} was served: {whole:?}"
+        );
+    }
+    let text = serde_json::to_string(&whole).unwrap();
+    for key in ["movedkeyzq", "deletedkeyzq"] {
+        assert!(!text.contains(key), "{key} reached the reader: {text}");
+    }
+    let edge_kinds: Vec<&str> = whole
+        .iter()
+        .filter(|e| e["subject"]["id"] == served_edge.uuid().to_string())
+        .map(|e| e["kind"].as_str().unwrap())
+        .collect();
+    assert!(
+        edge_kinds.len() >= 2,
+        "the readable edge's assertion and fold are both served: {edge_kinds:?}"
+    );
+    assert!(
+        named.contains(&a1.uuid().to_string().as_str()),
+        "readable resources are served: {whole:?}"
+    );
+
+    let mut pos: (String, i64) = (BEGINNING.0.into(), BEGINNING.1);
+    let mut paged = Vec::new();
+    loop {
+        let a = read(&pool, reader, shared, Some((&pos.0, pos.1)), 1)
+            .await
+            .unwrap();
+        let page = entries(&a);
+        if a["has_more"].as_bool().unwrap() {
+            assert_eq!(
+                page.len(),
+                1,
+                "a page that says more exists holds its entry"
+            );
+            assert_eq!(
+                a["through"], page[0]["position"],
+                "a cut page reads through its entry"
+            );
+        }
+        paged.extend(page.iter().cloned());
+        pos = through(&a);
+        if !a["has_more"].as_bool().unwrap() {
+            break;
+        }
+    }
+    assert_eq!(
+        paged, whole,
+        "withheld rows never change what paging serves"
+    );
 }
