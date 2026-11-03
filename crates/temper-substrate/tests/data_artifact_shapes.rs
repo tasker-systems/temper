@@ -690,6 +690,43 @@ async fn an_advisory_verdict_records_one_violation(pool: sqlx::PgPool) {
     );
 }
 
+/// A commit names an uncompilable shape only when there is one: a commit under a shape that
+/// compiles, enforcing or not, and a commit with no shape in force name none. Bites a variant
+/// that names the shape in force whatever it is.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_commit_names_no_uncompilable_shape_when_none_is_in_force(pool: sqlx::PgPool) {
+    let (emitter, home, resource, _owner) = world(&pool, "no-uncompilable-shape").await;
+    let content = serde_json::json!({"value": "42"});
+
+    let (_, shape_state, uncompilable) =
+        commit_noting(&pool, resource, "unshaped", &content, emitter).await;
+    assert_eq!(shape_state, ShapeState::NeverDeclared);
+    assert!(uncompilable.is_none(), "no shape in force names none");
+
+    for (kind, enforcement) in [
+        ("shaped-enforcing", EnforcementMode::Enforcing),
+        ("shaped-advisory", EnforcementMode::Advisory),
+    ] {
+        declare(
+            &pool,
+            emitter,
+            AnchorRef::context(home),
+            None,
+            kind,
+            &string_value_schema(),
+            enforcement,
+        )
+        .await;
+        let (_, shape_state, uncompilable) =
+            commit_noting(&pool, resource, kind, &content, emitter).await;
+        assert_eq!(shape_state, ShapeState::DeclaredSatisfied, "{kind}");
+        assert!(
+            uncompilable.is_none(),
+            "a shape that compiles names none: {kind}"
+        );
+    }
+}
+
 /// A commit with no shape in force stays `NeverDeclared` — persistence never requires a prior
 /// declaration.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]

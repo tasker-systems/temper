@@ -407,6 +407,38 @@ pub struct ArtifactCommitResponse {
 mod tests {
     use super::*;
 
+    /// A commit response with no uncompilable shape leaves the notice key out of the wire entirely
+    /// — absent, not `null` — and one with a notice carries it.
+    #[test]
+    fn the_uncompilable_shape_notice_is_absent_from_the_wire_unless_present() {
+        let view: ArtifactView = serde_json::from_value(serde_json::json!({
+            "artifact_id": Uuid::from_u128(1),
+            "resource_id": Uuid::from_u128(2),
+            "kind_owner_table": "kb_profiles",
+            "kind_owner_id": Uuid::from_u128(3),
+            "artifact_kind": "measurement",
+            "intent": "current",
+            "precedence": 0.0,
+            "content_hash": "h",
+            "content_bytes": 0,
+            "shape_state": "declared_satisfied",
+            "is_folded": false,
+            "created": "2026-11-02T00:00:00Z",
+        }))
+        .expect("a view deserializes");
+        let mut response = ArtifactCommitResponse {
+            artifact_id: view.artifact_id,
+            artifact: view,
+            uncompilable_shape_notice: None,
+        };
+        let wire = serde_json::to_value(&response).expect("serializes");
+        assert!(wire.get("uncompilable_shape_notice").is_none(), "{wire}");
+
+        response.uncompilable_shape_notice = Some("amend it".to_string());
+        let wire = serde_json::to_value(&response).expect("serializes");
+        assert_eq!(wire["uncompilable_shape_notice"], "amend it");
+    }
+
     fn cursor() -> ArtifactCursor {
         ArtifactCursor {
             // Sub-second precision: the keyset compares microseconds, so the wire must carry them.

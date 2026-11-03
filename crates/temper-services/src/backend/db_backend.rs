@@ -924,6 +924,20 @@ impl DbBackend {
         }
     }
 
+    /// The notice an uncompilable shape in force owes this committer
+    /// ([`writes::UncompilableShapeInForce::notice_for_reader`]), asked on a pool connection with no
+    /// transaction open. Any fault answers the fixed sentence, which names nothing of the shape.
+    async fn uncompilable_shape_notice(&self, shape: &writes::UncompilableShapeInForce) -> String {
+        let asked = match self.pool.acquire().await {
+            Ok(mut conn) => shape.notice_for_reader(&mut conn, self.profile_id).await,
+            Err(e) => Err(e.into()),
+        };
+        asked.unwrap_or_else(|fault| {
+            tracing::warn!(error = %fault, "could not ask whether the committer reads the shape");
+            shape.notice_for(false)
+        })
+    }
+
     /// Open an edge-mutation transaction gated at its head: [`Self::check_edge_mutable`] (the
     /// edge's source floor, container-write on its home, its target readable), then the
     /// correlation-integrity check on the act's invocation, both on the transaction — the order
@@ -3329,26 +3343,19 @@ impl Backend for DbBackend {
             Ok(committed) => committed,
             Err(e) => return Err(write_floor::rollback_with(tx, write_err(e)).await),
         };
+        let artifact_id = committed.id;
+        tx.commit().await.map_err(tx_err)?;
         // An uncompilable shape in force records the artifact unchecked and owes the committer a
         // notice. It names what the compile refused **only to a committer who can already read that
         // shape**, and gives anyone else the fixed sentence (shape ruling R4), so the notice is
-        // never a window onto a shape its reader could not open. The question is asked on the
-        // transaction, never `self.pool`, which the open transaction would wait against; a fault on
-        // it leaves the fixed sentence, never a server error.
+        // never a window onto a shape its reader could not open. The question is asked after the
+        // commit, on its own connection: asked inside the transaction, a fault on it would abort
+        // the transaction and the commit would silently roll back. A fault leaves the fixed
+        // sentence, never a server error over an artifact that landed.
         let uncompilable_shape_notice = match &committed.uncompilable_shape {
             None => None,
-            Some(shape) => Some(
-                match shape.notice_for_reader(&mut tx, self.profile_id).await {
-                    Ok(notice) => notice,
-                    Err(fault) => {
-                        tracing::warn!(error = %fault, "could not ask whether the committer reads the shape");
-                        shape.notice_for(false)
-                    }
-                },
-            ),
+            Some(shape) => Some(self.uncompilable_shape_notice(shape).await),
         };
-        let artifact_id = committed.id;
-        tx.commit().await.map_err(tx_err)?;
         // Read back the committed artifact as an ArtifactView for the response.
         let view =
             crate::backend::substrate_read::get_artifact(&self.pool, self.profile_id, artifact_id)
