@@ -11,7 +11,7 @@
     },
     "packages/temper-cloud": {
       "name": "temper-cloud",
-      "version": "0.6.2",
+      "version": "0.6.3",
       "dependencies": {
         "@kreuzberg/node": "latest",
         "@neondatabase/serverless": "^1",
@@ -36,7 +36,7 @@
     },
     "packages/temper-ui": {
       "name": "@temper/ui",
-      "version": "0.6.2",
+      "version": "0.6.3",
       "dependencies": {
         "@fontsource-variable/inter": "^5.3.0",
         "@fontsource-variable/jetbrains-mono": "^5.3.0",
