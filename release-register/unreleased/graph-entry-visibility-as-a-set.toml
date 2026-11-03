@@ -1,0 +1,14 @@
+title    = "The graph entry and traversal reads test edge visibility once per call, so their cost no longer grows with every live edge in the instance"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["schema", "http"]
+status   = "signal-only"
+body = '''
+Migration 20261116000000 replaces the bodies of graph_induced_edges and graph_atlas_nodes_visible.
+Their signatures, columns and results stay the same. Both now read edges_visible_to once per call,
+as a set. Before, graph_induced_edges called anchor_readable_by_profile on every live edge, and
+graph_atlas_nodes_visible re-ran edges_visible_to for each hydrated node. Who observes:
+`/api/graph/entry` and `/api/graph/traverse` readers on a large corpus, where these reads now return in well
+under a second instead of tens of seconds. Response shapes are unchanged in both skew directions.
+Release relevance: additive (cost only).
+'''
