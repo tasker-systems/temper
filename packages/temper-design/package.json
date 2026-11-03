@@ -1,6 +1,6 @@
 {
   "name": "@tasker-systems/temper-design",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "description": "temper's theme contract, themes and shared rendering modules: the one source every temper surface paints from",
   "license": "MIT",
   "type": "module",
