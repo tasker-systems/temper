@@ -514,3 +514,60 @@ async fn nodes_carry_where_they_live_and_when_they_moved(pool: PgPool) {
         "every drawn node knows its home — a mark that cannot say where it lives is the thin card"
     );
 }
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn hydration_degree_counts_a_self_loop_once_and_agrees_across_ids(pool: PgPool) {
+    // 20261116000000 moved hydration's degree from a per-node `source = id OR target = id` count
+    // to one pass over (edge, end) pairs for the whole id set. The pairs are UNIONed, not UNION
+    // ALLed, precisely so a self-loop still counts once; a regression to UNION ALL reads 2 here.
+    let (profile, ctx, goal) = seed_context_with_goal_and_tasks(&pool, 2).await;
+    let event: Uuid = sqlx::query_scalar("SELECT id FROM kb_events ORDER BY id DESC LIMIT 1")
+        .fetch_one(&pool)
+        .await
+        .expect("an event");
+    seed_contains_edge(&pool, goal, goal, ctx, event).await;
+
+    let tasks: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT target_id FROM kb_edges WHERE source_id = $1 AND target_id <> $1 ORDER BY 1",
+    )
+    .bind(goal)
+    .fetch_all(&pool)
+    .await
+    .expect("tasks");
+    let mut ids = vec![goal];
+    ids.extend(&tasks);
+
+    let degrees: Vec<(Uuid, i32)> =
+        sqlx::query_as("SELECT id, degree FROM graph_atlas_nodes_visible($1, $2) ORDER BY id")
+            .bind(profile)
+            .bind(&ids)
+            .fetch_all(&pool)
+            .await
+            .expect("hydrate");
+
+    let degree_of = |id: Uuid| degrees.iter().find(|(n, _)| *n == id).map(|(_, d)| *d);
+    assert_eq!(
+        degree_of(goal),
+        Some(3),
+        "two task edges plus one self-loop, counted once"
+    );
+    for t in &tasks {
+        assert_eq!(degree_of(*t), Some(1), "each task touches only the goal");
+    }
+
+    // The ranking counts the same set; the two must not disagree on any drawn node.
+    let ranked: Vec<(Uuid, i32)> = sqlx::query_as(
+        "SELECT resource_id, degree FROM graph_visible_degree_ranking($1, NULL, 1, 50)",
+    )
+    .bind(profile)
+    .fetch_all(&pool)
+    .await
+    .expect("rank");
+    for (id, d) in ranked.iter().filter(|(id, _)| ids.contains(id)) {
+        assert_eq!(
+            degree_of(*id),
+            Some(*d),
+            "hydration and ranking disagree on {id}"
+        );
+    }
+}
