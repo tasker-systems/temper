@@ -225,3 +225,78 @@ async fn cogmap_scope_excludes_homed_but_not_visible_resource(pool: sqlx::PgPool
         "homed-but-not-visible resource must be excluded: {ids:?}"
     );
 }
+
+/// 20261117000000 moved the kind filter from the walk's join into the `se` edge set it walks. The
+/// filter must still bound the WALK, not only the output: a node reachable only through an
+/// excluded kind is never reached, so an edge beyond it is absent even when its own kind matches.
+/// And depth still counts hops from the seed.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn cogmap_walk_honours_kinds_and_depth(pool: sqlx::PgPool) {
+    let profile = mk_profile(&pool, "cogmap-kinds-tester").await;
+    let event = any_event(&pool).await;
+    let telos = create_resource(&pool, "telos", "temper://cogmap-kinds/telos").await;
+    let cogmap = create_cogmap(&pool, "cogmap-kinds-map", telos).await;
+    let team = create_team(&pool, "cogmap-kinds-team").await;
+    add_member(&pool, team, profile).await;
+    join_cogmap(&pool, cogmap, team).await;
+
+    let mk = |title: &'static str| {
+        let pool = pool.clone();
+        async move {
+            let id = create_resource(&pool, title, &format!("temper://cogmap-kinds/{title}")).await;
+            home_in_cogmap(&pool, id, cogmap, profile).await;
+            id
+        }
+    };
+    let (s, a, b, c, d) = (
+        mk("s").await,
+        mk("a").await,
+        mk("b").await,
+        mk("c").await,
+        mk("d").await,
+    );
+
+    // s -contains-> a -contains-> b ; s -near-> c -contains-> d
+    let sa = assert_edge(&pool, s, a, EdgeKind::Contains, "kb_cogmaps", cogmap, event).await;
+    let ab = assert_edge(&pool, a, b, EdgeKind::Contains, "kb_cogmaps", cogmap, event).await;
+    let sc = assert_edge(&pool, s, c, EdgeKind::Near, "kb_cogmaps", cogmap, event).await;
+    let cd = assert_edge(&pool, c, d, EdgeKind::Contains, "kb_cogmaps", cogmap, event).await;
+
+    let walk = |depth: i32, kinds: Vec<EdgeKind>| {
+        let pool = pool.clone();
+        async move {
+            let mut ids: Vec<Uuid> =
+                sqlx::query_scalar("SELECT id FROM graph_traverse_cogmap_scoped($1,$2,$3,$4,$5)")
+                    .bind(profile)
+                    .bind(cogmap)
+                    .bind(vec![s])
+                    .bind(depth)
+                    .bind(kinds)
+                    .fetch_all(&pool)
+                    .await
+                    .expect("graph_traverse_cogmap_scoped");
+            ids.sort();
+            ids
+        }
+    };
+    let sorted = |mut v: Vec<Uuid>| {
+        v.sort();
+        v
+    };
+
+    assert_eq!(
+        walk(2, vec![EdgeKind::Contains]).await,
+        sorted(vec![sa, ab]),
+        "c is reachable only through a `near` edge, so c -> d is never walked to"
+    );
+    assert_eq!(
+        walk(1, vec![EdgeKind::Contains]).await,
+        vec![sa],
+        "depth 1 stops at a"
+    );
+    assert_eq!(
+        walk(2, Vec::new()).await,
+        sorted(vec![sa, ab, sc, cd]),
+        "no kinds means every kind"
+    );
+}

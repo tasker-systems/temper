@@ -415,9 +415,10 @@ pub async fn region_composition_slice(
     // Edges of the induced cross-home subgraph. EdgeKind/Polarity decode natively via their
     // `sqlx::Type` derive (`type_name = "edge_kind"` / `"edge_polarity"`), so the columns need
     // only a type override — no `::text` cast round-trip. Every column but `label` is NOT NULL
-    // on `kb_edges` and the body's final SELECT reads them straight off `FROM kb_edges e` with
-    // inner joins only, so the set-returning function's blanket nullability is the only reason
-    // an override is needed at all; `kb_edges.label` is genuinely nullable.
+    // on `kb_edges`, and the body (a delegation to `graph_induced_edges`) carries them from
+    // `kb_edges` into its `ve` CTE and out through inner joins only, so the set-returning
+    // function's blanket nullability is the only reason an override is needed at all;
+    // `kb_edges.label` is genuinely nullable.
     let walked = sqlx::query!(
         r#"SELECT id AS "id!", source_id AS "source_id!", target_id AS "target_id!",
                   edge_kind AS "edge_kind!: EdgeKind", polarity AS "polarity!: Polarity",
@@ -674,7 +675,7 @@ pub async fn entry_orientation_slice(
     // 275 edges, depth 1 returns 2672.
     //
     // Same override reasoning as `region_composition_slice`: every column but `label` is NOT NULL
-    // on `kb_edges` and the body's final SELECT reads them off `FROM kb_edges e` through inner
+    // on `kb_edges`, and the body carries them from `kb_edges` through its `ve` CTE with inner
     // joins only. EdgeKind/Polarity decode natively via their `sqlx::Type` derive.
     let walked = sqlx::query!(
         r#"SELECT id AS "id!", source_id AS "source_id!", target_id AS "target_id!",
