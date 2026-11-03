@@ -28,8 +28,8 @@
 --      scans them. Every such transaction has committed or aborted, and every transaction still
 --      running, or not yet started, has an id at or above it. So no commit after the read can sort at
 --      or before the position it returns. The cost is lag: a transaction holding an id anywhere in
---      the cluster holds the horizon until it ends. It never causes a skip. An entry is served only
---      when the reader can read its subject now, not merely the context (see the function's comment).
+--      the cluster holds the horizon until it ends. It never causes a skip. An entry is a pointer: it
+--      names what changed and carries nothing of it (see the function's comment).
 
 -- ---------------------------------------------------------------------------
 -- Section 1. The order columns.
@@ -124,31 +124,17 @@ $$;
 -- STABLE and a single SQL statement, so the horizon and the scan share one snapshot. Rule R5 rests on
 -- that: a transaction below the horizon must be visible, or have aborted, in the snapshot that scans.
 --
--- The context gate is not the whole gate. An event anchored on a readable context can be about a
--- subject the reader cannot read now: an edge homed here whose other endpoint is private, a resource
--- that has since moved to a context the reader cannot read, a deleted resource, a struck blob. Every
--- entry is served only when its subject passes that subject's own read predicate, evaluated now:
---   kb_resources       resources_visible_to (which carries the soft-delete floor)
---   kb_edges           the edge's home and both endpoints readable: endpoint_readable_by_profile and
---                      anchor_readable_by_profile, the authorization half of edges_visible_to. Its
---                      currency half (NOT is_folded) is left out on purpose: a retracted edge between
---                      readable endpoints is a change the reader may see.
---   kb_content_blocks  the block's resource, as kb_resources
---   kb_blobs           blob_readable_by_profile (which carries the strike)
---   kb_contexts        this context: the gate above
--- Any other subject table is refused (fail-closed). The filter runs before the page bound, so a
--- withheld row never sets `through` and never counts toward `has_more`: nothing in the answer moves
--- because of a row the reader cannot read. The position a reader holds therefore says nothing about
--- withheld rows, and a forged one discloses only what the filter would serve from it.
+-- An entry is a pointer, ruled by the owner 2026-11-03 for task 01a1a1a5-773a-7599-a157-6128705ef71e:
+-- position, kind, subject {table, id}, actor, occurred_at and act. It carries nothing of the change,
+-- and no key name (R4, goal: an-entry-never-carries-content). The reader learns what changed by
+-- reading the subject through its own door, which answers under the reader's standing now. So the
+-- context gate is the only gate here: a subject since deleted, erased, struck or moved out of view is
+-- still pointed at, and its own read is what refuses it. That refusal is how a relay learns the
+-- subject left its view.
 --
--- The cost, ruled 2026-11-03 for task 01a1a1a5-773a-7599-a157-6128705ef71e: once a resource is
--- deleted or moves out of the reader's view, none of its entries is served, its deletion included.
--- A relay holding a claim on it is not told it went.
---
--- An entry is built from an allowlist (R4, goal: an-entry-never-carries-content). No payload value is
--- copied whole. A property kind names its key, taken from the asserting event's payload. That payload
--- is the one erasure rewrites, and its kb_event_field_redactions row marks the rewrite. It never takes
--- the key from kb_properties. A key a redaction covers is served as `"key": null, "redacted": true`.
+-- The subject is named from the payload. Every property kind that is emitted carries its owner as an
+-- AnchorRef, {table, id} (payloads.rs). Anything else is named by the first id it carries, or is the
+-- context itself.
 CREATE FUNCTION context_changes_after(
     p_profile uuid, p_context uuid,
     p_after_xact xid8, p_after_seq bigint,
@@ -162,12 +148,8 @@ CREATE FUNCTION context_changes_after(
         SELECT CASE WHEN p_limit BETWEEN 1 AND 1000 THEN p_limit
                     ELSE (SELECT NULL::int WHERE _feed_refuse_limit(p_limit)) END AS n
     ),
-    -- Computed once per call. MATERIALIZED, because the subject filter references it per row.
-    vis AS MATERIALIZED (
-        SELECT v.resource_id FROM gate g CROSS JOIN LATERAL resources_visible_to(p_profile) v WHERE g.ok
-    ),
-    candidate AS (
-        SELECT e.id, e.xact_id, e.seq, e.emitter_entity_id, e.occurred_at, e.correlation_id,
+    page AS (
+        SELECT e.xact_id, e.seq, e.emitter_entity_id, e.occurred_at, e.correlation_id,
                et.name AS kind, e.payload
           FROM kb_events e
           JOIN kb_event_types et ON et.id = e.event_type_id
@@ -181,58 +163,7 @@ CREATE FUNCTION context_changes_after(
            AND (e.xact_id, e.seq) > (p_after_xact, coalesce(p_after_seq, 0))
            AND e.category = 'domain'
            AND (p_kinds IS NULL OR et.name = ANY (p_kinds))
-    ),
-    subjected AS (
-        SELECT c.*, prop.asserted_by_event_id, subj.subject_table, subj.subject_id
-          FROM candidate c
-          LEFT JOIN kb_properties prop
-            ON c.kind LIKE 'property\_%' AND prop.id = _feed_uuid(c.payload->>'property_id')
-          CROSS JOIN LATERAL (
-              SELECT t.subject_table, t.subject_id FROM (
-                  SELECT CASE
-                      -- A property payload's owner is an AnchorRef, {table, id}.
-                      WHEN c.payload->'owner' ? 'table' THEN c.payload->'owner'->>'table'
-                      WHEN prop.id IS NOT NULL THEN prop.owner_table
-                      WHEN _feed_uuid(c.payload->>'resource_id') IS NOT NULL THEN 'kb_resources'
-                      WHEN _feed_uuid(c.payload->>'edge_id') IS NOT NULL THEN 'kb_edges'
-                      WHEN _feed_uuid(c.payload->>'block_id') IS NOT NULL THEN 'kb_content_blocks'
-                      WHEN _feed_uuid(c.payload->>'blob_id') IS NOT NULL THEN 'kb_blobs'
-                      ELSE 'kb_contexts'
-                  END AS subject_table,
-                  CASE
-                      WHEN c.payload->'owner' ? 'table' THEN _feed_uuid(c.payload->'owner'->>'id')
-                      WHEN prop.id IS NOT NULL THEN prop.owner_id
-                      WHEN _feed_uuid(c.payload->>'resource_id') IS NOT NULL THEN _feed_uuid(c.payload->>'resource_id')
-                      WHEN _feed_uuid(c.payload->>'edge_id') IS NOT NULL THEN _feed_uuid(c.payload->>'edge_id')
-                      WHEN _feed_uuid(c.payload->>'block_id') IS NOT NULL THEN _feed_uuid(c.payload->>'block_id')
-                      WHEN _feed_uuid(c.payload->>'blob_id') IS NOT NULL THEN _feed_uuid(c.payload->>'blob_id')
-                      ELSE p_context
-                  END AS subject_id
-              ) t
-          ) subj
-    ),
-    page AS (
-        SELECT s.* FROM subjected s
-         WHERE CASE s.subject_table
-                   WHEN 'kb_contexts' THEN s.subject_id = p_context
-                   WHEN 'kb_resources' THEN s.subject_id IN (SELECT resource_id FROM vis)
-                   WHEN 'kb_content_blocks' THEN EXISTS (
-                       SELECT 1 FROM kb_content_blocks b
-                        WHERE b.id = s.subject_id AND b.resource_id IN (SELECT resource_id FROM vis))
-                   WHEN 'kb_blobs' THEN blob_readable_by_profile(p_profile, s.subject_id)
-                   WHEN 'kb_edges' THEN EXISTS (
-                       SELECT 1 FROM kb_edges ed
-                        WHERE ed.id = s.subject_id
-                          AND anchor_readable_by_profile(p_profile, ed.home_anchor_table, ed.home_anchor_id)
-                          AND CASE ed.source_table
-                                  WHEN 'kb_resources' THEN ed.source_id IN (SELECT resource_id FROM vis)
-                                  ELSE endpoint_readable_by_profile(p_profile, ed.source_table, ed.source_id) END
-                          AND CASE ed.target_table
-                                  WHEN 'kb_resources' THEN ed.target_id IN (SELECT resource_id FROM vis)
-                                  ELSE endpoint_readable_by_profile(p_profile, ed.target_table, ed.target_id) END)
-                   ELSE false
-               END
-         ORDER BY s.xact_id, s.seq
+         ORDER BY e.xact_id, e.seq
          LIMIT (SELECT n + 1 FROM bound)
     ),
     numbered AS (
@@ -246,26 +177,30 @@ CREATE FUNCTION context_changes_after(
                jsonb_strip_nulls(jsonb_build_object(
                    'position',    jsonb_build_object('xact', s.xact_id::text, 'seq', s.seq),
                    'kind',        s.kind,
-                   'subject',     jsonb_build_object('table', s.subject_table, 'id', s.subject_id),
+                   'subject',     jsonb_build_object('table', subj.t, 'id', subj.id),
                    'actor',       s.emitter_entity_id,
                    'occurred_at', s.occurred_at,
                    'act',         s.correlation_id
-               ))
-               || CASE WHEN s.kind LIKE 'property\_%' THEN
-                      CASE WHEN keyed.redacted THEN jsonb_build_object('key', NULL, 'redacted', true)
-                           ELSE jsonb_build_object('key', keyed.key) END
-                  ELSE '{}'::jsonb END AS entry
+               )) AS entry
           FROM served s
-          -- The event whose payload holds the key: this event when it carries `property_key`, else
-          -- the event that asserted the property (property_retracted / _folded / _reweighted).
-          LEFT JOIN kb_events kev
-            ON s.kind LIKE 'property\_%'
-           AND kev.id = CASE WHEN s.payload ? 'property_key' THEN s.id ELSE s.asserted_by_event_id END
-          LEFT JOIN LATERAL (
-              SELECT kev.payload->>'property_key' AS key,
-                     EXISTS (SELECT 1 FROM kb_event_field_redactions r
-                              WHERE r.event_id = kev.id AND r.path = 'property_key') AS redacted
-          ) keyed ON s.kind LIKE 'property\_%'
+          CROSS JOIN LATERAL (
+              SELECT CASE
+                         WHEN s.payload->'owner' ? 'table' THEN s.payload->'owner'->>'table'
+                         WHEN _feed_uuid(s.payload->>'resource_id') IS NOT NULL THEN 'kb_resources'
+                         WHEN _feed_uuid(s.payload->>'edge_id') IS NOT NULL THEN 'kb_edges'
+                         WHEN _feed_uuid(s.payload->>'block_id') IS NOT NULL THEN 'kb_content_blocks'
+                         WHEN _feed_uuid(s.payload->>'blob_id') IS NOT NULL THEN 'kb_blobs'
+                         ELSE 'kb_contexts'
+                     END AS t,
+                     CASE
+                         WHEN s.payload->'owner' ? 'table' THEN _feed_uuid(s.payload->'owner'->>'id')
+                         WHEN _feed_uuid(s.payload->>'resource_id') IS NOT NULL THEN _feed_uuid(s.payload->>'resource_id')
+                         WHEN _feed_uuid(s.payload->>'edge_id') IS NOT NULL THEN _feed_uuid(s.payload->>'edge_id')
+                         WHEN _feed_uuid(s.payload->>'block_id') IS NOT NULL THEN _feed_uuid(s.payload->>'block_id')
+                         WHEN _feed_uuid(s.payload->>'blob_id') IS NOT NULL THEN _feed_uuid(s.payload->>'blob_id')
+                         ELSE p_context
+                     END AS id
+          ) subj
     ),
     last_served AS (
         SELECT xact_id, seq FROM shaped ORDER BY rn DESC LIMIT 1

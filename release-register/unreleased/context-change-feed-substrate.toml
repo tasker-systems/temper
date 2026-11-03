@@ -9,8 +9,9 @@ and seq, the append order. Column defaults fill both, so no inserter changes, an
 the migration keep NULL. A BEFORE INSERT trigger refuses a new row whose order is missing or names
 another transaction, except under replay. The new function context_changes_after(profile, context,
 position, bound, kinds) returns a context's domain changes after a position. It serves only settled
-rows, so a later commit never lands behind a position already passed. Each entry is withheld unless
-the reader can read its subject now: a resource (the soft-delete floor included), an edge's home and
-both endpoints, a blob. No surface calls the function yet; the HTTP, CLI and MCP doors come in a later
-change. Who observes: nobody, until those doors ship. Release relevance: additive (schema only).
+rows, so a later commit never lands behind a position already passed. Each entry is a pointer: its
+position, kind, subject {table, id}, actor, time and act, and nothing of the change itself, not even a
+key name. The reader reads the subject through its own door, which answers under the reader's
+standing now, so a deleted or moved-out subject is still pointed at and its own read refuses it. No
+surface calls the function yet; the HTTP, CLI and MCP doors come in a later change. Who observes: nobody, until those doors ship. Release relevance: additive (schema only).
 '''
