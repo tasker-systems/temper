@@ -4224,12 +4224,21 @@ export interface components {
             supersedes?: components["schemas"]["DataArtifactId"][];
         };
         /**
-         * @description Response body for `POST /api/resources/{id}/artifacts` — the committed artifact's ID
-         *     and its full readback view.
+         * @description Response body for `POST /api/resources/{id}/artifacts` — the committed artifact's ID,
+         *     its full readback view, and, when the family's shape in force could not be compiled, a notice
+         *     saying so.
          */
         ArtifactCommitResponse: {
             artifact: components["schemas"]["ArtifactView"];
             artifact_id: components["schemas"]["DataArtifactId"];
+            /**
+             * @description Present only when the family's shape in force cannot be compiled (it is not a field tree —
+             *     e.g. a shape declared before v0.6.3 that uses `$ref` or `allOf`): the artifact was recorded
+             *     unchecked, as `declared_not_yet_checked`, even under an `enforcing` shape, and the sentence
+             *     says a steward must amend the shape. It names what the compile refused only to a committer
+             *     who can read the shape. Absent, not `null`, otherwise.
+             */
+            uncompilable_shape_notice?: string | null;
         };
         /**
          * @description A position in the `(created, id)` keyset order that `artifacts_for_resource` returns rows in.

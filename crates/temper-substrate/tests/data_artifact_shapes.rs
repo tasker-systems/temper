@@ -208,6 +208,22 @@ async fn commit(
     content: &serde_json::Value,
     emitter: EntityId,
 ) -> (DataArtifactId, ShapeState) {
+    let (id, shape_state, _) = commit_noting(pool, resource, kind, content, emitter).await;
+    (id, shape_state)
+}
+
+/// [`commit`], also returning the uncompilable shape in force the commit names, if any.
+async fn commit_noting(
+    pool: &sqlx::PgPool,
+    resource: ResourceId,
+    kind: &str,
+    content: &serde_json::Value,
+    emitter: EntityId,
+) -> (
+    DataArtifactId,
+    ShapeState,
+    Option<writes::UncompilableShapeInForce>,
+) {
     let mut tx = pool.begin().await.unwrap();
     let fired = fire(
         &mut tx,
@@ -224,15 +240,16 @@ async fn commit(
     )
     .await
     .unwrap();
-    let (id, shape_state) = match fired {
+    let noted = match fired {
         Fired::DataArtifact {
             artifact,
             shape_state,
-        } => (artifact, shape_state),
+            uncompilable_shape,
+        } => (artifact, shape_state, uncompilable_shape),
         other => panic!("expected Fired::DataArtifact, got {other:?}"),
     };
     tx.commit().await.unwrap();
-    (id, shape_state)
+    noted
 }
 
 /// Attempt to commit; expect a refusal (error). Returns the error message.
@@ -261,37 +278,6 @@ async fn commit_err(
     let err = result.expect_err("commit should have been refused");
     tx.rollback().await.ok();
     err.to_string()
-}
-
-/// Attempt to commit; expect the TYPED refusal a surface renders as the data-artifact refusal
-/// (not the 500-class bridge). Returns it.
-async fn commit_refusal(
-    pool: &sqlx::PgPool,
-    resource: ResourceId,
-    kind: &str,
-    content: &serde_json::Value,
-    emitter: EntityId,
-) -> writes::DataArtifactRefusal {
-    let mut tx = pool.begin().await.unwrap();
-    let result = fire(
-        &mut tx,
-        SeedAction::DataArtifactCommit {
-            resource,
-            kind,
-            kind_owner: None,
-            intent: ArtifactIntent::Current,
-            precedence: 0.0,
-            content,
-            supersedes: &[],
-            emitter,
-        },
-    )
-    .await;
-    tx.rollback().await.ok();
-    result
-        .expect_err("commit should have been refused")
-        .downcast::<writes::DataArtifactRefusal>()
-        .expect("the refusal must be the typed DataArtifactRefusal, not an internal error")
 }
 
 /// Count artifact rows for a resource (to verify no row was written on refusal).
@@ -704,6 +690,43 @@ async fn an_advisory_verdict_records_one_violation(pool: sqlx::PgPool) {
     );
 }
 
+/// A commit names an uncompilable shape only when there is one: a commit under a shape that
+/// compiles, enforcing or not, and a commit with no shape in force name none. Bites a variant
+/// that names the shape in force whatever it is.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_commit_names_no_uncompilable_shape_when_none_is_in_force(pool: sqlx::PgPool) {
+    let (emitter, home, resource, _owner) = world(&pool, "no-uncompilable-shape").await;
+    let content = serde_json::json!({"value": "42"});
+
+    let (_, shape_state, uncompilable) =
+        commit_noting(&pool, resource, "unshaped", &content, emitter).await;
+    assert_eq!(shape_state, ShapeState::NeverDeclared);
+    assert!(uncompilable.is_none(), "no shape in force names none");
+
+    for (kind, enforcement) in [
+        ("shaped-enforcing", EnforcementMode::Enforcing),
+        ("shaped-advisory", EnforcementMode::Advisory),
+    ] {
+        declare(
+            &pool,
+            emitter,
+            AnchorRef::context(home),
+            None,
+            kind,
+            &string_value_schema(),
+            enforcement,
+        )
+        .await;
+        let (_, shape_state, uncompilable) =
+            commit_noting(&pool, resource, kind, &content, emitter).await;
+        assert_eq!(shape_state, ShapeState::DeclaredSatisfied, "{kind}");
+        assert!(
+            uncompilable.is_none(),
+            "a shape that compiles names none: {kind}"
+        );
+    }
+}
+
 /// A commit with no shape in force stays `NeverDeclared` — persistence never requires a prior
 /// declaration.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
@@ -737,15 +760,17 @@ fn remote_ref_schema(probe: &FetchProbe) -> serde_json::Value {
     })
 }
 
-/// An `enforcing` family whose shape cannot be compiled has no rule it can check, so its commits
-/// are refused with the typed refusal — whatever the content — and nothing is written or fetched.
-/// The sentence names no URI and no compiler text.
+/// An `enforcing` family whose shape cannot be compiled has no rule it can check. Its commits are
+/// NOT refused — a shape stored before the field-tree rule would otherwise leave its family
+/// unwritable — but recorded unchecked, exactly as the advisory arm records them, and the commit
+/// names the shape as enforcing so the door can say its enforcement was not applied. Nothing is
+/// fetched. Bites a variant that refuses, that records a verdict, or that names no shape.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn an_enforcing_shape_that_cannot_compile_refuses_the_commit(pool: sqlx::PgPool) {
-    let (emitter, home, resource, _owner) = world(&pool, "enforcing-uncompilable").await;
+async fn an_enforcing_shape_that_cannot_compile_records_the_commit_unchecked(pool: sqlx::PgPool) {
+    let (emitter, home, resource, owner) = world(&pool, "enforcing-uncompilable").await;
     let kind = "measurement";
     let probe = FetchProbe::bind();
-    declare(
+    let shape = declare(
         &pool,
         emitter,
         AnchorRef::context(home),
@@ -756,8 +781,7 @@ async fn an_enforcing_shape_that_cannot_compile_refuses_the_commit(pool: sqlx::P
     )
     .await;
 
-    // Content that would satisfy any reasonable rule: the refusal is about the shape, not the content.
-    let refusal = commit_refusal(
+    let (id, shape_state, uncompilable) = commit_noting(
         &pool,
         resource,
         kind,
@@ -766,21 +790,34 @@ async fn an_enforcing_shape_that_cannot_compile_refuses_the_commit(pool: sqlx::P
     )
     .await;
 
-    assert!(
-        refusal.message.contains("cannot be compiled") && refusal.message.contains("amend"),
-        "the refusal must say the shape cannot be compiled and that a steward must amend it, got: {}",
-        refusal.message
-    );
-    assert!(
-        !refusal.message.contains("127.0.0.1")
-            && !refusal.message.contains(&probe.port().to_string()),
-        "the refusal must not echo the URI the schema names, got: {}",
-        refusal.message
-    );
+    assert_eq!(shape_state, ShapeState::DeclaredNotYetChecked);
+    let uncompilable = uncompilable.expect("the commit names the shape it could not check");
+    assert_eq!(uncompilable.shape_id, shape);
+    assert!(uncompilable.enforcing, "the shape is named as enforcing");
     assert_eq!(
         artifact_count(&pool, resource).await,
-        0,
-        "no artifact row is written when the enforcing shape cannot be checked"
+        1,
+        "the artifact lands"
+    );
+    let verdicts: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_data_artifact_verdicts WHERE artifact_id=$1")
+            .bind(id.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        verdicts, 0,
+        "no verdict row is written for an unchecked artifact"
+    );
+    assert_eq!(
+        read_shape_state(&pool, owner, resource).await,
+        Some(ShapeState::DeclaredNotYetChecked),
+        "the read side never reports the artifact as checked"
+    );
+    let notice = uncompilable.notice_for(true);
+    assert!(
+        !notice.contains("127.0.0.1") && !notice.contains(&probe.port().to_string()),
+        "the notice must not echo the URI the schema names, got: {notice}"
     );
     assert_eq!(
         probe.connections(),
@@ -809,12 +846,17 @@ async fn an_advisory_shape_that_cannot_compile_records_the_artifact_unchecked(po
     .await;
 
     let content = serde_json::json!({"value": 42, "note": "kept whole"});
-    let (id, shape_state) = commit(&pool, resource, kind, &content, emitter).await;
+    let (id, shape_state, uncompilable) =
+        commit_noting(&pool, resource, kind, &content, emitter).await;
 
     assert_eq!(
         shape_state,
         ShapeState::DeclaredNotYetChecked,
         "an advisory commit under an uncompilable shape is recorded unchecked"
+    );
+    assert!(
+        uncompilable.is_some_and(|shape| !shape.enforcing),
+        "the commit names the uncompilable shape, as advisory"
     );
     let stored: serde_json::Value =
         sqlx::query_scalar("SELECT content FROM kb_data_artifact_content WHERE artifact_id=$1")
@@ -1178,13 +1220,13 @@ async fn shape_reads_gate_on_home_visibility(pool: sqlx::PgPool) {
 
 // ── Who is told what an uncompilable enforcing shape refused (shape ruling R4) ──────────────
 
-/// A commit into an enforcing family whose shape is not a field tree carries the shape and what
-/// its compile refused first beside a fixed message. The detail reaches a reader who can read the
-/// shape — the home's owner here — and nobody else: a stranger, whom the gated `shape_by_id`
-/// does not answer, is given the fixed sentence word for word. Bites a refusal that names the
-/// detail in `message`, and a `message_for_reader` that skips the readability question.
+/// A commit into an enforcing family whose shape is not a field tree names the shape and what its
+/// compile refused first. The detail reaches, in the notice, a reader who can read the shape — the
+/// home's owner here — and nobody else: a stranger, whom the gated `shape_by_id` does not answer, is
+/// given the fixed sentence word for word. Bites a `notice_for_reader` that skips the readability
+/// question, and a notice that quotes a `const` value.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn an_uncompilable_enforcing_refusal_names_what_failed_only_to_a_reader_of_the_shape(
+async fn an_uncompilable_enforcing_notice_names_what_failed_only_to_a_reader_of_the_shape(
     pool: sqlx::PgPool,
 ) {
     let (emitter, home, resource, owner) = world(&pool, "enforcing-detail").await;
@@ -1205,7 +1247,7 @@ async fn an_uncompilable_enforcing_refusal_names_what_failed_only_to_a_reader_of
     )
     .await;
 
-    let refusal = commit_refusal(
+    let (_, _, uncompilable) = commit_noting(
         &pool,
         resource,
         kind,
@@ -1213,22 +1255,19 @@ async fn an_uncompilable_enforcing_refusal_names_what_failed_only_to_a_reader_of
         emitter,
     )
     .await;
-    let fixed = writes::uncompilable_shape_message(None);
-    assert_eq!(refusal.message, fixed, "the message itself names nothing");
-    let carried = refusal
-        .uncompilable_shape
-        .as_ref()
-        .expect("the uncompilable shape rides beside the message");
+    let carried = uncompilable.expect("the commit names the uncompilable shape");
     assert_eq!(carried.shape_id, shape);
+    let fixed = writes::uncompilable_shape_notice(true, None);
 
     let mut conn = pool.acquire().await.unwrap();
-    let to_owner = refusal.message_for_reader(&mut conn, owner).await.unwrap();
+    let to_owner = carried.notice_for_reader(&mut conn, owner).await.unwrap();
     assert_eq!(
         to_owner,
-        writes::uncompilable_shape_message(Some("keyword allOf at /properties/when"))
+        writes::uncompilable_shape_notice(true, Some("keyword allOf at /properties/when"))
     );
     assert!(
-        to_owner.contains("a steward must amend the shape"),
+        to_owner.contains("a steward must amend the shape")
+            && to_owner.contains("declared_not_yet_checked"),
         "{to_owner}"
     );
     assert!(!to_owner.contains("SENTINEL"), "{to_owner}");
@@ -1238,8 +1277,8 @@ async fn an_uncompilable_enforcing_refusal_names_what_failed_only_to_a_reader_of
     );
 
     let stranger = ProfileId::from(common::insert_profile(&pool, "shape-stranger").await);
-    let to_stranger = refusal
-        .message_for_reader(&mut conn, stranger)
+    let to_stranger = carried
+        .notice_for_reader(&mut conn, stranger)
         .await
         .unwrap();
     assert_eq!(

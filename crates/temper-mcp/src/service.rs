@@ -940,7 +940,7 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "Declare a data-artifact shape for a family within a context or cogmap home. The schema is a field tree (a subset of JSON Schema 2020-12; the data-artifacts skill lists the vocabulary) that governs the family; enforcement 'advisory' (default) records non-conformance, 'enforcing' refuses the commit. Authority-gated: requires authoring authority over the home (context_authorable_by_profile or cogmap_authorable_by_profile). A principal who cannot author the home is refused.",
+        description = "Declare a data-artifact shape for a family within a context or cogmap home. The schema is a field tree (a subset of JSON Schema 2020-12; the data-artifacts skill lists the vocabulary) that governs the family; enforcement 'advisory' (default) records non-conformance, 'enforcing' refuses a non-conforming commit (a stored shape that is not a field tree cannot be checked, so its commits land unchecked under either mode). Authority-gated: requires authoring authority over the home (context_authorable_by_profile or cogmap_authorable_by_profile). A principal who cannot author the home is refused.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,

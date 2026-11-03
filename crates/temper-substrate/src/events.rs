@@ -816,11 +816,13 @@ pub enum Fired {
     /// multi-valued key mints a row per inner key). The `shape_state` is `NeverDeclared` when no
     /// shape governs the artifact's family; `DeclaredSatisfied` or `DeclaredNotSatisfied` when a
     /// shape is in force and the content was validated against it in Rust; `DeclaredNotYetChecked`
-    /// when the shape in force could not be compiled and the family is advisory (no verdict row
-    /// is written).
+    /// when the shape in force could not be compiled (no verdict row is written), whatever its
+    /// enforcement — and then `uncompilable_shape` names that shape and what its compile refused
+    /// first, so the door can tell the committer the shape needs amending.
     DataArtifact {
         artifact: DataArtifactId,
         shape_state: payloads::ShapeState,
+        uncompilable_shape: Option<crate::writes::UncompilableShapeInForce>,
     },
     /// The shape row a `ShapeDeclare` fire produced. Singular — one declaration, one shape row
     /// (assert/fold: a prior row is folded, not superseded in place).
@@ -867,6 +869,7 @@ impl Fired {
             Fired::DataArtifact {
                 artifact,
                 shape_state,
+                ..
             } => Ok((artifact, shape_state)),
             other => anyhow::bail!("expected Fired::DataArtifact, got {other:?}"),
         }
@@ -1083,25 +1086,6 @@ pub(crate) async fn project_property_unset(
     u64::try_from(folded).context("_project_property_unset returned a negative row count")
 }
 
-/// The refusal for a commit into a family whose `enforcing` shape cannot be compiled, whether
-/// the schema is malformed or is not a field tree. Its `message` is a fixed sentence true of both
-/// causes: the compiler's text and any URI in the schema never reach the caller. It carries the
-/// shape and what the compile refused first beside the message, so a door that knows its reader
-/// can already read that shape may name it ([`crate::writes::DataArtifactRefusal::message_for`]);
-/// this layer does not know the reader, so the message it sets names nothing. Typed so the surfaces
-/// render it as the data-artifact refusal rather than the 500-class bridge.
-fn uncompilable_shape_refusal(
-    shape_id: Option<Uuid>,
-    refused: crate::shape_schema::ShapeSchemaUncompilable,
-) -> anyhow::Error {
-    anyhow::Error::new(crate::writes::DataArtifactRefusal {
-        message: crate::writes::uncompilable_shape_message(None),
-        // With no shape id there is no shape to ask about: the refusal stands, naming nothing.
-        uncompilable_shape: shape_id
-            .map(|shape_id| crate::writes::UncompilableShapeInForce { shape_id, refused }),
-    })
-}
-
 /// Fire one seeding action: dispatch it to its SQL function (event + projection, one txn) and return the
 /// produced ids. The caller threads a transaction (`&mut *tx`) so a run of fires commits atomically.
 /// Classify one SQL error from a data-artifact wrapper call. A `RAISE EXCEPTION`
@@ -1115,7 +1099,6 @@ fn classify_data_artifact_sql_error(e: sqlx::Error) -> anyhow::Error {
         if db.code().as_deref() == Some("P0001") && db.message().starts_with("data_artifact_") {
             return anyhow::Error::new(crate::writes::DataArtifactRefusal {
                 message: db.message().to_string(),
-                uncompilable_shape: None,
             });
         }
     }
@@ -1536,11 +1519,12 @@ pub async fn fire_with(
             // `validate` pass, which stops at the first violation, cut to a bound. Compiling a JSON Schema is the expensive part — doing it twice per
             // commit is wasteful and was flagged in review. The failure is owned strings because
             // `ValidationError` borrows from the validator (which is dropped here).
-            let (shape_state, validation_failure): (
+            let (shape_state, validation_failure, uncompilable_shape): (
                 payloads::ShapeState,
                 Option<(String, String)>,
+                Option<crate::writes::UncompilableShapeInForce>,
             ) = match &shape {
-                None => (payloads::ShapeState::NeverDeclared, None),
+                None => (payloads::ShapeState::NeverDeclared, None, None),
                 Some(row) => {
                     let schema = row
                         .schema
@@ -1550,15 +1534,19 @@ pub async fn fire_with(
                         .enforcement
                         .as_deref()
                         .context("shape in force returned null enforcement despite CHECK")?;
-                    // The family's rule is stated by the shape in force, not by the commit's
-                    // outcome: a shape that cannot be compiled (malformed, or not a
-                    // field tree) cannot be checked, so enforcing refuses and
-                    // advisory records the artifact unchecked (task 01a15661-8460-739d-9ed3-f1e8ccbf9b69). Neither arm
-                    // carries the compiler's text.
+                    // A shape that cannot be compiled (malformed, or not a field tree) has no rule
+                    // to check, so the artifact is recorded unchecked under either enforcement
+                    // (task 01a15661-8460-739d-9ed3-f1e8ccbf9b69). An `enforcing` family is not
+                    // refused: a shape stored before the field-tree rule (v0.6.3) was enforced by
+                    // the general compiler then, and refusing every commit to it would leave the
+                    // family unwritable until its schema is rewritten. It reads
+                    // `declared_not_yet_checked`, never as checked, and the commit names the shape
+                    // so the door can say it needs amending. Declare still refuses a new one.
+                    // Nothing here carries the compiler's text.
                     match crate::shape_schema::compile(schema) {
                         Ok(validator) => {
                             match crate::shape_schema::first_failure(&validator, content) {
-                                None => (payloads::ShapeState::DeclaredSatisfied, None),
+                                None => (payloads::ShapeState::DeclaredSatisfied, None, None),
                                 Some((path, msg)) if enforcement == "enforcing" => {
                                     // TYPED, not a bare bail: this is a refusal the caller can
                                     // satisfy, and the surfaces must render the violation instead
@@ -1571,28 +1559,38 @@ pub async fn fire_with(
                                                  to the enforcing shape in force for this family \
                                                  — {path}: {msg}"
                                             ),
-                                            uncompilable_shape: None,
                                         },
                                     ));
                                 }
-                                Some(failure) => {
-                                    (payloads::ShapeState::DeclaredNotSatisfied, Some(failure))
-                                }
+                                Some(failure) => (
+                                    payloads::ShapeState::DeclaredNotSatisfied,
+                                    Some(failure),
+                                    None,
+                                ),
                             }
                         }
-                        Err(refused) if enforcement == "enforcing" => {
-                            return Err(uncompilable_shape_refusal(row.shape_id, refused));
-                        }
-                        Err(_) => {
+                        Err(refused) => {
                             tracing::warn!(
                                 shape_id = ?row.shape_id,
                                 kind = kind,
                                 kind_owner_table = %ko_table,
                                 kind_owner_id = %ko_id,
-                                "shape in force cannot be compiled; the advisory commit is \
-                                 recorded without a verdict"
+                                enforcement = enforcement,
+                                "shape in force cannot be compiled; the commit is recorded \
+                                 without a verdict"
                             );
-                            (payloads::ShapeState::DeclaredNotYetChecked, None)
+                            let uncompilable_shape = row.shape_id.map(|shape_id| {
+                                crate::writes::UncompilableShapeInForce {
+                                    shape_id,
+                                    enforcing: enforcement == "enforcing",
+                                    refused,
+                                }
+                            });
+                            (
+                                payloads::ShapeState::DeclaredNotYetChecked,
+                                None,
+                                uncompilable_shape,
+                            )
                         }
                     }
                 }
@@ -1694,6 +1692,7 @@ pub async fn fire_with(
             Ok(Fired::DataArtifact {
                 artifact: DataArtifactId::from(artifact_uuid),
                 shape_state,
+                uncompilable_shape,
             })
         }
 

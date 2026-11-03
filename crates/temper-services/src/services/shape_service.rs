@@ -1462,6 +1462,7 @@ mod tests {
             Fired::DataArtifact {
                 artifact,
                 shape_state,
+                ..
             } => (artifact, shape_state),
             other => panic!("expected Fired::DataArtifact, got {other:?}"),
         };

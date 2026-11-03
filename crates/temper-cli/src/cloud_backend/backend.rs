@@ -124,8 +124,10 @@ mod embed_impl {
         async fn commit_data_artifact(
             &self,
             _cmd: CommitDataArtifact,
-        ) -> Result<CommandOutput<temper_core::types::data_artifact::ArtifactView>, TemperError>
-        {
+        ) -> Result<
+            CommandOutput<temper_core::types::data_artifact::ArtifactCommitResponse>,
+            TemperError,
+        > {
             Err(TemperError::Project(
                 "CloudBackend::commit_data_artifact not dispatched through the backend — \
                  CLI uses the data-artifacts client directly"
@@ -585,8 +587,10 @@ mod non_embed_impl {
         async fn commit_data_artifact(
             &self,
             _cmd: CommitDataArtifact,
-        ) -> Result<CommandOutput<temper_core::types::data_artifact::ArtifactView>, TemperError>
-        {
+        ) -> Result<
+            CommandOutput<temper_core::types::data_artifact::ArtifactCommitResponse>,
+            TemperError,
+        > {
             Err(TemperError::BadRequest(
                 "cloud mode requires --features embed".to_string(),
             ))

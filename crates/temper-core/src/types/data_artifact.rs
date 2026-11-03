@@ -383,8 +383,9 @@ pub fn overlong_kind(kind: &str) -> Option<String> {
     })
 }
 
-/// Response body for `POST /api/resources/{id}/artifacts` — the committed artifact's ID
-/// and its full readback view.
+/// Response body for `POST /api/resources/{id}/artifacts` — the committed artifact's ID,
+/// its full readback view, and, when the family's shape in force could not be compiled, a notice
+/// saying so.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "data_artifact.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -393,11 +394,50 @@ pub fn overlong_kind(kind: &str) -> Option<String> {
 pub struct ArtifactCommitResponse {
     pub artifact_id: DataArtifactId,
     pub artifact: ArtifactView,
+    /// Present only when the family's shape in force cannot be compiled (it is not a field tree —
+    /// e.g. a shape declared before v0.6.3 that uses `$ref` or `allOf`): the artifact was recorded
+    /// unchecked, as `declared_not_yet_checked`, even under an `enforcing` shape, and the sentence
+    /// says a steward must amend the shape. It names what the compile refused only to a committer
+    /// who can read the shape. Absent, not `null`, otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uncompilable_shape_notice: Option<String>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A commit response with no uncompilable shape leaves the notice key out of the wire entirely
+    /// — absent, not `null` — and one with a notice carries it.
+    #[test]
+    fn the_uncompilable_shape_notice_is_absent_from_the_wire_unless_present() {
+        let view: ArtifactView = serde_json::from_value(serde_json::json!({
+            "artifact_id": Uuid::from_u128(1),
+            "resource_id": Uuid::from_u128(2),
+            "kind_owner_table": "kb_profiles",
+            "kind_owner_id": Uuid::from_u128(3),
+            "artifact_kind": "measurement",
+            "intent": "current",
+            "precedence": 0.0,
+            "content_hash": "h",
+            "content_bytes": 0,
+            "shape_state": "declared_satisfied",
+            "is_folded": false,
+            "created": "2026-11-02T00:00:00Z",
+        }))
+        .expect("a view deserializes");
+        let mut response = ArtifactCommitResponse {
+            artifact_id: view.artifact_id,
+            artifact: view,
+            uncompilable_shape_notice: None,
+        };
+        let wire = serde_json::to_value(&response).expect("serializes");
+        assert!(wire.get("uncompilable_shape_notice").is_none(), "{wire}");
+
+        response.uncompilable_shape_notice = Some("amend it".to_string());
+        let wire = serde_json::to_value(&response).expect("serializes");
+        assert_eq!(wire["uncompilable_shape_notice"], "amend it");
+    }
 
     fn cursor() -> ArtifactCursor {
         ArtifactCursor {

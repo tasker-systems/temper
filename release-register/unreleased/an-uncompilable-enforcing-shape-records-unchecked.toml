@@ -1,0 +1,27 @@
+title    = "An enforcing shape that is not a field tree no longer refuses commits: the artifact lands unchecked, with a notice"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp", "cli-stdout", "clients"]
+status   = "signal-only"
+body = '''
+Fast follow to `a-shape-is-a-field-tree`. A shape stored before the field-tree rule (declared on
+v0.6.2 or earlier) that uses `$ref`, `$defs`, `allOf`, `anyOf`, `if` or any other keyword outside
+the field tree cannot be compiled. From v0.6.3 a commit into an `enforcing` family with such a
+shape was refused, so the family was unwritable until its schema was rewritten. Now it commits as
+an `advisory` family's does: the artifact lands, reads `declared_not_yet_checked` (never as
+checked), and no verdict is written. The field-tree rule itself is unchanged: such a shape is never
+compiled with the general compiler, declaring one is still refused, reconcile still records it as
+`schema_uncompilable`, and an ask naming it is still answered as uncompilable. Content that breaks a
+shape which does compile is still refused under `enforcing`.
+
+Additive shape: `ArtifactCommitResponse` (`POST /api/resources/{id}/artifacts`, the MCP
+`commit_data_artifact` tool, `temper data-artifact commit`) gains an optional
+`uncompilable_shape_notice`. It appears only when the shape in force cannot be compiled, under
+either enforcement, and says a steward must amend the shape. It names what the compile refused
+first (`keyword allOf at /properties/when`) only to a committer who can read the shape (shape
+ruling R4), and is absent, not `null`, otherwise. The generated SDKs carry the field.
+
+Who observes: writers committing to a family whose stored shape predates the rule; a deployment
+holding such shapes no longer has to re-declare them `advisory` before upgrading. No migration.
+Release relevance: signal-only.
+'''

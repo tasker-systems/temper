@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use crate::affinity::EdgeKind;
 use crate::content::{prepare_block, prepare_block_from_chunks, IncomingChunk, PreparedBlock};
-use crate::events::{fire, fire_with, EdgeHome, EventContext, SeedAction};
+use crate::events::{fire, fire_with, EdgeHome, EventContext, Fired, SeedAction};
 use crate::ids::{
     BlobId, BlockId, ChunkId, CogmapId, ContextId, DataArtifactId, EdgeId, EntityId, EventId,
     InvocationId, ProfileId, PropertyId, ResourceId, ShapeId,
@@ -492,7 +492,7 @@ impl std::error::Error for BlockAddressError {}
 /// wrapper's `RAISE EXCEPTION` refusals (SQLSTATE `P0001` under a `data_artifact_` message
 /// prefix — classified in `events`, beside the two wrapper calls), the Rust-side
 /// enforcing-shape verdict, and the shape-schema compile refusals (at declare in
-/// `temper-services`, and at commit under an enforcing shape that cannot be compiled). Typed so
+/// `temper-services`). Typed so
 /// the surfaces render the refusal's own words instead of the 500-class bridge — the mapping
 /// of these refusals onto internal errors is the defect this type exists to close, and the
 /// prefix key is what keeps a genuine server fault from ever carrying it. The refusal text is
@@ -502,77 +502,74 @@ impl std::error::Error for BlockAddressError {}
 pub struct DataArtifactRefusal {
     /// The words every reader may see.
     pub message: String,
-    /// Set only on a commit refused because the enforcing shape in force cannot be compiled: the
-    /// shape, and what its compile refused first. `message` never names it; a door names it only
-    /// through [`DataArtifactRefusal::message_for`], having asked whether its reader can already
-    /// read the shape.
-    pub uncompilable_shape: Option<UncompilableShapeInForce>,
 }
 
-/// The enforcing shape in force that a commit could not be checked against, and what its compile
-/// refused first.
+/// The shape in force that a commit could not be checked against, and what its compile refused
+/// first. The commit is recorded unchecked (`declared_not_yet_checked`) under either enforcement;
+/// this is what lets the door tell the committer that the family's shape needs amending.
 #[derive(Debug, Clone)]
 pub struct UncompilableShapeInForce {
     pub shape_id: uuid::Uuid,
+    /// The shape is `enforcing`: its rule went unenforced for this commit, which the notice says.
+    pub enforcing: bool,
     pub refused: crate::shape_schema::ShapeSchemaUncompilable,
 }
 
-impl DataArtifactRefusal {
-    /// The refusal's words for a reader: `message`, or — when the refusal is an uncompilable
-    /// enforcing shape and `reads_shape` says this reader can already read that shape (the gated
-    /// `shape_by_id` returns it to them) — the same sentence naming what the compile refused first
-    /// (shape ruling R4). A committer who cannot read the shape learns nothing of it here that the
-    /// fixed sentence does not already say.
+impl UncompilableShapeInForce {
+    /// The notice for a reader: the fixed sentence, or — when `reads_shape` says this reader can
+    /// already read the shape (the gated `shape_by_id` returns it to them) — the same sentence
+    /// naming what the compile refused first (shape ruling R4). A committer who cannot read the
+    /// shape learns nothing of it here that the fixed sentence does not already say.
     #[must_use]
-    pub fn message_for(&self, reads_shape: bool) -> String {
-        match &self.uncompilable_shape {
-            Some(shape) if reads_shape => uncompilable_shape_message(shape.refused.refused()),
-            _ => self.message.clone(),
-        }
+    pub fn notice_for(&self, reads_shape: bool) -> String {
+        let refused = reads_shape.then(|| self.refused.refused()).flatten();
+        uncompilable_shape_notice(self.enforcing, refused)
     }
 
-    /// The refusal's words for `reader`, asking on `conn` — the refused commit's own transaction,
-    /// which this refusal leaves usable, since it is raised in Rust after every statement
-    /// succeeded — whether `reader` can read the uncompilable shape through the gated
-    /// `shape_by_id`, the read `schema show` makes. Only an uncompilable-shape refusal asks;
-    /// every other answers `message` without a query.
+    /// The notice for `reader`, asking on `conn` — the commit's own transaction — whether `reader`
+    /// can read the shape through the gated `shape_by_id`, the read `schema show` makes.
     ///
     /// A writer who passed the commit's modify floor can ordinarily read the resource's home,
     /// where the shape in force lives; the fixed sentence holds for any path where that is not so.
     ///
     /// # Errors
     /// A database fault on the question.
-    pub async fn message_for_reader(
+    pub async fn notice_for_reader(
         &self,
         conn: &mut sqlx::PgConnection,
         reader: ProfileId,
     ) -> Result<String> {
-        let Some(shape) = &self.uncompilable_shape else {
-            return Ok(self.message.clone());
-        };
         let reads_shape = sqlx::query_scalar!(
             r#"SELECT EXISTS (SELECT 1 FROM shape_by_id($1, $2)) AS "reads!""#,
             reader.uuid(),
-            shape.shape_id,
+            self.shape_id,
         )
         .fetch_one(conn)
         .await?;
-        Ok(self.message_for(reads_shape))
+        Ok(self.notice_for(reads_shape))
     }
 }
 
-/// The sentence refusing a commit into a family whose enforcing shape cannot be compiled, naming
-/// what the compile refused first when `refused` is given. Bounded: `refused` is at most the room
-/// [`crate::shape_schema::ShapeSchemaUncompilable`] leaves under the failure-message bound.
+/// The sentence telling a committer that the family's shape in force cannot be compiled, so the
+/// artifact was recorded unchecked, naming what the compile refused first when `refused` is
+/// given. Bounded: `refused` is at most the room [`crate::shape_schema::ShapeSchemaUncompilable`]
+/// leaves under the failure-message bound.
 #[must_use]
-pub fn uncompilable_shape_message(refused: Option<&str>) -> String {
+pub fn uncompilable_shape_notice(enforcing: bool, refused: Option<&str>) -> String {
     let named = refused
         .map(|refused| format!(" ({refused})"))
         .unwrap_or_default();
+    let enforcement = if enforcing { "enforcing" } else { "advisory" };
+    let unenforced = if enforcing {
+        ", its enforcement is not applied,"
+    } else {
+        ""
+    };
     format!(
-        "data_artifact_commit: the enforcing shape in force for this family cannot be \
+        "data_artifact_commit: the {enforcement} shape in force for this family cannot be \
          compiled{named} — it is not a field tree this server can compile — so the content's \
-         conformance cannot be checked and the commit is refused; a steward must amend the shape"
+         conformance cannot be checked{unenforced} and the artifact is recorded as \
+         declared_not_yet_checked; a steward must amend the shape"
     )
 }
 
@@ -3472,19 +3469,27 @@ pub async fn commit_data_artifact_with(
     ctx: EventContext,
 ) -> Result<DataArtifactId> {
     let mut tx = begin_scoped(pool).await?;
-    let id = commit_data_artifact_in_tx(&mut tx, p, ctx).await?;
+    let committed = commit_data_artifact_in_tx(&mut tx, p, ctx).await?;
     tx.commit().await?;
-    Ok(id)
+    Ok(committed.id)
+}
+
+/// What [`commit_data_artifact_in_tx`] produced: the new artifact's id, and — when the shape in
+/// force could not be compiled, so the artifact was recorded unchecked — that shape.
+#[derive(Debug)]
+pub struct CommittedDataArtifact {
+    pub id: DataArtifactId,
+    pub uncompilable_shape: Option<UncompilableShapeInForce>,
 }
 
 /// In-transaction variant of [`commit_data_artifact_with`] — fires the `DataArtifactCommit` seed
-/// action on a caller-supplied connection (no begin/commit) and returns the new artifact id.
+/// action on a caller-supplied connection (no begin/commit) and returns what it produced.
 pub async fn commit_data_artifact_in_tx(
     conn: &mut sqlx::PgConnection,
     p: CommitDataArtifactParams<'_>,
     ctx: EventContext,
-) -> Result<DataArtifactId> {
-    let id = fire_with(
+) -> Result<CommittedDataArtifact> {
+    let fired = fire_with(
         conn,
         SeedAction::DataArtifactCommit {
             resource: p.resource,
@@ -3498,9 +3503,18 @@ pub async fn commit_data_artifact_in_tx(
         },
         ctx,
     )
-    .await?
-    .data_artifact()?;
-    Ok(id)
+    .await?;
+    match fired {
+        Fired::DataArtifact {
+            artifact,
+            uncompilable_shape,
+            ..
+        } => Ok(CommittedDataArtifact {
+            id: artifact,
+            uncompilable_shape,
+        }),
+        other => anyhow::bail!("expected Fired::DataArtifact, got {other:?}"),
+    }
 }
 
 // ── data-artifact shape writes ────────────────────────────────────────────────

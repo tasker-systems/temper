@@ -17,8 +17,8 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, Field
-from typing import Any, ClassVar, Dict, List
+from pydantic import BaseModel, ConfigDict, Field, StrictStr
+from typing import Any, ClassVar, Dict, List, Optional
 from uuid import UUID
 from temper.generated.models.artifact_view import ArtifactView
 from typing import Optional, Set
@@ -27,11 +27,12 @@ from pydantic_core import to_jsonable_python
 
 class ArtifactCommitResponse(BaseModel):
     """
-    Response body for `POST /api/resources/{id}/artifacts` — the committed artifact's ID and its full readback view.
+    Response body for `POST /api/resources/{id}/artifacts` — the committed artifact's ID, its full readback view, and, when the family's shape in force could not be compiled, a notice saying so.
     """ # noqa: E501
     artifact: ArtifactView
     artifact_id: UUID = Field(description="A `kb_data_artifacts.id` value — one schema-boundable structured datum owned by a resource.")
-    __properties: ClassVar[List[str]] = ["artifact", "artifact_id"]
+    uncompilable_shape_notice: Optional[StrictStr] = Field(default=None, description="Present only when the family's shape in force cannot be compiled (it is not a field tree — e.g. a shape declared before v0.6.3 that uses `$ref` or `allOf`): the artifact was recorded unchecked, as `declared_not_yet_checked`, even under an `enforcing` shape, and the sentence says a steward must amend the shape. It names what the compile refused only to a committer who can read the shape. Absent, not `null`, otherwise.")
+    __properties: ClassVar[List[str]] = ["artifact", "artifact_id", "uncompilable_shape_notice"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -75,6 +76,11 @@ class ArtifactCommitResponse(BaseModel):
         # override the default output from pydantic by calling `to_dict()` of artifact
         if self.artifact:
             _dict['artifact'] = self.artifact.to_dict()
+        # set to None if uncompilable_shape_notice (nullable) is None
+        # and model_fields_set contains the field
+        if self.uncompilable_shape_notice is None and "uncompilable_shape_notice" in self.model_fields_set:
+            _dict['uncompilable_shape_notice'] = None
+
         return _dict
 
     @classmethod
@@ -88,7 +94,8 @@ class ArtifactCommitResponse(BaseModel):
 
         _obj = cls.model_validate({
             "artifact": ArtifactView.from_dict(obj["artifact"]) if obj.get("artifact") is not None else None,
-            "artifact_id": obj.get("artifact_id")
+            "artifact_id": obj.get("artifact_id"),
+            "uncompilable_shape_notice": obj.get("uncompilable_shape_notice")
         })
         return _obj
 
