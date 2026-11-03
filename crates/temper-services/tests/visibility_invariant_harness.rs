@@ -1918,7 +1918,6 @@ const CONSUMES: &[&str] = &[
     "graph_home_teams",
     "graph_induced_edges",
     "graph_orphan_salient_nodes",
-    "graph_region_composition_edges",
     "graph_region_members",
     "graph_region_territories",
     "graph_territory_bridges",
