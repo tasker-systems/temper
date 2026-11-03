@@ -14,7 +14,7 @@
 use async_trait::async_trait;
 
 use temper_core::error::TemperError;
-use temper_core::types::data_artifact::ArtifactView;
+use temper_core::types::data_artifact::ArtifactCommitResponse;
 use temper_core::types::ids::{EdgeId, PropertyId, ResourceId};
 use temper_core::types::ingest::{
     AppendBlockPayload, BlocksResponse, FinalizePayload, SegmentedBegin, SegmentedBeginResponse,
@@ -77,11 +77,11 @@ pub trait Backend: Send + Sync {
     /// Commit one data artifact to a resource. Gated on `can_modify_resource` (auth before
     /// write). The substrate hashes the content, calls `data_artifact_commit()` SQL, and
     /// returns the new `DataArtifactId`; the backend reads the committed artifact back as
-    /// an `ArtifactView` for the response.
+    /// an `ArtifactView` for the response, beside the notice an uncompilable shape in force owes.
     async fn commit_data_artifact(
         &self,
         cmd: CommitDataArtifact,
-    ) -> Result<CommandOutput<ArtifactView>, TemperError>;
+    ) -> Result<CommandOutput<ArtifactCommitResponse>, TemperError>;
 
     // There is deliberately **no `list_resources` and no `search_resources` here.** Both were
     // vestigial surface from before the reads-stay-service-direct decision: neither had a single

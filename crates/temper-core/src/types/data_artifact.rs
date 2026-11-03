@@ -383,8 +383,9 @@ pub fn overlong_kind(kind: &str) -> Option<String> {
     })
 }
 
-/// Response body for `POST /api/resources/{id}/artifacts` — the committed artifact's ID
-/// and its full readback view.
+/// Response body for `POST /api/resources/{id}/artifacts` — the committed artifact's ID,
+/// its full readback view, and, when the family's shape in force could not be compiled, a notice
+/// saying so.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "data_artifact.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -393,6 +394,13 @@ pub fn overlong_kind(kind: &str) -> Option<String> {
 pub struct ArtifactCommitResponse {
     pub artifact_id: DataArtifactId,
     pub artifact: ArtifactView,
+    /// Present only when the family's shape in force cannot be compiled (it is not a field tree —
+    /// e.g. a shape declared before v0.6.3 that uses `$ref` or `allOf`): the artifact was recorded
+    /// unchecked, as `declared_not_yet_checked`, even under an `enforcing` shape, and the sentence
+    /// says a steward must amend the shape. It names what the compile refused only to a committer
+    /// who can read the shape. Absent, not `null`, otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uncompilable_shape_notice: Option<String>,
 }
 
 #[cfg(test)]

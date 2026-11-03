@@ -16662,7 +16662,7 @@
       },
       "ArtifactCommitResponse": {
         "type": "object",
-        "description": "Response body for `POST /api/resources/{id}/artifacts` — the committed artifact's ID\nand its full readback view.",
+        "description": "Response body for `POST /api/resources/{id}/artifacts` — the committed artifact's ID,\nits full readback view, and, when the family's shape in force could not be compiled, a notice\nsaying so.",
         "required": [
           "artifact_id",
           "artifact"
@@ -16673,6 +16673,13 @@
           },
           "artifact_id": {
             "$ref": "#/components/schemas/DataArtifactId"
+          },
+          "uncompilable_shape_notice": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Present only when the family's shape in force cannot be compiled (it is not a field tree —\ne.g. a shape declared before v0.6.3 that uses `$ref` or `allOf`): the artifact was recorded\nunchecked, as `declared_not_yet_checked`, even under an `enforcing` shape, and the sentence\nsays a steward must amend the shape. It names what the compile refused only to a committer\nwho can read the shape. Absent, not `null`, otherwise."
           }
         }
       },

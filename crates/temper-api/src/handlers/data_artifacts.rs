@@ -375,10 +375,7 @@ pub async fn commit(
         .commit_data_artifact(cmd)
         .await
         .map_err(ApiError::from)?;
-    Ok(Json(ArtifactCommitResponse {
-        artifact_id: out.value.artifact_id,
-        artifact: out.value,
-    }))
+    Ok(Json(out.value))
 }
 
 #[cfg(test)]

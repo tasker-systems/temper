@@ -14,18 +14,22 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # Response body for `POST /api/resources/{id}/artifacts` — the committed artifact's ID and its full readback view.
+  # Response body for `POST /api/resources/{id}/artifacts` — the committed artifact's ID, its full readback view, and, when the family's shape in force could not be compiled, a notice saying so.
   class ArtifactCommitResponse < ApiModelBase
     attr_accessor :artifact
 
     # A `kb_data_artifacts.id` value — one schema-boundable structured datum owned by a resource.
     attr_accessor :artifact_id
 
+    # Present only when the family's shape in force cannot be compiled (it is not a field tree — e.g. a shape declared before v0.6.3 that uses `$ref` or `allOf`): the artifact was recorded unchecked, as `declared_not_yet_checked`, even under an `enforcing` shape, and the sentence says a steward must amend the shape. It names what the compile refused only to a committer who can read the shape. Absent, not `null`, otherwise.
+    attr_accessor :uncompilable_shape_notice
+
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
         :'artifact' => :'artifact',
-        :'artifact_id' => :'artifact_id'
+        :'artifact_id' => :'artifact_id',
+        :'uncompilable_shape_notice' => :'uncompilable_shape_notice'
       }
     end
 
@@ -43,13 +47,15 @@ module Temper::Generated
     def self.openapi_types
       {
         :'artifact' => :'ArtifactView',
-        :'artifact_id' => :'String'
+        :'artifact_id' => :'String',
+        :'uncompilable_shape_notice' => :'String'
       }
     end
 
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
+        :'uncompilable_shape_notice'
       ])
     end
 
@@ -79,6 +85,10 @@ module Temper::Generated
         self.artifact_id = attributes[:'artifact_id']
       else
         self.artifact_id = nil
+      end
+
+      if attributes.key?(:'uncompilable_shape_notice')
+        self.uncompilable_shape_notice = attributes[:'uncompilable_shape_notice']
       end
     end
 
@@ -133,7 +143,8 @@ module Temper::Generated
       return true if self.equal?(o)
       self.class == o.class &&
           artifact == o.artifact &&
-          artifact_id == o.artifact_id
+          artifact_id == o.artifact_id &&
+          uncompilable_shape_notice == o.uncompilable_shape_notice
     end
 
     # @see the `==` method
@@ -145,7 +156,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [artifact, artifact_id].hash
+      [artifact, artifact_id, uncompilable_shape_notice].hash
     end
 
     # Builds the object from hash

@@ -349,12 +349,13 @@ async fn enforcing_refusal_names_the_violations_over_http(pool: PgPool) {
 }
 
 /// A commit into an enforcing family whose stored shape is not a field tree (declared before
-/// declare compiled, and stored here through the substrate write, which does not compile) is
-/// refused naming what the compile refused first — the committer owns the context, so it can read
-/// the shape (shape ruling R4). The detail rides beside the substrate's fixed message and only the
-/// API door, which knows the reader, names it: bites a door that drops it, or names it unasked.
+/// declare compiled, and stored here through the substrate write, which does not compile) is NOT
+/// refused: the artifact lands unchecked, reading `declared_not_yet_checked`, and the response
+/// carries the notice naming what the compile refused first — the committer owns the context, so
+/// it can read the shape (shape ruling R4). Only the API door, which knows the reader, names it:
+/// bites a door that refuses the commit, drops the notice, or names the detail unasked.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn an_uncompilable_enforcing_shape_refusal_names_what_failed_to_its_reader_over_http(
+async fn an_uncompilable_enforcing_shape_records_the_commit_unchecked_with_a_notice_over_http(
     pool: PgPool,
 ) {
     let app = common::setup(pool).await;
@@ -390,7 +391,7 @@ async fn an_uncompilable_enforcing_shape_refusal_names_what_failed_to_its_reader
     .await
     .expect("the substrate write stores a schema declare would refuse");
 
-    let err = app
+    let response = app
         .client
         .data_artifacts()
         .commit(
@@ -406,16 +407,20 @@ async fn an_uncompilable_enforcing_shape_refusal_names_what_failed_to_its_reader
             },
         )
         .await
-        .expect_err("an enforcing family whose shape cannot compile refuses the commit");
-    let refusal = match err {
-        ClientError::DataArtifactRefusal { message } => message,
-        other => panic!("the refusal must arrive typed, not as {other}"),
-    };
+        .expect("an enforcing family whose shape cannot compile still takes the commit");
     assert_eq!(
-        refusal,
-        temper_substrate::writes::uncompilable_shape_message(Some(
-            "keyword anyOf at /properties/value"
-        )),
+        response.artifact.shape_state, "declared_not_yet_checked",
+        "an artifact no shape could check must never read as checked"
+    );
+    assert_eq!(
+        response.uncompilable_shape_notice.as_deref(),
+        Some(
+            temper_substrate::writes::uncompilable_shape_notice(
+                true,
+                Some("keyword anyOf at /properties/value")
+            )
+            .as_str()
+        ),
     );
 }
 

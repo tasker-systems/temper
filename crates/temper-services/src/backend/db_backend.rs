@@ -22,7 +22,7 @@ use temper_macros::act_span;
 use temper_core::error::TemperError;
 use temper_core::types::authorship::ActContext;
 use temper_core::types::data_artifact::{
-    overlong_kind, unstorable_nul, ArtifactView, KindOwnerInput,
+    overlong_kind, unstorable_nul, ArtifactCommitResponse, KindOwnerInput,
 };
 use temper_core::types::graph;
 use temper_core::types::home::HomeAnchor;
@@ -922,41 +922,6 @@ impl DbBackend {
             Ok(()) => Ok(tx),
             Err(refusal) => Err(write_floor::rollback_with(tx, refusal).await),
         }
-    }
-
-    /// A refused commit's error, on the commit's own transaction, which it then rolls back.
-    ///
-    /// A commit refused because the enforcing shape in force cannot be compiled names what the
-    /// compile refused first **only to a committer who can already read that shape**, and gives
-    /// anyone else the fixed sentence (shape ruling R4;
-    /// [`writes::DataArtifactRefusal::message_for_reader`]), so the refusal is never a window onto
-    /// a shape its reader could not open. The question is asked on the transaction, never
-    /// `self.pool`, which the open transaction would wait against. Every other error maps as
-    /// [`write_err`] does.
-    async fn commit_refusal(
-        &self,
-        mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
-        e: anyhow::Error,
-    ) -> TemperError {
-        let Some(refusal) = e
-            .downcast_ref::<writes::DataArtifactRefusal>()
-            .filter(|refusal| refusal.uncompilable_shape.is_some())
-        else {
-            return write_err(e);
-        };
-        // A fault on the question leaves the refusal standing with the fixed sentence: it is never
-        // turned into a server error, and it names nothing it has not established it may.
-        let message = match refusal.message_for_reader(&mut tx, self.profile_id).await {
-            Ok(message) => message,
-            Err(fault) => {
-                tracing::warn!(error = %fault, "could not ask whether the committer reads the shape");
-                refusal.message_for(false)
-            }
-        };
-        // Dropping the transaction rolls it back as well; an explicit rollback that faults
-        // changes nothing the caller is owed.
-        tx.rollback().await.ok();
-        TemperError::DataArtifactRefusal(message)
     }
 
     /// Open an edge-mutation transaction gated at its head: [`Self::check_edge_mutable`] (the
@@ -3314,7 +3279,7 @@ impl Backend for DbBackend {
     async fn commit_data_artifact(
         &self,
         cmd: CommitDataArtifact,
-    ) -> Result<CommandOutput<ArtifactView>, TemperError> {
+    ) -> Result<CommandOutput<ArtifactCommitResponse>, TemperError> {
         // U+0000 in the family name or the content, refused by name before anything is read:
         // Postgres cannot store the character, so binding it would fail in the database, as a
         // fault. The check reads the request alone, so refusing ahead of the modify floor
@@ -3360,10 +3325,29 @@ impl Backend for DbBackend {
             act_ctx,
         )
         .await;
-        let artifact_id = match committed {
-            Ok(id) => id,
-            Err(e) => return Err(self.commit_refusal(tx, e).await),
+        let committed = match committed {
+            Ok(committed) => committed,
+            Err(e) => return Err(write_floor::rollback_with(tx, write_err(e)).await),
         };
+        // An uncompilable shape in force records the artifact unchecked and owes the committer a
+        // notice. It names what the compile refused **only to a committer who can already read that
+        // shape**, and gives anyone else the fixed sentence (shape ruling R4), so the notice is
+        // never a window onto a shape its reader could not open. The question is asked on the
+        // transaction, never `self.pool`, which the open transaction would wait against; a fault on
+        // it leaves the fixed sentence, never a server error.
+        let uncompilable_shape_notice = match &committed.uncompilable_shape {
+            None => None,
+            Some(shape) => Some(
+                match shape.notice_for_reader(&mut tx, self.profile_id).await {
+                    Ok(notice) => notice,
+                    Err(fault) => {
+                        tracing::warn!(error = %fault, "could not ask whether the committer reads the shape");
+                        shape.notice_for(false)
+                    }
+                },
+            ),
+        };
+        let artifact_id = committed.id;
         tx.commit().await.map_err(tx_err)?;
         // Read back the committed artifact as an ArtifactView for the response.
         let view =
@@ -3376,7 +3360,11 @@ impl Backend for DbBackend {
                     .to_string(),
             )
                 })?;
-        Ok(CommandOutput::new(view))
+        Ok(CommandOutput::new(ArtifactCommitResponse {
+            artifact_id: view.artifact_id,
+            artifact: view,
+            uncompilable_shape_notice,
+        }))
     }
 
     #[act_span]

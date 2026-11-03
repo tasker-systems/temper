@@ -108,9 +108,12 @@ anywhere a schema sits and carried as written; their values are never read, what
 declare. The refusal names the first keyword or cap that failed and, for all but the value budget,
 the JSON-pointer path of the schema position holding it — `(keyword allOf at /properties/when)`, or
 `(more than 12288 JSON values in the whole schema)` — then the sentence that lists this
-vocabulary. A commit refused because its family's enforcing shape cannot be compiled, and an ask
-naming such a shape, name it the same way to a reader who can read the shape. A refused commit,
-and a recorded verdict, name at most one violation, its message cut to 1 KiB.
+vocabulary. A shape stored before this rule (one declared before v0.6.3) may still use those
+keywords. A commit into its family is never refused for it, even under `enforcing`: the artifact
+lands as `declared_not_yet_checked`, and the commit response carries `uncompilable_shape_notice`,
+saying the shape must be amended. That notice, and an ask naming such a shape, name what the
+compile refused the same way, to a reader who can read the shape. A refused commit, and a recorded
+verdict, name at most one violation, its message cut to 1 KiB.
 
 **Declaring is never required to commit.** The system persists your data whether or not a shape
 exists. `never_declared` is a first-class state, not a gate. If you declare a shape later, the
