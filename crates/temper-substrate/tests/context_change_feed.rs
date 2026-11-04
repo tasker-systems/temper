@@ -900,24 +900,33 @@ async fn a_subject_that_left_view_is_still_pointed_at_and_its_own_read_refuses(p
 }
 
 /// The departure's rule (migration 20261116000020): a resource departs once, and only from a home
-/// it is leaving. A resource deleted and then erased has its deletion as its one way out, so the
-/// erasure writes no departure. A move to the home the resource is already in is no departure.
+/// it is leaving. A deleted resource has its deletion as its one way out, so moving it afterwards
+/// writes no departure. A move to the home the resource is already in is no departure.
 ///
-/// FAILS IF: an erasure of a deleted resource, or a move to the same home, writes a departure.
+/// FAILS IF: the departure skips the live check (then the deleted resource's move departs), or the
+/// same-home check (then the same-home move departs).
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn a_resource_departs_once_and_only_from_a_home_it_leaves(pool: PgPool) {
     let (owner, emitter, home) = setup(&pool).await;
     let gone = create(&pool, owner, emitter, home, "gone", "g", &[]).await;
     writes::delete_resource(&pool, gone, emitter).await.unwrap();
-    let (_, operator_entity) = system_actor(&pool).await;
-    sqlx::query_scalar::<_, serde_json::Value>("SELECT resource_erasure_execute($1,$2,$3,$4)")
-        .bind(gone.uuid())
-        .bind(operator_entity)
-        .bind(operator_entity)
-        .bind(Uuid::now_v7())
-        .fetch_one(&pool)
-        .await
-        .expect("the erasure of a deleted resource completes");
+    let elsewhere = ContextId::from(
+        common::insert_context(&pool, "kb_profiles", owner.uuid(), "elsewhere", "elsewhere")
+            .await
+            .unwrap(),
+    );
+    let mut tx = pool.begin().await.unwrap();
+    fire(
+        &mut tx,
+        SeedAction::ResourceRehome {
+            resource: gone,
+            home: AnchorRef::context(elsewhere),
+            emitter,
+        },
+    )
+    .await
+    .expect("a deleted resource can still be moved");
+    tx.commit().await.unwrap();
 
     let stays = create(&pool, owner, emitter, home, "stays", "s", &[]).await;
     let mut tx = pool.begin().await.unwrap();
@@ -943,7 +952,7 @@ async fn a_resource_departs_once_and_only_from_a_home_it_leaves(pool: PgPool) {
     assert!(kinds(gone.uuid()).contains(&"resource_deleted"), "{got:?}");
     assert!(
         !kinds(gone.uuid()).contains(&"resource_departed"),
-        "a deleted resource departs again on erasure: {got:?}"
+        "a deleted resource departs again when moved: {got:?}"
     );
     assert!(
         kinds(stays.uuid()).contains(&"resource_rehomed"),

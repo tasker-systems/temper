@@ -317,7 +317,7 @@ async fn execute_with_release_timeout(
         )
         .await;
     }
-    queue_region_settling(pool, attempt.resource, attempt.emitter).await;
+    queue_region_settling(pool, attempt.resource).await;
 
     Ok(ResourceErasureOutcome::Completed(
         ResourceErasureCompletion {
@@ -341,9 +341,26 @@ async fn execute_with_release_timeout(
 /// readouts, and re-arms the context's telos snapshot the act nulled. A materialize already in
 /// flight absorbs this job; `region_service::requeue_if_erased_members` follows it with another.
 ///
+/// The settling runs as the **system actor**, never the operator. It is system-computed work, and
+/// the events it writes (`region_materialized`, `salience_refreshed`) are domain events anchored on
+/// the context, which the change feed serves with their emitter as actor. Run under the operator,
+/// they would name who erased to every reader of the context, which the owner ruled an admin act
+/// must never do (`_event_is_admin_act`, migration 20261116000010).
+///
 /// **Never fails the act**, as `DbBackend::queue_region_clocks` never fails a write: the act has
 /// committed, and a failed enqueue leaves the regions to the next write that reaches the anchor.
-pub(super) async fn queue_region_settling(pool: &PgPool, resource: ResourceId, emitter: EntityId) {
+pub(super) async fn queue_region_settling(pool: &PgPool, resource: ResourceId) {
+    let emitter = match temper_substrate::readback::system_actor(pool).await {
+        Ok((_, emitter)) => emitter,
+        Err(e) => {
+            tracing::warn!(
+                resource = %resource.uuid(),
+                error = %e,
+                "failed to resolve the system actor for an erased resource's region settling; regions are stale until the next write re-drives them"
+            );
+            return;
+        }
+    };
     let anchors = match sqlx::query!(
         r#"SELECT 'kb_contexts' AS "anchor_table!", h.anchor_id AS "anchor_id!"
              FROM kb_resource_homes h

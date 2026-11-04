@@ -273,7 +273,7 @@ pub async fn execute_erasure(
     // after its own act (each erasure nulled those watermarks and recomputed the live centroids;
     // the settling re-forms the regions without the husk). Never fails the act.
     for e in &wire.resource_erasures {
-        queue_region_settling(pool, ResourceId::from(e.resource), emitter).await;
+        queue_region_settling(pool, ResourceId::from(e.resource)).await;
     }
     let estate_stragglers = estate_stragglers(pool, subject.uuid(), &wire.estate_contexts).await;
 

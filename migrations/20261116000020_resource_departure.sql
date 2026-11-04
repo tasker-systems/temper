@@ -52,7 +52,9 @@ $$;
 
 -- The move: its record on the destination as before, then the departure on the home it leaves,
 -- under the same correlation id, read from the record so a move fired without one still pairs.
--- Both before the projection re-points the home.
+-- Both before the projection re-points the home. The resource row is locked FIRST, before the
+-- record, so two concurrent moves of one resource append in the order they hold the lock: a later
+-- move's record never sorts before an earlier move's departure in a feed.
 CREATE OR REPLACE FUNCTION resource_rehome(p_payload jsonb, p_emitter uuid,
                                            p_metadata jsonb DEFAULT '{}'::jsonb,
                                            p_invocation uuid DEFAULT NULL,
@@ -60,6 +62,7 @@ CREATE OR REPLACE FUNCTION resource_rehome(p_payload jsonb, p_emitter uuid,
 RETURNS uuid LANGUAGE plpgsql AS $$
 DECLARE v_ev uuid;
 BEGIN
+    PERFORM 1 FROM kb_resources WHERE id = (p_payload->>'resource_id')::uuid FOR NO KEY UPDATE;
     v_ev := _event_append('resource_rehomed', p_emitter,
                           p_payload#>>'{home,table}', (p_payload#>>'{home,id}')::uuid, p_payload,
                           p_metadata => p_metadata, p_invocation => p_invocation,

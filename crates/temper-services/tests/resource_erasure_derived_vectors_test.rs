@@ -717,6 +717,98 @@ async fn the_act_queues_a_region_settle_for_the_home_context(pool: PgPool) {
     );
 }
 
+/// The settle runs as the system actor, never the operator (the owner's ruling of 2026-11-03 that
+/// an admin act never reaches a context's change feed). The settling's events are domain events
+/// anchored on the context, which the feed serves with their emitter as actor. So after the act and
+/// one drain, no entry the context's owner reads names any entity of the operator.
+///
+/// FAILS IF: `queue_region_settling` enqueues under the operator's emitter (then the drain's
+/// `region_materialized` / `salience_refreshed` carry the operator as actor).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_settle_never_names_the_operator_in_the_context_feed(pool: PgPool) {
+    let p = planted(&pool).await;
+    let horizon: String = sqlx::query_scalar("SELECT pg_current_xact_id()::text")
+        .fetch_one(&pool)
+        .await
+        .expect("a position before the act");
+    clear_region_queue(&pool).await;
+
+    erase(&pool, p.r).await;
+    let operator_entity: Uuid = sqlx::query_scalar(
+        "SELECT e.emitter_entity_id FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'resource_erased' AND e.payload->>'subject_id' = $1::text",
+    )
+    .bind(p.r.uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("the act's record names its operator");
+    let job_emitter: String = sqlx::query_scalar(
+        "SELECT payload->>'emitter' FROM kb_workflow_jobs \
+          WHERE context_id = $1 AND persona = 'region' AND dispatch_type = 'materialize'",
+    )
+    .bind(p.ctx.uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("the act queued one settle");
+    assert_ne!(
+        job_emitter,
+        operator_entity.to_string(),
+        "the settle is queued under the operator"
+    );
+
+    drain(&pool).await;
+    // Anti-vacuity: the drain wrote settling events on the context after the act.
+    let settled: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name IN ('region_materialized', 'salience_refreshed') \
+            AND e.producing_anchor_table = 'kb_contexts' AND e.producing_anchor_id = $1 \
+            AND e.xact_id > $2::text::xid8",
+    )
+    .bind(p.ctx.uuid())
+    .bind(&horizon)
+    .fetch_one(&pool)
+    .await
+    .expect("settling events");
+    assert!(settled > 0, "the drain settled the context's regions");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let target: String = sqlx::query_scalar("SELECT pg_snapshot_xmax(pg_current_snapshot())::text")
+        .fetch_one(&pool)
+        .await
+        .expect("a horizon target");
+    while !sqlx::query_scalar::<_, bool>(
+        "SELECT pg_snapshot_xmin(pg_current_snapshot()) >= $1::text::xid8",
+    )
+    .bind(&target)
+    .fetch_one(&pool)
+    .await
+    .expect("horizon")
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the horizon did not settle"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let answer: serde_json::Value =
+        sqlx::query_scalar("SELECT context_changes_after($1, $2, $3::text::xid8, 0, 1000)")
+            .bind(p.owner.uuid())
+            .bind(p.ctx.uuid())
+            .bind(&horizon)
+            .fetch_one(&pool)
+            .await
+            .expect("the owner reads the context's changes");
+    let text = answer.to_string();
+    assert!(
+        answer["entries"].as_array().is_some_and(|e| !e.is_empty()),
+        "anti-vacuity: the settle's entries are served: {text}"
+    );
+    assert!(
+        !text.contains(&operator_entity.to_string()),
+        "the operator reached the context feed: {text}"
+    );
+}
+
 /// (e) Ruling 1, the settle: after one drain R has left formation, and the live region holding
 /// S has the centroid of its own members — R's share gone.
 ///
