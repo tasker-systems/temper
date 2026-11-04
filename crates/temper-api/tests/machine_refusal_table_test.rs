@@ -57,6 +57,7 @@ const ADMITTED: &[(&str, &str)] = &[
     ("GET", "/api/contexts/{id}/shape"),        // handlers::contexts::shape
     ("GET", "/api/contexts/{id}/shapes"),       // handlers::data_artifact_shapes::list_shapes
     ("GET", "/api/data-artifacts/{artifact_id}"), // handlers::data_artifacts::get_by_id
+    ("GET", "/api/events/{kb_context_id}/changes"), // handlers::events::changes
     ("GET", "/api/events/{kb_context_id}/cursor"), // handlers::events::cursor
     ("GET", "/api/graph/cogmaps/{id}/panorama"), // handlers::graph::cogmap_panorama
     ("GET", "/api/graph/contexts/composition"), // handlers::graph::context_composition

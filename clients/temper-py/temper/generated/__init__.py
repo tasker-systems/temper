@@ -184,6 +184,9 @@ __all__ = [
     "ConnectionSubscription",
     "ContentResponse",
     "ContextActivity",
+    "ContextChange",
+    "ContextChangeSubject",
+    "ContextChangesResponse",
     "ContextCreateRequest",
     "ContextOwnerRef",
     "ContextOwnerRefOneOf",
@@ -700,6 +703,9 @@ from temper.generated.models.connection_credential import ConnectionCredential a
 from temper.generated.models.connection_subscription import ConnectionSubscription as ConnectionSubscription
 from temper.generated.models.content_response import ContentResponse as ContentResponse
 from temper.generated.models.context_activity import ContextActivity as ContextActivity
+from temper.generated.models.context_change import ContextChange as ContextChange
+from temper.generated.models.context_change_subject import ContextChangeSubject as ContextChangeSubject
+from temper.generated.models.context_changes_response import ContextChangesResponse as ContextChangesResponse
 from temper.generated.models.context_create_request import ContextCreateRequest as ContextCreateRequest
 from temper.generated.models.context_owner_ref import ContextOwnerRef as ContextOwnerRef
 from temper.generated.models.context_owner_ref_one_of import ContextOwnerRefOneOf as ContextOwnerRefOneOf

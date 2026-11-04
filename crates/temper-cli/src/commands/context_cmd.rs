@@ -603,6 +603,35 @@ pub async fn analytics_remote(
     Ok(())
 }
 
+/// `temper context changes <context_ref> [--after <position>] [--limit N] [--kind K]...` — the
+/// context's changes after a position, each a pointer, never content.
+///
+/// An unreadable context is refused as `temper context get` refuses it; a refused position is
+/// never read as the beginning.
+pub async fn changes_remote(
+    client: &temper_client::TemperClient,
+    context: &str,
+    after: Option<String>,
+    limit: Option<i32>,
+    kinds: Vec<String>,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let context_id = resolve_context_id_for_read(client, context).await?;
+    let query = temper_core::types::query_params::ContextChangesQuery {
+        after,
+        limit,
+        kinds: (!kinds.is_empty()).then(|| kinds.join(",")),
+    };
+    let page = client
+        .events()
+        .changes(context_id, &query)
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+    let rendered = crate::format::render(&page, fmt)?;
+    crate::output::plain(rendered);
+    Ok(())
+}
+
 /// `temper context materialize <context_ref> [--threshold N]` — re-form the context's regions.
 pub async fn materialize_remote(
     client: &temper_client::TemperClient,

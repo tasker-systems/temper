@@ -208,6 +208,7 @@ pub(super) fn gated_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::auditor::dispatch))
         .routes(routes!(handlers::auditor::complete))
         .routes(routes!(handlers::events::cursor))
+        .routes(routes!(handlers::events::changes))
         .routes(routes!(handlers::events::element_trail))
         // The vocabularies each kind of work carries. Caller-independent answers over the
         // embedded schemas — still on the gated surface, because caller-independence is a

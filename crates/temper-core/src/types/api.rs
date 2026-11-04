@@ -31,6 +31,56 @@ pub struct EventCursorResponse {
     pub latest_event_id: Option<Uuid>,
 }
 
+/// One change in a context's change feed: a pointer to what changed, never the change itself.
+///
+/// It names the kind of change, the thing it changed, who acted and when. It carries no title,
+/// prose, meta value or key name: the new state is reached only by reading the subject through its
+/// own door, under the reader's standing. A subject the reader can no longer read is still pointed
+/// at, and its own read is what refuses it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct ContextChange {
+    /// The ledger's event-type name, verbatim (for example `property_set`, `resource_departed`).
+    pub kind: String,
+    /// The thing the change was made to.
+    pub subject: ContextChangeSubject,
+    /// The acting entity (`kb_entities.id`).
+    pub actor: Uuid,
+    /// When the acting transaction began. Not the feed's order: entries are in commit order.
+    pub occurred_at: chrono::DateTime<chrono::Utc>,
+    /// The act the change belongs to (its correlation id). Changes made by one act share it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub act: Option<Uuid>,
+}
+
+/// What a [`ContextChange`] points at: a table and a row id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct ContextChangeSubject {
+    /// `kb_resources`, `kb_edges`, `kb_content_blocks`, `kb_blobs` or `kb_contexts`.
+    pub table: String,
+    pub id: Uuid,
+}
+
+/// A page of a context's change feed.
+///
+/// **A change hint, not a cache-invalidation guarantee.** The feed never announces an admin act
+/// (an erasure or a scrub), so a consumer that mirrors content must periodically re-read the
+/// subjects it holds and drop whatever its read now refuses. That re-read is how erased or
+/// scrubbed content leaves a mirror.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct ContextChangesResponse {
+    /// The changes after the position given, in commit order, up to the page bound.
+    pub entries: Vec<ContextChange>,
+    /// The position this answer read through. Hand it back as `after` to resume. It is opaque,
+    /// issued for this context only, and never moves back from the position given. An empty page
+    /// still says how far it looked.
+    pub through: String,
+    /// Whether more changes exist past `through` right now.
+    pub has_more: bool,
+}
+
 /// Default search config for full-text search.
 fn default_search_config() -> String {
     "english".to_string()

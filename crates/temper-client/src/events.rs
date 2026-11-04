@@ -3,8 +3,9 @@
 use crate::error::Result;
 use crate::http::HttpClient;
 use crate::ops;
-use temper_core::types::api::EventCursorResponse;
+use temper_core::types::api::{ContextChangesResponse, EventCursorResponse};
 use temper_core::types::element_trail::{ElementKind, EventTrail};
+use temper_core::types::query_params::ContextChangesQuery;
 use uuid::Uuid;
 
 /// Sub-client for event listing.
@@ -35,6 +36,28 @@ impl<'a> EventClient<'a> {
             .send_json(&op.method(), &path, req, token.as_deref())
             .await?;
         Ok(resp.latest_event_id)
+    }
+
+    /// GET /api/events/{kb_context_id}/changes — a context's changes after a position, each a
+    /// pointer (kind, subject, actor, time, act), never content. Omit `query.after` to start:
+    /// the answer has no entries and a `through` at the present. A change hint, not a
+    /// cache-invalidation guarantee: the feed never announces an admin act, so a mirror must
+    /// periodically re-read the subjects it holds and drop what is refused.
+    ///
+    /// An unreadable context is [`crate::error::ClientError::NotFound`]; a refused position, bound or
+    /// kind is a bad request.
+    pub async fn changes(
+        &self,
+        kb_context_id: Uuid,
+        query: &ContextChangesQuery,
+    ) -> Result<ContextChangesResponse> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::CONTEXT_CHANGES;
+        let path = op.path(&[&kb_context_id])?;
+        let req = self.http.request(op, &path).query(query);
+        self.http
+            .send_json(&op.method(), &path, req, token.as_deref())
+            .await
     }
 
     /// GET /api/graph/elements/{kind}/{id}/trail — the time-ordered event trail

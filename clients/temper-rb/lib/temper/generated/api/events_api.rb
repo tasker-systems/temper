@@ -19,6 +19,85 @@ module Temper::Generated
     def initialize(api_client = ApiClient.default)
       @api_client = api_client
     end
+    # Read a context's changes after a position
+    # A context's changes after a position, in commit order. Each entry is a pointer naming the kind of change, the thing changed (`subject`), the acting entity, the time and the act. No entry carries content: read the subject through its own endpoint, under your own standing. A subject you can no longer read is still pointed at, and its own read refuses it.  Omit `after` to start: the answer has no entries and a `through` at the present, never a tail of history. Hand `through` back as `after` to resume. A position is opaque and is valid only for the context it was issued for. Every answer says how far it looked (`through`) and whether more exists (`has_more`).  **This is a change hint, not a cache-invalidation guarantee.** The feed never announces an admin act, such as an erasure or a scrub. A consumer that mirrors content must periodically re-read the subjects it holds and drop whatever is refused: that re-read is how erased or scrubbed content leaves a mirror.
+    # @param kb_context_id [String] The context whose changes are read
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :after The &#x60;through&#x60; of an earlier answer for this context. Omit it to start: the first answer has no entries and a position at the present, never a tail of history.
+    # @option opts [Integer] :limit Page bound, 1..&#x3D;1000 (default 100). A bound outside that range is refused, never clamped.
+    # @option opts [String] :kinds Comma-separated change kinds to keep (ledger event-type names). Omit for every kind.
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [ContextChangesResponse]
+    def context_changes(kb_context_id, opts = {})
+      data, _status_code, _headers = context_changes_with_http_info(kb_context_id, opts)
+      data
+    end
+
+    # Read a context&#39;s changes after a position
+    # A context&#39;s changes after a position, in commit order. Each entry is a pointer naming the kind of change, the thing changed (&#x60;subject&#x60;), the acting entity, the time and the act. No entry carries content: read the subject through its own endpoint, under your own standing. A subject you can no longer read is still pointed at, and its own read refuses it.  Omit &#x60;after&#x60; to start: the answer has no entries and a &#x60;through&#x60; at the present, never a tail of history. Hand &#x60;through&#x60; back as &#x60;after&#x60; to resume. A position is opaque and is valid only for the context it was issued for. Every answer says how far it looked (&#x60;through&#x60;) and whether more exists (&#x60;has_more&#x60;).  **This is a change hint, not a cache-invalidation guarantee.** The feed never announces an admin act, such as an erasure or a scrub. A consumer that mirrors content must periodically re-read the subjects it holds and drop whatever is refused: that re-read is how erased or scrubbed content leaves a mirror.
+    # @param kb_context_id [String] The context whose changes are read
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :after The &#x60;through&#x60; of an earlier answer for this context. Omit it to start: the first answer has no entries and a position at the present, never a tail of history.
+    # @option opts [Integer] :limit Page bound, 1..&#x3D;1000 (default 100). A bound outside that range is refused, never clamped.
+    # @option opts [String] :kinds Comma-separated change kinds to keep (ledger event-type names). Omit for every kind.
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(ContextChangesResponse, Integer, Hash)>] ContextChangesResponse data, response status code and response headers
+    def context_changes_with_http_info(kb_context_id, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: EventsApi.context_changes ...'
+      end
+      # verify the required parameter 'kb_context_id' is set
+      if @api_client.config.client_side_validation && kb_context_id.nil?
+        fail ArgumentError, "Missing the required parameter 'kb_context_id' when calling EventsApi.context_changes"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/events/{kb_context_id}/changes'.sub('{kb_context_id}', CGI.escape(kb_context_id.to_s).gsub('.', '%2E'))
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+      query_params[:'after'] = opts[:'after'] if !opts[:'after'].nil?
+      query_params[:'limit'] = opts[:'limit'] if !opts[:'limit'].nil?
+      query_params[:'kinds'] = opts[:'kinds'] if !opts[:'kinds'].nil?
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body]
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'ContextChangesResponse'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"EventsApi.context_changes",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:GET, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: EventsApi#context_changes\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # Read the event cursor for a context
     # @param kb_context_id [String] The context whose latest event id is requested
     # @param [Hash] opts the optional parameters

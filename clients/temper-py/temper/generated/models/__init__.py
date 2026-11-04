@@ -139,6 +139,9 @@ from temper.generated.models.connection_credential import ConnectionCredential
 from temper.generated.models.connection_subscription import ConnectionSubscription
 from temper.generated.models.content_response import ContentResponse
 from temper.generated.models.context_activity import ContextActivity
+from temper.generated.models.context_change import ContextChange
+from temper.generated.models.context_change_subject import ContextChangeSubject
+from temper.generated.models.context_changes_response import ContextChangesResponse
 from temper.generated.models.context_create_request import ContextCreateRequest
 from temper.generated.models.context_owner_ref import ContextOwnerRef
 from temper.generated.models.context_owner_ref_one_of import ContextOwnerRefOneOf

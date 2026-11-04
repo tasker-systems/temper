@@ -162,6 +162,9 @@ temper/generated/models/connection_credential.py
 temper/generated/models/connection_subscription.py
 temper/generated/models/content_response.py
 temper/generated/models/context_activity.py
+temper/generated/models/context_change.py
+temper/generated/models/context_change_subject.py
+temper/generated/models/context_changes_response.py
 temper/generated/models/context_create_request.py
 temper/generated/models/context_owner_ref.py
 temper/generated/models/context_owner_ref_one_of.py

@@ -523,6 +523,7 @@ handlers::edges::list
 handlers::edges::list_connections
 handlers::edges::retype
 handlers::edges::reweight
+handlers::events::changes
 handlers::events::cursor
 handlers::events::element_trail
 handlers::evidence::evidence

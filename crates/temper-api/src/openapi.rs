@@ -5,8 +5,9 @@ use utoipa::openapi::{ObjectBuilder, Required, Type};
 use utoipa::{Modify, OpenApi};
 
 use temper_core::types::api::{
-    EventCursorResponse, ExactArm, ExactHit, HealthResponse, ProfileUpdateRequest, SearchParams,
-    SearchReason, SearchResponse, SearchResultRow, SearchScope, SearchScopeInfo, WideArm, WideHit,
+    ContextChange, ContextChangeSubject, ContextChangesResponse, EventCursorResponse, ExactArm,
+    ExactHit, HealthResponse, ProfileUpdateRequest, SearchParams, SearchReason, SearchResponse,
+    SearchResultRow, SearchScope, SearchScopeInfo, WideArm, WideHit,
 };
 use temper_core::types::context::{
     ContextActivity, ContextRowWithCounts, ReassignContextOutcome, ReassignContextRequest,
@@ -56,6 +57,9 @@ const API_VERSION: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../
         UnshareContextOutcome,
         ProfileUpdateRequest,
         EventCursorResponse,
+        ContextChangesResponse,
+        ContextChange,
+        ContextChangeSubject,
         SearchParams,
         SearchResultRow,
         SearchResponse,

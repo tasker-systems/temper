@@ -163,6 +163,7 @@
 "kb_erasure_retention_policies.set_by_profile_id"  = { class = "reference", ceiling = "pseudonym", achieved = "-", note = "the operator who set the policy" }
 "kb_saml_idp.email_attr"                           = { class = "none", ceiling = "n-a", achieved = "-", note = "an attribute NAME, not a value" }
 "_sqlx_migrations.checksum"                        = { class = "none", ceiling = "n-a", achieved = "-", note = "test/migration bookkeeping bytea, not user data" }
+"kb_feed_position_keys.key"                        = { class = "none", ceiling = "n-a", achieved = "-", note = "the deployment's server-minted key sealing change-feed positions (20261117000000); a secret, not user data" }
 
 # ── free-form columns that may carry personal data ───────────────────────────────────────────
 "kb_properties.property_value"                     = { class = "incidental", ceiling = "full", achieved = "resource-erasure", note = "the estate resources' properties, to the sentinel '\"erased\"'; a property on a resource outside the estate is not reached" }

@@ -1,0 +1,47 @@
+title    = "A context's changes are readable after a position on HTTP, MCP and CLI, and the feed withholds only an admin act's own transaction"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp", "cli-stdout", "clients", "schema"]
+status   = "signal-only"
+body = '''
+The change feed's doors read context_changes_after (20261116000010):
+- HTTP: GET /api/events/{kb_context_id}/changes (operation context_changes).
+- MCP: the context_read view `changes`.
+- CLI: `temper context changes`.
+
+The answer is { entries, through, has_more }. Each entry is a pointer: kind, subject {table, id},
+actor, occurred_at, act. No entry carries content, and no entry carries a position of its own. A read
+with no `after` returns no entries and a `through` at the present. `through` is opaque: (xact_id,
+seq) sealed with XChaCha20-Poly1305 under a key the server mints on first use (kb_feed_position_keys,
+20261117000000), with the context as associated data. A position names a place in the context's
+ledger, not a reader.
+
+Refusals:
+- An unreadable context gets the context read's 404 ("context not found or not readable"), before the
+  position, bound or kinds are looked at.
+- A position not issued for this context (malformed, forged, from another context or another key)
+  is 400. A position above the present horizon is 400. Neither is ever read as the beginning.
+- A bound outside 1..=1000 is 400, never clamped.
+- An unknown kind is 400, and admin kinds count as unknown. More than 64 kinds is 400.
+
+Every door documents the consumer contract. The feed is a change hint, not a cache-invalidation
+guarantee: it never announces an erasure or a scrub, so a mirror must periodically re-read what it
+holds.
+
+Behavioral (substrate, not yet served by any door before this change): _event_is_admin_act now
+withholds only events written in the admin act's own transaction, matched on correlation id,
+emitter and xact_id. Correlation ids are caller-chosen. Before this, an admin could hide their own
+authored writes from every reader by reusing an act's correlation id, either afterwards with the
+reference an act handed back, or earlier by naming a past correlation id as principal erasure's
+reference. Every admin act is one statement and one transaction.
+
+Schema:
+- A partial index of admin rows.
+- _event_is_admin_act gains an xid8 parameter. context_changes_after is replaced with its
+  signature unchanged.
+- A page over a 100,000-event correlated span drops from 15.5 s to 3 ms.
+
+openapi.json moves additively only, and the three SDKs are regenerated. The context cursor and
+`updated` are unchanged. Witnesses: crates/temper-services/tests/context_change_doors_test.rs.
+Release relevance: new read surface, signal-only.
+'''

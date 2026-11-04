@@ -10,6 +10,7 @@ pub mod block_history_scrub_service;
 pub mod citation_audit_service;
 pub mod cogmap_service;
 pub mod connection_service;
+pub mod context_change_service;
 pub mod context_graph_service;
 pub mod context_service;
 pub mod delivery_service;

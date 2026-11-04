@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_feed_position_keys (id, key) VALUES (1, $1) ON CONFLICT (id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c6bf8a4f1c5c27e7e6fe2083e9aa6c1e71e7aa15c6d614046370ec12478202af"
+}

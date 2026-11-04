@@ -24,6 +24,7 @@ Commands:
   shape              Orient in a context by its REGIONS: the distilled, region-level view of everything homed there, most salient first. The fastest way to see what a context is about without reading any single resource in it
   region-metrics     Per-region analytics for a context: centrality, content cohesion, internal tension, reference standing, telos alignment
   analytics          Context-level staleness: when the shape was last materialized, the latest touch you can see to its regions and edges, and whether the read is stale
+  changes            A context's changes after a position, in commit order
   materialize        Re-form a context's regions when enough has changed since the last materialize. Below the threshold this is a safe no-op (`materialized: false`). Requires write access to the context
   materialize-delta  Read a context's formation drift since its last materialize — the read peer of `context materialize`: how many formation events are pending, and whether the threshold clears. Deny is 404 (absent and unreadable collapsed — no existence oracle)
   show               Show one context by ref
@@ -351,6 +352,47 @@ Options:
 
       --embed-threads <N>
           ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### `temper context changes`
+
+```text
+A context's changes after a position, in commit order.
+
+Each entry is a pointer — kind, subject (table and id), actor, time and act — never content: read the subject with its own command. Omit `--after` to start: the answer has no entries and a `through` at the present. Pass an answer's `through` as `--after` to resume, and keep reading while `has_more` is true. A position is opaque and valid only for the context it was issued for.
+
+A change hint, not a cache-invalidation guarantee: the feed never announces an erasure or a scrub, so a mirror must periodically re-read the subjects it holds and drop what is refused.
+
+Usage: temper context changes [OPTIONS] <CONTEXT>
+
+Arguments:
+  <CONTEXT>
+          Context ref: a UUID or `@me/slug` / `+team-slug/slug`
+
+Options:
+      --after <AFTER>
+          The `through` of an earlier answer for this context. Omit to start
+
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --limit <LIMIT>
+          Page bound, 1..=1000 (default 100). Outside that range is refused, never clamped
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --kind <KINDS>
+          Keep only this change kind (a ledger event-type name). Repeat for several
 
       --color <COLOR>
           Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto

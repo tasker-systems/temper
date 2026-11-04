@@ -263,6 +263,7 @@ registry! {
         ASK_DATA_ARTIFACTS = Post "/api/data-artifacts/ask" => "ask_data_artifacts";
         GET_ARTIFACT_BY_ID = Get "/api/data-artifacts/{artifact_id}" => "get_artifact_by_id";
         ADMIN_REEMBED = Post "/api/embed/admin/reembed" => "admin_reembed";
+        CONTEXT_CHANGES = Get "/api/events/{kb_context_id}/changes" => "context_changes";
         CURSOR = Get "/api/events/{kb_context_id}/cursor" => "cursor";
         SET_FACET = Post "/api/facets" => "set_facet";
         ELEMENT_TRAIL = Get "/api/graph/elements/{kind}/{id}/trail" => "element_trail";
