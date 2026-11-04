@@ -256,6 +256,54 @@ async fn edge_visible(pool: &PgPool, profile: Uuid, edge: Uuid) -> bool {
         .expect("edges_visible_to")
 }
 
+/// `can_modify_resource(profile, resource)` — the source floor's own admission, asked directly.
+async fn can_modify(pool: &PgPool, profile: Uuid, resource: Uuid) -> bool {
+    sqlx::query_scalar("SELECT can_modify_resource($1, $2)")
+        .bind(profile)
+        .bind(resource)
+        .fetch_one(pool)
+        .await
+        .expect("can_modify_resource")
+}
+
+async fn context_authorable(pool: &PgPool, profile: Uuid, context: Uuid) -> bool {
+    sqlx::query_scalar("SELECT context_authorable_by_profile($1, $2)")
+        .bind(profile)
+        .bind(context)
+        .fetch_one(pool)
+        .await
+        .expect("context_authorable_by_profile")
+}
+
+/// Open a transaction holding `FOR UPDATE` on each resource row — the erasure act's lock. A
+/// request that takes `FOR KEY SHARE` on any of them (the source floor, clause 3's target lock)
+/// queues behind it.
+async fn hold_rows(
+    pool: &PgPool,
+    resources: &[Uuid],
+) -> sqlx::Transaction<'static, sqlx::Postgres> {
+    let mut held = pool.begin().await.expect("begin the holder");
+    for resource in resources {
+        sqlx::query("SELECT 1 FROM kb_resources WHERE id = $1 FOR UPDATE")
+            .bind(resource)
+            .execute(&mut *held)
+            .await
+            .expect("hold the row");
+    }
+    held
+}
+
+/// Await `request`, failing if it has not answered within three seconds — under the write lock
+/// bound (`WRITE_LOCK_TIMEOUT_MS`, five), so a request queued on a held row cannot answer first.
+async fn answers_without_waiting<T>(
+    request: impl std::future::Future<Output = T>,
+    what: &str,
+) -> T {
+    tokio::time::timeout(std::time::Duration::from_secs(3), request)
+        .await
+        .unwrap_or_else(|_| panic!("{what}: a refused caller waited on a held row lock"))
+}
+
 async fn context_readable(pool: &PgPool, profile: Uuid, context: Uuid) -> bool {
     sqlx::query_scalar("SELECT anchor_readable_by_profile($1, 'kb_contexts', $2)")
         .bind(profile)
@@ -274,8 +322,11 @@ async fn context_readable(pool: &PgPool, profile: Uuid, context: Uuid) -> bool {
 /// row.visible)` removed): the hidden-source and hidden-home edges then answer the source floor's
 /// `403`. Dropping only the `anchor_readable_by_profile` conjunct fails through the hidden-home
 /// edge alone. The hidden-target edge does NOT bite on either: clause 3's refusal is re-rendered
-/// as the edge's own `NotFound`, so that arm is uniform without clause 0. FAILS IF the lookup
-/// stops carrying `NOT is_folded`, through the folded edge.
+/// as the edge's own `NotFound`, so that arm's BODY is uniform without clause 0 — but its cost is
+/// not: dropping only the target conjunct lets the hidden-target edge reach the source floor,
+/// which locks the (admitted) source row, and the lock probe fails on it (the request queues
+/// behind the held row). FAILS IF the lookup stops carrying `NOT is_folded`, through the folded
+/// edge.
 ///
 /// The positive control (an edge between two endpoints the writer reads, in the same home) is
 /// what proves the writer has the standing that makes the refusals worth comparing: the doors
@@ -368,6 +419,44 @@ async fn a_hidden_edge_is_refused_exactly_as_a_missing_one(pool: PgPool) {
         }
     }
 
+    // The refusal costs what a missing edge's does: the row lookup, and no lock. With every
+    // endpoint row of the hidden edges held `FOR UPDATE`, each door still answers each hidden edge
+    // the missing edge's refusal, promptly. A gate that let a hidden edge past its lookup would
+    // reach the source floor (which locks an admitted source) or clause 3 (which locks the
+    // target) and queue — the body can be uniform while the cost is not.
+    let held = hold_rows(
+        &app.pool,
+        &[
+            open_a,
+            open_b,
+            private_source,
+            private_target,
+            granted_x,
+            granted_y,
+        ],
+    )
+    .await;
+    for (index, (name, ..)) in edge_mutate_doors(missing_edge, property).iter().enumerate() {
+        for (label, edge) in [
+            ("hidden SOURCE", hidden_source_edge),
+            ("hidden TARGET", hidden_target_edge),
+            ("hidden HOME", hidden_home_edge),
+        ] {
+            let (_, method, path, body) = edge_mutate_doors(edge, property).swap_remove(index);
+            let (status, response) = answers_without_waiting(
+                call(&app, &writer, method, &path, body),
+                &format!("{name} on the {label} edge"),
+            )
+            .await;
+            assert_eq!(
+                (status, response["error"]["code"].as_str()),
+                (404, Some("NOT_FOUND")),
+                "{name}: the {label} edge, its rows held; body: {response}"
+            );
+        }
+    }
+    held.rollback().await.expect("release the rows");
+
     // Nothing was written through the refused doors.
     for (edge, folded) in [
         (hidden_source_edge, false),
@@ -404,41 +493,54 @@ async fn a_hidden_edge_is_refused_exactly_as_a_missing_one(pool: PgPool) {
     );
 }
 
-/// The `403` that remains: a caller who SEES the edge as `edges_visible_to` defines it (a reader
-/// of its home context, so home and both endpoints readable) but may not modify its source gets
-/// the source floor's `403` from every edge-mutation door — never the `404` a hidden edge gets.
-/// Clause 0 must refuse only callers who do not see the edge.
+/// The `403` that remains, from the SOURCE FLOOR: a caller who sees the edge as `edges_visible_to`
+/// defines it, and may author into its home, but may not modify its source gets the floor's `403`
+/// from every edge-mutation door — never the `404` a hidden edge gets.
+///
+/// The caller is a writer in the shared context the edge is homed in, so container-write admits
+/// them. The source was asserted there and then moved to the owner's private context (an edge
+/// keeps its home), and the caller reads it through a resource read grant only. So the floor
+/// (`can_modify_resource` on the source) is the one clause that refuses.
 ///
 /// FAILS IF clause 0 refuses a caller who sees the edge (the doors then answer `404`), or the
-/// source floor stops refusing a read-only caller (they answer `200`).
+/// source floor admits a caller who may only read the source — the bite: replace the
+/// `"kb_resources"` arm's `write_floor::modify_floor_in_tx(..)` with `{}`, and retype, reweight,
+/// fold and facet set answer `200`.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_caller_who_sees_the_edge_but_may_not_modify_its_source_gets_403(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
     let (owner, shared) = caller(&app.pool, "owner").await;
-    let (reader, _) = caller(&app.pool, "reader").await;
-    sqlx::query(
-        "INSERT INTO kb_access_grants \
-           (subject_table, subject_id, principal_table, principal_id, \
-            can_read, can_write, can_delete, can_grant, granted_by_profile_id) \
-         VALUES ('kb_contexts', $1, 'kb_profiles', $2, true, false, false, false, $3)",
-    )
-    .bind(shared)
-    .bind(reader.profile)
-    .bind(owner.profile)
-    .execute(&app.pool)
-    .await
-    .expect("seed a context read grant");
+    let private = private_context(&app.pool, owner.profile).await;
+    let (writer, _) = caller(&app.pool, "writer").await;
+    grant_context_write(&app.pool, shared, writer.profile, owner.profile).await;
 
-    let a = create(&app, &owner, shared, "seen a").await;
-    let b = create(&app, &owner, shared, "seen b").await;
-    let edge = assert_edge(&app, &owner, a, b).await;
+    let source = create(&app, &owner, shared, "read-only source").await;
+    let target = create(&app, &owner, shared, "seen target").await;
+    let edge = assert_edge(&app, &owner, source, target).await;
+    move_to(&app, &owner, source, private).await;
+    grant_read(&app, &owner, source, writer.profile).await;
+
+    // Non-vacuity: the writer sees the edge and authors its home; only the source floor refuses.
+    assert_eq!(
+        edge_home(&app.pool, edge).await,
+        shared,
+        "homed in the shared context"
+    );
     assert!(
-        edge_visible(&app.pool, reader.profile, edge).await,
-        "precondition: the reader sees the edge"
+        edge_visible(&app.pool, writer.profile, edge).await,
+        "the writer sees the edge"
+    );
+    assert!(
+        context_authorable(&app.pool, writer.profile, shared).await,
+        "container-write admits the writer"
+    );
+    assert!(
+        !can_modify(&app.pool, writer.profile, source).await,
+        "the writer may not modify the source"
     );
 
     for (name, method, path, body) in edge_mutate_doors(edge, Uuid::now_v7()) {
-        let (status, response) = call(&app, &reader, method, &path, body).await;
+        let (status, response) = call(&app, &writer, method, &path, body).await;
         assert_eq!(
             (status, response["error"]["code"].as_str()),
             (403, Some("FORBIDDEN")),

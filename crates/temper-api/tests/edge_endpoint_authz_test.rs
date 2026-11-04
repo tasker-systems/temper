@@ -328,6 +328,23 @@ async fn retype_requires_container_write_like_assert(pool: PgPool) {
     // can reach.
     grant_context_read(&pool, owner_context, delegate).await;
 
+    // Non-vacuity: the delegate passes clause 0 and the source floor, so container-write is the
+    // one clause left to refuse.
+    let (modifies_source, authors_home, sees_edge): (bool, bool, bool) = sqlx::query_as(
+        "SELECT can_modify_resource($1, $2), context_authorable_by_profile($1, $3), \
+                $4 IN (SELECT edge_id FROM edges_visible_to($1))",
+    )
+    .bind(delegate)
+    .bind(source)
+    .bind(owner_context)
+    .bind(edge.uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("the delegate's standing");
+    assert!(modifies_source, "the delegate may modify the source");
+    assert!(!authors_home, "the delegate may not author into the home");
+    assert!(sees_edge, "the delegate sees the edge");
+
     let denied = DbBackend::new(pool.clone(), ProfileId::from(delegate))
         .retype_relationship(RetypeRelationship {
             edge_handle: edge,

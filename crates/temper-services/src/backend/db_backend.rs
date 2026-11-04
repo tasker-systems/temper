@@ -939,7 +939,9 @@ impl DbBackend {
     }
 
     /// Open an edge-mutation transaction gated at its head: [`Self::check_edge_mutable`] (the
-    /// edge's source floor, container-write on its home, its target readable), then the
+    /// caller sees the edge — its home and both endpoints readable, else `NotFound` as for a
+    /// missing edge — then the edge's source floor, container-write on its home, its target
+    /// readable under its lock), then the
     /// correlation-integrity check on the act's invocation, both on the transaction — the order
     /// the retype, reweight, fold and facet-retract doors gate in. A refusal of either rolls the
     /// transaction back explicitly ([`write_floor::rollback_with`]) before it is returned.
@@ -3727,8 +3729,9 @@ impl Backend for DbBackend {
         //
         // A resource-owned facet asks "may I modify this resource?". An edge-owned facet asks the
         // edge's own mutability question, which `check_edge_mutable` already owns for
-        // retype/reweight/fold: the edge's SOURCE resource must be modifiable AND the caller must
-        // have container-write on the edge's home. Calling it here rather than restating those
+        // retype/reweight/fold: the caller must see the edge (its home and both endpoints
+        // readable; else `NotFound`, as for a missing edge), the edge's SOURCE resource must be
+        // modifiable, AND the caller must have container-write on the edge's home. Calling it here rather than restating those
         // clauses is what keeps facet-writing an edge and re-typing one answering to one
         // definition — otherwise a caller could facet an edge they may not otherwise touch.
         //
