@@ -1,0 +1,24 @@
+title    = "The ledger records the order its events were committed in, and a context's changes can be read after a position"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["schema", "erasure-policy"]
+status   = "signal-only"
+body = '''
+Migration 20261116000010 adds two nullable kb_events columns: xact_id, the writing transaction's id,
+and seq, the append order. Column defaults fill both, so no inserter changes, and rows written before
+the migration keep NULL. A BEFORE INSERT trigger refuses a new row whose order is missing or names
+another transaction, except under replay. The new function context_changes_after(profile, context,
+position, bound, kinds) returns a context's domain changes after a position. It serves only settled
+rows, so a later commit never lands behind a position already passed. Each entry is a pointer: its
+position, kind, subject {table, id}, actor, time and act, and nothing of the change itself, not even a
+key name. The reader reads the subject through its own door, which answers under the reader's
+standing now, so a deleted or moved-out subject is still pointed at and its own read refuses it.
+The feed never serves an admin act's events (an erasure, a scrub, a strike), so neither an operator
+nor a request reference reaches a context's readers. An erasure's region settling now runs as the
+system actor instead of the operator, so its region_materialized and salience_refreshed events no
+longer name the operator. Migration 20261116000020 makes a move an entry
+in the context it leaves: a new domain event, resource_departed, is anchored on the home a resource
+leaves, carrying only its id. A deletion already wrote resource_deleted. The erasure policy declares
+resource_departed permissive: its payload carries only an id, so erasure has nothing in it to redact. No surface calls the function
+yet; the HTTP, CLI and MCP doors come in a later change. Who observes: a resource's event trail now shows a resource_departed event after a move; the feed itself, nobody until its doors ship. Release relevance: additive (schema only).
+'''

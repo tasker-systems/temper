@@ -741,6 +741,7 @@ const AUTHORED: &[&str] = &[
     "relationship_reweighted",
     "resource_created",
     "resource_deleted",
+    "resource_departed",
     "resource_finalized",
     "resource_reassigned",
     "resource_reblocked",

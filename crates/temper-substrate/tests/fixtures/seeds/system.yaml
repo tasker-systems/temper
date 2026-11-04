@@ -11,6 +11,7 @@ event_types:
   - resource_updated
   - resource_deleted
   - resource_rehomed
+  - resource_departed
   - relationship_asserted
   - relationship_retracted
   - relationship_retyped

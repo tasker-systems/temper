@@ -281,6 +281,7 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             | EventKind::SalienceRefreshed
             | EventKind::ResourceDeleted
             | EventKind::ResourceRehomed
+            | EventKind::ResourceDeparted
             // A segmented ingest's completion assertion. It carries no content — the bytes arrived on
             // the block_created events it is attesting to — so it needs no sidecar.
             | EventKind::ResourceFinalized
@@ -558,7 +559,18 @@ async fn restore_table(pool: &PgPool, table: &str, rows: &serde_json::Value) -> 
     let q = format!(
         "INSERT INTO {table} SELECT * FROM jsonb_populate_recordset(NULL::{table}, $1){conflict}"
     );
-    sqlx::query(&q).bind(rows).execute(pool).await?;
+    // kb_events restores verbatim, including the recorded `xact_id`/`seq` and the NULLs of rows
+    // that predate them (R5, migration 20261116000010). `kb_events_order_recorded` refuses both a
+    // NULL order and a foreign transaction id outside replay, so the restore runs under the
+    // transaction-local `temper.replaying`, as the walk below does.
+    let mut tx = pool.begin().await?;
+    if table == "kb_events" {
+        sqlx::query_scalar!("SELECT set_config('temper.replaying', 'on', true)")
+            .fetch_one(&mut *tx)
+            .await?;
+    }
+    sqlx::query(&q).bind(rows).execute(&mut *tx).await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -1029,7 +1041,10 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // Resource erasure's refusal (spec 2026-09-28): a no-op by DESIGN — it mutates
             // nothing (the record's rule). `ResourceErased` (build order 2b, migration
             // 20260929040730) and `BlockHistoryScrubbed` (build order 2e) have arms below.
-            | EventKind::ResourceErasureRefused => {}
+            | EventKind::ResourceErasureRefused
+            // A departure (20261116000020) is a pointer on the home a resource left. The act it
+            // belongs to (the move, the erasure) does the work, and its own event replays it.
+            | EventKind::ResourceDeparted => {}
             // The act's completion (spec 2026-09-28, D2/D12/D14). The body applies at the END of
             // the act's correlated span, not at this event's position: after the last event of
             // the act's own transaction sharing its correlation id (`apply_after`, above the

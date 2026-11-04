@@ -42,6 +42,9 @@ pub enum EventKind {
     ResourceUpdated,
     ResourceDeleted,
     ResourceRehomed,
+    /// A resource left a home: anchored on the home it left, carrying only its id
+    /// (migration 20261116000020). Written by a move and by an erasure; it projects nothing.
+    ResourceDeparted,
     ResourceReassigned,
     ContextReassigned,
     ContextRenamed,
@@ -225,6 +228,7 @@ impl EventKind {
             EventKind::ResourceUpdated => "resource_updated",
             EventKind::ResourceDeleted => "resource_deleted",
             EventKind::ResourceRehomed => "resource_rehomed",
+            EventKind::ResourceDeparted => "resource_departed",
             EventKind::ResourceReassigned => "resource_reassigned",
             EventKind::ContextReassigned => "context_reassigned",
             EventKind::ContextRenamed => "context_renamed",
@@ -288,6 +292,7 @@ impl EventKind {
             "resource_updated" => EventKind::ResourceUpdated,
             "resource_deleted" => EventKind::ResourceDeleted,
             "resource_rehomed" => EventKind::ResourceRehomed,
+            "resource_departed" => EventKind::ResourceDeparted,
             "resource_reassigned" => EventKind::ResourceReassigned,
             "context_reassigned" => EventKind::ContextReassigned,
             "context_renamed" => EventKind::ContextRenamed,
