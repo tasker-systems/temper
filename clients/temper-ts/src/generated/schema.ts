@@ -2602,7 +2602,7 @@ export interface paths {
          * Set a facet on a relationship
          * @description Sets a facet whose owner is an edge rather than a resource. The edge is addressed in the path, matching the other edge writes (`retype`, `reweight`, `fold`).
          *
-         *     Answers 404 when the edge does not exist, is folded, or has a target you cannot read. That last case answers 404 rather than 403 on purpose, so a refusal never confirms the existence of something you are not allowed to see.
+         *     Answers 404 when the edge does not exist, is folded, or has an endpoint you cannot read, with the same body in all three cases. A refusal never confirms the existence of something you are not allowed to see, nor which side of a relationship is hidden from you.
          */
         post: operations["set_edge_facet"];
         delete?: never;

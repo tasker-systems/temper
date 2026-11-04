@@ -64,20 +64,21 @@ pub async fn set_facet(
 // same edge.
 //
 // Both statuses are reachable, and they mean different things. 404 for an edge that does not
-// exist, is folded, or whose target the caller cannot read — that last arm is `NotFound` rather
-// than `Forbidden` on purpose, so the write never confirms the existence of a resource the
-// caller has no standing to see. 403 for an edge the caller can legitimately see but may not
-// author into: it fails source-write or container-write on the edge's home.
+// exist, is folded, or has an endpoint (either one) the caller cannot read — one answer for all
+// three, on purpose: the write never confirms the existence of something the caller has no
+// standing to see, nor which side of an edge is hidden from them. 403 only for an edge the
+// caller can see (both endpoints readable) but may not author into: it fails source-write or
+// container-write on the edge's home.
 //
 // An earlier version of this comment claimed the endpoint returns "404 rather than 403"
 // outright, twelve lines above an OpenAPI block declaring `403`. The annotation was right and
 // the prose was wrong; `check_edge_mutable` renders `Forbidden` for clauses 1 and 2 and
-// `NotFound` for the row lookup and clause 3.
+// `NotFound` for the row lookup, clause 0 (both endpoints readable) and clause 3.
 /// Set a facet on a relationship
 ///
 /// Sets a facet whose owner is an edge rather than a resource. The edge is addressed in the path, matching the other edge writes (`retype`, `reweight`, `fold`).
 ///
-/// Answers 404 when the edge does not exist, is folded, or has a target you cannot read. That last case answers 404 rather than 403 on purpose, so a refusal never confirms the existence of something you are not allowed to see.
+/// Answers 404 when the edge does not exist, is folded, or has an endpoint you cannot read, with the same body in all three cases. A refusal never confirms the existence of something you are not allowed to see, nor which side of a relationship is hidden from you.
 #[utoipa::path(
     post,
     path = "/api/relationships/{edge_handle}/facets",

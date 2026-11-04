@@ -1,0 +1,17 @@
+title    = "Every edge-mutation door refuses an edge with an endpoint the caller cannot read exactly as it refuses an edge that does not exist"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "mcp", "cli-stdout"]
+status   = "signal-only"
+body = '''
+check_edge_mutable, the gate behind retype, reweight, fold, edge facet set and edge facet retract,
+now answers 404 "edge <id> not found" whenever the caller cannot read both of the edge's
+endpoints, before any authority clause runs. It previously answered by side: 403 when the source
+was unreadable (the source write floor), and a 404 naming the target's table and id when the
+target was. That split told a caller which side of an edge was hidden and whether the edge was
+still live, and the context change feed hands every reader of a context the ids of the edges
+homed there. Who observes: a caller mutating an edge they cannot see, including the owner of a
+soft-deleted source, who now gets 404 instead of 403. A caller who can read both endpoints still
+gets 403 when they may not modify the source or author into the edge's home. Shapes are unchanged
+(both statuses were already declared). Release relevance: closes a low-severity existence oracle.
+'''

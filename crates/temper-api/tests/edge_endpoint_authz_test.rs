@@ -114,6 +114,21 @@ async fn grant_resource_write(pool: &PgPool, resource: Uuid, profile: Uuid) {
     .expect("seed a direct resource write grant");
 }
 
+/// A direct profile-anchored READ grant on a single resource — sight of it, and nothing else.
+async fn grant_resource_read(pool: &PgPool, resource: Uuid, profile: Uuid) {
+    sqlx::query(
+        "INSERT INTO kb_access_grants \
+           (subject_table, subject_id, principal_table, principal_id, \
+            can_read, can_write, can_delete, can_grant, granted_by_profile_id) \
+         VALUES ('kb_resources', $1, 'kb_profiles', $2, true, false, false, false, $2)",
+    )
+    .bind(resource)
+    .bind(profile)
+    .execute(pool)
+    .await
+    .expect("seed a direct resource read grant");
+}
+
 /// A direct profile-anchored WRITE grant on a CONTEXT — satisfies `context_authorable_by_profile`
 /// via its `profile_explicit_grant` arm, without making the grantee owner or team member. The
 /// container-side twin of [`grant_resource_write`].
@@ -305,6 +320,11 @@ async fn retype_requires_container_write_like_assert(pool: PgPool) {
     let demail = format!("f1-retyper-{}@example.com", Uuid::new_v4());
     let delegate = common::fixtures::create_test_profile(&pool, &demail).await;
     grant_resource_write(&pool, source, delegate).await;
+    // And read on the target, so the delegate sees the edge: an edge with an endpoint the caller
+    // cannot read is refused `NotFound` before any authority clause (`check_edge_mutable`'s
+    // clause 0), and this test pins the container-write clause's `Forbidden`, which only a caller
+    // who sees the edge can reach.
+    grant_resource_read(&pool, target, delegate).await;
 
     let denied = DbBackend::new(pool.clone(), ProfileId::from(delegate))
         .retype_relationship(RetypeRelationship {
