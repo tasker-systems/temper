@@ -391,11 +391,12 @@ async fn the_facets_read_returns_live_rows_only_after_a_retraction(pool: PgPool)
     );
 }
 
-/// An unauthorized caller gets the gate's own refusal — `Forbidden` from
-/// `check_edge_mutable`'s authority clauses — never a 404. A not-found here would let a
-/// caller without standing probe which property ids exist on an edge.
+/// A caller who cannot see the edge gets the edge gate's refusal — `check_edge_mutable`'s
+/// clause 0, the `NotFound` a missing edge answers — before any property row is looked up. So
+/// the answer is the same whether or not `property_id` exists on the edge: a caller without
+/// standing cannot probe property ids, nor tell this edge from one that does not exist.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn an_unauthorized_caller_gets_the_gates_refusal_never_a_404(pool: PgPool) {
+async fn a_caller_who_cannot_see_the_edge_gets_the_edge_gates_refusal(pool: PgPool) {
     let (backend, _profile, source, _target, edge, _edge_b) = two_edge_fixture(&pool).await;
     let property_id = assert_anchor(&backend, edge, "source", source).await;
 
@@ -407,9 +408,26 @@ async fn an_unauthorized_caller_gets_the_gates_refusal_never_a_404(pool: PgPool)
         .retract_facet(retract_cmd(edge, property_id))
         .await
         .expect_err("a caller with no standing must be refused");
+    let unknown_property = stranger_backend
+        .retract_facet(retract_cmd(edge, Uuid::now_v7()))
+        .await
+        .expect_err("a caller with no standing must be refused");
+    let missing_edge = stranger_backend
+        .retract_facet(retract_cmd(Uuid::now_v7(), property_id))
+        .await
+        .expect_err("a missing edge is refused");
     assert!(
-        matches!(denied, TemperError::Forbidden),
-        "the gate's authority refusal, never a 404 that would act as an existence oracle: {denied:?}"
+        matches!(denied, TemperError::NotFound(_)),
+        "the edge gate's refusal of an edge the caller cannot see: {denied:?}"
+    );
+    assert_eq!(
+        denied.to_string(),
+        unknown_property.to_string(),
+        "a real property id and an unknown one answer alike"
+    );
+    assert!(
+        matches!(missing_edge, TemperError::NotFound(_)),
+        "a missing edge answers NotFound: {missing_edge:?}"
     );
 
     let folded: bool = sqlx::query_scalar("SELECT is_folded FROM kb_properties WHERE id = $1")

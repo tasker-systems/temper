@@ -27,7 +27,8 @@
 //! * the edge-mutate doors (retype, reweight, fold, edge facet set and retract) on an edge that
 //!   touched an erased resource answer `404` to everyone — the erasure act folded the edge, and
 //!   the gate's `NOT is_folded` lookup refuses it before any clause runs; on an edge whose SOURCE
-//!   is merely deleted (a delete folds nothing) they answer its owner the floor's `403`;
+//!   is merely deleted (a delete folds nothing) they answer its owner `404` too — the tombstone is
+//!   unreadable, so the gate's endpoint-readability clause refuses the edge as absent;
 //! * an edge assert whose TARGET is erased answers the source's owner `404`, never `410` — the
 //!   erased classification reaches only the resource the caller would modify;
 //! * blob relate refuses an erased or deleted resource peer `404` (the peer read floor);
@@ -984,19 +985,22 @@ async fn an_edge_touching_an_erased_resource_was_folded_and_its_doors_answer_404
     }
 }
 
-// ── WITNESS: an edge whose source is deleted answers its owner the source floor's 403 ─────────
+// ── WITNESS: an edge whose source is deleted answers its owner 404 ───────────────────────────
 
 /// A soft delete folds no edge (`_project_resource_deleted` flips `is_active` only), so an edge out
-/// of a tombstone stays live and the edge-mutate doors reach `check_edge_mutable`'s source clause:
-/// the write floor, inside the edge write's transaction, which refuses a tombstone `403` — never
-/// `410`. The owner still has container-write on the home and can read the live target, so the
-/// floor is the only clause that refuses.
+/// of a tombstone stays live. The edge-mutate doors refuse it at `check_edge_mutable`'s clause 0:
+/// the read floor hides a tombstone, so the edge has an endpoint its owner cannot read and is
+/// answered as absent, `404` — never `410`, and never the source floor's `403`, which was the
+/// answer before clause 0 and which told a caller that the hidden endpoint was the SOURCE. The
+/// owner still has container-write on the home and can read the live target, so the source's
+/// readability is the only thing that refuses.
 ///
 /// FAILS IF the edge doors admit a write out of a tombstoned source, or classify it erased. The
-/// bite: in `check_edge_mutable`, make the `"kb_resources"` arm admit (replace its
-/// `write_floor::modify_floor_in_tx(..)` with `{}`) — retype, reweight and fold then answer `200`.
+/// bite: remove clause 0 from `check_edge_mutable` and make the `"kb_resources"` arm admit
+/// (replace its `write_floor::modify_floor_in_tx(..)` with `{}`) — retype, reweight and fold then
+/// answer `200`. Removing clause 0 alone answers `403`.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn an_edge_out_of_a_deleted_resource_answers_its_owner_403(pool: PgPool) {
+async fn an_edge_out_of_a_deleted_resource_answers_its_owner_404(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
     let (owner, own_context) = caller(&app.pool, "owner").await;
     let source = ingest(&app, &owner, own_context).await;
@@ -1012,8 +1016,8 @@ async fn an_edge_out_of_a_deleted_resource_answers_its_owner_403(pool: PgPool) {
     for door in edge_mutate_doors(edge) {
         let (status, body) = send(&app, &owner, &door).await;
         assert_eq!(
-            status, 403,
-            "{}: an edge out of a tombstone is refused by the source floor; body: {body}",
+            status, 404,
+            "{}: an edge out of a tombstone is refused as absent; body: {body}",
             door.name
         );
         assert_ne!(

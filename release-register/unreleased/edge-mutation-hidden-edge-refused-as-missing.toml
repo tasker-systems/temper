@@ -1,0 +1,28 @@
+title    = "Every edge-mutation door refuses an edge the caller does not see exactly as it refuses an edge that is missing or folded"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp", "cli-stdout", "clients"]
+status   = "signal-only"
+body = '''
+check_edge_mutable is the gate behind retype, reweight, fold, edge facet set and edge facet
+retract. Its row lookup now also asks whether the caller sees the edge as edges_visible_to defines
+it: the home anchor readable and both endpoints readable. If not, it answers 404 "edge <id> not
+found" from that same single statement, word for word what a missing or folded edge answers,
+before any authority clause runs. It previously answered by part: 403 from the source write floor
+when the source was unreadable, 403 from the floor or container-write when only the home was, and
+a 404 naming the target's table and id when the target was. That split told a caller which part
+of an edge was hidden and whether the edge was still live, and the context change feed hands every
+reader of a context the ids of the edges homed there.
+
+Who observes: a caller mutating an edge they do not see, including the owner of a soft-deleted
+source, who now gets 404 instead of 403 (owner ruling: a soft-deleted resource does not exist now).
+A caller who sees the edge as edges_visible_to defines it still gets 403 when they may not modify
+the source or author into the home. Request and response shapes are unchanged, and there is no
+migration. The five doors' 403, 404 and 410 descriptions now say this (openapi.json and the three
+SDKs regenerated, description text only). `additive` is declared because the gate computes any
+openapi.json movement as `grew` and requires a shape class for it; nothing actually grew.
+Witnesses: `a_hidden_edge_is_refused_exactly_as_a_missing_one` and
+`a_caller_who_sees_the_edge_but_may_not_modify_its_source_gets_403` in
+`crates/temper-api/tests/edge_mutation_refusal_uniformity_test.rs`. Release relevance: closes a
+low-severity existence oracle; signal-only.
+'''

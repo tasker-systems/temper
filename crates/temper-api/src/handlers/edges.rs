@@ -159,9 +159,9 @@ pub async fn assert(
         (status = 200, description = "Relationship retyped", body = RelationshipAck),
         (status = 400, description = "Invalid payload", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
-        (status = 403, description = "Cannot modify source resource", body = ErrorBody),
-        (status = 404, description = "Relationship not found", body = ErrorBody),
-        (status = 410, description = "The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404", body = ErrorBody),
+        (status = 403, description = "You can see the relationship but cannot modify its source resource or author into its home", body = ErrorBody),
+        (status = 404, description = "Relationship not found, folded, or not visible to you: one answer for all three", body = ErrorBody),
+        (status = 410, description = "The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED), answered to a caller who held standing on it. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404, as does any request from a caller who cannot see the relationship", body = ErrorBody),
     )
 )]
 pub async fn retype(
@@ -201,9 +201,9 @@ pub async fn retype(
         (status = 200, description = "Relationship reweighted", body = RelationshipAck),
         (status = 400, description = "Invalid payload", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
-        (status = 403, description = "Cannot modify source resource", body = ErrorBody),
-        (status = 404, description = "Relationship not found", body = ErrorBody),
-        (status = 410, description = "The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404", body = ErrorBody),
+        (status = 403, description = "You can see the relationship but cannot modify its source resource or author into its home", body = ErrorBody),
+        (status = 404, description = "Relationship not found, folded, or not visible to you: one answer for all three", body = ErrorBody),
+        (status = 410, description = "The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED), answered to a caller who held standing on it. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404, as does any request from a caller who cannot see the relationship", body = ErrorBody),
     )
 )]
 pub async fn reweight(
@@ -242,9 +242,9 @@ pub async fn reweight(
         (status = 200, description = "Relationship folded", body = RelationshipAck),
         (status = 400, description = "Invalid payload", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
-        (status = 403, description = "Cannot modify source resource", body = ErrorBody),
-        (status = 404, description = "Relationship not found", body = ErrorBody),
-        (status = 410, description = "The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404", body = ErrorBody),
+        (status = 403, description = "You can see the relationship but cannot modify its source resource or author into its home", body = ErrorBody),
+        (status = 404, description = "Relationship not found, folded, or not visible to you: one answer for all three", body = ErrorBody),
+        (status = 410, description = "The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED), answered to a caller who held standing on it. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404, as does any request from a caller who cannot see the relationship", body = ErrorBody),
     )
 )]
 pub async fn fold(

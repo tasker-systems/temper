@@ -114,6 +114,22 @@ async fn grant_resource_write(pool: &PgPool, resource: Uuid, profile: Uuid) {
     .expect("seed a direct resource write grant");
 }
 
+/// A direct profile-anchored READ grant on a CONTEXT — sight of the context and what is homed
+/// there, with no authority to author into it.
+async fn grant_context_read(pool: &PgPool, context: Uuid, profile: Uuid) {
+    sqlx::query(
+        "INSERT INTO kb_access_grants \
+           (subject_table, subject_id, principal_table, principal_id, \
+            can_read, can_write, can_delete, can_grant, granted_by_profile_id) \
+         VALUES ('kb_contexts', $1, 'kb_profiles', $2, true, false, false, false, $2)",
+    )
+    .bind(context)
+    .bind(profile)
+    .execute(pool)
+    .await
+    .expect("seed a direct context read grant");
+}
+
 /// A direct profile-anchored WRITE grant on a CONTEXT — satisfies `context_authorable_by_profile`
 /// via its `profile_explicit_grant` arm, without making the grantee owner or team member. The
 /// container-side twin of [`grant_resource_write`].
@@ -305,6 +321,29 @@ async fn retype_requires_container_write_like_assert(pool: PgPool) {
     let demail = format!("f1-retyper-{}@example.com", Uuid::new_v4());
     let delegate = common::fixtures::create_test_profile(&pool, &demail).await;
     grant_resource_write(&pool, source, delegate).await;
+    // And READ (never write) on the home context, so the delegate sees the edge as
+    // `edges_visible_to` defines it — home and both endpoints readable. An edge the caller does not
+    // see is refused `NotFound` before any authority clause (`check_edge_mutable`'s clause 0), and
+    // this test pins the container-write clause's `Forbidden`, which only a caller who sees the edge
+    // can reach.
+    grant_context_read(&pool, owner_context, delegate).await;
+
+    // Non-vacuity: the delegate passes clause 0 and the source floor, so container-write is the
+    // one clause left to refuse.
+    let (modifies_source, authors_home, sees_edge): (bool, bool, bool) = sqlx::query_as(
+        "SELECT can_modify_resource($1, $2), context_authorable_by_profile($1, $3), \
+                $4 IN (SELECT edge_id FROM edges_visible_to($1))",
+    )
+    .bind(delegate)
+    .bind(source)
+    .bind(owner_context)
+    .bind(edge.uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("the delegate's standing");
+    assert!(modifies_source, "the delegate may modify the source");
+    assert!(!authors_home, "the delegate may not author into the home");
+    assert!(sees_edge, "the delegate sees the edge");
 
     let denied = DbBackend::new(pool.clone(), ProfileId::from(delegate))
         .retype_relationship(RetypeRelationship {
