@@ -64,21 +64,21 @@ pub async fn set_facet(
 // same edge.
 //
 // Both statuses are reachable, and they mean different things. 404 for an edge that does not
-// exist, is folded, or has an endpoint (either one) the caller cannot read — one answer for all
-// three, on purpose: the write never confirms the existence of something the caller has no
-// standing to see, nor which side of an edge is hidden from them. 403 only for an edge the
-// caller can see (both endpoints readable) but may not author into: it fails source-write or
-// container-write on the edge's home.
+// exist, is folded, or that the caller does not see — one answer for all three, on purpose: the
+// write never confirms the existence of something the caller has no standing to see, nor which
+// part of an edge is hidden from them. 403 only for an edge the caller sees as `edges_visible_to`
+// defines it (its home and both endpoints readable) but may not author into: it fails
+// source-write or container-write on the edge's home.
 //
 // An earlier version of this comment claimed the endpoint returns "404 rather than 403"
 // outright, twelve lines above an OpenAPI block declaring `403`. The annotation was right and
 // the prose was wrong; `check_edge_mutable` renders `Forbidden` for clauses 1 and 2 and
-// `NotFound` for the row lookup, clause 0 (both endpoints readable) and clause 3.
+// `NotFound` for the row lookup (which carries clause 0, the edge's visibility) and clause 3.
 /// Set a facet on a relationship
 ///
 /// Sets a facet whose owner is an edge rather than a resource. The edge is addressed in the path, matching the other edge writes (`retype`, `reweight`, `fold`).
 ///
-/// Answers 404 when the edge does not exist, is folded, or has an endpoint you cannot read, with the same body in all three cases. A refusal never confirms the existence of something you are not allowed to see, nor which side of a relationship is hidden from you.
+/// Answers 404 when the edge does not exist, is folded, or is not visible to you (its home or either endpoint is unreadable), with the same body in all three cases. A refusal never confirms the existence of something you are not allowed to see, nor which part of a relationship is hidden from you.
 #[utoipa::path(
     post,
     path = "/api/relationships/{edge_handle}/facets",
@@ -90,9 +90,9 @@ pub async fn set_facet(
         (status = 200, description = "Facet set on the edge", body = FacetAck),
         (status = 400, description = "Invalid payload", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
-        (status = 403, description = "Cannot modify this relationship", body = ErrorBody),
-        (status = 404, description = "Relationship not found", body = ErrorBody),
-        (status = 410, description = "The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404", body = ErrorBody),
+        (status = 403, description = "You can see the relationship but cannot modify its source resource or author into its home", body = ErrorBody),
+        (status = 404, description = "Relationship not found, folded, or not visible to you: one answer for all three", body = ErrorBody),
+        (status = 410, description = "The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED), answered to a caller who held standing on it. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404, as does any request from a caller who cannot see the relationship", body = ErrorBody),
     )
 )]
 pub async fn set_edge_facet(
@@ -144,9 +144,9 @@ pub async fn set_edge_facet(
     responses(
         (status = 200, description = "Facet retracted", body = FacetRetractAck),
         (status = 401, description = "Unauthorized", body = ErrorBody),
-        (status = 403, description = "Cannot modify this relationship", body = ErrorBody),
-        (status = 404, description = "No live facet row with that id on this relationship", body = ErrorBody),
-        (status = 410, description = "The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404", body = ErrorBody),
+        (status = 403, description = "You can see the relationship but cannot modify its source resource or author into its home", body = ErrorBody),
+        (status = 404, description = "No live facet row with that id on this relationship, or the relationship is missing, folded, or not visible to you: one answer for all", body = ErrorBody),
+        (status = 410, description = "The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED), answered to a caller who held standing on it. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404, as does any request from a caller who cannot see the relationship", body = ErrorBody),
     )
 )]
 pub async fn retract_edge_facet(

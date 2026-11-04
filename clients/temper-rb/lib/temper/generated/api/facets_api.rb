@@ -257,7 +257,7 @@ module Temper::Generated
     end
 
     # Set a facet on a relationship
-    # Sets a facet whose owner is an edge rather than a resource. The edge is addressed in the path, matching the other edge writes (`retype`, `reweight`, `fold`).  Answers 404 when the edge does not exist, is folded, or has an endpoint you cannot read, with the same body in all three cases. A refusal never confirms the existence of something you are not allowed to see, nor which side of a relationship is hidden from you.
+    # Sets a facet whose owner is an edge rather than a resource. The edge is addressed in the path, matching the other edge writes (`retype`, `reweight`, `fold`).  Answers 404 when the edge does not exist, is folded, or is not visible to you (its home or either endpoint is unreadable), with the same body in all three cases. A refusal never confirms the existence of something you are not allowed to see, nor which part of a relationship is hidden from you.
     # @param edge_handle [String] Relationship edge handle
     # @param edge_facet_set_request [EdgeFacetSetRequest] 
     # @param [Hash] opts the optional parameters
@@ -269,7 +269,7 @@ module Temper::Generated
     end
 
     # Set a facet on a relationship
-    # Sets a facet whose owner is an edge rather than a resource. The edge is addressed in the path, matching the other edge writes (&#x60;retype&#x60;, &#x60;reweight&#x60;, &#x60;fold&#x60;).  Answers 404 when the edge does not exist, is folded, or has an endpoint you cannot read, with the same body in all three cases. A refusal never confirms the existence of something you are not allowed to see, nor which side of a relationship is hidden from you.
+    # Sets a facet whose owner is an edge rather than a resource. The edge is addressed in the path, matching the other edge writes (&#x60;retype&#x60;, &#x60;reweight&#x60;, &#x60;fold&#x60;).  Answers 404 when the edge does not exist, is folded, or is not visible to you (its home or either endpoint is unreadable), with the same body in all three cases. A refusal never confirms the existence of something you are not allowed to see, nor which part of a relationship is hidden from you.
     # @param edge_handle [String] Relationship edge handle
     # @param edge_facet_set_request [EdgeFacetSetRequest] 
     # @param [Hash] opts the optional parameters

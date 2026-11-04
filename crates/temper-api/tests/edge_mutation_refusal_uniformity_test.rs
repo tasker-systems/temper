@@ -1,6 +1,8 @@
 #![cfg(feature = "test-db")]
-//! An edge the caller cannot see is refused by every edge-mutation door exactly as an edge that
-//! does not exist: `404`, the same code, the same message. `check_edge_mutable`'s clause 0.
+//! An edge the caller does not see is refused by every edge-mutation door exactly as an edge that
+//! does not exist or is folded: `404`, the same code, the same message. `check_edge_mutable`'s
+//! clause 0. "Sees" is `edges_visible_to`'s definition: the home anchor and both endpoints
+//! readable.
 //!
 //! Before it, the gate answered by which endpoint was hidden: the source floor's `403` when the
 //! caller could not read the SOURCE (`write_floor::modify_floor_in_tx`), the target clause's `404`
@@ -11,8 +13,9 @@
 //! oracle for which side of an edge is hidden and whether the edge is still live. The read
 //! surfaces already answer hidden and missing alike.
 //!
-//! The caller is a WRITER in the edge's home context: the one principal for whom a hidden edge
-//! and a live one differ only in an endpoint's readability. Every state is made by a real door,
+//! The caller is a WRITER in the shared context: the principal for whom a hidden edge and a live
+//! one differ only in one part's readability. A second test pins the `403` that remains, to a
+//! caller who sees the edge but may not modify its source. Every state is made by a real door,
 //! except the writer's context grant and the second context, which are fixture rows.
 
 mod common;
@@ -210,17 +213,73 @@ fn masked(status: u16, body: &Value, edge: Uuid) -> (u16, String) {
     )
 }
 
-/// A writer in an edge's home context gets the same refusal from every edge-mutation door for an
-/// edge whose SOURCE they cannot read, one whose TARGET they cannot read, and an edge id that
-/// does not exist — status, code and message alike.
+/// `owner` grants `grantee` read on `resource` through the real grant door.
+async fn grant_read(app: &common::TestApp, owner: &Caller, resource: Uuid, grantee: Uuid) {
+    let (status, body) = call(
+        app,
+        owner,
+        Method::POST,
+        &format!("/api/resources/{resource}/grants"),
+        Some(json!({
+            "principal_table": "kb_profiles",
+            "principal_id": grantee,
+            "can_read": true,
+            "can_write": false,
+            "can_delete": false,
+            "can_grant": false,
+        })),
+    )
+    .await;
+    assert_eq!(status, 200, "the owner grants read; body: {body}");
+}
+
+/// `owner` folds `edge` through `POST /api/relationships/{h}/fold`.
+async fn fold(app: &common::TestApp, owner: &Caller, edge: Uuid) {
+    let (status, body) = call(
+        app,
+        owner,
+        Method::POST,
+        &format!("/api/relationships/{edge}/fold"),
+        Some(json!({ "reason": "folded before the probe" })),
+    )
+    .await;
+    assert_eq!(status, 200, "the owner folds the edge; body: {body}");
+}
+
+/// Does `profile` see `edge` as the read surfaces define it?
+async fn edge_visible(pool: &PgPool, profile: Uuid, edge: Uuid) -> bool {
+    sqlx::query_scalar("SELECT $2 IN (SELECT edge_id FROM edges_visible_to($1))")
+        .bind(profile)
+        .bind(edge)
+        .fetch_one(pool)
+        .await
+        .expect("edges_visible_to")
+}
+
+async fn context_readable(pool: &PgPool, profile: Uuid, context: Uuid) -> bool {
+    sqlx::query_scalar("SELECT anchor_readable_by_profile($1, 'kb_contexts', $2)")
+        .bind(profile)
+        .bind(context)
+        .fetch_one(pool)
+        .await
+        .expect("anchor predicate")
+}
+
+/// A writer in an edge's home context gets the same refusal from every edge-mutation door for
+/// every edge they do not see — one whose SOURCE they cannot read, one whose TARGET they cannot
+/// read, one whose HOME they cannot read though they read both endpoints — and for a FOLDED edge
+/// and an edge id that does not exist: status, code and message alike.
 ///
-/// FAILS IF clause 0 is removed from `check_edge_mutable`, or moved after the source floor: the
-/// private-source edge then answers `403` from the floor, and the private-target edge a `404`
-/// naming `kb_resources` and the target's id. Either alone splits the three answers.
+/// FAILS IF `check_edge_mutable`'s row lookup stops filtering on visibility (`.filter(|row|
+/// row.visible)` removed): the hidden-source and hidden-home edges then answer the source floor's
+/// `403`. Dropping only the `anchor_readable_by_profile` conjunct fails through the hidden-home
+/// edge alone. The hidden-target edge does NOT bite on either: clause 3's refusal is re-rendered
+/// as the edge's own `NotFound`, so that arm is uniform without clause 0. FAILS IF the lookup
+/// stops carrying `NOT is_folded`, through the folded edge.
 ///
 /// The positive control (an edge between two endpoints the writer reads, in the same home) is
-/// what proves the writer has the standing that makes the three refusals worth comparing: the
-/// doors admit them on a visible edge.
+/// what proves the writer has the standing that makes the refusals worth comparing: the doors
+/// admit them on a visible edge.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_hidden_edge_is_refused_exactly_as_a_missing_one(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
@@ -235,59 +294,98 @@ async fn a_hidden_edge_is_refused_exactly_as_a_missing_one(pool: PgPool) {
     // Created in the shared context so its edge is homed there, then moved out: an edge keeps the
     // home it was asserted in.
     let private_source = create(&app, &owner, shared, "private source").await;
+    // Both endpoints of the home-hidden edge live in the private context, and the writer is
+    // granted read on each resource directly — never on their home.
+    let granted_x = create(&app, &owner, private, "granted x").await;
+    let granted_y = create(&app, &owner, private, "granted y").await;
+    grant_read(&app, &owner, granted_x, writer.profile).await;
+    grant_read(&app, &owner, granted_y, writer.profile).await;
 
     let hidden_target_edge = assert_edge(&app, &owner, open_a, private_target).await;
     let hidden_source_edge = assert_edge(&app, &owner, private_source, open_b).await;
     move_to(&app, &owner, private_source, private).await;
+    let hidden_home_edge = assert_edge(&app, &owner, granted_x, granted_y).await;
+    let folded_edge = assert_edge(&app, &owner, open_b, open_a).await;
+    fold(&app, &owner, folded_edge).await;
     let missing_edge = Uuid::now_v7();
 
-    // Non-vacuity: both hidden edges are homed where the writer writes, and each has exactly one
-    // endpoint the writer cannot read.
-    for edge in [hidden_target_edge, hidden_source_edge] {
+    // Non-vacuity, per edge: exactly the one part named is what the writer cannot read.
+    for edge in [hidden_target_edge, hidden_source_edge, folded_edge] {
         assert_eq!(
             edge_home(&app.pool, edge).await,
             shared,
             "homed in the shared context"
         );
     }
-    assert!(readable(&app.pool, writer.profile, open_a).await);
-    assert!(readable(&app.pool, writer.profile, open_b).await);
+    assert_eq!(edge_home(&app.pool, hidden_home_edge).await, private);
+    assert!(context_readable(&app.pool, writer.profile, shared).await);
+    assert!(!context_readable(&app.pool, writer.profile, private).await);
+    for readable_endpoint in [open_a, open_b, granted_x, granted_y] {
+        assert!(readable(&app.pool, writer.profile, readable_endpoint).await);
+    }
     assert!(!readable(&app.pool, writer.profile, private_target).await);
     assert!(!readable(&app.pool, writer.profile, private_source).await);
-
-    let property = Uuid::now_v7();
-    for (index, (name, ..)) in edge_mutate_doors(missing_edge, property).iter().enumerate() {
-        let mut answers = Vec::new();
-        for edge in [missing_edge, hidden_source_edge, hidden_target_edge] {
-            let (_, method, path, body) = edge_mutate_doors(edge, property).swap_remove(index);
-            let (status, response) = call(&app, &writer, method, &path, body).await;
-            answers.push(masked(status, &response, edge));
-        }
-        assert_eq!(
-            answers[0].0, 404,
-            "{name}: a missing edge answers 404: {:?}",
-            answers[0]
-        );
-        assert_eq!(
-            answers[1], answers[0],
-            "{name}: an edge with a hidden SOURCE answers as a missing one"
-        );
-        assert_eq!(
-            answers[2], answers[0],
-            "{name}: an edge with a hidden TARGET answers as a missing one"
+    for edge in [
+        hidden_target_edge,
+        hidden_source_edge,
+        hidden_home_edge,
+        folded_edge,
+    ] {
+        assert!(
+            !edge_visible(&app.pool, writer.profile, edge).await,
+            "the writer does not see {edge}"
         );
     }
 
+    let compared = [
+        ("hidden SOURCE", hidden_source_edge),
+        ("hidden TARGET", hidden_target_edge),
+        ("hidden HOME", hidden_home_edge),
+        ("FOLDED", folded_edge),
+    ];
+    let property = Uuid::now_v7();
+    for (index, (name, ..)) in edge_mutate_doors(missing_edge, property).iter().enumerate() {
+        let probe = |edge: Uuid| {
+            let (_, method, path, body) = edge_mutate_doors(edge, property).swap_remove(index);
+            let app = &app;
+            let writer = &writer;
+            async move {
+                let (status, response) = call(app, writer, method, &path, body).await;
+                masked(status, &response, edge)
+            }
+        };
+        let missing = probe(missing_edge).await;
+        assert_eq!(
+            missing.0, 404,
+            "{name}: a missing edge answers 404: {missing:?}"
+        );
+        for (label, edge) in compared {
+            assert_eq!(
+                probe(edge).await,
+                missing,
+                "{name}: an edge with a {label} answers as a missing one"
+            );
+        }
+    }
+
     // Nothing was written through the refused doors.
-    for edge in [hidden_source_edge, hidden_target_edge] {
-        let (kind, weight, folded): (String, f64, bool) = sqlx::query_as(
+    for (edge, folded) in [
+        (hidden_source_edge, false),
+        (hidden_target_edge, false),
+        (hidden_home_edge, false),
+        (folded_edge, true),
+    ] {
+        let (kind, weight, is_folded): (String, f64, bool) = sqlx::query_as(
             "SELECT edge_kind::text, weight::float8, is_folded FROM kb_edges WHERE id = $1",
         )
         .bind(edge)
         .fetch_one(&app.pool)
         .await
         .expect("edge row");
-        assert_eq!((kind.as_str(), weight, folded), ("leads_to", 1.0, false));
+        assert_eq!(
+            (kind.as_str(), weight, is_folded),
+            ("leads_to", 1.0, folded)
+        );
     }
 
     // Positive control: the same writer, an edge in the same home whose endpoints they read.
@@ -304,4 +402,47 @@ async fn a_hidden_edge_is_refused_exactly_as_a_missing_one(pool: PgPool) {
         status, 200,
         "the writer reweights a visible edge; body: {body}"
     );
+}
+
+/// The `403` that remains: a caller who SEES the edge as `edges_visible_to` defines it (a reader
+/// of its home context, so home and both endpoints readable) but may not modify its source gets
+/// the source floor's `403` from every edge-mutation door — never the `404` a hidden edge gets.
+/// Clause 0 must refuse only callers who do not see the edge.
+///
+/// FAILS IF clause 0 refuses a caller who sees the edge (the doors then answer `404`), or the
+/// source floor stops refusing a read-only caller (they answer `200`).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_caller_who_sees_the_edge_but_may_not_modify_its_source_gets_403(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (owner, shared) = caller(&app.pool, "owner").await;
+    let (reader, _) = caller(&app.pool, "reader").await;
+    sqlx::query(
+        "INSERT INTO kb_access_grants \
+           (subject_table, subject_id, principal_table, principal_id, \
+            can_read, can_write, can_delete, can_grant, granted_by_profile_id) \
+         VALUES ('kb_contexts', $1, 'kb_profiles', $2, true, false, false, false, $3)",
+    )
+    .bind(shared)
+    .bind(reader.profile)
+    .bind(owner.profile)
+    .execute(&app.pool)
+    .await
+    .expect("seed a context read grant");
+
+    let a = create(&app, &owner, shared, "seen a").await;
+    let b = create(&app, &owner, shared, "seen b").await;
+    let edge = assert_edge(&app, &owner, a, b).await;
+    assert!(
+        edge_visible(&app.pool, reader.profile, edge).await,
+        "precondition: the reader sees the edge"
+    );
+
+    for (name, method, path, body) in edge_mutate_doors(edge, Uuid::now_v7()) {
+        let (status, response) = call(&app, &reader, method, &path, body).await;
+        assert_eq!(
+            (status, response["error"]["code"].as_str()),
+            (403, Some("FORBIDDEN")),
+            "{name}: the source floor refuses a caller who sees the edge; body: {response}"
+        );
+    }
 }

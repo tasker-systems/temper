@@ -2602,7 +2602,7 @@ export interface paths {
          * Set a facet on a relationship
          * @description Sets a facet whose owner is an edge rather than a resource. The edge is addressed in the path, matching the other edge writes (`retype`, `reweight`, `fold`).
          *
-         *     Answers 404 when the edge does not exist, is folded, or has an endpoint you cannot read, with the same body in all three cases. A refusal never confirms the existence of something you are not allowed to see, nor which side of a relationship is hidden from you.
+         *     Answers 404 when the edge does not exist, is folded, or is not visible to you (its home or either endpoint is unreadable), with the same body in all three cases. A refusal never confirms the existence of something you are not allowed to see, nor which part of a relationship is hidden from you.
          */
         post: operations["set_edge_facet"];
         delete?: never;
@@ -18531,7 +18531,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Cannot modify this relationship */
+            /** @description You can see the relationship but cannot modify its source resource or author into its home */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -18540,7 +18540,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Relationship not found */
+            /** @description Relationship not found, folded, or not visible to you: one answer for all three */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -18549,7 +18549,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404 */
+            /** @description The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED), answered to a caller who held standing on it. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404, as does any request from a caller who cannot see the relationship */
             410: {
                 headers: {
                     [name: string]: unknown;
@@ -18622,7 +18622,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Cannot modify this relationship */
+            /** @description You can see the relationship but cannot modify its source resource or author into its home */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -18631,7 +18631,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No live facet row with that id on this relationship */
+            /** @description No live facet row with that id on this relationship, or the relationship is missing, folded, or not visible to you: one answer for all */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -18640,7 +18640,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404 */
+            /** @description The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED), answered to a caller who held standing on it. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404, as does any request from a caller who cannot see the relationship */
             410: {
                 headers: {
                     [name: string]: unknown;
@@ -18697,7 +18697,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Cannot modify source resource */
+            /** @description You can see the relationship but cannot modify its source resource or author into its home */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -18706,7 +18706,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Relationship not found */
+            /** @description Relationship not found, folded, or not visible to you: one answer for all three */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -18715,7 +18715,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404 */
+            /** @description The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED), answered to a caller who held standing on it. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404, as does any request from a caller who cannot see the relationship */
             410: {
                 headers: {
                     [name: string]: unknown;
@@ -18772,7 +18772,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Cannot modify source resource */
+            /** @description You can see the relationship but cannot modify its source resource or author into its home */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -18781,7 +18781,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Relationship not found */
+            /** @description Relationship not found, folded, or not visible to you: one answer for all three */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -18790,7 +18790,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404 */
+            /** @description The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED), answered to a caller who held standing on it. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404, as does any request from a caller who cannot see the relationship */
             410: {
                 headers: {
                     [name: string]: unknown;
@@ -18847,7 +18847,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Cannot modify source resource */
+            /** @description You can see the relationship but cannot modify its source resource or author into its home */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -18856,7 +18856,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Relationship not found */
+            /** @description Relationship not found, folded, or not visible to you: one answer for all three */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -18865,7 +18865,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404 */
+            /** @description The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED), answered to a caller who held standing on it. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404, as does any request from a caller who cannot see the relationship */
             410: {
                 headers: {
                     [name: string]: unknown;

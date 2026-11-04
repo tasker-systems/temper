@@ -1239,16 +1239,20 @@ impl DbBackend {
     /// **Clause 0, then the three of `assert` in the same order** (source-modify → container-write →
     /// target-read), plus the tombstone floor the row lookup carries.
     ///
-    /// **Clause 0 — both endpoints readable, else the edge is absent.** An edge with an endpoint the
-    /// caller cannot read answers `NotFound`, word for word what a missing or folded edge answers,
-    /// before any authority clause runs. The read surfaces already answer hidden and missing alike
-    /// (`edges_visible_to` gates both endpoints); this makes the write doors agree. Without it the
-    /// gate split by side — the source floor's `403` for an unreadable source, clause 3's `NotFound`
-    /// naming the target for an unreadable target — and the context change feed hands every reader
-    /// of a context the ids of the edges homed there, so the split was a reachable oracle for which
-    /// side of an edge is hidden and whether it is live (security review of the change feed, task
-    /// 01a1a1a5-773a-7599-a157-6128705ef71e). `Forbidden` is now rendered only to a caller who sees
-    /// the edge.
+    /// **Clause 0 — the caller sees the edge, else it is absent.** "Sees" is `edges_visible_to`'s
+    /// definition: the home anchor readable and both endpoints readable. An edge the caller does
+    /// not see answers `NotFound`, word for word what a missing or folded edge answers, before any
+    /// authority clause runs, and from the same single statement (the row lookup carries the
+    /// predicate), so a hidden edge does not cost a round trip a missing one does not. The read
+    /// surfaces already answer hidden and missing alike; this makes the write doors agree. Without
+    /// it the gate split — the source floor's `403` for an unreadable source or home, clause 3's
+    /// `NotFound` naming the target for an unreadable target — and the context change feed hands
+    /// every reader of a context the ids of the edges homed there, so the split was a reachable
+    /// oracle for which part of an edge is hidden and whether it is live (security review of the
+    /// change feed, task 01a1a1a5-773a-7599-a157-6128705ef71e). `Forbidden` is now rendered only to
+    /// a caller who sees the edge as `edges_visible_to` defines it. Residual, accepted: the
+    /// predicates run only when a live row exists, so inside that one statement a hidden edge
+    /// does more work than a missing one.
     ///
     /// This gate previously had **no target-read clause**, justified in its own words as: *"these
     /// verbs do not change endpoints, so the target was already authorized at assert time.
@@ -1272,9 +1276,9 @@ impl DbBackend {
     /// axis."* Folding an already-folded edge is now `NotFound` rather than a silent second fold.
     ///
     /// **Clause ORDER is load-bearing, not cosmetic.** Clause 0 runs first because the clauses after
-    /// it render refusals that name a side. It refuses only a caller who cannot see the edge, so
-    /// container-write's `Forbidden` still reaches a caller who sees the edge but may not author
-    /// into its home. Target-read runs last, exactly as it does in
+    /// it render refusals that name a side. It refuses only a caller who does not see the edge as
+    /// `edges_visible_to` defines it, so container-write's `Forbidden` still reaches a caller who
+    /// sees the edge but may not author into its home. Target-read runs last, exactly as it does in
     /// [`Self::assert_edge_from_source_home_in_tx`], under the target's row lock; its `NotFound` is
     /// re-rendered as the edge's own, since it is reachable only if the target left the caller's
     /// view after clause 0.
@@ -1287,7 +1291,8 @@ impl DbBackend {
     ///
     /// **The erased classification is not reached in the ordinary case.** A tombstoned or erased
     /// endpoint on either side is unreadable, so clause 0 answers `NotFound` — to the owner of a
-    /// tombstoned source too, who formerly got the source floor's `403`. In practice an erased
+    /// tombstoned source too, who formerly got the source floor's `403` (owner ruling, 2026-11-03:
+    /// a soft-deleted resource does not exist now, so neither does its edge to that owner). In practice an erased
     /// endpoint on either side is not reached even by clause 0:
     /// the erasure act folds every live edge touching the erased resource
     /// (`resource_erasure_execute`, latest body `20260930000070`), so such an edge answers this
@@ -1299,41 +1304,43 @@ impl DbBackend {
         conn: &mut sqlx::PgConnection,
         edge_id: uuid::Uuid,
     ) -> Result<(), TemperError> {
+        // The row lookup IS clause 0: the edge is live AND the caller sees it, in one statement,
+        // or it is absent to them — the same `NotFound`, word for word, for a missing, folded or
+        // hidden edge. "Sees" is `edges_visible_to`'s definition, conjunct for conjunct: the home
+        // anchor readable and BOTH endpoints readable. Every authority clause below renders a
+        // refusal that names something — the source floor's `403`, container-write's `403`,
+        // clause 3's `NotFound` naming the target's table and id — so none may reach a caller who
+        // does not see the edge. The context change feed hands every reader of a context the ids
+        // of the edges homed there, including ones they cannot see (task
+        // 01a1a1a5-773a-7599-a157-6128705ef71e); without this a write door was the oracle the
+        // reads are not: which part is hidden, and whether the edge is still live.
+        //
+        // One statement so a hidden edge costs what a missing one does, rather than a second
+        // round trip only a hidden edge pays. The residual asymmetry is accepted: the predicates
+        // are evaluated only when a live row exists, so a missing or folded id does less work in
+        // the database than a hidden one inside that one statement.
+        //
+        // Unlocked: a caller this clause refuses takes no lock. It binds nothing; clause 3's
+        // check under the target's lock and clause 1's floor under the source's decide.
         let home = sqlx::query!(
-            "SELECT source_table, source_id, target_table, target_id, home_anchor_table, \
-                    home_anchor_id \
-             FROM kb_edges \
-             WHERE id = $1 AND NOT is_folded",
+            r#"SELECT source_table, source_id, target_table, target_id, home_anchor_table,
+                      home_anchor_id,
+                      COALESCE(
+                          anchor_readable_by_profile($2, home_anchor_table, home_anchor_id)
+                          AND endpoint_readable_by_profile($2, source_table, source_id)
+                          AND endpoint_readable_by_profile($2, target_table, target_id),
+                          false
+                      ) AS "visible!"
+                 FROM kb_edges
+                WHERE id = $1 AND NOT is_folded"#,
             edge_id,
+            *self.profile_id,
         )
         .fetch_optional(&mut *conn)
         .await
         .map_err(api_err)?
+        .filter(|row| row.visible)
         .ok_or_else(|| TemperError::NotFound(format!("edge {edge_id} not found")))?;
-
-        // Clause 0: the caller reads BOTH endpoints, or the edge is absent to them — the same
-        // `NotFound`, word for word, that a missing or folded edge answers above. This runs
-        // before every authority clause, because each of them renders a refusal that names a
-        // side: the source floor's `403` to a caller who cannot read the source, clause 3's
-        // `NotFound` naming the target's table and id. An edge with an unreadable endpoint is
-        // one no read surface shows this caller (`edges_visible_to` gates both endpoints; the
-        // element trail and the edge facet read answer hidden and missing alike), and the
-        // context change feed hands out the ids of such edges to every reader of their home
-        // (task 01a1a1a5-773a-7599-a157-6128705ef71e). Without this clause a write door was the
-        // oracle the reads are not: which side is hidden, and whether the edge is still live.
-        //
-        // Unlocked: a caller this clause refuses takes no lock. It binds nothing; clause 3's
-        // check under the target's lock and clause 1's floor under the source's decide.
-        if !self
-            .edge_endpoints_readable_on(
-                &mut *conn,
-                (&home.source_table, home.source_id),
-                (&home.target_table, home.target_id),
-            )
-            .await?
-        {
-            return Err(TemperError::NotFound(format!("edge {edge_id} not found")));
-        }
 
         // Clause 1 is SOURCE-TYPED. Blob-endpoint edges (D3) have no
         // `can_modify_resource` to run — a blob is immutable and homed like a resource, so
@@ -1442,30 +1449,6 @@ impl DbBackend {
                 }
                 other => other,
             })
-    }
-
-    /// [`Self::check_edge_mutable`]'s clause 0: does the caller read both of the edge's endpoints?
-    /// `endpoint_readable_by_profile` on each — the predicate `edges_visible_to` mirrors — on
-    /// `conn`, unlocked, in one statement.
-    async fn edge_endpoints_readable_on(
-        &self,
-        conn: &mut sqlx::PgConnection,
-        (source_table, source_id): (&str, uuid::Uuid),
-        (target_table, target_id): (&str, uuid::Uuid),
-    ) -> Result<bool, TemperError> {
-        let both: Option<bool> = sqlx::query_scalar!(
-            "SELECT endpoint_readable_by_profile($1, $2, $3) \
-                AND endpoint_readable_by_profile($1, $4, $5)",
-            *self.profile_id,
-            source_table,
-            source_id,
-            target_table,
-            target_id,
-        )
-        .fetch_one(&mut *conn)
-        .await
-        .map_err(api_err)?;
-        Ok(both.unwrap_or(false))
     }
 
     /// Container-write gate for an **anchor of either kind** — the arm-dispatching wrapper over
