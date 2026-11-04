@@ -1070,6 +1070,10 @@ async fn facet_set_on_a_foreign_resource_speaks_the_forbidden_arm(pool: PgPool) 
 /// clause 1 passes on a DIRECT write grant on the source resource while L0
 /// authorship stays withheld (team-reach read only), because
 /// `cogmap_authorable_by_profile` is write-grant-only — read is never authorship.
+/// The caller also reads the target, through a direct read grant: the edge doors answer
+/// a caller who does not see the edge (`edges_visible_to`: home and both endpoints
+/// readable) exactly as a missing edge, so the authority arm is reachable only by one
+/// who sees it.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn an_edge_facet_in_a_readable_unauthorable_map_speaks_the_forbidden_detail_arm(
     pool: PgPool,
@@ -1107,6 +1111,26 @@ async fn an_edge_facet_in_a_readable_unauthorable_map_speaks_the_forbidden_detai
     .execute(&app.pool)
     .await
     .expect("the direct resource write grant lands");
+    sqlx::query(
+        "INSERT INTO kb_access_grants \
+             (subject_table, subject_id, principal_table, principal_id, can_read, can_write, \
+              granted_by_profile_id) \
+          VALUES ('kb_resources', $1, 'kb_profiles', $2, true, false, $3)",
+    )
+    .bind(kernel_tgt)
+    .bind(parity::profile_id_by_email(&app.pool, &email).await)
+    .bind(harness_id)
+    .execute(&app.pool)
+    .await
+    .expect("the direct target read grant lands");
+    let sees_the_edge: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM edges_visible_to($1) WHERE edge_id = $2)")
+            .bind(parity::profile_id_by_email(&app.pool, &email).await)
+            .bind(handle)
+            .fetch_one(&app.pool)
+            .await
+            .expect("visibility reads");
+    assert!(sees_the_edge, "precondition: the caller sees the edge");
     // The second identity is its own parts: its real bearer crosses the door.
     let other_parts = app.relay_parts_for(&token);
 
