@@ -12,6 +12,9 @@ position, bound, kinds) returns a context's domain changes after a position. It 
 rows, so a later commit never lands behind a position already passed. Each entry is a pointer: its
 position, kind, subject {table, id}, actor, time and act, and nothing of the change itself, not even a
 key name. The reader reads the subject through its own door, which answers under the reader's
-standing now, so a deleted or moved-out subject is still pointed at and its own read refuses it. No
-surface calls the function yet; the HTTP, CLI and MCP doors come in a later change. Who observes: nobody, until those doors ship. Release relevance: additive (schema only).
+standing now, so a deleted or moved-out subject is still pointed at and its own read refuses it.
+Migration 20261116000020 makes every way a resource leaves a context an entry there: a new domain
+event, resource_departed, is anchored on the home a resource leaves, carrying only its id. A move and
+an erasure now write one; a deletion already wrote resource_deleted. No surface calls the function
+yet; the HTTP, CLI and MCP doors come in a later change. Who observes: a resource's event trail now shows a resource_departed event after a move or an erasure; the feed itself, nobody until its doors ship. Release relevance: additive (schema only).
 '''

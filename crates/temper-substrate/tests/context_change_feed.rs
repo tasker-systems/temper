@@ -650,15 +650,16 @@ async fn unset_and_retracted_entries_name_their_owner(pool: PgPool) {
 /// shared context:
 ///   - an edge homed there whose target lives in a context the reader cannot read;
 ///   - a resource created there and since moved to that context;
-///   - a resource deleted there, whose deletion is itself an entry;
+///   - a resource deleted there;
 ///   - a resource erased there.
-/// None of their titles or key names reaches the reader.
-///
-/// A move out is not itself an entry here: `resource_rehome` anchors its event on the destination
-/// only. A relay learns of the move when it next reads a subject this context pointed it at.
+/// Every way a resource leaves is itself an entry in the context it left (ruled 2026-11-03,
+/// migration 20261116000020): the deletion as `resource_deleted`, the move and the erasure each as
+/// one `resource_departed`, which names no destination. None of their titles or key names reaches
+/// the reader.
 ///
 /// FAILS IF: the read filters by subject (then a departed subject's entries vanish and a relay is
-/// never told), or a subject's own read admits what the reader can no longer read.
+/// never told), a move or an erasure leaves the old home silent, a departure names where the
+/// resource went, or a subject's own read admits what the reader can no longer read.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn a_subject_that_left_view_is_still_pointed_at_and_its_own_read_refuses(pool: PgPool) {
     let (owner, emitter, _) = setup(&pool).await;
@@ -751,6 +752,29 @@ async fn a_subject_that_left_view_is_still_pointed_at_and_its_own_read_refuses(p
         pointed(deleted.uuid()).contains(&"resource_deleted"),
         "the deletion itself is an entry: {whole:?}"
     );
+    for (what, id) in [("move", moved.uuid()), ("erasure", erased.uuid())] {
+        let departures = pointed(id)
+            .iter()
+            .filter(|k| **k == "resource_departed")
+            .count();
+        assert_eq!(departures, 1, "the {what} is one departure here: {whole:?}");
+    }
+    // The departure's record carries the resource id and nothing else: no destination.
+    let payloads: Vec<serde_json::Value> = sqlx::query_scalar(
+        "SELECT e.payload FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE et.name = 'resource_departed' ORDER BY e.xact_id, e.seq",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        payloads,
+        vec![
+            serde_json::json!({ "resource_id": moved.uuid() }),
+            serde_json::json!({ "resource_id": erased.uuid() }),
+        ],
+        "a departure carries only the resource id"
+    );
     assert!(
         pointed(p1.uuid()).is_empty(),
         "the private resource has no event here"
@@ -795,5 +819,61 @@ async fn a_subject_that_left_view_is_still_pointed_at_and_its_own_read_refuses(p
     assert!(
         !visible(EDGE, hidden_edge.uuid()).await,
         "the hidden edge still reads"
+    );
+}
+
+/// The departure's rule (migration 20261116000020): a resource departs once, and only from a home
+/// it is leaving. A resource deleted and then erased has its deletion as its one way out, so the
+/// erasure writes no departure. A move to the home the resource is already in is no departure.
+///
+/// FAILS IF: an erasure of a deleted resource, or a move to the same home, writes a departure.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_resource_departs_once_and_only_from_a_home_it_leaves(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let gone = create(&pool, owner, emitter, home, "gone", "g", &[]).await;
+    writes::delete_resource(&pool, gone, emitter).await.unwrap();
+    let (_, operator_entity) = system_actor(&pool).await;
+    sqlx::query_scalar::<_, serde_json::Value>("SELECT resource_erasure_execute($1,$2,$3,$4)")
+        .bind(gone.uuid())
+        .bind(operator_entity)
+        .bind(operator_entity)
+        .bind(Uuid::now_v7())
+        .fetch_one(&pool)
+        .await
+        .expect("the erasure of a deleted resource completes");
+
+    let stays = create(&pool, owner, emitter, home, "stays", "s", &[]).await;
+    let mut tx = pool.begin().await.unwrap();
+    fire(
+        &mut tx,
+        SeedAction::ResourceRehome {
+            resource: stays,
+            home: AnchorRef::context(home),
+            emitter,
+        },
+    )
+    .await
+    .expect("the move to its own home fires");
+    tx.commit().await.unwrap();
+
+    let (got, _) = drain(&pool, owner, home, (BEGINNING.0.into(), BEGINNING.1), 1000).await;
+    let kinds = |id: Uuid| -> Vec<&str> {
+        got.iter()
+            .filter(|e| e["subject"]["id"] == id.to_string())
+            .map(|e| e["kind"].as_str().unwrap())
+            .collect()
+    };
+    assert!(kinds(gone.uuid()).contains(&"resource_deleted"), "{got:?}");
+    assert!(
+        !kinds(gone.uuid()).contains(&"resource_departed"),
+        "a deleted resource departs again on erasure: {got:?}"
+    );
+    assert!(
+        kinds(stays.uuid()).contains(&"resource_rehomed"),
+        "anti-vacuity: the same-home move fired: {got:?}"
+    );
+    assert!(
+        !kinds(stays.uuid()).contains(&"resource_departed"),
+        "a move to the same home departs: {got:?}"
     );
 }

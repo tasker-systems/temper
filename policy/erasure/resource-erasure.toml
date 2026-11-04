@@ -224,6 +224,9 @@
 [payload."resource_reassigned"]
 "*" = { disposition = "permissive", note = "ResourceReassigned carries only ids" }
 
+[payload."resource_departed"]
+"*" = { disposition = "permissive", note = "a departure (20261116000020) carries only resource_id" }
+
 [payload."resource_rehomed"]
 "*"           = { disposition = "permissive", note = "fields from payloads.rs ResourceRehomed" }
 "/home/table" = { disposition = "structural", note = "an anchor table name" }
