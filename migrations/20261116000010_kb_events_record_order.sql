@@ -111,6 +111,29 @@ BEGIN
 END;
 $$;
 
+-- Whether an event is an admin act on others' work, which the feed never serves. Ruled by the owner
+-- 2026-11-03 for task 01a1a1a5-773a-7599-a157-6128705ef71e: an admin act (an erasure, a scrub, a
+-- strike) is not a change a context's readers are authorized to see as an act, so its silence is
+-- intended. Its pointers would name the operator and the request reference that records it, and
+-- would tell an erasure from a move.
+--
+-- The definition is the one _profile_change_events (20261107000000) applies, and the two must
+-- agree: the kinds blob_erased and context_erased, and every event sharing its correlation id and
+-- its emitter with a resource_erased, principal_erased, resource_scrubbed or block_history_scrubbed
+-- record (those records are admin events anchored on no context; the act's ordinary-path events,
+-- such as an erasure's per-edge relationship_folded, carry the act's request reference).
+CREATE FUNCTION _event_is_admin_act(p_kind text, p_correlation uuid, p_emitter uuid)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT p_kind IN ('blob_erased', 'context_erased')
+        OR (p_correlation IS NOT NULL AND EXISTS (
+               SELECT 1 FROM kb_events act
+                 JOIN kb_event_types act_t ON act_t.id = act.event_type_id
+                WHERE act.correlation_id = p_correlation
+                  AND act.emitter_entity_id = p_emitter
+                  AND act_t.name IN ('resource_erased', 'principal_erased',
+                                     'resource_scrubbed', 'block_history_scrubbed')))
+$$;
+
 -- context_changes_after(profile, context, after_xact, after_seq, limit, kinds) → jsonb
 --
 -- Returns NULL when the profile cannot read the context now (goal: the-feed-reads-under-standing-now).
@@ -131,6 +154,9 @@ $$;
 -- context gate is the only gate here: a subject since deleted, erased, struck or moved out of view is
 -- still pointed at, and its own read is what refuses it. That refusal is how a relay learns the
 -- subject left its view.
+--
+-- One class of event is never served: an admin act's (_event_is_admin_act). Withheld before the
+-- page bound, so a withheld row never sets `through` or counts toward `has_more`.
 --
 -- The subject is named from the payload. Every property kind that is emitted carries its owner as an
 -- AnchorRef, {table, id} (payloads.rs). Anything else is named by the first id it carries, or is the
@@ -163,6 +189,7 @@ CREATE FUNCTION context_changes_after(
            AND (e.xact_id, e.seq) > (p_after_xact, coalesce(p_after_seq, 0))
            AND e.category = 'domain'
            AND (p_kinds IS NULL OR et.name = ANY (p_kinds))
+           AND NOT _event_is_admin_act(et.name, e.correlation_id, e.emitter_entity_id)
          ORDER BY e.xact_id, e.seq
          LIMIT (SELECT n + 1 FROM bound)
     ),
@@ -233,5 +260,5 @@ $$;
 SELECT declare_migration(
     20261116000010,
     'additive',
-    'Adds the nullable kb_events columns xact_id and seq with defaults (existing rows stay NULL, the table is not rewritten), their sequence, a both-or-neither CHECK, two partial indexes (one UNIQUE on (xact_id, seq)), a BEFORE INSERT trigger that refuses a new row without a truthful order outside replay, and the new functions _feed_uuid, _feed_refuse_limit and context_changes_after. A binary from before this migration inserts events without naming the new columns, so the defaults fill them and the trigger passes; nothing it reads is dropped, renamed or reshaped.'
+    'Adds the nullable kb_events columns xact_id and seq with defaults (existing rows stay NULL, the table is not rewritten), their sequence, a both-or-neither CHECK, two partial indexes (one UNIQUE on (xact_id, seq)), a BEFORE INSERT trigger that refuses a new row without a truthful order outside replay, and the new functions _feed_uuid, _feed_refuse_limit, _event_is_admin_act and context_changes_after. A binary from before this migration inserts events without naming the new columns, so the defaults fill them and the trigger passes; nothing it reads is dropped, renamed or reshaped.'
 );

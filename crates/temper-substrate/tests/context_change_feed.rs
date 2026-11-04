@@ -58,6 +58,20 @@ async fn system_actor(pool: &PgPool) -> (ProfileId, EntityId) {
     (ProfileId::from(profile), entity)
 }
 
+/// An operator distinct from every author, as an admin act's operator is: its own profile and
+/// entity, a member of nothing.
+async fn operator_actor(pool: &PgPool) -> (ProfileId, EntityId) {
+    let profile = common::create_profile(pool, "operator@example.test").await;
+    let entity: EntityId = sqlx::query_scalar(
+        "INSERT INTO kb_entities (profile_id, name) VALUES ($1, 'operator@admin') RETURNING id",
+    )
+    .bind(profile)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    (ProfileId::from(profile), entity)
+}
+
 async fn setup(pool: &PgPool) -> (ProfileId, EntityId, ContextId) {
     common::reset_schema(pool).await;
     temper_substrate::scenario::bootseed::seed_system(pool)
@@ -652,14 +666,17 @@ async fn unset_and_retracted_entries_name_their_owner(pool: PgPool) {
 ///   - a resource created there and since moved to that context;
 ///   - a resource deleted there;
 ///   - a resource erased there.
-/// Every way a resource leaves is itself an entry in the context it left (ruled 2026-11-03,
-/// migration 20261116000020): the deletion as `resource_deleted`, the move and the erasure each as
-/// one `resource_departed`, which names no destination. None of their titles or key names reaches
-/// the reader.
+/// A deletion and a move are each an entry in the context they left (ruled 2026-11-03, migration
+/// 20261116000020): `resource_deleted`, and one `resource_departed` that names no destination. An
+/// erasure is an admin act, and the feed never serves an admin act's events (ruled the same day):
+/// it writes no departure, its fold of the erased resource's edge is withheld, and neither its
+/// operator nor its request reference reaches the reader. The erased resource's past entries stay,
+/// as pointers. None of the titles or key names reaches the reader.
 ///
 /// FAILS IF: the read filters by subject (then a departed subject's entries vanish and a relay is
-/// never told), a move or an erasure leaves the old home silent, a departure names where the
-/// resource went, or a subject's own read admits what the reader can no longer read.
+/// never told), a move leaves the old home silent, a departure names where the resource went, an
+/// erasure's act reaches the feed, or a subject's own read admits what the reader can no longer
+/// read.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn a_subject_that_left_view_is_still_pointed_at_and_its_own_read_refuses(pool: PgPool) {
     let (owner, emitter, _) = setup(&pool).await;
@@ -710,12 +727,14 @@ async fn a_subject_that_left_view_is_still_pointed_at_and_its_own_read_refuses(p
         &[("ERASEDKEYzq".to_string(), serde_json::json!("v"))],
     )
     .await;
-    let (_, operator_entity) = system_actor(&pool).await;
+    let erased_edge = edge(&pool, emitter, shared, a1, erased).await;
+    let (_, operator_entity) = operator_actor(&pool).await;
+    let request = Uuid::now_v7();
     sqlx::query_scalar::<_, serde_json::Value>("SELECT resource_erasure_execute($1,$2,$3,$4)")
         .bind(erased.uuid())
         .bind(operator_entity)
         .bind(operator_entity)
-        .bind(Uuid::now_v7())
+        .bind(request)
         .fetch_one(&pool)
         .await
         .expect("the erasure completes");
@@ -740,25 +759,86 @@ async fn a_subject_that_left_view_is_still_pointed_at_and_its_own_read_refuses(p
         !pointed(hidden_edge.uuid()).is_empty(),
         "the hidden edge is pointed at: {whole:?}"
     );
+    // Past entries stay: no subject filter withholds what was written while the resource lived here.
     assert!(
-        !pointed(moved.uuid()).is_empty(),
-        "the moved resource is pointed at: {whole:?}"
+        pointed(moved.uuid()).contains(&"resource_created"),
+        "the moved resource's past is still pointed at: {whole:?}"
     );
     assert!(
-        !pointed(erased.uuid()).is_empty(),
-        "the erased resource is pointed at: {whole:?}"
+        pointed(erased.uuid()).contains(&"resource_created"),
+        "the erased resource's past is still pointed at: {whole:?}"
     );
     assert!(
         pointed(deleted.uuid()).contains(&"resource_deleted"),
         "the deletion itself is an entry: {whole:?}"
     );
-    for (what, id) in [("move", moved.uuid()), ("erasure", erased.uuid())] {
-        let departures = pointed(id)
+    let departures = |id: Uuid| {
+        pointed(id)
             .iter()
             .filter(|k| **k == "resource_departed")
-            .count();
-        assert_eq!(departures, 1, "the {what} is one departure here: {whole:?}");
-    }
+            .count()
+    };
+    assert_eq!(
+        departures(moved.uuid()),
+        1,
+        "the move is one departure here: {whole:?}"
+    );
+    assert_eq!(
+        departures(erased.uuid()),
+        0,
+        "an erasure departs: {whole:?}"
+    );
+    // The move's departure is its act's own event: it carries the move's correlation id. The move
+    // was fired without one, so this is the id the move's own record took.
+    let move_act: Uuid = sqlx::query_scalar(
+        "SELECT e.correlation_id FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE et.name = 'resource_rehomed' AND e.payload->>'resource_id' = $1::text",
+    )
+    .bind(moved.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let move_departure = whole
+        .iter()
+        .find(|e| {
+            e["kind"] == "resource_departed" && e["subject"]["id"] == moved.uuid().to_string()
+        })
+        .unwrap();
+    assert_eq!(
+        move_departure["act"],
+        move_act.to_string(),
+        "the move's departure pairs with its record"
+    );
+    // The erasure's act is silent: its edge fold is withheld, and neither its operator nor its
+    // request reference is served. Anti-vacuity: the fold is anchored on the shared context.
+    let fold_anchored: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE et.name = 'relationship_folded' AND e.payload->>'edge_id' = $1::text \
+            AND e.producing_anchor_id = $2 AND e.correlation_id = $3",
+    )
+    .bind(erased_edge.uuid())
+    .bind(shared.uuid())
+    .bind(request)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        fold_anchored, 1,
+        "the erasure folded the edge on the shared context"
+    );
+    assert!(
+        !pointed(erased_edge.uuid()).contains(&"relationship_folded"),
+        "the erasure's fold was served: {whole:?}"
+    );
+    let text = serde_json::to_string(&whole).unwrap();
+    assert!(
+        !text.contains(&operator_entity.to_string()),
+        "the erasure's operator was served: {text}"
+    );
+    assert!(
+        !text.contains(&request.to_string()),
+        "the erasure's request reference was served: {text}"
+    );
     // The departure's record carries the resource id and nothing else: no destination.
     let payloads: Vec<serde_json::Value> = sqlx::query_scalar(
         "SELECT e.payload FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
@@ -769,10 +849,7 @@ async fn a_subject_that_left_view_is_still_pointed_at_and_its_own_read_refuses(p
     .unwrap();
     assert_eq!(
         payloads,
-        vec![
-            serde_json::json!({ "resource_id": moved.uuid() }),
-            serde_json::json!({ "resource_id": erased.uuid() }),
-        ],
+        vec![serde_json::json!({ "resource_id": moved.uuid() })],
         "a departure carries only the resource id"
     );
     assert!(
@@ -875,5 +952,199 @@ async fn a_resource_departs_once_and_only_from_a_home_it_leaves(pool: PgPool) {
     assert!(
         !kinds(stays.uuid()).contains(&"resource_departed"),
         "a move to the same home departs: {got:?}"
+    );
+}
+
+/// The departure's rule under concurrency (code review of PR 1, I1). Two moves of one resource out
+/// of the same home, in overlapping transactions, serialize on the resource: the second reads the
+/// home the first left it in. Each home records exactly the one departure that left it.
+///
+/// FAILS IF: the departure reads the home without locking the resource first (then both moves
+/// depart from the first home, and the second home never sees the resource leave).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn concurrent_moves_each_depart_from_the_home_they_left(pool: PgPool) {
+    let (owner, emitter, a) = setup(&pool).await;
+    let b = ContextId::from(
+        common::insert_context(&pool, "kb_profiles", owner.uuid(), "b", "b")
+            .await
+            .unwrap(),
+    );
+    let c = ContextId::from(
+        common::insert_context(&pool, "kb_profiles", owner.uuid(), "c", "c")
+            .await
+            .unwrap(),
+    );
+    let r = create(&pool, owner, emitter, a, "racer", "r", &[]).await;
+
+    let mut first = pool.begin().await.unwrap();
+    fire(
+        &mut first,
+        SeedAction::ResourceRehome {
+            resource: r,
+            home: AnchorRef::context(b),
+            emitter,
+        },
+    )
+    .await
+    .expect("the first move fires");
+
+    let second_pool = pool.clone();
+    let second = tokio::spawn(async move {
+        let mut tx = second_pool.begin().await.unwrap();
+        fire(
+            &mut tx,
+            SeedAction::ResourceRehome {
+                resource: r,
+                home: AnchorRef::context(c),
+                emitter,
+            },
+        )
+        .await
+        .expect("the second move fires");
+        tx.commit().await.unwrap();
+    });
+
+    // The second move must be waiting on the first before the first commits, or this is no race.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM pg_stat_activity \
+                         WHERE datname = current_database() AND wait_event_type = 'Lock')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap()
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the second move never waited on the first"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    first.commit().await.unwrap();
+    second.await.unwrap();
+
+    let departures: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT e.producing_anchor_id FROM kb_events e \
+           JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE et.name = 'resource_departed' ORDER BY e.xact_id, e.seq",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        departures,
+        vec![a.uuid(), b.uuid()],
+        "one departure from each home the resource left"
+    );
+}
+
+/// The gate answers before the bound (`context_changes_after`'s comment on `_feed_refuse_limit`).
+/// A caller who cannot read a context is answered NULL whatever bound it sends, so a bad bound
+/// never tells it the context exists.
+///
+/// FAILS IF: the bound is checked before the gate (then an unreadable context answers a bound
+/// error instead of NULL).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_unreadable_context_is_refused_whatever_bound_is_sent(pool: PgPool) {
+    let (owner, _, home) = setup(&pool).await;
+    let stranger = ProfileId::from(common::create_profile(&pool, "stranger@example.test").await);
+    for bound in [0, 1001, -1] {
+        let answer: Option<serde_json::Value> =
+            sqlx::query_scalar("SELECT context_changes_after($1, $2, '0'::xid8, 0, $3)")
+                .bind(stranger.uuid())
+                .bind(home.uuid())
+                .bind(bound)
+                .fetch_one(&pool)
+                .await
+                .expect("an unreadable context is answered, not refused for its bound");
+        assert!(answer.is_none(), "bound {bound} answered: {answer:?}");
+    }
+    // Anti-vacuity: the owner, who can read it, is refused for the same bound.
+    let refused = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT context_changes_after($1, $2, '0'::xid8, 0, 0)",
+    )
+    .bind(owner.uuid())
+    .bind(home.uuid())
+    .fetch_one(&pool)
+    .await;
+    assert!(refused.is_err(), "a readable context refuses bound 0");
+}
+
+/// The admin-act ruling (2026-11-03): the feed never serves an admin act's events, of any kind.
+/// A field scrub in clear mode writes a `property_unset` on a live resource, carrying the operator
+/// and the request reference;
+/// a `blob_erased` is a domain kind anchored on the context. Neither is served. The reader's own
+/// change to the same resource still is.
+///
+/// FAILS IF: the read serves an event sharing its correlation id and emitter with an admin record,
+/// or serves `blob_erased` / `context_erased` by kind.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn admin_acts_are_never_served(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let live = create(&pool, owner, emitter, home, "live", "l", &[]).await;
+    set(&pool, emitter, live, "scrubkeyzq", "v").await;
+    let set_event: Uuid = sqlx::query_scalar(
+        "SELECT e.id FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE et.name = 'property_set' AND e.payload->>'property_key' = 'scrubkeyzq'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let (operator, operator_entity) = operator_actor(&pool).await;
+    let request = Uuid::now_v7();
+    sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT resource_field_scrub_execute($1, 'property', $2, true, $3, $4, $5)",
+    )
+    .bind(live.uuid())
+    .bind(set_event)
+    .bind(operator.uuid())
+    .bind(operator_entity)
+    .bind(request)
+    .fetch_one(&pool)
+    .await
+    .expect("the scrub completes");
+    let strike: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, \
+                                producing_anchor_id, payload) \
+         SELECT id, $1, 'kb_contexts', $2, '{}'::jsonb FROM kb_event_types \
+          WHERE name = 'blob_erased' RETURNING id",
+    )
+    .bind(operator_entity)
+    .bind(home.uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("a blob_erased anchored on the context");
+
+    // Anti-vacuity: the scrub wrote domain events on this context under the act's reference.
+    let scrub_events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE e.producing_anchor_id = $1 AND e.correlation_id = $2 AND et.category = 'domain'",
+    )
+    .bind(home.uuid())
+    .bind(request)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(scrub_events > 0, "the scrub wrote on the context");
+
+    let (got, _) = drain(&pool, owner, home, (BEGINNING.0.into(), BEGINNING.1), 1000).await;
+    let text = serde_json::to_string(&got).unwrap();
+    assert!(
+        !text.contains(&request.to_string()),
+        "the scrub's act was served: {text}"
+    );
+    assert!(
+        !text.contains(&operator_entity.to_string()),
+        "an admin act's operator was served: {text}"
+    );
+    assert!(
+        !got.iter().any(|e| e["kind"] == "blob_erased"),
+        "a blob_erased was served: {text}"
+    );
+    let _ = strike;
+    assert!(
+        got.iter()
+            .any(|e| e["kind"] == "property_set" && e["actor"] == emitter.uuid().to_string()),
+        "the reader's own set is still served: {text}"
     );
 }
