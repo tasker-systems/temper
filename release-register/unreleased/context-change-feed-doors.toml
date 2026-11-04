@@ -1,7 +1,7 @@
 title    = "A context's changes are readable after a position on HTTP, MCP and CLI, and the feed withholds only an admin act's own transaction"
 pr       = "self"
 classes  = ["additive", "behavioral"]
-surfaces = ["http", "mcp", "cli-stdout", "clients", "schema"]
+surfaces = ["http", "mcp", "cli-stdout", "clients", "schema", "erasure-policy"]
 status   = "signal-only"
 body = '''
 The change feed's doors read context_changes_after (20261116000010):
@@ -41,6 +41,7 @@ Schema:
   signature unchanged.
 - A page over a 100,000-event correlated span drops from 15.5 s to 3 ms.
 
+Erasure policy: kb_feed_position_keys.key is declared class none in personal-data.toml (a secret, not user data).
 openapi.json moves additively only, and the three SDKs are regenerated. The context cursor and
 `updated` are unchanged. Witnesses: crates/temper-services/tests/context_change_doors_test.rs.
 Release relevance: new read surface, signal-only.
