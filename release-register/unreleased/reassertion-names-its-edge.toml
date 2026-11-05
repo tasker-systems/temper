@@ -1,0 +1,27 @@
+title    = "A re-assertion of an active edge records that edge's id, and an edge's trail includes the re-assertions recorded before this change"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["schema", "http", "mcp", "cli-stdout"]
+status   = "signal-only"
+body = '''
+Migration 20261117000030 replaces relationship_assert and element_trail_edge, keeping their
+signatures, and adds the helper _edge_phantom_reassertions. Until now, asserting an edge that was
+already active recorded a relationship_asserted event naming a freshly minted edge_id. The edge
+was reweighted under its existing id, so the event's id had no row. relationship_assert now looks
+up the active edge, holding an identity-keyed advisory lock and a FOR UPDATE row lock, and writes
+that edge's id into the payload before appending. If the projection then answers with any other
+id, it raises 40001 instead of recording the event. Nothing retries that error automatically, and
+it is reachable only by a concurrent retype into the same identity.
+
+Recorded events are not edited. The edge trail (element_trail_edge, served by the trail doors on
+HTTP, MCP and CLI) used to match only on payload edge_id, so it left out every re-assertion that
+had reweighted the edge. It now also reaches the pre-fix re-assertions, matching on the edge's
+identity, its kind at the time and its active window.
+
+Who observes it:
+- Readers of a re-assertion event's payload now see the real edge id.
+- Edge-trail readers see more entries.
+Shapes are unchanged. Replay is unchanged, because the projector is.
+Witnesses: crates/temper-substrate/tests/reassertion_edge_id.rs.
+Release relevance: signal-only.
+'''
