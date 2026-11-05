@@ -1,0 +1,15 @@
+title    = "A segmented ingest indexes its body for full-text search once, at finalize, instead of on every append"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["schema"]
+status   = "signal-only"
+body = '''
+Migration 20261117000010 replaces two functions with unchanged signatures. While a resource's
+ingest_state is in_progress, _rebuild_resource_search_vector indexes its title, keywords, tags and
+descriptor but not its body text. _project_resource_finalized rebuilds the vector with the body once,
+in the finalize transaction. Each append used to re-tokenize the whole body, so a segmented ingest was
+quadratic: about 96 ms per append at 4000 blocks, measured locally. Who observes it: nobody through a
+door. Every search arm reads through kb_resources_live, which admits only complete resources, and the
+per-append body_hash, which the append response returns and finalize checks, is unchanged. User
+visibility: large segmented uploads get faster. Release relevance: additive (schema only).
+'''
