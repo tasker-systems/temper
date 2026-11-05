@@ -5519,6 +5519,54 @@ async fn payload_of(pool: &PgPool, event: Uuid) -> serde_json::Value {
         .unwrap()
 }
 
+/// Record a re-assertion of an active `leads_to` edge the way every version before migration
+/// 20261117000030 did: a freshly minted `edge_id`, appended as written, then projected. The
+/// projector's ON CONFLICT answers with the existing edge, so the event names an id with no row.
+/// Production holds events of this shape. The live write path no longer makes them; it names the
+/// edge it updated.
+async fn historical_reassertion(
+    pool: &PgPool,
+    src: ResourceId,
+    tgt: ResourceId,
+    label: &str,
+    home: ContextId,
+    emitter: EntityId,
+) -> Uuid {
+    let payload = serde_json::json!({
+        "edge_id": Uuid::now_v7(),
+        "source": {"table": "kb_resources", "id": src.uuid()},
+        "target": {"table": "kb_resources", "id": tgt.uuid()},
+        "edge_kind": "leads_to",
+        "polarity": "forward",
+        "label": label,
+        "weight": 0.5,
+        "home": {"table": "kb_contexts", "id": home.uuid()},
+    });
+    let mut tx = pool.begin().await.unwrap();
+    let ev: Uuid = sqlx::query_scalar(
+        "SELECT _event_append('relationship_asserted', $1, 'kb_contexts', $2, $3)",
+    )
+    .bind(emitter.uuid())
+    .bind(home.uuid())
+    .bind(&payload)
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    let answered: Uuid = sqlx::query_scalar("SELECT _project_relationship_asserted($1, $2)")
+        .bind(ev)
+        .bind(&payload)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_ne!(
+        answered.to_string(),
+        payload["edge_id"].as_str().unwrap(),
+        "setup: a re-assertion of an active edge"
+    );
+    ev
+}
+
 /// The `resource_created` event of `resource`.
 async fn created_event(pool: &PgPool, resource: Uuid) -> Uuid {
     sqlx::query_scalar(
@@ -6202,28 +6250,22 @@ async fn the_trail_scope_is_the_or_predicates_set(pool: sqlx::PgPool) {
     .await
     .unwrap();
 
-    // A re-assertion of seed_leak's edge: its payload edge_id never becomes a row.
+    // A historical re-assertion of seed_leak's edge: its payload edge_id never became a row.
     let edge_row: (Uuid, Uuid, String) =
         sqlx::query_as("SELECT target_id, home_anchor_id, label FROM kb_edges WHERE id = $1")
             .bind(leak.edge.uuid())
             .fetch_one(&pool)
             .await
             .unwrap();
-    writes::assert_relationship(
+    historical_reassertion(
         &pool,
-        AssertParams {
-            src: leak.resource,
-            tgt: ResourceId::from(edge_row.0),
-            kind: EdgeKind::LeadsTo,
-            polarity: EdgePolarity::Forward,
-            label: Some(&edge_row.2),
-            weight: 0.5,
-            home: ContextId::from(edge_row.1),
-            emitter,
-        },
+        leak.resource,
+        ResourceId::from(edge_row.0),
+        &edge_row.2,
+        ContextId::from(edge_row.1),
+        emitter,
     )
-    .await
-    .unwrap();
+    .await;
     let reassertions: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
           WHERE t.name = 'relationship_asserted' \
@@ -6277,8 +6319,9 @@ async fn the_trail_scope_is_the_or_predicates_set(pool: sqlx::PgPool) {
 }
 
 /// Edge labels redact per endpoint pair, every non-empty label counting as text (ruled 2026-10-08,
-/// with the review fixes). A re-assertion, whose payload edge_id never became a row, is in the
-/// trail and redacts to its first assertion's sentinel; a label someone typed in a sentinel's shape
+/// with the review fixes). A re-assertion is in the trail and redacts to its first assertion's
+/// sentinel, both one that names its edge (20261117000030) and one recorded before that, whose
+/// payload edge_id never became a row; a label someone typed in a sentinel's shape
 /// is numbered like any other label, so it never lands on another label's text. Replay builds the
 /// same edges.
 ///
@@ -6311,6 +6354,9 @@ async fn reassertions_and_sentinel_shaped_labels_redact_and_replay(pool: sqlx::P
         .await
         .unwrap();
     }
+    // The live re-assertion above names its edge (20261117000030). Production also holds
+    // re-assertions from before that, whose edge_id is no row: the trail must redact those too.
+    historical_reassertion(&pool, r, t, "foo", home, emitter).await;
     let asserts: Vec<(Uuid, String)> = sqlx::query_as(
         "SELECT e.id, e.payload->>'label' FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
           WHERE t.name = 'relationship_asserted' AND e.payload#>>'{source,id}' = $1::text ORDER BY e.id",
@@ -6321,8 +6367,8 @@ async fn reassertions_and_sentinel_shaped_labels_redact_and_replay(pool: sqlx::P
     .unwrap();
     assert_eq!(
         asserts.len(),
-        3,
-        "setup: foo, a sentinel-shaped label, and foo again"
+        4,
+        "setup: foo, a sentinel-shaped label, foo again live, and foo again as recorded before the fix"
     );
 
     execute_act(&pool, r.uuid()).await;
@@ -6341,8 +6387,13 @@ async fn reassertions_and_sentinel_shaped_labels_redact_and_replay(pool: sqlx::P
     };
     assert_eq!(
         after,
-        vec!["erased-label-1", "erased-label-2", "erased-label-1"],
-        "foo is 1 in both its assertions; the typed label is text, numbered 2"
+        vec![
+            "erased-label-1",
+            "erased-label-2",
+            "erased-label-1",
+            "erased-label-1"
+        ],
+        "foo is 1 in all three of its assertions; the typed label is text, numbered 2"
     );
     assert_replay_byte_identical(&pool, "with a re-assertion and a sentinel-shaped label").await;
 }
