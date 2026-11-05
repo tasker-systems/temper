@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT name AS \"name!\" FROM kb_event_types WHERE category = 'domain' AND name = ANY($1)",
+  "query": "SELECT name AS \"name!\" FROM kb_event_types\n            WHERE category = 'domain' AND name = ANY($1) AND NOT _feed_withholds_kind(name)",
   "describe": {
     "columns": [
       {
@@ -18,5 +18,5 @@
       false
     ]
   },
-  "hash": "279c1d7d353479221d01e4d8c2009d27ce168754ec4838befdb20f3499ed7718"
+  "hash": "2c7fba255546f9b3da6e121b1f43d49a06741e8662ec5d202e47feb9ae64ae92"
 }

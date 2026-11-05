@@ -335,8 +335,12 @@ async fn a_position_ahead_of_the_ledger_is_refused(pool: PgPool) {
     assert_eq!(bad_request(err), POSITION_AHEAD_REFUSAL);
 }
 
+/// A kind the feed never serves is refused as unknown: an admin kind, and a connection's traffic,
+/// `webhook_received` and `subscription_delivery_disposed` (`_feed_withholds_kind`, migration
+/// 20261117000020), which are domain kinds.
+///
 /// FAILS IF: a bound is clamped or a kind silently ignored (bite probe: replace the bound check with
-/// `limit.clamp(1, MAX_LIMIT)`, and 0 and 1001 answer).
+/// `limit.clamp(1, MAX_LIMIT)`, and 0 and 1001 answer), or a connection's traffic is accepted.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_bound_or_kind_out_of_range_is_refused_never_clamped(pool: PgPool) {
     let owner = reader(&pool, "owner").await;
@@ -347,7 +351,28 @@ async fn a_bound_or_kind_out_of_range_is_refused_never_clamped(pool: PgPool) {
             .expect_err("out of range");
         assert!(bad_request(err).contains("limit"), "{limit}");
     }
-    for kinds in ["", " , ", "property_set,no_such_kind", "resource_erased"] {
+    // Anti-vacuity: the traffic kinds are registered domain kinds, so they are refused for being
+    // withheld, not for being unknown.
+    let registered: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_event_types WHERE category = 'domain' \
+          AND name IN ('webhook_received', 'subscription_delivery_disposed')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        registered, 2,
+        "both traffic kinds are registered domain kinds"
+    );
+    for kinds in [
+        "",
+        " , ",
+        "property_set,no_such_kind",
+        "resource_erased",
+        "webhook_received",
+        "subscription_delivery_disposed",
+        "property_set,webhook_received",
+    ] {
         let err = read(&pool, owner.profile, ctx, q(None, None, Some(kinds)))
             .await
             .expect_err(kinds);
