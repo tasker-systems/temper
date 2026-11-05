@@ -1857,8 +1857,10 @@ const ENROLLED: &[&str] = &[
     "contexts_changed_by",
     // context_changes_after (the change feed, 20261116000010): an answer exactly for the contexts
     // in contexts_readable_by, each serving its own change — driven by
-    // `the_change_feed_answers_exactly_the_readable_contexts`. That gate is the whole gate: an entry
-    // is a pointer, and its subject's own read answers under the reader's standing.
+    // `the_change_feed_answers_exactly_the_readable_contexts`. That gate is the whole gate for
+    // resources, blocks and blobs: an entry is a pointer, and its subject's own read answers under
+    // the reader's standing. An edge subject is served only while the reader can read both its
+    // endpoints (20261117000020), witnessed in temper-substrate's context_change_feed.rs.
     "context_changes_after",
     // search doors (wrappers over the gated query_* machines)
     "search_exact",
