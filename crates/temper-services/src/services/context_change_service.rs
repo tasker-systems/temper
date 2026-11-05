@@ -1,8 +1,8 @@
 //! A context's changes after a position: the service behind every door to the change feed.
 //!
-//! The read itself is `context_changes_after` (20261116000010): a context's domain events under the
-//! settled horizon, in commit order, each a pointer (kind, subject, actor, time, act) and never
-//! content. This service adds what a door needs on top of it:
+//! The read itself is `context_changes_after` (20261116000010, last replaced by 20261117000020):
+//! a context's domain events under the settled horizon, in commit order, each a pointer (kind,
+//! subject, actor, time, act) and never content. This service adds what a door needs on top of it:
 //!
 //! - **The gate first.** A context the reader cannot read is refused exactly as `GET
 //!   /api/contexts/{id}` refuses it (404, `context_service::CONTEXT_REFUSAL`), before the position,
@@ -28,6 +28,12 @@
 //! **The consumer contract.** The feed is a change hint, not a cache-invalidation guarantee. It
 //! never announces an admin act, so a consumer that mirrors content must periodically re-read the
 //! subjects it holds and drop what its read now refuses. Every door repeats this.
+//!
+//! **What the feed withholds besides admin acts** (20261117000020). An edge is served only while
+//! the reader can read both its endpoints, as `edges_visible_to` answers, so an edge whose endpoint
+//! leaves the reader's view goes quiet rather than reporting a fold. The endpoint's own departure
+//! is served, and that is what tells a mirror to drop the edge. `webhook_received` is never served,
+//! and naming it in `kinds` is refused as an unknown kind (`_feed_withholds_kind`).
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
@@ -193,7 +199,8 @@ async fn parse_kinds(pool: &PgPool, raw: Option<&str>) -> ApiResult<Option<Vec<S
         ));
     }
     let known: Vec<String> = sqlx::query_scalar!(
-        r#"SELECT name AS "name!" FROM kb_event_types WHERE category = 'domain' AND name = ANY($1)"#,
+        r#"SELECT name AS "name!" FROM kb_event_types
+            WHERE category = 'domain' AND name = ANY($1) AND NOT _feed_withholds_kind(name)"#,
         &kinds
     )
     .fetch_all(pool)

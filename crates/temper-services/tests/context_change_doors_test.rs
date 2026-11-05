@@ -335,8 +335,11 @@ async fn a_position_ahead_of_the_ledger_is_refused(pool: PgPool) {
     assert_eq!(bad_request(err), POSITION_AHEAD_REFUSAL);
 }
 
+/// A kind the feed never serves is refused as unknown: an admin kind, and `webhook_received`
+/// (`_feed_withholds_kind`, migration 20261117000020), which is a domain kind.
+///
 /// FAILS IF: a bound is clamped or a kind silently ignored (bite probe: replace the bound check with
-/// `limit.clamp(1, MAX_LIMIT)`, and 0 and 1001 answer).
+/// `limit.clamp(1, MAX_LIMIT)`, and 0 and 1001 answer), or `webhook_received` is accepted.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_bound_or_kind_out_of_range_is_refused_never_clamped(pool: PgPool) {
     let owner = reader(&pool, "owner").await;
@@ -347,7 +350,14 @@ async fn a_bound_or_kind_out_of_range_is_refused_never_clamped(pool: PgPool) {
             .expect_err("out of range");
         assert!(bad_request(err).contains("limit"), "{limit}");
     }
-    for kinds in ["", " , ", "property_set,no_such_kind", "resource_erased"] {
+    for kinds in [
+        "",
+        " , ",
+        "property_set,no_such_kind",
+        "resource_erased",
+        "webhook_received",
+        "property_set,webhook_received",
+    ] {
         let err = read(&pool, owner.profile, ctx, q(None, None, Some(kinds)))
             .await
             .expect_err(kinds);

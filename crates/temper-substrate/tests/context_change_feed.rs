@@ -659,10 +659,12 @@ async fn unset_and_retracted_entries_name_their_owner(pool: PgPool) {
 }
 
 /// The pointer ruling (2026-11-03, task 01a1a1a5-773a-7599-a157-6128705ef71e). The context gate is
-/// the whole gate. A subject that has left the reader's view is still pointed at, and its own read is
-/// what refuses it. That refusal is how a relay learns it went. Every one of these is anchored on the
-/// shared context:
-///   - an edge homed there whose target lives in a context the reader cannot read;
+/// the whole gate for resources, blocks and blobs. A subject that has left the reader's view is still
+/// pointed at, and its own read is what refuses it. That refusal is how a relay learns it went. Edges
+/// are the exception (owner ruling 2026-11-05, migration 20261117000020): an edge whose endpoint the
+/// reader cannot read is never pointed at, as `edges_visible_to` never admits it. Every one of these
+/// is anchored on the shared context:
+///   - an edge homed there whose target lives in a context the reader cannot read (withheld);
 ///   - a resource created there and since moved to that context;
 ///   - a resource deleted there;
 ///   - a resource erased there.
@@ -673,8 +675,8 @@ async fn unset_and_retracted_entries_name_their_owner(pool: PgPool) {
 /// operator nor its request reference reaches the reader. The erased resource's past entries stay,
 /// as pointers. None of the titles or key names reaches the reader.
 ///
-/// FAILS IF: the read filters by subject (then a departed subject's entries vanish and a relay is
-/// never told), a move leaves the old home silent, a departure names where the resource went, an
+/// FAILS IF: the read filters resources by subject (then a departed subject's entries vanish and a
+/// relay is never told), the hidden edge is pointed at, a move leaves the old home silent, a departure names where the resource went, an
 /// erasure's act reaches the feed, or a subject's own read admits what the reader can no longer
 /// read.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
@@ -756,7 +758,7 @@ async fn a_subject_that_left_view_is_still_pointed_at_and_its_own_read_refuses(p
     };
 
     assert!(
-        !pointed(hidden_edge.uuid()).is_empty(),
+        pointed(hidden_edge.uuid()).is_empty(),
         "the hidden edge is pointed at: {whole:?}"
     );
     // Past entries stay: no subject filter withholds what was written while the resource lived here.
@@ -1155,5 +1157,341 @@ async fn admin_acts_are_never_served(pool: PgPool) {
         got.iter()
             .any(|e| e["kind"] == "property_set" && e["actor"] == emitter.uuid().to_string()),
         "the reader's own set is still served: {text}"
+    );
+}
+
+/// Every entry the ledger anchored on `context` that names `edge`, as the feed derives an edge
+/// subject: `edge_id` in the payload, or an edge-owned property.
+async fn ledger_edge_entries(pool: &PgPool, context: ContextId, edge: EdgeId) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e \
+          WHERE e.producing_anchor_table = 'kb_contexts' AND e.producing_anchor_id = $1 \
+            AND e.category = 'domain' AND e.xact_id IS NOT NULL \
+            AND (e.payload->>'edge_id' = $2::text \
+                 OR (e.payload->'owner'->>'table' = 'kb_edges' AND e.payload->'owner'->>'id' = $2::text))",
+    )
+    .bind(context.uuid())
+    .bind(edge.uuid())
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+async fn touch_edge(pool: &PgPool, emitter: EntityId, e: EdgeId, end: ResourceId) {
+    let mut tx = pool.begin().await.unwrap();
+    fire(
+        &mut tx,
+        SeedAction::RelationshipReweight {
+            edge: e,
+            weight: 0.5,
+            emitter,
+        },
+    )
+    .await
+    .expect("the reweight fires");
+    tx.commit().await.unwrap();
+    let address = serde_json::json!({
+        "endpoint": "source",
+        "address": format!("{end}#{}", Uuid::now_v7()),
+    });
+    writes::assert_keyed_property_with(
+        pool,
+        PropertyOwner::Edge { id: e },
+        ANCHORED_AT_PROPERTY_KEY,
+        &address,
+        1.0,
+        emitter,
+        EventContext::default(),
+    )
+    .await
+    .unwrap();
+}
+
+async fn fold_edge(pool: &PgPool, emitter: EntityId, e: EdgeId) {
+    let mut tx = pool.begin().await.unwrap();
+    fire(
+        &mut tx,
+        SeedAction::RelationshipFold {
+            edge: e,
+            reason: None,
+            emitter,
+        },
+    )
+    .await
+    .expect("the fold fires");
+    tx.commit().await.unwrap();
+}
+
+/// Owner ruling 2026-11-05 (cross-review tasker-systems/temper-artifacts#203, migration
+/// 20261117000020). An edge-subject entry is served only while the reader can read both endpoints
+/// NOW, as `edges_visible_to` answers, whatever the entry's kind: the assertion, a reweight, an
+/// edge-owned property, a fold. Three edges homed in the shared context, each touched the same way:
+///   - between two resources the reader reads: every entry served, its fold included;
+///   - to a resource in a context the reader cannot read: nothing served;
+///   - to a resource the reader read when the edge was made, which has since moved out: nothing
+///     served, its earlier entries included. The endpoint's own departure is served, which is how a
+///     relay learns to drop the edge.
+/// The owner reads both contexts and is served all three: the filter is the reader's standing, not
+/// a drop of every edge.
+///
+/// FAILS IF: edge subjects are not filtered (the hidden edges are served), only one endpoint is
+/// tested, the filter tests the fold (the visible edge's fold is withheld), or edge-owned property
+/// entries escape the filter.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_edge_is_served_only_while_the_reader_can_read_both_endpoints(pool: PgPool) {
+    let (owner, emitter, _) = setup(&pool).await;
+    let team = common::create_team(&pool, "edge-team").await;
+    let reader = ProfileId::from(common::create_profile(&pool, "edge-reader@example.test").await);
+    common::add_team_member(&pool, team, reader.uuid()).await;
+    common::add_team_member(&pool, team, owner.uuid()).await;
+    let shared = ContextId::from(
+        common::insert_context(&pool, "kb_teams", team, "shared", "shared")
+            .await
+            .unwrap(),
+    );
+    let private = ContextId::from(
+        common::insert_context(&pool, "kb_profiles", owner.uuid(), "private", "private")
+            .await
+            .unwrap(),
+    );
+    let a1 = create(&pool, owner, emitter, shared, "a1", "a1", &[]).await;
+    let a2 = create(&pool, owner, emitter, shared, "a2", "a2", &[]).await;
+    let p1 = create(&pool, owner, emitter, private, "p1", "p1", &[]).await;
+    let leaver = create(&pool, owner, emitter, shared, "leaver", "l", &[]).await;
+
+    let visible = edge(&pool, emitter, shared, a1, a2).await;
+    let hidden = edge(&pool, emitter, shared, a1, p1).await;
+    // Hidden by its SOURCE: only a test of both endpoints withholds it.
+    let hidden_source = edge(&pool, emitter, shared, p1, a2).await;
+    let later = edge(&pool, emitter, shared, a1, leaver).await;
+    for e in [visible, hidden, hidden_source, later] {
+        touch_edge(&pool, emitter, e, a1).await;
+    }
+    fold_edge(&pool, emitter, visible).await;
+    fold_edge(&pool, emitter, hidden).await;
+
+    let mut tx = pool.begin().await.unwrap();
+    fire(
+        &mut tx,
+        SeedAction::ResourceRehome {
+            resource: leaver,
+            home: AnchorRef::context(private),
+            emitter,
+        },
+    )
+    .await
+    .expect("the rehome fires");
+    tx.commit().await.unwrap();
+
+    let from = (BEGINNING.0.to_owned(), BEGINNING.1);
+    let (seen, _) = drain(&pool, reader, shared, from.clone(), 1000).await;
+    let (owner_seen, _) = drain(&pool, owner, shared, from, 1000).await;
+    let served = |got: &[serde_json::Value], e: EdgeId| -> Vec<String> {
+        got.iter()
+            .filter(|x| {
+                x["subject"]["table"] == "kb_edges" && x["subject"]["id"] == e.uuid().to_string()
+            })
+            .map(|x| x["kind"].as_str().unwrap().to_owned())
+            .collect()
+    };
+
+    for (what, e) in [
+        ("visible", visible),
+        ("hidden", hidden),
+        ("hidden-source", hidden_source),
+        ("later", later),
+    ] {
+        let ledger = ledger_edge_entries(&pool, shared, e).await;
+        // Anti-vacuity: each edge's assertion, reweight and property are in the shared ledger, and
+        // the owner, who reads both endpoints, is served every one of them.
+        assert!(ledger >= 3, "{what}: the ledger holds {ledger} entries");
+        assert_eq!(
+            served(&owner_seen, e).len() as i64,
+            ledger,
+            "{what}: the owner is served the whole edge: {owner_seen:?}"
+        );
+        let expect = if e == visible { ledger } else { 0 };
+        assert_eq!(
+            served(&seen, e).len() as i64,
+            expect,
+            "{what}: the reader is served {:?}",
+            served(&seen, e)
+        );
+    }
+    assert!(
+        served(&seen, visible).contains(&"relationship_folded".to_owned()),
+        "the visible edge's fold is a change the reader could see: {seen:?}"
+    );
+    assert!(
+        served(&seen, visible).contains(&"property_asserted".to_owned()),
+        "the visible edge's property is served: {seen:?}"
+    );
+    assert_eq!(
+        subjects_of_kind(&seen, "resource_departed"),
+        vec![leaver.uuid().to_string()],
+        "the endpoint's departure is served"
+    );
+    let edge_visible = |e: EdgeId| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (SELECT 1 FROM edges_visible_to($1) WHERE edge_id = $2)",
+            )
+            .bind(reader.uuid())
+            .bind(e.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    // The feed and the edge's own read agree on the live hidden edges.
+    for e in [hidden_source, later] {
+        assert!(!edge_visible(e).await, "a hidden edge reads");
+    }
+}
+
+/// The edge filter runs before the page bound (migration 20261117000020). A page with `has_more`
+/// is never short, and reading one entry at a time serves exactly what one large page serves, in
+/// the same order, though withheld edge entries and webhook receipts sit between the served ones.
+///
+/// FAILS IF: the filter runs after the bound (then pages come back short, or `has_more` counts what
+/// is withheld), or `through` skips a served entry.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_page_is_never_short_for_what_it_withholds(pool: PgPool) {
+    let (owner, emitter, _) = setup(&pool).await;
+    let team = common::create_team(&pool, "page-team").await;
+    let reader = ProfileId::from(common::create_profile(&pool, "page-reader@example.test").await);
+    common::add_team_member(&pool, team, reader.uuid()).await;
+    let shared = ContextId::from(
+        common::insert_context(&pool, "kb_teams", team, "shared", "shared")
+            .await
+            .unwrap(),
+    );
+    let private = ContextId::from(
+        common::insert_context(&pool, "kb_profiles", owner.uuid(), "private", "private")
+            .await
+            .unwrap(),
+    );
+    let p1 = create(&pool, owner, emitter, private, "p1", "p1", &[]).await;
+    let mut kept = Vec::new();
+    for i in 0..4 {
+        let r = create(&pool, owner, emitter, shared, &format!("r{i}"), "r", &[]).await;
+        let e = edge(&pool, emitter, shared, r, p1).await;
+        touch_edge(&pool, emitter, e, r).await;
+        insert_webhook(&pool, emitter, shared).await;
+        kept.push(r);
+    }
+
+    let (whole, _) = drain(
+        &pool,
+        reader,
+        shared,
+        (BEGINNING.0.into(), BEGINNING.1),
+        1000,
+    )
+    .await;
+    assert!(whole.len() >= kept.len(), "anti-vacuity: {whole:?}");
+    assert!(
+        whole.iter().all(|x| x["subject"]["table"] != "kb_edges"),
+        "every edge here is hidden: {whole:?}"
+    );
+
+    let mut pos = (BEGINNING.0.to_owned(), BEGINNING.1);
+    let mut one_by_one = Vec::new();
+    loop {
+        let a = read(&pool, reader, shared, Some((&pos.0, pos.1)), 1)
+            .await
+            .expect("readable");
+        let page = entries(&a).clone();
+        pos = through(&a);
+        if a["has_more"].as_bool().unwrap() {
+            assert_eq!(page.len(), 1, "a page with more after it is full: {a}");
+            one_by_one.extend(page);
+        } else {
+            assert!(page.len() <= 1, "{a}");
+            one_by_one.extend(page);
+            break;
+        }
+    }
+    assert_eq!(
+        one_by_one, whole,
+        "paging one at a time serves the same entries"
+    );
+}
+
+/// A webhook receipt anchored on the connection's home context (20260819000020's shape: a domain
+/// kind, the context as subject). Inserted directly: the intake path lives above this crate. The
+/// boot-seed stamps only typed kinds, so `reset_schema` leaves this foreign one unregistered: register
+/// it as 20260819000020 does.
+async fn insert_webhook(pool: &PgPool, emitter: EntityId, context: ContextId) {
+    sqlx::query(
+        "INSERT INTO kb_event_types (name, payload_schema, schema_version, category) \
+         VALUES ('webhook_received', NULL, 1, 'domain') ON CONFLICT (name) DO NOTHING",
+    )
+    .execute(pool)
+    .await
+    .expect("the receipt kind registers");
+    let landed = sqlx::query(
+        "INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, \
+         producing_anchor_id, payload, category) \
+         SELECT id, $1, 'kb_contexts', $2, '{\"v\":2,\"body\":{}}'::jsonb, category \
+           FROM kb_event_types WHERE name = 'webhook_received'",
+    )
+    .bind(emitter)
+    .bind(context.uuid())
+    .execute(pool)
+    .await
+    .expect("the receipt lands")
+    .rows_affected();
+    assert_eq!(landed, 1, "one receipt row");
+}
+
+/// Owner ruling 2026-11-05 (migration 20261117000020). An inbound webhook is no change to the
+/// context: the feed never serves `webhook_received`, whoever reads, and naming it in `kinds`
+/// serves nothing. Outside the feed only a subscription manager reads a receipt.
+///
+/// FAILS IF: `context_changes_after` serves the kind (with or without `kinds` naming it).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_inbound_webhook_is_no_change_to_the_context(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    insert_webhook(&pool, emitter, home).await;
+    let r = create(&pool, owner, emitter, home, "after", "a", &[]).await;
+
+    let anchored: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE et.name = 'webhook_received' AND e.producing_anchor_id = $1 \
+            AND e.category = 'domain' AND e.xact_id IS NOT NULL",
+    )
+    .bind(home.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        anchored, 1,
+        "anti-vacuity: the receipt is an ordered domain row here"
+    );
+
+    let (got, _) = drain(&pool, owner, home, (BEGINNING.0.into(), BEGINNING.1), 1000).await;
+    assert!(
+        subjects_of_kind(&got, "webhook_received").is_empty(),
+        "a receipt was served: {got:?}"
+    );
+    assert_eq!(
+        subjects_of_kind(&got, "resource_created"),
+        vec![r.uuid().to_string()],
+        "the change after it is served"
+    );
+    let named: Option<serde_json::Value> = sqlx::query_scalar(
+        "SELECT context_changes_after($1, $2, '0'::xid8, 0, 1000, ARRAY['webhook_received'])",
+    )
+    .bind(owner.uuid())
+    .bind(home.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let named = named.expect("readable");
+    assert!(
+        entries(&named).is_empty(),
+        "naming the kind serves it: {named}"
     );
 }
