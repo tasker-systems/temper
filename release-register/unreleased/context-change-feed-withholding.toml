@@ -1,4 +1,4 @@
-title    = "The context change feed serves an edge only while the reader can read both its endpoints, and never serves a webhook receipt"
+title    = "The context change feed serves an edge only while the reader can read both its endpoints, and never serves a connection's traffic"
 pr       = "self"
 classes  = ["behavioral"]
 surfaces = ["http", "mcp", "cli-stdout", "schema"]
@@ -11,9 +11,11 @@ context reader could not learn through any other door:
   Before, the feed named an edge whose endpoint the reader cannot read, from its birth, with every
   later change, its actor, time and liveness, though every edge door denies such an edge exists.
   A fold of a visible edge is still served. An edge whose endpoint has since left the reader's view
-  is withheld for its whole history; the endpoint's own departure is still served.
-- webhook_received is never served. Naming it in `kinds` is refused as an unknown kind (400), as
-  admin kinds are. _feed_withholds_kind(text) is the one definition both use.
+  is withheld for its whole history; when that endpoint lived in the context, its own departure
+  is still served.
+- A connection's traffic, webhook_received and subscription_delivery_disposed, is never served.
+  Naming either in `kinds` is refused as an unknown kind (400), as admin kinds are.
+  _feed_withholds_kind(text) is the one definition both use.
 Resources, blocks and blobs are not filtered, so departures stay served. Both filters run before the
 page bound, so pages are never short and `has_more`/`through` count only what is served.
 
@@ -21,7 +23,8 @@ Who observes it: a reader of a context that homes an edge to something they cann
 a connection's home. Fewer entries, never different ones. openapi.json is unchanged.
 Witnesses: crates/temper-substrate/tests/context_change_feed.rs
 (an_edge_is_served_only_while_the_reader_can_read_both_endpoints,
-a_page_is_never_short_for_what_it_withholds, an_inbound_webhook_is_no_change_to_the_context),
+an_edge_to_an_unreadable_cogmap_or_blob_is_withheld, a_page_is_never_short_for_what_it_withholds,
+a_connections_traffic_is_no_change_to_the_context),
 crates/temper-services/tests/context_change_doors_test.rs.
 Release relevance: disclosure narrowing on a read surface shipped in the same unreleased window.
 '''

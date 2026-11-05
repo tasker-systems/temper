@@ -1,4 +1,4 @@
--- The context change feed withholds two things the reader could not learn through any other door
+-- The context change feed withholds what the reader could not learn through any other door
 -- (cross-review tasker-systems/temper-artifacts#203, 2026-11-04; owner ruling 2026-11-05).
 --
 --   1. AN EDGE IS SERVED ONLY WHILE BOTH ITS ENDPOINTS ARE READABLE. An edge homed in the context
@@ -10,42 +10,58 @@
 --      edge-owned property_* kinds alike) is now served only when the edge's row exists and both
 --      endpoints are readable by the reader NOW, by the same per-endpoint rule as edges_visible_to
 --      and endpoint_readable_by_profile. There is no fold test: a fold of a visible edge is a change
---      the reader could see, and stays served. The home is not tested again: it is the context, and
---      the gate already requires it readable. "Now" means an edge whose endpoint has since left the
+--      the reader could see, and stays served. The home must be this context, which the gate already
+--      requires readable; an edge event anchored here always names an edge homed here, so the test
+--      only bounds the lookup, and an edge homed anywhere else is withheld. "Now" means an edge whose endpoint has since left the
 --      reader's view is withheld for its whole history, its earlier entries included, which is what
---      edges_visible_to answers today. A relay loses nothing it held: it never held a hidden edge,
---      and an endpoint leaving the context is that endpoint's own entry (resource_departed,
---      resource_deleted). An edge whose row is gone (none is today: erasure folds, it does not
---      delete) is withheld, never served on a guess.
+--      edges_visible_to answers today. A relay loses nothing it held: it never held a hidden edge.
+--      When an endpoint that lived in this context leaves it, that is the endpoint's own entry here
+--      (resource_departed, resource_deleted). When an endpoint that lives in another context leaves
+--      the reader's view, nothing here says so: the edge goes quiet, and the consumer contract's
+--      periodic re-read is what drops it. An edge whose row is gone (none is today: erasure folds,
+--      it does not delete) is withheld, never served on a guess.
 --      Resources, blocks and blobs are not filtered. Every event about them is written while the
 --      subject lives in the context, so the reader had standing to see it then, and their
 --      departures must stay served.
 --      The test runs before the page bound, so a page is never short because of it, and `has_more`
 --      and `through` count only what is served.
 --
---   2. webhook_received IS NOT A CHANGE TO THE CONTEXT. It is a domain kind anchored on a
---      connection's home context (20260819000020), so every reader of that context was shown each
---      inbound webhook: when, through which emitter, under which act. Elsewhere only subscription
---      managers can read a receipt (delivery_service). _feed_withholds_kind names it, and is the one
---      definition: context_changes_after skips the kind, and the service refuses it in `kinds` as an
---      unknown kind, as it refuses admin kinds.
+--   2. A CONNECTION'S TRAFFIC IS NOT A CHANGE TO THE CONTEXT. webhook_received (20260819000020) and
+--      subscription_delivery_disposed (20260819000030) are domain kinds anchored on a connection's
+--      home context, so every reader of that context was shown each inbound webhook and each
+--      steward's judgement of a delivery: when, through which emitter, under which act. Elsewhere
+--      only a caller the subscription authorizes can read either (delivery_service). The other
+--      non-authored kinds _profile_change_events excludes anchor elsewhere: invocation_closed and
+--      delegated_launch on a cogmap, citation_audited on the audited resource's own home, the
+--      region and salience kinds on a cogmap. _feed_withholds_kind names the two, and is the one
+--      definition: context_changes_after skips them, and the service refuses them in `kinds` as
+--      unknown kinds, as it refuses admin kinds.
 --
 -- context_changes_after's signature and result are unchanged. Its subject derivation moves from
 -- the shaping step into the page, so the edge test can read it before the bound; the derivation
 -- itself is the one 20261117000000 wrote, unchanged.
 --
--- Cost: the visible-resource set is computed at most once per read, and only when the page meets
--- an edge subject whose endpoint is a resource (a MATERIALIZED CTE read from a CASE arm). A read
--- that meets no edge pays nothing for it.
+-- Cost:
+--   - The visible-resource set is computed at most once per read, and only when the page meets an
+--     edge subject whose endpoint is a resource (a MATERIALIZED CTE read from a CASE arm).
+--   - The edge lookup is one primary-key probe per scanned edge event. Its subquery is bounded to
+--     edges homed in this context, and OFFSET 0 keeps the planner from rewriting the correlated
+--     EXISTS into a hashed subplan over kb_edges: that rewrite read every edge in the database, and
+--     took 20 s with 100,000 edges homed in other contexts (code review, 2026-11-05).
+--   - One read scans until it fills its page, so a context whose recent events are almost all
+--     withheld costs more per read. Across reads the work stays linear, because `through` moves past
+--     what was withheld. Admin-act withholding already behaves this way. How long a read takes
+--     therefore says roughly how much it skipped; that is stated on the goal.
 
 CREATE FUNCTION _feed_withholds_kind(p_kind text)
 RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
-    SELECT p_kind = 'webhook_received'
+    SELECT p_kind IN ('webhook_received', 'subscription_delivery_disposed')
 $$;
 
 COMMENT ON FUNCTION _feed_withholds_kind(text) IS
   'A domain kind the context change feed never serves and refuses in `kinds` (20261117000020). '
-  'Today only webhook_received: an inbound receipt is no change to what lives in the context.';
+  'A connection''s traffic (webhook_received, subscription_delivery_disposed) is no change to what '
+  'lives in the context.';
 
 CREATE OR REPLACE FUNCTION context_changes_after(
     p_profile uuid, p_context uuid,
@@ -103,6 +119,10 @@ CREATE OR REPLACE FUNCTION context_changes_after(
                    SELECT 1
                      FROM kb_edges ed
                     WHERE ed.id = subj.id
+                      -- The home is the context the gate admitted; it bounds the lookup to this
+                      -- context's edges (idx_kb_edges_home_all).
+                      AND ed.home_anchor_table = 'kb_contexts'
+                      AND ed.home_anchor_id = p_context
                       AND CASE ed.source_table
                               WHEN 'kb_resources' THEN ed.source_id IN (SELECT resource_id FROM vis)
                               ELSE endpoint_readable_by_profile(p_profile, ed.source_table, ed.source_id)
@@ -110,7 +130,9 @@ CREATE OR REPLACE FUNCTION context_changes_after(
                       AND CASE ed.target_table
                               WHEN 'kb_resources' THEN ed.target_id IN (SELECT resource_id FROM vis)
                               ELSE endpoint_readable_by_profile(p_profile, ed.target_table, ed.target_id)
-                          END))
+                          END
+                   -- Keeps the lookup a per-event key probe (see Cost above).
+                   OFFSET 0))
          ORDER BY e.xact_id, e.seq
          LIMIT (SELECT n + 1 FROM bound)
     ),
@@ -163,5 +185,5 @@ $$;
 SELECT declare_migration(
     20261117000020,
     'additive',
-    'Adds _feed_withholds_kind(text). Replaces context_changes_after with its signature and result type unchanged: it now withholds webhook_received and any entry whose subject is an edge the reader cannot see both endpoints of. Nothing an older binary reads is dropped, renamed or reshaped; an older binary that names webhook_received in `kinds` is answered with no such entries.'
+    'Adds _feed_withholds_kind(text). Replaces context_changes_after with its signature and result type unchanged: it now withholds webhook_received, subscription_delivery_disposed, and any entry whose subject is an edge the reader cannot see both endpoints of. Nothing an older binary reads is dropped, renamed or reshaped; an older binary that names either kind in `kinds` is answered with no such entries.'
 );

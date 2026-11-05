@@ -1378,7 +1378,9 @@ async fn a_page_is_never_short_for_what_it_withholds(pool: PgPool) {
         let r = create(&pool, owner, emitter, shared, &format!("r{i}"), "r", &[]).await;
         let e = edge(&pool, emitter, shared, r, p1).await;
         touch_edge(&pool, emitter, e, r).await;
-        insert_webhook(&pool, emitter, shared).await;
+        for kind in TRAFFIC {
+            insert_traffic(&pool, kind, emitter, shared).await;
+        }
         kept.push(r);
     }
 
@@ -1419,79 +1421,206 @@ async fn a_page_is_never_short_for_what_it_withholds(pool: PgPool) {
     );
 }
 
-/// A webhook receipt anchored on the connection's home context (20260819000020's shape: a domain
-/// kind, the context as subject). Inserted directly: the intake path lives above this crate. The
-/// boot-seed stamps only typed kinds, so `reset_schema` leaves this foreign one unregistered: register
-/// it as 20260819000020 does.
-async fn insert_webhook(pool: &PgPool, emitter: EntityId, context: ContextId) {
+/// A connection's traffic, anchored on the connection's home context with the context as subject:
+/// a webhook receipt (20260819000020) or a steward's disposition of a delivery (20260819000030).
+/// Inserted directly: the intake and delivery paths live above this crate. Their migrations register
+/// both kinds, but `reset_schema` empties the registry and the boot-seed restores neither, so each is
+/// registered here as a domain kind first (the payload schema does not matter to the feed).
+const TRAFFIC: [&str; 2] = ["webhook_received", "subscription_delivery_disposed"];
+
+async fn insert_traffic(pool: &PgPool, kind: &str, emitter: EntityId, context: ContextId) {
     sqlx::query(
         "INSERT INTO kb_event_types (name, payload_schema, schema_version, category) \
-         VALUES ('webhook_received', NULL, 1, 'domain') ON CONFLICT (name) DO NOTHING",
+         VALUES ($1, NULL, 1, 'domain') ON CONFLICT (name) DO NOTHING",
     )
+    .bind(kind)
     .execute(pool)
     .await
-    .expect("the receipt kind registers");
+    .expect("the traffic kind registers");
     let landed = sqlx::query(
         "INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, \
          producing_anchor_id, payload, category) \
          SELECT id, $1, 'kb_contexts', $2, '{\"v\":2,\"body\":{}}'::jsonb, category \
-           FROM kb_event_types WHERE name = 'webhook_received'",
+           FROM kb_event_types WHERE name = $3 AND category = 'domain'",
     )
     .bind(emitter)
     .bind(context.uuid())
+    .bind(kind)
     .execute(pool)
     .await
-    .expect("the receipt lands")
+    .expect("the traffic lands")
     .rows_affected();
-    assert_eq!(landed, 1, "one receipt row");
+    assert_eq!(landed, 1, "one {kind} row, a domain kind");
 }
 
-/// Owner ruling 2026-11-05 (migration 20261117000020). An inbound webhook is no change to the
-/// context: the feed never serves `webhook_received`, whoever reads, and naming it in `kinds`
-/// serves nothing. Outside the feed only a subscription manager reads a receipt.
+/// Owner ruling 2026-11-05 (migration 20261117000020). A connection's traffic is no change to the
+/// context: the feed never serves `webhook_received` or `subscription_delivery_disposed`, whoever
+/// reads, and naming them in `kinds` serves nothing. Outside the feed only a caller the subscription
+/// authorizes reads either.
 ///
-/// FAILS IF: `context_changes_after` serves the kind (with or without `kinds` naming it).
+/// FAILS IF: `context_changes_after` serves either kind (with or without `kinds` naming it).
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn an_inbound_webhook_is_no_change_to_the_context(pool: PgPool) {
+async fn a_connections_traffic_is_no_change_to_the_context(pool: PgPool) {
     let (owner, emitter, home) = setup(&pool).await;
-    insert_webhook(&pool, emitter, home).await;
+    for kind in TRAFFIC {
+        insert_traffic(&pool, kind, emitter, home).await;
+    }
     let r = create(&pool, owner, emitter, home, "after", "a", &[]).await;
 
-    let anchored: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
-          WHERE et.name = 'webhook_received' AND e.producing_anchor_id = $1 \
-            AND e.category = 'domain' AND e.xact_id IS NOT NULL",
-    )
-    .bind(home.uuid())
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(
-        anchored, 1,
-        "anti-vacuity: the receipt is an ordered domain row here"
-    );
-
     let (got, _) = drain(&pool, owner, home, (BEGINNING.0.into(), BEGINNING.1), 1000).await;
-    assert!(
-        subjects_of_kind(&got, "webhook_received").is_empty(),
-        "a receipt was served: {got:?}"
-    );
+    for kind in TRAFFIC {
+        // Anti-vacuity: the row is an ordered domain row anchored here.
+        let anchored: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+              WHERE et.name = $1 AND e.producing_anchor_id = $2 \
+                AND e.category = 'domain' AND e.xact_id IS NOT NULL",
+        )
+        .bind(kind)
+        .bind(home.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(anchored, 1, "{kind} is an ordered domain row here");
+        assert!(
+            subjects_of_kind(&got, kind).is_empty(),
+            "{kind} was served: {got:?}"
+        );
+        let named: Option<serde_json::Value> = sqlx::query_scalar(
+            "SELECT context_changes_after($1, $2, '0'::xid8, 0, 1000, ARRAY[$3])",
+        )
+        .bind(owner.uuid())
+        .bind(home.uuid())
+        .bind(kind)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let named = named.expect("readable");
+        assert!(
+            entries(&named).is_empty(),
+            "naming {kind} serves it: {named}"
+        );
+    }
     assert_eq!(
         subjects_of_kind(&got, "resource_created"),
         vec![r.uuid().to_string()],
-        "the change after it is served"
+        "the change after them is served"
     );
-    let named: Option<serde_json::Value> = sqlx::query_scalar(
-        "SELECT context_changes_after($1, $2, '0'::xid8, 0, 1000, ARRAY['webhook_received'])",
+}
+
+/// The edge rule's other endpoint arms (migration 20261117000020): a cogmap endpoint is readable
+/// as `cogmap_readable_by_profile` answers, a blob endpoint as `blob_readable_by_profile` does, the
+/// same rule as `edges_visible_to`. An edge from a shared resource to a cogmap the reader cannot
+/// read, and one from a blob homed in a context the reader cannot read, are both withheld; the
+/// owner, who reads both, is served both.
+///
+/// FAILS IF: either arm is skipped (a cogmap or blob endpoint treated as readable).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_edge_to_an_unreadable_cogmap_or_blob_is_withheld(pool: PgPool) {
+    let (owner, emitter, _) = setup(&pool).await;
+    let team = common::create_team(&pool, "arm-team").await;
+    let owner_team = common::create_team(&pool, "arm-owner-team").await;
+    let reader = ProfileId::from(common::create_profile(&pool, "arm-reader@example.test").await);
+    common::add_team_member(&pool, team, reader.uuid()).await;
+    common::add_team_member(&pool, team, owner.uuid()).await;
+    common::add_team_member(&pool, owner_team, owner.uuid()).await;
+    let shared = ContextId::from(
+        common::insert_context(&pool, "kb_teams", team, "shared", "shared")
+            .await
+            .unwrap(),
+    );
+    let private = ContextId::from(
+        common::insert_context(&pool, "kb_profiles", owner.uuid(), "private", "private")
+            .await
+            .unwrap(),
+    );
+    let a1 = create(&pool, owner, emitter, shared, "a1", "a1", &[]).await;
+
+    let (cogmap, _) = common::genesis_cogmap(&pool, "arm-map", "arm telos").await;
+    sqlx::query("INSERT INTO kb_team_cogmaps (team_id, cogmap_id) VALUES ($1, $2)")
+        .bind(owner_team)
+        .bind(cogmap)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let bytes = b"arm blob".to_vec();
+    let hash = {
+        use sha2::Digest as _;
+        hex::encode(sha2::Sha256::digest(&bytes))
+    };
+    let store = temper_substrate::blob_store::InMemoryBlobStore::default()
+        .with_object(temper_substrate::blob_store::blob_pathname(&hash));
+    let blob = writes::commit_blob(
+        &pool,
+        &store,
+        writes::CommitBlobParams {
+            id: temper_substrate::ids::BlobId::from(Uuid::now_v7()),
+            home: AnchorRef::context(private),
+            owner,
+            originator: None,
+            content_hash: hash,
+            content_type: "image/png".to_owned(),
+            content_bytes: bytes.len() as i64,
+            max_bytes: 10 * 1024 * 1024,
+            allowlist: &["image/png".to_owned()][..],
+            emitter,
+        },
     )
-    .bind(owner.uuid())
-    .bind(home.uuid())
-    .fetch_one(&pool)
     .await
-    .unwrap();
-    let named = named.expect("readable");
-    assert!(
-        entries(&named).is_empty(),
-        "naming the kind serves it: {named}"
-    );
+    .expect("the blob commits");
+
+    let mut ids = Vec::new();
+    for (src, tgt) in [
+        (
+            AnchorRef::resource(a1),
+            AnchorRef::cogmap(temper_substrate::ids::CogmapId::from(cogmap)),
+        ),
+        (AnchorRef::blob(blob), AnchorRef::resource(a1)),
+    ] {
+        let mut tx = pool.begin().await.unwrap();
+        fire(
+            &mut tx,
+            SeedAction::RelationshipAssert {
+                src,
+                tgt,
+                kind: EdgeKind::LeadsTo,
+                polarity: EdgePolarity::Forward,
+                label: Some("arm"),
+                weight: 1.0,
+                home: EdgeHome::Context(shared),
+                emitter,
+            },
+        )
+        .await
+        .expect("the edge asserts");
+        tx.commit().await.unwrap();
+        let id: Uuid = sqlx::query_scalar(
+            "SELECT id FROM kb_edges WHERE home_anchor_id = $1 ORDER BY id DESC LIMIT 1",
+        )
+        .bind(shared.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        ids.push(id.to_string());
+    }
+
+    let from = (BEGINNING.0.to_owned(), BEGINNING.1);
+    let (seen, _) = drain(&pool, reader, shared, from.clone(), 1000).await;
+    let (owner_seen, _) = drain(&pool, owner, shared, from, 1000).await;
+    for (what, id) in ["cogmap", "blob"].iter().zip(&ids) {
+        let of = |got: &[serde_json::Value]| {
+            got.iter()
+                .filter(|x| x["subject"]["table"] == "kb_edges" && x["subject"]["id"] == *id)
+                .count()
+        };
+        assert!(
+            of(&owner_seen) >= 1,
+            "{what}: the owner is served the edge: {owner_seen:?}"
+        );
+        assert_eq!(
+            of(&seen),
+            0,
+            "{what}: the reader is served the edge: {seen:?}"
+        );
+    }
 }

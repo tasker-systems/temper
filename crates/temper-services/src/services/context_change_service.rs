@@ -29,11 +29,13 @@
 //! never announces an admin act, so a consumer that mirrors content must periodically re-read the
 //! subjects it holds and drop what its read now refuses. Every door repeats this.
 //!
-//! **What the feed withholds besides admin acts** (20261117000020). An edge is served only while
-//! the reader can read both its endpoints, as `edges_visible_to` answers, so an edge whose endpoint
-//! leaves the reader's view goes quiet rather than reporting a fold. The endpoint's own departure
-//! is served, and that is what tells a mirror to drop the edge. `webhook_received` is never served,
-//! and naming it in `kinds` is refused as an unknown kind (`_feed_withholds_kind`).
+//! **What the feed withholds besides admin acts** (20261117000020).
+//! - An edge is served only while the reader can read both its endpoints, as `edges_visible_to`
+//!   answers, so an edge whose endpoint leaves the reader's view goes quiet rather than reporting a
+//!   fold. When that endpoint lived in this context, its own departure is served here. When it
+//!   lives in another context, nothing here says so, and the periodic re-read drops the edge.
+//! - A connection's traffic, `webhook_received` and `subscription_delivery_disposed`, is never
+//!   served, and naming either in `kinds` is refused as an unknown kind (`_feed_withholds_kind`).
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
