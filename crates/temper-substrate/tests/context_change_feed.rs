@@ -1621,9 +1621,9 @@ async fn an_edge_to_an_unreadable_cogmap_or_blob_is_withheld(pool: PgPool) {
 }
 
 /// A re-assertion of an active edge is served to a reader who can read both endpoints (migration
-/// 20261117000020). `RelationshipAssert` mints a fresh `edge_id` for its payload, and the
-/// projection's `ON CONFLICT` reweights the existing edge instead, so the second event names an id
-/// with no row. Its payload's source, target and home are tested in place of the row's. The same
+/// 20261117000020). Before 20261117000030, `RelationshipAssert` minted a fresh `edge_id` for its
+/// payload and the projection's `ON CONFLICT` reweighted the existing edge instead, so the ledger
+/// still holds re-assertions naming an id with no row; the test records them that way. Its payload's source, target and home are tested in place of the row's. The same
 /// re-assertion of an edge with a hidden endpoint stays withheld.
 ///
 /// FAILS IF: an edge event with no row is withheld whatever its payload says (the reweight never
@@ -1649,25 +1649,53 @@ async fn a_reassertion_is_served_by_its_own_endpoints(pool: PgPool) {
     let a2 = create(&pool, owner, emitter, shared, "a2", "a2", &[]).await;
     let p1 = create(&pool, owner, emitter, private, "p1", "p1", &[]).await;
     for target in [a2, p1] {
-        for weight in [1.0, 5.0] {
-            let mut tx = pool.begin().await.unwrap();
-            fire(
-                &mut tx,
-                SeedAction::RelationshipAssert {
-                    src: AnchorRef::resource(a1),
-                    tgt: AnchorRef::resource(target),
-                    kind: EdgeKind::LeadsTo,
-                    polarity: EdgePolarity::Forward,
-                    label: Some("again"),
-                    weight,
-                    home: EdgeHome::Context(shared),
-                    emitter,
-                },
-            )
+        let mut tx = pool.begin().await.unwrap();
+        fire(
+            &mut tx,
+            SeedAction::RelationshipAssert {
+                src: AnchorRef::resource(a1),
+                tgt: AnchorRef::resource(target),
+                kind: EdgeKind::LeadsTo,
+                polarity: EdgePolarity::Forward,
+                label: Some("again"),
+                weight: 1.0,
+                home: EdgeHome::Context(shared),
+                emitter,
+            },
+        )
+        .await
+        .expect("the edge asserts");
+        tx.commit().await.unwrap();
+        // The re-assertion is written as events were before 20261117000030: its payload names a
+        // freshly minted edge_id, and the projection reweights the existing edge. `fire` now
+        // names the existing edge, so this records the shape the ledger still holds.
+        let payload = serde_json::json!({
+            "edge_id": Uuid::now_v7(),
+            "source": {"table": "kb_resources", "id": a1.uuid()},
+            "target": {"table": "kb_resources", "id": target.uuid()},
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "again",
+            "weight": 5.0,
+            "home": {"table": "kb_contexts", "id": shared.uuid()},
+        });
+        let mut tx = pool.begin().await.unwrap();
+        let ev: Uuid = sqlx::query_scalar(
+            "SELECT _event_append('relationship_asserted', $1, 'kb_contexts', $2, $3)",
+        )
+        .bind(emitter.uuid())
+        .bind(shared.uuid())
+        .bind(&payload)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        sqlx::query("SELECT _project_relationship_asserted($1, $2)")
+            .bind(ev)
+            .bind(&payload)
+            .execute(&mut *tx)
             .await
-            .expect("the edge asserts");
-            tx.commit().await.unwrap();
-        }
+            .unwrap();
+        tx.commit().await.unwrap();
     }
     // Anti-vacuity: two edges, and each re-assertion names an id with no row.
     let (rows, rowless): (i64, i64) = sqlx::query_as(
