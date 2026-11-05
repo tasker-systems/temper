@@ -16,8 +16,7 @@ it is reachable only by a concurrent retype into the same identity.
 Recorded events are not edited. The edge trail (element_trail_edge, served by the trail doors on
 HTTP, MCP and CLI) used to match only on payload edge_id, so it left out every re-assertion that
 had reweighted the edge. It now also reaches the pre-fix re-assertions, matching on the edge's
-identity, its kind at the time and its active window. Production held 243 such events on
-2026-10-08.
+identity, its kind at the time and its active window.
 
 Who observes it:
 - Readers of a re-assertion event's payload now see the real edge id.
