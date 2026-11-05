@@ -1350,8 +1350,8 @@ async fn an_edge_is_served_only_while_the_reader_can_read_both_endpoints(pool: P
     }
 }
 
-/// The edge filter runs before the page bound (migration 20261117000020). A page with `has_more`
-/// is never short, and reading one entry at a time serves exactly what one large page serves, in
+/// The edge filter runs before the page bound (migration 20261117000020). Below the scan budget a
+/// page with `has_more` is never short, and reading one entry at a time serves exactly what one large page serves, in
 /// the same order, though withheld edge entries and webhook receipts sit between the served ones.
 ///
 /// FAILS IF: the filter runs after the bound (then pages come back short, or `has_more` counts what
@@ -1703,5 +1703,58 @@ async fn a_reassertion_is_served_by_its_own_endpoints(pool: PgPool) {
         asserted(&seen),
         2,
         "the reader is served the visible edge's assertion and re-assertion only: {seen:?}"
+    );
+}
+
+/// One read scans at most `_feed_scan_budget()` of the context's events past its position (owner
+/// ruling 2026-11-05, migration 20261117000020). A run of withheld events longer than the budget
+/// gives a short page that says `has_more`, with a `through` past what it scanned, so the reader
+/// resumes beyond the withheld run and reaches the change after it, and no read scans the whole run.
+///
+/// FAILS IF: the budget is not applied (then the first read scans the whole run and serves the
+/// change after it), or `through` does not move past the scanned run (then the reader never
+/// reaches the change).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_read_scans_at_most_its_budget(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let budget: i64 = sqlx::query_scalar("SELECT _feed_scan_budget()::bigint")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    // A run of withheld events longer than the budget, then one served change.
+    insert_traffic(&pool, "webhook_received", emitter, home).await;
+    sqlx::query(
+        "INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, \
+         producing_anchor_id, payload, category) \
+         SELECT et.id, $1, 'kb_contexts', $2, '{}'::jsonb, et.category \
+           FROM kb_event_types et, generate_series(1, $3::bigint + 10) \
+          WHERE et.name = 'webhook_received'",
+    )
+    .bind(emitter)
+    .bind(home.uuid())
+    .bind(budget)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let r = create(&pool, owner, emitter, home, "past-the-run", "p", &[]).await;
+    settle(&pool).await;
+
+    let first = read(&pool, owner, home, Some(BEGINNING), 10)
+        .await
+        .expect("readable");
+    assert!(
+        entries(&first).is_empty(),
+        "the first read stops inside the run: {first}"
+    );
+    assert_eq!(
+        first["has_more"], true,
+        "a spent budget says has_more: {first}"
+    );
+
+    let (rest, _) = drain(&pool, owner, home, through(&first), 10).await;
+    assert_eq!(
+        subjects_of_kind(&rest, "resource_created"),
+        vec![r.uuid().to_string()],
+        "resuming past the run reaches the change after it"
     );
 }

@@ -17,7 +17,11 @@ context reader could not learn through any other door:
   Naming either in `kinds` is refused as an unknown kind (400), as admin kinds are.
   _feed_withholds_kind(text) is the one definition both use.
 Resources, blocks and blobs are not filtered, so departures stay served. Both filters run before the
-page bound, so pages are never short and `has_more`/`through` count only what is served.
+page bound, so `has_more`/`through` count only what is served.
+- One read scans at most 10,000 of the context's events past its position (_feed_scan_budget()).
+  When that runs out before the page fills, the page is short, `has_more` is true, and `through` is
+  the last event scanned. Below the budget a page is never short. Without the budget, a writer who
+  made many hidden edges made every other reader's read scan all of them.
 
 Who observes it: a reader of a context that homes an edge to something they cannot read, or that is
 a connection's home. Fewer entries, never different ones. openapi.json is unchanged.

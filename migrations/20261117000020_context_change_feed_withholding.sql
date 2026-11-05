@@ -29,8 +29,8 @@
 --      Resources, blocks and blobs are not filtered. Every event about them is written while the
 --      subject lives in the context, so the reader had standing to see it then, and their
 --      departures must stay served.
---      The test runs before the page bound, so a page is never short because of it, and `has_more`
---      and `through` count only what is served.
+--      The test runs before the page bound, so below the scan budget (item 3) a page is never
+--      short because of it, and `has_more` and `through` count only what is served.
 --
 --   2. A CONNECTION'S TRAFFIC IS NOT A CHANGE TO THE CONTEXT. webhook_received (20260819000020) and
 --      subscription_delivery_disposed (20260819000030) are domain kinds anchored on a connection's
@@ -43,6 +43,18 @@
 --      definition: context_changes_after skips them, and the service refuses them in `kinds` as
 --      unknown kinds, as it refuses admin kinds.
 --
+--   3. ONE READ SCANS AT MOST _feed_scan_budget() EVENTS (10,000; owner ruling 2026-11-05). Items
+--      1 and 2 withhold before the page bound, so without a budget a read scanned past every
+--      withheld event until its page filled. A writer who reads both endpoints of an edge can
+--      make many edges to a resource only they read, and every other reader of the context, or
+--      anyone replaying an old position, then paid for all of them on each read. When the budget
+--      runs out before the page fills, the answer serves what it found, says `has_more`, and its
+--      `through` is the last event scanned, so the next read resumes past what was withheld. Such
+--      a page is short, and that tells the reader at least the budget's worth of events in that
+--      stretch were withheld or of other categories, nothing finer. Below the budget a page is
+--      never short. The budget counts every event anchored on the context, of any category or
+--      kind, so a `kinds` filter is bounded the same way.
+--
 -- context_changes_after's signature and result are unchanged. Its subject derivation moves from
 -- the shaping step into the page, so the edge test can read it before the bound; the derivation
 -- itself is the one 20261117000000 wrote, unchanged.
@@ -54,10 +66,18 @@
 --     edges homed in this context, and OFFSET 0 keeps the planner from rewriting the correlated
 --     EXISTS into a hashed subplan over kb_edges: that rewrite read every edge in the database, and
 --     took 20 s with 100,000 edges homed in other contexts (code review, 2026-11-05).
---   - One read scans until it fills its page, so a context whose recent events are almost all
---     withheld costs more per read. Across reads the work stays linear, because `through` moves past
---     what was withheld. Admin-act withholding already behaves this way. How long a read takes
---     therefore says roughly how much it skipped; that is stated on the goal.
+--   - One read scans at most _feed_scan_budget() events past its position (item 3), so withheld
+--     events cannot make a read unbounded, however many a writer creates or however often a
+--     position is replayed. Within the budget a read still costs more when more is withheld, so
+--     how long a read takes says roughly how much it skipped; that is stated on the goal.
+
+CREATE FUNCTION _feed_scan_budget()
+RETURNS int LANGUAGE sql IMMUTABLE AS $$
+    SELECT 10000
+$$;
+
+COMMENT ON FUNCTION _feed_scan_budget() IS
+  'The most ledger rows one context_changes_after read scans past its position (20261117000020).';
 
 CREATE FUNCTION _feed_withholds_kind(p_kind text)
 RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
@@ -89,9 +109,21 @@ CREATE OR REPLACE FUNCTION context_changes_after(
     page AS (
         SELECT e.xact_id, e.seq, e.emitter_entity_id, e.occurred_at, e.correlation_id,
                et.name AS kind, subj.t, subj.id
-          FROM kb_events e
+          -- The scan budget: at most _feed_scan_budget() of the context's events past the position,
+          -- whatever is withheld among them (see item 3).
+          FROM (SELECT e0.*
+                  FROM kb_events e0
+                  CROSS JOIN gate g0
+                 WHERE g0.ok
+                   AND p_after_xact IS NOT NULL
+                   AND e0.producing_anchor_table = 'kb_contexts'
+                   AND e0.producing_anchor_id = p_context
+                   AND e0.xact_id IS NOT NULL
+                   AND e0.xact_id < g0.h
+                   AND (e0.xact_id, e0.seq) > (p_after_xact, coalesce(p_after_seq, 0))
+                 ORDER BY e0.xact_id, e0.seq
+                 LIMIT _feed_scan_budget()) e
           JOIN kb_event_types et ON et.id = e.event_type_id
-          CROSS JOIN gate g
           CROSS JOIN LATERAL (
               SELECT CASE
                          WHEN e.payload->'owner' ? 'table' THEN e.payload->'owner'->>'table'
@@ -110,14 +142,7 @@ CREATE OR REPLACE FUNCTION context_changes_after(
                          ELSE p_context
                      END AS id
           ) subj
-         WHERE g.ok
-           AND p_after_xact IS NOT NULL
-           AND e.producing_anchor_table = 'kb_contexts'
-           AND e.producing_anchor_id = p_context
-           AND e.xact_id IS NOT NULL
-           AND e.xact_id < g.h
-           AND (e.xact_id, e.seq) > (p_after_xact, coalesce(p_after_seq, 0))
-           AND e.category = 'domain'
+         WHERE e.category = 'domain'
            AND (p_kinds IS NULL OR et.name = ANY (p_kinds))
            AND NOT _feed_withholds_kind(et.name)
            AND NOT _event_is_admin_act(et.name, e.correlation_id, e.emitter_entity_id, e.xact_id)
@@ -155,6 +180,23 @@ CREATE OR REPLACE FUNCTION context_changes_after(
          ORDER BY e.xact_id, e.seq
          LIMIT (SELECT n + 1 FROM bound)
     ),
+    -- The last event the budget reaches, when the context has that many past the position. Read
+    -- only when the page did not fill.
+    cut AS (
+        SELECT e.xact_id, e.seq
+          FROM kb_events e
+          CROSS JOIN gate g
+         WHERE g.ok
+           AND p_after_xact IS NOT NULL
+           AND e.producing_anchor_table = 'kb_contexts'
+           AND e.producing_anchor_id = p_context
+           AND e.xact_id IS NOT NULL
+           AND e.xact_id < g.h
+           AND (e.xact_id, e.seq) > (p_after_xact, coalesce(p_after_seq, 0))
+         ORDER BY e.xact_id, e.seq
+         OFFSET _feed_scan_budget() - 1
+         LIMIT 1
+    ),
     numbered AS (
         SELECT p.*, row_number() OVER (ORDER BY p.xact_id, p.seq) AS rn FROM page p
     ),
@@ -178,14 +220,19 @@ CREATE OR REPLACE FUNCTION context_changes_after(
     )
     SELECT CASE WHEN NOT g.ok THEN NULL ELSE jsonb_build_object(
         'entries',  coalesce((SELECT jsonb_agg(entry ORDER BY rn) FROM shaped), '[]'::jsonb),
-        'has_more', (SELECT count(*) FROM page) > (SELECT b.n FROM bound b),
+        'has_more', (SELECT count(*) FROM page) > (SELECT b.n FROM bound b)
+                    OR EXISTS (SELECT 1 FROM cut),
         'through',  (
             SELECT jsonb_build_object('xact', t.x::text, 'seq', t.s)
               FROM (
                   SELECT CASE WHEN (SELECT count(*) FROM page) > (SELECT b.n FROM bound b)
-                              THEN (SELECT ls.xact_id FROM last_served ls) ELSE g.h END AS x,
+                              THEN (SELECT ls.xact_id FROM last_served ls)
+                              WHEN EXISTS (SELECT 1 FROM cut) THEN (SELECT ct.xact_id FROM cut ct)
+                              ELSE g.h END AS x,
                          CASE WHEN (SELECT count(*) FROM page) > (SELECT b.n FROM bound b)
-                              THEN (SELECT ls.seq FROM last_served ls) ELSE 0 END AS s
+                              THEN (SELECT ls.seq FROM last_served ls)
+                              WHEN EXISTS (SELECT 1 FROM cut) THEN (SELECT ct.seq FROM cut ct)
+                              ELSE 0 END AS s
               ) c
               -- Never move back from the position given.
               CROSS JOIN LATERAL (
@@ -204,5 +251,5 @@ $$;
 SELECT declare_migration(
     20261117000020,
     'additive',
-    'Adds _feed_withholds_kind(text). Replaces context_changes_after with its signature and result type unchanged: it now withholds webhook_received, subscription_delivery_disposed, and any entry whose subject is an edge the reader cannot see both endpoints of. Nothing an older binary reads is dropped, renamed or reshaped; an older binary that names either kind in `kinds` is answered with no such entries.'
+    'Adds _feed_scan_budget() and _feed_withholds_kind(text). Replaces context_changes_after with its signature and result type unchanged: it now withholds webhook_received, subscription_delivery_disposed, and any entry whose subject is an edge the reader cannot see both endpoints of; one read scans at most _feed_scan_budget() events. Nothing an older binary reads is dropped, renamed or reshaped; an older binary that names either kind in `kinds` is answered with no such entries.'
 );
