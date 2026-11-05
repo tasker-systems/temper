@@ -12,14 +12,20 @@
 --      and endpoint_readable_by_profile. There is no fold test: a fold of a visible edge is a change
 --      the reader could see, and stays served. The home must be this context, which the gate already
 --      requires readable; an edge event anchored here always names an edge homed here, so the test
---      only bounds the lookup, and an edge homed anywhere else is withheld. "Now" means an edge whose endpoint has since left the
---      reader's view is withheld for its whole history, its earlier entries included, which is what
---      edges_visible_to answers today. A relay loses nothing it held: it never held a hidden edge.
+--      only bounds the lookup, and an edge homed anywhere else is withheld. "Now" means an edge
+--      whose endpoint has since left the reader's view is withheld for its whole history, its
+--      earlier entries included, which is what edges_visible_to answers today. A relay loses nothing it held: it never held a hidden edge.
 --      When an endpoint that lived in this context leaves it, that is the endpoint's own entry here
 --      (resource_departed, resource_deleted). When an endpoint that lives in another context leaves
 --      the reader's view, nothing here says so: the edge goes quiet, and the consumer contract's
---      periodic re-read is what drops it. An edge whose row is gone (none is today: erasure folds,
---      it does not delete) is withheld, never served on a guess.
+--      periodic re-read is what drops it.
+--      Endpoints come from the edge's row. One event names an edge with no row: a re-assertion of
+--      an active edge. RelationshipAssert mints a fresh edge_id for its payload, and the projection's
+--      ON CONFLICT updates the existing edge instead (20260624000002), so the event's id names
+--      nothing. Its payload carries the edge's source, target and home, which are the existing
+--      edge's by that conflict, so for relationship_asserted with no row those are tested instead,
+--      and the event is served under the id it carries, as before. Any other edge event with no row
+--      is withheld, never served on a guess.
 --      Resources, blocks and blobs are not filtered. Every event about them is written while the
 --      subject lives in the context, so the reader had standing to see it then, and their
 --      departures must stay served.
@@ -117,19 +123,32 @@ CREATE OR REPLACE FUNCTION context_changes_after(
            AND NOT _event_is_admin_act(et.name, e.correlation_id, e.emitter_entity_id, e.xact_id)
            AND (subj.t IS DISTINCT FROM 'kb_edges' OR EXISTS (
                    SELECT 1
-                     FROM kb_edges ed
-                    WHERE ed.id = subj.id
-                      -- The home is the context the gate admitted; it bounds the lookup to this
-                      -- context's edges (idx_kb_edges_home_all).
-                      AND ed.home_anchor_table = 'kb_contexts'
-                      AND ed.home_anchor_id = p_context
-                      AND CASE ed.source_table
-                              WHEN 'kb_resources' THEN ed.source_id IN (SELECT resource_id FROM vis)
-                              ELSE endpoint_readable_by_profile(p_profile, ed.source_table, ed.source_id)
+                     FROM (
+                       -- The edge's row. The home is the context the gate admitted; it bounds
+                       -- the lookup to this context's edges.
+                       SELECT ed.source_table AS st, ed.source_id AS si,
+                              ed.target_table AS tt, ed.target_id AS ti
+                         FROM kb_edges ed
+                        WHERE ed.id = subj.id
+                          AND ed.home_anchor_table = 'kb_contexts'
+                          AND ed.home_anchor_id = p_context
+                       UNION ALL
+                       -- A re-assertion names an id with no row (see item 1): its own source,
+                       -- target and home are the existing edge's, so they are tested instead.
+                       SELECT e.payload#>>'{source,table}', _feed_uuid(e.payload#>>'{source,id}'),
+                              e.payload#>>'{target,table}', _feed_uuid(e.payload#>>'{target,id}')
+                        WHERE et.name = 'relationship_asserted'
+                          AND e.payload#>>'{home,table}' = 'kb_contexts'
+                          AND _feed_uuid(e.payload#>>'{home,id}') = p_context
+                          AND NOT EXISTS (SELECT 1 FROM kb_edges ed2 WHERE ed2.id = subj.id)
+                     ) ends
+                    WHERE CASE ends.st
+                              WHEN 'kb_resources' THEN ends.si IN (SELECT resource_id FROM vis)
+                              ELSE endpoint_readable_by_profile(p_profile, ends.st, ends.si)
                           END
-                      AND CASE ed.target_table
-                              WHEN 'kb_resources' THEN ed.target_id IN (SELECT resource_id FROM vis)
-                              ELSE endpoint_readable_by_profile(p_profile, ed.target_table, ed.target_id)
+                      AND CASE ends.tt
+                              WHEN 'kb_resources' THEN ends.ti IN (SELECT resource_id FROM vis)
+                              ELSE endpoint_readable_by_profile(p_profile, ends.tt, ends.ti)
                           END
                    -- Keeps the lookup a per-event key probe (see Cost above).
                    OFFSET 0))

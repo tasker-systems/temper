@@ -1578,7 +1578,7 @@ async fn an_edge_to_an_unreadable_cogmap_or_blob_is_withheld(pool: PgPool) {
         (AnchorRef::blob(blob), AnchorRef::resource(a1)),
     ] {
         let mut tx = pool.begin().await.unwrap();
-        fire(
+        let id = fire(
             &mut tx,
             SeedAction::RelationshipAssert {
                 src,
@@ -1592,16 +1592,11 @@ async fn an_edge_to_an_unreadable_cogmap_or_blob_is_withheld(pool: PgPool) {
             },
         )
         .await
-        .expect("the edge asserts");
-        tx.commit().await.unwrap();
-        let id: Uuid = sqlx::query_scalar(
-            "SELECT id FROM kb_edges WHERE home_anchor_id = $1 ORDER BY id DESC LIMIT 1",
-        )
-        .bind(shared.uuid())
-        .fetch_one(&pool)
-        .await
+        .expect("the edge asserts")
+        .relationship()
         .unwrap();
-        ids.push(id.to_string());
+        tx.commit().await.unwrap();
+        ids.push(id.uuid().to_string());
     }
 
     let from = (BEGINNING.0.to_owned(), BEGINNING.1);
@@ -1623,4 +1618,90 @@ async fn an_edge_to_an_unreadable_cogmap_or_blob_is_withheld(pool: PgPool) {
             "{what}: the reader is served the edge: {seen:?}"
         );
     }
+}
+
+/// A re-assertion of an active edge is served to a reader who can read both endpoints (migration
+/// 20261117000020). `RelationshipAssert` mints a fresh `edge_id` for its payload, and the
+/// projection's `ON CONFLICT` reweights the existing edge instead, so the second event names an id
+/// with no row. Its payload's source, target and home are tested in place of the row's. The same
+/// re-assertion of an edge with a hidden endpoint stays withheld.
+///
+/// FAILS IF: an edge event with no row is withheld whatever its payload says (the reweight never
+/// reaches a mirror), or the payload's endpoints are trusted without the readability test.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_reassertion_is_served_by_its_own_endpoints(pool: PgPool) {
+    let (owner, emitter, _) = setup(&pool).await;
+    let team = common::create_team(&pool, "again-team").await;
+    let reader = ProfileId::from(common::create_profile(&pool, "again@example.test").await);
+    common::add_team_member(&pool, team, reader.uuid()).await;
+    common::add_team_member(&pool, team, owner.uuid()).await;
+    let shared = ContextId::from(
+        common::insert_context(&pool, "kb_teams", team, "shared", "shared")
+            .await
+            .unwrap(),
+    );
+    let private = ContextId::from(
+        common::insert_context(&pool, "kb_profiles", owner.uuid(), "private", "private")
+            .await
+            .unwrap(),
+    );
+    let a1 = create(&pool, owner, emitter, shared, "a1", "a1", &[]).await;
+    let a2 = create(&pool, owner, emitter, shared, "a2", "a2", &[]).await;
+    let p1 = create(&pool, owner, emitter, private, "p1", "p1", &[]).await;
+    for target in [a2, p1] {
+        for weight in [1.0, 5.0] {
+            let mut tx = pool.begin().await.unwrap();
+            fire(
+                &mut tx,
+                SeedAction::RelationshipAssert {
+                    src: AnchorRef::resource(a1),
+                    tgt: AnchorRef::resource(target),
+                    kind: EdgeKind::LeadsTo,
+                    polarity: EdgePolarity::Forward,
+                    label: Some("again"),
+                    weight,
+                    home: EdgeHome::Context(shared),
+                    emitter,
+                },
+            )
+            .await
+            .expect("the edge asserts");
+            tx.commit().await.unwrap();
+        }
+    }
+    // Anti-vacuity: two edges, and each re-assertion names an id with no row.
+    let (rows, rowless): (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM kb_edges WHERE home_anchor_id = $1), \
+                (SELECT count(*) FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+                  WHERE et.name = 'relationship_asserted' AND e.producing_anchor_id = $1 \
+                    AND NOT EXISTS (SELECT 1 FROM kb_edges ed WHERE ed.id::text = e.payload->>'edge_id'))",
+    )
+    .bind(shared.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        (rows, rowless),
+        (2, 2),
+        "two edges, two re-assertions with no row"
+    );
+
+    let from = (BEGINNING.0.to_owned(), BEGINNING.1);
+    let (seen, _) = drain(&pool, reader, shared, from.clone(), 1000).await;
+    let (owner_seen, _) = drain(&pool, owner, shared, from, 1000).await;
+    let asserted = |got: &[serde_json::Value]| {
+        got.iter()
+            .filter(|x| x["kind"] == "relationship_asserted")
+            .count()
+    };
+    assert_eq!(
+        asserted(&owner_seen),
+        4,
+        "the owner is served every assertion: {owner_seen:?}"
+    );
+    assert_eq!(
+        asserted(&seen),
+        2,
+        "the reader is served the visible edge's assertion and re-assertion only: {seen:?}"
+    );
 }
