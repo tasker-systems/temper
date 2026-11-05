@@ -1932,6 +1932,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/events/{kb_context_id}/changes": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a context's changes after a position
+         * @description A context's changes after a position, in commit order. Each entry is a pointer naming the kind of change, the thing changed (`subject`), the acting entity, the time and the act. No entry carries content: read the subject through its own endpoint, under your own standing. A subject you can no longer read is still pointed at, and its own read refuses it.
+         *
+         *     Omit `after` to start: the answer has no entries and a `through` at the present, never a tail of history. Hand `through` back as `after` to resume. A position is opaque and is valid only for the context it was issued for. Every answer says how far it looked (`through`) and whether more exists (`has_more`).
+         *
+         *     **This is a change hint, not a cache-invalidation guarantee.** The feed never announces an admin act, such as an erasure or a scrub. A consumer that mirrors content must periodically re-read the subjects it holds and drop whatever is refused: that re-read is how erased or scrubbed content leaves a mirror.
+         */
+        get: operations["context_changes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/events/{kb_context_id}/cursor": {
         parameters: {
             query?: never;
@@ -5806,6 +5833,62 @@ export interface components {
              * @description The time of the caller's latest authored change produced in this context.
              */
             last_changed_at: string;
+        };
+        /**
+         * @description One change in a context's change feed: a pointer to what changed, never the change itself.
+         *
+         *     It names the kind of change, the thing it changed, who acted and when. It carries no title,
+         *     prose, meta value or key name: the new state is reached only by reading the subject through its
+         *     own door, under the reader's standing. A subject the reader can no longer read is still pointed
+         *     at, and its own read is what refuses it.
+         */
+        ContextChange: {
+            /**
+             * Format: uuid
+             * @description The act the change belongs to (its correlation id). Changes made by one act share it.
+             */
+            act?: string | null;
+            /**
+             * Format: uuid
+             * @description The acting entity (`kb_entities.id`).
+             */
+            actor: string;
+            /** @description The ledger's event-type name, verbatim (for example `property_set`, `resource_departed`). */
+            kind: string;
+            /**
+             * Format: date-time
+             * @description When the acting transaction began. Not the feed's order: entries are in commit order.
+             */
+            occurred_at: string;
+            /** @description The thing the change was made to. */
+            subject: components["schemas"]["ContextChangeSubject"];
+        };
+        /** @description What a [`ContextChange`] points at: a table and a row id. */
+        ContextChangeSubject: {
+            /** Format: uuid */
+            id: string;
+            /** @description `kb_resources`, `kb_edges`, `kb_content_blocks`, `kb_blobs` or `kb_contexts`. */
+            table: string;
+        };
+        /**
+         * @description A page of a context's change feed.
+         *
+         *     **A change hint, not a cache-invalidation guarantee.** The feed never announces an admin act
+         *     (an erasure or a scrub), so a consumer that mirrors content must periodically re-read the
+         *     subjects it holds and drop whatever its read now refuses. That re-read is how erased or
+         *     scrubbed content leaves a mirror.
+         */
+        ContextChangesResponse: {
+            /** @description The changes after the position given, in commit order, up to the page bound. */
+            entries: components["schemas"]["ContextChange"][];
+            /** @description Whether more changes exist past `through` right now. */
+            has_more: boolean;
+            /**
+             * @description The position this answer read through. Hand it back as `after` to resume. It is opaque,
+             *     issued for this context only, and never moves back from the position given. An empty page
+             *     still says how far it looked.
+             */
+            through: string;
         };
         /** @description Request body for POST /api/contexts. */
         ContextCreateRequest: {
@@ -16816,6 +16899,69 @@ export interface operations {
             };
             /** @description Caller is not a system admin, the scope is someone else's personal context or a resource homed in one (`FORBIDDEN_DETAIL`: this context is, or this resource is homed in, @handle's personal space; the admin arm does not reach it), or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    context_changes: {
+        parameters: {
+            query?: {
+                /**
+                 * @description The `through` of an earlier answer for this context. Omit it to start: the first answer
+                 *     has no entries and a position at the present, never a tail of history.
+                 */
+                after?: string | null;
+                /** @description Page bound, 1..=1000 (default 100). A bound outside that range is refused, never clamped. */
+                limit?: number | null;
+                /** @description Comma-separated change kinds to keep (ledger event-type names). Omit for every kind. */
+                kinds?: string | null;
+            };
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description The context whose changes are read */
+                kb_context_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The changes after the position, and the position read through */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContextChangesResponse"];
+                };
+            };
+            /** @description A position this deployment did not issue for this context, or one ahead of its ledger; a page bound outside 1..=1000; an unknown change kind. A refused position is never read as the beginning: omit `after` to start again */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The context does not exist or is not readable, refused exactly as a context read is, before the position, bound or kinds are looked at */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -131,6 +131,19 @@ pub struct ContextMaterializeDeltaQuery {
     pub threshold: Option<i64>,
 }
 
+/// Query params for a context's change feed.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::IntoParams))]
+pub struct ContextChangesQuery {
+    /// The `through` of an earlier answer for this context. Omit it to start: the first answer
+    /// has no entries and a position at the present, never a tail of history.
+    pub after: Option<String>,
+    /// Page bound, 1..=1000 (default 100). A bound outside that range is refused, never clamped.
+    pub limit: Option<i32>,
+    /// Comma-separated change kinds to keep (ledger event-type names). Omit for every kind.
+    pub kinds: Option<String>,
+}
+
 /// Query params for the bounded connections read — an optional limit on the page.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::IntoParams))]

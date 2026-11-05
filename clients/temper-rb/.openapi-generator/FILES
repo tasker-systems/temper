@@ -160,6 +160,9 @@ lib/temper/generated/models/connection_credential.rb
 lib/temper/generated/models/connection_subscription.rb
 lib/temper/generated/models/content_response.rb
 lib/temper/generated/models/context_activity.rb
+lib/temper/generated/models/context_change.rb
+lib/temper/generated/models/context_change_subject.rb
+lib/temper/generated/models/context_changes_response.rb
 lib/temper/generated/models/context_create_request.rb
 lib/temper/generated/models/context_owner_ref.rb
 lib/temper/generated/models/context_owner_ref_one_of.rb

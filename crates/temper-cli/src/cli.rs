@@ -1516,6 +1516,29 @@ pub enum ContextAction {
         /// Context ref: a UUID or `@me/slug` / `+team-slug/slug`.
         context: String,
     },
+    /// A context's changes after a position, in commit order.
+    ///
+    /// Each entry is a pointer — kind, subject (table and id), actor, time and act — never
+    /// content: read the subject with its own command. Omit `--after` to start: the answer has no
+    /// entries and a `through` at the present. Pass an answer's `through` as `--after` to resume,
+    /// and keep reading while `has_more` is true. A position is opaque and valid only for the
+    /// context it was issued for.
+    ///
+    /// A change hint, not a cache-invalidation guarantee: the feed never announces an erasure or a
+    /// scrub, so a mirror must periodically re-read the subjects it holds and drop what is refused.
+    Changes {
+        /// Context ref: a UUID or `@me/slug` / `+team-slug/slug`.
+        context: String,
+        /// The `through` of an earlier answer for this context. Omit to start.
+        #[arg(long)]
+        after: Option<String>,
+        /// Page bound, 1..=1000 (default 100). Outside that range is refused, never clamped.
+        #[arg(long)]
+        limit: Option<i32>,
+        /// Keep only this change kind (a ledger event-type name). Repeat for several.
+        #[arg(long = "kind")]
+        kinds: Vec<String>,
+    },
     /// Re-form a context's regions when enough has changed since the last materialize. Below the
     /// threshold this is a safe no-op (`materialized: false`). Requires write access to the context.
     Materialize {

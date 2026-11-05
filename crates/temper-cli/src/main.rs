@@ -768,6 +768,24 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     })
                 })
             }
+            ContextAction::Changes {
+                context,
+                after,
+                limit,
+                kinds,
+            } => temper_cli::actions::runtime::with_client(|client| {
+                Box::pin(async move {
+                    temper_cli::commands::context_cmd::changes_remote(
+                        client,
+                        &context,
+                        after,
+                        limit,
+                        kinds,
+                        output_format,
+                    )
+                    .await
+                })
+            }),
             ContextAction::Materialize { context, threshold } => {
                 temper_cli::actions::runtime::with_client(|client| {
                     Box::pin(async move {

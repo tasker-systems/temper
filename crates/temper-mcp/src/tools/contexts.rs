@@ -35,9 +35,12 @@ use temper_core::types::cognitive_maps::{ContextAnalyticsInput, ContextShapeInpu
 use temper_core::types::context::{
     ContextCreateRequest, ReassignContextRequest, RenameContextRequest, ShareContextRequest,
 };
+use temper_core::types::query_params::ContextChangesQuery;
 
 use crate::service::{api_error_cause, AcrossAuth, TemperMcpService};
-use crate::tools::cognitive_maps::{context_analytics, context_region_metrics, context_shape};
+use crate::tools::cognitive_maps::{
+    context_analytics, context_anchor, context_region_metrics, context_shape,
+};
 
 fn to_text<T: serde::Serialize>(value: &T) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string())
@@ -353,6 +356,13 @@ pub enum ContextReadView {
     /// Read the context's staleness readout: when its shape was last materialized, the latest
     /// readable touch to its regions/edges, and whether the read is stale.
     Analytics,
+    /// Read the context's changes after a position, in commit order. Each entry is a pointer
+    /// (kind, subject, actor, time, act), never content: read the subject through its own tool.
+    /// Omit `after` to start (no entries, `through` at the present); pass an answer's `through`
+    /// as `after` to resume. A change hint, not a cache-invalidation guarantee: the feed never
+    /// announces an erasure or scrub, so a mirror must periodically re-read what it holds and
+    /// drop what is refused.
+    Changes,
 }
 
 /// Consolidated context-read tool — one read tool with a `view` discriminator.
@@ -366,12 +376,21 @@ pub struct ContextReadInput {
     /// Context UUID. Required for `get`; ignored for `list`.
     #[serde(default)]
     pub id: Option<Uuid>,
-    /// Context ref (`@me/<slug>`, `+<team>/<slug>`, or UUID). Required for `shape`, `metrics` and `analytics`; ignored for `list` and `get`.
+    /// Context ref (`@me/<slug>`, `+<team>/<slug>`, or UUID). Required for `shape`, `metrics`, `analytics` and `changes`; ignored for `list` and `get`.
     #[serde(default)]
     pub context: Option<String>,
     /// Optional lens ref to filter regions. Used with `shape` and `metrics`.
     #[serde(default)]
     pub lens: Option<String>,
+    /// `changes` only: the `through` of an earlier `changes` answer for this context. Omit to start.
+    #[serde(default)]
+    pub after: Option<String>,
+    /// `changes` only: page bound, 1..=1000 (default 100). Outside that range is refused.
+    #[serde(default)]
+    pub limit: Option<i32>,
+    /// `changes` only: change kinds to keep (ledger event-type names). Omit for every kind.
+    #[serde(default)]
+    pub kinds: Option<Vec<String>>,
 }
 
 /// Dispatch the consolidated context-read tool.
@@ -422,7 +441,48 @@ pub async fn context_read(
             })?;
             context_analytics(svc, parts, ContextAnalyticsInput { context }).await
         }
+        ContextReadView::Changes => {
+            let context = input.context.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("changes requires `context`".to_string(), None)
+            })?;
+            let query = ContextChangesQuery {
+                after: input.after,
+                limit: input.limit,
+                kinds: input.kinds.map(|k| k.join(",")),
+            };
+            context_changes(svc, parts, &context, &query).await
+        }
     }
+}
+
+/// The `changes` view: the context ref resolves as every context-scoped read does, then the
+/// change feed's own refusals (a position not issued for this context, a bound out of range, an
+/// unknown kind) carry the server's sentence as invalid params.
+async fn context_changes(
+    svc: &TemperMcpService,
+    parts: &http::request::Parts,
+    context: &str,
+    query: &ContextChangesQuery,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let context_id = context_anchor(svc, parts, context).await?;
+    let page = svc
+        .relay_client(parts)?
+        .events()
+        .changes(context_id, query)
+        .await
+        .across_auth(|e| match e {
+            ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
+            ClientError::Server {
+                status: 400,
+                message,
+            } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+            other => rmcp::ErrorData::internal_error(format!("changes failed: {other}"), None),
+        })?;
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(
+            serde_json::to_string_pretty(&page).unwrap_or_else(|_| "{}".to_string()),
+        ),
+    ]))
 }
 
 // ── Consolidated write tool (5→1) ─────────────────────────────────────────────
