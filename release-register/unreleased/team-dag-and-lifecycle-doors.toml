@@ -1,7 +1,7 @@
 title    = "Team DAG and lifecycle doors: attach, move, multi-parent create, restore, slug rename and an admin auto-join door"
 pr       = "self"
 classes  = ["additive", "behavioral"]
-surfaces = ["http", "clients", "schema", "erasure-policy"]
+surfaces = ["http", "mcp", "cli-stdout", "clients", "schema", "erasure-policy"]
 status   = "signal-only"
 body = '''
 Team DAG and lifecycle doors (temper-artifacts specs/2026-11-06-team-dag-and-lifecycle-doors-design.md).
@@ -36,6 +36,14 @@ Team DAG and lifecycle doors (temper-artifacts specs/2026-11-06-team-dag-and-lif
 - New admin event type team_lifecycle_changed (migration 20261118000010), written by create_team
   and delete_team. Behavioral: a team's managers now see these records on the team's admin-ledger
   page.
+
+- MCP: `team_manage` gains create, update, delete, restore, add_member, change_role,
+  remove_member, attach, detach, reparent, rename_slug and set_auto_join beside `leave`. A new
+  read tool, `team_read`, offers views list and detail (42 tools). A machine principal's call is
+  refused by the API.
+- CLI: `temper team attach`, `team reparent`, `team restore`, `team rename-slug` (which prints an
+  address-change warning) and `temper admin team auto-join`. `team create --parent` is
+  repeatable. `team show` output includes `parents`.
 
 Who observes it: SDK users, through new operations and models and one new field. Admin-ledger
 readers see the new event type. No existing shape changes.

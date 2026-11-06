@@ -117,16 +117,22 @@ pub async fn create_remote(
     client: &temper_client::TemperClient,
     slug: &str,
     name: Option<&str>,
-    parent: Option<&str>,
+    parents: &[String],
     auto_join_role: Option<&str>,
     fmt: crate::format::OutputFormat,
 ) -> Result<()> {
     let auto_join_role = auto_join_role.map(parse_role).transpose()?;
+    // One parent rides `parent`, which every server understands; several ride `parents`.
+    let (parent, parents) = match parents {
+        [] => (None, None),
+        [one] => (Some(one.clone()), None),
+        many => (None, Some(many.to_vec())),
+    };
     let req = TeamCreateRequest {
         slug: slug.to_owned(),
         name: name.map(str::to_owned),
-        parent: parent.map(str::to_owned),
-        parents: None,
+        parent,
+        parents,
         auto_join_role,
     };
 
@@ -212,7 +218,7 @@ pub async fn delete_remote(
     Ok(())
 }
 
-/// Detach a child team from a parent team (an owner or maintainer of the parent, or a system
+/// Detach a child team from a parent team (a manager of the parent or of the child, or a system
 /// admin). The child keeps its roster and only this link is cut; its members stop reaching what is
 /// attached to the parent.
 ///
@@ -254,6 +260,121 @@ pub async fn detach_remote(
         .await
         .map_err(crate::actions::runtime::client_err_to_temper)?;
     output::success("Child team detached.");
+    Ok(())
+}
+
+/// Attach a child team under a parent team (a manager of both; a temper-system or gating-team
+/// parent, or an auto-join child, a system admin).
+pub async fn attach_remote(
+    client: &temper_client::TemperClient,
+    parent: &str,
+    child: &str,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let parent_id = resolve_team_id(client, parent).await?;
+    let child_id = resolve_team_id(client, child).await?;
+    let outcome = client
+        .teams()
+        .attach_child(parent_id, child_id)
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+    println!("{}", crate::format::render(&outcome, fmt)?);
+    Ok(())
+}
+
+/// Move a team from one parent to another in one act. `from`/`to` are passed to the API as given
+/// (it resolves them), so a parent the caller is not a member of is still nameable by slug.
+pub async fn reparent_remote(
+    client: &temper_client::TemperClient,
+    team: &str,
+    from: &str,
+    to: &str,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let team_id = resolve_team_id(client, team).await?;
+    let outcome = client
+        .teams()
+        .reparent(
+            team_id,
+            &temper_core::types::team::ReparentRequest {
+                from: from.to_owned(),
+                to: to.to_owned(),
+            },
+        )
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+    println!("{}", crate::format::render(&outcome, fmt)?);
+    Ok(())
+}
+
+/// Restore a soft-deleted team (its owner, or a system admin), printing the revived parents,
+/// children and roster.
+pub async fn restore_remote(
+    client: &temper_client::TemperClient,
+    team: &str,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let team_id = resolve_team_id(client, team).await?;
+    let outcome = client
+        .teams()
+        .restore(team_id)
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+    println!("{}", crate::format::render(&outcome, fmt)?);
+    Ok(())
+}
+
+/// Change a team's slug, warning that `+old/...` addresses stop resolving.
+pub async fn rename_slug_remote(
+    client: &temper_client::TemperClient,
+    team: &str,
+    slug: &str,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let team_id = resolve_team_id(client, team).await?;
+    let outcome = client
+        .teams()
+        .rename_slug(
+            team_id,
+            &temper_core::types::team::RenameTeamSlugRequest {
+                slug: slug.to_owned(),
+            },
+        )
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+    println!("{}", crate::format::render(&outcome, fmt)?);
+    if outcome.from != outcome.to {
+        output::warning(format!(
+            "addresses changed: `+{}/...` refs no longer resolve; use `+{}/...` (UUID refs are \
+             unaffected, and refs written in content are not rewritten)",
+            outcome.from, outcome.to
+        ));
+    }
+    Ok(())
+}
+
+/// Set, change or clear a team's auto-join role (a system admin). `role` is member, watcher or
+/// none.
+pub async fn set_auto_join_remote(
+    client: &temper_client::TemperClient,
+    team: &str,
+    role: &str,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let role = match role {
+        "none" | "clear" => None,
+        other => Some(parse_role(other)?),
+    };
+    let team_id = resolve_team_id(client, team).await?;
+    let outcome = client
+        .teams()
+        .set_auto_join(
+            team_id,
+            &temper_core::types::team::SetAutoJoinRequest { role },
+        )
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+    println!("{}", crate::format::render(&outcome, fmt)?);
     Ok(())
 }
 

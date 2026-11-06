@@ -501,6 +501,12 @@ current_gates() {
 # admin's; children show to managers) and say that the API decides and a machine is refused at the
 # route. The tool checks none of it: every action relays on the caller's bearer, and
 # `mcp_team_manage_e2e` drives a machine token through each write to the API's refusal sentence.
+# REVIEWED 2026-11-06 (same doors, Phase 8: the CLI) — `temper-cli/src/cli.rs` 23 -> 27 and
+# `commands/team.rs` 7 -> 10, unbound (`-`): the help and doc text of `team attach` (a manager of
+# both; root/gating parent or auto-join child a system admin's), `team reparent`, `team restore`
+# (owner or system admin), `team rename-slug` (owner/maintainer; root/gating a system admin),
+# `admin team auto-join`, and `team detach` widened to a manager of either side. Each restates the
+# `team_service` gate it reaches; the CLI decides nothing.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -521,7 +527,7 @@ claim crates/temper-api/src/handlers/slack_disconnect.rs 1 -
 claim crates/temper-api/src/handlers/subscriptions.rs 7 subscription
 claim crates/temper-api/src/handlers/teams.rs 20 team_membership,is_system_admin
 claim crates/temper-api/src/openapi.rs 5 is_system_admin,machine,connection,subscription,read_gates,grant,ledger_subject
-claim crates/temper-cli/src/cli.rs 23 team_membership
+claim crates/temper-cli/src/cli.rs 27 team_membership
 claim crates/temper-cli/src/commands/admin.rs 4 -
 claim crates/temper-cli/src/commands/admin_connection.rs 2 connection
 claim crates/temper-cli/src/commands/admin_erasure.rs 1 -
@@ -531,7 +537,7 @@ claim crates/temper-cli/src/commands/admin_slack.rs 1 -
 claim crates/temper-cli/src/commands/admin_subscription.rs 2 subscription
 claim crates/temper-cli/src/commands/cogmap.rs 3 two_sided,is_system_admin
 claim crates/temper-cli/src/commands/context_cmd.rs 2 context_admin
-claim crates/temper-cli/src/commands/team.rs 7 team_membership
+claim crates/temper-cli/src/commands/team.rs 10 team_membership
 claim crates/temper-cli/src/commands/warmup.rs 1 is_system_admin
 claim crates/temper-core/src/types/admin.rs 5 is_system_admin,read_gates
 claim crates/temper-core/src/types/connection.rs 2 machine,connection

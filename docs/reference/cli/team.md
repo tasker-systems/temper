@@ -17,7 +17,11 @@ Commands:
   uninvite       Revoke (withdraw) a pending invitation (a team manager or a system admin; on a personal team, its owner only)
   show           Show a team's detail and member roster
   leave          Leave a team you are a member of (removes your membership)
-  detach         Detach a child team from a parent team (an owner or maintainer of the parent, or a system admin)
+  attach         Attach a child team under a parent team (a manager of both; a temper-system or gating-team parent, or an auto-join child, a system admin)
+  reparent       Move a team from one parent to another, in one act (a manager of the team and of `--to`)
+  restore        Restore a soft-deleted team (its owner, or a system admin)
+  rename-slug    Change a team's slug (an owner or maintainer; temper-system and the gating team, a system admin)
+  detach         Detach a child team from a parent team (a manager of the parent or of the child, or a system admin)
   remove-member  Remove a member from a team (owner/maintainer)
   set-role       Change a member's role (a team owner/maintainer or a system admin; personal team: its owner)
   update         Update a team's metadata (owner/maintainer)
@@ -165,10 +169,142 @@ Options:
   -h, --help               Print help
 ```
 
+### `temper team attach`
+
+```text
+Attach a child team under a parent team (a manager of both; a temper-system or gating-team parent, or an auto-join child, a system admin)
+
+Every member of the child, at any role, then reads everything attached to the parent and its ancestors. Also the way to give a team a second parent.
+
+Usage: temper team attach [OPTIONS] <PARENT> <CHILD>
+
+Arguments:
+  <PARENT>
+          Parent team slug (optionally `+`-prefixed) or UUID
+
+  <CHILD>
+          Child team slug (optionally `+`-prefixed), decorated ref, or UUID
+
+Options:
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### `temper team reparent`
+
+```text
+Move a team from one parent to another, in one act (a manager of the team and of `--to`)
+
+The new link is written before the old one is cut, so a refusal leaves the team where it was.
+
+Usage: temper team reparent [OPTIONS] --from <FROM> --to <TO> <TEAM>
+
+Arguments:
+  <TEAM>
+          The team being moved: slug (optionally `+`-prefixed) or UUID
+
+Options:
+      --from <FROM>
+          The current parent to leave (a team ref)
+
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --to <TO>
+          The new parent to join (a team ref)
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### `temper team restore`
+
+```text
+Restore a soft-deleted team (its owner, or a system admin)
+
+Every preserved membership, parent link and child's reach revives; the output lists them. A deleted team is no longer in `team list`, so name it by UUID.
+
+Usage: temper team restore [OPTIONS] <TEAM>
+
+Arguments:
+  <TEAM>
+          Team UUID (or decorated ref)
+
+Options:
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### `temper team rename-slug`
+
+```text
+Change a team's slug (an owner or maintainer; temper-system and the gating team, a system admin)
+
+Addresses change: `+old-slug/...` refs stop resolving, and refs written in content are not rewritten. UUID refs are unaffected.
+
+Usage: temper team rename-slug [OPTIONS] <TEAM> <SLUG>
+
+Arguments:
+  <TEAM>
+          Team slug (optionally `+`-prefixed) or UUID
+
+  <SLUG>
+          The new slug: a-z, 0-9 and `-`, starting with a letter or digit, at most 63 characters
+
+Options:
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
 ### `temper team detach`
 
 ```text
-Detach a child team from a parent team (an owner or maintainer of the parent, or a system admin)
+Detach a child team from a parent team (a manager of the parent or of the child, or a system admin)
 
 The child keeps its roster and only this link is cut; its members stop reaching what is attached to the parent. `temper team show <parent>` lists the parent's children.
 
@@ -345,7 +481,7 @@ Options:
       --format <FORMAT>
           Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
       --parent <PARENT>
-          Parent team ref (`+slug` or bare slug); creates a child team
+          Parent team ref (`+slug`, bare slug, or UUID); creates a child team. Repeat for several parents (at most 16); you must manage each
       --auto-join-role <AUTO_JOIN_ROLE>
           Auto-join role for an "everyone" pool (admin-only): member/watcher
       --embed-threads <N>

@@ -39,6 +39,7 @@ Consequences worth internalizing before you act:
 | `admin saml` | SAML provisioning tooling: `provision` (keys + env bundle + SQL), `map-group` (IdP group → team), `verify`. |
 | `admin machine` | Machine principals (client_credentials): `provision`, `rebind`, `issue`, `rotate-secret`, `list`, `show`, `revoke`. See below — each verb answers a different failure. |
 | `admin slack` | Account links: `disconnect` (idempotent). |
+| `admin team` | `auto-join <team> <member\|watcher\|none>`: set, change or clear a team's auto-join pool. Every approved person (never a machine) is enrolled and reads everything the team **and its ancestors** hold — the output lists those ancestors. Existing memberships are never changed. Refused on temper-system, the gating team and personal teams. |
 | `admin connection` | Provision and configure the authed link to a remote system (GitHub, Linear). See below — capability is derived, not flagged. |
 | `admin subscription` | Point a team/context/cogmap at a connection's events: `create`, `list`, `show`, `revoke`. The authz gate (authoring-team manage-capable, a reach grant on the connection, **and** authorship of a context or map subscriber) runs server-side. |
 | `admin erasure` | Permanent erasure: `resource`, `principal` (by pseudonym UUID), `block-history` (named blocks' revisions), `field` (a leaked title, origin URI or property, while the resource survives). Each **surveys by default** and acts only with `--execute`. See below. |

@@ -1666,8 +1666,51 @@ pub enum TeamAction {
         /// Team slug (optionally `+`-prefixed) or UUID
         team: String,
     },
-    /// Detach a child team from a parent team (an owner or maintainer of the parent, or a system
+    /// Attach a child team under a parent team (a manager of both; a temper-system or gating-team
+    /// parent, or an auto-join child, a system admin)
+    ///
+    /// Every member of the child, at any role, then reads everything attached to the parent and
+    /// its ancestors. Also the way to give a team a second parent.
+    Attach {
+        /// Parent team slug (optionally `+`-prefixed) or UUID
+        parent: String,
+        /// Child team slug (optionally `+`-prefixed), decorated ref, or UUID
+        child: String,
+    },
+    /// Move a team from one parent to another, in one act (a manager of the team and of `--to`)
+    ///
+    /// The new link is written before the old one is cut, so a refusal leaves the team where it was.
+    Reparent {
+        /// The team being moved: slug (optionally `+`-prefixed) or UUID
+        team: String,
+        /// The current parent to leave (a team ref)
+        #[arg(long)]
+        from: String,
+        /// The new parent to join (a team ref)
+        #[arg(long)]
+        to: String,
+    },
+    /// Restore a soft-deleted team (its owner, or a system admin)
+    ///
+    /// Every preserved membership, parent link and child's reach revives; the output lists them.
+    /// A deleted team is no longer in `team list`, so name it by UUID.
+    Restore {
+        /// Team UUID (or decorated ref)
+        team: String,
+    },
+    /// Change a team's slug (an owner or maintainer; temper-system and the gating team, a system
     /// admin)
+    ///
+    /// Addresses change: `+old-slug/...` refs stop resolving, and refs written in content are not
+    /// rewritten. UUID refs are unaffected.
+    RenameSlug {
+        /// Team slug (optionally `+`-prefixed) or UUID
+        team: String,
+        /// The new slug: a-z, 0-9 and `-`, starting with a letter or digit, at most 63 characters
+        slug: String,
+    },
+    /// Detach a child team from a parent team (a manager of the parent or of the child, or a
+    /// system admin)
     ///
     /// The child keeps its roster and only this link is cut; its members stop reaching what is
     /// attached to the parent. `temper team show <parent>` lists the parent's children.
@@ -1736,9 +1779,10 @@ pub enum TeamAction {
         /// Display name (defaults to the slug)
         #[arg(long)]
         name: Option<String>,
-        /// Parent team ref (`+slug` or bare slug); creates a child team
+        /// Parent team ref (`+slug`, bare slug, or UUID); creates a child team. Repeat for several
+        /// parents (at most 16); you must manage each.
         #[arg(long)]
-        parent: Option<String>,
+        parent: Vec<String>,
         /// Auto-join role for an "everyone" pool (admin-only): member/watcher
         #[arg(long = "auto-join-role")]
         auto_join_role: Option<String>,
@@ -1856,6 +1900,11 @@ pub enum AdminAction {
     Slack {
         #[command(subcommand)]
         action: AdminSlackAction,
+    },
+    /// Administer teams: the acts only a system admin takes
+    Team {
+        #[command(subcommand)]
+        action: AdminTeamAction,
     },
     /// Provision connections — temper's authed link to a remote system (GitHub, Linear)
     Connection {
@@ -2099,6 +2148,21 @@ pub enum AdminMachineAction {
     Show { id: String },
     /// Revoke a machine client. Denies authentication; grants and memberships survive.
     Revoke { id: String },
+}
+
+#[derive(Debug, clap::Subcommand)]
+pub enum AdminTeamAction {
+    /// Set, change or clear a team's auto-join role
+    ///
+    /// With a role set, every approved person (never a machine) is enrolled at it and reads
+    /// everything attached to the team and its ancestors (listed in the output). Existing
+    /// memberships are never changed. Refused on temper-system, the gating team and personal teams.
+    AutoJoin {
+        /// Team slug (optionally `+`-prefixed) or UUID
+        team: String,
+        /// member | watcher | none (none clears it)
+        role: String,
+    },
 }
 
 #[derive(Debug, clap::Subcommand)]
