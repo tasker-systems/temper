@@ -559,3 +559,92 @@ async fn a_former_owner_grants_no_reach_on_a_dead_teams_connection(pool: PgPool)
     .expect("count");
     assert_eq!(grants, 0, "no reach row landed");
 }
+
+/// Team DAG and lifecycle doors, Phase 0 (temper-artifacts
+/// `specs/2026-11-06-team-dag-and-lifecycle-doors-design.md` D6): restoring a team revives the reach
+/// through it, so every walker of `kb_teams_parents` that confers reach must floor soft-deleted
+/// teams. The only live one is `team_ancestors` (`team_descendants`, `team_viewable_by` and
+/// `team_child_zones` were dropped by `20260709000020`). A dead mid-tier team cuts its child off
+/// from everything above it, and only `is_active` brings that back; the link rows never move.
+///
+/// FAILS IF `team_ancestors` stops filtering `is_active` on either the start row or a parent.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_dead_mid_tier_team_cuts_reach_above_it_until_it_is_live(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let top = create_team(&pool, f.alice, "sd-top").await;
+    let top_ctx: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+         VALUES ('kb_teams', $1, 'sd-top-ctx', 'sd-top-ctx') RETURNING id",
+    )
+    .bind(top)
+    .fetch_one(&pool)
+    .await
+    .expect("top's context");
+    // top ─▸ acme ─▸ partners (bob is a member of partners).
+    for (parent, child) in [(top, f.acme), (f.acme, f.partners)] {
+        sqlx::query("INSERT INTO kb_teams_parents (child_id, parent_id) VALUES ($1, $2)")
+            .bind(child)
+            .bind(parent)
+            .execute(&pool)
+            .await
+            .expect("link");
+    }
+    assert!(
+        reads_context(&pool, f.bob, top_ctx).await,
+        "fixture: bob reaches top through acme"
+    );
+
+    kill(&pool, &f).await;
+    assert!(
+        !reads_context(&pool, f.bob, top_ctx).await,
+        "a dead mid-tier team confers nothing above it"
+    );
+    let reaches_top: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM profile_reachable_teams($1) WHERE team_id = $2)",
+    )
+    .bind(f.bob)
+    .bind(top)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!reaches_top, "nor is top among bob's reachable teams");
+
+    sqlx::query("UPDATE kb_teams SET is_active = true WHERE id = $1")
+        .bind(f.acme)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        reads_context(&pool, f.bob, top_ctx).await,
+        "the preserved links confer again once the team is live"
+    );
+}
+
+/// D6: the cycle trigger walks soft-deleted links too, so a link that would close a cycle through a
+/// dead team is refused while it is dead. Restoring it can therefore never produce a cycle.
+///
+/// FAILS IF `team_parent_link_refuses_cycle` gains an `is_active` filter.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_cycle_check_sees_through_a_dead_team(pool: PgPool) {
+    let f = fixture(&pool).await;
+    // acme ─▸ partners, then acme dies.
+    sqlx::query("INSERT INTO kb_teams_parents (child_id, parent_id) VALUES ($1, $2)")
+        .bind(f.partners)
+        .bind(f.acme)
+        .execute(&pool)
+        .await
+        .expect("link");
+    kill(&pool, &f).await;
+
+    let err = sqlx::query("INSERT INTO kb_teams_parents (child_id, parent_id) VALUES ($1, $2)")
+        .bind(f.acme)
+        .bind(f.partners)
+        .execute(&pool)
+        .await
+        .expect_err("partners ─▸ acme would close a cycle once acme is restored");
+    let code = err
+        .as_database_error()
+        .and_then(|d| d.code())
+        .map(|c| c.to_string());
+    assert_eq!(code.as_deref(), Some("23514"), "check_violation: {err:?}");
+}
