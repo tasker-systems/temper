@@ -226,7 +226,7 @@ async fn cogmap_scope_excludes_homed_but_not_visible_resource(pool: sqlx::PgPool
     );
 }
 
-/// 20261117000000 moved the kind filter from the walk's join into the `se` edge set it walks. The
+/// 20261117000050 moved the kind filter from the walk's join into the `se` edge set it walks. The
 /// filter must still bound the WALK, not only the output: a node reachable only through an
 /// excluded kind is never reached, so an edge beyond it is absent even when its own kind matches.
 /// And depth still counts hops from the seed.

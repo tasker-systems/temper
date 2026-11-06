@@ -75,7 +75,7 @@ the array the caller passed. Above 0 it expands outward first (clamped to 3), th
 among everything reached.
 
 Visibility is read once per call as a set and walked as a hashed adjacency (20261116000000,
-20261117000000).$c$;
+20261117000050).$c$;
 
 CREATE OR REPLACE FUNCTION graph_region_composition_edges(p_profile uuid, p_region_ids uuid[], p_depth integer)
 RETURNS TABLE (id uuid, source_id uuid, target_id uuid,
@@ -93,7 +93,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION graph_region_composition_edges(uuid, uuid[], integer) IS
-$c$graph_induced_edges seeded with the members of p_region_ids (20261117000000). Same visibility,
+$c$graph_induced_edges seeded with the members of p_region_ids (20261117000050). Same visibility,
 clamp and depth-0 induced semantics.$c$;
 
 CREATE OR REPLACE FUNCTION graph_traverse_cogmap_scoped(
@@ -142,7 +142,7 @@ COMMENT ON FUNCTION graph_traverse_cogmap_scoped(uuid, uuid, uuid[], integer, ed
 $c$Undirected walk from p_seed_ids over edges visible to p_profile with both endpoints in
 resources_in_cogmap_scope(p_profile, p_cogmap), optionally of p_edge_kinds, clamped to depth 10;
 returns the in-scope edges among everything reached. Walked as a hashed adjacency over one
-visible-edge pass (20261117000000).$c$;
+visible-edge pass (20261117000050).$c$;
 
 CREATE OR REPLACE FUNCTION graph_context_containers(p_profile uuid, p_context_id uuid, p_container_types text[], p_depth integer)
 RETURNS TABLE(id uuid, label text, member_count integer)
@@ -311,7 +311,7 @@ AS $$
 $$;
 
 SELECT declare_migration(
-    20261117000000,
+    20261117000050,
     'additive',
     'CREATE OR REPLACE of graph_induced_edges(uuid, uuid[], integer), graph_region_composition_edges(uuid, uuid[], integer), graph_traverse_cogmap_scoped(uuid, uuid, uuid[], integer, edge_kind[]), graph_context_containers, graph_context_residual_counts and graph_context_residual_members with unchanged argument lists, unchanged RETURNS TABLE columns and unchanged results -- only how visibility is evaluated (one edges_visible_to pass per call) and, in the first three, how the walk joins (a hashed adjacency in place of an OR join) move. Three COMMENTs. Nothing created, dropped or renamed, so a binary on either side of this migration calls the same names and reads the same rows.'
 );

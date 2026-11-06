@@ -4,7 +4,7 @@ classes  = ["additive"]
 surfaces = ["schema", "http"]
 status   = "signal-only"
 body = '''
-Migration 20261117000000 replaces the bodies of graph_induced_edges, graph_region_composition_edges,
+Migration 20261117000050 replaces the bodies of graph_induced_edges, graph_region_composition_edges,
 graph_traverse_cogmap_scoped and the three context-panorama readers (graph_context_containers,
 graph_context_residual_counts, graph_context_residual_members). Their signatures, columns and
 results stay the same. Each now reads edges_visible_to once per call. The traversal, region and
