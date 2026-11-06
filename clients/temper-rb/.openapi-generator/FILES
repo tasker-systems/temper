@@ -83,7 +83,9 @@ lib/temper/generated/models/atlas_entry.rb
 lib/temper/generated/models/atlas_home.rb
 lib/temper/generated/models/atlas_node.rb
 lib/temper/generated/models/atlas_subgraph.rb
+lib/temper/generated/models/attach_child_outcome.rb
 lib/temper/generated/models/attach_credential_response.rb
+lib/temper/generated/models/attach_outcome.rb
 lib/temper/generated/models/audit_citation.rb
 lib/temper/generated/models/audit_sweep_row.rb
 lib/temper/generated/models/auditor_dispatch_tick_request.rb
@@ -487,6 +489,7 @@ lib/temper/generated/models/team_invitation.rb
 lib/temper/generated/models/team_member_detail.rb
 lib/temper/generated/models/team_member_row.rb
 lib/temper/generated/models/team_member_source.rb
+lib/temper/generated/models/team_ref.rb
 lib/temper/generated/models/team_role.rb
 lib/temper/generated/models/team_row.rb
 lib/temper/generated/models/team_spec.rb

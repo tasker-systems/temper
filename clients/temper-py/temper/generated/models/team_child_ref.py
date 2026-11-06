@@ -26,7 +26,7 @@ from pydantic_core import to_jsonable_python
 
 class TeamChildRef(BaseModel):
     """
-    A direct child team, as listed on its parent's [`TeamDetail`].
+    A direct child team, as listed on its parent's [`TeamDetail`]. The same shape as [`TeamRef`], which generalises it (team DAG doors D9); it stays its own type, and so its own schema, for one release so the SDK class of that name keeps serving `children`. New fields use [`TeamRef`].
     """ # noqa: E501
     id: UUID
     name: StrictStr

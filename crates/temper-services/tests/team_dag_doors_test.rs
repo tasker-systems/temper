@@ -442,3 +442,249 @@ async fn deleting_a_team_records_one_event_and_a_404_records_none(pool: PgPool) 
         "nothing recorded"
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Phase 2 — D1 attach, D9 parents on detail
+// ---------------------------------------------------------------------------------------------
+
+/// `team_parent_link_changed` records with `parent` as subject and `child` as principal.
+async fn link_events(pool: &PgPool, parent: Uuid, child: Uuid, act: &str) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'team_parent_link_changed' \
+            AND e.payload @> jsonb_build_object('parent_team_id', $1::uuid, \
+                                                'child_team_id', $2::uuid, 'act', $3::text)",
+    )
+    .bind(parent)
+    .bind(child)
+    .bind(act)
+    .fetch_one(pool)
+    .await
+    .expect("link event count")
+}
+
+async fn linked(pool: &PgPool, parent: Uuid, child: Uuid) -> bool {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM kb_teams_parents WHERE parent_id = $1 AND child_id = $2)",
+    )
+    .bind(parent)
+    .bind(child)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+async fn attach(
+    pool: &PgPool,
+    who: Uuid,
+    parent: Uuid,
+    child: Uuid,
+) -> Result<temper_core::types::team::AttachOutcome, ApiError> {
+    let p = test_support::human_principal_for(pool, who).await;
+    team_service::attach_child(pool, &p, parent, child)
+        .await
+        .map(|o| o.outcome)
+}
+
+/// A manager of both teams attaches: the link is written and recorded once, the child's roster
+/// reaches the new parent (a second parent: both ancestors stay reachable), and a repeat answers
+/// `exists` and records nothing.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_manager_of_both_attaches_a_second_parent(pool: PgPool) {
+    use temper_core::types::team::AttachOutcome;
+    let f = fixture(&pool).await;
+    // side's owner also maintains eng-web.
+    let both = f.on("side", "owner");
+    join(&pool, f.eng_web, both, "maintainer").await;
+    let web_watcher = f.on("eng-web", "watcher");
+    assert!(!reaches(&pool, web_watcher, f.side).await, "fixture");
+
+    assert_eq!(
+        attach(&pool, both, f.side, f.eng_web).await.unwrap(),
+        AttachOutcome::Linked
+    );
+    assert_eq!(link_events(&pool, f.side, f.eng_web, "linked").await, 1);
+    assert!(
+        reaches(&pool, web_watcher, f.side).await,
+        "the new parent is reached"
+    );
+    assert!(
+        reaches(&pool, web_watcher, f.org).await,
+        "and the old ancestors still are"
+    );
+
+    assert_eq!(
+        attach(&pool, both, f.side, f.eng_web).await.unwrap(),
+        AttachOutcome::Exists
+    );
+    assert_eq!(
+        link_events(&pool, f.side, f.eng_web, "linked").await,
+        1,
+        "a repeat records nothing"
+    );
+}
+
+/// Both sides consent: managing only one side, or being a member or watcher of both, is `403`,
+/// and nothing is written.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn attach_needs_manage_on_both_sides(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let parent_only = f.on("side", "maintainer");
+    let child_only = f.on("eng-web", "owner");
+    let member = f.on("side", "member");
+    join(&pool, f.eng_web, member, "member").await;
+    let watcher = f.on("side", "watcher");
+    join(&pool, f.eng_web, watcher, "watcher").await;
+    for who in [parent_only, child_only, member, watcher, f.loner] {
+        let refusal = attach(&pool, who, f.side, f.eng_web)
+            .await
+            .expect_err("not a manager of both");
+        assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    }
+    assert!(!linked(&pool, f.side, f.eng_web).await);
+    assert_eq!(link_events(&pool, f.side, f.eng_web, "linked").await, 0);
+}
+
+/// The root and the gating team take a child only from a system admin, and an auto-join team is
+/// attached only by one (R6), whatever rows the caller holds.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn instance_parents_and_auto_join_children_are_an_admins_act(pool: PgPool) {
+    use temper_core::types::team::AttachOutcome;
+    let f = fixture(&pool).await;
+    let owner = f.on("side", "owner");
+    join(&pool, f.root, owner, "owner").await;
+    join(&pool, f.gate, owner, "owner").await;
+    join(&pool, f.watch, owner, "owner").await;
+    for (parent, child) in [(f.root, f.side), (f.gate, f.side), (f.side, f.watch)] {
+        let refusal = attach(&pool, owner, parent, child)
+            .await
+            .expect_err("a non-admin");
+        assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    }
+    for (parent, child) in [(f.gate, f.side), (f.side, f.watch)] {
+        assert_eq!(
+            attach(&pool, f.admin, parent, child).await.unwrap(),
+            AttachOutcome::Linked
+        );
+    }
+    // The pool's whole roster now reaches side.
+    assert!(reaches(&pool, f.loner, f.side).await);
+}
+
+/// Structural refusals, for a caller past the authority checks: a personal team on either side and
+/// the root as a child are `400`, a cycle is `409`, a soft-deleted side is `404`.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn attach_refuses_what_the_dag_cannot_hold(pool: PgPool) {
+    let f = fixture(&pool).await;
+    // The loner owns their personal team; make them a maintainer of side too.
+    join(&pool, f.side, f.loner, "maintainer").await;
+    for (parent, child) in [(f.loner_personal, f.side), (f.side, f.loner_personal)] {
+        let refusal = attach(&pool, f.loner, parent, child)
+            .await
+            .expect_err("a personal team");
+        assert!(matches!(refusal, ApiError::BadRequest(_)), "{refusal:?}");
+    }
+    let refusal = attach(&pool, f.admin, f.side, f.root)
+        .await
+        .expect_err("the root takes no parent");
+    assert!(matches!(refusal, ApiError::BadRequest(_)), "{refusal:?}");
+
+    // eng-web above org: org's owner also maintains eng-web.
+    let org_owner = f.on("org", "owner");
+    join(&pool, f.eng_web, org_owner, "maintainer").await;
+    let refusal = attach(&pool, org_owner, f.eng_web, f.org)
+        .await
+        .expect_err("a cycle");
+    assert!(matches!(refusal, ApiError::Conflict(_)), "{refusal:?}");
+
+    // Soft-deleted either side.
+    let side_owner = f.on("side", "owner");
+    join(&pool, f.eng_web, side_owner, "maintainer").await;
+    let p = test_support::human_principal_for(&pool, side_owner).await;
+    team_service::delete_team(&pool, &p, f.side).await.unwrap();
+    for (parent, child) in [(f.side, f.eng_web), (f.eng_web, f.side)] {
+        let refusal = attach(&pool, side_owner, parent, child)
+            .await
+            .expect_err("a dead side");
+        assert!(matches!(refusal, ApiError::NotFound(_)), "{refusal:?}");
+    }
+    assert_eq!(link_events(&pool, f.eng_web, f.org, "linked").await, 0);
+}
+
+/// G12: a caller demoted on the parent after the pool pre-check, while the attach waits on the
+/// team-row lock, is refused under the lock and nothing is written.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_caller_demoted_under_the_lock_attaches_nothing(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let both = f.on("side", "owner");
+    join(&pool, f.eng_web, both, "maintainer").await;
+    let first = f.side.min(f.eng_web);
+
+    let mut holder = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM kb_teams WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(first)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE kb_team_members SET role = 'member' WHERE team_id = $1 AND profile_id = $2",
+    )
+    .bind(f.eng_web)
+    .bind(both)
+    .execute(&mut *holder)
+    .await
+    .unwrap();
+
+    let pool2 = pool.clone();
+    let (side, web) = (f.side, f.eng_web);
+    let contender = tokio::spawn(async move { attach(&pool2, both, side, web).await });
+    test_support::await_team_lock_waiter(&pool).await;
+    holder.commit().await.unwrap();
+
+    let refusal = contender
+        .await
+        .unwrap()
+        .expect_err("demoted under the lock");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    assert!(!linked(&pool, f.side, f.eng_web).await);
+}
+
+/// D9: every member of a team, at any role, sees its live parents; `children` stays a manager's.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn every_member_sees_parents_and_only_managers_see_children(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let watcher = test_support::caller_for(&pool, f.on("eng-web", "watcher")).await;
+    let web = team_service::team_detail(&pool, &watcher, f.eng_web)
+        .await
+        .expect("a watcher reads its team");
+    let parents: Vec<Uuid> = web.parents.iter().map(|t| t.id).collect();
+    assert_eq!(parents, vec![f.eng]);
+
+    // The watcher of eng-web is also a watcher of eng in this case.
+    join(&pool, f.eng, f.on("eng-web", "watcher"), "watcher").await;
+    let eng = team_service::team_detail(&pool, &watcher, f.eng)
+        .await
+        .unwrap();
+    assert!(eng.children.is_empty(), "a watcher sees no children");
+    assert_eq!(
+        eng.parents.iter().map(|t| t.id).collect::<Vec<_>>(),
+        vec![f.org]
+    );
+
+    let manager = test_support::caller_for(&pool, f.on("eng", "maintainer")).await;
+    let eng = team_service::team_detail(&pool, &manager, f.eng)
+        .await
+        .unwrap();
+    assert_eq!(
+        eng.children.iter().map(|t| t.id).collect::<Vec<_>>(),
+        vec![f.eng_web]
+    );
+
+    // A dead parent is not listed.
+    let p = test_support::human_principal_for(&pool, f.on("eng", "owner")).await;
+    team_service::delete_team(&pool, &p, f.eng).await.unwrap();
+    let web = team_service::team_detail(&pool, &watcher, f.eng_web)
+        .await
+        .unwrap();
+    assert!(web.parents.is_empty(), "{:?}", web.parents);
+}

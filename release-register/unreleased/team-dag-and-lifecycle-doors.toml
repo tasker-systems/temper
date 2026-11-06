@@ -1,0 +1,23 @@
+title    = "Teams can be attached under a second parent, and a team's members see its parents"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "clients", "schema"]
+status   = "signal-only"
+body = '''
+Team DAG and lifecycle doors (temper-artifacts specs/2026-11-06-team-dag-and-lifecycle-doors-design.md).
+
+- PUT /api/teams/{id}/children/{child_id} attaches a child under a parent. It is also the door for
+  a second parent. The caller must manage both teams. A root or gating parent, or an auto-join
+  child, needs a system admin. Responses: 200 { outcome: linked | exists }, 400 for a structural
+  refusal, 403, 404, and 409 for a cycle. A new link is recorded as team_parent_link_changed.
+- TeamDetail gains `parents: TeamRef[]` (the live parents), shown to every member and to system
+  admins. `children` still shows only to managers and keeps its TeamChildRef schema. TeamRef is a
+  new schema of the same shape.
+- New admin event type team_lifecycle_changed (migration 20261118000010), written by create_team
+  and delete_team. Behavioral: a team's managers now see these records on the team's admin-ledger
+  page.
+
+Who observes it: SDK users, through new operations and models and one new field. Admin-ledger
+readers see the new event type. No existing shape changes.
+Release relevance: signal-only.
+'''

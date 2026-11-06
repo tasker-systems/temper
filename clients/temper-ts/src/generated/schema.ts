@@ -3499,7 +3499,15 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        put?: never;
+        /**
+         * Attach a child team under this team
+         * @description Writes a parent link: every member of the child, at any role, then reaches everything attached
+         *     to this team and its ancestors. Also the door for a second parent. The caller must manage both
+         *     teams (owner or maintainer of each); attaching under temper-system or the gating team, or
+         *     attaching an auto-join team as the child, is a system admin's act. Recorded on the admin ledger
+         *     as `team_parent_link_changed`; a link that already exists answers `exists` and records nothing.
+         */
+        put: operations["attach_child_team"];
         post?: never;
         /**
          * Detach a child team from this team
@@ -4528,6 +4536,10 @@ export interface components {
             edges: components["schemas"]["AtlasEdge"][];
             nodes: components["schemas"]["AtlasNode"][];
         };
+        /** @description Response body for `PUT /api/teams/{id}/children/{child_id}`. */
+        AttachChildOutcome: {
+            outcome: components["schemas"]["AttachOutcome"];
+        };
         /**
          * @description The result of attaching a credential: the updated connection plus what minting
          *     once at attach time observed.
@@ -4536,6 +4548,11 @@ export interface components {
             connection: components["schemas"]["RemoteConnection"];
             verification: components["schemas"]["CredentialVerification"];
         };
+        /**
+         * @description What `PUT /api/teams/{id}/children/{child_id}` did (team DAG doors D1).
+         * @enum {string}
+         */
+        AttachOutcome: "linked" | "exists";
         /**
          * @description One unit of the auditor's work: a `(block, source)` citation, and the finding it belongs to.
          *
@@ -11518,7 +11535,11 @@ export interface components {
             omitted_paths: number;
             shape: components["schemas"]["ShapeId"];
         };
-        /** @description A direct child team, as listed on its parent's [`TeamDetail`]. */
+        /**
+         * @description A direct child team, as listed on its parent's [`TeamDetail`]. The same shape as [`TeamRef`],
+         *     which generalises it (team DAG doors D9); it stays its own type, and so its own schema, for one
+         *     release so the SDK class of that name keeps serving `children`. New fields use [`TeamRef`].
+         */
         TeamChildRef: {
             /** Format: uuid */
             id: string;
@@ -11557,6 +11578,13 @@ export interface components {
             id: string;
             members: components["schemas"]["TeamMemberDetail"][];
             name: string;
+            /**
+             * @description The team's live parent teams, for every member of this team (any role) and for system
+             *     admins (team DAG doors D9, ruling R2 as amended). A member already reads everything attached
+             *     to these teams, so their names disclose nothing new; a child's manager needs them to detach
+             *     or move it. Deliberately not symmetrical with `children`, which stays managers-only.
+             */
+            parents?: components["schemas"]["TeamRef"][];
             slug: string;
         };
         /**
@@ -11643,6 +11671,16 @@ export interface components {
          * @enum {string}
          */
         TeamMemberSource: "native" | "idp";
+        /**
+         * @description A team named by id, slug and display name — a parent or child on [`TeamDetail`], an ancestor on
+         *     an auto-join outcome, a link on a restore outcome.
+         */
+        TeamRef: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            slug: string;
+        };
         /**
          * @description Team role — strict hierarchy: Owner > Maintainer > Member > Watcher.
          *
@@ -21584,6 +21622,64 @@ export interface operations {
             };
             /** @description Team not found or soft-deleted */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    attach_child_team: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Parent team ID */
+                id: string;
+                /** @description Child team ID */
+                child_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Linked, or the link already existed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttachChildOutcome"];
+                };
+            };
+            /** @description A personal team on either side, temper-system as the child, or the team as its own parent */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forbidden: the caller does not manage both teams, or the parent is temper-system or the gating team, or the child is an auto-join team, and the caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Either team does not exist or is soft-deleted; told only to a caller who may manage both */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The link would make a team its own ancestor */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

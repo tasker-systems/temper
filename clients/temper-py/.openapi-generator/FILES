@@ -85,7 +85,9 @@ temper/generated/models/atlas_entry.py
 temper/generated/models/atlas_home.py
 temper/generated/models/atlas_node.py
 temper/generated/models/atlas_subgraph.py
+temper/generated/models/attach_child_outcome.py
 temper/generated/models/attach_credential_response.py
+temper/generated/models/attach_outcome.py
 temper/generated/models/audit_citation.py
 temper/generated/models/audit_sweep_row.py
 temper/generated/models/auditor_dispatch_tick_request.py
@@ -489,6 +491,7 @@ temper/generated/models/team_invitation.py
 temper/generated/models/team_member_detail.py
 temper/generated/models/team_member_row.py
 temper/generated/models/team_member_source.py
+temper/generated/models/team_ref.py
 temper/generated/models/team_role.py
 temper/generated/models/team_row.py
 temper/generated/models/team_spec.py

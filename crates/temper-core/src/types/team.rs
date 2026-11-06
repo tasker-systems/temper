@@ -206,18 +206,73 @@ pub struct TeamDetail {
     /// managers see which teams hang beneath it (team-authority fixes D3). Empty for everyone else.
     #[serde(default)]
     pub children: Vec<TeamChildRef>,
+    /// The team's live parent teams, for every member of this team (any role) and for system
+    /// admins (team DAG doors D9, ruling R2 as amended). A member already reads everything attached
+    /// to these teams, so their names disclose nothing new; a child's manager needs them to detach
+    /// or move it. Deliberately not symmetrical with `children`, which stays managers-only.
+    #[serde(default)]
+    pub parents: Vec<TeamRef>,
 }
 
-/// A direct child team, as listed on its parent's [`TeamDetail`].
+/// A team named by id, slug and display name — a parent or child on [`TeamDetail`], an ancestor on
+/// an auto-join outcome, a link on a restore outcome.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromRow)]
+pub struct TeamRef {
+    pub id: Uuid,
+    pub slug: String,
+    pub name: String,
+}
+
+/// A direct child team, as listed on its parent's [`TeamDetail`]. The same shape as [`TeamRef`],
+/// which generalises it (team DAG doors D9); it stays its own type, and so its own schema, for one
+/// release so the SDK class of that name keeps serving `children`. New fields use [`TeamRef`].
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromRow)]
 pub struct TeamChildRef {
     pub id: Uuid,
     pub slug: String,
     pub name: String,
+}
+
+impl From<TeamRef> for TeamChildRef {
+    fn from(t: TeamRef) -> Self {
+        Self {
+            id: t.id,
+            slug: t.slug,
+            name: t.name,
+        }
+    }
+}
+
+/// What `PUT /api/teams/{id}/children/{child_id}` did (team DAG doors D1).
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttachOutcome {
+    /// The link was written and recorded (`team_parent_link_changed`).
+    Linked,
+    /// The child was already under this parent; nothing was written or recorded.
+    Exists,
+}
+
+/// Response body for `PUT /api/teams/{id}/children/{child_id}`.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttachChildOutcome {
+    pub outcome: AttachOutcome,
 }
 
 /// Request body for `PATCH /api/teams/{id}` — update team metadata.

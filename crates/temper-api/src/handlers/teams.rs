@@ -11,8 +11,8 @@ use crate::middleware::auth::{AnyPrincipal, AuthUser};
 use temper_core::types::ids::ProfileId;
 use temper_core::types::reassign::RemoveMemberOutcome;
 use temper_core::types::team::{
-    AddMemberRequest, ChangeRoleRequest, TeamCreateRequest, TeamDetail, TeamMemberRow, TeamRow,
-    TeamUpdateRequest,
+    AddMemberRequest, AttachChildOutcome, ChangeRoleRequest, TeamCreateRequest, TeamDetail,
+    TeamMemberRow, TeamRow, TeamUpdateRequest,
 };
 use temper_services::error::ApiResult;
 use temper_services::services::team_service;
@@ -244,4 +244,39 @@ pub async fn detach_child(
 ) -> ApiResult<StatusCode> {
     team_service::detach_child(&state.pool, &auth.0, team_id, child_id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Attach a child team under this team
+///
+/// Writes a parent link: every member of the child, at any role, then reaches everything attached
+/// to this team and its ancestors. Also the door for a second parent. The caller must manage both
+/// teams (owner or maintainer of each); attaching under temper-system or the gating team, or
+/// attaching an auto-join team as the child, is a system admin's act. Recorded on the admin ledger
+/// as `team_parent_link_changed`; a link that already exists answers `exists` and records nothing.
+#[utoipa::path(
+    put,
+    operation_id = "attach_child_team",
+    path = "/api/teams/{id}/children/{child_id}",
+    tag = "Teams",
+    params(
+        ("id" = Uuid, Path, description = "Parent team ID"),
+        ("child_id" = Uuid, Path, description = "Child team ID"),
+    ),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Linked, or the link already existed", body = AttachChildOutcome),
+        (status = 400, description = "A personal team on either side, temper-system as the child, or the team as its own parent"),
+        (status = 403, description = "Forbidden: the caller does not manage both teams, or the parent is temper-system or the gating team, or the child is an auto-join team, and the caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 404, description = "Either team does not exist or is soft-deleted; told only to a caller who may manage both"),
+        (status = 409, description = "The link would make a team its own ancestor"),
+    )
+)]
+pub async fn attach_child(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((team_id, child_id)): Path<(Uuid, Uuid)>,
+) -> ApiResult<Json<AttachChildOutcome>> {
+    team_service::attach_child(&state.pool, &auth.0, team_id, child_id)
+        .await
+        .map(Json)
 }

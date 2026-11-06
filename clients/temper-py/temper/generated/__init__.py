@@ -107,7 +107,9 @@ __all__ = [
     "AtlasHome",
     "AtlasNode",
     "AtlasSubgraph",
+    "AttachChildOutcome",
     "AttachCredentialResponse",
+    "AttachOutcome",
     "AuditCitation",
     "AuditSweepRow",
     "AuditorDispatchTickRequest",
@@ -511,6 +513,7 @@ __all__ = [
     "TeamMemberDetail",
     "TeamMemberRow",
     "TeamMemberSource",
+    "TeamRef",
     "TeamRole",
     "TeamRow",
     "TeamSpec",
@@ -626,7 +629,9 @@ from temper.generated.models.atlas_entry import AtlasEntry as AtlasEntry
 from temper.generated.models.atlas_home import AtlasHome as AtlasHome
 from temper.generated.models.atlas_node import AtlasNode as AtlasNode
 from temper.generated.models.atlas_subgraph import AtlasSubgraph as AtlasSubgraph
+from temper.generated.models.attach_child_outcome import AttachChildOutcome as AttachChildOutcome
 from temper.generated.models.attach_credential_response import AttachCredentialResponse as AttachCredentialResponse
+from temper.generated.models.attach_outcome import AttachOutcome as AttachOutcome
 from temper.generated.models.audit_citation import AuditCitation as AuditCitation
 from temper.generated.models.audit_sweep_row import AuditSweepRow as AuditSweepRow
 from temper.generated.models.auditor_dispatch_tick_request import AuditorDispatchTickRequest as AuditorDispatchTickRequest
@@ -1030,6 +1035,7 @@ from temper.generated.models.team_invitation import TeamInvitation as TeamInvita
 from temper.generated.models.team_member_detail import TeamMemberDetail as TeamMemberDetail
 from temper.generated.models.team_member_row import TeamMemberRow as TeamMemberRow
 from temper.generated.models.team_member_source import TeamMemberSource as TeamMemberSource
+from temper.generated.models.team_ref import TeamRef as TeamRef
 from temper.generated.models.team_role import TeamRole as TeamRole
 from temper.generated.models.team_row import TeamRow as TeamRow
 from temper.generated.models.team_spec import TeamSpec as TeamSpec

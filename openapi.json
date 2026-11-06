@@ -15091,6 +15091,73 @@
           }
         }
       ],
+      "put": {
+        "tags": [
+          "Teams"
+        ],
+        "summary": "Attach a child team under this team",
+        "description": "Writes a parent link: every member of the child, at any role, then reaches everything attached\nto this team and its ancestors. Also the door for a second parent. The caller must manage both\nteams (owner or maintainer of each); attaching under temper-system or the gating team, or\nattaching an auto-join team as the child, is a system admin's act. Recorded on the admin ledger\nas `team_parent_link_changed`; a link that already exists answers `exists` and records nothing.",
+        "operationId": "attach_child_team",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Parent team ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "child_id",
+            "in": "path",
+            "description": "Child team ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Linked, or the link already existed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachChildOutcome"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A personal team on either side, temper-system as the child, or the team as its own parent"
+          },
+          "403": {
+            "description": "Forbidden: the caller does not manage both teams, or the parent is temper-system or the gating team, or the child is an auto-join team, and the caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Either team does not exist or is soft-deleted; told only to a caller who may manage both"
+          },
+          "409": {
+            "description": "The link would make a team its own ancestor"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Teams"
+      },
       "delete": {
         "tags": [
           "Teams"
@@ -17312,6 +17379,18 @@
           }
         }
       },
+      "AttachChildOutcome": {
+        "type": "object",
+        "description": "Response body for `PUT /api/teams/{id}/children/{child_id}`.",
+        "required": [
+          "outcome"
+        ],
+        "properties": {
+          "outcome": {
+            "$ref": "#/components/schemas/AttachOutcome"
+          }
+        }
+      },
       "AttachCredentialResponse": {
         "type": "object",
         "description": "The result of attaching a credential: the updated connection plus what minting\nonce at attach time observed.",
@@ -17327,6 +17406,14 @@
             "$ref": "#/components/schemas/CredentialVerification"
           }
         }
+      },
+      "AttachOutcome": {
+        "type": "string",
+        "description": "What `PUT /api/teams/{id}/children/{child_id}` did (team DAG doors D1).",
+        "enum": [
+          "linked",
+          "exists"
+        ]
       },
       "AuditCitation": {
         "type": "object",
@@ -28435,7 +28522,7 @@
       },
       "TeamChildRef": {
         "type": "object",
-        "description": "A direct child team, as listed on its parent's [`TeamDetail`].",
+        "description": "A direct child team, as listed on its parent's [`TeamDetail`]. The same shape as [`TeamRef`],\nwhich generalises it (team DAG doors D9); it stays its own type, and so its own schema, for one\nrelease so the SDK class of that name keeps serving `children`. New fields use [`TeamRef`].",
         "required": [
           "id",
           "slug",
@@ -28538,6 +28625,13 @@
           },
           "name": {
             "type": "string"
+          },
+          "parents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TeamRef"
+            },
+            "description": "The team's live parent teams, for every member of this team (any role) and for system\nadmins (team DAG doors D9, ruling R2 as amended). A member already reads everything attached\nto these teams, so their names disclose nothing new; a child's manager needs them to detach\nor move it. Deliberately not symmetrical with `children`, which stays managers-only."
           },
           "slug": {
             "type": "string"
@@ -28660,6 +28754,27 @@
           "native",
           "idp"
         ]
+      },
+      "TeamRef": {
+        "type": "object",
+        "description": "A team named by id, slug and display name — a parent or child on [`TeamDetail`], an ancestor on\nan auto-join outcome, a link on a restore outcome.",
+        "required": [
+          "id",
+          "slug",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          }
+        }
       },
       "TeamRole": {
         "type": "string",

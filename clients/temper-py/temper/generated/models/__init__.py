@@ -62,7 +62,9 @@ from temper.generated.models.atlas_entry import AtlasEntry
 from temper.generated.models.atlas_home import AtlasHome
 from temper.generated.models.atlas_node import AtlasNode
 from temper.generated.models.atlas_subgraph import AtlasSubgraph
+from temper.generated.models.attach_child_outcome import AttachChildOutcome
 from temper.generated.models.attach_credential_response import AttachCredentialResponse
+from temper.generated.models.attach_outcome import AttachOutcome
 from temper.generated.models.audit_citation import AuditCitation
 from temper.generated.models.audit_sweep_row import AuditSweepRow
 from temper.generated.models.auditor_dispatch_tick_request import AuditorDispatchTickRequest
@@ -466,6 +468,7 @@ from temper.generated.models.team_invitation import TeamInvitation
 from temper.generated.models.team_member_detail import TeamMemberDetail
 from temper.generated.models.team_member_row import TeamMemberRow
 from temper.generated.models.team_member_source import TeamMemberSource
+from temper.generated.models.team_ref import TeamRef
 from temper.generated.models.team_role import TeamRole
 from temper.generated.models.team_row import TeamRow
 from temper.generated.models.team_spec import TeamSpec

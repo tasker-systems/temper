@@ -23,8 +23,9 @@ use crate::error::{ApiError, ApiResult};
 use temper_core::types::ids::ProfileId;
 use temper_core::types::reassign::{RemoveMemberOutcome, ResidualContext, ResidualOwnedReach};
 use temper_core::types::team::{
-    AddMemberRequest, TeamChildRef, TeamCreateRequest, TeamDetail, TeamMemberDetail, TeamMemberRow,
-    TeamMemberSource, TeamRole, TeamRow, TeamUpdateRequest,
+    AddMemberRequest, AttachChildOutcome, AttachOutcome, TeamChildRef, TeamCreateRequest,
+    TeamDetail, TeamMemberDetail, TeamMemberRow, TeamMemberSource, TeamRef, TeamRole, TeamRow,
+    TeamUpdateRequest,
 };
 
 /// The slug prefix of every personal team (`personal-<handle>`), which `sync_personal_team`
@@ -670,6 +671,20 @@ pub async fn team_detail(pool: &PgPool, caller: &Caller, team_id: Uuid) -> ApiRe
         Vec::new()
     };
 
+    // The live parents, for every caller past the read gate (team DAG doors D9, ruling R2 as
+    // amended): a member already reads their material, so the names disclose nothing new.
+    let parents = sqlx::query_as!(
+        TeamRef,
+        r#"SELECT t.id, t.slug, t.name
+             FROM kb_teams_parents tp
+             JOIN kb_teams t ON t.id = tp.parent_id AND t.is_active
+            WHERE tp.child_id = $1
+            ORDER BY t.slug"#,
+        team_id,
+    )
+    .fetch_all(pool)
+    .await?;
+
     Ok(TeamDetail {
         id: team.id,
         slug: team.slug,
@@ -679,6 +694,7 @@ pub async fn team_detail(pool: &PgPool, caller: &Caller, team_id: Uuid) -> ApiRe
         auto_join_role: team.auto_join_role,
         members,
         children,
+        parents,
     })
 }
 
@@ -867,6 +883,225 @@ pub async fn detach_child(
         ));
     }
     tx.commit().await?;
+    Ok(())
+}
+
+/// A team's standing for the attach door: live, personal, the root, an auto-join pool.
+struct LinkSide {
+    live: bool,
+    personal: bool,
+    root: bool,
+    auto_join: bool,
+}
+
+async fn link_side(conn: &mut sqlx::PgConnection, team_id: Uuid) -> ApiResult<Option<LinkSide>> {
+    let row = sqlx::query!(
+        r#"SELECT is_active AS "live!",
+                  personal_of IS NOT NULL AS "personal!",
+                  slug = 'temper-system' AS "root!",
+                  auto_join_role IS NOT NULL AS "auto_join!"
+             FROM kb_teams WHERE id = $1"#,
+        team_id,
+    )
+    .fetch_optional(&mut *conn)
+    .await?;
+    Ok(row.map(|r| LinkSide {
+        live: r.live,
+        personal: r.personal,
+        root: r.root,
+        auto_join: r.auto_join,
+    }))
+}
+
+/// Map a refusal from the `kb_teams_parents` triggers to its status: the cycle check is a `409`,
+/// a personal-team link a `400`, the root taking a parent a `400`. Matched on the trigger's message
+/// (`team_parent_link_refuses_cycle`, `personal_team_link_refused`), the only thing that tells two
+/// `check_violation`s apart. Anything else passes through.
+fn map_link_trigger(err: sqlx::Error) -> ApiError {
+    if let sqlx::Error::Database(db) = &err {
+        if db.code().as_deref() == Some("23514") {
+            let msg = db.message();
+            if msg.contains("one of its own descendants") {
+                return ApiError::Conflict(
+                    "that link would make a team its own ancestor".to_string(),
+                );
+            }
+            if msg.contains("personal team") {
+                return ApiError::BadRequest(PERSONAL_TEAM_HOLDS_ITS_OWNER.to_string());
+            }
+            if msg.contains("temper-system is the root") {
+                return ApiError::BadRequest(
+                    "temper-system is the root of the team tree and takes no parent".to_string(),
+                );
+            }
+        }
+    }
+    ApiError::from(err)
+}
+
+/// The non-structural attach rules (team DAG doors D1, rules 1–4), on `conn`: the caller manages
+/// the parent and the child (direct, live), unless a system admin; a root or gating parent, or an
+/// auto-join child, is a system admin's act alone. Run as the pool pre-check and again under the
+/// row locks.
+async fn attach_authority(
+    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
+    caller: &HumanPrincipal,
+    admin: bool,
+    parent_id: Uuid,
+    child_id: Uuid,
+) -> ApiResult<()> {
+    if !admin {
+        for team in [parent_id, child_id] {
+            match role_on_team_on(conn, team, caller.profile_id()).await? {
+                Some(role) if can_manage(role) => {}
+                _ => return Err(ApiError::Forbidden),
+            }
+        }
+    }
+    let instance_parent =
+        crate::services::access_service::is_root_or_gating_team_on(conn, parent_id).await?;
+    let pool_child = link_side(conn, child_id)
+        .await?
+        .is_some_and(|side| side.auto_join);
+    if instance_parent || pool_child {
+        // Re-asked, not reused: under the locks a demotion since the pre-check must refuse.
+        require_admin_on(pool, caller).await?;
+    }
+    Ok(())
+}
+
+/// Attach `child_id` under `parent_id` (team DAG doors D1) — the mirror of [`detach_child`], and the
+/// door for a second parent. A parent link is read reach: every member of the child, at any role,
+/// reaches everything attached to the parent and every live ancestor. So writing one is conferring
+/// read on a roster, and both sides consent.
+///
+/// Authority, all required (a system admin satisfies 1–2, never 5):
+/// 1. the caller manages the parent (direct, live `owner`/`maintainer`): the side whose material
+///    becomes readable consents;
+/// 2. the caller manages the child: otherwise a parent's manager could adopt any team, list it
+///    under `children`, and learn it exists;
+/// 3. a parent that is the root or the gating team → a system admin only;
+/// 4. a child that is an auto-join team → a system admin only (ruling R6): its roster is every
+///    approved profile, so this is the same act as attaching to the root;
+/// 5. structural: a personal team on either side, the root as the child, or the team as its own
+///    parent is `400`; a link that closes a cycle is `409`; a soft-deleted side is `404`.
+///
+/// The checks run in that order, so a caller who manages neither side learns nothing (`403`); a
+/// `404` reaches only a caller who holds a managing row on both. Then, under both rows' locks taken
+/// in ascending id order, 1–4 run again (the G12 pattern of `create_team` and `detach_child`). The
+/// row and its `team_parent_link_changed` record are one write; an existing link answers `exists`
+/// and records nothing.
+pub async fn attach_child(
+    pool: &PgPool,
+    caller: &HumanPrincipal,
+    parent_id: Uuid,
+    child_id: Uuid,
+) -> ApiResult<AttachChildOutcome> {
+    let admin = crate::authz::Principal::Human(caller)
+        .system_admin(pool)
+        .await?
+        .is_some();
+
+    // 1–2 on the membership rows, live or not: a dead team is told apart (404) only to a caller
+    // who holds a managing row on both sides, after which 1–2 run again live-only under the locks.
+    if !admin {
+        for team in [parent_id, child_id] {
+            match membership_row_role(pool, team, caller.profile_id()).await? {
+                Some(role) if can_manage(role) => {}
+                _ => return Err(ApiError::Forbidden),
+            }
+        }
+    }
+    let not_found = || ApiError::NotFound("team not found or not readable".to_string());
+    let mut conn = pool.acquire().await?;
+    let parent = link_side(&mut conn, parent_id)
+        .await?
+        .ok_or_else(not_found)?;
+    let child = link_side(&mut conn, child_id)
+        .await?
+        .ok_or_else(not_found)?;
+    // 3–4, still before any structural answer.
+    let instance_parent =
+        crate::services::access_service::is_root_or_gating_team_on(&mut conn, parent_id).await?;
+    if (instance_parent || child.auto_join) && !admin {
+        return Err(ApiError::Forbidden);
+    }
+    // 5.
+    if !parent.live || !child.live {
+        return Err(not_found());
+    }
+    if parent.personal {
+        return Err(ApiError::BadRequest(
+            "a personal team cannot have child teams".to_string(),
+        ));
+    }
+    if child.personal {
+        return Err(ApiError::BadRequest(
+            "a personal team's only parent is temper-system".to_string(),
+        ));
+    }
+    if child.root {
+        return Err(ApiError::BadRequest(
+            "temper-system is the root of the team tree and takes no parent".to_string(),
+        ));
+    }
+    if parent_id == child_id {
+        return Err(ApiError::BadRequest(
+            "a team cannot be its own parent".to_string(),
+        ));
+    }
+    drop(conn);
+
+    let mut tx = pool.begin().await?;
+    lock_teams_ascending(&mut tx, &[parent_id, child_id]).await?;
+    for team in [parent_id, child_id] {
+        if !link_side(&mut tx, team)
+            .await?
+            .is_some_and(|side| side.live)
+        {
+            return Err(not_found());
+        }
+    }
+    attach_authority(pool, &mut tx, caller, admin, parent_id, child_id).await?;
+
+    let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let outcome = sqlx::query_scalar!(
+        r#"SELECT _admin_team_parent_link_write($1, $2, 'link', $3, $4) AS "outcome!""#,
+        emitter.uuid(),
+        *caller.profile_id(),
+        parent_id,
+        child_id,
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(map_link_trigger)?;
+    tx.commit().await?;
+    Ok(AttachChildOutcome {
+        outcome: if outcome == "linked" {
+            AttachOutcome::Linked
+        } else {
+            AttachOutcome::Exists
+        },
+    })
+}
+
+/// Take `FOR NO KEY UPDATE` on each team row, in ascending id order, so two doors locking the same
+/// pair cannot deadlock. A missing row takes no lock and is not an error here; the caller re-reads.
+async fn lock_teams_ascending(tx: &mut sqlx::PgConnection, teams: &[Uuid]) -> ApiResult<()> {
+    let mut ids = teams.to_vec();
+    ids.sort();
+    ids.dedup();
+    for id in ids {
+        sqlx::query!(
+            "SELECT id FROM kb_teams WHERE id = $1 FOR NO KEY UPDATE",
+            id
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+    }
     Ok(())
 }
 

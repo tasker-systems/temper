@@ -14,7 +14,7 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # A direct child team, as listed on its parent's [`TeamDetail`].
+  # A direct child team, as listed on its parent's [`TeamDetail`]. The same shape as [`TeamRef`], which generalises it (team DAG doors D9); it stays its own type, and so its own schema, for one release so the SDK class of that name keeps serving `children`. New fields use [`TeamRef`].
   class TeamChildRef < ApiModelBase
     attr_accessor :id
 

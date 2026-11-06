@@ -6,12 +6,24 @@
 export type AddMemberRequest = { profile_id: string, role: TeamRole, };
 
 /**
+ * Response body for `PUT /api/teams/{id}/children/{child_id}`.
+ */
+export type AttachChildOutcome = { outcome: AttachOutcome, };
+
+/**
+ * What `PUT /api/teams/{id}/children/{child_id}` did (team DAG doors D1).
+ */
+export type AttachOutcome = "linked" | "exists";
+
+/**
  * Request body for `PATCH /api/teams/{id}/members/{profile_id}`.
  */
 export type ChangeRoleRequest = { role: TeamRole, };
 
 /**
- * A direct child team, as listed on its parent's [`TeamDetail`].
+ * A direct child team, as listed on its parent's [`TeamDetail`]. The same shape as [`TeamRef`],
+ * which generalises it (team DAG doors D9); it stays its own type, and so its own schema, for one
+ * release so the SDK class of that name keeps serving `children`. New fields use [`TeamRef`].
  */
 export type TeamChildRef = { id: string, slug: string, name: string, };
 
@@ -34,7 +46,14 @@ export type TeamDetail = { id: string, slug: string, name: string, description: 
  * or is a system admin: a child's members reach everything attached to this team, so its
  * managers see which teams hang beneath it (team-authority fixes D3). Empty for everyone else.
  */
-children: Array<TeamChildRef>, };
+children: Array<TeamChildRef>, 
+/**
+ * The team's live parent teams, for every member of this team (any role) and for system
+ * admins (team DAG doors D9, ruling R2 as amended). A member already reads everything attached
+ * to these teams, so their names disclose nothing new; a child's manager needs them to detach
+ * or move it. Deliberately not symmetrical with `children`, which stays managers-only.
+ */
+parents: Array<TeamRef>, };
 
 /**
  * A team member enriched with the profile handle and provenance — the row
@@ -53,6 +72,12 @@ export type TeamMemberRow = { team_id: string, profile_id: string, role: TeamRol
  * `Idp` rows are owned by SAML reconcile and are not user-mutable.
  */
 export type TeamMemberSource = "native" | "idp";
+
+/**
+ * A team named by id, slug and display name — a parent or child on [`TeamDetail`], an ancestor on
+ * an auto-join outcome, a link on a restore outcome.
+ */
+export type TeamRef = { id: string, slug: string, name: string, };
 
 /**
  * Team role — strict hierarchy: Owner > Maintainer > Member > Watcher.
