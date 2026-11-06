@@ -10,8 +10,12 @@
 --      _feed_withholds_kind now names, so `kinds` refuses it as an unknown kind. The ledger keeps
 --      resource_deleted as it was: replay, the element trail and every other reader see no change.
 --      A departure carries only the resource id and the act's own correlation id, so a move's and
---      a deletion's exits are the same entry. Neither act writes anything else into the home it
---      leaves: a move's record anchors on its destination, and a deletion folds nothing.
+--      a deletion's exits are the same entry. What else each act leaves in that home is made the
+--      same outside this migration: a deletion's resource_deleted is withheld here; an update that
+--      moves fires the move before its edits (writes::update_resource_in_tx_prepared), so the
+--      edits anchor on the destination; and a move settles the home it left as a deletion does
+--      (DbBackend::update_resource, replay::resource_deleted_since counting resource_departed).
+--      A move's own record anchors on its destination, and a deletion folds nothing.
 --
 --   2. AN ADMIN ACT DOES NOT MOVE THE CONTEXT CURSOR. latest_event_id_for_context reads every
 --      event anchored on the context, so an erasure's edge folds there moved it, and the cursor's
@@ -36,20 +40,77 @@
 --      added later could have put any string there. An entry is served only when its subject is
 --      kb_resources, kb_edges, kb_blobs or kb_contexts with an id; anything else is withheld.
 --
+--   5. SYSTEM-COMPUTED KINDS ARE NOT CHANGES (owner ruling 2026-11-06, security review H2).
+--      region_materialized, salience_refreshed and relationship_decayed are the region producer's
+--      and the decay sweep's own bookkeeping, anchored on the context they recompute. The settle
+--      that follows an erasure runs as the system actor in its own transaction, so it escaped
+--      _event_is_admin_act, and a system-actor settle in a context nearly fingerprinted an erasure
+--      and dated it. They are withheld from the feed and the cursor alike, as _profile_change_events
+--      (20261107000000) already leaves them out of what a profile changed. _feed_withholds_kind
+--      names them. A relay mirrors records, not region computations, so it loses nothing.
+--
+--   6. A DELETION FROM BEFORE THIS MIGRATION STILL EXITS (security review L3). Deletions written
+--      between 20261116000010 and this migration carry an order but no departure. Withholding
+--      resource_deleted would have made their exit silent, which reads as an erasure. A
+--      resource_deleted whose transaction holds no departure for its resource is served as
+--      resource_departed (_feed_served_kind), so every deletion has exactly one exit entry.
+--
+--   7. THE CURSOR SKIPS WHAT THE FEED WITHHOLDS (owner ruling 2026-11-06, security review L1;
+--      cost, review L2). latest_event_id_for_context now reads context_cursor, the newest event
+--      the feed would serve: a domain event, under the same served-kind rule, admin-act rule,
+--      subject allow-list and both-endpoints edge rule as context_changes_after. It differs from
+--      the feed in two ways only, both about order rather than disclosure: it reads newest-first
+--      by occurred_at, as the cursor always has, and it reads rows from before the order columns
+--      (the feed skips them because it cannot place them, not because they disclose anything). The
+--      predicate text is the feed's, repeated, because the feed's plan depends on its exact shape
+--      (20261117000020's Cost notes); a witness pins the two to the same answer. One read scans at
+--      most _feed_scan_budget() of the newest events, through idx_kb_events_anchor_occurred, and
+--      answers NULL when none of them would be served. NULL never names a withheld event.
+--
+--   8. AN INVOCATION SHOWS NO ACT ON A DELETED RESOURCE (owner ruling 2026-11-06, security review
+--      M2). invocation_show kept every act naming a soft-deleted resource visible to readers of its
+--      home, and dropped the same acts once the resource had moved out of their view, so it told a
+--      deletion from a move. The exception is removed (crates/temper-substrate/src/readback): a
+--      deleted resource is unreadable there as everywhere else.
+--
 -- context_changes_after's signature and result type are unchanged; its entries gain the optional
--- key `block`. resource_delete's signature is unchanged.
+-- key `block`, and `kind` is the served kind (item 6). resource_delete's signature is unchanged.
 
 -- ── 1. The deletion departs ─────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION _feed_withholds_kind(p_kind text)
 RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
-    SELECT p_kind IN ('webhook_received', 'subscription_delivery_disposed', 'resource_deleted')
+    SELECT p_kind IN ('webhook_received', 'subscription_delivery_disposed', 'resource_deleted',
+                      'region_materialized', 'salience_refreshed', 'relationship_decayed')
 $$;
 
 COMMENT ON FUNCTION _feed_withholds_kind(text) IS
   'A domain kind the context change feed never serves and refuses in `kinds` (20261117000020, '
   '20261117000040). A connection''s traffic (webhook_received, subscription_delivery_disposed) is '
   'no change to what lives in the context. A deletion is served as its departure, so '
-  'resource_deleted is not served as well.';
+  'resource_deleted is not served as well (_feed_served_kind serves a deletion with no departure '
+  'as one). The system-computed region_materialized, salience_refreshed and relationship_decayed '
+  'are bookkeeping, not changes, and the settle after an erasure would date it.';
+
+-- The kind a feed or cursor read serves an event as, or NULL when it serves none (items 1, 5, 6).
+-- A resource_deleted is served as resource_departed only when its transaction wrote no departure
+-- for the resource (deletions from before this migration, and legacy rows the cursor reads);
+-- otherwise the departure is the deletion's one exit and the deletion itself is withheld.
+CREATE FUNCTION _feed_served_kind(p_kind text, p_xact xid8, p_payload jsonb)
+RETURNS text LANGUAGE sql STABLE AS $$
+    SELECT CASE
+               WHEN p_kind = 'resource_deleted' THEN
+                   CASE WHEN EXISTS (
+                            SELECT 1
+                              FROM kb_events d
+                              JOIN kb_event_types dt ON dt.id = d.event_type_id
+                             WHERE d.xact_id = p_xact
+                               AND dt.name = 'resource_departed'
+                               AND d.payload->>'resource_id' = p_payload->>'resource_id')
+                        THEN NULL ELSE 'resource_departed' END
+               WHEN _feed_withholds_kind(p_kind) THEN NULL
+               ELSE p_kind
+           END
+$$;
 
 -- 20260709000050's body, with the departure between the record and the projection. The resource
 -- row is locked first, as resource_rehome does, so a deletion and a move of one resource append in
@@ -142,7 +203,7 @@ CREATE OR REPLACE FUNCTION context_changes_after(
     ),
     page AS (
         SELECT e.xact_id, e.seq, e.emitter_entity_id, e.occurred_at, e.correlation_id,
-               et.name AS kind, subj.t, subj.id, subj.block
+               sk.kind, subj.t, subj.id, subj.block
           -- The scan budget: at most _feed_scan_budget() of the context's events past the position,
           -- whatever is withheld among them (see item 3).
           FROM (SELECT e0.*
@@ -190,12 +251,14 @@ CREATE OR REPLACE FUNCTION context_changes_after(
                                         _feed_uuid(e.payload#>>'{block,block_id}'))
                      END AS block
           ) subj
+          -- The kind it is served as, if any (items 1, 5, 6).
+          CROSS JOIN LATERAL (SELECT _feed_served_kind(et.name, e.xact_id, e.payload) AS kind) sk
          WHERE e.category = 'domain'
            -- Only a subject the feed knows how to name (item 4).
            AND subj.t IN ('kb_resources', 'kb_edges', 'kb_blobs', 'kb_contexts')
            AND subj.id IS NOT NULL
-           AND (p_kinds IS NULL OR et.name = ANY (p_kinds))
-           AND NOT _feed_withholds_kind(et.name)
+           AND sk.kind IS NOT NULL
+           AND (p_kinds IS NULL OR sk.kind = ANY (p_kinds))
            AND NOT _event_is_admin_act(et.name, e.correlation_id, e.emitter_entity_id, e.xact_id)
            AND (subj.t IS DISTINCT FROM 'kb_edges' OR EXISTS (
                    SELECT 1
@@ -299,8 +362,115 @@ CREATE OR REPLACE FUNCTION context_changes_after(
     ) END
       FROM gate g
 $$;
+-- ── 7. The cursor: the newest event the feed would serve ────────────────────
+CREATE INDEX idx_kb_events_anchor_occurred
+    ON kb_events (producing_anchor_table, producing_anchor_id, occurred_at DESC);
+
+-- The newest event anchored on p_context that context_changes_after would serve p_profile, or NULL
+-- (item 7). Gated by the context read like the feed: an unreadable context answers NULL. The
+-- predicates below are context_changes_after's, repeated verbatim except for the `kinds` filter;
+-- crates/temper-substrate/tests/context_change_feed.rs
+-- (the_cursor_is_the_newest_event_the_feed_serves) pins the two together.
+CREATE FUNCTION context_cursor(p_profile uuid, p_context uuid)
+RETURNS uuid LANGUAGE sql STABLE AS $$
+    WITH gate AS (
+        SELECT context_readable_by_profile(p_profile, p_context) AS ok
+    ),
+    vis AS MATERIALIZED (
+        SELECT resource_id FROM resources_visible_to(p_profile)
+    )
+    SELECT e.id
+          -- The budget: at most _feed_scan_budget() of the context's newest events.
+          FROM (SELECT e0.*
+                  FROM kb_events e0
+                  CROSS JOIN gate g0
+                 WHERE g0.ok
+                   AND e0.producing_anchor_table = 'kb_contexts'
+                   AND e0.producing_anchor_id = p_context
+                 ORDER BY e0.occurred_at DESC
+                 LIMIT _feed_scan_budget()) e
+          JOIN kb_event_types et ON et.id = e.event_type_id
+          -- The subject as the payload names it (20261117000000's derivation, unchanged).
+          CROSS JOIN LATERAL (
+              SELECT CASE
+                         WHEN e.payload->'owner' ? 'table' THEN e.payload->'owner'->>'table'
+                         WHEN _feed_uuid(e.payload->>'resource_id') IS NOT NULL THEN 'kb_resources'
+                         WHEN _feed_uuid(e.payload->>'edge_id') IS NOT NULL THEN 'kb_edges'
+                         WHEN _feed_uuid(e.payload->>'block_id') IS NOT NULL THEN 'kb_content_blocks'
+                         WHEN _feed_uuid(e.payload->>'blob_id') IS NOT NULL THEN 'kb_blobs'
+                         ELSE 'kb_contexts'
+                     END AS t,
+                     CASE
+                         WHEN e.payload->'owner' ? 'table' THEN _feed_uuid(e.payload->'owner'->>'id')
+                         WHEN _feed_uuid(e.payload->>'resource_id') IS NOT NULL THEN _feed_uuid(e.payload->>'resource_id')
+                         WHEN _feed_uuid(e.payload->>'edge_id') IS NOT NULL THEN _feed_uuid(e.payload->>'edge_id')
+                         WHEN _feed_uuid(e.payload->>'block_id') IS NOT NULL THEN _feed_uuid(e.payload->>'block_id')
+                         WHEN _feed_uuid(e.payload->>'blob_id') IS NOT NULL THEN _feed_uuid(e.payload->>'blob_id')
+                         ELSE p_context
+                     END AS id
+          ) raw
+          -- A block's subject is its resource, and the block rides beside it (item 3).
+          CROSS JOIN LATERAL (
+              SELECT CASE WHEN raw.t = 'kb_content_blocks' THEN 'kb_resources' ELSE raw.t END AS t,
+                     CASE WHEN raw.t = 'kb_content_blocks'
+                          THEN (SELECT b.resource_id FROM kb_content_blocks b WHERE b.id = raw.id)
+                          ELSE raw.id END AS id,
+                     CASE WHEN raw.t = 'kb_content_blocks' THEN raw.id
+                          -- block_created nests its block (payloads::BlockCreated).
+                          WHEN raw.t = 'kb_resources'
+                          THEN coalesce(_feed_uuid(e.payload->>'block_id'),
+                                        _feed_uuid(e.payload#>>'{block,block_id}'))
+                     END AS block
+          ) subj
+          -- The kind it is served as, if any (items 1, 5, 6).
+          CROSS JOIN LATERAL (SELECT _feed_served_kind(et.name, e.xact_id, e.payload) AS kind) sk
+         WHERE e.category = 'domain'
+           -- Only a subject the feed knows how to name (item 4).
+           AND subj.t IN ('kb_resources', 'kb_edges', 'kb_blobs', 'kb_contexts')
+           AND subj.id IS NOT NULL
+           AND sk.kind IS NOT NULL
+           AND NOT _event_is_admin_act(et.name, e.correlation_id, e.emitter_entity_id, e.xact_id)
+           AND (subj.t IS DISTINCT FROM 'kb_edges' OR EXISTS (
+                   SELECT 1
+                     FROM (
+                       -- The edge's row. The home is the context the gate admitted; it bounds
+                       -- the lookup to this context's edges.
+                       SELECT ed.source_table AS st, ed.source_id AS si,
+                              ed.target_table AS tt, ed.target_id AS ti
+                         FROM kb_edges ed
+                        WHERE ed.id = subj.id
+                          AND ed.home_anchor_table = 'kb_contexts'
+                          AND ed.home_anchor_id = p_context
+                       UNION ALL
+                       -- A re-assertion names an id with no row (see item 1): its own source,
+                       -- target and home are the existing edge's, so they are tested instead.
+                       SELECT e.payload#>>'{source,table}', _feed_uuid(e.payload#>>'{source,id}'),
+                              e.payload#>>'{target,table}', _feed_uuid(e.payload#>>'{target,id}')
+                        WHERE et.name = 'relationship_asserted'
+                          AND e.payload#>>'{home,table}' = 'kb_contexts'
+                          AND _feed_uuid(e.payload#>>'{home,id}') = p_context
+                          AND NOT EXISTS (SELECT 1 FROM kb_edges ed2 WHERE ed2.id = subj.id)
+                     ) ends
+                    WHERE CASE ends.st
+                              WHEN 'kb_resources' THEN ends.si IN (SELECT resource_id FROM vis)
+                              ELSE endpoint_readable_by_profile(p_profile, ends.st, ends.si)
+                          END
+                      AND CASE ends.tt
+                              WHEN 'kb_resources' THEN ends.ti IN (SELECT resource_id FROM vis)
+                              ELSE endpoint_readable_by_profile(p_profile, ends.tt, ends.ti)
+                          END
+                   -- Keeps the lookup a per-event key probe (see Cost above).
+                   OFFSET 0))
+         ORDER BY e.occurred_at DESC, e.id DESC
+         LIMIT 1
+$$;
+
+COMMENT ON FUNCTION context_cursor(uuid, uuid) IS
+  'The context cursor (20261117000040): the newest event on the context that the change feed would '
+  'serve the reader, or NULL. Reads at most _feed_scan_budget() of the newest events.';
+
 SELECT declare_migration(
     20261117000040,
     'additive',
-    'Replaces _feed_withholds_kind, resource_delete, _resource_departure_append, _event_is_admin_act and context_changes_after, each with its signature and result type unchanged. A deletion also appends resource_departed (an existing kind) before it projects; the feed withholds resource_deleted, names a block''s resource as the subject of a block entry with an optional `block` key beside it, and serves only subjects in kb_resources, kb_edges, kb_blobs or kb_contexts. _event_is_admin_act matches legacy rows (NULL xact_id) to legacy act records. Nothing an older binary reads is dropped, renamed or reshaped: an older binary ignores the new `block` key, and refuses resource_deleted in `kinds` as the new one does, since both ask _feed_withholds_kind.'
+    'Adds _feed_served_kind(text, xid8, jsonb), context_cursor(uuid, uuid) and the index idx_kb_events_anchor_occurred on kb_events (producing_anchor_table, producing_anchor_id, occurred_at DESC). Replaces _feed_withholds_kind, resource_delete, _resource_departure_append, _event_is_admin_act and context_changes_after, each with its signature and result type unchanged. The feed and the cursor withhold region_materialized, salience_refreshed and relationship_decayed; a resource_deleted with no departure in its transaction is served as resource_departed. A deletion also appends resource_departed (an existing kind) before it projects; the feed withholds resource_deleted, names a block''s resource as the subject of a block entry with an optional `block` key beside it, and serves only subjects in kb_resources, kb_edges, kb_blobs or kb_contexts. _event_is_admin_act matches legacy rows (NULL xact_id) to legacy act records. Nothing an older binary reads is dropped, renamed or reshaped: an older binary ignores the new `block` key, and refuses resource_deleted in `kinds` as the new one does, since both ask _feed_withholds_kind.'
 );

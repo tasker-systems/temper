@@ -1967,3 +1967,163 @@ async fn a_subject_outside_the_feeds_tables_is_withheld(pool: PgPool) {
         "the change after them is served"
     );
 }
+
+/// The cursor's event as the feed would name it: (served kind, subject id).
+async fn cursor_entry(
+    pool: &PgPool,
+    reader: ProfileId,
+    context: ContextId,
+) -> Option<(String, String)> {
+    sqlx::query_as::<_, (String, String)>(
+        "SELECT coalesce(_feed_served_kind(et.name, e.xact_id, e.payload), 'WITHHELD:' || et.name), \
+                coalesce(e.payload->>'resource_id', e.payload->>'edge_id', $2::text) \
+           FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE e.id = context_cursor($1, $2)",
+    )
+    .bind(reader.uuid())
+    .bind(context.uuid())
+    .fetch_optional(pool)
+    .await
+    .unwrap()
+}
+
+/// The feed's newest entry, as (kind, subject id).
+async fn newest_entry(
+    pool: &PgPool,
+    reader: ProfileId,
+    context: ContextId,
+) -> Option<(String, String)> {
+    let (got, _) = drain(
+        pool,
+        reader,
+        context,
+        (BEGINNING.0.into(), BEGINNING.1),
+        1000,
+    )
+    .await;
+    got.last().map(|e| {
+        (
+            e["kind"].as_str().unwrap().to_owned(),
+            e["subject"]["id"].as_str().unwrap().to_owned(),
+        )
+    })
+}
+
+/// Owner rulings 2026-11-06 (migration 20261117000040, items 5 to 7). The cursor is the newest
+/// event the feed would serve, so neither dates what the other withholds. After each withheld
+/// write, of every class the feed withholds, both stay where they were:
+///   - a connection's traffic (`webhook_received`);
+///   - the region producer's bookkeeping (`region_materialized`, `salience_refreshed`), which after
+///     an erasure runs as the system actor and dated it;
+///   - an admin act's own transaction;
+///   - an edge whose endpoint the reader cannot read.
+/// A deletion moves both to its one departure. A deletion written before this migration, with no
+/// departure in its transaction, is served as `resource_departed` and moves both too.
+///
+/// FAILS IF: the cursor reads past a withheld class the feed skips (bite probe: drop any one
+/// predicate from `context_cursor`), the feed serves the system-computed kinds (drop them from
+/// `_feed_withholds_kind`), or a departure-less deletion is silent (make `_feed_served_kind`
+/// return NULL for every `resource_deleted`).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_cursor_is_the_newest_event_the_feed_serves(pool: PgPool) {
+    let (owner, emitter, _) = setup(&pool).await;
+    let team = common::create_team(&pool, "cursor-team").await;
+    let reader = ProfileId::from(common::create_profile(&pool, "cursor@example.test").await);
+    common::add_team_member(&pool, team, reader.uuid()).await;
+    let shared = ContextId::from(
+        common::insert_context(&pool, "kb_teams", team, "shared", "shared")
+            .await
+            .unwrap(),
+    );
+    let private = ContextId::from(
+        common::insert_context(&pool, "kb_profiles", owner.uuid(), "private", "private")
+            .await
+            .unwrap(),
+    );
+    let p1 = create(&pool, owner, emitter, private, "p1", "p1", &[]).await;
+    let a1 = create(&pool, owner, emitter, shared, "a1", "a1", &[]).await;
+
+    let agree = |what: &'static str, expect: (&'static str, Uuid)| {
+        let pool = pool.clone();
+        async move {
+            let want = Some((expect.0.to_owned(), expect.1.to_string()));
+            assert_eq!(
+                newest_entry(&pool, reader, shared).await,
+                want,
+                "after {what}: the feed's newest entry"
+            );
+            assert_eq!(
+                cursor_entry(&pool, reader, shared).await,
+                want,
+                "after {what}: the cursor"
+            );
+        }
+    };
+    agree("the first change", ("resource_created", a1.uuid())).await;
+
+    insert_traffic(&pool, "webhook_received", emitter, shared).await;
+    agree("a webhook receipt", ("resource_created", a1.uuid())).await;
+    for kind in ["region_materialized", "salience_refreshed"] {
+        insert_traffic(&pool, kind, emitter, shared).await;
+    }
+    agree("region bookkeeping", ("resource_created", a1.uuid())).await;
+
+    let (_, operator) = operator_actor(&pool).await;
+    let corr = Uuid::now_v7();
+    let mut tx = pool.begin().await.unwrap();
+    for sql in [
+        "INSERT INTO kb_events (event_type_id, emitter_entity_id, correlation_id, category, payload) \
+         SELECT id, $1, $2, 'admin', '{}'::jsonb FROM kb_event_types WHERE name = 'resource_erased'",
+        "INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, \
+                                producing_anchor_id, correlation_id, payload) \
+         SELECT id, $1, 'kb_contexts', $3, $2, jsonb_build_object('resource_id', $4::uuid) \
+           FROM kb_event_types WHERE name = 'property_set'",
+    ] {
+        sqlx::query(sql)
+            .bind(operator)
+            .bind(corr)
+            .bind(shared.uuid())
+            .bind(a1.uuid())
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+    }
+    tx.commit().await.unwrap();
+    agree("an admin act", ("resource_created", a1.uuid())).await;
+
+    let hidden = edge(&pool, emitter, shared, a1, p1).await;
+    assert!(
+        ledger_edge_entries(&pool, shared, hidden).await >= 1,
+        "anti-vacuity: the hidden edge's events are anchored on the shared context"
+    );
+    agree(
+        "an edge to an unreadable endpoint",
+        ("resource_created", a1.uuid()),
+    )
+    .await;
+
+    let gone = create(&pool, owner, emitter, shared, "gone", "g", &[]).await;
+    writes::delete_resource(&pool, gone, emitter).await.unwrap();
+    agree("a deletion", ("resource_departed", gone.uuid())).await;
+
+    // A deletion from before this migration: its record, and no departure in its transaction.
+    let old = create(&pool, owner, emitter, shared, "old", "o", &[]).await;
+    sqlx::query(
+        "SELECT _event_append('resource_deleted', $1, 'kb_contexts', $2, \
+                jsonb_build_object('resource_id', $3::uuid))",
+    )
+    .bind(emitter)
+    .bind(shared.uuid())
+    .bind(old.uuid())
+    .execute(&pool)
+    .await
+    .unwrap();
+    agree(
+        "a deletion with no departure",
+        ("resource_departed", old.uuid()),
+    )
+    .await;
+
+    let b = create(&pool, owner, emitter, shared, "b", "b", &[]).await;
+    agree("a later change", ("resource_created", b.uuid())).await;
+}

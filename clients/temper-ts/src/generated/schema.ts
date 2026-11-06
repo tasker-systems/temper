@@ -6807,7 +6807,10 @@ export interface components {
         EventCursorResponse: {
             /**
              * Format: uuid
-             * @description Most recent `kb_events.id` for the context, newest by `created`.
+             * @description The newest `kb_events.id` on the context, by `occurred_at`, among the events the context's
+             *     change feed would serve the reader. Never an admin act's, a connection's traffic, region
+             *     bookkeeping or an edge the reader cannot see. `None` when none of the newest events
+             *     qualifies.
              */
             latest_event_id?: string | null;
         };

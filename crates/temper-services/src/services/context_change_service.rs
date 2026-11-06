@@ -37,8 +37,10 @@
 //! - A connection's traffic, `webhook_received` and `subscription_delivery_disposed`, is never
 //!   served, and naming either in `kinds` is refused as an unknown kind (`_feed_withholds_kind`).
 //! - A resource leaves a context one way: a deletion and a move are each one `resource_departed`,
-//!   naming only the resource, so an exit never says whether the resource still exists elsewhere.
-//!   `resource_deleted` stays in the ledger, is not served, and is refused in `kinds` the same way.
+//!   naming only the resource, and the entry never says whether the resource still exists
+//!   elsewhere. `resource_deleted` stays in the ledger, is not served, and is refused in `kinds` the
+//!   same way. An update that moves fires the move before its edits, so the home it left holds only
+//!   the departure for that act, and either exit settles that home's regions the same way.
 //!
 //! **What an entry names.** A change to a content block names the block's resource as its subject
 //! and the block as `block`: a block is re-read through its resource. Every subject is one of

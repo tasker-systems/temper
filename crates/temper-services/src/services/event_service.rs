@@ -14,31 +14,23 @@ use temper_core::types::ids::{ContextId, ProfileId};
 /// the context-read rule that `20260712000010` collapsed. It ignored context shares and explicit
 /// read-grants entirely, so a profile who could read a context by either route still got `None` here.
 ///
-/// An admin act's events never move it (owner ruling 2026-11-06, migration 20261117000040). An
-/// erasure folds the erased resource's edges in their home context, and the cursor's uuidv7 would
-/// date an erasure the change feed never shows. It skips them through the feed's own definition,
-/// `_event_is_admin_act`, so the cursor and the feed agree on what an admin act is.
+/// It moves only on what the change feed would serve the reader (owner ruling 2026-11-06,
+/// migration 20261117000040, `context_cursor`): never on an admin act's events, a connection's
+/// traffic, the region producer's bookkeeping, a withheld deletion record, or an edge whose
+/// endpoints the reader cannot both read. Otherwise its uuidv7 would date what the feed withholds,
+/// an erasure first among them. It reads newest-first by `occurred_at` over at most
+/// `_feed_scan_budget()` events, and answers `None` when none of them would be served.
 pub async fn latest_event_id_for_context(
     pool: &PgPool,
     profile_id: ProfileId,
     kb_context_id: ContextId,
 ) -> ApiResult<Option<Uuid>> {
     let id = sqlx::query_scalar!(
-        r#"
-        SELECT e.id AS "id!: Uuid"
-          FROM kb_events e
-          JOIN kb_event_types et ON et.id = e.event_type_id
-         WHERE e.producing_anchor_table = 'kb_contexts'
-           AND e.producing_anchor_id = $2
-           AND context_readable_by_profile($1, $2)
-           AND NOT _event_is_admin_act(et.name, e.correlation_id, e.emitter_entity_id, e.xact_id)
-         ORDER BY e.occurred_at DESC
-         LIMIT 1
-        "#,
+        r#"SELECT context_cursor($1, $2) AS "id: Uuid""#,
         *profile_id,
         *kb_context_id,
     )
-    .fetch_optional(pool)
+    .fetch_one(pool)
     .await?;
     Ok(id)
 }

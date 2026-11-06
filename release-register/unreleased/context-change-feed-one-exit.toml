@@ -1,7 +1,7 @@
 title    = "A resource leaves a context's change feed one way, a block entry names its resource, and an admin act never moves the context cursor"
 pr       = "self"
 classes  = ["additive", "behavioral"]
-surfaces = ["http", "mcp", "cli-stdout", "clients", "schema"]
+surfaces = ["http", "mcp", "cli-stdout", "clients", "schema", "internal"]
 status   = "signal-only"
 body = '''
 Migration 20261117000040 carries the owner's 2026-11-06 rulings on the change feed's last
@@ -9,29 +9,51 @@ disclosures (cross-review tasker-systems/temper-artifacts#203, recommendations 3
 - A deletion now also appends resource_departed (an existing kind) in the home it leaves, before
   it projects. The feed serves that departure and no longer serves resource_deleted, which
   _feed_withholds_kind now names, so `kinds=resource_deleted` is refused (400) as an unknown kind.
-  A move's exit and a deletion's are then the same entry, so the feed no longer tells a reader that
-  a moved resource still exists somewhere it cannot see. The ledger, replay and the element trail
-  still carry resource_deleted.
-- GET /api/events/{kb_context_id}/cursor (latest_event_id_for_context) skips an admin act's events
-  through _event_is_admin_act, so an erasure's edge folds no longer move it and date the erasure.
-  The owner ruled this over the letter of the goal's clause that the cursor answers as before.
+  A move's exit and a deletion's are then the same entry. The ledger, replay and the element trail
+  still carry resource_deleted; a deletion's ledger now also holds the departure.
+- An update that moves a resource (update_resource with move_to.context_to) fires the move before
+  its edits, so the edits (resource_updated, property_*, block events) anchor on the destination
+  and the home it left records only the departure for that act. A move also queues a region settle
+  for the home it left, and the tick's exit gate (resource_deleted_since) counts resource_departed,
+  so that home re-derives its regions at the next drain as it does after a deletion. Both close a
+  way the old home's readers could tell a move from a deletion, and the settle also stops a
+  moved-out member lingering in the old home's centroids.
+- GET /api/events/{kb_context_id}/cursor (latest_event_id_for_context) now reads context_cursor:
+  the newest event, by occurred_at, that the feed would serve the reader. It no longer moves on an
+  admin act's events, a connection's traffic, region bookkeeping, a withheld resource_deleted or an
+  edge whose endpoints the reader cannot both read. It reads at most 10,000 of the newest events
+  and answers null when none of them qualifies. A new index, idx_kb_events_anchor_occurred on
+  kb_events (producing_anchor_table, producing_anchor_id, occurred_at DESC), lets it stop at the
+  first qualifying event; building it takes a lock on kb_events while it builds. The owner ruled
+  this over the letter of the goal's clause that the cursor answers as before.
   _event_is_admin_act now matches legacy rows (NULL xact_id) to a legacy act record by correlation
   id and emitter; the feed never serves a legacy row, so the feed's answers are unchanged by it.
-- A block entry (block_mutated, block_created, block_provenance_annotated, block_folded,
-  citation_audited) names the block's resource as its subject, and the block in a new optional
+- The feed and the cursor withhold the system-computed kinds region_materialized,
+  salience_refreshed and relationship_decayed (refused in `kinds`), as the changed-by readers
+  already do. The settle after an erasure runs as the system actor and dated it.
+- A resource_deleted whose transaction wrote no departure (deletions between the feed's ordering
+  migration and this one) is served as resource_departed, so every deletion has one exit entry.
+- invocation_show no longer shows acts that name a soft-deleted resource to readers of its home.
+  A deleted resource is unreadable there as elsewhere, which stops that door telling a deletion
+  from a move. The acts stay in the ledger and the element trail.
+- A block entry (block_mutated, block_created, block_provenance_annotated,
+  block_provenance_corrected, block_folded, citation_audited) names the block's resource as its subject, and the block in a new optional
   `block` key (ContextChange.block in temper-core, the SDKs and openapi.json). No entry names
   kb_content_blocks as its subject any more.
 - An entry is served only when its subject is kb_resources, kb_edges, kb_blobs or kb_contexts with
   an id. A payload naming anything else is withheld (defence in depth; no write path stores one).
 
 Who observes it: a feed reader (one fewer kind, block subjects re-pointed, a new optional key), and
-a cursor reader of a context where an admin act ran (the cursor stays on the last authored event).
+a cursor reader of a context where an admin act ran (the cursor skips the act's own events), and
+a writer who moves a resource with edits (the edit events now sit in the destination's ledger).
 Witnesses: crates/temper-substrate/tests/context_change_feed.rs
 (a_subject_that_left_view_is_still_pointed_at_and_its_own_read_refuses,
 a_resource_departs_once_and_only_from_a_home_it_leaves,
 a_block_entry_names_its_resource_and_the_block, a_subject_outside_the_feeds_tables_is_withheld),
 crates/temper-services/tests/context_change_doors_test.rs (an_admin_act_never_moves_the_cursor,
-a_bound_or_kind_out_of_range_is_refused_never_clamped).
+a_bound_or_kind_out_of_range_is_refused_never_clamped),
+crates/temper-services/tests/region_tick_off_request_test.rs
+(a_move_out_settles_the_home_it_left_as_a_delete_does).
 Release relevance: a disclosure narrowing on read surfaces shipped in the same unreleased window,
 plus a cursor narrowing on a released door.
 '''

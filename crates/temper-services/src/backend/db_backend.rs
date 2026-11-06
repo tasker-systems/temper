@@ -3090,6 +3090,16 @@ impl Backend for DbBackend {
         // lock and R's row would make other writers and an erasure act wait that long (found by
         // both second-round reviews).
         let prepared = writes::prepare_update_body(&mut params, defer).map_err(api_err)?;
+        // The home a move leaves, read before the write re-points it: its regions still count the
+        // resource as a member, so it is settled after the commit as a deletion's home is (below).
+        // Best-effort like every clock enqueue: an unreadable home only means no settle is queued.
+        let left_home = match rehome_to {
+            Some(_) => region_clocks::home_of(&self.pool, new_id)
+                .await
+                .ok()
+                .flatten(),
+            None => None,
+        };
         let mut tx = self.begin_floored(ResourceId::from(new_id)).await?;
         // GOAL ROWS FIRST: a goal patch locks the goal rows it touches before the update and the
         // goal-edge folds lock edge, block and remote-source rows — the NEW goal's (a set), whose
@@ -3194,6 +3204,16 @@ impl Backend for DbBackend {
                 error = %e,
                 "could not resolve home anchor; region clocks not ticked"
             ),
+        }
+        // A move settles the home it left, as a deletion settles its home: the resource left that
+        // home's regions, and the tick's departure gate (`resource_deleted_since`, which counts a
+        // move's departure as it counts a deletion) re-derives them at the next drain. The same
+        // settle follows either exit, so the old home's readers cannot tell a move from a deletion
+        // by what follows the departure (owner ruling 2026-11-06; migration 20261117000040).
+        if let Some(left) = left_home {
+            if rehome_to.map(HomeAnchor::Context) != Some(left) {
+                self.queue_region_clocks(left, emitter).await;
+            }
         }
 
         // If this update rehomed the resource, enqueue a shape-reconcile job for the destination

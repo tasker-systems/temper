@@ -372,8 +372,10 @@ async fn a_bound_or_kind_out_of_range_is_refused_never_clamped(pool: PgPool) {
         "webhook_received",
         "subscription_delivery_disposed",
         "property_set,webhook_received",
-        // A deletion is served as its departure (migration 20261117000040).
+        // A deletion is served as its departure, and region bookkeeping is no change
+        // (migration 20261117000040).
         "resource_deleted",
+        "region_materialized",
     ] {
         let err = read(&pool, owner.profile, ctx, q(None, None, Some(kinds)))
             .await

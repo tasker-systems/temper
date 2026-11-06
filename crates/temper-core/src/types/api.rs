@@ -27,7 +27,10 @@ pub struct HealthResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct EventCursorResponse {
-    /// Most recent `kb_events.id` for the context, newest by `created`.
+    /// The newest `kb_events.id` on the context, by `occurred_at`, among the events the context's
+    /// change feed would serve the reader. Never an admin act's, a connection's traffic, region
+    /// bookkeeping or an edge the reader cannot see. `None` when none of the newest events
+    /// qualifies.
     pub latest_event_id: Option<Uuid>,
 }
 
