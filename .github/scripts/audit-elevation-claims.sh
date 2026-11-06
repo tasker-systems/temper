@@ -494,6 +494,13 @@ current_gates() {
 # 27 -> 38, the same doors' service docs plus the widened detach (a manager of either side, R1).
 # `temper-core/src/types/team.rs` 4 -> 5: `SetAutoJoinRequest` says "system admin only", which
 # the handler's `require_system_admin` enforces.
+# REVIEWED 2026-11-06 (same doors, Phase 7: team management on MCP for people, ruling R7
+# reversed) — `temper-mcp/src/service.rs` 4 -> 6 and new `tools/teams.rs` 4, unbound (`-`). The
+# `team_manage` and `team_read` descriptions and the module doc restate the API's gates (a manager
+# of both sides attaches; root/gating parents, auto-join children and `set_auto_join` are a system
+# admin's; children show to managers) and say that the API decides and a machine is refused at the
+# route. The tool checks none of it: every action relays on the caller's bearer, and
+# `mcp_team_manage_e2e` drives a machine token through each write to the API's refusal sentence.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -533,10 +540,11 @@ claim crates/temper-core/src/types/invitation.rs 3 team_membership
 claim crates/temper-core/src/types/machine.rs 1 machine
 claim crates/temper-core/src/types/subscription.rs 1 subscription
 claim crates/temper-core/src/types/team.rs 5 team_membership,is_system_admin
-claim crates/temper-mcp/src/service.rs 4 -
+claim crates/temper-mcp/src/service.rs 6 -
 claim crates/temper-mcp/src/tools/cognitive_maps.rs 1 is_system_admin
 claim crates/temper-mcp/src/tools/contexts.rs 2 context_admin,two_sided
 claim crates/temper-mcp/src/tools/reblock.rs 3 -
+claim crates/temper-mcp/src/tools/teams.rs 4 -
 claim crates/temper-services/src/services/access_service.rs 11 is_system_admin
 claim crates/temper-services/src/services/admin_directory_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/cogmap_service.rs 4 two_sided
