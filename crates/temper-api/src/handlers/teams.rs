@@ -11,8 +11,10 @@ use crate::middleware::auth::{AnyPrincipal, AuthUser};
 use temper_core::types::ids::ProfileId;
 use temper_core::types::reassign::RemoveMemberOutcome;
 use temper_core::types::team::{
-    AddMemberRequest, AttachChildOutcome, ChangeRoleRequest, ReparentOutcome, ReparentRequest,
-    TeamCreateRequest, TeamDetail, TeamMemberRow, TeamRow, TeamUpdateRequest,
+    AddMemberRequest, AttachChildOutcome, ChangeRoleRequest, RenameTeamSlugOutcome,
+    RenameTeamSlugRequest, ReparentOutcome, ReparentRequest, RestoreTeamOutcome,
+    SetAutoJoinOutcome, SetAutoJoinRequest, TeamCreateRequest, TeamDetail, TeamMemberRow, TeamRow,
+    TeamUpdateRequest,
 };
 use temper_services::error::ApiResult;
 use temper_services::services::team_service;
@@ -311,6 +313,102 @@ pub async fn reparent(
     Json(body): Json<ReparentRequest>,
 ) -> ApiResult<Json<ReparentOutcome>> {
     team_service::reparent(&state.pool, &auth.0, team_id, &body)
+        .await
+        .map(Json)
+}
+
+/// Restore a soft-deleted team
+///
+/// The inverse of delete. Every preserved row confers again: the roster, the parent links, and the
+/// children's reach through this team; the response lists all three so the restorer sees the reach
+/// they revived. The team's owner, or a system admin (temper-system and the gating team: a system
+/// admin only; a personal team: its owner only). Recorded as `team_lifecycle_changed`.
+#[utoipa::path(
+    post,
+    operation_id = "restore_team",
+    path = "/api/teams/{id}/restore",
+    tag = "Teams",
+    params(("id" = Uuid, Path, description = "Team ID")),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Restored", body = RestoreTeamOutcome),
+        (status = 403, description = "Forbidden: the caller is not the team's owner or a system admin (temper-system or the gating team: not a system admin; a personal team: not its owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 404, description = "The team does not exist or is not deleted"),
+    )
+)]
+pub async fn restore(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(team_id): Path<Uuid>,
+) -> ApiResult<Json<RestoreTeamOutcome>> {
+    team_service::restore_team(&state.pool, &auth.0, team_id)
+        .await
+        .map(Json)
+}
+
+/// Set, change or clear a team's auto-join role
+///
+/// A system admin's act. With a role set, every approved profile (never a machine) is enrolled at
+/// it, and so reads everything attached to the team and to each of the `ancestors` returned.
+/// Existing memberships are never changed: not raised, not lowered, not removed. `null` stops
+/// enrolment. Refused on temper-system, the gating team and personal teams. Recorded as
+/// `team_lifecycle_changed`.
+#[utoipa::path(
+    put,
+    operation_id = "set_team_auto_join",
+    path = "/api/teams/{id}/auto-join",
+    tag = "Teams",
+    params(("id" = Uuid, Path, description = "Team ID")),
+    security(("bearer_auth" = [])),
+    request_body = SetAutoJoinRequest,
+    responses(
+        (status = 200, description = "Set, changed, cleared, or already so", body = SetAutoJoinOutcome),
+        (status = 400, description = "A role above `member`, or the team is temper-system, the gating team or a personal team"),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 404, description = "The team does not exist or is soft-deleted"),
+    )
+)]
+pub async fn set_auto_join(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(team_id): Path<Uuid>,
+    Json(body): Json<SetAutoJoinRequest>,
+) -> ApiResult<Json<SetAutoJoinOutcome>> {
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
+    team_service::set_auto_join(&state.pool, &admin, team_id, body.role)
+        .await
+        .map(Json)
+}
+
+/// Change a team's slug
+///
+/// Its own door, not a field of `PATCH`. **Addresses change:** `+old/<context>` refs stop resolving
+/// (UUID refs are unaffected), and refs stored in content are not rewritten. An owner or maintainer;
+/// temper-system and the gating team: a system admin (renaming the gating team carries the
+/// instance setting with it). Recorded as `team_lifecycle_changed`.
+#[utoipa::path(
+    post,
+    operation_id = "rename_team_slug",
+    path = "/api/teams/{id}/rename-slug",
+    tag = "Teams",
+    params(("id" = Uuid, Path, description = "Team ID")),
+    security(("bearer_auth" = [])),
+    request_body = RenameTeamSlugRequest,
+    responses(
+        (status = 200, description = "Renamed (or already so)", body = RenameTeamSlugOutcome),
+        (status = 400, description = "The slug is invalid or starts with `personal-`, or the team is temper-system or a personal team"),
+        (status = 403, description = "Forbidden: the caller is not an owner or maintainer of the team (temper-system or the gating team: not a system admin); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 404, description = "The team does not exist or is soft-deleted"),
+        (status = 409, description = "The slug is taken, by a live or a soft-deleted team"),
+    )
+)]
+pub async fn rename_slug(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(team_id): Path<Uuid>,
+    Json(body): Json<RenameTeamSlugRequest>,
+) -> ApiResult<Json<RenameTeamSlugOutcome>> {
+    team_service::rename_slug(&state.pool, &auth.0, team_id, &body)
         .await
         .map(Json)
 }

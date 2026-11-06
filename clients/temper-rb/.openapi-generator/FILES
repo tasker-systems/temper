@@ -387,6 +387,8 @@ lib/temper/generated/models/remote_connection.rb
 lib/temper/generated/models/remove_member_outcome.rb
 lib/temper/generated/models/rename_context_outcome.rb
 lib/temper/generated/models/rename_context_request.rb
+lib/temper/generated/models/rename_team_slug_outcome.rb
+lib/temper/generated/models/rename_team_slug_request.rb
 lib/temper/generated/models/reparent_outcome.rb
 lib/temper/generated/models/reparent_request.rb
 lib/temper/generated/models/requested.rb
@@ -419,6 +421,7 @@ lib/temper/generated/models/resource_sort_field.rb
 lib/temper/generated/models/resource_update_request.rb
 lib/temper/generated/models/resource_view.rb
 lib/temper/generated/models/restore_context_outcome.rb
+lib/temper/generated/models/restore_team_outcome.rb
 lib/temper/generated/models/retention_category.rb
 lib/temper/generated/models/retention_policies.rb
 lib/temper/generated/models/retention_policy.rb
@@ -446,6 +449,8 @@ lib/temper/generated/models/search_scope_info.rb
 lib/temper/generated/models/segment_info.rb
 lib/temper/generated/models/segmented_begin.rb
 lib/temper/generated/models/segmented_begin_response.rb
+lib/temper/generated/models/set_auto_join_outcome.rb
+lib/temper/generated/models/set_auto_join_request.rb
 lib/temper/generated/models/set_tool_manifest_request.rb
 lib/temper/generated/models/set_webhook_events_request.rb
 lib/temper/generated/models/shape_declare_request.rb

@@ -17,15 +17,17 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::auth::{Caller, HumanPrincipal};
+use crate::auth::{Caller, HumanPrincipal, SystemAdmin};
 use crate::authz::team_membership::{self, MembershipAct, MembershipAuthority};
 use crate::error::{ApiError, ApiResult};
 use temper_core::types::ids::ProfileId;
 use temper_core::types::reassign::{RemoveMemberOutcome, ResidualContext, ResidualOwnedReach};
 use temper_core::types::team::{
-    AddMemberRequest, AttachChildOutcome, AttachOutcome, ReparentOutcome, ReparentRequest,
-    TeamChildRef, TeamCreateRequest, TeamDetail, TeamMemberDetail, TeamMemberRow, TeamMemberSource,
-    TeamRef, TeamRole, TeamRow, TeamUpdateRequest,
+    AddMemberRequest, AttachChildOutcome, AttachOutcome, RenameTeamSlugOutcome,
+    RenameTeamSlugRequest, ReparentOutcome, ReparentRequest, RestoreTeamOutcome,
+    SetAutoJoinOutcome, TeamChildRef, TeamCreateRequest, TeamDetail, TeamMemberDetail,
+    TeamMemberRow, TeamMemberSource, TeamRef, TeamRole, TeamRow, TeamUpdateRequest,
+    MAX_CREATE_PARENTS,
 };
 
 /// The slug prefix of every personal team (`personal-<handle>`), which `sync_personal_team`
@@ -308,15 +310,8 @@ pub async fn create_team(
     req: &TeamCreateRequest,
 ) -> ApiResult<TeamRow> {
     let creator = ProfileId::from(authed.profile().id);
-    if req
-        .slug
-        .to_ascii_lowercase()
-        .starts_with(PERSONAL_TEAM_SLUG_PREFIX)
-    {
-        return Err(ApiError::BadRequest(format!(
-            "the `{PERSONAL_TEAM_SLUG_PREFIX}` slug prefix is reserved for personal teams"
-        )));
-    }
+    // One validator for new slugs and renames (ruling R4); it refuses the personal prefix too.
+    let slug = validate_team_slug(&req.slug)?;
 
     // A team's creator becomes its `owner`, and a machine principal never governs (ruled
     // 2026-10-09; the database refuses the row — 20261019100000_machines_never_govern.sql). The
@@ -325,19 +320,12 @@ pub async fn create_team(
 
     // --- Auth before writes ---
 
-    // Child team: resolve the parent and require owner/maintainer on it. This is the pool
-    // pre-check; the same decision runs again under the parent's row lock before the link is written.
-    let parent_id = if let Some(parent_ref) = &req.parent {
-        let slug = team_slug(parent_ref);
-        let parent = sqlx::query!(
-            r#"SELECT id, personal_of IS NOT NULL AS "is_personal!" FROM kb_teams
-                WHERE slug = $1 AND is_active"#,
-            slug
-        )
-        .fetch_optional(pool)
-        .await?
-        .ok_or_else(|| ApiError::NotFound("parent team not found or not readable".to_string()))?;
-        let parent_id = parent.id;
+    // Child team: resolve each parent and require owner/maintainer on it (team DAG doors D4: the
+    // several-parent form is checked exactly as the one parent always was). This is the pool
+    // pre-check; the same decision runs again under the parents' row locks before any link is
+    // written.
+    let parent_ids = resolve_create_parents(pool, req).await?;
+    for &parent_id in &parent_ids {
         // The root and the gating team take children only from a system admin (team-authority
         // fixes D4): a child of either is read reach into everything attached to it, and R11 keeps
         // the gating roster admin-only. A leftover managing row (a demoted admin's) confers nothing.
@@ -349,16 +337,13 @@ pub async fn create_team(
                 _ => return Err(ApiError::Forbidden),
             }
             // After the role check, so a non-manager learns nothing about the parent.
-            if parent.is_personal {
+            if personal_of(pool, parent_id).await?.is_some() {
                 return Err(ApiError::BadRequest(
                     "a personal team cannot have child teams".to_string(),
                 ));
             }
         }
-        Some(parent_id)
-    } else {
-        None
-    };
+    }
 
     // auto_join_role defines an everyone-pool — admin-gated.
     if req.auto_join_role.is_some()
@@ -385,20 +370,24 @@ pub async fn create_team(
 
     // --- Writes (one transaction) ---
     let team_id = Uuid::now_v7();
-    let name = req.name.clone().unwrap_or_else(|| req.slug.clone());
+    let name = req.name.clone().unwrap_or_else(|| slug.clone());
 
     let mut tx = pool
         .begin()
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {e}")))?;
 
-    // Under the parent's row lock (the one every membership writer takes), the pre-check's decision
-    // is made again: the parent is still live, and either it is an instance team and the caller is
-    // a system admin, or it is not and the creator still manages it. A concurrent demotion,
-    // removal, soft-delete or re-pointed gating slug cannot race the link it would have refused
-    // (team DAG review G12). Same pattern as `detach_child`.
-    if let Some(parent_id) = parent_id {
-        if !team_membership::lock_team(&mut tx, parent_id).await? {
+    // Under the parents' row locks (the one every membership writer takes), taken in ascending id
+    // order, the pre-check's decision is made again for each: the parent is still live, and either
+    // it is an instance team and the caller is a system admin, or it is not and the creator still
+    // manages it. A concurrent demotion, removal, soft-delete or re-pointed gating slug cannot race
+    // the link it would have refused (team DAG review G12). Same pattern as `detach_child`.
+    lock_teams_ascending(&mut tx, &parent_ids).await?;
+    for &parent_id in &parent_ids {
+        if !link_side(&mut tx, parent_id)
+            .await?
+            .is_some_and(|side| side.live)
+        {
             return Err(ApiError::NotFound(
                 "parent team not found or not readable".to_string(),
             ));
@@ -422,7 +411,7 @@ pub async fn create_team(
                   auto_join_role AS "auto_join_role: TeamRole"
         "#,
         team_id,
-        req.slug,
+        slug,
         name,
         req.auto_join_role as Option<TeamRole>,
     )
@@ -430,21 +419,25 @@ pub async fn create_team(
     .await
     .map_err(|e| map_unique_violation(e, "team slug already exists"))?;
 
-    // The parent link is read reach into everything attached to the parent, so it is a recorded act
-    // (team-authority fixes D3): the row and its `team_parent_link_changed` record are one write.
-    if let Some(parent_id) = parent_id {
+    // Each parent link is read reach into everything attached to the parent, so it is a recorded
+    // act (team-authority fixes D3): the row and its `team_parent_link_changed` record are one
+    // write. The links of one create share a correlation id (D4).
+    if !parent_ids.is_empty() {
         let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, creator, "web")
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
-        sqlx::query_scalar!(
-            r#"SELECT _admin_team_parent_link_write($1, $2, 'link', $3, $4) AS "outcome!""#,
-            emitter.uuid(),
-            *creator,
-            parent_id,
-            team_id,
-        )
-        .fetch_one(&mut *tx)
-        .await?;
+        let correlation = Uuid::now_v7();
+        for &parent_id in &parent_ids {
+            link(
+                &mut tx,
+                emitter.uuid(),
+                creator,
+                parent_id,
+                team_id,
+                Some(correlation),
+            )
+            .await?;
+        }
     }
 
     // The creator's `owner` row is a recorded act (plan P7): it goes through the one membership
@@ -490,6 +483,73 @@ pub async fn create_team(
     }
 
     Ok(row)
+}
+
+/// The one team-slug validator (team DAG doors ruling R4), for every new slug — a create and a
+/// rename. Lowercases its input, then requires `^[a-z0-9][a-z0-9-]{0,62}$` and refuses the
+/// [`PERSONAL_TEAM_SLUG_PREFIX`] (only `sync_personal_team` mints one). Existing slugs are
+/// grandfathered: nothing re-validates a slug already stored. Returns the slug to store.
+pub fn validate_team_slug(raw: &str) -> ApiResult<String> {
+    let slug = raw.to_ascii_lowercase();
+    let mut chars = slug.chars();
+    let shaped = slug.len() <= 63
+        && chars
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if !shaped {
+        return Err(ApiError::BadRequest(
+            "a team slug is 1-63 characters of a-z, 0-9 and `-`, starting with a letter or digit"
+                .to_string(),
+        ));
+    }
+    if slug.starts_with(PERSONAL_TEAM_SLUG_PREFIX) {
+        return Err(ApiError::BadRequest(format!(
+            "the `{PERSONAL_TEAM_SLUG_PREFIX}` slug prefix is reserved for personal teams"
+        )));
+    }
+    Ok(slug)
+}
+
+/// The parents a create names (team DAG doors D4), resolved to live team ids in request order with
+/// duplicates collapsed: `parent` is the one-element form of `parents`, and sending both is `400`;
+/// more than [`MAX_CREATE_PARENTS`] is `400`; a ref naming no live team is `404`.
+async fn resolve_create_parents(pool: &PgPool, req: &TeamCreateRequest) -> ApiResult<Vec<Uuid>> {
+    let refs: Vec<&str> = match (&req.parent, &req.parents) {
+        (Some(_), Some(_)) => {
+            return Err(ApiError::BadRequest(
+                "send `parent` or `parents`, not both".to_string(),
+            ))
+        }
+        (Some(one), None) => vec![one.as_str()],
+        (None, Some(many)) => many.iter().map(String::as_str).collect(),
+        (None, None) => Vec::new(),
+    };
+    if refs.len() > MAX_CREATE_PARENTS {
+        return Err(ApiError::BadRequest(format!(
+            "a team is created with at most {MAX_CREATE_PARENTS} parents"
+        )));
+    }
+    let mut ids: Vec<Uuid> = Vec::with_capacity(refs.len());
+    for parent_ref in refs {
+        let live = match resolve_team_ref(pool, parent_ref).await? {
+            Some(id) => sqlx::query_scalar!(
+                r#"SELECT is_active AS "live!" FROM kb_teams WHERE id = $1"#,
+                id
+            )
+            .fetch_one(pool)
+            .await?
+            .then_some(id),
+            None => None,
+        };
+        let id = live.ok_or_else(|| {
+            ApiError::NotFound("parent team not found or not readable".to_string())
+        })?;
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    Ok(ids)
 }
 
 /// Add a member to a team at `req.role` — the rank rule (team-role rank spec C1, R11): a manager
@@ -747,7 +807,7 @@ pub async fn update_team(
 ///
 /// Refuses the `temper-system` root (load-bearing: every profile descends from
 /// it). Idempotency: a team that is absent OR already soft-deleted yields
-/// `NotFound`. Rows are preserved — recovery is a DB-level `is_active = true`.
+/// `NotFound`. Rows are preserved — [`restore_team`] is the inverse.
 /// Children are NOT recursively deleted (see the migration's cascade note).
 pub async fn delete_team(pool: &PgPool, caller: &HumanPrincipal, team_id: Uuid) -> ApiResult<()> {
     // Auth before writes: owner only (stricter than manage — a maintainer cannot dissolve the
@@ -805,6 +865,289 @@ pub async fn delete_team(pool: &PgPool, caller: &HumanPrincipal, team_id: Uuid) 
         });
     }
     Ok(())
+}
+
+/// Change a team's slug (team DAG doors D7) — its own door, not a `PATCH` field (review L3).
+///
+/// Authority as [`update_team`]: an owner or maintainer; on the root or the gating team, a system
+/// admin only. Refused (`400`) for `temper-system` (its slug is load-bearing in SQL), a personal
+/// team (`personal-<handle>` is derived identity), and a slug failing [`validate_team_slug`].
+/// `409` on a collision with any slug, live or soft-deleted (deleted slugs stay reserved).
+///
+/// The gating team is stored by slug (`kb_system_settings.gating_team_slug`); the writer moves that
+/// setting in the same statement under `_gating_team_lock`, so the instance is never without its
+/// gating team. Addresses change: `+old/<ctx>` stops resolving; UUID refs are unaffected; refs in
+/// stored content are not rewritten. Recorded as `team_lifecycle_changed` `renamed`.
+pub async fn rename_slug(
+    pool: &PgPool,
+    caller: &HumanPrincipal,
+    team_id: Uuid,
+    req: &RenameTeamSlugRequest,
+) -> ApiResult<RenameTeamSlugOutcome> {
+    if is_root_or_gating(pool, team_id).await? {
+        require_admin_on(pool, caller).await?;
+    } else {
+        match membership_row_role(pool, team_id, caller.profile_id()).await? {
+            Some(role) if can_manage(role) => {}
+            _ => return Err(ApiError::Forbidden),
+        }
+    }
+    let current = sqlx::query!(
+        r#"SELECT slug, personal_of IS NOT NULL AS "personal!" FROM kb_teams WHERE id = $1"#,
+        team_id
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| ApiError::NotFound("team not found or not readable".to_string()))?;
+    if current.slug == "temper-system" {
+        return Err(ApiError::BadRequest(
+            "the temper-system root keeps its slug".to_string(),
+        ));
+    }
+    if current.personal {
+        return Err(ApiError::BadRequest(
+            "a personal team's slug is derived from its owner".to_string(),
+        ));
+    }
+    let to = validate_team_slug(&req.slug)?;
+
+    let mut tx = pool.begin().await?;
+    let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let outcome = lifecycle_write(
+        &mut tx,
+        emitter.uuid(),
+        caller.profile_id(),
+        team_id,
+        "renamed",
+        Some(&to),
+        None,
+    )
+    .await
+    .map_err(|e| match e {
+        // `kb_teams_slug_key`: any slug, live or soft-deleted.
+        ApiError::Conflict(_) => ApiError::Conflict("team slug already exists".to_string()),
+        other => other,
+    })?;
+    if outcome == LifecycleOutcome::Absent {
+        return Err(ApiError::NotFound(
+            "team not found or not readable".to_string(),
+        ));
+    }
+    tx.commit().await?;
+    Ok(RenameTeamSlugOutcome {
+        team_id,
+        from: current.slug,
+        to,
+    })
+}
+
+/// Restore a soft-deleted team (team DAG doors D6) — the inverse of [`delete_team`], with its
+/// authority: the team's `owner` (the blind row lookup, since the team is dead), or a system admin;
+/// on the root or the gating team, a system admin only; on a personal team, its owner only. Not a
+/// `maintainer`: delete is owner-only.
+///
+/// `is_active = true` and its `team_lifecycle_changed` record are one statement. The slug is still
+/// held (soft-deleted slugs stay reserved), so nothing collides. Every preserved row confers again:
+/// the roster, the parent links (and through them the children's reach to everything above), its
+/// contexts, shares and grants. So the outcome lists the live parents, the live children and the
+/// roster: the restorer sees the reach they revived. After commit, an auto-join team backfills the
+/// profiles approved while it was dead. `NotFound` when the team is absent or not deleted.
+pub async fn restore_team(
+    pool: &PgPool,
+    caller: &HumanPrincipal,
+    team_id: Uuid,
+) -> ApiResult<RestoreTeamOutcome> {
+    let admin = personal_of(pool, team_id).await?.is_none()
+        && crate::authz::Principal::Human(caller)
+            .system_admin(pool)
+            .await?
+            .is_some();
+    if !admin {
+        if is_root_or_gating(pool, team_id).await? {
+            return Err(ApiError::Forbidden);
+        }
+        match membership_row_role(pool, team_id, caller.profile_id()).await? {
+            Some(TeamRole::Owner) => {}
+            _ => return Err(ApiError::Forbidden),
+        }
+    }
+
+    let mut tx = pool.begin().await?;
+    let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let outcome = lifecycle_write(
+        &mut tx,
+        emitter.uuid(),
+        caller.profile_id(),
+        team_id,
+        "restored",
+        None,
+        None,
+    )
+    .await?;
+    if outcome == LifecycleOutcome::Absent {
+        return Err(ApiError::NotFound(
+            "team not found or not deleted".to_string(),
+        ));
+    }
+    tx.commit().await?;
+
+    let team = sqlx::query_as!(
+        TeamRow,
+        r#"SELECT id, slug, name, description, created,
+                  auto_join_role AS "auto_join_role: TeamRole"
+             FROM kb_teams WHERE id = $1"#,
+        team_id,
+    )
+    .fetch_one(pool)
+    .await?;
+    if team.auto_join_role.is_some() {
+        sqlx::query!("SELECT backfill_auto_join_team($1)", team_id)
+            .execute(pool)
+            .await?;
+    }
+    let mut conn = pool.acquire().await?;
+    Ok(RestoreTeamOutcome {
+        parents: live_parents(&mut conn, team_id).await?,
+        children: live_children(&mut conn, team_id).await?,
+        members: roster(&mut conn, team_id).await?,
+        team,
+    })
+}
+
+async fn live_parents(conn: &mut sqlx::PgConnection, team_id: Uuid) -> ApiResult<Vec<TeamRef>> {
+    Ok(sqlx::query_as!(
+        TeamRef,
+        r#"SELECT t.id, t.slug, t.name
+             FROM kb_teams_parents tp
+             JOIN kb_teams t ON t.id = tp.parent_id AND t.is_active
+            WHERE tp.child_id = $1
+            ORDER BY t.slug"#,
+        team_id,
+    )
+    .fetch_all(&mut *conn)
+    .await?)
+}
+
+async fn live_children(conn: &mut sqlx::PgConnection, team_id: Uuid) -> ApiResult<Vec<TeamRef>> {
+    Ok(sqlx::query_as!(
+        TeamRef,
+        r#"SELECT t.id, t.slug, t.name
+             FROM kb_teams_parents tp
+             JOIN kb_teams t ON t.id = tp.child_id AND t.is_active
+            WHERE tp.parent_id = $1
+            ORDER BY t.slug"#,
+        team_id,
+    )
+    .fetch_all(&mut *conn)
+    .await?)
+}
+
+async fn roster(conn: &mut sqlx::PgConnection, team_id: Uuid) -> ApiResult<Vec<TeamMemberDetail>> {
+    Ok(sqlx::query_as!(
+        TeamMemberDetail,
+        r#"SELECT tm.profile_id,
+                  p.handle,
+                  tm.role AS "role: TeamRole",
+                  tm.source AS "source: TeamMemberSource"
+             FROM kb_team_members tm
+             JOIN kb_profiles p ON p.id = tm.profile_id
+            WHERE tm.team_id = $1
+            ORDER BY tm.role, p.handle"#,
+        team_id,
+    )
+    .fetch_all(&mut *conn)
+    .await?)
+}
+
+/// Set, change or clear a team's `auto_join_role` (team DAG doors D5). A system admin's act.
+///
+/// Refused (`400`) on `temper-system` (the root already reaches everyone through personal teams),
+/// the gating team (its roster is standing) and a personal team (it admits only its owner and their
+/// machines), and for a role above `member` (a role that governs is granted by a person). The
+/// column and its `team_lifecycle_changed` record are one statement; a change to the value already
+/// held records nothing.
+///
+/// Ruling R3: existing rows are never touched. Auto-join rows are written `source = native` and are
+/// not recorded, so nothing tells a pool-written row from one a manager wrote; a rewrite would
+/// demote or evict people someone added deliberately. Setting or changing the role then backfills
+/// (after commit) every eligible profile with no row; clearing it stops enrolment. The outcome
+/// carries the team's live ancestors: with auto-join set, every approved profile reads them.
+pub async fn set_auto_join(
+    pool: &PgPool,
+    admin: &SystemAdmin,
+    team_id: Uuid,
+    role: Option<TeamRole>,
+) -> ApiResult<SetAutoJoinOutcome> {
+    if role.is_some_and(|r| r.rank() > TeamRole::Member.rank()) {
+        return Err(ApiError::BadRequest(
+            "auto_join_role may be member or watcher; a role that governs a team is granted by a \
+             person"
+                .to_string(),
+        ));
+    }
+    if is_root_or_gating(pool, team_id).await? {
+        return Err(ApiError::BadRequest(
+            "temper-system and the gating team are never auto-join teams".to_string(),
+        ));
+    }
+    if personal_of(pool, team_id).await?.is_some() {
+        return Err(ApiError::BadRequest(
+            PERSONAL_TEAM_HOLDS_ITS_OWNER.to_string(),
+        ));
+    }
+
+    let mut tx = pool.begin().await?;
+    let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, admin.actor(), "web")
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let wire = role.map(|r| r.as_str());
+    let outcome = lifecycle_write(
+        &mut tx,
+        emitter.uuid(),
+        admin.actor(),
+        team_id,
+        "auto_join_changed",
+        wire,
+        None,
+    )
+    .await?;
+    if outcome == LifecycleOutcome::Absent {
+        return Err(ApiError::NotFound(
+            "team not found or not readable".to_string(),
+        ));
+    }
+    tx.commit().await?;
+
+    if role.is_some() {
+        sqlx::query!("SELECT backfill_auto_join_team($1)", team_id)
+            .execute(pool)
+            .await?;
+    }
+    let team = sqlx::query_as!(
+        TeamRow,
+        r#"SELECT id, slug, name, description, created,
+                  auto_join_role AS "auto_join_role: TeamRole"
+             FROM kb_teams WHERE id = $1"#,
+        team_id,
+    )
+    .fetch_one(pool)
+    .await?;
+    let ancestors = sqlx::query_as!(
+        TeamRef,
+        r#"SELECT t.id, t.slug, t.name
+             FROM team_ancestors($1) a
+             JOIN kb_teams t ON t.id = a.team_id
+            WHERE a.team_id <> $1
+            ORDER BY t.slug"#,
+        team_id,
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(SetAutoJoinOutcome { team, ancestors })
 }
 
 /// Detach `child_id` from its parent `parent_id` (team-authority fixes D3; team DAG doors D2).
@@ -2459,6 +2802,7 @@ mod lifecycle_tests {
                 slug: slug.to_string(),
                 name: None,
                 parent: None,
+                parents: None,
                 auto_join_role: None,
             };
             let refused = create_team(&pool, &authed, &req).await;
@@ -2716,6 +3060,7 @@ mod lifecycle_tests {
             slug: "root".to_string(),
             name: None,
             parent: None,
+            parents: None,
             auto_join_role: None,
         };
         let root = create_team(&pool, &principal(&pool, creator).await, &req)
@@ -2737,6 +3082,7 @@ mod lifecycle_tests {
             slug: "child".to_string(),
             name: None,
             parent: Some("root".to_string()),
+            parents: None,
             auto_join_role: None,
         };
         let child = create_team(&pool, &principal(&pool, creator).await, &child_req)
@@ -3249,6 +3595,7 @@ mod lifecycle_tests {
             slug: "child".to_string(),
             name: None,
             parent: Some("parent".to_string()),
+            parents: None,
             auto_join_role: None,
         };
         let pool2 = pool.clone();
@@ -4012,6 +4359,7 @@ mod lifecycle_tests {
                 slug: "dana-squad".into(),
                 name: None,
                 parent: Some(slug),
+                parents: None,
                 auto_join_role: None,
             },
         )

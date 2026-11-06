@@ -45,6 +45,17 @@ impl TeamRole {
             TeamRole::Watcher => 0,
         }
     }
+
+    /// The SQL (`team_role`) and wire spelling.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TeamRole::Owner => "owner",
+            TeamRole::Maintainer => "maintainer",
+            TeamRole::Member => "member",
+            TeamRole::Watcher => "watcher",
+        }
+    }
 }
 
 /// Response row for team endpoints — matches the real `kb_teams` columns.
@@ -67,20 +78,31 @@ pub struct TeamRow {
 
 /// Request body for `POST /api/teams`.
 ///
-/// `parent` is an optional team ref (`+slug` or bare `slug`); when present the
-/// new team is created as a child in `kb_teams_parents` and the caller must be
-/// `owner`/`maintainer` on the parent. `auto_join_role` is admin-gated.
+/// `parent` is an optional team ref (`+slug`, bare `slug`, or a team UUID); when present the new
+/// team is created as a child in `kb_teams_parents` and the caller must be `owner`/`maintainer` on
+/// the parent. `parents` is the several-parent form (team DAG doors D4): each is checked exactly as
+/// `parent` is. Send one or the other, not both. `auto_join_role` is admin-gated.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TeamCreateRequest {
     pub slug: String,
     pub name: Option<String>,
+    /// One parent team ref: the one-element form of `parents`.
     pub parent: Option<String>,
+    /// Several parent team refs (at most 16; duplicates collapse). Mutually exclusive with
+    /// `parent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional))]
+    pub parents: Option<Vec<String>>,
     pub auto_join_role: Option<TeamRole>,
 }
+
+/// The most parents `POST /api/teams` takes in one request (team DAG doors D4), so one request
+/// cannot fan out unboundedly.
+pub const MAX_CREATE_PARENTS: usize = 16;
 
 /// Response row for team membership — matches the real `kb_team_members` columns.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -302,6 +324,69 @@ pub struct ReparentOutcome {
     pub from: TeamRef,
     pub to: TeamRef,
     pub correlation_id: Uuid,
+}
+
+/// Request body for `PUT /api/teams/{id}/auto-join` (team DAG doors D5, system admin only):
+/// `member` or `watcher` sets the role every approved profile is enrolled at; `null` clears it.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetAutoJoinRequest {
+    pub role: Option<TeamRole>,
+}
+
+/// Response body for `PUT /api/teams/{id}/auto-join`. `ancestors` are the team's live ancestors:
+/// with auto-join set, every approved profile reads everything attached to each of them, so the
+/// admin sees exactly what the change opened.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetAutoJoinOutcome {
+    pub team: TeamRow,
+    pub ancestors: Vec<TeamRef>,
+}
+
+/// Response body for `POST /api/teams/{id}/restore` (team DAG doors D6). Restoring revives every
+/// preserved row's reach: the roster (`members`, exactly as it was at deletion), the links to the
+/// live `parents`, and the live `children` that reach through the team again.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RestoreTeamOutcome {
+    pub team: TeamRow,
+    pub parents: Vec<TeamRef>,
+    pub children: Vec<TeamRef>,
+    pub members: Vec<TeamMemberDetail>,
+}
+
+/// Request body for `POST /api/teams/{id}/rename-slug` (team DAG doors D7). The new slug is
+/// lowercased, then must match `^[a-z0-9][a-z0-9-]{0,62}$` and must not start with `personal-`.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenameTeamSlugRequest {
+    pub slug: String,
+}
+
+/// Response body for `POST /api/teams/{id}/rename-slug`. Addresses change: `+from/...` refs stop
+/// resolving (UUID refs are unaffected), and refs stored in content are not rewritten.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenameTeamSlugOutcome {
+    pub team_id: Uuid,
+    pub from: String,
+    pub to: String,
 }
 
 /// Request body for `PATCH /api/teams/{id}` — update team metadata.

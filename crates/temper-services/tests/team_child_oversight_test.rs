@@ -121,6 +121,7 @@ async fn fixture(pool: &PgPool) -> Fixture {
             slug: "co-eng".into(),
             name: None,
             parent: None,
+            parents: None,
             auto_join_role: None,
         },
     )
@@ -137,6 +138,7 @@ async fn fixture(pool: &PgPool) -> Fixture {
             slug: "co-tools".into(),
             name: None,
             parent: Some("+co-eng".into()),
+            parents: None,
             auto_join_role: None,
         },
     )

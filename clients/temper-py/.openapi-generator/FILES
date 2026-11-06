@@ -389,6 +389,8 @@ temper/generated/models/remote_connection.py
 temper/generated/models/remove_member_outcome.py
 temper/generated/models/rename_context_outcome.py
 temper/generated/models/rename_context_request.py
+temper/generated/models/rename_team_slug_outcome.py
+temper/generated/models/rename_team_slug_request.py
 temper/generated/models/reparent_outcome.py
 temper/generated/models/reparent_request.py
 temper/generated/models/requested.py
@@ -421,6 +423,7 @@ temper/generated/models/resource_sort_field.py
 temper/generated/models/resource_update_request.py
 temper/generated/models/resource_view.py
 temper/generated/models/restore_context_outcome.py
+temper/generated/models/restore_team_outcome.py
 temper/generated/models/retention_category.py
 temper/generated/models/retention_policies.py
 temper/generated/models/retention_policy.py
@@ -448,6 +451,8 @@ temper/generated/models/search_scope_info.py
 temper/generated/models/segment_info.py
 temper/generated/models/segmented_begin.py
 temper/generated/models/segmented_begin_response.py
+temper/generated/models/set_auto_join_outcome.py
+temper/generated/models/set_auto_join_request.py
 temper/generated/models/set_tool_manifest_request.py
 temper/generated/models/set_webhook_events_request.py
 temper/generated/models/shape_declare_request.py

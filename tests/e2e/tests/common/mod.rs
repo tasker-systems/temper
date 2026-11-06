@@ -1320,6 +1320,7 @@ pub async fn context_anchor_faces(app: &E2eTestApp) -> Vec<AnchorFace> {
             slug: "anchor-faces-team".to_owned(),
             name: None,
             parent: None,
+            parents: None,
             auto_join_role: None,
         })
         .await
@@ -1488,6 +1489,7 @@ pub async fn register_team_machine(app: &E2eTestApp, client_id: &str, role: &str
             slug: team_slug.clone(),
             name: None,
             parent: None,
+            parents: None,
             auto_join_role: None,
         })
         .await

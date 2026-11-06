@@ -171,6 +171,10 @@ pub(super) fn gated_routes() -> OpenApiRouter<AppState> {
             handlers::teams::detach_child
         ))
         .routes(routes!(handlers::teams::reparent))
+        .routes(routes!(handlers::teams::restore))
+        .routes(routes!(handlers::teams::rename_slug))
+        // System admin only: the handler mints `SystemAdmin` before anything else.
+        .routes(routes!(handlers::teams::set_auto_join))
         .routes(routes!(handlers::ingest::create))
         .routes(routes!(handlers::ingest::update))
         .routes(routes!(

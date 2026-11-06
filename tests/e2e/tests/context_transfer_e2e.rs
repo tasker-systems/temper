@@ -163,6 +163,7 @@ async fn transfer_makes_context_team_owned_and_members_can_author(pool: sqlx::Pg
             slug: "acme".to_owned(),
             name: None,
             parent: None,
+            parents: None,
             auto_join_role: None,
         })
         .await
@@ -272,6 +273,7 @@ async fn transfer_surfaces_inherited_shares_and_read_grants(pool: sqlx::PgPool) 
             slug: "acme".to_owned(),
             name: None,
             parent: None,
+            parents: None,
             auto_join_role: None,
         })
         .await
@@ -372,6 +374,7 @@ async fn non_context_administrator_cannot_transfer(pool: sqlx::PgPool) {
             slug: "member-team".to_owned(),
             name: None,
             parent: None,
+            parents: None,
             auto_join_role: None,
         })
         .await

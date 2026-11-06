@@ -15075,6 +15075,87 @@
         "x-apidog-folder": "Reference/API Reference/Teams"
       }
     },
+    "/api/teams/{id}/auto-join": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "put": {
+        "tags": [
+          "Teams"
+        ],
+        "summary": "Set, change or clear a team's auto-join role",
+        "description": "A system admin's act. With a role set, every approved profile (never a machine) is enrolled at\nit, and so reads everything attached to the team and to each of the `ancestors` returned.\nExisting memberships are never changed: not raised, not lowered, not removed. `null` stops\nenrolment. Refused on temper-system, the gating team and personal teams. Recorded as\n`team_lifecycle_changed`.",
+        "operationId": "set_team_auto_join",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Team ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetAutoJoinRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Set, changed, cleared, or already so",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetAutoJoinOutcome"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A role above `member`, or the team is temper-system, the gating team or a personal team"
+          },
+          "403": {
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The team does not exist or is soft-deleted"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Teams"
+      }
+    },
     "/api/teams/{id}/children/{child_id}": {
       "parameters": [
         {
@@ -15750,6 +15831,90 @@
         "x-apidog-folder": "Reference/API Reference/Teams"
       }
     },
+    "/api/teams/{id}/rename-slug": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Teams"
+        ],
+        "summary": "Change a team's slug",
+        "description": "Its own door, not a field of `PATCH`. **Addresses change:** `+old/<context>` refs stop resolving\n(UUID refs are unaffected), and refs stored in content are not rewritten. An owner or maintainer;\ntemper-system and the gating team: a system admin (renaming the gating team carries the\ninstance setting with it). Recorded as `team_lifecycle_changed`.",
+        "operationId": "rename_team_slug",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Team ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameTeamSlugRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Renamed (or already so)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenameTeamSlugOutcome"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The slug is invalid or starts with `personal-`, or the team is temper-system or a personal team"
+          },
+          "403": {
+            "description": "Forbidden: the caller is not an owner or maintainer of the team (temper-system or the gating team: not a system admin); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The team does not exist or is soft-deleted"
+          },
+          "409": {
+            "description": "The slug is taken, by a live or a soft-deleted team"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Teams"
+      }
+    },
     "/api/teams/{id}/reparent": {
       "parameters": [
         {
@@ -15824,6 +15989,74 @@
           },
           "409": {
             "description": "The move would make a team its own ancestor; nothing changed"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Teams"
+      }
+    },
+    "/api/teams/{id}/restore": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Teams"
+        ],
+        "summary": "Restore a soft-deleted team",
+        "description": "The inverse of delete. Every preserved row confers again: the roster, the parent links, and the\nchildren's reach through this team; the response lists all three so the restorer sees the reach\nthey revived. The team's owner, or a system admin (temper-system and the gating team: a system\nadmin only; a personal team: its owner only). Recorded as `team_lifecycle_changed`.",
+        "operationId": "restore_team",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Team ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Restored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreTeamOutcome"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden: the caller is not the team's owner or a system admin (temper-system or the gating team: not a system admin; a personal team: not its owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The team does not exist or is not deleted"
           }
         },
         "security": [
@@ -25689,6 +25922,39 @@
           }
         }
       },
+      "RenameTeamSlugOutcome": {
+        "type": "object",
+        "description": "Response body for `POST /api/teams/{id}/rename-slug`. Addresses change: `+from/...` refs stop\nresolving (UUID refs are unaffected), and refs stored in content are not rewritten.",
+        "required": [
+          "team_id",
+          "from",
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "team_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "to": {
+            "type": "string"
+          }
+        }
+      },
+      "RenameTeamSlugRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/teams/{id}/rename-slug` (team DAG doors D7). The new slug is\nlowercased, then must match `^[a-z0-9][a-z0-9-]{0,62}$` and must not start with `personal-`.",
+        "required": [
+          "slug"
+        ],
+        "properties": {
+          "slug": {
+            "type": "string"
+          }
+        }
+      },
       "ReparentOutcome": {
         "type": "object",
         "description": "Response body for `POST /api/teams/{id}/reparent`. Both `team_parent_link_changed` records of the\nmove carry `correlation_id`, so the ledger shows one move rather than two unrelated acts.",
@@ -26928,6 +27194,39 @@
           }
         }
       },
+      "RestoreTeamOutcome": {
+        "type": "object",
+        "description": "Response body for `POST /api/teams/{id}/restore` (team DAG doors D6). Restoring revives every\npreserved row's reach: the roster (`members`, exactly as it was at deletion), the links to the\nlive `parents`, and the live `children` that reach through the team again.",
+        "required": [
+          "team",
+          "parents",
+          "children",
+          "members"
+        ],
+        "properties": {
+          "children": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TeamRef"
+            }
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TeamMemberDetail"
+            }
+          },
+          "parents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TeamRef"
+            }
+          },
+          "team": {
+            "$ref": "#/components/schemas/TeamRow"
+          }
+        }
+      },
       "RetentionCategory": {
         "type": "string",
         "description": "What a deployment's retention policy may keep through a person erasure (R4 of the 2026-10-10\nerasure inventory). The act removes every identifier of the subject and every free-text field\nabout them by default; a category here is kept only when an organisation names it in a policy\nwith a stated basis and period, and the record then names it `retained under policy <name>`.\n\nFree text and replay evidence only. Identifiers and live credentials are not retainable: a\ndeployment cannot keep a usable credential or a direct identifier of an erased person, so no\nvalue here names one. The SQL CHECK on `kb_erasure_retention_policies.category` is the same\nclosed set.",
@@ -27585,6 +27884,41 @@
           "resource_id": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "SetAutoJoinOutcome": {
+        "type": "object",
+        "description": "Response body for `PUT /api/teams/{id}/auto-join`. `ancestors` are the team's live ancestors:\nwith auto-join set, every approved profile reads everything attached to each of them, so the\nadmin sees exactly what the change opened.",
+        "required": [
+          "team",
+          "ancestors"
+        ],
+        "properties": {
+          "ancestors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TeamRef"
+            }
+          },
+          "team": {
+            "$ref": "#/components/schemas/TeamRow"
+          }
+        }
+      },
+      "SetAutoJoinRequest": {
+        "type": "object",
+        "description": "Request body for `PUT /api/teams/{id}/auto-join` (team DAG doors D5, system admin only):\n`member` or `watcher` sets the role every approved profile is enrolled at; `null` clears it.",
+        "properties": {
+          "role": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TeamRole"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -28670,7 +29004,7 @@
       },
       "TeamCreateRequest": {
         "type": "object",
-        "description": "Request body for `POST /api/teams`.\n\n`parent` is an optional team ref (`+slug` or bare `slug`); when present the\nnew team is created as a child in `kb_teams_parents` and the caller must be\n`owner`/`maintainer` on the parent. `auto_join_role` is admin-gated.",
+        "description": "Request body for `POST /api/teams`.\n\n`parent` is an optional team ref (`+slug`, bare `slug`, or a team UUID); when present the new\nteam is created as a child in `kb_teams_parents` and the caller must be `owner`/`maintainer` on\nthe parent. `parents` is the several-parent form (team DAG doors D4): each is checked exactly as\n`parent` is. Send one or the other, not both. `auto_join_role` is admin-gated.",
         "required": [
           "slug"
         ],
@@ -28695,7 +29029,18 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "One parent team ref: the one-element form of `parents`."
+          },
+          "parents": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Several parent team refs (at most 16; duplicates collapse). Mutually exclusive with\n`parent`."
           },
           "slug": {
             "type": "string"

@@ -761,6 +761,87 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Change a team's slug
+    # Its own door, not a field of `PATCH`. **Addresses change:** `+old/<context>` refs stop resolving (UUID refs are unaffected), and refs stored in content are not rewritten. An owner or maintainer; temper-system and the gating team: a system admin (renaming the gating team carries the instance setting with it). Recorded as `team_lifecycle_changed`.
+    # @param id [String] Team ID
+    # @param rename_team_slug_request [RenameTeamSlugRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [RenameTeamSlugOutcome]
+    def rename_team_slug(id, rename_team_slug_request, opts = {})
+      data, _status_code, _headers = rename_team_slug_with_http_info(id, rename_team_slug_request, opts)
+      data
+    end
+
+    # Change a team&#39;s slug
+    # Its own door, not a field of &#x60;PATCH&#x60;. **Addresses change:** &#x60;+old/&lt;context&gt;&#x60; refs stop resolving (UUID refs are unaffected), and refs stored in content are not rewritten. An owner or maintainer; temper-system and the gating team: a system admin (renaming the gating team carries the instance setting with it). Recorded as &#x60;team_lifecycle_changed&#x60;.
+    # @param id [String] Team ID
+    # @param rename_team_slug_request [RenameTeamSlugRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(RenameTeamSlugOutcome, Integer, Hash)>] RenameTeamSlugOutcome data, response status code and response headers
+    def rename_team_slug_with_http_info(id, rename_team_slug_request, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: TeamsApi.rename_team_slug ...'
+      end
+      # verify the required parameter 'id' is set
+      if @api_client.config.client_side_validation && id.nil?
+        fail ArgumentError, "Missing the required parameter 'id' when calling TeamsApi.rename_team_slug"
+      end
+      # verify the required parameter 'rename_team_slug_request' is set
+      if @api_client.config.client_side_validation && rename_team_slug_request.nil?
+        fail ArgumentError, "Missing the required parameter 'rename_team_slug_request' when calling TeamsApi.rename_team_slug"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/teams/{id}/rename-slug'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E'))
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      # HTTP header 'Content-Type'
+      content_type = @api_client.select_header_content_type(['application/json'])
+      if !content_type.nil?
+          header_params['Content-Type'] = content_type
+      end
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body] || @api_client.object_to_http_body(rename_team_slug_request)
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'RenameTeamSlugOutcome'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"TeamsApi.rename_team_slug",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:POST, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: TeamsApi#rename_team_slug\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # Move this team from one parent to another
     # One act: the new link is written before the old one is cut, so a refusal leaves the team where it was and it never holds both reaches. The caller must manage this team and the new parent; a new parent that is temper-system or the gating team, or moving an auto-join team, is a system admin's act. Both `team_parent_link_changed` records carry the returned `correlation_id`.
     # @param id [String] Team ID (the child being moved)
@@ -838,6 +919,157 @@ module Temper::Generated
       data, status_code, headers = @api_client.call_api(:POST, local_var_path, new_options)
       if @api_client.config.debugging
         @api_client.config.logger.debug "API called: TeamsApi#reparent_team\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
+    # Restore a soft-deleted team
+    # The inverse of delete. Every preserved row confers again: the roster, the parent links, and the children's reach through this team; the response lists all three so the restorer sees the reach they revived. The team's owner, or a system admin (temper-system and the gating team: a system admin only; a personal team: its owner only). Recorded as `team_lifecycle_changed`.
+    # @param id [String] Team ID
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [RestoreTeamOutcome]
+    def restore_team(id, opts = {})
+      data, _status_code, _headers = restore_team_with_http_info(id, opts)
+      data
+    end
+
+    # Restore a soft-deleted team
+    # The inverse of delete. Every preserved row confers again: the roster, the parent links, and the children&#39;s reach through this team; the response lists all three so the restorer sees the reach they revived. The team&#39;s owner, or a system admin (temper-system and the gating team: a system admin only; a personal team: its owner only). Recorded as &#x60;team_lifecycle_changed&#x60;.
+    # @param id [String] Team ID
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(RestoreTeamOutcome, Integer, Hash)>] RestoreTeamOutcome data, response status code and response headers
+    def restore_team_with_http_info(id, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: TeamsApi.restore_team ...'
+      end
+      # verify the required parameter 'id' is set
+      if @api_client.config.client_side_validation && id.nil?
+        fail ArgumentError, "Missing the required parameter 'id' when calling TeamsApi.restore_team"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/teams/{id}/restore'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E'))
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body]
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'RestoreTeamOutcome'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"TeamsApi.restore_team",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:POST, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: TeamsApi#restore_team\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
+    # Set, change or clear a team's auto-join role
+    # A system admin's act. With a role set, every approved profile (never a machine) is enrolled at it, and so reads everything attached to the team and to each of the `ancestors` returned. Existing memberships are never changed: not raised, not lowered, not removed. `null` stops enrolment. Refused on temper-system, the gating team and personal teams. Recorded as `team_lifecycle_changed`.
+    # @param id [String] Team ID
+    # @param set_auto_join_request [SetAutoJoinRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [SetAutoJoinOutcome]
+    def set_team_auto_join(id, set_auto_join_request, opts = {})
+      data, _status_code, _headers = set_team_auto_join_with_http_info(id, set_auto_join_request, opts)
+      data
+    end
+
+    # Set, change or clear a team&#39;s auto-join role
+    # A system admin&#39;s act. With a role set, every approved profile (never a machine) is enrolled at it, and so reads everything attached to the team and to each of the &#x60;ancestors&#x60; returned. Existing memberships are never changed: not raised, not lowered, not removed. &#x60;null&#x60; stops enrolment. Refused on temper-system, the gating team and personal teams. Recorded as &#x60;team_lifecycle_changed&#x60;.
+    # @param id [String] Team ID
+    # @param set_auto_join_request [SetAutoJoinRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(SetAutoJoinOutcome, Integer, Hash)>] SetAutoJoinOutcome data, response status code and response headers
+    def set_team_auto_join_with_http_info(id, set_auto_join_request, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: TeamsApi.set_team_auto_join ...'
+      end
+      # verify the required parameter 'id' is set
+      if @api_client.config.client_side_validation && id.nil?
+        fail ArgumentError, "Missing the required parameter 'id' when calling TeamsApi.set_team_auto_join"
+      end
+      # verify the required parameter 'set_auto_join_request' is set
+      if @api_client.config.client_side_validation && set_auto_join_request.nil?
+        fail ArgumentError, "Missing the required parameter 'set_auto_join_request' when calling TeamsApi.set_team_auto_join"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/teams/{id}/auto-join'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E'))
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      # HTTP header 'Content-Type'
+      content_type = @api_client.select_header_content_type(['application/json'])
+      if !content_type.nil?
+          header_params['Content-Type'] = content_type
+      end
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body] || @api_client.object_to_http_body(set_auto_join_request)
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'SetAutoJoinOutcome'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"TeamsApi.set_team_auto_join",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:PUT, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: TeamsApi#set_team_auto_join\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
       end
       return data, status_code, headers
     end

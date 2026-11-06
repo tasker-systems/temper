@@ -90,6 +90,7 @@ async fn a_demoted_admins_leftover_owner_row_governs_nothing(pool: PgPool) {
         slug: "a2-shadow".into(),
         name: None,
         parent: Some("+gate".into()),
+        parents: None,
         auto_join_role: None,
     };
     let refusal = team_service::create_team(&pool, &ex_principal, &child)
@@ -158,6 +159,7 @@ async fn the_root_takes_children_only_from_an_admin(pool: PgPool) {
             slug: "a2-under-root".into(),
             name: None,
             parent: Some("temper-system".into()),
+            parents: None,
             auto_join_role: None,
         },
     )
@@ -184,6 +186,7 @@ async fn no_child_under_a_personal_team_and_admins_delete_any_team(pool: PgPool)
             slug: "a2-under-personal".into(),
             name: None,
             parent: Some(personal),
+            parents: None,
             auto_join_role: None,
         },
     )
@@ -198,6 +201,7 @@ async fn no_child_under_a_personal_team_and_admins_delete_any_team(pool: PgPool)
             slug: "a2-mine".into(),
             name: None,
             parent: None,
+            parents: None,
             auto_join_role: None,
         },
     )

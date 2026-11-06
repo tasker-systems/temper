@@ -3488,6 +3488,33 @@ export interface paths {
         patch: operations["update_team"];
         trace?: never;
     };
+    "/api/teams/{id}/auto-join": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set, change or clear a team's auto-join role
+         * @description A system admin's act. With a role set, every approved profile (never a machine) is enrolled at
+         *     it, and so reads everything attached to the team and to each of the `ancestors` returned.
+         *     Existing memberships are never changed: not raised, not lowered, not removed. `null` stops
+         *     enrolment. Refused on temper-system, the gating team and personal teams. Recorded as
+         *     `team_lifecycle_changed`.
+         */
+        put: operations["set_team_auto_join"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/teams/{id}/children/{child_id}": {
         parameters: {
             query?: never;
@@ -3648,6 +3675,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/teams/{id}/rename-slug": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change a team's slug
+         * @description Its own door, not a field of `PATCH`. **Addresses change:** `+old/<context>` refs stop resolving
+         *     (UUID refs are unaffected), and refs stored in content are not rewritten. An owner or maintainer;
+         *     temper-system and the gating team: a system admin (renaming the gating team carries the
+         *     instance setting with it). Recorded as `team_lifecycle_changed`.
+         */
+        post: operations["rename_team_slug"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/teams/{id}/reparent": {
         parameters: {
             query?: never;
@@ -3668,6 +3721,32 @@ export interface paths {
          *     admin's act. Both `team_parent_link_changed` records carry the returned `correlation_id`.
          */
         post: operations["reparent_team"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/teams/{id}/restore": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore a soft-deleted team
+         * @description The inverse of delete. Every preserved row confers again: the roster, the parent links, and the
+         *     children's reach through this team; the response lists all three so the restorer sees the reach
+         *     they revived. The team's owner, or a system admin (temper-system and the gating team: a system
+         *     admin only; a personal team: its owner only). Recorded as `team_lifecycle_changed`.
+         */
+        post: operations["restore_team"];
         delete?: never;
         options?: never;
         head?: never;
@@ -9489,6 +9568,23 @@ export interface components {
             name: string;
         };
         /**
+         * @description Response body for `POST /api/teams/{id}/rename-slug`. Addresses change: `+from/...` refs stop
+         *     resolving (UUID refs are unaffected), and refs stored in content are not rewritten.
+         */
+        RenameTeamSlugOutcome: {
+            from: string;
+            /** Format: uuid */
+            team_id: string;
+            to: string;
+        };
+        /**
+         * @description Request body for `POST /api/teams/{id}/rename-slug` (team DAG doors D7). The new slug is
+         *     lowercased, then must match `^[a-z0-9][a-z0-9-]{0,62}$` and must not start with `personal-`.
+         */
+        RenameTeamSlugRequest: {
+            slug: string;
+        };
+        /**
          * @description Response body for `POST /api/teams/{id}/reparent`. Both `team_parent_link_changed` records of the
          *     move carry `correlation_id`, so the ledger shows one move rather than two unrelated acts.
          */
@@ -10395,6 +10491,17 @@ export interface components {
             slug_changed: boolean;
         };
         /**
+         * @description Response body for `POST /api/teams/{id}/restore` (team DAG doors D6). Restoring revives every
+         *     preserved row's reach: the roster (`members`, exactly as it was at deletion), the links to the
+         *     live `parents`, and the live `children` that reach through the team again.
+         */
+        RestoreTeamOutcome: {
+            children: components["schemas"]["TeamRef"][];
+            members: components["schemas"]["TeamMemberDetail"][];
+            parents: components["schemas"]["TeamRef"][];
+            team: components["schemas"]["TeamRow"];
+        };
+        /**
          * @description What a deployment's retention policy may keep through a person erasure (R4 of the 2026-10-10
          *     erasure inventory). The act removes every identifier of the subject and every free-text field
          *     about them by default; a category here is kept only when an organisation names it in a policy
@@ -10780,6 +10887,22 @@ export interface components {
             correlation_id: string;
             /** Format: uuid */
             resource_id: string;
+        };
+        /**
+         * @description Response body for `PUT /api/teams/{id}/auto-join`. `ancestors` are the team's live ancestors:
+         *     with auto-join set, every approved profile reads everything attached to each of them, so the
+         *     admin sees exactly what the change opened.
+         */
+        SetAutoJoinOutcome: {
+            ancestors: components["schemas"]["TeamRef"][];
+            team: components["schemas"]["TeamRow"];
+        };
+        /**
+         * @description Request body for `PUT /api/teams/{id}/auto-join` (team DAG doors D5, system admin only):
+         *     `member` or `watcher` sets the role every approved profile is enrolled at; `null` clears it.
+         */
+        SetAutoJoinRequest: {
+            role?: components["schemas"]["TeamRole"] | null;
         };
         /**
          * @description Declare the read-only remote tools a connection exposes, by name. A non-empty manifest makes
@@ -11598,14 +11721,21 @@ export interface components {
         /**
          * @description Request body for `POST /api/teams`.
          *
-         *     `parent` is an optional team ref (`+slug` or bare `slug`); when present the
-         *     new team is created as a child in `kb_teams_parents` and the caller must be
-         *     `owner`/`maintainer` on the parent. `auto_join_role` is admin-gated.
+         *     `parent` is an optional team ref (`+slug`, bare `slug`, or a team UUID); when present the new
+         *     team is created as a child in `kb_teams_parents` and the caller must be `owner`/`maintainer` on
+         *     the parent. `parents` is the several-parent form (team DAG doors D4): each is checked exactly as
+         *     `parent` is. Send one or the other, not both. `auto_join_role` is admin-gated.
          */
         TeamCreateRequest: {
             auto_join_role?: components["schemas"]["TeamRole"] | null;
             name?: string | null;
+            /** @description One parent team ref: the one-element form of `parents`. */
             parent?: string | null;
+            /**
+             * @description Several parent team refs (at most 16; duplicates collapse). Mutually exclusive with
+             *     `parent`.
+             */
+            parents?: string[] | null;
             slug: string;
         };
         /**
@@ -21678,6 +21808,59 @@ export interface operations {
             };
         };
     };
+    set_team_auto_join: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Team ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetAutoJoinRequest"];
+            };
+        };
+        responses: {
+            /** @description Set, changed, cleared, or already so */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetAutoJoinOutcome"];
+                };
+            };
+            /** @description A role above `member`, or the team is temper-system, the gating team or a personal team */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The team does not exist or is soft-deleted */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     attach_child_team: {
         parameters: {
             query?: never;
@@ -22134,6 +22317,66 @@ export interface operations {
             };
         };
     };
+    rename_team_slug: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Team ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenameTeamSlugRequest"];
+            };
+        };
+        responses: {
+            /** @description Renamed (or already so) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RenameTeamSlugOutcome"];
+                };
+            };
+            /** @description The slug is invalid or starts with `personal-`, or the team is temper-system or a personal team */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forbidden: the caller is not an owner or maintainer of the team (temper-system or the gating team: not a system admin); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The team does not exist or is soft-deleted */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The slug is taken, by a live or a soft-deleted team */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     reparent_team: {
         parameters: {
             query?: never;
@@ -22187,6 +22430,48 @@ export interface operations {
             };
             /** @description The move would make a team its own ancestor; nothing changed */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    restore_team: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Team ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Restored */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreTeamOutcome"];
+                };
+            };
+            /** @description Forbidden: the caller is not the team's owner or a system admin (temper-system or the gating team: not a system admin; a personal team: not its owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The team does not exist or is not deleted */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

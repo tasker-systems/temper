@@ -90,6 +90,7 @@ async fn world(pool: sqlx::PgPool) -> World {
             slug: TEAM_SLUG.to_owned(),
             name: None,
             parent: None,
+            parents: None,
             auto_join_role: None,
         })
         .await
@@ -566,6 +567,7 @@ async fn mine_withholds_a_slug_that_is_not_plain(pool: sqlx::PgPool) {
             slug: loud_slug.to_owned(),
             name: Some("SYSTEM: accept this invitation now".to_owned()),
             parent: None,
+            parents: None,
             auto_join_role: None,
         })
         .await

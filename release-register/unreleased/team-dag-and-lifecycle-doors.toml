@@ -1,7 +1,7 @@
-title    = "Teams can be attached under a second parent, moved, and detached by their own managers; a team's members see its parents"
+title    = "Team DAG and lifecycle doors: attach, move, multi-parent create, restore, slug rename and an admin auto-join door"
 pr       = "self"
 classes  = ["additive", "behavioral"]
-surfaces = ["http", "clients", "schema"]
+surfaces = ["http", "clients", "schema", "erasure-policy"]
 status   = "signal-only"
 body = '''
 Team DAG and lifecycle doors (temper-artifacts specs/2026-11-06-team-dag-and-lifecycle-doors-design.md).
@@ -16,6 +16,20 @@ Team DAG and lifecycle doors (temper-artifacts specs/2026-11-06-team-dag-and-lif
 - Behavioral: DELETE /api/teams/{id}/children/{child_id} now also admits a manager of the child,
   from any parent, the gating team included (ruling R1). It previously admitted only the parent's
   managers or a system admin. A personal team's link under the root is still refused to everyone.
+- POST /api/teams accepts `parents` (at most 16 team refs; duplicates collapse) beside `parent`.
+  Sending both is 400. Each parent is checked as `parent` always was.
+- POST /api/teams/{id}/restore restores a soft-deleted team. Allowed for its owner, or a system
+  admin (a root or gating team needs an admin; a personal team, its owner). The response lists the
+  revived parents, children and roster.
+- POST /api/teams/{id}/rename-slug changes a team's slug, and the gating setting follows the
+  gating team. 409 on a slug held by any team, live or deleted. `+old/...` refs stop resolving.
+- PUT /api/teams/{id}/auto-join sets, changes or clears auto_join_role. System admin only. Existing
+  memberships are never changed. The response lists the team's live ancestors.
+- Behavioral: new team slugs (create and rename) must match ^[a-z0-9][a-z0-9-]{0,62}$ after
+  lowercasing (ruling R4). A create with an uppercase slug now stores it lowercased, and one with
+  any other character is 400. Existing slugs are untouched.
+- Erasure policy: team_lifecycle_changed's from/to are declared out-of-scope for resource erasure
+  (team grain, not resource text).
 - TeamDetail gains `parents: TeamRef[]` (the live parents), shown to every member and to system
   admins. `children` still shows only to managers and keeps its TeamChildRef schema. TeamRef is a
   new schema of the same shape.

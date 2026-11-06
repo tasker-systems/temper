@@ -366,6 +366,8 @@ from temper.generated.models.remote_connection import RemoteConnection
 from temper.generated.models.remove_member_outcome import RemoveMemberOutcome
 from temper.generated.models.rename_context_outcome import RenameContextOutcome
 from temper.generated.models.rename_context_request import RenameContextRequest
+from temper.generated.models.rename_team_slug_outcome import RenameTeamSlugOutcome
+from temper.generated.models.rename_team_slug_request import RenameTeamSlugRequest
 from temper.generated.models.reparent_outcome import ReparentOutcome
 from temper.generated.models.reparent_request import ReparentRequest
 from temper.generated.models.requested import Requested
@@ -398,6 +400,7 @@ from temper.generated.models.resource_sort_field import ResourceSortField
 from temper.generated.models.resource_update_request import ResourceUpdateRequest
 from temper.generated.models.resource_view import ResourceView
 from temper.generated.models.restore_context_outcome import RestoreContextOutcome
+from temper.generated.models.restore_team_outcome import RestoreTeamOutcome
 from temper.generated.models.retention_category import RetentionCategory
 from temper.generated.models.retention_policies import RetentionPolicies
 from temper.generated.models.retention_policy import RetentionPolicy
@@ -425,6 +428,8 @@ from temper.generated.models.search_scope_info import SearchScopeInfo
 from temper.generated.models.segment_info import SegmentInfo
 from temper.generated.models.segmented_begin import SegmentedBegin
 from temper.generated.models.segmented_begin_response import SegmentedBeginResponse
+from temper.generated.models.set_auto_join_outcome import SetAutoJoinOutcome
+from temper.generated.models.set_auto_join_request import SetAutoJoinRequest
 from temper.generated.models.set_tool_manifest_request import SetToolManifestRequest
 from temper.generated.models.set_webhook_events_request import SetWebhookEventsRequest
 from temper.generated.models.shape_declare_request import ShapeDeclareRequest

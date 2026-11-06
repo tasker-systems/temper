@@ -55,6 +55,7 @@ fn req(slug: &str, parent: Option<&str>, auto: Option<TeamRole>) -> TeamCreateRe
         slug: slug.to_owned(),
         name: None,
         parent: parent.map(str::to_owned),
+        parents: None,
         auto_join_role: auto,
     }
 }

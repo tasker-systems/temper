@@ -90,6 +90,7 @@ async fn create(
             slug: slug.into(),
             name: None,
             parent: parent.map(|p| format!("+{p}")),
+            parents: None,
             auto_join_role,
         },
     )
@@ -384,6 +385,7 @@ async fn a_refused_create_records_nothing(pool: PgPool) {
             slug: "dg-nope".into(),
             name: None,
             parent: Some("+dg-org".into()),
+            parents: None,
             auto_join_role: None,
         },
     )
@@ -398,6 +400,7 @@ async fn a_refused_create_records_nothing(pool: PgPool) {
             slug: "dg-org".into(),
             name: None,
             parent: None,
+            parents: None,
             auto_join_role: None,
         },
     )
@@ -846,4 +849,441 @@ async fn a_refused_move_changes_nothing(pool: PgPool) {
 
     assert!(linked(&pool, f.org, f.eng).await);
     assert!(!linked(&pool, f.side, f.eng).await);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Phase 4 — D4 create with several parents
+// ---------------------------------------------------------------------------------------------
+
+async fn create_with_parents(
+    pool: &PgPool,
+    who: Uuid,
+    slug: &str,
+    parents: &[&str],
+) -> Result<Uuid, ApiError> {
+    let p = test_support::human_principal_for(pool, who).await;
+    team_service::create_team(
+        pool,
+        &p,
+        &TeamCreateRequest {
+            slug: slug.into(),
+            parents: Some(parents.iter().map(|s| s.to_string()).collect()),
+            ..Default::default()
+        },
+    )
+    .await
+    .map(|t| t.id)
+}
+
+/// Two parents (one named twice, in two spellings): both links are written and recorded under one
+/// correlation id, and the new team's roster reaches both trees.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn create_with_two_parents_links_both(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let who = f.on("side", "owner");
+    join(&pool, f.eng, who, "maintainer").await;
+    let eng_id = f.eng.to_string();
+    let team = create_with_parents(&pool, who, "dg-bridge", &["+dg-side", "dg-eng", &eng_id])
+        .await
+        .expect("create under two parents");
+    assert!(linked(&pool, f.side, team).await && linked(&pool, f.eng, team).await);
+    assert!(reaches(&pool, who, f.org).await, "through eng");
+
+    let correlations: Vec<Option<Uuid>> = sqlx::query_scalar(
+        "SELECT DISTINCT e.correlation_id FROM kb_events e \
+           JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'team_parent_link_changed' \
+            AND e.payload @> jsonb_build_object('child_team_id', $1::uuid)",
+    )
+    .bind(team)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(correlations.len(), 1, "{correlations:?}");
+    assert!(correlations[0].is_some());
+    assert_eq!(
+        link_events(&pool, f.eng, team, "linked").await,
+        1,
+        "duplicates collapse"
+    );
+}
+
+/// One parent the caller may not manage refuses the whole create: no team, no link. Sending both
+/// forms, or more than 16 parents, is `400`.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn one_unauthorised_parent_refuses_the_create(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let who = f.on("side", "owner");
+    let refusal = create_with_parents(&pool, who, "dg-sneak", &["+dg-side", "+dg-eng"])
+        .await
+        .expect_err("does not manage eng");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM kb_teams WHERE slug = 'dg-sneak')")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(!exists, "no team was created");
+
+    let p = test_support::human_principal_for(&pool, who).await;
+    let refusal = team_service::create_team(
+        &pool,
+        &p,
+        &TeamCreateRequest {
+            slug: "dg-both".into(),
+            parent: Some("+dg-side".into()),
+            parents: Some(vec!["+dg-side".into()]),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect_err("both forms");
+    assert!(matches!(refusal, ApiError::BadRequest(_)), "{refusal:?}");
+
+    let many: Vec<String> = (0..17).map(|i| format!("dg-nope-{i}")).collect();
+    let many: Vec<&str> = many.iter().map(String::as_str).collect();
+    let refusal = create_with_parents(&pool, who, "dg-many", &many)
+        .await
+        .expect_err("17 parents");
+    assert!(matches!(refusal, ApiError::BadRequest(_)), "{refusal:?}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Phase 5 — D5 auto-join door, D6 restore
+// ---------------------------------------------------------------------------------------------
+
+async fn role_on(pool: &PgPool, team: Uuid, who: Uuid) -> Option<String> {
+    sqlx::query_scalar(
+        "SELECT role::text FROM kb_team_members WHERE team_id = $1 AND profile_id = $2",
+    )
+    .bind(team)
+    .bind(who)
+    .fetch_optional(pool)
+    .await
+    .unwrap()
+}
+
+async fn set_auto_join(
+    pool: &PgPool,
+    f: &Fixture,
+    team: Uuid,
+    role: Option<TeamRole>,
+) -> Result<temper_core::types::team::SetAutoJoinOutcome, ApiError> {
+    let admin = test_support::system_admin_proof_for(pool, f.admin).await;
+    team_service::set_auto_join(pool, &admin, team, role).await
+}
+
+/// R3: setting watcher enrols every approved person with no row at watcher and leaves every
+/// existing row as it was; the outcome names the ancestors the pool now reads; it is recorded.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn setting_auto_join_enrols_newcomers_and_touches_no_existing_row(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let out = set_auto_join(&pool, &f, f.eng, Some(TeamRole::Watcher))
+        .await
+        .expect("set watcher on eng");
+    assert_eq!(out.team.auto_join_role, Some(TeamRole::Watcher));
+    assert_eq!(
+        out.ancestors.iter().map(|t| t.id).collect::<Vec<_>>(),
+        vec![f.org],
+        "the admin sees what the pool now reads"
+    );
+    assert_eq!(
+        role_on(&pool, f.eng, f.loner).await.as_deref(),
+        Some("watcher")
+    );
+    for role in ROLES {
+        assert_eq!(
+            role_on(&pool, f.eng, f.on("eng", role)).await.as_deref(),
+            Some(role),
+            "existing {role} row unchanged"
+        );
+    }
+    assert!(
+        reaches(&pool, f.loner, f.org).await,
+        "the pool reaches eng's ancestors"
+    );
+    assert_eq!(
+        lifecycle_events(&pool, f.eng, "auto_join_changed", Some(f.admin)).await,
+        1
+    );
+
+    // watcher → member: earlier watcher rows stay watcher; a newcomer is enrolled at member.
+    let newcomer = person(&pool, "dg-newcomer").await;
+    set_auto_join(&pool, &f, f.eng, Some(TeamRole::Member))
+        .await
+        .expect("change to member");
+    assert_eq!(
+        role_on(&pool, f.eng, f.loner).await.as_deref(),
+        Some("watcher")
+    );
+    assert_eq!(
+        role_on(&pool, f.eng, newcomer).await.as_deref(),
+        Some("member")
+    );
+
+    // A repeat records nothing.
+    set_auto_join(&pool, &f, f.eng, Some(TeamRole::Member))
+        .await
+        .unwrap();
+    assert_eq!(
+        lifecycle_events(&pool, f.eng, "auto_join_changed", None).await,
+        2
+    );
+}
+
+/// Clearing stops enrolment: a profile approved afterwards is not enrolled, and nobody is removed.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn clearing_auto_join_stops_enrolment(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let out = set_auto_join(&pool, &f, f.watch, None)
+        .await
+        .expect("clear");
+    assert_eq!(out.team.auto_join_role, None);
+    assert_eq!(
+        role_on(&pool, f.watch, f.loner).await.as_deref(),
+        Some("watcher")
+    );
+
+    let later = person(&pool, "dg-later").await;
+    sqlx::query("SELECT ensure_auto_join_memberships($1)")
+        .bind(later)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(role_on(&pool, f.watch, later).await, None);
+}
+
+/// The door refuses temper-system, the gating team, personal teams and a governing role (400); a
+/// non-admin never holds the proof it takes (403).
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_auto_join_door_refuses_instance_and_personal_teams(pool: PgPool) {
+    let f = fixture(&pool).await;
+    for team in [f.root, f.gate, f.loner_personal] {
+        let refusal = set_auto_join(&pool, &f, team, Some(TeamRole::Watcher))
+            .await
+            .expect_err("not an auto-join candidate");
+        assert!(matches!(refusal, ApiError::BadRequest(_)), "{refusal:?}");
+    }
+    let refusal = set_auto_join(&pool, &f, f.side, Some(TeamRole::Maintainer))
+        .await
+        .expect_err("a governing role");
+    assert!(matches!(refusal, ApiError::BadRequest(_)), "{refusal:?}");
+
+    let owner = test_support::human_principal_for(&pool, f.on("side", "owner")).await;
+    let refusal = temper_services::auth::require_system_admin(&pool, &owner)
+        .await
+        .expect_err("a team owner is not a system admin");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+}
+
+/// D6: the owner restores a deleted mid-tier team: it is live, its roster and its child's reach
+/// above it come back, the outcome lists them, and the restore is recorded. A maintainer may not
+/// (delete is owner-only); a team that is not deleted is `404`.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_owner_restores_a_team_and_its_reach_comes_back(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let owner = f.on("eng", "owner");
+    let p = test_support::human_principal_for(&pool, owner).await;
+    let web_watcher = f.on("eng-web", "watcher");
+
+    let refusal = team_service::restore_team(&pool, &p, f.eng)
+        .await
+        .expect_err("not deleted");
+    assert!(matches!(refusal, ApiError::NotFound(_)), "{refusal:?}");
+
+    team_service::delete_team(&pool, &p, f.eng).await.unwrap();
+    assert!(
+        !reaches(&pool, web_watcher, f.org).await,
+        "dead eng cuts eng-web off"
+    );
+
+    let maint = test_support::human_principal_for(&pool, f.on("eng", "maintainer")).await;
+    let refusal = team_service::restore_team(&pool, &maint, f.eng)
+        .await
+        .expect_err("a maintainer");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+
+    let out = team_service::restore_team(&pool, &p, f.eng)
+        .await
+        .expect("the owner restores");
+    assert_eq!(out.team.id, f.eng);
+    assert_eq!(
+        out.parents.iter().map(|t| t.id).collect::<Vec<_>>(),
+        vec![f.org]
+    );
+    assert_eq!(
+        out.children.iter().map(|t| t.id).collect::<Vec<_>>(),
+        vec![f.eng_web]
+    );
+    assert!(out
+        .members
+        .iter()
+        .any(|m| m.profile_id == f.on("eng", "watcher")));
+    assert!(
+        reaches(&pool, web_watcher, f.org).await,
+        "the child reaches above again"
+    );
+    assert!(
+        reaches(&pool, f.on("eng", "member"), f.org).await,
+        "the roster confers again"
+    );
+    assert_eq!(
+        lifecycle_events(&pool, f.eng, "restored", Some(owner)).await,
+        1
+    );
+}
+
+/// A restored auto-join team enrols the profiles approved while it was dead.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_restored_auto_join_team_backfills(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let admin = test_support::human_principal_for(&pool, f.admin).await;
+    team_service::delete_team(&pool, &admin, f.watch)
+        .await
+        .unwrap();
+    let meanwhile = person(&pool, "dg-meanwhile").await;
+    team_service::restore_team(&pool, &admin, f.watch)
+        .await
+        .expect("the admin (its creator) restores the pool");
+    assert_eq!(
+        role_on(&pool, f.watch, meanwhile).await.as_deref(),
+        Some("watcher")
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Phase 6 — D7 slug rename
+// ---------------------------------------------------------------------------------------------
+
+async fn rename(
+    pool: &PgPool,
+    who: Uuid,
+    team: Uuid,
+    slug: &str,
+) -> Result<temper_core::types::team::RenameTeamSlugOutcome, ApiError> {
+    let p = test_support::human_principal_for(pool, who).await;
+    team_service::rename_slug(
+        pool,
+        &p,
+        team,
+        &temper_core::types::team::RenameTeamSlugRequest { slug: slug.into() },
+    )
+    .await
+}
+
+async fn slug_of(pool: &PgPool, team: Uuid) -> String {
+    sqlx::query_scalar("SELECT slug FROM kb_teams WHERE id = $1")
+        .bind(team)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// A maintainer renames: the slug is lowercased and stored, the outcome names both, it is
+/// recorded; a member may not.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_maintainer_renames_a_team(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let refusal = rename(&pool, f.on("side", "member"), f.side, "dg-flank")
+        .await
+        .expect_err("a member");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+
+    let maint = f.on("side", "maintainer");
+    let out = rename(&pool, maint, f.side, "DG-Flank")
+        .await
+        .expect("rename");
+    assert_eq!(
+        (out.from.as_str(), out.to.as_str()),
+        ("dg-side", "dg-flank")
+    );
+    assert_eq!(slug_of(&pool, f.side).await, "dg-flank");
+    let ev: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'team_lifecycle_changed' \
+            AND e.payload @> jsonb_build_object('team_id', $1::uuid, 'act', 'renamed', \
+                                                'from', 'dg-side', 'to', 'dg-flank')",
+    )
+    .bind(f.side)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(ev, 1);
+}
+
+/// Renaming the gating team (an admin's act) carries the instance setting with it, so the gating
+/// predicates still find it; a non-admin manager of it may not.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn renaming_the_gating_team_keeps_it_the_gating_team(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let ex = f.on("side", "owner");
+    join(&pool, f.gate, ex, "owner").await;
+    let refusal = rename(&pool, ex, f.gate, "dg-gate-2")
+        .await
+        .expect_err("a non-admin");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+
+    rename(&pool, f.admin, f.gate, "dg-gate-2")
+        .await
+        .expect("admin renames");
+    let setting: String = sqlx::query_scalar("SELECT gating_team_slug FROM kb_system_settings")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(setting, "dg-gate-2");
+    // Still the gating team: its leftover owner row still governs nothing — no child of it.
+    let p = test_support::human_principal_for(&pool, ex).await;
+    let refusal = team_service::create_team(
+        &pool,
+        &p,
+        &TeamCreateRequest {
+            slug: "dg-under-gate".into(),
+            parent: Some("+dg-gate-2".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect_err("the gating gate still finds it");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+}
+
+/// Refusals: the root and a personal team (400), an invalid or reserved slug (400), a slug held by
+/// a soft-deleted team (409).
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn rename_refuses_root_personal_invalid_and_taken(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let refusal = rename(&pool, f.admin, f.root, "anything")
+        .await
+        .expect_err("root");
+    assert!(matches!(refusal, ApiError::BadRequest(_)), "{refusal:?}");
+    let refusal = rename(&pool, f.loner, f.loner_personal, "mine")
+        .await
+        .expect_err("personal");
+    assert!(matches!(refusal, ApiError::BadRequest(_)), "{refusal:?}");
+
+    let owner = f.on("side", "owner");
+    for bad in [
+        "",
+        "-lead",
+        "has space",
+        "under_score",
+        "personal-x",
+        &"a".repeat(64),
+    ] {
+        let refusal = rename(&pool, owner, f.side, bad).await.expect_err(bad);
+        assert!(
+            matches!(refusal, ApiError::BadRequest(_)),
+            "{bad}: {refusal:?}"
+        );
+    }
+
+    let p = test_support::human_principal_for(&pool, f.on("eng-web", "owner")).await;
+    team_service::delete_team(&pool, &p, f.eng_web)
+        .await
+        .unwrap();
+    let refusal = rename(&pool, owner, f.side, "dg-eng-web")
+        .await
+        .expect_err("held by a dead team");
+    assert!(matches!(refusal, ApiError::Conflict(_)), "{refusal:?}");
+    assert_eq!(slug_of(&pool, f.side).await, "dg-side");
 }

@@ -67,6 +67,7 @@ async fn create_team(pool: &PgPool, creator: Uuid, slug: &str) -> Uuid {
             slug: slug.into(),
             name: None,
             parent: None,
+            parents: None,
             auto_join_role: None,
         },
     )

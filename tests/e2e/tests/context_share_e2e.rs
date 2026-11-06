@@ -152,6 +152,7 @@ async fn context_share_widens_visibility_admin_gated_and_reversible(pool: sqlx::
             slug: "context-share-team".to_owned(),
             name: None,
             parent: None,
+            parents: None,
             auto_join_role: None,
         })
         .await

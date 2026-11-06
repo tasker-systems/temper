@@ -126,6 +126,7 @@ pub async fn create_remote(
         slug: slug.to_owned(),
         name: name.map(str::to_owned),
         parent: parent.map(str::to_owned),
+        parents: None,
         auto_join_role,
     };
 
