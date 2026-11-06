@@ -101,6 +101,47 @@ fn map_team_err(act: &str, err: ClientError) -> rmcp::ErrorData {
     }
 }
 
+/// A team role, as `add_member` and `change_role` take it: owner, maintainer, member or watcher.
+/// A mirror of [`TeamRole`] inlined into the tool's schema, which carries no `$ref` (the wire rule).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[schemars(inline)]
+#[serde(rename_all = "snake_case")]
+pub enum MemberRole {
+    Owner,
+    Maintainer,
+    Member,
+    Watcher,
+}
+
+impl From<MemberRole> for TeamRole {
+    fn from(role: MemberRole) -> Self {
+        match role {
+            MemberRole::Owner => TeamRole::Owner,
+            MemberRole::Maintainer => TeamRole::Maintainer,
+            MemberRole::Member => TeamRole::Member,
+            MemberRole::Watcher => TeamRole::Watcher,
+        }
+    }
+}
+
+/// An auto-join role: member or watcher (a role that governs a team is granted by a person).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[schemars(inline)]
+#[serde(rename_all = "snake_case")]
+pub enum PoolRole {
+    Member,
+    Watcher,
+}
+
+impl From<PoolRole> for TeamRole {
+    fn from(role: PoolRole) -> Self {
+        match role {
+            PoolRole::Member => TeamRole::Member,
+            PoolRole::Watcher => TeamRole::Watcher,
+        }
+    }
+}
+
 /// The team-manage action to perform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[schemars(inline)]
@@ -192,10 +233,10 @@ pub struct TeamManageInput {
     pub profile_id: Option<Uuid>,
     /// `add_member` / `change_role`: owner, maintainer, member or watcher.
     #[serde(default)]
-    pub role: Option<TeamRole>,
+    pub role: Option<MemberRole>,
     /// `create` / `set_auto_join`: member or watcher; for `set_auto_join`, omit or null to clear.
     #[serde(default)]
-    pub auto_join_role: Option<TeamRole>,
+    pub auto_join_role: Option<PoolRole>,
 }
 
 /// Dispatch the consolidated team-manage tool.
@@ -225,7 +266,7 @@ pub async fn team_manage(
                     name: input.name,
                     parent: None,
                     parents: input.parents,
-                    auto_join_role: input.auto_join_role,
+                    auto_join_role: input.auto_join_role.map(TeamRole::from),
                 })
                 .await
                 .across_auth(err)?,
@@ -253,7 +294,7 @@ pub async fn team_manage(
                     team_id()?,
                     &AddMemberRequest {
                         profile_id: required(input.profile_id, act, "profile_id")?,
-                        role: required(input.role, act, "role")?,
+                        role: required(input.role, act, "role")?.into(),
                     },
                 )
                 .await
@@ -265,7 +306,7 @@ pub async fn team_manage(
                     team_id()?,
                     required(input.profile_id, act, "profile_id")?,
                     &ChangeRoleRequest {
-                        role: required(input.role, act, "role")?,
+                        role: required(input.role, act, "role")?.into(),
                     },
                 )
                 .await
@@ -346,7 +387,7 @@ pub async fn team_manage(
                 .set_auto_join(
                     team_id()?,
                     &SetAutoJoinRequest {
-                        role: input.auto_join_role,
+                        role: input.auto_join_role.map(TeamRole::from),
                     },
                 )
                 .await
