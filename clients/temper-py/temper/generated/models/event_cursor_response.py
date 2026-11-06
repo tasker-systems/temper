@@ -28,7 +28,7 @@ class EventCursorResponse(BaseModel):
     """
     Response body for the event-cursor endpoint: the most recent event id recorded for a context, or `None` if the context has no events.
     """ # noqa: E501
-    latest_event_id: Optional[UUID] = Field(default=None, description="Most recent `kb_events.id` for the context, newest by `created`.")
+    latest_event_id: Optional[UUID] = Field(default=None, description="The newest `kb_events.id` on the context, by `occurred_at`, among the events the context's change feed would serve the reader. Never an admin act's, a connection's traffic, region bookkeeping or an edge the reader cannot see. `None` when none of the newest events qualifies.")
     __properties: ClassVar[List[str]] = ["latest_event_id"]
 
     model_config = ConfigDict(

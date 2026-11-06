@@ -18,7 +18,7 @@ module Temper::Generated
   class ContextChangeSubject < ApiModelBase
     attr_accessor :id
 
-    # `kb_resources`, `kb_edges`, `kb_content_blocks`, `kb_blobs` or `kb_contexts`.
+    # `kb_resources`, `kb_edges`, `kb_blobs` or `kb_contexts`.
     attr_accessor :table
 
     # Attribute mapping from ruby-style variable name to JSON key.

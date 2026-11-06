@@ -721,6 +721,25 @@ pub async fn update_resource_in_tx_prepared(
 ) -> Result<()> {
     lock_resource_for_write(conn, p.resource).await?;
 
+    // A move fires FIRST, before any edit the same update carries. Every edit event anchors on the
+    // resource's home at the time it is written, so once the resource is re-homed the edits land in
+    // the destination. The home it left then records exactly one entry for the act, the departure,
+    // as a deletion does: an edit sharing the departure's act in the old home would tell its
+    // readers the resource was moved and still exists (owner ruling 2026-11-06; migration
+    // 20261117000040). The edits are the destination's to see, because the resource now lives there.
+    if let Some(dest) = p.rehome_to.take() {
+        fire_with(
+            &mut *conn,
+            SeedAction::ResourceRehome {
+                resource: p.resource,
+                home: AnchorRef::context(dest),
+                emitter: p.emitter,
+            },
+            ctx.clone(),
+        )
+        .await?;
+    }
+
     // A whole-body write (body set, no `content_block`) is the CLI/UI default: the new text IS
     // the resource's entire body. On a multi-block resource — the shape every multi-section
     // document lands in under the blocking policy — the whole body REPLACES the partition: the
@@ -941,18 +960,8 @@ async fn finish_update(
         .await?;
     }
 
-    if let Some(dest) = p.rehome_to {
-        fire_with(
-            &mut *conn,
-            SeedAction::ResourceRehome {
-                resource: p.resource,
-                home: AnchorRef::context(dest),
-                emitter: p.emitter,
-            },
-            ctx,
-        )
-        .await?;
-    }
+    // The move, if any, fired first (`update_resource_in_tx_prepared`).
+    debug_assert!(p.rehome_to.is_none(), "the move fires before the edits");
 
     Ok(())
 }

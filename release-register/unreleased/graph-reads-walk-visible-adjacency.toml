@@ -1,0 +1,19 @@
+title    = "The graph traversal, region-composition and cogmap-traverse reads walk a set-based visible adjacency, and the context panorama reads visibility once per call, so these reads no longer time out on a large corpus"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["schema", "http"]
+status   = "signal-only"
+body = '''
+Migration 20261117000050 replaces the bodies of graph_induced_edges, graph_region_composition_edges,
+graph_traverse_cogmap_scoped and the three context-panorama readers (graph_context_containers,
+graph_context_residual_counts, graph_context_residual_members). Their signatures, columns and
+results stay the same. Each now reads edges_visible_to once per call. The traversal, region and
+cogmap walks also join a hashed adjacency (each visible edge listed once per direction) where they
+used an OR join over kb_edges. The context-panorama walk keeps its OR join: it is confined to one
+context's internal edges.
+graph_region_composition_edges now delegates to graph_induced_edges. Who observes:
+`/api/graph/traverse`, region composition, the cogmap atlas walk and the context panorama on a
+large corpus, where a depth-2 or deeper walk took tens of seconds and now returns in under a
+second. Response shapes are unchanged in both skew directions. Release relevance: additive (cost
+only).
+'''

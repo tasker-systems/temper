@@ -29,7 +29,7 @@ class ContextChangeSubject(BaseModel):
     What a [`ContextChange`] points at: a table and a row id.
     """ # noqa: E501
     id: UUID
-    table: StrictStr = Field(description="`kb_resources`, `kb_edges`, `kb_content_blocks`, `kb_blobs` or `kb_contexts`.")
+    table: StrictStr = Field(description="`kb_resources`, `kb_edges`, `kb_blobs` or `kb_contexts`.")
     __properties: ClassVar[List[str]] = ["id", "table"]
 
     model_config = ConfigDict(

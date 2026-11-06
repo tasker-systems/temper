@@ -1862,6 +1862,11 @@ const ENROLLED: &[&str] = &[
     // the reader's standing. An edge subject is served only while the reader can read both its
     // endpoints (20261117000020), witnessed in temper-substrate's context_change_feed.rs.
     "context_changes_after",
+    // context_cursor (the context cursor, 20261117000040): non-NULL exactly for the contexts in
+    // contexts_readable_by that hold a change the feed serves, NULL for every other — driven by the
+    // same `the_change_feed_answers_exactly_the_readable_contexts`. Its other predicates are the
+    // feed's; temper-substrate's context_change_feed.rs pins the two to the same answer.
+    "context_cursor",
     // search doors (wrappers over the gated query_* machines)
     "search_exact",
     "search_wide",
@@ -1918,7 +1923,6 @@ const CONSUMES: &[&str] = &[
     "graph_home_teams",
     "graph_induced_edges",
     "graph_orphan_salient_nodes",
-    "graph_region_composition_edges",
     "graph_region_members",
     "graph_region_territories",
     "graph_territory_bridges",
@@ -2557,6 +2561,22 @@ async fn the_change_feed_answers_exactly_the_readable_contexts(pool: PgPool) -> 
                 readable_pairs += 1;
             } else {
                 unreadable_pairs += 1;
+            }
+            let cursor: Option<Uuid> = sqlx::query_scalar("SELECT context_cursor($1, $2)")
+                .bind(profile)
+                .bind(context)
+                .fetch_one(&pool)
+                .await?;
+            match (cursor, may) {
+                (None, false) | (Some(_), true) => {}
+                (Some(id), false) => violations.push(format!(
+                    "I9: context_cursor[{who}, {context}] answered {id} for a context outside \
+                     contexts_readable_by"
+                )),
+                (None, true) => violations.push(format!(
+                    "I9: context_cursor[{who}, {context}] answered nothing for a readable \
+                     context holding a served change"
+                )),
             }
             match (&answer, may) {
                 (None, false) => {}

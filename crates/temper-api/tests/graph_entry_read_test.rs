@@ -519,7 +519,7 @@ async fn nodes_carry_where_they_live_and_when_they_moved(pool: PgPool) {
 async fn hydration_degree_counts_a_self_loop_once_and_agrees_across_ids(pool: PgPool) {
     // 20261116000000 moved hydration's degree from a per-node `source = id OR target = id` count
     // to one pass over (edge, end) pairs for the whole id set. The pairs are UNIONed, not UNION
-    // ALLed, precisely so a self-loop still counts once; a regression to UNION ALL reads 2 here.
+    // ALLed, precisely so a self-loop still counts once; a regression to UNION ALL reads 4 here.
     let (profile, ctx, goal) = seed_context_with_goal_and_tasks(&pool, 2).await;
     let event: Uuid = sqlx::query_scalar("SELECT id FROM kb_events ORDER BY id DESC LIMIT 1")
         .fetch_one(&pool)

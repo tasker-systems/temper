@@ -1442,8 +1442,11 @@ pub async fn formation_touched_count_since(
     .await?)
 }
 
-/// Whether any `resource_deleted` event touched this anchor after `watermark` — the delete gate
-/// beside [`formation_touched_count_since`]'s count gate.
+/// Whether any resource left this anchor after `watermark`, by deletion (`resource_deleted`) or by a
+/// move out (`resource_departed`, which a deletion also writes since 20261117000040) — the exit gate
+/// beside [`formation_touched_count_since`]'s count gate. A moved-out member is as stale in the
+/// anchor's stored centroids as a deleted one, and counting both exits the same way keeps a move and
+/// a deletion indistinguishable by the settle that follows them (owner ruling 2026-11-06).
 ///
 /// A delete is not drift volume, so it must not wait for the count: the projection it invalidates is
 /// a STORED AGGREGATE, and the aggregate is wrong the moment the event lands — the dead member is
@@ -1465,7 +1468,7 @@ pub async fn resource_deleted_since(
            SELECT 1 FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id
           WHERE ($3::uuid IS NULL OR e.id > $3)
             AND e.producing_anchor_table = $1 AND e.producing_anchor_id = $2
-            AND et.name = 'resource_deleted') AS "exists!""#,
+            AND et.name IN ('resource_deleted', 'resource_departed')) AS "exists!""#,
         anchor.table(),
         anchor.uuid(),
         watermark,

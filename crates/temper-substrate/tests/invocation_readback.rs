@@ -164,8 +164,12 @@ fn reasoning_of(row: &temper_substrate::readback::InvocationShowRow) -> Vec<Stri
 /// the reasoning an agent wrote about an element the reader cannot read. A cogmap member sees the
 /// acts on what they can read and none of the acts that name a resource they cannot read — by its
 /// home, by an edge pointing at it (first assert and re-assert alike), by a facet on that edge, or
-/// after it is rehomed out of their reach (by owner and by block). A reader of both sees every act,
-/// so the gate drops only what it must, and a soft delete does not hide the delete act.
+/// after it is rehomed out of their reach (by owner and by block). A deleted resource is unreadable
+/// like a moved-out one (owner ruling 2026-11-06), so the delete act and every act naming the
+/// deleted resource are dropped for every reader, and the door cannot tell a deletion from a move.
+/// A reader of both contexts sees every other act, so the gate drops only what it must.
+///
+/// FAILS IF: the soft-delete exception comes back (then "doomed: retired" surfaces).
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn invocation_show_drops_acts_on_elements_the_reader_cannot_read(pool: PgPool) {
     common::seed_system(&pool).await;
@@ -359,8 +363,8 @@ async fn invocation_show_drops_acts_on_elements_the_reader_cannot_read(pool: PgP
         )
     };
 
-    // The cogmap-only reader: the open, the telos act and the delete. Nothing that names the hidden
-    // resource, however it is named.
+    // The cogmap-only reader: the open and the telos act. Nothing that names the hidden resource,
+    // however it is named, and nothing that names the deleted one.
     let shown = show(map_only)
         .await
         .expect("readable show")
@@ -371,17 +375,17 @@ async fn invocation_show_drops_acts_on_elements_the_reader_cannot_read(pool: PgP
             .iter()
             .map(|a| a.event_kind.as_str())
             .collect::<Vec<_>>(),
-        ["delegated_launch", "property_asserted", "resource_deleted"],
-        "only the open, the telos act and the delete surface for a cogmap-only reader: {:?}",
+        ["delegated_launch", "property_asserted"],
+        "only the open and the telos act surface for a cogmap-only reader: {:?}",
         shown.acts
     );
     assert_eq!(
         reasoning_of(&shown),
-        ["telos: reads as shipped", "doomed: retired"],
-        "no reasoning about the hidden resource reaches a cogmap-only reader"
+        ["telos: reads as shipped"],
+        "no reasoning about the hidden or the deleted resource reaches a cogmap-only reader"
     );
 
-    // The reader of both: every act, so the gate removes only what the reader cannot read.
+    // The reader of both: every act but those naming the deleted resource, which nobody can read.
     let shown = show(both)
         .await
         .expect("readable show")
@@ -391,7 +395,6 @@ async fn invocation_show_drops_acts_on_elements_the_reader_cannot_read(pool: PgP
     assert_eq!(
         reasoning,
         [
-            "doomed: retired",
             "edge: facet on it",
             "edge: first assert",
             "edge: re-assert",
@@ -400,7 +403,7 @@ async fn invocation_show_drops_acts_on_elements_the_reader_cannot_read(pool: PgP
             "moved: by owner",
             "telos: reads as shipped",
         ],
-        "a reader of the cogmap and the hidden context sees every act: {:?}",
+        "a reader of the cogmap and the hidden context sees every act on what it can read: {:?}",
         shown.acts
     );
 }

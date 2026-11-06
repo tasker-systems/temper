@@ -613,3 +613,134 @@ async fn a_delete_settles_the_anchor_at_the_next_drain_without_further_writes(po
         cos(&f64ify(&all_mean), &f64ify(&axis(0))) - cos(&f64ify(&all_mean), &f64ify(&axis(1)))
     );
 }
+
+/// Owner ruling 2026-11-06 (migration 20261117000040): a move and a deletion leave a context the
+/// same way, including what follows. A move that also edits the resource, the common `update` with
+/// `move_to`, must (a) record nothing in the home it left but the departure, because the move fires
+/// before the edits and the edits land in the destination; and (b) settle the home it left at the
+/// next drain, as the deletion witness above settles its home, because the moved member is as stale
+/// in that home's centroids as a deleted one.
+///
+/// FAILS IF: the update fires the move after its edits (then the old home's feed carries a
+/// `resource_updated` under the departure's act), the move queues no settle for the home it left,
+/// or the tick's exit gate ignores `resource_departed` (then the drain claims the job and declines
+/// to materialize, and the moved member's contribution stays in the centroid).
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_move_out_settles_the_home_it_left_as_a_delete_does(pool: PgPool) {
+    let (profile, context) = seed_profile_with_context(&pool, "move-window@example.com").await;
+    let anchor = HomeAnchor::Context(ContextId::from(context));
+    let destination = uuid::Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name) \
+         VALUES ($1,'kb_profiles',$2,'elsewhere','elsewhere')",
+    )
+    .bind(destination)
+    .bind(profile)
+    .execute(&pool)
+    .await
+    .expect("seed destination");
+
+    let mut b = axis(0);
+    let off = (1.0_f32 - 0.9 * 0.9).sqrt();
+    b[0] = 0.9;
+    b[1] = off;
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
+    for i in 0..4 {
+        backend
+            .create_resource(create_cmd_embedded(anchor, &format!("stays-{i}"), axis(0)))
+            .await
+            .expect("create member");
+    }
+    let moved = backend
+        .create_resource(create_cmd_embedded(anchor, "moves-out", b.clone()))
+        .await
+        .expect("create the member that moves")
+        .value
+        .id;
+    let summary = region_service::dispatch_tick(&pool, None)
+        .await
+        .expect("drain 1");
+    assert_eq!(summary.materialized, 1, "precondition: the region formed");
+
+    let corr = uuid::Uuid::now_v7();
+    let act = ActContext {
+        correlation: Some(temper_core::types::ids::CorrelationId::from(corr)),
+        ..ActContext::default()
+    };
+    backend
+        .update_resource(temper_workflow::operations::UpdateResource {
+            open_meta_add: None,
+            resource: moved,
+            title: Some("moved and retitled".to_string()),
+            slug: None,
+            body: None,
+            managed_meta: None,
+            open_meta: None,
+            goal: None,
+            move_to: Some(temper_workflow::operations::MoveSpec {
+                context_to: Some(ContextId::from(destination)),
+                type_to: None,
+            }),
+            context_ref: None,
+            act: act.clone(),
+            origin: Surface::ApiHttp,
+        })
+        .await
+        .expect("move with an edit");
+
+    // (a) The home it left holds exactly one event of the act: the departure.
+    let left_behind: Vec<String> = sqlx::query_scalar(
+        "SELECT et.name FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE e.correlation_id = $1 AND e.producing_anchor_table = 'kb_contexts' \
+            AND e.producing_anchor_id = $2 ORDER BY e.xact_id, e.seq",
+    )
+    .bind(corr)
+    .bind(context)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        left_behind,
+        vec!["resource_departed".to_string()],
+        "the home it left records more of the act than its departure"
+    );
+    let landed: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE e.correlation_id = $1 AND e.producing_anchor_id = $2 \
+            AND et.name = 'resource_updated'",
+    )
+    .bind(corr)
+    .bind(destination)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        landed, 1,
+        "anti-vacuity: the edit landed in the destination"
+    );
+
+    // (b) The move queued the old home's settle, and the next drain alone re-derives it.
+    assert_eq!(
+        queued_jobs(&pool, anchor).await,
+        1,
+        "the move must queue a settle for the home it left"
+    );
+    let summary = region_service::dispatch_tick(&pool, None)
+        .await
+        .expect("drain 2");
+    assert!(
+        summary.materialized >= 1,
+        "the move's exit is its own pressure"
+    );
+    assert_eq!(
+        materialized_count(&pool, anchor).await,
+        2,
+        "the home it left settled once more"
+    );
+    let centroid = live_region_centroid(&pool, context).await;
+    let cos_live = cos(&centroid, &f64ify(&axis(0)));
+    assert!(
+        (cos_live - 1.0).abs() < 1e-9,
+        "the moved member is still inside the old home's centroid (cosine {cos_live})"
+    );
+}

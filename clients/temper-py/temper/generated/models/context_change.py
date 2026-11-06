@@ -32,10 +32,11 @@ class ContextChange(BaseModel):
     """ # noqa: E501
     act: Optional[UUID] = Field(default=None, description="The act the change belongs to (its correlation id). Changes made by one act share it.")
     actor: UUID = Field(description="The acting entity (`kb_entities.id`).")
+    block: Optional[UUID] = Field(default=None, description="The content block the change was made to, when it was made to one (`kb_content_blocks.id`). The subject is then the block's resource, which is the door a reader re-reads it through.")
     kind: StrictStr = Field(description="The ledger's event-type name, verbatim (for example `property_set`, `resource_departed`).")
     occurred_at: datetime = Field(description="When the acting transaction began. Not the feed's order: entries are in commit order.")
-    subject: ContextChangeSubject = Field(description="The thing the change was made to.")
-    __properties: ClassVar[List[str]] = ["act", "actor", "kind", "occurred_at", "subject"]
+    subject: ContextChangeSubject = Field(description="The thing the change was made to. A change to one of a resource's content blocks names the resource here, and the block in [`block`](Self::block).")
+    __properties: ClassVar[List[str]] = ["act", "actor", "block", "kind", "occurred_at", "subject"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -84,6 +85,11 @@ class ContextChange(BaseModel):
         if self.act is None and "act" in self.model_fields_set:
             _dict['act'] = None
 
+        # set to None if block (nullable) is None
+        # and model_fields_set contains the field
+        if self.block is None and "block" in self.model_fields_set:
+            _dict['block'] = None
+
         return _dict
 
     @classmethod
@@ -98,6 +104,7 @@ class ContextChange(BaseModel):
         _obj = cls.model_validate({
             "act": obj.get("act"),
             "actor": obj.get("actor"),
+            "block": obj.get("block"),
             "kind": obj.get("kind"),
             "occurred_at": obj.get("occurred_at"),
             "subject": ContextChangeSubject.from_dict(obj["subject"]) if obj.get("subject") is not None else None
