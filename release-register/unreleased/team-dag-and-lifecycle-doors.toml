@@ -45,6 +45,11 @@ Team DAG and lifecycle doors (temper-artifacts specs/2026-11-06-team-dag-and-lif
   address-change warning) and `temper admin team auto-join`. `team create --parent` is
   repeatable. `team show` output includes `parents`.
 
+- The root or the gating team as the CHILD of an attach or reparent is a system admin's act. A
+  child-side detach does not act on them. Restoring an auto-join team is a system admin's act.
+  `parents` on team detail is shown to members and admins only, not to an ancestor's manager.
+  Reparent answers an unknown `to` with 403, not 404.
+
 Who observes it: SDK users, through new operations and models and one new field. Admin-ledger
 readers see the new event type. No existing shape changes.
 Release relevance: signal-only.

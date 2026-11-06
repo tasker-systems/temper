@@ -731,19 +731,19 @@ pub async fn team_detail(pool: &PgPool, caller: &Caller, team_id: Uuid) -> ApiRe
         Vec::new()
     };
 
-    // The live parents, for every caller past the read gate (team DAG doors D9, ruling R2 as
-    // amended): a member already reads their material, so the names disclose nothing new.
-    let parents = sqlx::query_as!(
-        TeamRef,
-        r#"SELECT t.id, t.slug, t.name
-             FROM kb_teams_parents tp
-             JOIN kb_teams t ON t.id = tp.parent_id AND t.is_active
-            WHERE tp.child_id = $1
-            ORDER BY t.slug"#,
-        team_id,
-    )
-    .fetch_all(pool)
-    .await?;
+    // The live parents, for a member of this team (any role) or a system admin (team DAG doors D9,
+    // ruling R2 as amended): a member already reads their material, so the names disclose nothing
+    // new. Not for a caller who reads this team only as an ancestor's manager: a child's other
+    // parents may be teams that caller has no relationship with.
+    let member = role_on_team(pool, team_id, caller.profile_id())
+        .await?
+        .is_some();
+    let parents = if admin || member {
+        let mut conn = pool.acquire().await?;
+        live_parents(&mut conn, team_id).await?
+    } else {
+        Vec::new()
+    };
 
     Ok(TeamDetail {
         id: team.id,
@@ -912,6 +912,21 @@ pub async fn rename_slug(
     let to = validate_team_slug(&req.slug)?;
 
     let mut tx = pool.begin().await?;
+    // Under the team's row lock, the authority is decided again, and the slug being replaced is
+    // read: a concurrent demotion cannot race the rename, and the outcome names the slug that
+    // actually stopped resolving.
+    lock_teams_ascending(&mut tx, &[team_id]).await?;
+    if crate::services::access_service::is_root_or_gating_team_on(&mut tx, team_id).await? {
+        require_admin_on(pool, caller).await?;
+    } else if !role_on_team_on(&mut tx, team_id, caller.profile_id())
+        .await?
+        .is_some_and(can_manage)
+    {
+        return Err(ApiError::Forbidden);
+    }
+    let from = sqlx::query_scalar!("SELECT slug FROM kb_teams WHERE id = $1", team_id)
+        .fetch_one(&mut *tx)
+        .await?;
     let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -936,11 +951,7 @@ pub async fn rename_slug(
         ));
     }
     tx.commit().await?;
-    Ok(RenameTeamSlugOutcome {
-        team_id,
-        from: current.slug,
-        to,
-    })
+    Ok(RenameTeamSlugOutcome { team_id, from, to })
 }
 
 /// Restore a soft-deleted team (team DAG doors D6) — the inverse of [`delete_team`], with its
@@ -965,16 +976,16 @@ pub async fn restore_team(
             .await?
             .is_some();
     if !admin {
-        if is_root_or_gating(pool, team_id).await? {
-            return Err(ApiError::Forbidden);
-        }
-        match membership_row_role(pool, team_id, caller.profile_id()).await? {
-            Some(TeamRole::Owner) => {}
-            _ => return Err(ApiError::Forbidden),
-        }
+        restore_authority(pool.acquire().await?.as_mut(), caller, team_id).await?;
     }
 
     let mut tx = pool.begin().await?;
+    // Under the team's row lock, the owner arm is decided again: a concurrent demotion or removal
+    // cannot race the restore it would have refused.
+    lock_teams_ascending(&mut tx, &[team_id]).await?;
+    if !admin {
+        restore_authority(&mut tx, caller, team_id).await?;
+    }
     let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -1016,6 +1027,33 @@ pub async fn restore_team(
         members: roster(&mut conn, team_id).await?,
         team,
     })
+}
+
+/// The non-admin arm of [`restore_team`]: the team's `owner` on its membership row (the team is
+/// dead, so the blind lookup), never the root or the gating team, and never an auto-join team —
+/// restoring one re-enrols every approved profile, which is a system admin's act (D5, R6).
+async fn restore_authority(
+    conn: &mut sqlx::PgConnection,
+    caller: &HumanPrincipal,
+    team_id: Uuid,
+) -> ApiResult<()> {
+    if crate::services::access_service::is_root_or_gating_team_on(conn, team_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let row = sqlx::query!(
+        r#"SELECT tm.role AS "role: TeamRole", t.auto_join_role IS NOT NULL AS "auto_join!"
+             FROM kb_team_members tm
+             JOIN kb_teams t ON t.id = tm.team_id
+            WHERE tm.team_id = $1 AND tm.profile_id = $2"#,
+        team_id,
+        *caller.profile_id(),
+    )
+    .fetch_optional(&mut *conn)
+    .await?;
+    match row {
+        Some(r) if r.role == TeamRole::Owner && !r.auto_join => Ok(()),
+        _ => Err(ApiError::Forbidden),
+    }
 }
 
 async fn live_parents(conn: &mut sqlx::PgConnection, team_id: Uuid) -> ApiResult<Vec<TeamRef>> {
@@ -1225,7 +1263,11 @@ async fn detach_authority(
     child_id: Uuid,
 ) -> ApiResult<()> {
     let manages = |role: Option<TeamRole>| role.is_some_and(can_manage);
-    if manages(role_on_team_on(conn, child_id, caller.profile_id()).await?) {
+    // The child arm stops at the root and the gating team: their rosters are admin-only, and a
+    // leftover managing row on either (a demoted admin's) confers nothing.
+    if manages(role_on_team_on(conn, child_id, caller.profile_id()).await?)
+        && !crate::services::access_service::is_root_or_gating_team_on(conn, child_id).await?
+    {
         return Ok(());
     }
     if manages(role_on_team_on(conn, parent_id, caller.profile_id()).await?)
@@ -1344,9 +1386,13 @@ pub async fn reparent(
     let from = resolve_team_ref(pool, &req.from)
         .await?
         .ok_or_else(|| not_found("`from`"))?;
-    let to = resolve_team_ref(pool, &req.to)
-        .await?
-        .ok_or_else(|| not_found("`to`"))?;
+    // An unknown `to` is answered as one the caller does not manage (403), so the door is not an
+    // oracle for which team slugs exist (G6); only a system admin is told it is absent.
+    let to = match resolve_team_ref(pool, &req.to).await? {
+        Some(id) => id,
+        None if admin => return Err(not_found("`to`")),
+        None => return Err(ApiError::Forbidden),
+    };
     if from == to {
         return Err(ApiError::BadRequest(
             "`from` and `to` name the same team".to_string(),
@@ -1481,9 +1527,13 @@ async fn attach_authority(
     }
     let instance_parent =
         crate::services::access_service::is_root_or_gating_team_on(conn, parent_id).await?;
+    // An auto-join child (R6) or an instance-team child (the gating team's roster is the access
+    // pool, every approved profile) hands the parent's material to the whole instance: the same
+    // act as attaching to the root. A leftover managing row on the gating team confers nothing.
     let pool_child = link_side(conn, child_id)
         .await?
-        .is_some_and(|side| side.auto_join);
+        .is_some_and(|side| side.auto_join)
+        || crate::services::access_service::is_root_or_gating_team_on(conn, child_id).await?;
     if instance_parent || pool_child {
         // Re-asked, not reused: under the locks a demotion since the pre-check must refuse.
         require_admin_on(pool, caller).await?;
@@ -1521,7 +1571,9 @@ async fn attach_precheck(
     // 3–4, still before any structural answer.
     let instance_parent =
         crate::services::access_service::is_root_or_gating_team_on(&mut conn, parent_id).await?;
-    if (instance_parent || child.auto_join) && !admin {
+    let instance_child =
+        crate::services::access_service::is_root_or_gating_team_on(&mut conn, child_id).await?;
+    if (instance_parent || instance_child || child.auto_join) && !admin {
         return Err(ApiError::Forbidden);
     }
     // 5.

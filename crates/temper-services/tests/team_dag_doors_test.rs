@@ -1287,3 +1287,92 @@ async fn rename_refuses_root_personal_invalid_and_taken(pool: PgPool) {
     assert!(matches!(refusal, ApiError::Conflict(_)), "{refusal:?}");
     assert_eq!(slug_of(&pool, f.side).await, "dg-side");
 }
+
+// ---------------------------------------------------------------------------------------------
+// Review fixes
+// ---------------------------------------------------------------------------------------------
+
+/// A non-admin's managing row on the gating team (a demoted admin's leftover owner row) confers
+/// nothing: they cannot attach the gating team under a team they manage, move it there, or detach
+/// it from a parent. Its roster is every approved profile, so each is an instance-wide act.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_leftover_gating_owner_row_cannot_place_the_gating_team(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let ex = f.on("side", "owner");
+    join(&pool, f.gate, ex, "owner").await;
+
+    let refusal = attach(&pool, ex, f.side, f.gate)
+        .await
+        .expect_err("gating team as a child");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    assert!(!linked(&pool, f.side, f.gate).await);
+
+    // An admin places it under org; the leftover row may neither move nor detach it.
+    attach(&pool, f.admin, f.org, f.gate).await.unwrap();
+    let refusal = reparent(&pool, ex, f.gate, "+dg-org", "+dg-side")
+        .await
+        .expect_err("moving the gating team");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    let refusal = detach(&pool, ex, f.org, f.gate)
+        .await
+        .expect_err("detaching the gating team");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    assert!(linked(&pool, f.org, f.gate).await);
+}
+
+/// `parents` is for the team's members and admins: a manager of an ancestor who reads the child's
+/// detail through the ancestor arm does not learn the child's other parents.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_ancestor_manager_does_not_see_a_childs_other_parents(pool: PgPool) {
+    let f = fixture(&pool).await;
+    attach(&pool, f.admin, f.side, f.eng_web).await.unwrap();
+    let org_owner = test_support::caller_for(&pool, f.on("org", "owner")).await;
+    let web = team_service::team_detail(&pool, &org_owner, f.eng_web)
+        .await
+        .expect("an ancestor's manager reads the child's roster");
+    assert!(web.parents.is_empty(), "{:?}", web.parents);
+
+    let member = test_support::caller_for(&pool, f.on("eng-web", "member")).await;
+    let web = team_service::team_detail(&pool, &member, f.eng_web)
+        .await
+        .unwrap();
+    assert_eq!(web.parents.len(), 2, "a member sees both");
+}
+
+/// Reparent is not a slug-existence oracle: an unknown `to` is answered like one the caller does
+/// not manage.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn reparent_to_an_unknown_team_is_forbidden_not_missing(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let owner = f.on("eng", "owner");
+    let unknown = reparent(&pool, owner, f.eng, "+dg-org", "+dg-no-such-team")
+        .await
+        .expect_err("unknown `to`");
+    let unmanaged = reparent(&pool, owner, f.eng, "+dg-org", "+dg-side")
+        .await
+        .expect_err("unmanaged `to`");
+    assert!(matches!(unknown, ApiError::Forbidden), "{unknown:?}");
+    assert!(matches!(unmanaged, ApiError::Forbidden), "{unmanaged:?}");
+}
+
+/// Restoring an auto-join team re-enrols every approved profile, so it is a system admin's act even
+/// for the team's owner.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn only_an_admin_restores_an_auto_join_team(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let owner = f.on("side", "owner");
+    join(&pool, f.watch, owner, "owner").await;
+    let admin = test_support::human_principal_for(&pool, f.admin).await;
+    team_service::delete_team(&pool, &admin, f.watch)
+        .await
+        .unwrap();
+
+    let p = test_support::human_principal_for(&pool, owner).await;
+    let refusal = team_service::restore_team(&pool, &p, f.watch)
+        .await
+        .expect_err("a non-admin owner of a pool");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    team_service::restore_team(&pool, &admin, f.watch)
+        .await
+        .expect("an admin restores it");
+}

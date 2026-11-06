@@ -507,6 +507,11 @@ current_gates() {
 # (owner or system admin), `team rename-slug` (owner/maintainer; root/gating a system admin),
 # `admin team auto-join`, and `team detach` widened to a manager of either side. Each restates the
 # `team_service` gate it reaches; the CLI decides nothing.
+# REVIEWED 2026-11-06 (same doors, review fixes) — `handlers/teams.rs` 20 -> 21 and
+# `team_service.rs` 38 -> 39: the attach, detach, reparent and restore texts now say that the root
+# or gating team as the CHILD, and an auto-join team on restore, are a system admin's; the gates
+# (`attach_precheck`/`attach_authority`, `detach_authority`, `restore_authority`) now enforce
+# exactly that, pinned in `team_dag_doors_test`'s review-fix tests.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -525,7 +530,7 @@ claim crates/temper-api/src/handlers/resource_erasure.rs 5 is_system_admin
 claim crates/temper-api/src/handlers/resources.rs 2 grant
 claim crates/temper-api/src/handlers/slack_disconnect.rs 1 -
 claim crates/temper-api/src/handlers/subscriptions.rs 7 subscription
-claim crates/temper-api/src/handlers/teams.rs 20 team_membership,is_system_admin
+claim crates/temper-api/src/handlers/teams.rs 21 team_membership,is_system_admin
 claim crates/temper-api/src/openapi.rs 5 is_system_admin,machine,connection,subscription,read_gates,grant,ledger_subject
 claim crates/temper-cli/src/cli.rs 27 team_membership
 claim crates/temper-cli/src/commands/admin.rs 4 -
@@ -569,7 +574,7 @@ claim crates/temper-services/src/services/slack_disconnect_service.rs 2 -
 claim crates/temper-services/src/services/standing_service.rs 2 -
 claim crates/temper-services/src/services/subscription_service.rs 9 subscription
 claim crates/temper-services/src/services/subscription_test_support.rs 1 subscription
-claim crates/temper-services/src/services/team_service.rs 38 require_manage_on_team,can_manage,team_membership,is_system_admin
+claim crates/temper-services/src/services/team_service.rs 39 require_manage_on_team,can_manage,team_membership,is_system_admin
 gate audit_gate 021f87ca4bed
 gate connection 66c36643c716
 gate context_admin b07eeb1d5289
