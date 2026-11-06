@@ -1,33 +1,31 @@
-//! Team tools — membership acts on teams, through the network door.
+//! Team tools — a person's team acts, through the network door.
 //!
-//! `team_manage` carries `leave` today: the caller removes themselves from a team, as
-//! `temper team leave <team>` does. It is the tool the rest of team stewardship joins (create,
-//! update, add and remove members, change roles) once role-rank PR C settles the membership
-//! writers those acts forward to.
+//! `team_manage` carries every team act a person takes (ruling R7, reversed, of temper-artifacts
+//! `specs/2026-11-06-team-dag-and-lifecycle-doors-design.md`): `create`, `update`, `delete`,
+//! `restore`, `add_member`, `change_role`, `remove_member`, `leave`, `attach`, `detach`,
+//! `reparent`, `rename_slug` and `set_auto_join`. `team_read` carries the reads: `list` (your teams)
+//! and `detail` (one team: its roster, its parents, and its children when you manage it).
 //!
-//! # Leaving needs no confirmation step
+//! # Authorization is the API's, and so is the machine refusal
 //!
-//! Leaving over MCP is the same act as `temper team leave`: the same route on the caller's own
-//! bearer. The human check on an agent's write is the client's approval of the call, which the
-//! tool's annotations (`destructiveHint: true`) ask a client to apply. A leave the user did not
-//! mean costs them their reach into the team until someone re-invites them; it gives no one else
-//! anything. The API keeps the cases that cannot be undone that way: it refuses the last owner, a
-//! membership the identity provider assigned, and your own personal team.
+//! Every action resolves its team refs and forwards one route on the caller's own bearer through
+//! `relay_client`; this module decides no authority. Each team route extracts
+//! `AuthUser(HumanPrincipal)`, which only `classify_caller` mints, and `set_auto_join` also mints
+//! `SystemAdmin`. So a machine principal's call is refused by the API, and the refusal sentence
+//! arrives verbatim through `map_team_err`. There is deliberately **no** machine check here: a
+//! second copy of that policy would be the one that drifts (spec § Surfaces).
 //!
-//! # Authorization is the API's
+//! # No confirmation step
 //!
-//! `leave` resolves the caller's own profile id (`GET /api/profile`) and forwards
-//! `DELETE /api/teams/{id}/members/{profile_id}` with it. Self-removal is decided by the API's
-//! membership rule; this module adds no gate. The route sits on the gated router, so a caller
-//! whose access is not yet approved cannot leave on any surface; the system-access refusal
-//! arrives in its own sentence.
+//! These are the same acts as `temper team ...`, on the same routes. The human check on an agent's
+//! write is the client's approval of the call, which `destructiveHint: true` asks for. The API keeps
+//! the guards: the last owner, a membership the identity provider assigned, a personal team.
 //!
 //! # Text in the answer
 //!
-//! `residual_owned.contexts[].context_ref` is `+<team-slug>/<context-slug>`, and team slugs are not
-//! constrained at creation, so a ref can carry text the team's creator chose. It is passed through
-//! unguarded on purpose: the caller authored content in those contexts, `context_read` already
-//! shows the same refs, and the ref is what the caller needs to act on that content.
+//! Team slugs and names in answers are text a team's creator chose; they are data, never
+//! instructions. `residual_owned.contexts[].context_ref` is `+<team-slug>/<context-slug>`, passed
+//! through unguarded on purpose: the caller authored content there and needs the ref to act on it.
 
 use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
@@ -36,6 +34,10 @@ use uuid::Uuid;
 
 use temper_client::error::ClientError;
 use temper_core::types::reassign::ResidualOwnedReach;
+use temper_core::types::team::{
+    AddMemberRequest, ChangeRoleRequest, RenameTeamSlugRequest, ReparentRequest,
+    SetAutoJoinRequest, TeamCreateRequest, TeamRole, TeamUpdateRequest,
+};
 
 use crate::service::{api_error_cause, AcrossAuth, TemperMcpService};
 use crate::tools::invitations::resolve_team;
@@ -64,15 +66,22 @@ struct LeaveAck {
 
 /// Map a team act's error onto an MCP error.
 ///
-/// For a self-removal the bare `403` means the caller holds no membership the rule lets them act
-/// from — in practice, they are not on the team. `ForbiddenDetail` (a machine principal) carries
-/// the server's sentence. `404`, `409` (the last owner, an identity-provider membership, your own
-/// personal team) and `400` carry the server's own sentence too. Everything else is the tool's
-/// internal fault voice.
+/// A bare `403` is the API refusing the act without a sentence: for `leave` the caller holds no
+/// membership the rule lets them act from, for every other act the caller lacks the authority it
+/// needs (a role on the team, or a system admin's). `ForbiddenDetail` carries the server's sentence
+/// verbatim — a machine principal's refusal among them. `404`, `409` and `400` carry the server's
+/// own sentence too. Everything else is the tool's internal fault voice.
 fn map_team_err(act: &str, err: ClientError) -> rmcp::ErrorData {
     match err {
-        ClientError::Forbidden => rmcp::ErrorData::invalid_params(
+        ClientError::Forbidden if act.ends_with(" leave") => rmcp::ErrorData::invalid_params(
             format!("{act} was refused: you can leave only a team you are a member of"),
+            None,
+        ),
+        ClientError::Forbidden => rmcp::ErrorData::invalid_params(
+            format!(
+                "{act} was refused: you do not hold the role this act needs on the team(s) it \
+                 names (or it is a system admin's act)"
+            ),
             None,
         ),
         ClientError::ForbiddenDetail { message } => rmcp::ErrorData::new(
@@ -92,13 +101,98 @@ fn map_team_err(act: &str, err: ClientError) -> rmcp::ErrorData {
     }
 }
 
+/// A team role, as `add_member` and `change_role` take it: owner, maintainer, member or watcher.
+/// A mirror of [`TeamRole`] inlined into the tool's schema, which carries no `$ref` (the wire rule).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[schemars(inline)]
+#[serde(rename_all = "snake_case")]
+pub enum MemberRole {
+    Owner,
+    Maintainer,
+    Member,
+    Watcher,
+}
+
+impl From<MemberRole> for TeamRole {
+    fn from(role: MemberRole) -> Self {
+        match role {
+            MemberRole::Owner => TeamRole::Owner,
+            MemberRole::Maintainer => TeamRole::Maintainer,
+            MemberRole::Member => TeamRole::Member,
+            MemberRole::Watcher => TeamRole::Watcher,
+        }
+    }
+}
+
+/// An auto-join role: member or watcher (a role that governs a team is granted by a person).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[schemars(inline)]
+#[serde(rename_all = "snake_case")]
+pub enum PoolRole {
+    Member,
+    Watcher,
+}
+
+impl From<PoolRole> for TeamRole {
+    fn from(role: PoolRole) -> Self {
+        match role {
+            PoolRole::Member => TeamRole::Member,
+            PoolRole::Watcher => TeamRole::Watcher,
+        }
+    }
+}
+
 /// The team-manage action to perform.
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[schemars(inline)]
 #[serde(rename_all = "snake_case")]
 pub enum TeamManageAction {
+    /// Create a team; you become its owner.
+    Create,
+    /// Change a team's display name or description.
+    Update,
+    /// Soft-delete a team (its owner, or a system admin).
+    Delete,
+    /// Restore a soft-deleted team (its owner, or a system admin).
+    Restore,
+    /// Add a profile to a team at a role.
+    AddMember,
+    /// Change a member's role.
+    ChangeRole,
+    /// Remove a member from a team.
+    RemoveMember,
     /// Leave a team you are a member of.
     Leave,
+    /// Attach a child team under a parent team.
+    Attach,
+    /// Detach a child team from a parent team.
+    Detach,
+    /// Move a team from one parent to another.
+    Reparent,
+    /// Change a team's slug.
+    RenameSlug,
+    /// Set, change or clear a team's auto-join role (a system admin's act).
+    SetAutoJoin,
+}
+
+impl TeamManageAction {
+    fn act(self) -> &'static str {
+        match self {
+            Self::Create => "team_manage create",
+            Self::Update => "team_manage update",
+            Self::Delete => "team_manage delete",
+            Self::Restore => "team_manage restore",
+            Self::AddMember => "team_manage add_member",
+            Self::ChangeRole => "team_manage change_role",
+            Self::RemoveMember => "team_manage remove_member",
+            Self::Leave => "team_manage leave",
+            Self::Attach => "team_manage attach",
+            Self::Detach => "team_manage detach",
+            Self::Reparent => "team_manage reparent",
+            Self::RenameSlug => "team_manage rename_slug",
+            Self::SetAutoJoin => "team_manage set_auto_join",
+        }
+    }
 }
 
 /// Consolidated team-manage tool — one write tool with an `action` discriminator.
@@ -106,10 +200,43 @@ pub enum TeamManageAction {
 pub struct TeamManageInput {
     /// Which team action to perform.
     pub action: TeamManageAction,
-    /// The team, as a slug (`+`-prefix optional), a decorated `slug-<uuid>` ref, or a UUID.
-    /// Required for `leave`.
+    /// The team acted on, as a slug (`+`-prefix optional), a decorated `slug-<uuid>` ref, or a UUID.
+    /// A slug resolves only among teams you are a member of, and a soft-deleted team only by UUID.
+    /// Required for every action but `create`; for `attach`/`detach` it is the PARENT, for
+    /// `reparent` the team being moved.
     #[serde(default)]
     pub team: Option<String>,
+    /// The child team (same forms as `team`). Required for `attach` and `detach`.
+    #[serde(default)]
+    pub child: Option<String>,
+    /// `reparent`: the current parent to leave (a team ref; resolved by the API).
+    #[serde(default)]
+    pub from: Option<String>,
+    /// `reparent`: the new parent to join (a team ref; resolved by the API).
+    #[serde(default)]
+    pub to: Option<String>,
+    /// `create`: the new team's slug (required). `rename_slug`: the new slug (required).
+    #[serde(default)]
+    pub slug: Option<String>,
+    /// `create` / `update`: the display name.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// `update`: the description.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// `create`: parent team refs (at most 16), resolved by the API.
+    #[serde(default)]
+    pub parents: Option<Vec<String>>,
+    /// `add_member` / `change_role` / `remove_member`: the member's profile UUID (from
+    /// team_read view `detail`).
+    #[serde(default)]
+    pub profile_id: Option<Uuid>,
+    /// `add_member` / `change_role`: owner, maintainer, member or watcher.
+    #[serde(default)]
+    pub role: Option<MemberRole>,
+    /// `create` / `set_auto_join`: member or watcher; for `set_auto_join`, omit or null to clear.
+    #[serde(default)]
+    pub auto_join_role: Option<PoolRole>,
 }
 
 /// Dispatch the consolidated team-manage tool.
@@ -118,30 +245,232 @@ pub async fn team_manage(
     parts: &http::request::Parts,
     input: TeamManageInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    match input.action {
+    let act = input.action.act();
+    let client = svc.relay_client(parts)?;
+    let teams = client.teams();
+    let err = |e| map_team_err(act, e);
+    // The acted-on team, resolved the way every team tool resolves one.
+    let team_id = match input.action {
+        TeamManageAction::Create => None,
+        _ => {
+            let team = required(input.team.clone(), act, "team")?;
+            Some(resolve_team(&client, act, &team).await?)
+        }
+    };
+    let team_id = || team_id.ok_or_else(|| rmcp::ErrorData::internal_error("no team", None));
+    let text = match input.action {
+        TeamManageAction::Create => to_text(
+            &teams
+                .create(&TeamCreateRequest {
+                    slug: required(input.slug, act, "slug")?,
+                    name: input.name,
+                    parent: None,
+                    parents: input.parents,
+                    auto_join_role: input.auto_join_role.map(TeamRole::from),
+                })
+                .await
+                .across_auth(err)?,
+        ),
+        TeamManageAction::Update => to_text(
+            &teams
+                .update(
+                    team_id()?,
+                    &TeamUpdateRequest {
+                        name: input.name,
+                        description: input.description,
+                    },
+                )
+                .await
+                .across_auth(err)?,
+        ),
+        TeamManageAction::Delete => {
+            teams.delete(team_id()?).await.across_auth(err)?;
+            to_text(&serde_json::json!({ "deleted": true, "team_id": team_id()? }))
+        }
+        TeamManageAction::Restore => to_text(&teams.restore(team_id()?).await.across_auth(err)?),
+        TeamManageAction::AddMember => to_text(
+            &teams
+                .add_member(
+                    team_id()?,
+                    &AddMemberRequest {
+                        profile_id: required(input.profile_id, act, "profile_id")?,
+                        role: required(input.role, act, "role")?.into(),
+                    },
+                )
+                .await
+                .across_auth(err)?,
+        ),
+        TeamManageAction::ChangeRole => to_text(
+            &teams
+                .change_role(
+                    team_id()?,
+                    required(input.profile_id, act, "profile_id")?,
+                    &ChangeRoleRequest {
+                        role: required(input.role, act, "role")?.into(),
+                    },
+                )
+                .await
+                .across_auth(err)?,
+        ),
+        TeamManageAction::RemoveMember => to_text(
+            &teams
+                .remove_member(team_id()?, required(input.profile_id, act, "profile_id")?)
+                .await
+                .across_auth(err)?,
+        ),
         TeamManageAction::Leave => {
-            const ACT: &str = "team_manage leave";
-            let team = required(input.team, ACT, "team")?;
-            let client = svc.relay_client(parts)?;
-            let team_id = resolve_team(&client, ACT, &team).await?;
             let me = client.profile().get().await.across_auth(|e| {
                 rmcp::ErrorData::internal_error(
-                    format!("{ACT}: could not read your own profile: {e}"),
+                    format!("{act}: could not read your own profile: {e}"),
                     None,
                 )
             })?;
-            let outcome = client
-                .teams()
-                .remove_member(team_id, me.id)
+            let outcome = teams
+                .remove_member(team_id()?, me.id)
                 .await
-                .across_auth(|e| map_team_err(ACT, e))?;
-            Ok(text_result(to_text(&LeaveAck {
+                .across_auth(err)?;
+            to_text(&LeaveAck {
                 left: true,
-                team_id,
+                team_id: team_id()?,
                 residual_owned: outcome.residual_owned,
-            })))
+            })
+        }
+        TeamManageAction::Attach | TeamManageAction::Detach => {
+            let child = required(input.child, act, "child")?;
+            let child_id = if input.action == TeamManageAction::Detach {
+                resolve_child(&client, act, team_id()?, &child).await?
+            } else {
+                resolve_team(&client, act, &child).await?
+            };
+            if input.action == TeamManageAction::Attach {
+                to_text(
+                    &teams
+                        .attach_child(team_id()?, child_id)
+                        .await
+                        .across_auth(err)?,
+                )
+            } else {
+                teams
+                    .detach_child(team_id()?, child_id)
+                    .await
+                    .across_auth(err)?;
+                to_text(&serde_json::json!({
+                    "detached": true, "parent_team_id": team_id()?, "child_team_id": child_id,
+                }))
+            }
+        }
+        TeamManageAction::Reparent => to_text(
+            &teams
+                .reparent(
+                    team_id()?,
+                    &ReparentRequest {
+                        from: required(input.from, act, "from")?,
+                        to: required(input.to, act, "to")?,
+                    },
+                )
+                .await
+                .across_auth(err)?,
+        ),
+        TeamManageAction::RenameSlug => to_text(
+            &teams
+                .rename_slug(
+                    team_id()?,
+                    &RenameTeamSlugRequest {
+                        slug: required(input.slug, act, "slug")?,
+                    },
+                )
+                .await
+                .across_auth(err)?,
+        ),
+        TeamManageAction::SetAutoJoin => to_text(
+            &teams
+                .set_auto_join(
+                    team_id()?,
+                    &SetAutoJoinRequest {
+                        role: input.auto_join_role.map(TeamRole::from),
+                    },
+                )
+                .await
+                .across_auth(err)?,
+        ),
+    };
+    Ok(text_result(text))
+}
+
+/// Resolve `detach`'s child ref. A parent's manager need not be a member of the child, so a bare
+/// slug is looked up among the parent's own children (its detail lists them for its managers)
+/// before the caller's memberships, as `temper team detach` does.
+async fn resolve_child(
+    client: &temper_client::TemperClient,
+    act: &str,
+    parent_id: Uuid,
+    child: &str,
+) -> Result<Uuid, rmcp::ErrorData> {
+    let token = child.strip_prefix('+').unwrap_or(child);
+    if temper_workflow::operations::parse_ref(token).is_err() {
+        if let Ok(detail) = client.teams().get(parent_id).await {
+            if let Some(c) = detail.children.iter().find(|c| c.slug == token) {
+                return Ok(c.id);
+            }
         }
     }
+    resolve_team(client, act, child).await
+}
+
+/// The team-read view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[schemars(inline)]
+#[serde(rename_all = "snake_case")]
+pub enum TeamReadView {
+    /// The teams you are a member of.
+    List,
+    /// One team: roster, parents, and children when you manage it.
+    Detail,
+}
+
+/// Consolidated team-read tool — one read tool with a `view` discriminator.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TeamReadInput {
+    /// Which view to read.
+    pub view: TeamReadView,
+    /// `detail`: the team, as a slug (`+`-prefix optional), a decorated `slug-<uuid>` ref, or a
+    /// UUID.
+    #[serde(default)]
+    pub team: Option<String>,
+}
+
+/// Dispatch the consolidated team-read tool.
+pub async fn team_read(
+    svc: &TemperMcpService,
+    parts: &http::request::Parts,
+    input: TeamReadInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let client = svc.relay_client(parts)?;
+    let text = match input.view {
+        TeamReadView::List => {
+            const ACT: &str = "team_read list";
+            to_text(
+                &client
+                    .teams()
+                    .list()
+                    .await
+                    .across_auth(|e| map_team_err(ACT, e))?,
+            )
+        }
+        TeamReadView::Detail => {
+            const ACT: &str = "team_read detail";
+            let team = required(input.team, ACT, "team")?;
+            let team_id = resolve_team(&client, ACT, &team).await?;
+            to_text(
+                &client
+                    .teams()
+                    .get(team_id)
+                    .await
+                    .across_auth(|e| map_team_err(ACT, e))?,
+            )
+        }
+    };
+    Ok(text_result(text))
 }
 
 #[cfg(test)]
@@ -159,22 +488,93 @@ mod tests {
         assert_eq!(input.team.as_deref(), Some("+acme-eng"));
     }
 
-    /// Only `leave` is offered: the stewardship acts join after role-rank PR C.
+    /// Every action deserializes with the fields it needs.
     #[test]
-    fn leave_is_the_only_action() {
-        for action in [
-            "create",
-            "add_member",
-            "remove_member",
-            "change_role",
-            "delete",
+    fn every_action_deserializes() {
+        use serde_json::json;
+        let pid = Uuid::now_v7();
+        for (value, action) in [
+            (
+                json!({"action": "create", "slug": "acme", "parents": ["+org"], "auto_join_role": "watcher"}),
+                TeamManageAction::Create,
+            ),
+            (
+                json!({"action": "update", "team": "acme", "name": "Acme"}),
+                TeamManageAction::Update,
+            ),
+            (
+                json!({"action": "delete", "team": "acme"}),
+                TeamManageAction::Delete,
+            ),
+            (
+                json!({"action": "restore", "team": pid.to_string()}),
+                TeamManageAction::Restore,
+            ),
+            (
+                json!({"action": "add_member", "team": "acme", "profile_id": pid, "role": "member"}),
+                TeamManageAction::AddMember,
+            ),
+            (
+                json!({"action": "change_role", "team": "acme", "profile_id": pid, "role": "watcher"}),
+                TeamManageAction::ChangeRole,
+            ),
+            (
+                json!({"action": "remove_member", "team": "acme", "profile_id": pid}),
+                TeamManageAction::RemoveMember,
+            ),
+            (
+                json!({"action": "leave", "team": "acme"}),
+                TeamManageAction::Leave,
+            ),
+            (
+                json!({"action": "attach", "team": "org", "child": "acme"}),
+                TeamManageAction::Attach,
+            ),
+            (
+                json!({"action": "detach", "team": "org", "child": "acme"}),
+                TeamManageAction::Detach,
+            ),
+            (
+                json!({"action": "reparent", "team": "acme", "from": "+org", "to": "+eng"}),
+                TeamManageAction::Reparent,
+            ),
+            (
+                json!({"action": "rename_slug", "team": "acme", "slug": "acme-2"}),
+                TeamManageAction::RenameSlug,
+            ),
+            (
+                json!({"action": "set_auto_join", "team": "acme", "auto_join_role": null}),
+                TeamManageAction::SetAutoJoin,
+            ),
         ] {
-            let refused = serde_json::from_value::<TeamManageInput>(serde_json::json!({
-                "action": action,
-                "team": "acme-eng",
-            }));
-            assert!(refused.is_err(), "{action} must not deserialize");
+            let input = serde_json::from_value::<TeamManageInput>(value.clone())
+                .unwrap_or_else(|e| panic!("{value}: {e}"));
+            assert_eq!(input.action, action, "{value}");
         }
+        let input = serde_json::from_value::<TeamManageInput>(json!({
+            "action": "reparent", "team": "acme", "from": "+org", "to": "+eng",
+        }))
+        .unwrap();
+        assert_eq!(
+            (input.from.as_deref(), input.to.as_deref()),
+            (Some("+org"), Some("+eng"))
+        );
+        let read =
+            serde_json::from_value::<TeamReadInput>(json!({"view": "detail", "team": "+acme"}))
+                .unwrap();
+        assert_eq!(read.view, TeamReadView::Detail);
+        assert!(serde_json::from_value::<TeamManageInput>(json!({"action": "transfer"})).is_err());
+    }
+
+    /// A bare 403 on a non-leave act names the authority it lacks, not leaving.
+    #[test]
+    fn a_bare_refusal_names_the_act() {
+        let refused = map_team_err("team_manage attach", ClientError::Forbidden);
+        assert_eq!(refused.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        assert!(refused
+            .message
+            .starts_with("team_manage attach was refused"));
+        assert!(!refused.message.contains("leave"), "{refused:?}");
     }
 
     #[test]

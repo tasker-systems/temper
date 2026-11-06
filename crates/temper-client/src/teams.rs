@@ -13,7 +13,9 @@ use temper_core::types::reassign::{
     BulkReassignAck, BulkReassignRequest, RemoveMemberOutcome, ResidualOwnedReach,
 };
 use temper_core::types::team::{
-    AddMemberRequest, ChangeRoleRequest, TeamCreateRequest, TeamDetail, TeamMemberRow, TeamRow,
+    AddMemberRequest, AttachChildOutcome, ChangeRoleRequest, RenameTeamSlugOutcome,
+    RenameTeamSlugRequest, ReparentOutcome, ReparentRequest, RestoreTeamOutcome,
+    SetAutoJoinOutcome, SetAutoJoinRequest, TeamCreateRequest, TeamDetail, TeamMemberRow, TeamRow,
     TeamUpdateRequest,
 };
 
@@ -121,6 +123,71 @@ impl<'a> TeamsClient<'a> {
             .send(&op.method(), &path, req, token.as_deref())
             .await?;
         Ok(())
+    }
+
+    /// PUT /api/teams/{id}/children/{child_id} — attach a child team under this team (a manager
+    /// of both; a temper-system or gating parent, or an auto-join child, a system admin).
+    pub async fn attach_child(&self, team_id: Uuid, child_id: Uuid) -> Result<AttachChildOutcome> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::ATTACH_CHILD_TEAM;
+        let path = op.path(&[&team_id, &child_id])?;
+        let req = self.http.request(op, &path);
+        self.http
+            .send_json(&op.method(), &path, req, token.as_deref())
+            .await
+    }
+
+    /// POST /api/teams/{id}/reparent — move this team from one parent to another in one act.
+    pub async fn reparent(&self, team_id: Uuid, body: &ReparentRequest) -> Result<ReparentOutcome> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::REPARENT_TEAM;
+        let path = op.path(&[&team_id])?;
+        let req = self.http.request(op, &path).json(body);
+        self.http
+            .send_json(&op.method(), &path, req, token.as_deref())
+            .await
+    }
+
+    /// POST /api/teams/{id}/restore — restore a soft-deleted team (its owner, or a system admin).
+    pub async fn restore(&self, team_id: Uuid) -> Result<RestoreTeamOutcome> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::RESTORE_TEAM;
+        let path = op.path(&[&team_id])?;
+        let req = self.http.request(op, &path);
+        self.http
+            .send_json(&op.method(), &path, req, token.as_deref())
+            .await
+    }
+
+    /// POST /api/teams/{id}/rename-slug — change a team's slug. `+old/...` refs stop resolving.
+    pub async fn rename_slug(
+        &self,
+        team_id: Uuid,
+        body: &RenameTeamSlugRequest,
+    ) -> Result<RenameTeamSlugOutcome> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::RENAME_TEAM_SLUG;
+        let path = op.path(&[&team_id])?;
+        let req = self.http.request(op, &path).json(body);
+        self.http
+            .send_json(&op.method(), &path, req, token.as_deref())
+            .await
+    }
+
+    /// PUT /api/teams/{id}/auto-join — set, change or clear a team's auto-join role (a system
+    /// admin).
+    pub async fn set_auto_join(
+        &self,
+        team_id: Uuid,
+        body: &SetAutoJoinRequest,
+    ) -> Result<SetAutoJoinOutcome> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::SET_TEAM_AUTO_JOIN;
+        let path = op.path(&[&team_id])?;
+        let req = self.http.request(op, &path).json(body);
+        self.http
+            .send_json(&op.method(), &path, req, token.as_deref())
+            .await
     }
 
     /// PATCH /api/teams/{id}/members/{profile_id} — change a member's role.

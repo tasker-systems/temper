@@ -23,6 +23,7 @@ from typing import Any, ClassVar, Dict, List, Optional
 from uuid import UUID
 from temper.generated.models.team_child_ref import TeamChildRef
 from temper.generated.models.team_member_detail import TeamMemberDetail
+from temper.generated.models.team_ref import TeamRef
 from temper.generated.models.team_role import TeamRole
 from typing import Optional, Set
 from typing_extensions import Self
@@ -39,8 +40,9 @@ class TeamDetail(BaseModel):
     id: UUID
     members: List[TeamMemberDetail]
     name: StrictStr
+    parents: Optional[List[TeamRef]] = Field(default=None, description="The team's live parent teams, for every member of this team (any role) and for system admins (team DAG doors D9, ruling R2 as amended). A member already reads everything attached to these teams, so their names disclose nothing new; a child's manager needs them to detach or move it. Deliberately not symmetrical with `children`, which stays managers-only.")
     slug: StrictStr
-    __properties: ClassVar[List[str]] = ["auto_join_role", "children", "created", "description", "id", "members", "name", "slug"]
+    __properties: ClassVar[List[str]] = ["auto_join_role", "children", "created", "description", "id", "members", "name", "parents", "slug"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -95,6 +97,13 @@ class TeamDetail(BaseModel):
                 if _item_members:
                     _items.append(_item_members.to_dict())
             _dict['members'] = _items
+        # override the default output from pydantic by calling `to_dict()` of each item in parents (list)
+        _items = []
+        if self.parents:
+            for _item_parents in self.parents:
+                if _item_parents:
+                    _items.append(_item_parents.to_dict())
+            _dict['parents'] = _items
         # set to None if auto_join_role (nullable) is None
         # and model_fields_set contains the field
         if self.auto_join_role is None and "auto_join_role" in self.model_fields_set:
@@ -124,6 +133,7 @@ class TeamDetail(BaseModel):
             "id": obj.get("id"),
             "members": [TeamMemberDetail.from_dict(_item) for _item in obj["members"]] if obj.get("members") is not None else None,
             "name": obj.get("name"),
+            "parents": [TeamRef.from_dict(_item) for _item in obj["parents"]] if obj.get("parents") is not None else None,
             "slug": obj.get("slug")
         })
         return _obj

@@ -65,6 +65,7 @@ async fn invitee_sees_own_pending_invitation(pool: sqlx::PgPool) {
             slug: "invitee-list-team".to_owned(),
             name: None,
             parent: None,
+            parents: None,
             auto_join_role: None,
         })
         .await

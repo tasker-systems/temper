@@ -99,7 +99,7 @@ async fn every_tool_says_whether_it_writes() {
         "update_resource",
         "update_resource_meta",
     ];
-    const READ_ONLY: [&str; 22] = [
+    const READ_ONLY: [&str; 23] = [
         "ask_data_artifacts",
         "blob_read",
         "cogmap_list",
@@ -122,6 +122,7 @@ async fn every_tool_says_whether_it_writes() {
         "run_query",
         "search",
         "steward_ingest_delta",
+        "team_read",
     ];
     let advertised = tools_list(&open()).await;
     let mut read_only_tools = Vec::new();

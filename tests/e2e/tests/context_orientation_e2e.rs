@@ -336,6 +336,7 @@ async fn temper_context_shape_refuses_through_the_resolver(pool: sqlx::PgPool) {
             slug: "cli-resolve-team".to_owned(),
             name: None,
             parent: None,
+            parents: None,
             auto_join_role: None,
         })
         .await

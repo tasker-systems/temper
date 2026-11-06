@@ -14,13 +14,17 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # Request body for `POST /api/teams`.  `parent` is an optional team ref (`+slug` or bare `slug`); when present the new team is created as a child in `kb_teams_parents` and the caller must be `owner`/`maintainer` on the parent. `auto_join_role` is admin-gated.
+  # Request body for `POST /api/teams`.  `parent` is an optional team ref (`+slug`, bare `slug`, or a team UUID); when present the new team is created as a child in `kb_teams_parents` and the caller must be `owner`/`maintainer` on the parent. `parents` is the several-parent form (team DAG doors D4): each is checked exactly as `parent` is. Send one or the other, not both. `auto_join_role` is admin-gated.
   class TeamCreateRequest < ApiModelBase
     attr_accessor :auto_join_role
 
     attr_accessor :name
 
+    # One parent team ref: the one-element form of `parents`.
     attr_accessor :parent
+
+    # Several parent team refs (at most 16; duplicates collapse). Mutually exclusive with `parent`.
+    attr_accessor :parents
 
     attr_accessor :slug
 
@@ -52,6 +56,7 @@ module Temper::Generated
         :'auto_join_role' => :'auto_join_role',
         :'name' => :'name',
         :'parent' => :'parent',
+        :'parents' => :'parents',
         :'slug' => :'slug'
       }
     end
@@ -72,6 +77,7 @@ module Temper::Generated
         :'auto_join_role' => :'TeamRole',
         :'name' => :'String',
         :'parent' => :'String',
+        :'parents' => :'Array<String>',
         :'slug' => :'String'
       }
     end
@@ -82,6 +88,7 @@ module Temper::Generated
         :'auto_join_role',
         :'name',
         :'parent',
+        :'parents',
       ])
     end
 
@@ -111,6 +118,12 @@ module Temper::Generated
 
       if attributes.key?(:'parent')
         self.parent = attributes[:'parent']
+      end
+
+      if attributes.key?(:'parents')
+        if (value = attributes[:'parents']).is_a?(Array)
+          self.parents = value
+        end
       end
 
       if attributes.key?(:'slug')
@@ -158,6 +171,7 @@ module Temper::Generated
           auto_join_role == o.auto_join_role &&
           name == o.name &&
           parent == o.parent &&
+          parents == o.parents &&
           slug == o.slug
     end
 
@@ -170,7 +184,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [auto_join_role, name, parent, slug].hash
+      [auto_join_role, name, parent, parents, slug].hash
     end
 
     # Builds the object from hash

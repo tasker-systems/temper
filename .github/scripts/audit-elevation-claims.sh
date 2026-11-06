@@ -480,6 +480,38 @@ current_gates() {
 # standing (`standing_service::judge_and_apply_conn`), and refused with a 409 when illegal. That
 # narrows the acts' effect, never who may take them. `access_service.rs` stays 11; no fingerprint
 # moved.
+# REVIEWED 2026-11-06 (team DAG and lifecycle doors, temper-artifacts
+# specs/2026-11-06-team-dag-and-lifecycle-doors-design.md) — `ledger_subject` 89ab4129fe64 ->
+# current: `readable_event_types`' team arm, which admits a manager of the subject team (C12),
+# now also pushes `team_lifecycle_changed` beside the membership and parent-link families. Who
+# reads moved nowhere; only what they read grew. The two claims in `handlers/admin_ledger.rs` were
+# re-read: the subject-axis description now names the lifecycle acts; the module doc names no
+# family. The five in `openapi.rs` name the ledger generically ("the act families the caller may
+# read") and still hold. Claim counts: `handlers/teams.rs` 10 -> 20, the five new doors' route docs
+# (attach and reparent: a manager of both sides, root/gating parent or auto-join child a system
+# admin's; restore: the owner or a system admin; rename-slug: as update; auto-join: a system admin),
+# each matching its `team_service` gate and pinned in `team_dag_doors_test`. `team_service.rs`
+# 27 -> 38, the same doors' service docs plus the widened detach (a manager of either side, R1).
+# `temper-core/src/types/team.rs` 4 -> 5: `SetAutoJoinRequest` says "system admin only", which
+# the handler's `require_system_admin` enforces.
+# REVIEWED 2026-11-06 (same doors, Phase 7: team management on MCP for people, ruling R7
+# reversed) — `temper-mcp/src/service.rs` 4 -> 6 and new `tools/teams.rs` 4, unbound (`-`). The
+# `team_manage` and `team_read` descriptions and the module doc restate the API's gates (a manager
+# of both sides attaches; root/gating parents, auto-join children and `set_auto_join` are a system
+# admin's; children show to managers) and say that the API decides and a machine is refused at the
+# route. The tool checks none of it: every action relays on the caller's bearer, and
+# `mcp_team_manage_e2e` drives a machine token through each write to the API's refusal sentence.
+# REVIEWED 2026-11-06 (same doors, Phase 8: the CLI) — `temper-cli/src/cli.rs` 23 -> 27 and
+# `commands/team.rs` 7 -> 10, unbound (`-`): the help and doc text of `team attach` (a manager of
+# both; root/gating parent or auto-join child a system admin's), `team reparent`, `team restore`
+# (owner or system admin), `team rename-slug` (owner/maintainer; root/gating a system admin),
+# `admin team auto-join`, and `team detach` widened to a manager of either side. Each restates the
+# `team_service` gate it reaches; the CLI decides nothing.
+# REVIEWED 2026-11-06 (same doors, review fixes) — `handlers/teams.rs` 20 -> 21 and
+# `team_service.rs` 38 -> 39: the attach, detach, reparent and restore texts now say that the root
+# or gating team as the CHILD, and an auto-join team on restore, are a system admin's; the gates
+# (`attach_precheck`/`attach_authority`, `detach_authority`, `restore_authority`) now enforce
+# exactly that, pinned in `team_dag_doors_test`'s review-fix tests.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -498,9 +530,9 @@ claim crates/temper-api/src/handlers/resource_erasure.rs 5 is_system_admin
 claim crates/temper-api/src/handlers/resources.rs 2 grant
 claim crates/temper-api/src/handlers/slack_disconnect.rs 1 -
 claim crates/temper-api/src/handlers/subscriptions.rs 7 subscription
-claim crates/temper-api/src/handlers/teams.rs 10 team_membership,is_system_admin
+claim crates/temper-api/src/handlers/teams.rs 21 team_membership,is_system_admin
 claim crates/temper-api/src/openapi.rs 5 is_system_admin,machine,connection,subscription,read_gates,grant,ledger_subject
-claim crates/temper-cli/src/cli.rs 23 team_membership
+claim crates/temper-cli/src/cli.rs 27 team_membership
 claim crates/temper-cli/src/commands/admin.rs 4 -
 claim crates/temper-cli/src/commands/admin_connection.rs 2 connection
 claim crates/temper-cli/src/commands/admin_erasure.rs 1 -
@@ -510,7 +542,7 @@ claim crates/temper-cli/src/commands/admin_slack.rs 1 -
 claim crates/temper-cli/src/commands/admin_subscription.rs 2 subscription
 claim crates/temper-cli/src/commands/cogmap.rs 3 two_sided,is_system_admin
 claim crates/temper-cli/src/commands/context_cmd.rs 2 context_admin
-claim crates/temper-cli/src/commands/team.rs 7 team_membership
+claim crates/temper-cli/src/commands/team.rs 10 team_membership
 claim crates/temper-cli/src/commands/warmup.rs 1 is_system_admin
 claim crates/temper-core/src/types/admin.rs 5 is_system_admin,read_gates
 claim crates/temper-core/src/types/connection.rs 2 machine,connection
@@ -518,11 +550,12 @@ claim crates/temper-core/src/types/erasure.rs 3 is_system_admin
 claim crates/temper-core/src/types/invitation.rs 3 team_membership
 claim crates/temper-core/src/types/machine.rs 1 machine
 claim crates/temper-core/src/types/subscription.rs 1 subscription
-claim crates/temper-core/src/types/team.rs 4 team_membership,is_system_admin
-claim crates/temper-mcp/src/service.rs 4 -
+claim crates/temper-core/src/types/team.rs 5 team_membership,is_system_admin
+claim crates/temper-mcp/src/service.rs 6 -
 claim crates/temper-mcp/src/tools/cognitive_maps.rs 1 is_system_admin
 claim crates/temper-mcp/src/tools/contexts.rs 2 context_admin,two_sided
 claim crates/temper-mcp/src/tools/reblock.rs 3 -
+claim crates/temper-mcp/src/tools/teams.rs 4 -
 claim crates/temper-services/src/services/access_service.rs 11 is_system_admin
 claim crates/temper-services/src/services/admin_directory_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/cogmap_service.rs 4 two_sided
@@ -541,14 +574,14 @@ claim crates/temper-services/src/services/slack_disconnect_service.rs 2 -
 claim crates/temper-services/src/services/standing_service.rs 2 -
 claim crates/temper-services/src/services/subscription_service.rs 9 subscription
 claim crates/temper-services/src/services/subscription_test_support.rs 1 subscription
-claim crates/temper-services/src/services/team_service.rs 27 require_manage_on_team,can_manage,team_membership,is_system_admin
+claim crates/temper-services/src/services/team_service.rs 39 require_manage_on_team,can_manage,team_membership,is_system_admin
 gate audit_gate 021f87ca4bed
 gate connection 66c36643c716
 gate context_admin b07eeb1d5289
 gate grant bccea040b6cf
 gate machine eb4042c5c963
 gate read_gates 6a6ce4847fbc
-gate ledger_subject 89ab4129fe64
+gate ledger_subject 065f24b99bbb
 gate subscription f45d76e9be69
 gate two_sided 92995b75cab8
 gate reconcile_regime 5339d74ce2eb

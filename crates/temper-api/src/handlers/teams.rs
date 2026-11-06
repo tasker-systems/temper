@@ -11,7 +11,9 @@ use crate::middleware::auth::{AnyPrincipal, AuthUser};
 use temper_core::types::ids::ProfileId;
 use temper_core::types::reassign::RemoveMemberOutcome;
 use temper_core::types::team::{
-    AddMemberRequest, ChangeRoleRequest, TeamCreateRequest, TeamDetail, TeamMemberRow, TeamRow,
+    AddMemberRequest, AttachChildOutcome, ChangeRoleRequest, RenameTeamSlugOutcome,
+    RenameTeamSlugRequest, ReparentOutcome, ReparentRequest, RestoreTeamOutcome,
+    SetAutoJoinOutcome, SetAutoJoinRequest, TeamCreateRequest, TeamDetail, TeamMemberRow, TeamRow,
     TeamUpdateRequest,
 };
 use temper_services::error::ApiResult;
@@ -219,7 +221,8 @@ pub async fn change_role(
 /// Detach a child team from this team
 ///
 /// Removes the parent link, so the child's members stop reaching what is attached to this team and
-/// its ancestors. The child and its roster survive; only this link is cut. Recorded on the admin
+/// its ancestors. The child and its roster survive; only this link is cut. A manager of the parent
+/// or of the child may detach (a child's managers may leave any parent). Recorded on the admin
 /// ledger as `team_parent_link_changed`.
 #[utoipa::path(
     delete,
@@ -233,8 +236,8 @@ pub async fn change_role(
     security(("bearer_auth" = [])),
     responses(
         (status = 204, description = "Child detached"),
-        (status = 403, description = "Forbidden: the caller is not an owner or maintainer of the parent team, or the parent is temper-system or the gating team and the caller is not a system admin, or the child is a personal team (nobody detaches one); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
-        (status = 404, description = "That team is not a child of this team; told only to a caller who may manage the parent"),
+        (status = 403, description = "Forbidden: the caller manages neither the child team nor the parent team (neither arm acts on temper-system or the gating team) and is not a system admin, or the child is a personal team (nobody detaches one); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 404, description = "That team is not a child of this team; told only to a caller who may detach it"),
     )
 )]
 pub async fn detach_child(
@@ -244,4 +247,168 @@ pub async fn detach_child(
 ) -> ApiResult<StatusCode> {
     team_service::detach_child(&state.pool, &auth.0, team_id, child_id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Attach a child team under this team
+///
+/// Writes a parent link: every member of the child, at any role, then reaches everything attached
+/// to this team and its ancestors. Also the door for a second parent. The caller must manage both
+/// teams (owner or maintainer of each); attaching under temper-system or the gating team, or
+/// attaching an auto-join team as the child, is a system admin's act. Recorded on the admin ledger
+/// as `team_parent_link_changed`; a link that already exists answers `exists` and records nothing.
+#[utoipa::path(
+    put,
+    operation_id = "attach_child_team",
+    path = "/api/teams/{id}/children/{child_id}",
+    tag = "Teams",
+    params(
+        ("id" = Uuid, Path, description = "Parent team ID"),
+        ("child_id" = Uuid, Path, description = "Child team ID"),
+    ),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Linked, or the link already existed", body = AttachChildOutcome),
+        (status = 400, description = "A personal team on either side, temper-system as the child, or the team as its own parent"),
+        (status = 403, description = "Forbidden: the caller does not manage both teams, or the parent or the child is temper-system or the gating team, or the child is an auto-join team, and the caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 404, description = "Either team does not exist or is soft-deleted; told only to a caller who may manage both"),
+        (status = 409, description = "The link would make a team its own ancestor"),
+    )
+)]
+pub async fn attach_child(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((team_id, child_id)): Path<(Uuid, Uuid)>,
+) -> ApiResult<Json<AttachChildOutcome>> {
+    team_service::attach_child(&state.pool, &auth.0, team_id, child_id)
+        .await
+        .map(Json)
+}
+
+/// Move this team from one parent to another
+///
+/// One act: the new link is written before the old one is cut, so a refusal leaves the team where
+/// it was and it never holds both reaches. The caller must manage this team and the new parent;
+/// a new parent that is temper-system or the gating team, or moving an auto-join team, is a system
+/// admin's act. Both `team_parent_link_changed` records carry the returned `correlation_id`.
+#[utoipa::path(
+    post,
+    operation_id = "reparent_team",
+    path = "/api/teams/{id}/reparent",
+    tag = "Teams",
+    params(("id" = Uuid, Path, description = "Team ID (the child being moved)")),
+    security(("bearer_auth" = [])),
+    request_body = ReparentRequest,
+    responses(
+        (status = 200, description = "Moved", body = ReparentOutcome),
+        (status = 400, description = "`from` and `to` are the same team, or a structural refusal (a personal team, temper-system as the child)"),
+        (status = 403, description = "Forbidden: the caller does not manage this team, or does not manage `to` (an unknown `to` included), or `to` or this team is temper-system or the gating team, or this team is an auto-join team, and the caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 404, description = "`from` does not resolve (`to` only to a system admin), a team is soft-deleted, or `from` is not a parent of this team; told only to a caller who manages this team"),
+        (status = 409, description = "The move would make a team its own ancestor; nothing changed"),
+    )
+)]
+pub async fn reparent(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(team_id): Path<Uuid>,
+    Json(body): Json<ReparentRequest>,
+) -> ApiResult<Json<ReparentOutcome>> {
+    team_service::reparent(&state.pool, &auth.0, team_id, &body)
+        .await
+        .map(Json)
+}
+
+/// Restore a soft-deleted team
+///
+/// The inverse of delete. Every preserved row confers again: the roster, the parent links, and the
+/// children's reach through this team; the response lists all three so the restorer sees the reach
+/// they revived. The team's owner, or a system admin (temper-system and the gating team: a system
+/// admin only; a personal team: its owner only). Recorded as `team_lifecycle_changed`.
+#[utoipa::path(
+    post,
+    operation_id = "restore_team",
+    path = "/api/teams/{id}/restore",
+    tag = "Teams",
+    params(("id" = Uuid, Path, description = "Team ID")),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Restored", body = RestoreTeamOutcome),
+        (status = 403, description = "Forbidden: the caller is not the team's owner or a system admin (temper-system, the gating team or an auto-join team: not a system admin; a personal team: not its owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 404, description = "The team does not exist or is not deleted"),
+    )
+)]
+pub async fn restore(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(team_id): Path<Uuid>,
+) -> ApiResult<Json<RestoreTeamOutcome>> {
+    team_service::restore_team(&state.pool, &auth.0, team_id)
+        .await
+        .map(Json)
+}
+
+/// Set, change or clear a team's auto-join role
+///
+/// A system admin's act. With a role set, every approved profile (never a machine) is enrolled at
+/// it, and so reads everything attached to the team and to each of the `ancestors` returned.
+/// Existing memberships are never changed: not raised, not lowered, not removed. `null` stops
+/// enrolment. Refused on temper-system, the gating team and personal teams. Recorded as
+/// `team_lifecycle_changed`.
+#[utoipa::path(
+    put,
+    operation_id = "set_team_auto_join",
+    path = "/api/teams/{id}/auto-join",
+    tag = "Teams",
+    params(("id" = Uuid, Path, description = "Team ID")),
+    security(("bearer_auth" = [])),
+    request_body = SetAutoJoinRequest,
+    responses(
+        (status = 200, description = "Set, changed, cleared, or already so", body = SetAutoJoinOutcome),
+        (status = 400, description = "A role above `member`, or the team is temper-system, the gating team or a personal team"),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 404, description = "The team does not exist or is soft-deleted"),
+    )
+)]
+pub async fn set_auto_join(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(team_id): Path<Uuid>,
+    Json(body): Json<SetAutoJoinRequest>,
+) -> ApiResult<Json<SetAutoJoinOutcome>> {
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
+    team_service::set_auto_join(&state.pool, &admin, team_id, body.role)
+        .await
+        .map(Json)
+}
+
+/// Change a team's slug
+///
+/// Its own door, not a field of `PATCH`. **Addresses change:** `+old/<context>` refs stop resolving
+/// (UUID refs are unaffected), and refs stored in content are not rewritten. An owner or maintainer;
+/// temper-system and the gating team: a system admin (renaming the gating team carries the
+/// instance setting with it). Recorded as `team_lifecycle_changed`.
+#[utoipa::path(
+    post,
+    operation_id = "rename_team_slug",
+    path = "/api/teams/{id}/rename-slug",
+    tag = "Teams",
+    params(("id" = Uuid, Path, description = "Team ID")),
+    security(("bearer_auth" = [])),
+    request_body = RenameTeamSlugRequest,
+    responses(
+        (status = 200, description = "Renamed (or already so)", body = RenameTeamSlugOutcome),
+        (status = 400, description = "The slug is invalid or starts with `personal-`, or the team is temper-system or a personal team"),
+        (status = 403, description = "Forbidden: the caller is not an owner or maintainer of the team (temper-system or the gating team: not a system admin); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 404, description = "The team does not exist or is soft-deleted"),
+        (status = 409, description = "The slug is taken, by a live or a soft-deleted team"),
+    )
+)]
+pub async fn rename_slug(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(team_id): Path<Uuid>,
+    Json(body): Json<RenameTeamSlugRequest>,
+) -> ApiResult<Json<RenameTeamSlugOutcome>> {
+    team_service::rename_slug(&state.pool, &auth.0, team_id, &body)
+        .await
+        .map(Json)
 }

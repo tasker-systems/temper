@@ -22,6 +22,7 @@ Commands:
   saml          SAML provisioning: generate keys + emit the consistent env bundle and SQL (operator tooling)
   machine       Register and rotate machine (client_credentials) principals
   slack         Administer Slack account links
+  team          Administer teams: the acts only a system admin takes
   connection    Provision connections — temper's authed link to a remote system (GitHub, Linear)
   subscription  Manage subscriptions — a team/context/cogmap subscribes to a connection's events
   reembed       Re-embed chunks whose vectors were produced by an older model (the drain does the work)
@@ -972,6 +973,58 @@ Options:
       --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
       --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
   -h, --help               Print help
+```
+
+### `temper admin team`
+
+```text
+Administer teams: the acts only a system admin takes
+
+Usage: temper admin team [OPTIONS] <COMMAND>
+
+Commands:
+  auto-join  Set, change or clear a team's auto-join role
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+      --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
+      --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+      --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+      --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+  -h, --help               Print help
+```
+
+#### `temper admin team auto-join`
+
+```text
+Set, change or clear a team's auto-join role
+
+With a role set, every approved person (never a machine) is enrolled at it and reads everything attached to the team and its ancestors (listed in the output). Existing memberships are never changed. Refused on temper-system, the gating team and personal teams.
+
+Usage: temper admin team auto-join [OPTIONS] <TEAM> <ROLE>
+
+Arguments:
+  <TEAM>
+          Team slug (optionally `+`-prefixed) or UUID
+
+  <ROLE>
+          member | watcher | none (none clears it)
+
+Options:
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 ### `temper admin connection`

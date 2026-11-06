@@ -113,6 +113,7 @@ async fn invitation_invite_accept_flow(pool: sqlx::PgPool) {
             slug: "invite-team".to_owned(),
             name: None,
             parent: None,
+            parents: None,
             auto_join_role: None,
         })
         .await
@@ -239,6 +240,7 @@ async fn client_accept_and_decline_drive_the_body_carrying_routes(pool: sqlx::Pg
             slug: "client-invite-team".to_owned(),
             name: None,
             parent: None,
+            parents: None,
             auto_join_role: None,
         })
         .await

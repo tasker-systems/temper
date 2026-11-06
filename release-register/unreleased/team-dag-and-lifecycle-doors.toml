@@ -1,0 +1,56 @@
+title    = "Team DAG and lifecycle doors: attach, move, multi-parent create, restore, slug rename and an admin auto-join door"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp", "cli-stdout", "clients", "schema", "erasure-policy"]
+status   = "signal-only"
+body = '''
+Team DAG and lifecycle doors (temper-artifacts specs/2026-11-06-team-dag-and-lifecycle-doors-design.md).
+
+- PUT /api/teams/{id}/children/{child_id} attaches a child under a parent. It is also the door for
+  a second parent. The caller must manage both teams. A root or gating parent, or an auto-join
+  child, needs a system admin. Responses: 200 { outcome: linked | exists }, 400 for a structural
+  refusal, 403, 404, and 409 for a cycle. A new link is recorded as team_parent_link_changed.
+- POST /api/teams/{id}/reparent { from, to } moves a team in one act: the new link is written,
+  then the old one cut. Both team_parent_link_changed records share the returned correlation_id.
+  A refusal (400/403/404/409) changes nothing.
+- Behavioral: DELETE /api/teams/{id}/children/{child_id} now also admits a manager of the child,
+  from any parent, the gating team included (ruling R1). It previously admitted only the parent's
+  managers or a system admin. A personal team's link under the root is still refused to everyone.
+- POST /api/teams accepts `parents` (at most 16 team refs; duplicates collapse) beside `parent`.
+  Sending both is 400. Each parent is checked as `parent` always was.
+- POST /api/teams/{id}/restore restores a soft-deleted team. Allowed for its owner, or a system
+  admin (a root or gating team needs an admin; a personal team, its owner). The response lists the
+  revived parents, children and roster.
+- POST /api/teams/{id}/rename-slug changes a team's slug, and the gating setting follows the
+  gating team. 409 on a slug held by any team, live or deleted. `+old/...` refs stop resolving.
+- PUT /api/teams/{id}/auto-join sets, changes or clears auto_join_role. System admin only. Existing
+  memberships are never changed. The response lists the team's live ancestors.
+- Behavioral: new team slugs (create and rename) must match ^[a-z0-9][a-z0-9-]{0,62}$ after
+  lowercasing (ruling R4). A create with an uppercase slug now stores it lowercased, and one with
+  any other character is 400. Existing slugs are untouched.
+- Erasure policy: team_lifecycle_changed's from/to are declared out-of-scope for resource erasure
+  (team grain, not resource text).
+- TeamDetail gains `parents: TeamRef[]` (the live parents), shown to every member and to system
+  admins. `children` still shows only to managers and keeps its TeamChildRef schema. TeamRef is a
+  new schema of the same shape.
+- New admin event type team_lifecycle_changed (migration 20261118000010), written by create_team
+  and delete_team. Behavioral: a team's managers now see these records on the team's admin-ledger
+  page.
+
+- MCP: `team_manage` gains create, update, delete, restore, add_member, change_role,
+  remove_member, attach, detach, reparent, rename_slug and set_auto_join beside `leave`. A new
+  read tool, `team_read`, offers views list and detail (42 tools). A machine principal's call is
+  refused by the API.
+- CLI: `temper team attach`, `team reparent`, `team restore`, `team rename-slug` (which prints an
+  address-change warning) and `temper admin team auto-join`. `team create --parent` is
+  repeatable. `team show` output includes `parents`.
+
+- The root or the gating team as the CHILD of an attach or reparent is a system admin's act. A
+  child-side detach does not act on them. Restoring an auto-join team is a system admin's act.
+  `parents` on team detail is shown to members and admins only, not to an ancestor's manager.
+  Reparent answers an unknown `to` with 403, not 404.
+
+Who observes it: SDK users, through new operations and models and one new field. Admin-ledger
+readers see the new event type. No existing shape changes.
+Release relevance: signal-only.
+'''

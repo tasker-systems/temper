@@ -2,9 +2,10 @@ use clap::Parser;
 use temper_cli::cli::{
     AdminAction, AdminConnectionAction, AdminErasureAction, AdminMachineAction,
     AdminProfilesAction, AdminRequestsAction, AdminReviewsAction, AdminSamlAction,
-    AdminSlackAction, AdminSubscriptionAction, AuthAction, Cli, CogmapCmd, Commands, ConfigAction,
-    ContextAction, DataArtifactAction, InvocationCmd, MemoryAction, ResourceAction,
-    ResourceMetaAction, SchemaAction, SkillAction, SlackAction, StewardCmd, TeamAction,
+    AdminSlackAction, AdminSubscriptionAction, AdminTeamAction, AuthAction, Cli, CogmapCmd,
+    Commands, ConfigAction, ContextAction, DataArtifactAction, InvocationCmd, MemoryAction,
+    ResourceAction, ResourceMetaAction, SchemaAction, SkillAction, SlackAction, StewardCmd,
+    TeamAction,
 };
 use temper_cli::commands;
 use temper_cli::format::OutputFormat;
@@ -889,6 +890,51 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     temper_cli::commands::team::leave_remote(client, &team, output_format).await
                 })
             }),
+            TeamAction::Attach { parent, child } => {
+                temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::team::attach_remote(
+                            client,
+                            &parent,
+                            &child,
+                            output_format,
+                        )
+                        .await
+                    })
+                })
+            }
+            TeamAction::Reparent { team, from, to } => {
+                temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::team::reparent_remote(
+                            client,
+                            &team,
+                            &from,
+                            &to,
+                            output_format,
+                        )
+                        .await
+                    })
+                })
+            }
+            TeamAction::Restore { team } => temper_cli::actions::runtime::with_client(|client| {
+                Box::pin(async move {
+                    temper_cli::commands::team::restore_remote(client, &team, output_format).await
+                })
+            }),
+            TeamAction::RenameSlug { team, slug } => {
+                temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::team::rename_slug_remote(
+                            client,
+                            &team,
+                            &slug,
+                            output_format,
+                        )
+                        .await
+                    })
+                })
+            }
             TeamAction::Detach { parent, child } => {
                 temper_cli::actions::runtime::with_client(|client| {
                     Box::pin(async move {
@@ -977,7 +1023,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         client,
                         &slug,
                         name.as_deref(),
-                        parent.as_deref(),
+                        &parent,
                         auto_join_role.as_deref(),
                         output_format,
                     )
@@ -1446,6 +1492,21 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                             temper_cli::commands::admin_machine::revoke_remote(
                                 client,
                                 &id,
+                                output_format,
+                            )
+                            .await
+                        })
+                    })
+                }
+            },
+            AdminAction::Team { action } => match action {
+                AdminTeamAction::AutoJoin { team, role } => {
+                    temper_cli::actions::runtime::with_client(|client| {
+                        Box::pin(async move {
+                            temper_cli::commands::team::set_auto_join_remote(
+                                client,
+                                &team,
+                                &role,
                                 output_format,
                             )
                             .await

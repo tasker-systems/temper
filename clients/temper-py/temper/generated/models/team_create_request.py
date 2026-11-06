@@ -17,7 +17,7 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional
 from temper.generated.models.team_role import TeamRole
 from typing import Optional, Set
@@ -26,13 +26,14 @@ from pydantic_core import to_jsonable_python
 
 class TeamCreateRequest(BaseModel):
     """
-    Request body for `POST /api/teams`.  `parent` is an optional team ref (`+slug` or bare `slug`); when present the new team is created as a child in `kb_teams_parents` and the caller must be `owner`/`maintainer` on the parent. `auto_join_role` is admin-gated.
+    Request body for `POST /api/teams`.  `parent` is an optional team ref (`+slug`, bare `slug`, or a team UUID); when present the new team is created as a child in `kb_teams_parents` and the caller must be `owner`/`maintainer` on the parent. `parents` is the several-parent form (team DAG doors D4): each is checked exactly as `parent` is. Send one or the other, not both. `auto_join_role` is admin-gated.
     """ # noqa: E501
     auto_join_role: Optional[TeamRole] = None
     name: Optional[StrictStr] = None
-    parent: Optional[StrictStr] = None
+    parent: Optional[StrictStr] = Field(default=None, description="One parent team ref: the one-element form of `parents`.")
+    parents: Optional[List[StrictStr]] = Field(default=None, description="Several parent team refs (at most 16; duplicates collapse). Mutually exclusive with `parent`.")
     slug: StrictStr
-    __properties: ClassVar[List[str]] = ["auto_join_role", "name", "parent", "slug"]
+    __properties: ClassVar[List[str]] = ["auto_join_role", "name", "parent", "parents", "slug"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -88,6 +89,11 @@ class TeamCreateRequest(BaseModel):
         if self.parent is None and "parent" in self.model_fields_set:
             _dict['parent'] = None
 
+        # set to None if parents (nullable) is None
+        # and model_fields_set contains the field
+        if self.parents is None and "parents" in self.model_fields_set:
+            _dict['parents'] = None
+
         return _dict
 
     @classmethod
@@ -103,6 +109,7 @@ class TeamCreateRequest(BaseModel):
             "auto_join_role": obj.get("auto_join_role"),
             "name": obj.get("name"),
             "parent": obj.get("parent"),
+            "parents": obj.get("parents"),
             "slug": obj.get("slug")
         })
         return _obj

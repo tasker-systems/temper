@@ -31,6 +31,9 @@ module Temper::Generated
 
     attr_accessor :name
 
+    # The team's live parent teams, for every member of this team (any role) and for system admins (team DAG doors D9, ruling R2 as amended). A member already reads everything attached to these teams, so their names disclose nothing new; a child's manager needs them to detach or move it. Deliberately not symmetrical with `children`, which stays managers-only.
+    attr_accessor :parents
+
     attr_accessor :slug
 
     class EnumAttributeValidator
@@ -65,6 +68,7 @@ module Temper::Generated
         :'id' => :'id',
         :'members' => :'members',
         :'name' => :'name',
+        :'parents' => :'parents',
         :'slug' => :'slug'
       }
     end
@@ -89,6 +93,7 @@ module Temper::Generated
         :'id' => :'String',
         :'members' => :'Array<TeamMemberDetail>',
         :'name' => :'String',
+        :'parents' => :'Array<TeamRef>',
         :'slug' => :'String'
       }
     end
@@ -155,6 +160,12 @@ module Temper::Generated
         self.name = attributes[:'name']
       else
         self.name = nil
+      end
+
+      if attributes.key?(:'parents')
+        if (value = attributes[:'parents']).is_a?(Array)
+          self.parents = value
+        end
       end
 
       if attributes.key?(:'slug')
@@ -266,6 +277,7 @@ module Temper::Generated
           id == o.id &&
           members == o.members &&
           name == o.name &&
+          parents == o.parents &&
           slug == o.slug
     end
 
@@ -278,7 +290,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [auto_join_role, children, created, description, id, members, name, slug].hash
+      [auto_join_role, children, created, description, id, members, name, parents, slug].hash
     end
 
     # Builds the object from hash

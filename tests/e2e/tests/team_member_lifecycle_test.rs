@@ -115,6 +115,7 @@ async fn team_member_lifecycle_matrix(pool: sqlx::PgPool) {
             slug: "lifecycle-team".to_owned(),
             name: None,
             parent: None,
+            parents: None,
             auto_join_role: None,
         })
         .await

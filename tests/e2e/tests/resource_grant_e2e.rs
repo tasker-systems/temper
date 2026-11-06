@@ -143,6 +143,7 @@ async fn owner_grants_resource_to_team_via_cli_and_revokes(pool: sqlx::PgPool) {
             slug: "grant-team".to_owned(),
             name: None,
             parent: None,
+            parents: None,
             auto_join_role: None,
         })
         .await

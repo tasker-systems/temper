@@ -94,10 +94,46 @@ ledger records when that happens, for a system admin to repair.
 
 ## Nested teams
 
-A team can be nested under a parent (`--parent <ref>` at creation). Child teams inherit the
-parent's read reach while the parent stays active. This is how a large organisation models
-sub-teams without granting write across boundaries: the child reads up, the parent does not
-write down.
+Teams form a tree, and a team may have more than one parent. **Reads flow down:** every member
+of a child team, at any role, reads everything attached to each of its live ancestors. A parent
+reads nothing of its children. This is how a large organisation models sub-teams without granting
+write across boundaries. It is also why the leaf-most, most private team stays closed by default.
+Opening it is a deliberate act: placing a team under a parent hands the parent's material to the
+child's whole roster.
+
+| Act | Command | Who |
+|---|---|---|
+| Create under parents | `temper team create <slug> --parent <ref> [--parent <ref>…]` | a manager (owner or maintainer) of each parent |
+| Attach (or add a second parent) | `temper team attach <parent> <child>` | a manager of **both** teams |
+| Move to another parent | `temper team reparent <team> --from <p> --to <q>` | a manager of the team and of the new parent |
+| Detach | `temper team detach <parent> <child>` | a manager of either side |
+| See the links | `temper team show <team>` | `parents`: every member; `children`: managers only |
+
+A move is one act. The new link is written before the old one is cut, so a refusal (a cycle, for
+instance) leaves the team where it was. Placing a team under temper-system or the gating team, or
+attaching an auto-join team as a child, is a system admin's act. An auto-join team's roster is
+every approved person, so attaching one hands the parent's material to the whole instance. A
+watcher pool for a team is an auto-join watcher team attached **under** it
+(`temper admin team auto-join <team> watcher`).
+
+Every link and unlink is recorded on the admin ledger, readable by the parent's managers.
+
+## Lifecycle: delete, restore, rename
+
+- `temper team delete <team>` soft-deletes a team (its owner, or a system admin). Every row is
+  kept, and a deleted team confers nothing: its children stop reaching anything above it.
+- `temper team restore <team-uuid>` is the inverse, with the same authority. Every preserved
+  membership, parent link and child's reach confers again. The output lists the parents, children
+  and roster it revived.
+- `temper team rename-slug <team> <slug>` changes a team's slug (an owner or maintainer). Every
+  `+old-slug/...` address stops resolving. UUID refs are unaffected, and refs written in content
+  are not rewritten. New slugs are `a-z`, `0-9` and `-`, start with a letter or digit, and are at
+  most 63 characters.
+- `temper admin team auto-join <team> <member|watcher|none>` (a system admin) sets or clears an
+  auto-join pool. Existing memberships are never changed.
+
+Each of these acts is recorded on the admin ledger as `team_lifecycle_changed`, as is a team's
+creation.
 
 ## What membership grants — and what it does not
 
@@ -106,7 +142,7 @@ owning team. A member of the team that owns a context can write into it — no a
 To share one of your own contexts with a team, you use `context share` — which grants the team
 **read** access, not write. The only path to shared authorship is transferring ownership.
 
-This is deliberate: read inherits up the team tree so that joining a team immediately gives
+This is deliberate: read inherits down the team tree, from each ancestor to the teams beneath it, so that joining a team immediately gives
 access to the shared body of work, but reach granted to a team is read-only — a team that
 does not own a context never writes into it.
 

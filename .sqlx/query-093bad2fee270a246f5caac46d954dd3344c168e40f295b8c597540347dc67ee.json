@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT _admin_team_parent_link_write($1, $2, 'unlink', $3, $4) AS \"outcome!\"",
+  "query": "SELECT _admin_team_parent_link_write($1, $2, 'link', $3, $4, $5) AS \"outcome!\"",
   "describe": {
     "columns": [
       {
@@ -14,6 +14,7 @@
         "Uuid",
         "Uuid",
         "Uuid",
+        "Uuid",
         "Uuid"
       ]
     },
@@ -21,5 +22,5 @@
       null
     ]
   },
-  "hash": "fada0c431a3213bee209075b9627a9ea0cf32c83c1fdcedd8cca983a22f5884a"
+  "hash": "093bad2fee270a246f5caac46d954dd3344c168e40f295b8c597540347dc67ee"
 }

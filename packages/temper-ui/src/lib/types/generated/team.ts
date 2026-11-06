@@ -6,23 +6,98 @@
 export type AddMemberRequest = { profile_id: string, role: TeamRole, };
 
 /**
+ * Response body for `PUT /api/teams/{id}/children/{child_id}`.
+ */
+export type AttachChildOutcome = { outcome: AttachOutcome, };
+
+/**
+ * What `PUT /api/teams/{id}/children/{child_id}` did (team DAG doors D1).
+ */
+export type AttachOutcome = "linked" | "exists";
+
+/**
  * Request body for `PATCH /api/teams/{id}/members/{profile_id}`.
  */
 export type ChangeRoleRequest = { role: TeamRole, };
 
 /**
- * A direct child team, as listed on its parent's [`TeamDetail`].
+ * Response body for `POST /api/teams/{id}/rename-slug`. Addresses change: `+from/...` refs stop
+ * resolving (UUID refs are unaffected), and refs stored in content are not rewritten.
+ */
+export type RenameTeamSlugOutcome = { team_id: string, from: string, to: string, };
+
+/**
+ * Request body for `POST /api/teams/{id}/rename-slug` (team DAG doors D7). The new slug is
+ * lowercased, then must match `^[a-z0-9][a-z0-9-]{0,62}$` and must not start with `personal-`.
+ */
+export type RenameTeamSlugRequest = { slug: string, };
+
+/**
+ * Response body for `POST /api/teams/{id}/reparent`. Both `team_parent_link_changed` records of the
+ * move carry `correlation_id`, so the ledger shows one move rather than two unrelated acts.
+ */
+export type ReparentOutcome = { team: TeamRef, from: TeamRef, to: TeamRef, correlation_id: string, };
+
+/**
+ * Request body for `POST /api/teams/{id}/reparent` (team DAG doors D3): move the team from one
+ * parent to another in one act. Each is a team ref: `+slug`, a bare slug, a team UUID, or a
+ * decorated `slug-<uuid>` ref.
+ */
+export type ReparentRequest = { 
+/**
+ * The current parent to leave.
+ */
+from: string, 
+/**
+ * The new parent to join.
+ */
+to: string, };
+
+/**
+ * Response body for `POST /api/teams/{id}/restore` (team DAG doors D6). Restoring revives every
+ * preserved row's reach: the roster (`members`, exactly as it was at deletion), the links to the
+ * live `parents`, and the live `children` that reach through the team again.
+ */
+export type RestoreTeamOutcome = { team: TeamRow, parents: Array<TeamRef>, children: Array<TeamRef>, members: Array<TeamMemberDetail>, };
+
+/**
+ * Response body for `PUT /api/teams/{id}/auto-join`. `ancestors` are the team's live ancestors:
+ * with auto-join set, every approved profile reads everything attached to each of them, so the
+ * admin sees exactly what the change opened.
+ */
+export type SetAutoJoinOutcome = { team: TeamRow, ancestors: Array<TeamRef>, };
+
+/**
+ * Request body for `PUT /api/teams/{id}/auto-join` (team DAG doors D5, system admin only):
+ * `member` or `watcher` sets the role every approved profile is enrolled at; `null` clears it.
+ */
+export type SetAutoJoinRequest = { role: TeamRole | null, };
+
+/**
+ * A direct child team, as listed on its parent's [`TeamDetail`]. The same shape as [`TeamRef`],
+ * which generalises it (team DAG doors D9); it stays its own type, and so its own schema, for one
+ * release so the SDK class of that name keeps serving `children`. New fields use [`TeamRef`].
  */
 export type TeamChildRef = { id: string, slug: string, name: string, };
 
 /**
  * Request body for `POST /api/teams`.
  *
- * `parent` is an optional team ref (`+slug` or bare `slug`); when present the
- * new team is created as a child in `kb_teams_parents` and the caller must be
- * `owner`/`maintainer` on the parent. `auto_join_role` is admin-gated.
+ * `parent` is an optional team ref (`+slug`, bare `slug`, or a team UUID); when present the new
+ * team is created as a child in `kb_teams_parents` and the caller must be `owner`/`maintainer` on
+ * the parent. `parents` is the several-parent form (team DAG doors D4): each is checked exactly as
+ * `parent` is. Send one or the other, not both. `auto_join_role` is admin-gated.
  */
-export type TeamCreateRequest = { slug: string, name: string | null, parent: string | null, auto_join_role: TeamRole | null, };
+export type TeamCreateRequest = { slug: string, name: string | null, 
+/**
+ * One parent team ref: the one-element form of `parents`.
+ */
+parent: string | null, 
+/**
+ * Several parent team refs (at most 16; duplicates collapse). Mutually exclusive with
+ * `parent`.
+ */
+parents?: Array<string>, auto_join_role: TeamRole | null, };
 
 /**
  * Full team detail — the team row plus its member roster. Response body for
@@ -34,7 +109,14 @@ export type TeamDetail = { id: string, slug: string, name: string, description: 
  * or is a system admin: a child's members reach everything attached to this team, so its
  * managers see which teams hang beneath it (team-authority fixes D3). Empty for everyone else.
  */
-children: Array<TeamChildRef>, };
+children: Array<TeamChildRef>, 
+/**
+ * The team's live parent teams, for every member of this team (any role) and for system
+ * admins (team DAG doors D9, ruling R2 as amended). A member already reads everything attached
+ * to these teams, so their names disclose nothing new; a child's manager needs them to detach
+ * or move it. Deliberately not symmetrical with `children`, which stays managers-only.
+ */
+parents: Array<TeamRef>, };
 
 /**
  * A team member enriched with the profile handle and provenance — the row
@@ -53,6 +135,12 @@ export type TeamMemberRow = { team_id: string, profile_id: string, role: TeamRol
  * `Idp` rows are owned by SAML reconcile and are not user-mutable.
  */
 export type TeamMemberSource = "native" | "idp";
+
+/**
+ * A team named by id, slug and display name — a parent or child on [`TeamDetail`], an ancestor on
+ * an auto-join outcome, a link on a restore outcome.
+ */
+export type TeamRef = { id: string, slug: string, name: string, };
 
 /**
  * Team role — strict hierarchy: Owner > Maintainer > Member > Watcher.

@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TeamLifecycleChanged",
+  "description": "`team_lifecycle_changed` — a team was created, soft-deleted, restored, had its slug renamed, or had\nits `auto_join_role` changed (team DAG and lifecycle doors D8). Written only by\n`_admin_team_lifecycle_write`, in the same statement as the `kb_teams` change (for `created`,\nin the transaction that inserted the row).\n\nEach act changes who reaches what: a restore revives every preserved row's reach, a rename\nre-addresses every `+team/...` ref, an auto-join change enrols (or stops enrolling) every approved\nprofile. So each is an authority record like a parent link. The team is the event's `subject`\nreference; its managers read it on the subject axis.",
+  "type": "object",
+  "properties": {
+    "act": {
+      "$ref": "#/$defs/TeamLifecycleAct"
+    },
+    "actor": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProfileId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "from": {
+      "description": "The value before the act: the old slug on `renamed`, the old `auto_join_role` on\n`auto_join_changed` (absent when it was unset). Absent on the other acts.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "team_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "to": {
+      "description": "The value after the act: the new slug on `renamed`, the new `auto_join_role` on\n`auto_join_changed` (absent when cleared). Absent on the other acts.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "team_id",
+    "act"
+  ],
+  "$defs": {
+    "ProfileId": {
+      "description": "A `kb_profiles.id` value.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "TeamLifecycleAct": {
+      "description": "What happened to the team in a [`TeamLifecycleChanged`] record.",
+      "oneOf": [
+        {
+          "description": "The team was created (by `create_team`, in its insert transaction).",
+          "type": "string",
+          "const": "created"
+        },
+        {
+          "description": "The team was soft-deleted (`is_active = false`); every row is preserved.",
+          "type": "string",
+          "const": "deleted"
+        },
+        {
+          "description": "A soft-deleted team was made live again; every preserved row confers again.",
+          "type": "string",
+          "const": "restored"
+        },
+        {
+          "description": "The team's slug changed; `+old/...` refs stop resolving.",
+          "type": "string",
+          "const": "renamed"
+        },
+        {
+          "description": "The team's `auto_join_role` was set, changed or cleared.",
+          "type": "string",
+          "const": "auto_join_changed"
+        }
+      ]
+    }
+  }
+}

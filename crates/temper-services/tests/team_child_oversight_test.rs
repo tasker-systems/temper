@@ -121,6 +121,7 @@ async fn fixture(pool: &PgPool) -> Fixture {
             slug: "co-eng".into(),
             name: None,
             parent: None,
+            parents: None,
             auto_join_role: None,
         },
     )
@@ -137,6 +138,7 @@ async fn fixture(pool: &PgPool) -> Fixture {
             slug: "co-tools".into(),
             name: None,
             parent: Some("+co-eng".into()),
+            parents: None,
             auto_join_role: None,
         },
     )
@@ -231,9 +233,10 @@ async fn a_parents_manager_detaches_the_child_and_its_reach_ends(pool: PgPool) {
     assert!(matches!(refusal, ApiError::NotFound(_)), "{refusal:?}");
 }
 
-/// Only a manager of the PARENT detaches: not a member of it, and not the child's own owner.
+/// A member of the parent, or a plain member of the child, does not detach. (A manager of the child
+/// does, from any parent — ruling R1; `team_dag_doors_test` covers that arm.)
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn only_the_parents_managers_detach(pool: PgPool) {
+async fn members_of_either_side_do_not_detach(pool: PgPool) {
     let f = fixture(&pool).await;
     for who in [f.bob, f.eve] {
         let p = test_support::human_principal_for(&pool, who).await;

@@ -70,6 +70,7 @@ async fn team_metadata_and_soft_delete(pool: sqlx::PgPool) {
             slug: "meta-team".to_owned(),
             name: None,
             parent: None,
+            parents: None,
             auto_join_role: None,
         })
         .await
@@ -142,6 +143,7 @@ async fn team_metadata_and_soft_delete(pool: sqlx::PgPool) {
             slug: "cli-team".to_owned(),
             name: None,
             parent: None,
+            parents: None,
             auto_join_role: None,
         })
         .await

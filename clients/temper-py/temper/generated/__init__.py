@@ -107,7 +107,9 @@ __all__ = [
     "AtlasHome",
     "AtlasNode",
     "AtlasSubgraph",
+    "AttachChildOutcome",
     "AttachCredentialResponse",
+    "AttachOutcome",
     "AuditCitation",
     "AuditSweepRow",
     "AuditorDispatchTickRequest",
@@ -409,6 +411,10 @@ __all__ = [
     "RemoveMemberOutcome",
     "RenameContextOutcome",
     "RenameContextRequest",
+    "RenameTeamSlugOutcome",
+    "RenameTeamSlugRequest",
+    "ReparentOutcome",
+    "ReparentRequest",
     "Requested",
     "ResidualBucket",
     "ResidualContext",
@@ -439,6 +445,7 @@ __all__ = [
     "ResourceUpdateRequest",
     "ResourceView",
     "RestoreContextOutcome",
+    "RestoreTeamOutcome",
     "RetentionCategory",
     "RetentionPolicies",
     "RetentionPolicy",
@@ -466,6 +473,8 @@ __all__ = [
     "SegmentInfo",
     "SegmentedBegin",
     "SegmentedBeginResponse",
+    "SetAutoJoinOutcome",
+    "SetAutoJoinRequest",
     "SetToolManifestRequest",
     "SetWebhookEventsRequest",
     "ShapeDeclareRequest",
@@ -511,6 +520,7 @@ __all__ = [
     "TeamMemberDetail",
     "TeamMemberRow",
     "TeamMemberSource",
+    "TeamRef",
     "TeamRole",
     "TeamRow",
     "TeamSpec",
@@ -626,7 +636,9 @@ from temper.generated.models.atlas_entry import AtlasEntry as AtlasEntry
 from temper.generated.models.atlas_home import AtlasHome as AtlasHome
 from temper.generated.models.atlas_node import AtlasNode as AtlasNode
 from temper.generated.models.atlas_subgraph import AtlasSubgraph as AtlasSubgraph
+from temper.generated.models.attach_child_outcome import AttachChildOutcome as AttachChildOutcome
 from temper.generated.models.attach_credential_response import AttachCredentialResponse as AttachCredentialResponse
+from temper.generated.models.attach_outcome import AttachOutcome as AttachOutcome
 from temper.generated.models.audit_citation import AuditCitation as AuditCitation
 from temper.generated.models.audit_sweep_row import AuditSweepRow as AuditSweepRow
 from temper.generated.models.auditor_dispatch_tick_request import AuditorDispatchTickRequest as AuditorDispatchTickRequest
@@ -928,6 +940,10 @@ from temper.generated.models.remote_connection import RemoteConnection as Remote
 from temper.generated.models.remove_member_outcome import RemoveMemberOutcome as RemoveMemberOutcome
 from temper.generated.models.rename_context_outcome import RenameContextOutcome as RenameContextOutcome
 from temper.generated.models.rename_context_request import RenameContextRequest as RenameContextRequest
+from temper.generated.models.rename_team_slug_outcome import RenameTeamSlugOutcome as RenameTeamSlugOutcome
+from temper.generated.models.rename_team_slug_request import RenameTeamSlugRequest as RenameTeamSlugRequest
+from temper.generated.models.reparent_outcome import ReparentOutcome as ReparentOutcome
+from temper.generated.models.reparent_request import ReparentRequest as ReparentRequest
 from temper.generated.models.requested import Requested as Requested
 from temper.generated.models.residual_bucket import ResidualBucket as ResidualBucket
 from temper.generated.models.residual_context import ResidualContext as ResidualContext
@@ -958,6 +974,7 @@ from temper.generated.models.resource_sort_field import ResourceSortField as Res
 from temper.generated.models.resource_update_request import ResourceUpdateRequest as ResourceUpdateRequest
 from temper.generated.models.resource_view import ResourceView as ResourceView
 from temper.generated.models.restore_context_outcome import RestoreContextOutcome as RestoreContextOutcome
+from temper.generated.models.restore_team_outcome import RestoreTeamOutcome as RestoreTeamOutcome
 from temper.generated.models.retention_category import RetentionCategory as RetentionCategory
 from temper.generated.models.retention_policies import RetentionPolicies as RetentionPolicies
 from temper.generated.models.retention_policy import RetentionPolicy as RetentionPolicy
@@ -985,6 +1002,8 @@ from temper.generated.models.search_scope_info import SearchScopeInfo as SearchS
 from temper.generated.models.segment_info import SegmentInfo as SegmentInfo
 from temper.generated.models.segmented_begin import SegmentedBegin as SegmentedBegin
 from temper.generated.models.segmented_begin_response import SegmentedBeginResponse as SegmentedBeginResponse
+from temper.generated.models.set_auto_join_outcome import SetAutoJoinOutcome as SetAutoJoinOutcome
+from temper.generated.models.set_auto_join_request import SetAutoJoinRequest as SetAutoJoinRequest
 from temper.generated.models.set_tool_manifest_request import SetToolManifestRequest as SetToolManifestRequest
 from temper.generated.models.set_webhook_events_request import SetWebhookEventsRequest as SetWebhookEventsRequest
 from temper.generated.models.shape_declare_request import ShapeDeclareRequest as ShapeDeclareRequest
@@ -1030,6 +1049,7 @@ from temper.generated.models.team_invitation import TeamInvitation as TeamInvita
 from temper.generated.models.team_member_detail import TeamMemberDetail as TeamMemberDetail
 from temper.generated.models.team_member_row import TeamMemberRow as TeamMemberRow
 from temper.generated.models.team_member_source import TeamMemberSource as TeamMemberSource
+from temper.generated.models.team_ref import TeamRef as TeamRef
 from temper.generated.models.team_role import TeamRole as TeamRole
 from temper.generated.models.team_row import TeamRow as TeamRow
 from temper.generated.models.team_spec import TeamSpec as TeamSpec

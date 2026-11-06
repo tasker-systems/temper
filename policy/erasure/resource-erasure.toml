@@ -430,6 +430,10 @@ refine = [
 [payload."slack_principal_disconnected"]
 "/slack_principal_id" = { disposition = "structural", note = "an external id" }
 
+[payload."team_lifecycle_changed"]
+"/from" = { disposition = "out-of-scope", note = "a team's prior slug or auto_join_role: team grain, anchored on no resource; not the resource's text" }
+"/to"   = { disposition = "out-of-scope", note = "a team's new slug or auto_join_role: team grain, anchored on no resource; not the resource's text" }
+
 [payload."subscription_delivery_disposed"]
 "/disposition" = { disposition = "structural", note = "disposition vocabulary" }
 "/rationale"   = { disposition = "out-of-scope", note = "another principal's judgment of a webhook; listed by event (arm 3) and by delivery (arm 5)" }

@@ -94,6 +94,7 @@ async fn a_team_ref_resolves_for_a_member_and_refuses_a_non_member(pool: sqlx::P
             slug: "resolve-route-team".to_owned(),
             name: None,
             parent: None,
+            parents: None,
             auto_join_role: None,
         })
         .await

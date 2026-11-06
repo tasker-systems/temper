@@ -176,6 +176,10 @@ pub enum EventKind {
     /// `admin`, NULL-anchored, written only by `_admin_team_parent_link_write` in the same statement
     /// as the `kb_teams_parents` row.
     TeamParentLinkChanged,
+    /// A team created, soft-deleted, restored, slug-renamed or auto-join-changed (team DAG and
+    /// lifecycle doors D8). Category `admin`, NULL-anchored, written only by
+    /// `_admin_team_lifecycle_write` in the same statement as the `kb_teams` change.
+    TeamLifecycleChanged,
     /// An auditor's signed verdict on one `(block, source)` citation (Set 5, spec §4.1-4.2).
     /// Append-only — fires `citation_audited`, projected by `_project_citation_audited` into
     /// `kb_citation_audits` with no supersession. Registered permissive (NULL `payload_schema`),
@@ -271,6 +275,7 @@ impl EventKind {
             EventKind::ResourceScrubbed => "resource_scrubbed",
             EventKind::TeamMembershipChanged => "team_membership_changed",
             EventKind::TeamParentLinkChanged => "team_parent_link_changed",
+            EventKind::TeamLifecycleChanged => "team_lifecycle_changed",
             EventKind::CitationAudited => "citation_audited",
             EventKind::BlobCommitted => "blob_committed",
             EventKind::ResourceReblocked => "resource_reblocked",
@@ -335,6 +340,7 @@ impl EventKind {
             "resource_scrubbed" => EventKind::ResourceScrubbed,
             "team_membership_changed" => EventKind::TeamMembershipChanged,
             "team_parent_link_changed" => EventKind::TeamParentLinkChanged,
+            "team_lifecycle_changed" => EventKind::TeamLifecycleChanged,
             "citation_audited" => EventKind::CitationAudited,
             "blob_committed" => EventKind::BlobCommitted,
             "resource_reblocked" => EventKind::ResourceReblocked,

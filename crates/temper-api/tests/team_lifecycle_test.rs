@@ -55,6 +55,7 @@ fn req(slug: &str, parent: Option<&str>, auto: Option<TeamRole>) -> TeamCreateRe
         slug: slug.to_owned(),
         name: None,
         parent: parent.map(str::to_owned),
+        parents: None,
         auto_join_role: auto,
     }
 }
@@ -648,4 +649,96 @@ async fn http_remove_member_returns_residual_reach_body(pool: PgPool) {
     assert!(body.residual_owned.contexts[0]
         .context_ref
         .ends_with("/off-ctx"));
+}
+
+/// Team DAG doors D1 through the live server: a manager of both teams attaches a child (`200`,
+/// `linked`, then `exists` on a repeat), and a link that would close a cycle is `409`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn http_attach_child_links_then_exists_and_refuses_a_cycle(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let email = format!("http-attach-{}@example.com", Uuid::new_v4());
+    let owner = common::fixtures::create_test_profile(&app.pool, &email).await;
+    let p = temper_services::test_support::human_principal_for(&app.pool, owner).await;
+    let parent = team_service::create_team(&app.pool, &p, &req("http-att-parent", None, None))
+        .await
+        .expect("parent")
+        .id;
+    let child = team_service::create_team(&app.pool, &p, &req("http-att-child", None, None))
+        .await
+        .expect("child")
+        .id;
+    let token = common::generate_test_jwt(&format!("test|{owner}"), &email);
+
+    for expected in ["linked", "exists"] {
+        let resp = app
+            .client
+            .put(app.url(&format!("/api/teams/{parent}/children/{child}")))
+            .header("Authorization", format!("Bearer {token}"))
+            .send()
+            .await
+            .expect("attach request");
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.expect("json");
+        assert_eq!(body["outcome"], expected);
+    }
+
+    let resp = app
+        .client
+        .put(app.url(&format!("/api/teams/{child}/children/{parent}")))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("attach request");
+    assert_eq!(resp.status(), 409, "the reverse link closes a cycle");
+}
+
+/// Team DAG doors D3 through the live server: a move answers `200` with both parents and the
+/// correlation id; `from == to` is `400`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn http_reparent_moves_a_team_and_refuses_a_no_op(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let email = format!("http-move-{}@example.com", Uuid::new_v4());
+    let owner = common::fixtures::create_test_profile(&app.pool, &email).await;
+    let p = temper_services::test_support::human_principal_for(&app.pool, owner).await;
+    let old = team_service::create_team(&app.pool, &p, &req("http-mv-old", None, None))
+        .await
+        .expect("old parent")
+        .id;
+    let new = team_service::create_team(&app.pool, &p, &req("http-mv-new", None, None))
+        .await
+        .expect("new parent")
+        .id;
+    let child = team_service::create_team(
+        &app.pool,
+        &p,
+        &req("http-mv-child", Some("http-mv-old"), None),
+    )
+    .await
+    .expect("child")
+    .id;
+    let token = common::generate_test_jwt(&format!("test|{owner}"), &email);
+
+    let resp = app
+        .client
+        .post(app.url(&format!("/api/teams/{child}/reparent")))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&json!({ "from": "+http-mv-old", "to": new.to_string() }))
+        .send()
+        .await
+        .expect("reparent request");
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.expect("json");
+    assert_eq!(body["from"]["id"], old.to_string());
+    assert_eq!(body["to"]["slug"], "http-mv-new");
+    assert!(body["correlation_id"].is_string());
+
+    let resp = app
+        .client
+        .post(app.url(&format!("/api/teams/{child}/reparent")))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&json!({ "from": "http-mv-new", "to": "http-mv-new" }))
+        .send()
+        .await
+        .expect("reparent request");
+    assert_eq!(resp.status(), 400);
 }

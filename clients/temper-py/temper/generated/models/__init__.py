@@ -62,7 +62,9 @@ from temper.generated.models.atlas_entry import AtlasEntry
 from temper.generated.models.atlas_home import AtlasHome
 from temper.generated.models.atlas_node import AtlasNode
 from temper.generated.models.atlas_subgraph import AtlasSubgraph
+from temper.generated.models.attach_child_outcome import AttachChildOutcome
 from temper.generated.models.attach_credential_response import AttachCredentialResponse
+from temper.generated.models.attach_outcome import AttachOutcome
 from temper.generated.models.audit_citation import AuditCitation
 from temper.generated.models.audit_sweep_row import AuditSweepRow
 from temper.generated.models.auditor_dispatch_tick_request import AuditorDispatchTickRequest
@@ -364,6 +366,10 @@ from temper.generated.models.remote_connection import RemoteConnection
 from temper.generated.models.remove_member_outcome import RemoveMemberOutcome
 from temper.generated.models.rename_context_outcome import RenameContextOutcome
 from temper.generated.models.rename_context_request import RenameContextRequest
+from temper.generated.models.rename_team_slug_outcome import RenameTeamSlugOutcome
+from temper.generated.models.rename_team_slug_request import RenameTeamSlugRequest
+from temper.generated.models.reparent_outcome import ReparentOutcome
+from temper.generated.models.reparent_request import ReparentRequest
 from temper.generated.models.requested import Requested
 from temper.generated.models.residual_bucket import ResidualBucket
 from temper.generated.models.residual_context import ResidualContext
@@ -394,6 +400,7 @@ from temper.generated.models.resource_sort_field import ResourceSortField
 from temper.generated.models.resource_update_request import ResourceUpdateRequest
 from temper.generated.models.resource_view import ResourceView
 from temper.generated.models.restore_context_outcome import RestoreContextOutcome
+from temper.generated.models.restore_team_outcome import RestoreTeamOutcome
 from temper.generated.models.retention_category import RetentionCategory
 from temper.generated.models.retention_policies import RetentionPolicies
 from temper.generated.models.retention_policy import RetentionPolicy
@@ -421,6 +428,8 @@ from temper.generated.models.search_scope_info import SearchScopeInfo
 from temper.generated.models.segment_info import SegmentInfo
 from temper.generated.models.segmented_begin import SegmentedBegin
 from temper.generated.models.segmented_begin_response import SegmentedBeginResponse
+from temper.generated.models.set_auto_join_outcome import SetAutoJoinOutcome
+from temper.generated.models.set_auto_join_request import SetAutoJoinRequest
 from temper.generated.models.set_tool_manifest_request import SetToolManifestRequest
 from temper.generated.models.set_webhook_events_request import SetWebhookEventsRequest
 from temper.generated.models.shape_declare_request import ShapeDeclareRequest
@@ -466,6 +475,7 @@ from temper.generated.models.team_invitation import TeamInvitation
 from temper.generated.models.team_member_detail import TeamMemberDetail
 from temper.generated.models.team_member_row import TeamMemberRow
 from temper.generated.models.team_member_source import TeamMemberSource
+from temper.generated.models.team_ref import TeamRef
 from temper.generated.models.team_role import TeamRole
 from temper.generated.models.team_row import TeamRow
 from temper.generated.models.team_spec import TeamSpec

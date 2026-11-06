@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT is_active AS \"live!\",\n                  personal_of IS NOT NULL AS \"personal!\",\n                  slug = 'temper-system' AS \"root!\",\n                  auto_join_role IS NOT NULL AS \"auto_join!\"\n             FROM kb_teams WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "live!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "personal!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "root!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "auto_join!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "fedf9999d19c6609c33091eb793698cf63853594570eecc5b08b96bf87a97199"
+}

@@ -355,7 +355,12 @@ registry! {
         DELETE_TEAM = Delete "/api/teams/{id}" => "delete_team";
         DETAIL = Get "/api/teams/{id}" => "detail";
         UPDATE_TEAM = Patch "/api/teams/{id}" => "update_team";
+        ATTACH_CHILD_TEAM = Put "/api/teams/{id}/children/{child_id}" => "attach_child_team";
         DETACH_CHILD_TEAM = Delete "/api/teams/{id}/children/{child_id}" => "detach_child_team";
+        REPARENT_TEAM = Post "/api/teams/{id}/reparent" => "reparent_team";
+        RESTORE_TEAM = Post "/api/teams/{id}/restore" => "restore_team";
+        RENAME_TEAM_SLUG = Post "/api/teams/{id}/rename-slug" => "rename_team_slug";
+        SET_TEAM_AUTO_JOIN = Put "/api/teams/{id}/auto-join" => "set_team_auto_join";
         LIST_TEAM_INVITATIONS = Get "/api/teams/{id}/invitations" => "list_team_invitations";
         REVOKE_TEAM_INVITATION = Delete "/api/teams/{id}/invitations/{invitation_id}" => "revoke_team_invitation";
         CREATE_TEAM_INVITATION = Post "/api/teams/{id}/invite" => "create_team_invitation";
