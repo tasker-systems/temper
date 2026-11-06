@@ -119,8 +119,10 @@ pub enum StalenessOutcome {
 
 /// Compare a context's cursor against the server's latest event id for that
 /// context. Pure: the staleness *decision*, with no IO. The server's id is
-/// recorded into the cursor at pull time, so any divergence means at least
-/// one event landed since the last pull.
+/// recorded into the cursor at pull time, so any divergence means the context
+/// changed since the last pull: an event the caller may see landed, or (rarely)
+/// enough withheld events landed that the server's cursor window no longer
+/// reaches the last one it saw and answers `None`. Either way a re-pull is right.
 fn evaluate_staleness(cursor: &ProjectionCursor, server_latest: Option<Uuid>) -> StalenessOutcome {
     if server_latest == cursor.last_event_id {
         StalenessOutcome::Fresh

@@ -358,6 +358,7 @@ pub enum ContextReadView {
     Analytics,
     /// Read the context's changes after a position, in commit order. Each entry is a pointer
     /// (kind, subject, actor, time, act), never content: read the subject through its own tool.
+    /// A change to a content block names its resource as the subject and the block as `block`.
     /// Omit `after` to start (no entries, `through` at the present); pass an answer's `through`
     /// as `after` to resume. A change hint, not a cache-invalidation guarantee: the feed never
     /// announces an erasure or scrub, so a mirror must periodically re-read what it holds and

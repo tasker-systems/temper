@@ -1698,11 +1698,12 @@ pub struct InvocationListRow {
 ///
 /// - **Resources**, named by `resource_id`, a `kb_resources` `owner`, a `block_id` or a
 ///   `kb_content_blocks` `owner` (the block's resource), or a `kb_resources` `source`/`target`.
-///   Readable means in `resources_visible_to`, with one exception: a soft-deleted resource counts as
-///   readable to whoever can read its home, so the delete act itself, and every earlier act that
-///   names the resource, stays visible to the readers it was visible to. This departs from the
-///   soft-delete read floor on purpose; an erased resource gets no such exception, because erasure
-///   owns what its husk discloses.
+///   Readable means in `resources_visible_to`, with no exception: a soft-deleted resource is
+///   unreadable here as it is everywhere else, so the delete act and every earlier act that names
+///   the resource are dropped, exactly as they are once a resource has moved out of the reader's
+///   view. An exception for deleted resources told a deletion from a move (owner ruling
+///   2026-11-06, migration 20261117000040). The ledger keeps the acts; the element trail reaches
+///   them for a reader who can read the resource.
 /// - **Other endpoints** an edge act names in its payload — a `kb_cogmaps` or `kb_blobs` `source` or
 ///   `target` — through `endpoint_readable_by_profile`. The payload's endpoints are gated, not only
 ///   the edge row's: a re-asserted edge mints a fresh `edge_id` that conflicts into the existing row
@@ -1772,15 +1773,7 @@ pub async fn invocation_show(
                              WHERE e.payload -> 'owner' ->> 'table' = 'kb_content_blocks'
                                AND b.id = (e.payload -> 'owner' ->> 'id')::uuid) named
                      WHERE named.id IS NOT NULL
-                       AND NOT EXISTS (SELECT 1 FROM vis WHERE vis.resource_id = named.id)
-                       AND NOT EXISTS (
-                             SELECT 1
-                               FROM kb_resources r
-                               JOIN kb_resource_homes h ON h.resource_id = r.id
-                              WHERE r.id = named.id
-                                AND NOT r.is_active
-                                AND r.erased_at IS NULL
-                                AND anchor_readable_by_profile($2, h.anchor_table, h.anchor_id) IS TRUE))
+                       AND NOT EXISTS (SELECT 1 FROM vis WHERE vis.resource_id = named.id))
               AND NOT EXISTS (
                     SELECT 1
                       FROM (VALUES (e.payload -> 'source'), (e.payload -> 'target')) AS ends(ref)

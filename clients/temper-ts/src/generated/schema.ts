@@ -1944,7 +1944,7 @@ export interface paths {
         };
         /**
          * Read a context's changes after a position
-         * @description A context's changes after a position, in commit order. Each entry is a pointer naming the kind of change, the thing changed (`subject`), the acting entity, the time and the act. No entry carries content: read the subject through its own endpoint, under your own standing. A subject you can no longer read is still pointed at, and its own read refuses it.
+         * @description A context's changes after a position, in commit order. Each entry is a pointer naming the kind of change, the thing changed (`subject`), the acting entity, the time and the act. No entry carries content: read the subject through its own endpoint, under your own standing. A subject you can no longer read is still pointed at, and its own read refuses it. A change to one of a resource's content blocks names the resource as its `subject` and the block as `block`.
          *
          *     Omit `after` to start: the answer has no entries and a `through` at the present, never a tail of history. Hand `through` back as `after` to resume. A position is opaque and is valid only for the context it was issued for. Every answer says how far it looked (`through`) and whether more exists (`has_more`).
          *
@@ -5853,6 +5853,12 @@ export interface components {
              * @description The acting entity (`kb_entities.id`).
              */
             actor: string;
+            /**
+             * Format: uuid
+             * @description The content block the change was made to, when it was made to one (`kb_content_blocks.id`).
+             *     The subject is then the block's resource, which is the door a reader re-reads it through.
+             */
+            block?: string | null;
             /** @description The ledger's event-type name, verbatim (for example `property_set`, `resource_departed`). */
             kind: string;
             /**
@@ -5860,14 +5866,17 @@ export interface components {
              * @description When the acting transaction began. Not the feed's order: entries are in commit order.
              */
             occurred_at: string;
-            /** @description The thing the change was made to. */
+            /**
+             * @description The thing the change was made to. A change to one of a resource's content blocks names the
+             *     resource here, and the block in [`block`](Self::block).
+             */
             subject: components["schemas"]["ContextChangeSubject"];
         };
         /** @description What a [`ContextChange`] points at: a table and a row id. */
         ContextChangeSubject: {
             /** Format: uuid */
             id: string;
-            /** @description `kb_resources`, `kb_edges`, `kb_content_blocks`, `kb_blobs` or `kb_contexts`. */
+            /** @description `kb_resources`, `kb_edges`, `kb_blobs` or `kb_contexts`. */
             table: string;
         };
         /**
@@ -6798,7 +6807,10 @@ export interface components {
         EventCursorResponse: {
             /**
              * Format: uuid
-             * @description Most recent `kb_events.id` for the context, newest by `created`.
+             * @description The newest `kb_events.id` on the context, by `occurred_at`, among the events the context's
+             *     change feed would serve the reader. Never an admin act's, a connection's traffic, region
+             *     bookkeeping or an edge the reader cannot see. `None` when none of the newest events
+             *     qualifies.
              */
             latest_event_id?: string | null;
         };

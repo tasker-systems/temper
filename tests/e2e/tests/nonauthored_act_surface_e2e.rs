@@ -212,18 +212,26 @@ async fn api_nonauthored_writes_under_invocation_stamp_authorship(pool: sqlx::Pg
         "api delete act"
     );
 
-    // invocation_show surfaces all four non-authored acts with decoded authorship + correlator.
+    // invocation_show surfaces the three non-authored acts on what the caller can still read, with
+    // decoded authorship + correlator. The delete act is stamped (asserted above) but not shown: a
+    // deleted resource is unreadable on this door as on every other, so the door cannot tell a
+    // deletion from a move (owner ruling 2026-11-06, migration 20261117000040).
     let view = app
         .client
         .invocations()
         .show(invocation_id)
         .await
         .expect("show invocation");
+    for kind in ["resource_deleted", "resource_departed"] {
+        assert!(
+            view.acts.iter().all(|a| a.event_kind != kind),
+            "an act on the deleted resource surfaced in invocation_show: {kind}"
+        );
+    }
     for kind in [
         "property_set",
         "relationship_retyped",
         "relationship_reweighted",
-        "resource_deleted",
     ] {
         let act = view
             .acts

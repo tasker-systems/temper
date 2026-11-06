@@ -718,12 +718,15 @@ async fn the_act_queues_a_region_settle_for_the_home_context(pool: PgPool) {
 }
 
 /// The settle runs as the system actor, never the operator (the owner's ruling of 2026-11-03 that
-/// an admin act never reaches a context's change feed). The settling's events are domain events
-/// anchored on the context, which the feed serves with their emitter as actor. So after the act and
-/// one drain, no entry the context's owner reads names any entity of the operator.
+/// an admin act never reaches a context's change feed), and its events reach neither the feed nor
+/// the cursor (owner ruling 2026-11-06, migration 20261117000040: the region producer's bookkeeping
+/// is no change). A system-actor settle in a context would otherwise date the erasure it follows.
+/// So after the act and one drain, the owner's feed from before the act serves nothing, and the
+/// cursor still names the event it named before the act.
 ///
-/// FAILS IF: `queue_region_settling` enqueues under the operator's emitter (then the drain's
-/// `region_materialized` / `salience_refreshed` carry the operator as actor).
+/// FAILS IF: `queue_region_settling` enqueues under the operator's emitter, or the feed or the
+/// cursor serves `region_materialized` / `salience_refreshed` (drop them from
+/// `_feed_withholds_kind`).
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn the_settle_never_names_the_operator_in_the_context_feed(pool: PgPool) {
     let p = planted(&pool).await;
@@ -732,6 +735,16 @@ async fn the_settle_never_names_the_operator_in_the_context_feed(pool: PgPool) {
         .await
         .expect("a position before the act");
     clear_region_queue(&pool).await;
+    let cursor = |pool: PgPool| async move {
+        sqlx::query_scalar::<_, Option<Uuid>>("SELECT context_cursor($1, $2)")
+            .bind(p.owner.uuid())
+            .bind(p.ctx.uuid())
+            .fetch_one(&pool)
+            .await
+            .expect("the cursor")
+    };
+    let before = cursor(pool.clone()).await;
+    assert!(before.is_some(), "anti-vacuity: the context had a change");
 
     erase(&pool, p.r).await;
     let operator_entity: Uuid = sqlx::query_scalar(
@@ -799,13 +812,21 @@ async fn the_settle_never_names_the_operator_in_the_context_feed(pool: PgPool) {
             .await
             .expect("the owner reads the context's changes");
     let text = answer.to_string();
-    assert!(
-        answer["entries"].as_array().is_some_and(|e| !e.is_empty()),
-        "anti-vacuity: the settle's entries are served: {text}"
+    // The settle's events are anchored here (asserted above); the act's own are withheld as an
+    // admin act's, and the settle's as bookkeeping. Nothing since the horizon is served.
+    assert_eq!(
+        answer["entries"],
+        serde_json::json!([]),
+        "the erasure or its settle reached the context feed: {text}"
     );
     assert!(
         !text.contains(&operator_entity.to_string()),
         "the operator reached the context feed: {text}"
+    );
+    assert_eq!(
+        cursor(pool.clone()).await,
+        before,
+        "the erasure or its settle moved the context cursor"
     );
 }
 
