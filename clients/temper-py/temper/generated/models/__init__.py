@@ -366,6 +366,8 @@ from temper.generated.models.remote_connection import RemoteConnection
 from temper.generated.models.remove_member_outcome import RemoveMemberOutcome
 from temper.generated.models.rename_context_outcome import RenameContextOutcome
 from temper.generated.models.rename_context_request import RenameContextRequest
+from temper.generated.models.reparent_outcome import ReparentOutcome
+from temper.generated.models.reparent_request import ReparentRequest
 from temper.generated.models.requested import Requested
 from temper.generated.models.residual_bucket import ResidualBucket
 from temper.generated.models.residual_context import ResidualContext

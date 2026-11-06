@@ -688,3 +688,162 @@ async fn every_member_sees_parents_and_only_managers_see_children(pool: PgPool) 
         .unwrap();
     assert!(web.parents.is_empty(), "{:?}", web.parents);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Phase 3 — D2 child-side detach, D3 re-parent
+// ---------------------------------------------------------------------------------------------
+
+async fn detach(pool: &PgPool, who: Uuid, parent: Uuid, child: Uuid) -> Result<(), ApiError> {
+    let p = test_support::human_principal_for(pool, who).await;
+    team_service::detach_child(pool, &p, parent, child).await
+}
+
+async fn reparent(
+    pool: &PgPool,
+    who: Uuid,
+    child: Uuid,
+    from: &str,
+    to: &str,
+) -> Result<temper_core::types::team::ReparentOutcome, ApiError> {
+    let p = test_support::human_principal_for(pool, who).await;
+    team_service::reparent(
+        pool,
+        &p,
+        child,
+        &temper_core::types::team::ReparentRequest {
+            from: from.into(),
+            to: to.into(),
+        },
+    )
+    .await
+}
+
+/// R1: a manager of the child detaches it from a parent it does not manage — even the gating team,
+/// which a parent-side manager could not — and the reach ends. A plain member of the child cannot.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_childs_manager_detaches_it_from_any_parent(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let refusal = detach(&pool, f.on("eng-web", "member"), f.eng, f.eng_web)
+        .await
+        .expect_err("a member of the child");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+
+    let web_maint = f.on("eng-web", "maintainer");
+    detach(&pool, web_maint, f.eng, f.eng_web)
+        .await
+        .expect("the child's maintainer leaves eng");
+    assert!(!reaches(&pool, f.on("eng-web", "watcher"), f.eng).await);
+    assert_eq!(link_events(&pool, f.eng, f.eng_web, "unlinked").await, 1);
+
+    // Under the gating team (attached by an admin), the child's owner may still leave it.
+    attach(&pool, f.admin, f.gate, f.side).await.unwrap();
+    detach(&pool, f.on("side", "owner"), f.gate, f.side)
+        .await
+        .expect("leaving the gating team's subtree is a reduction");
+    assert!(!linked(&pool, f.gate, f.side).await);
+}
+
+/// The personal team's link under the root is still nobody's to cut, its owner's included.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn nobody_detaches_a_personal_team(pool: PgPool) {
+    let f = fixture(&pool).await;
+    for who in [f.loner, f.admin] {
+        let refusal = detach(&pool, who, f.root, f.loner_personal)
+            .await
+            .expect_err("a personal team");
+        assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    }
+    assert!(linked(&pool, f.root, f.loner_personal).await);
+}
+
+/// D3: a manager of the child who also manages the new parent moves it in one act — the old
+/// ancestor is no longer reached, the new one is, and the two link records share a correlation id.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_move_is_one_act_with_one_correlation(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let mover = f.on("eng-web", "owner");
+    join(&pool, f.side, mover, "maintainer").await;
+    let watcher = f.on("eng-web", "watcher");
+
+    let moved = reparent(&pool, mover, f.eng_web, "+dg-eng", &f.side.to_string())
+        .await
+        .expect("move eng-web from eng to side");
+    assert_eq!(
+        (moved.from.id, moved.to.id, moved.team.id),
+        (f.eng, f.side, f.eng_web)
+    );
+    assert!(
+        !reaches(&pool, watcher, f.eng).await,
+        "the old parent is gone"
+    );
+    assert!(
+        !reaches(&pool, watcher, f.org).await,
+        "and everything above it"
+    );
+    assert!(
+        reaches(&pool, watcher, f.side).await,
+        "the new parent is reached"
+    );
+
+    let correlations: Vec<Option<Uuid>> = sqlx::query_scalar(
+        "SELECT e.correlation_id FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'team_parent_link_changed' \
+            AND e.payload @> jsonb_build_object('child_team_id', $1::uuid) \
+            AND e.correlation_id = $2",
+    )
+    .bind(f.eng_web)
+    .bind(moved.correlation_id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        correlations.len(),
+        2,
+        "link and unlink carry one correlation id"
+    );
+}
+
+/// A move that would close a cycle is `409` and changes nothing; `from` that is not a parent is
+/// `404`; a caller who does not manage `to` is `403`; `from == to` is `400`. In every case the old
+/// link is still there.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_refused_move_changes_nothing(pool: PgPool) {
+    let f = fixture(&pool).await;
+    // eng's owner also maintains eng-web, eng's own child.
+    let eng_owner = f.on("eng", "owner");
+    join(&pool, f.eng_web, eng_owner, "maintainer").await;
+    let refusal = reparent(&pool, eng_owner, f.eng, "+dg-org", "+dg-eng-web")
+        .await
+        .expect_err("under its own child");
+    assert!(matches!(refusal, ApiError::Conflict(_)), "{refusal:?}");
+    assert!(linked(&pool, f.org, f.eng).await, "the old link survives");
+    assert!(!linked(&pool, f.eng_web, f.eng).await);
+
+    join(&pool, f.side, eng_owner, "maintainer").await;
+    let refusal = reparent(&pool, eng_owner, f.eng, "+dg-eng-web", "+dg-side")
+        .await
+        .expect_err("eng-web is not eng's parent");
+    assert!(matches!(refusal, ApiError::NotFound(_)), "{refusal:?}");
+    assert!(
+        !linked(&pool, f.side, f.eng).await,
+        "the new link rolled back"
+    );
+
+    let refusal = reparent(&pool, eng_owner, f.eng, "+dg-org", "+dg-org")
+        .await
+        .expect_err("from == to");
+    assert!(matches!(refusal, ApiError::BadRequest(_)), "{refusal:?}");
+
+    let eng_maint = f.on("eng", "maintainer");
+    let refusal = reparent(&pool, eng_maint, f.eng, "+dg-org", "+dg-side")
+        .await
+        .expect_err("does not manage side");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    let refusal = reparent(&pool, f.on("side", "owner"), f.eng, "+dg-org", "+dg-side")
+        .await
+        .expect_err("does not manage eng");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+
+    assert!(linked(&pool, f.org, f.eng).await);
+    assert!(!linked(&pool, f.side, f.eng).await);
+}

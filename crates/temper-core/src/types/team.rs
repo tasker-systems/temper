@@ -275,6 +275,35 @@ pub struct AttachChildOutcome {
     pub outcome: AttachOutcome,
 }
 
+/// Request body for `POST /api/teams/{id}/reparent` (team DAG doors D3): move the team from one
+/// parent to another in one act. Each is a team ref: `+slug`, a bare slug, a team UUID, or a
+/// decorated `slug-<uuid>` ref.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReparentRequest {
+    /// The current parent to leave.
+    pub from: String,
+    /// The new parent to join.
+    pub to: String,
+}
+
+/// Response body for `POST /api/teams/{id}/reparent`. Both `team_parent_link_changed` records of the
+/// move carry `correlation_id`, so the ledger shows one move rather than two unrelated acts.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReparentOutcome {
+    pub team: TeamRef,
+    pub from: TeamRef,
+    pub to: TeamRef,
+    pub correlation_id: Uuid,
+}
+
 /// Request body for `PATCH /api/teams/{id}` — update team metadata.
 ///
 /// Both fields are optional: a `None` leaves that column unchanged (partial

@@ -21,6 +21,27 @@ export type AttachOutcome = "linked" | "exists";
 export type ChangeRoleRequest = { role: TeamRole, };
 
 /**
+ * Response body for `POST /api/teams/{id}/reparent`. Both `team_parent_link_changed` records of the
+ * move carry `correlation_id`, so the ledger shows one move rather than two unrelated acts.
+ */
+export type ReparentOutcome = { team: TeamRef, from: TeamRef, to: TeamRef, correlation_id: string, };
+
+/**
+ * Request body for `POST /api/teams/{id}/reparent` (team DAG doors D3): move the team from one
+ * parent to another in one act. Each is a team ref: `+slug`, a bare slug, a team UUID, or a
+ * decorated `slug-<uuid>` ref.
+ */
+export type ReparentRequest = { 
+/**
+ * The current parent to leave.
+ */
+from: string, 
+/**
+ * The new parent to join.
+ */
+to: string, };
+
+/**
  * A direct child team, as listed on its parent's [`TeamDetail`]. The same shape as [`TeamRef`],
  * which generalises it (team DAG doors D9); it stays its own type, and so its own schema, for one
  * release so the SDK class of that name keeps serving `children`. New fields use [`TeamRef`].

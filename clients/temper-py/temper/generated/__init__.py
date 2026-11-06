@@ -411,6 +411,8 @@ __all__ = [
     "RemoveMemberOutcome",
     "RenameContextOutcome",
     "RenameContextRequest",
+    "ReparentOutcome",
+    "ReparentRequest",
     "Requested",
     "ResidualBucket",
     "ResidualContext",
@@ -933,6 +935,8 @@ from temper.generated.models.remote_connection import RemoteConnection as Remote
 from temper.generated.models.remove_member_outcome import RemoveMemberOutcome as RemoveMemberOutcome
 from temper.generated.models.rename_context_outcome import RenameContextOutcome as RenameContextOutcome
 from temper.generated.models.rename_context_request import RenameContextRequest as RenameContextRequest
+from temper.generated.models.reparent_outcome import ReparentOutcome as ReparentOutcome
+from temper.generated.models.reparent_request import ReparentRequest as ReparentRequest
 from temper.generated.models.requested import Requested as Requested
 from temper.generated.models.residual_bucket import ResidualBucket as ResidualBucket
 from temper.generated.models.residual_context import ResidualContext as ResidualContext

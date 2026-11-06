@@ -11,8 +11,8 @@ use crate::middleware::auth::{AnyPrincipal, AuthUser};
 use temper_core::types::ids::ProfileId;
 use temper_core::types::reassign::RemoveMemberOutcome;
 use temper_core::types::team::{
-    AddMemberRequest, AttachChildOutcome, ChangeRoleRequest, TeamCreateRequest, TeamDetail,
-    TeamMemberRow, TeamRow, TeamUpdateRequest,
+    AddMemberRequest, AttachChildOutcome, ChangeRoleRequest, ReparentOutcome, ReparentRequest,
+    TeamCreateRequest, TeamDetail, TeamMemberRow, TeamRow, TeamUpdateRequest,
 };
 use temper_services::error::ApiResult;
 use temper_services::services::team_service;
@@ -219,7 +219,8 @@ pub async fn change_role(
 /// Detach a child team from this team
 ///
 /// Removes the parent link, so the child's members stop reaching what is attached to this team and
-/// its ancestors. The child and its roster survive; only this link is cut. Recorded on the admin
+/// its ancestors. The child and its roster survive; only this link is cut. A manager of the parent
+/// or of the child may detach (a child's managers may leave any parent). Recorded on the admin
 /// ledger as `team_parent_link_changed`.
 #[utoipa::path(
     delete,
@@ -233,8 +234,8 @@ pub async fn change_role(
     security(("bearer_auth" = [])),
     responses(
         (status = 204, description = "Child detached"),
-        (status = 403, description = "Forbidden: the caller is not an owner or maintainer of the parent team, or the parent is temper-system or the gating team and the caller is not a system admin, or the child is a personal team (nobody detaches one); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
-        (status = 404, description = "That team is not a child of this team; told only to a caller who may manage the parent"),
+        (status = 403, description = "Forbidden: the caller manages neither the child team nor the parent team (a manager of the parent acts only when it is not temper-system or the gating team) and is not a system admin, or the child is a personal team (nobody detaches one); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 404, description = "That team is not a child of this team; told only to a caller who may detach it"),
     )
 )]
 pub async fn detach_child(
@@ -277,6 +278,39 @@ pub async fn attach_child(
     Path((team_id, child_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<Json<AttachChildOutcome>> {
     team_service::attach_child(&state.pool, &auth.0, team_id, child_id)
+        .await
+        .map(Json)
+}
+
+/// Move this team from one parent to another
+///
+/// One act: the new link is written before the old one is cut, so a refusal leaves the team where
+/// it was and it never holds both reaches. The caller must manage this team and the new parent;
+/// a new parent that is temper-system or the gating team, or moving an auto-join team, is a system
+/// admin's act. Both `team_parent_link_changed` records carry the returned `correlation_id`.
+#[utoipa::path(
+    post,
+    operation_id = "reparent_team",
+    path = "/api/teams/{id}/reparent",
+    tag = "Teams",
+    params(("id" = Uuid, Path, description = "Team ID (the child being moved)")),
+    security(("bearer_auth" = [])),
+    request_body = ReparentRequest,
+    responses(
+        (status = 200, description = "Moved", body = ReparentOutcome),
+        (status = 400, description = "`from` and `to` are the same team, or a structural refusal (a personal team, temper-system as the child)"),
+        (status = 403, description = "Forbidden: the caller does not manage this team, or does not manage `to`, or `to` is temper-system or the gating team, or this team is an auto-join team, and the caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 404, description = "`from` or `to` does not resolve, a team is soft-deleted, or `from` is not a parent of this team; told only to a caller who manages this team"),
+        (status = 409, description = "The move would make a team its own ancestor; nothing changed"),
+    )
+)]
+pub async fn reparent(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(team_id): Path<Uuid>,
+    Json(body): Json<ReparentRequest>,
+) -> ApiResult<Json<ReparentOutcome>> {
+    team_service::reparent(&state.pool, &auth.0, team_id, &body)
         .await
         .map(Json)
 }

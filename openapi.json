@@ -15163,7 +15163,7 @@
           "Teams"
         ],
         "summary": "Detach a child team from this team",
-        "description": "Removes the parent link, so the child's members stop reaching what is attached to this team and\nits ancestors. The child and its roster survive; only this link is cut. Recorded on the admin\nledger as `team_parent_link_changed`.",
+        "description": "Removes the parent link, so the child's members stop reaching what is attached to this team and\nits ancestors. The child and its roster survive; only this link is cut. A manager of the parent\nor of the child may detach (a child's managers may leave any parent). Recorded on the admin\nledger as `team_parent_link_changed`.",
         "operationId": "detach_child_team",
         "parameters": [
           {
@@ -15192,7 +15192,7 @@
             "description": "Child detached"
           },
           "403": {
-            "description": "Forbidden: the caller is not an owner or maintainer of the parent team, or the parent is temper-system or the gating team and the caller is not a system admin, or the child is a personal team (nobody detaches one); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "description": "Forbidden: the caller manages neither the child team nor the parent team (a manager of the parent acts only when it is not temper-system or the gating team) and is not a system admin, or the child is a personal team (nobody detaches one); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15202,7 +15202,7 @@
             }
           },
           "404": {
-            "description": "That team is not a child of this team; told only to a caller who may manage the parent"
+            "description": "That team is not a child of this team; told only to a caller who may detach it"
           }
         },
         "security": [
@@ -15740,6 +15740,90 @@
                 }
               }
             }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Teams"
+      }
+    },
+    "/api/teams/{id}/reparent": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Teams"
+        ],
+        "summary": "Move this team from one parent to another",
+        "description": "One act: the new link is written before the old one is cut, so a refusal leaves the team where\nit was and it never holds both reaches. The caller must manage this team and the new parent;\na new parent that is temper-system or the gating team, or moving an auto-join team, is a system\nadmin's act. Both `team_parent_link_changed` records carry the returned `correlation_id`.",
+        "operationId": "reparent_team",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Team ID (the child being moved)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReparentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Moved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReparentOutcome"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`from` and `to` are the same team, or a structural refusal (a personal team, temper-system as the child)"
+          },
+          "403": {
+            "description": "Forbidden: the caller does not manage this team, or does not manage `to`, or `to` is temper-system or the gating team, or this team is an auto-join team, and the caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`from` or `to` does not resolve, a team is soft-deleted, or `from` is not a parent of this team; told only to a caller who manages this team"
+          },
+          "409": {
+            "description": "The move would make a team its own ancestor; nothing changed"
           }
         },
         "security": [
@@ -25602,6 +25686,49 @@
           "name": {
             "type": "string",
             "description": "The new display name. Canonicalized (trimmed, internal whitespace collapsed) before it\nis stored, and sluggified to derive the new addressable slug."
+          }
+        }
+      },
+      "ReparentOutcome": {
+        "type": "object",
+        "description": "Response body for `POST /api/teams/{id}/reparent`. Both `team_parent_link_changed` records of the\nmove carry `correlation_id`, so the ledger shows one move rather than two unrelated acts.",
+        "required": [
+          "team",
+          "from",
+          "to",
+          "correlation_id"
+        ],
+        "properties": {
+          "correlation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "from": {
+            "$ref": "#/components/schemas/TeamRef"
+          },
+          "team": {
+            "$ref": "#/components/schemas/TeamRef"
+          },
+          "to": {
+            "$ref": "#/components/schemas/TeamRef"
+          }
+        }
+      },
+      "ReparentRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/teams/{id}/reparent` (team DAG doors D3): move the team from one\nparent to another in one act. Each is a team ref: `+slug`, a bare slug, a team UUID, or a\ndecorated `slug-<uuid>` ref.",
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "type": "string",
+            "description": "The current parent to leave."
+          },
+          "to": {
+            "type": "string",
+            "description": "The new parent to join."
           }
         }
       },

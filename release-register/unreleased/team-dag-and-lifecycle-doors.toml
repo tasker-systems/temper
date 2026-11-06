@@ -1,4 +1,4 @@
-title    = "Teams can be attached under a second parent, and a team's members see its parents"
+title    = "Teams can be attached under a second parent, moved, and detached by their own managers; a team's members see its parents"
 pr       = "self"
 classes  = ["additive", "behavioral"]
 surfaces = ["http", "clients", "schema"]
@@ -10,6 +10,12 @@ Team DAG and lifecycle doors (temper-artifacts specs/2026-11-06-team-dag-and-lif
   a second parent. The caller must manage both teams. A root or gating parent, or an auto-join
   child, needs a system admin. Responses: 200 { outcome: linked | exists }, 400 for a structural
   refusal, 403, 404, and 409 for a cycle. A new link is recorded as team_parent_link_changed.
+- POST /api/teams/{id}/reparent { from, to } moves a team in one act: the new link is written,
+  then the old one cut. Both team_parent_link_changed records share the returned correlation_id.
+  A refusal (400/403/404/409) changes nothing.
+- Behavioral: DELETE /api/teams/{id}/children/{child_id} now also admits a manager of the child,
+  from any parent, the gating team included (ruling R1). It previously admitted only the parent's
+  managers or a system admin. A personal team's link under the root is still refused to everyone.
 - TeamDetail gains `parents: TeamRef[]` (the live parents), shown to every member and to system
   admins. `children` still shows only to managers and keeps its TeamChildRef schema. TeamRef is a
   new schema of the same shape.

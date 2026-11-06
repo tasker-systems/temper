@@ -25,6 +25,8 @@ from temper.generated.models.bulk_reassign_ack import BulkReassignAck
 from temper.generated.models.bulk_reassign_request import BulkReassignRequest
 from temper.generated.models.change_role_request import ChangeRoleRequest
 from temper.generated.models.remove_member_outcome import RemoveMemberOutcome
+from temper.generated.models.reparent_outcome import ReparentOutcome
+from temper.generated.models.reparent_request import ReparentRequest
 from temper.generated.models.team_create_request import TeamCreateRequest
 from temper.generated.models.team_detail import TeamDetail
 from temper.generated.models.team_member_row import TeamMemberRow
@@ -1591,7 +1593,7 @@ class TeamsApi:
     ) -> None:
         """Detach a child team from this team
 
-        Removes the parent link, so the child's members stop reaching what is attached to this team and its ancestors. The child and its roster survive; only this link is cut. Recorded on the admin ledger as `team_parent_link_changed`.
+        Removes the parent link, so the child's members stop reaching what is attached to this team and its ancestors. The child and its roster survive; only this link is cut. A manager of the parent or of the child may detach (a child's managers may leave any parent). Recorded on the admin ledger as `team_parent_link_changed`.
 
         :param id: Parent team ID (required)
         :type id: UUID
@@ -1668,7 +1670,7 @@ class TeamsApi:
     ) -> ApiResponse[None]:
         """Detach a child team from this team
 
-        Removes the parent link, so the child's members stop reaching what is attached to this team and its ancestors. The child and its roster survive; only this link is cut. Recorded on the admin ledger as `team_parent_link_changed`.
+        Removes the parent link, so the child's members stop reaching what is attached to this team and its ancestors. The child and its roster survive; only this link is cut. A manager of the parent or of the child may detach (a child's managers may leave any parent). Recorded on the admin ledger as `team_parent_link_changed`.
 
         :param id: Parent team ID (required)
         :type id: UUID
@@ -1745,7 +1747,7 @@ class TeamsApi:
     ) -> RESTResponseType:
         """Detach a child team from this team
 
-        Removes the parent link, so the child's members stop reaching what is attached to this team and its ancestors. The child and its roster survive; only this link is cut. Recorded on the admin ledger as `team_parent_link_changed`.
+        Removes the parent link, so the child's members stop reaching what is attached to this team and its ancestors. The child and its roster survive; only this link is cut. A manager of the parent or of the child may detach (a child's managers may leave any parent). Recorded on the admin ledger as `team_parent_link_changed`.
 
         :param id: Parent team ID (required)
         :type id: UUID
@@ -2990,6 +2992,322 @@ class TeamsApi:
         return self.api_client.param_serialize(
             method='DELETE',
             resource_path='/api/teams/{id}/members/{profile_id}',
+            path_params=_path_params,
+            query_params=_query_params,
+            header_params=_header_params,
+            body=_body_params,
+            post_params=_form_params,
+            files=_files,
+            auth_settings=_auth_settings,
+            collection_formats=_collection_formats,
+            _host=_host,
+            _request_auth=_request_auth
+        )
+
+
+
+
+    @validate_call
+    def reparent_team(
+        self,
+        id: Annotated[UUID, Field(description="Team ID (the child being moved)")],
+        reparent_request: ReparentRequest,
+        x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
+        _request_timeout: Union[
+            None,
+            Annotated[StrictFloat, Field(gt=0)],
+            Tuple[
+                Annotated[StrictFloat, Field(gt=0)],
+                Annotated[StrictFloat, Field(gt=0)]
+            ]
+        ] = None,
+        _request_auth: Optional[Dict[StrictStr, Any]] = None,
+        _content_type: Optional[StrictStr] = None,
+        _headers: Optional[Dict[StrictStr, Any]] = None,
+        _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
+    ) -> ReparentOutcome:
+        """Move this team from one parent to another
+
+        One act: the new link is written before the old one is cut, so a refusal leaves the team where it was and it never holds both reaches. The caller must manage this team and the new parent; a new parent that is temper-system or the gating team, or moving an auto-join team, is a system admin's act. Both `team_parent_link_changed` records carry the returned `correlation_id`.
+
+        :param id: Team ID (the child being moved) (required)
+        :type id: UUID
+        :param reparent_request: (required)
+        :type reparent_request: ReparentRequest
+        :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+        :type x_temper_surface: str
+        :param _request_timeout: timeout setting for this request. If one
+                                 number provided, it will be total request
+                                 timeout. It can also be a pair (tuple) of
+                                 (connection, read) timeouts.
+        :type _request_timeout: int, tuple(int, int), optional
+        :param _request_auth: set to override the auth_settings for an a single
+                              request; this effectively ignores the
+                              authentication in the spec for a single request.
+        :type _request_auth: dict, optional
+        :param _content_type: force content-type for the request.
+        :type _content_type: str, Optional
+        :param _headers: set to override the headers for a single
+                         request; this effectively ignores the headers
+                         in the spec for a single request.
+        :type _headers: dict, optional
+        :param _host_index: set to override the host_index for a single
+                            request; this effectively ignores the host_index
+                            in the spec for a single request.
+        :type _host_index: int, optional
+        :return: Returns the result object.
+        """ # noqa: E501
+
+        _param = self._reparent_team_serialize(
+            id=id,
+            reparent_request=reparent_request,
+            x_temper_surface=x_temper_surface,
+            _request_auth=_request_auth,
+            _content_type=_content_type,
+            _headers=_headers,
+            _host_index=_host_index
+        )
+
+        _response_types_map: Dict[str, Optional[str]] = {
+            '200': "ReparentOutcome",
+            '400': None,
+            '403': "ErrorBody",
+            '404': None,
+            '409': None,
+        }
+        response_data = self.api_client.call_api(
+            *_param,
+            _request_timeout=_request_timeout
+        )
+        response_data.read()
+        return self.api_client.response_deserialize(
+            response_data=response_data,
+            response_types_map=_response_types_map,
+        ).data
+
+
+    @validate_call
+    def reparent_team_with_http_info(
+        self,
+        id: Annotated[UUID, Field(description="Team ID (the child being moved)")],
+        reparent_request: ReparentRequest,
+        x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
+        _request_timeout: Union[
+            None,
+            Annotated[StrictFloat, Field(gt=0)],
+            Tuple[
+                Annotated[StrictFloat, Field(gt=0)],
+                Annotated[StrictFloat, Field(gt=0)]
+            ]
+        ] = None,
+        _request_auth: Optional[Dict[StrictStr, Any]] = None,
+        _content_type: Optional[StrictStr] = None,
+        _headers: Optional[Dict[StrictStr, Any]] = None,
+        _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
+    ) -> ApiResponse[ReparentOutcome]:
+        """Move this team from one parent to another
+
+        One act: the new link is written before the old one is cut, so a refusal leaves the team where it was and it never holds both reaches. The caller must manage this team and the new parent; a new parent that is temper-system or the gating team, or moving an auto-join team, is a system admin's act. Both `team_parent_link_changed` records carry the returned `correlation_id`.
+
+        :param id: Team ID (the child being moved) (required)
+        :type id: UUID
+        :param reparent_request: (required)
+        :type reparent_request: ReparentRequest
+        :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+        :type x_temper_surface: str
+        :param _request_timeout: timeout setting for this request. If one
+                                 number provided, it will be total request
+                                 timeout. It can also be a pair (tuple) of
+                                 (connection, read) timeouts.
+        :type _request_timeout: int, tuple(int, int), optional
+        :param _request_auth: set to override the auth_settings for an a single
+                              request; this effectively ignores the
+                              authentication in the spec for a single request.
+        :type _request_auth: dict, optional
+        :param _content_type: force content-type for the request.
+        :type _content_type: str, Optional
+        :param _headers: set to override the headers for a single
+                         request; this effectively ignores the headers
+                         in the spec for a single request.
+        :type _headers: dict, optional
+        :param _host_index: set to override the host_index for a single
+                            request; this effectively ignores the host_index
+                            in the spec for a single request.
+        :type _host_index: int, optional
+        :return: Returns the result object.
+        """ # noqa: E501
+
+        _param = self._reparent_team_serialize(
+            id=id,
+            reparent_request=reparent_request,
+            x_temper_surface=x_temper_surface,
+            _request_auth=_request_auth,
+            _content_type=_content_type,
+            _headers=_headers,
+            _host_index=_host_index
+        )
+
+        _response_types_map: Dict[str, Optional[str]] = {
+            '200': "ReparentOutcome",
+            '400': None,
+            '403': "ErrorBody",
+            '404': None,
+            '409': None,
+        }
+        response_data = self.api_client.call_api(
+            *_param,
+            _request_timeout=_request_timeout
+        )
+        response_data.read()
+        return self.api_client.response_deserialize(
+            response_data=response_data,
+            response_types_map=_response_types_map,
+        )
+
+
+    @validate_call
+    def reparent_team_without_preload_content(
+        self,
+        id: Annotated[UUID, Field(description="Team ID (the child being moved)")],
+        reparent_request: ReparentRequest,
+        x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
+        _request_timeout: Union[
+            None,
+            Annotated[StrictFloat, Field(gt=0)],
+            Tuple[
+                Annotated[StrictFloat, Field(gt=0)],
+                Annotated[StrictFloat, Field(gt=0)]
+            ]
+        ] = None,
+        _request_auth: Optional[Dict[StrictStr, Any]] = None,
+        _content_type: Optional[StrictStr] = None,
+        _headers: Optional[Dict[StrictStr, Any]] = None,
+        _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
+    ) -> RESTResponseType:
+        """Move this team from one parent to another
+
+        One act: the new link is written before the old one is cut, so a refusal leaves the team where it was and it never holds both reaches. The caller must manage this team and the new parent; a new parent that is temper-system or the gating team, or moving an auto-join team, is a system admin's act. Both `team_parent_link_changed` records carry the returned `correlation_id`.
+
+        :param id: Team ID (the child being moved) (required)
+        :type id: UUID
+        :param reparent_request: (required)
+        :type reparent_request: ReparentRequest
+        :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+        :type x_temper_surface: str
+        :param _request_timeout: timeout setting for this request. If one
+                                 number provided, it will be total request
+                                 timeout. It can also be a pair (tuple) of
+                                 (connection, read) timeouts.
+        :type _request_timeout: int, tuple(int, int), optional
+        :param _request_auth: set to override the auth_settings for an a single
+                              request; this effectively ignores the
+                              authentication in the spec for a single request.
+        :type _request_auth: dict, optional
+        :param _content_type: force content-type for the request.
+        :type _content_type: str, Optional
+        :param _headers: set to override the headers for a single
+                         request; this effectively ignores the headers
+                         in the spec for a single request.
+        :type _headers: dict, optional
+        :param _host_index: set to override the host_index for a single
+                            request; this effectively ignores the host_index
+                            in the spec for a single request.
+        :type _host_index: int, optional
+        :return: Returns the result object.
+        """ # noqa: E501
+
+        _param = self._reparent_team_serialize(
+            id=id,
+            reparent_request=reparent_request,
+            x_temper_surface=x_temper_surface,
+            _request_auth=_request_auth,
+            _content_type=_content_type,
+            _headers=_headers,
+            _host_index=_host_index
+        )
+
+        _response_types_map: Dict[str, Optional[str]] = {
+            '200': "ReparentOutcome",
+            '400': None,
+            '403': "ErrorBody",
+            '404': None,
+            '409': None,
+        }
+        response_data = self.api_client.call_api(
+            *_param,
+            _request_timeout=_request_timeout
+        )
+        return response_data.response
+
+
+    def _reparent_team_serialize(
+        self,
+        id,
+        reparent_request,
+        x_temper_surface,
+        _request_auth,
+        _content_type,
+        _headers,
+        _host_index,
+    ) -> RequestSerialized:
+
+        _host = None
+
+        _collection_formats: Dict[str, str] = {
+        }
+
+        _path_params: Dict[str, str] = {}
+        _query_params: List[Tuple[str, str]] = []
+        _header_params: Dict[str, Optional[str]] = _headers or {}
+        _form_params: List[Tuple[str, str]] = []
+        _files: Dict[
+            str, Union[str, bytes, List[str], List[bytes], List[Tuple[str, bytes]]]
+        ] = {}
+        _body_params: Optional[bytes] = None
+
+        # process the path parameters
+        if id is not None:
+            _path_params['id'] = id
+        # process the query parameters
+        # process the header parameters
+        if x_temper_surface is not None:
+            _header_params['X-Temper-Surface'] = x_temper_surface
+        # process the form parameters
+        # process the body parameter
+        if reparent_request is not None:
+            _body_params = reparent_request
+
+
+        # set the HTTP header `Accept`
+        if 'Accept' not in _header_params:
+            _header_params['Accept'] = self.api_client.select_header_accept(
+                [
+                    'application/json'
+                ]
+            )
+
+        # set the HTTP header `Content-Type`
+        if _content_type:
+            _header_params['Content-Type'] = _content_type
+        else:
+            _default_content_type = (
+                self.api_client.select_header_content_type(
+                    [
+                        'application/json'
+                    ]
+                )
+            )
+            if _default_content_type is not None:
+                _header_params['Content-Type'] = _default_content_type
+
+        # authentication setting
+        _auth_settings: List[str] = [
+            'bearer_auth'
+        ]
+
+        return self.api_client.param_serialize(
+            method='POST',
+            resource_path='/api/teams/{id}/reparent',
             path_params=_path_params,
             query_params=_query_params,
             header_params=_header_params,

@@ -3512,7 +3512,8 @@ export interface paths {
         /**
          * Detach a child team from this team
          * @description Removes the parent link, so the child's members stop reaching what is attached to this team and
-         *     its ancestors. The child and its roster survive; only this link is cut. Recorded on the admin
+         *     its ancestors. The child and its roster survive; only this link is cut. A manager of the parent
+         *     or of the child may detach (a child's managers may leave any parent). Recorded on the admin
          *     ledger as `team_parent_link_changed`.
          */
         delete: operations["detach_child_team"];
@@ -3641,6 +3642,32 @@ export interface paths {
          *     are out of scope: a share confers read, never authority over the container.
          */
         post: operations["reassign_team"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/teams/{id}/reparent": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Move this team from one parent to another
+         * @description One act: the new link is written before the old one is cut, so a refusal leaves the team where
+         *     it was and it never holds both reaches. The caller must manage this team and the new parent;
+         *     a new parent that is temper-system or the gating team, or moving an auto-join team, is a system
+         *     admin's act. Both `team_parent_link_changed` records carry the returned `correlation_id`.
+         */
+        post: operations["reparent_team"];
         delete?: never;
         options?: never;
         head?: never;
@@ -9460,6 +9487,28 @@ export interface components {
              *     is stored, and sluggified to derive the new addressable slug.
              */
             name: string;
+        };
+        /**
+         * @description Response body for `POST /api/teams/{id}/reparent`. Both `team_parent_link_changed` records of the
+         *     move carry `correlation_id`, so the ledger shows one move rather than two unrelated acts.
+         */
+        ReparentOutcome: {
+            /** Format: uuid */
+            correlation_id: string;
+            from: components["schemas"]["TeamRef"];
+            team: components["schemas"]["TeamRef"];
+            to: components["schemas"]["TeamRef"];
+        };
+        /**
+         * @description Request body for `POST /api/teams/{id}/reparent` (team DAG doors D3): move the team from one
+         *     parent to another in one act. Each is a team ref: `+slug`, a bare slug, a team UUID, or a
+         *     decorated `slug-<uuid>` ref.
+         */
+        ReparentRequest: {
+            /** @description The current parent to leave. */
+            from: string;
+            /** @description The new parent to join. */
+            to: string;
         };
         /**
          * @description One residual bucket: a distinct value of the group key, and how many otherwise
@@ -21711,7 +21760,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Forbidden: the caller is not an owner or maintainer of the parent team, or the parent is temper-system or the gating team and the caller is not a system admin, or the child is a personal team (nobody detaches one); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden: the caller manages neither the child team nor the parent team (a manager of the parent acts only when it is not temper-system or the gating team) and is not a system admin, or the child is a personal team (nobody detaches one); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -21720,7 +21769,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description That team is not a child of this team; told only to a caller who may manage the parent */
+            /** @description That team is not a child of this team; told only to a caller who may detach it */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -22082,6 +22131,66 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
+            };
+        };
+    };
+    reparent_team: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Team ID (the child being moved) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReparentRequest"];
+            };
+        };
+        responses: {
+            /** @description Moved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReparentOutcome"];
+                };
+            };
+            /** @description `from` and `to` are the same team, or a structural refusal (a personal team, temper-system as the child) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forbidden: the caller does not manage this team, or does not manage `to`, or `to` is temper-system or the gating team, or this team is an auto-join team, and the caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description `from` or `to` does not resolve, a team is soft-deleted, or `from` is not a parent of this team; told only to a caller who manages this team */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The move would make a team its own ancestor; nothing changed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
