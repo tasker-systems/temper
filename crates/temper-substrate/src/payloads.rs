@@ -1838,6 +1838,49 @@ pub enum TeamParentLinkAct {
     Unlinked,
 }
 
+/// `team_lifecycle_changed` — a team was created, soft-deleted, restored, had its slug renamed, or had
+/// its `auto_join_role` changed (team DAG and lifecycle doors D8). Written only by
+/// `_admin_team_lifecycle_write`, in the same statement as the `kb_teams` change (for `created`,
+/// in the transaction that inserted the row).
+///
+/// Each act changes who reaches what: a restore revives every preserved row's reach, a rename
+/// re-addresses every `+team/...` ref, an auto-join change enrols (or stops enrolling) every approved
+/// profile. So each is an authority record like a parent link. The team is the event's `subject`
+/// reference; its managers read it on the subject axis.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct TeamLifecycleChanged {
+    pub team_id: Uuid,
+    pub act: TeamLifecycleAct,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<ProfileId>,
+    /// The value before the act: the old slug on `renamed`, the old `auto_join_role` on
+    /// `auto_join_changed` (absent when it was unset). Absent on the other acts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    /// The value after the act: the new slug on `renamed`, the new `auto_join_role` on
+    /// `auto_join_changed` (absent when cleared). Absent on the other acts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+}
+
+/// What happened to the team in a [`TeamLifecycleChanged`] record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum TeamLifecycleAct {
+    /// The team was created (by `create_team`, in its insert transaction).
+    Created,
+    /// The team was soft-deleted (`is_active = false`); every row is preserved.
+    Deleted,
+    /// A soft-deleted team was made live again; every preserved row confers again.
+    Restored,
+    /// The team's slug changed; `+old/...` refs stop resolving.
+    Renamed,
+    /// The team's `auto_join_role` was set, changed or cleared.
+    AutoJoinChanged,
+}
+
 /// `subscription_delivery_disposed` — a steward's judgment on one routed event (S2 chunk C).
 ///
 /// The disposition is an **act**, not a column write. `acted` cites what was authored; `declined`
@@ -2024,7 +2067,7 @@ impl FoldDisposition {
 }
 
 /// The typed event names — the registry-stamping and snapshot surfaces iterate this.
-pub const TYPED_EVENT_NAMES: [&str; 36] = [
+pub const TYPED_EVENT_NAMES: [&str; 37] = [
     "cogmap_seeded",
     "resource_created",
     "relationship_asserted",
@@ -2061,6 +2104,7 @@ pub const TYPED_EVENT_NAMES: [&str; 36] = [
     "resource_scrubbed",
     "team_membership_changed",
     "team_parent_link_changed",
+    "team_lifecycle_changed",
 ];
 
 /// FOREIGN event names — registered permissive (NULL `payload_schema`) because their body is a
@@ -2080,7 +2124,7 @@ pub const FOREIGN_EVENT_NAMES: [&str; 1] = ["webhook_received"];
 /// `20260718000020`). The migration stamps these on an existing registry; this const is what
 /// re-stamps them on a path that rebuilds the registry from scratch (`bootseed::seed_system` after
 /// a `reset_schema` truncate), so the classification cannot be lost to a reseed.
-pub const ADMIN_EVENT_NAMES: [&str; 14] = [
+pub const ADMIN_EVENT_NAMES: [&str; 15] = [
     "admin_ledger_opened",
     "grant_created",
     "grant_revoked",
@@ -2095,6 +2139,7 @@ pub const ADMIN_EVENT_NAMES: [&str; 14] = [
     "resource_scrubbed",
     "team_membership_changed",
     "team_parent_link_changed",
+    "team_lifecycle_changed",
 ];
 
 /// The event names classified `kb_event_types.category = 'system'` — configuration acts, which are
@@ -2228,6 +2273,9 @@ pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> 
                 }
                 "team_parent_link_changed" => {
                     serde_json::from_value::<TeamParentLinkChanged>(r.payload.clone())?;
+                }
+                "team_lifecycle_changed" => {
+                    serde_json::from_value::<TeamLifecycleChanged>(r.payload.clone())?;
                 }
                 // Unlisted types (e.g. taxonomy entries no write path emits yet) are intentionally
                 // not roundtripped here; add an arm when a write path begins emitting one.
@@ -2637,6 +2685,57 @@ mod tests {
         let v = serde_json::to_value(&unlinked).unwrap();
         assert_eq!(v["act"], "unlinked");
         assert!(v.get("actor").is_none());
+    }
+
+    /// `team_lifecycle_changed` (team DAG and lifecycle doors D8): every act round-trips, absent
+    /// `from`/`to`/`actor` stay absent on the wire, and no field is a trail join key.
+    #[test]
+    fn team_lifecycle_changed_round_trips_each_act() {
+        let base = TeamLifecycleChanged {
+            team_id: Uuid::now_v7(),
+            act: TeamLifecycleAct::Created,
+            actor: Some(ProfileId::from(Uuid::now_v7())),
+            from: None,
+            to: None,
+        };
+        let renamed = TeamLifecycleChanged {
+            act: TeamLifecycleAct::Renamed,
+            from: Some("old".into()),
+            to: Some("new".into()),
+            ..base.clone()
+        };
+        let cleared = TeamLifecycleChanged {
+            act: TeamLifecycleAct::AutoJoinChanged,
+            from: Some("watcher".into()),
+            ..base.clone()
+        };
+        let events = [
+            base.clone(),
+            TeamLifecycleChanged {
+                act: TeamLifecycleAct::Deleted,
+                actor: None,
+                ..base.clone()
+            },
+            TeamLifecycleChanged {
+                act: TeamLifecycleAct::Restored,
+                ..base.clone()
+            },
+            renamed,
+            cleared.clone(),
+        ];
+        for event in &events {
+            let v = serde_json::to_value(event).unwrap();
+            no_trail_key(&v, "team_lifecycle_changed");
+            assert_eq!(
+                &serde_json::from_value::<TeamLifecycleChanged>(v).unwrap(),
+                event
+            );
+        }
+        let v = serde_json::to_value(&cleared).unwrap();
+        assert_eq!(v["act"], "auto_join_changed");
+        assert!(v.get("to").is_none());
+        let v = serde_json::to_value(&events[1]).unwrap();
+        assert!(v.get("actor").is_none() && v.get("from").is_none());
     }
 
     /// `team_membership_changed` (team-role rank spec C8): the three act shapes round-trip, the

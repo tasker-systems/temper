@@ -231,6 +231,49 @@ async fn require_admin_on(pool: &PgPool, caller: &HumanPrincipal) -> ApiResult<(
     }
 }
 
+/// What [`lifecycle_write`] did: the act was written and recorded, it asked for the value already
+/// held (nothing written), or there was no team in the state the act needs (nothing written).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LifecycleOutcome {
+    Changed,
+    Noop,
+    Absent,
+}
+
+/// Perform one team lifecycle act through `_admin_team_lifecycle_write` (migration
+/// `20261118000010`): the `kb_teams` change and its `team_lifecycle_changed` record in one
+/// statement. `act` is one of `created`, `deleted`, `restored`, `renamed`, `auto_join_changed`;
+/// `to` is the new slug or role for the last two. It NEVER AUTHORIZES — every caller decides first.
+pub(crate) async fn lifecycle_write(
+    tx: &mut sqlx::PgConnection,
+    emitter: Uuid,
+    actor: ProfileId,
+    team_id: Uuid,
+    act: &str,
+    to: Option<&str>,
+    correlation: Option<Uuid>,
+) -> ApiResult<LifecycleOutcome> {
+    let outcome = sqlx::query_scalar!(
+        r#"SELECT _admin_team_lifecycle_write($1, $2, $3, $4, $5, $6) AS "outcome!""#,
+        emitter,
+        *actor,
+        team_id,
+        act,
+        to,
+        correlation,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    match outcome.as_str() {
+        "changed" => Ok(LifecycleOutcome::Changed),
+        "noop" => Ok(LifecycleOutcome::Noop),
+        "absent" => Ok(LifecycleOutcome::Absent),
+        other => Err(ApiError::Internal(format!(
+            "_admin_team_lifecycle_write answered {other}"
+        ))),
+    }
+}
+
 /// Proof that `create_team` has just inserted the team row it is about to write the creator's
 /// `owner` row for. Defined here with a private field and constructed only in this module, so the
 /// genesis constructor in `authz::team_membership` cannot be called from anywhere else (plan P16).
@@ -415,6 +458,22 @@ pub async fn create_team(
             team_id,
             creator,
         ),
+    )
+    .await?;
+
+    // The team itself is a recorded act (lifecycle doors D8, R5 extended), in the insert's
+    // transaction: the writer's `created` act appends only.
+    let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, creator, "web")
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    lifecycle_write(
+        &mut tx,
+        emitter.uuid(),
+        creator,
+        team_id,
+        "created",
+        None,
+        None,
     )
     .await?;
 
@@ -694,18 +753,25 @@ pub async fn delete_team(pool: &PgPool, caller: &HumanPrincipal, team_id: Uuid) 
         }
     }
 
-    // Guard the DAG root. Folded into the UPDATE's WHERE so the check and the
-    // write are one atomic statement.
-    let result = sqlx::query!(
-        r#"UPDATE kb_teams
-              SET is_active = false
-            WHERE id = $1 AND is_active AND slug <> 'temper-system'"#,
+    // The write and its `team_lifecycle_changed` record are one statement (lifecycle doors D8). The
+    // writer guards the DAG root in its UPDATE's WHERE, so the check and the write stay atomic.
+    let mut tx = pool.begin().await?;
+    let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let outcome = lifecycle_write(
+        &mut tx,
+        emitter.uuid(),
+        caller.profile_id(),
         team_id,
+        "deleted",
+        None,
+        None,
     )
-    .execute(pool)
     .await?;
+    tx.commit().await?;
 
-    if result.rows_affected() == 0 {
+    if outcome == LifecycleOutcome::Absent {
         // Either absent, already soft-deleted, or the protected root. The root
         // case is only reachable by its owner (auth passed), so distinguish it.
         let is_root = sqlx::query_scalar!(

@@ -96,6 +96,9 @@ const ADMIN_EVENT_TYPES: &[&str] = &[
     // A child team linked under, or detached from, a parent (team-authority fixes D3): the parent
     // is the subject, and its managers read it through the same arm as its membership changes.
     "team_parent_link_changed",
+    // A team created, deleted, restored, renamed or auto-join-changed (team DAG and lifecycle doors
+    // D8): the team is the subject, and its managers read it through the same arm.
+    "team_lifecycle_changed",
 ];
 
 /// The §5 table, evaluated for one subject. Returns the event types `caller` may read about
@@ -170,6 +173,7 @@ async fn readable_event_types(
         if resolved.manages() {
             readable.push("team_membership_changed");
             readable.push("team_parent_link_changed");
+            readable.push("team_lifecycle_changed");
         }
     }
 

@@ -26,8 +26,10 @@ use std::collections::HashMap;
 use sqlx::PgPool;
 use temper_core::types::team::{TeamCreateRequest, TeamRole};
 use temper_services::auth::HumanPrincipal;
-use temper_services::services::team_service;
+use temper_services::error::ApiError;
+use temper_services::services::{admin_ledger_service, team_service};
 use temper_services::test_support;
+use temper_substrate::payloads::{AnchorTable, RefTarget};
 use temper_workflow::operations::Surface;
 use uuid::Uuid;
 
@@ -294,4 +296,149 @@ async fn the_fixture_is_the_shape_it_claims(pool: PgPool) {
         .unwrap();
     assert!(personal);
     let _ = (f.root, f.admin);
+}
+
+/// `team_lifecycle_changed` records about `team` with `act`, optionally by `actor` (D8). Every one
+/// names the team on its `subject` reference, the axis its managers read.
+async fn lifecycle_events(pool: &PgPool, team: Uuid, act: &str, actor: Option<Uuid>) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'team_lifecycle_changed' \
+            AND e.payload @> jsonb_build_object('team_id', $1::uuid, 'act', $2::text) \
+            AND ($3::uuid IS NULL OR e.payload @> jsonb_build_object('actor', $3::uuid)) \
+            AND e.\"references\" @> jsonb_build_array(jsonb_build_object( \
+                  'rel', 'subject', 'target', jsonb_build_object('kind', 'kb_teams', 'id', $1::uuid)))",
+    )
+    .bind(team)
+    .bind(act)
+    .bind(actor)
+    .fetch_one(pool)
+    .await
+    .expect("lifecycle event count")
+}
+
+/// Every `team_lifecycle_changed` record on the ledger.
+async fn all_lifecycle_events(pool: &PgPool) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'team_lifecycle_changed'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("lifecycle event count")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Phase 1 — D8: lifecycle acts are recorded
+// ---------------------------------------------------------------------------------------------
+
+/// Creating a team records one `created` event by its creator, in the insert's transaction.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn creating_a_team_records_one_created_event(pool: PgPool) {
+    let f = fixture(&pool).await;
+    for (team, creator) in [
+        (f.org, f.on("org", "owner")),
+        (f.eng, f.on("eng", "owner")),
+        (f.watch, f.admin),
+    ] {
+        assert_eq!(
+            lifecycle_events(&pool, team, "created", Some(creator)).await,
+            1,
+            "one created event by the creator"
+        );
+    }
+
+    // It reads back through the admin ledger on the team's subject axis, for its managers — the
+    // door that decodes every row on the page, so an undecodable payload fails it.
+    let owner = test_support::human_principal_for(&pool, f.on("org", "owner")).await;
+    let page = admin_ledger_service::list_by_subject(
+        &pool,
+        &owner,
+        RefTarget {
+            kind: AnchorTable::Teams,
+            id: f.org,
+        },
+        50,
+        0,
+    )
+    .await
+    .expect("org's owner reads its ledger page");
+    assert!(
+        page.iter()
+            .any(|e| e.event_type == "team_lifecycle_changed"),
+        "{page:?}"
+    );
+}
+
+/// A refused create records nothing: not a forbidden child, not a slug collision.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_refused_create_records_nothing(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let before = all_lifecycle_events(&pool).await;
+
+    let member = test_support::human_principal_for(&pool, f.on("org", "member")).await;
+    let refusal = team_service::create_team(
+        &pool,
+        &member,
+        &TeamCreateRequest {
+            slug: "dg-nope".into(),
+            name: None,
+            parent: Some("+dg-org".into()),
+            auto_join_role: None,
+        },
+    )
+    .await
+    .expect_err("a member of the parent creates no child");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+
+    let refusal = team_service::create_team(
+        &pool,
+        &member,
+        &TeamCreateRequest {
+            slug: "dg-org".into(),
+            name: None,
+            parent: None,
+            auto_join_role: None,
+        },
+    )
+    .await
+    .expect_err("a taken slug");
+    assert!(matches!(refusal, ApiError::Conflict(_)), "{refusal:?}");
+
+    assert_eq!(
+        all_lifecycle_events(&pool).await,
+        before,
+        "nothing recorded"
+    );
+}
+
+/// Deleting a team records one `deleted` event by the actor; a delete of a team that is already
+/// gone (404) records nothing.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn deleting_a_team_records_one_event_and_a_404_records_none(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let owner = f.on("side", "owner");
+    let p = test_support::human_principal_for(&pool, owner).await;
+    team_service::delete_team(&pool, &p, f.side)
+        .await
+        .expect("the owner deletes side");
+    assert_eq!(
+        lifecycle_events(&pool, f.side, "deleted", Some(owner)).await,
+        1
+    );
+
+    let before = all_lifecycle_events(&pool).await;
+    let refusal = team_service::delete_team(&pool, &p, f.side)
+        .await
+        .expect_err("already deleted");
+    assert!(matches!(refusal, ApiError::NotFound(_)), "{refusal:?}");
+    let refusal = team_service::delete_team(&pool, &p, Uuid::now_v7())
+        .await
+        .expect_err("no such team");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    assert_eq!(
+        all_lifecycle_events(&pool).await,
+        before,
+        "nothing recorded"
+    );
 }
