@@ -7734,7 +7734,7 @@
           "Events"
         ],
         "summary": "Read a context's changes after a position",
-        "description": "A context's changes after a position, in commit order. Each entry is a pointer naming the kind of change, the thing changed (`subject`), the acting entity, the time and the act. No entry carries content: read the subject through its own endpoint, under your own standing. A subject you can no longer read is still pointed at, and its own read refuses it.\n\nOmit `after` to start: the answer has no entries and a `through` at the present, never a tail of history. Hand `through` back as `after` to resume. A position is opaque and is valid only for the context it was issued for. Every answer says how far it looked (`through`) and whether more exists (`has_more`).\n\n**This is a change hint, not a cache-invalidation guarantee.** The feed never announces an admin act, such as an erasure or a scrub. A consumer that mirrors content must periodically re-read the subjects it holds and drop whatever is refused: that re-read is how erased or scrubbed content leaves a mirror.",
+        "description": "A context's changes after a position, in commit order. Each entry is a pointer naming the kind of change, the thing changed (`subject`), the acting entity, the time and the act. No entry carries content: read the subject through its own endpoint, under your own standing. A subject you can no longer read is still pointed at, and its own read refuses it. A change to one of a resource's content blocks names the resource as its `subject` and the block as `block`.\n\nOmit `after` to start: the answer has no entries and a `through` at the present, never a tail of history. Hand `through` back as `after` to resume. A position is opaque and is valid only for the context it was issued for. Every answer says how far it looked (`through`) and whether more exists (`has_more`).\n\n**This is a change hint, not a cache-invalidation guarantee.** The feed never announces an admin act, such as an erasure or a scrub. A consumer that mirrors content must periodically re-read the subjects it holds and drop whatever is refused: that re-read is how erased or scrubbed content leaves a mirror.",
         "operationId": "context_changes",
         "parameters": [
           {
@@ -19297,6 +19297,14 @@
             "format": "uuid",
             "description": "The acting entity (`kb_entities.id`)."
           },
+          "block": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The content block the change was made to, when it was made to one (`kb_content_blocks.id`).\nThe subject is then the block's resource, which is the door a reader re-reads it through."
+          },
           "kind": {
             "type": "string",
             "description": "The ledger's event-type name, verbatim (for example `property_set`, `resource_departed`)."
@@ -19308,7 +19316,7 @@
           },
           "subject": {
             "$ref": "#/components/schemas/ContextChangeSubject",
-            "description": "The thing the change was made to."
+            "description": "The thing the change was made to. A change to one of a resource's content blocks names the\nresource here, and the block in [`block`](Self::block)."
           }
         }
       },
@@ -19326,7 +19334,7 @@
           },
           "table": {
             "type": "string",
-            "description": "`kb_resources`, `kb_edges`, `kb_content_blocks`, `kb_blobs` or `kb_contexts`."
+            "description": "`kb_resources`, `kb_edges`, `kb_blobs` or `kb_contexts`."
           }
         }
       },

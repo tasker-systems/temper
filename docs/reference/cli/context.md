@@ -365,7 +365,7 @@ Options:
 ```text
 A context's changes after a position, in commit order.
 
-Each entry is a pointer — kind, subject (table and id), actor, time and act — never content: read the subject with its own command. Omit `--after` to start: the answer has no entries and a `through` at the present. Pass an answer's `through` as `--after` to resume, and keep reading while `has_more` is true. A position is opaque and valid only for the context it was issued for.
+Each entry is a pointer — kind, subject (table and id), actor, time and act — never content: read the subject with its own command. A change to a content block names its resource as the subject and the block as `block`. Omit `--after` to start: the answer has no entries and a `through` at the present. Pass an answer's `through` as `--after` to resume, and keep reading while `has_more` is true. A position is opaque and valid only for the context it was issued for.
 
 A change hint, not a cache-invalidation guarantee: the feed never announces an erasure or a scrub, so a mirror must periodically re-read the subjects it holds and drop what is refused.
 

@@ -13,6 +13,11 @@ use temper_core::types::ids::{ContextId, ProfileId};
 /// This gate used to be an inline `EXISTS` over `kb_team_members` — the narrowest of the six copies of
 /// the context-read rule that `20260712000010` collapsed. It ignored context shares and explicit
 /// read-grants entirely, so a profile who could read a context by either route still got `None` here.
+///
+/// An admin act's events never move it (owner ruling 2026-11-06, migration 20261117000040). An
+/// erasure folds the erased resource's edges in their home context, and the cursor's uuidv7 would
+/// date an erasure the change feed never shows. It skips them through the feed's own definition,
+/// `_event_is_admin_act`, so the cursor and the feed agree on what an admin act is.
 pub async fn latest_event_id_for_context(
     pool: &PgPool,
     profile_id: ProfileId,
@@ -22,9 +27,11 @@ pub async fn latest_event_id_for_context(
         r#"
         SELECT e.id AS "id!: Uuid"
           FROM kb_events e
+          JOIN kb_event_types et ON et.id = e.event_type_id
          WHERE e.producing_anchor_table = 'kb_contexts'
            AND e.producing_anchor_id = $2
            AND context_readable_by_profile($1, $2)
+           AND NOT _event_is_admin_act(et.name, e.correlation_id, e.emitter_entity_id, e.xact_id)
          ORDER BY e.occurred_at DESC
          LIMIT 1
         "#,

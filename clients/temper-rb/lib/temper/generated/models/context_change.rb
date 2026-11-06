@@ -22,13 +22,16 @@ module Temper::Generated
     # The acting entity (`kb_entities.id`).
     attr_accessor :actor
 
+    # The content block the change was made to, when it was made to one (`kb_content_blocks.id`). The subject is then the block's resource, which is the door a reader re-reads it through.
+    attr_accessor :block
+
     # The ledger's event-type name, verbatim (for example `property_set`, `resource_departed`).
     attr_accessor :kind
 
     # When the acting transaction began. Not the feed's order: entries are in commit order.
     attr_accessor :occurred_at
 
-    # The thing the change was made to.
+    # The thing the change was made to. A change to one of a resource's content blocks names the resource here, and the block in [`block`](Self::block).
     attr_accessor :subject
 
     # Attribute mapping from ruby-style variable name to JSON key.
@@ -36,6 +39,7 @@ module Temper::Generated
       {
         :'act' => :'act',
         :'actor' => :'actor',
+        :'block' => :'block',
         :'kind' => :'kind',
         :'occurred_at' => :'occurred_at',
         :'subject' => :'subject'
@@ -57,6 +61,7 @@ module Temper::Generated
       {
         :'act' => :'String',
         :'actor' => :'String',
+        :'block' => :'String',
         :'kind' => :'String',
         :'occurred_at' => :'Time',
         :'subject' => :'ContextChangeSubject'
@@ -67,6 +72,7 @@ module Temper::Generated
     def self.openapi_nullable
       Set.new([
         :'act',
+        :'block',
       ])
     end
 
@@ -94,6 +100,10 @@ module Temper::Generated
         self.actor = attributes[:'actor']
       else
         self.actor = nil
+      end
+
+      if attributes.key?(:'block')
+        self.block = attributes[:'block']
       end
 
       if attributes.key?(:'kind')
@@ -197,6 +207,7 @@ module Temper::Generated
       self.class == o.class &&
           act == o.act &&
           actor == o.actor &&
+          block == o.block &&
           kind == o.kind &&
           occurred_at == o.occurred_at &&
           subject == o.subject
@@ -211,7 +222,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [act, actor, kind, occurred_at, subject].hash
+      [act, actor, block, kind, occurred_at, subject].hash
     end
 
     # Builds the object from hash

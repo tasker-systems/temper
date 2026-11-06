@@ -1,6 +1,6 @@
 //! A context's changes after a position: the service behind every door to the change feed.
 //!
-//! The read itself is `context_changes_after` (20261116000010, last replaced by 20261117000020):
+//! The read itself is `context_changes_after` (20261116000010, last replaced by 20261117000040):
 //! a context's domain events under the settled horizon, in commit order, each a pointer (kind,
 //! subject, actor, time, act) and never content. This service adds what a door needs on top of it:
 //!
@@ -29,13 +29,21 @@
 //! never announces an admin act, so a consumer that mirrors content must periodically re-read the
 //! subjects it holds and drop what its read now refuses. Every door repeats this.
 //!
-//! **What the feed withholds besides admin acts** (20261117000020).
+//! **What the feed withholds besides admin acts** (20261117000020, 20261117000040).
 //! - An edge is served only while the reader can read both its endpoints, as `edges_visible_to`
 //!   answers, so an edge whose endpoint leaves the reader's view goes quiet rather than reporting a
 //!   fold. When that endpoint lived in this context, its own departure is served here. When it
 //!   lives in another context, nothing here says so, and the periodic re-read drops the edge.
 //! - A connection's traffic, `webhook_received` and `subscription_delivery_disposed`, is never
 //!   served, and naming either in `kinds` is refused as an unknown kind (`_feed_withholds_kind`).
+//! - A resource leaves a context one way: a deletion and a move are each one `resource_departed`,
+//!   naming only the resource, so an exit never says whether the resource still exists elsewhere.
+//!   `resource_deleted` stays in the ledger, is not served, and is refused in `kinds` the same way.
+//!
+//! **What an entry names.** A change to a content block names the block's resource as its subject
+//! and the block as `block`: a block is re-read through its resource. Every subject is one of
+//! `kb_resources`, `kb_edges`, `kb_blobs` or `kb_contexts`; an event naming anything else is
+//! withheld, never served on a guess.
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;

@@ -27,7 +27,16 @@ use temper_substrate::writes::{self, CreateParams};
 use uuid::Uuid;
 
 /// The entry keys R4 allows. An entry is a pointer: anything else in it is a disclosure.
-const ENTRY_KEYS: &[&str] = &["position", "kind", "subject", "actor", "occurred_at", "act"];
+/// `block` names a content block beside its resource (migration 20261117000040).
+const ENTRY_KEYS: &[&str] = &[
+    "position",
+    "kind",
+    "subject",
+    "block",
+    "actor",
+    "occurred_at",
+    "act",
+];
 
 const BEGINNING: (&str, i64) = ("0", 0);
 
@@ -478,7 +487,7 @@ async fn rows_without_a_truthful_order_are_refused_or_never_served(pool: PgPool)
              producing_anchor_id, payload, category, xact_id, seq) \
              SELECT id, $1, 'kb_contexts', $2, '{}'::jsonb, \
                     category, $3::text::xid8, $4 \
-               FROM kb_event_types WHERE name = 'resource_deleted'",
+               FROM kb_event_types WHERE name = 'resource_departed'",
         )
         .bind(emitter)
         .bind(home.uuid())
@@ -524,7 +533,7 @@ async fn rows_without_a_truthful_order_are_refused_or_never_served(pool: PgPool)
     assert_eq!(legacy, 1);
     let (got, _) = drain(&pool, owner, home, (BEGINNING.0.into(), BEGINNING.1), 1000).await;
     assert!(
-        subjects_of_kind(&got, "resource_deleted").is_empty(),
+        subjects_of_kind(&got, "resource_departed").is_empty(),
         "an unordered row is never served: {got:?}"
     );
 }
@@ -669,14 +678,18 @@ async fn unset_and_retracted_entries_name_their_owner(pool: PgPool) {
 ///   - a resource deleted there;
 ///   - a resource erased there.
 /// A deletion and a move are each an entry in the context they left (ruled 2026-11-03, migration
-/// 20261116000020): `resource_deleted`, and one `resource_departed` that names no destination. An
+/// 20261116000020), and the same entry (ruled 2026-11-06, migration 20261117000040): one
+/// `resource_departed` that names no destination, so the exit never says whether the resource still
+/// exists somewhere the reader cannot see. `resource_deleted` stays in the ledger and is not served. An
 /// erasure is an admin act, and the feed never serves an admin act's events (ruled the same day):
 /// it writes no departure, its fold of the erased resource's edge is withheld, and neither its
 /// operator nor its request reference reaches the reader. The erased resource's past entries stay,
 /// as pointers. None of the titles or key names reaches the reader.
 ///
 /// FAILS IF: the read filters resources by subject (then a departed subject's entries vanish and a
-/// relay is never told), the hidden edge is pointed at, a move leaves the old home silent, a departure names where the resource went, an
+/// relay is never told), the hidden edge is pointed at, a move leaves the old home silent, a
+/// departure names where the resource went, a deletion's exit differs from a move's (bite probe: drop
+/// the departure from `resource_delete`, or `resource_deleted` from `_feed_withholds_kind`), an
 /// erasure's act reaches the feed, or a subject's own read admits what the reader can no longer
 /// read.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
@@ -771,8 +784,8 @@ async fn a_subject_that_left_view_is_still_pointed_at_and_its_own_read_refuses(p
         "the erased resource's past is still pointed at: {whole:?}"
     );
     assert!(
-        pointed(deleted.uuid()).contains(&"resource_deleted"),
-        "the deletion itself is an entry: {whole:?}"
+        !pointed(deleted.uuid()).contains(&"resource_deleted"),
+        "the deletion is served under its own kind: {whole:?}"
     );
     let departures = |id: Uuid| {
         pointed(id)
@@ -786,9 +799,45 @@ async fn a_subject_that_left_view_is_still_pointed_at_and_its_own_read_refuses(p
         "the move is one departure here: {whole:?}"
     );
     assert_eq!(
+        departures(deleted.uuid()),
+        1,
+        "the deletion is one departure here: {whole:?}"
+    );
+    assert_eq!(
         departures(erased.uuid()),
         0,
         "an erasure departs: {whole:?}"
+    );
+    // The two exits are the same entry: the same kind, subject table and keys.
+    let exit = |id: Uuid| {
+        let e = whole
+            .iter()
+            .find(|e| e["kind"] == "resource_departed" && e["subject"]["id"] == id.to_string())
+            .unwrap();
+        let mut keys: Vec<&String> = e.as_object().unwrap().keys().collect();
+        keys.sort();
+        (
+            e["subject"]["table"].clone(),
+            keys.into_iter().cloned().collect::<Vec<_>>(),
+        )
+    };
+    assert_eq!(
+        exit(moved.uuid()),
+        exit(deleted.uuid()),
+        "a move's exit and a deletion's differ: {whole:?}"
+    );
+    // The ledger is unchanged: the deletion's own record is still written, only not served.
+    let deletion_records: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE et.name = 'resource_deleted' AND e.payload->>'resource_id' = $1::text",
+    )
+    .bind(deleted.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        deletion_records, 1,
+        "the deletion's record is in the ledger"
     );
     // The move's departure is its act's own event: it carries the move's correlation id. The move
     // was fired without one, so this is the id the move's own record took.
@@ -851,7 +900,10 @@ async fn a_subject_that_left_view_is_still_pointed_at_and_its_own_read_refuses(p
     .unwrap();
     assert_eq!(
         payloads,
-        vec![serde_json::json!({ "resource_id": moved.uuid() })],
+        vec![
+            serde_json::json!({ "resource_id": moved.uuid() }),
+            serde_json::json!({ "resource_id": deleted.uuid() }),
+        ],
         "a departure carries only the resource id"
     );
     assert!(
@@ -901,12 +953,13 @@ async fn a_subject_that_left_view_is_still_pointed_at_and_its_own_read_refuses(p
     );
 }
 
-/// The departure's rule (migration 20261116000020): a resource departs once, and only from a home
-/// it is leaving. A deleted resource has its deletion as its one way out, so moving it afterwards
-/// writes no departure. A move to the home the resource is already in is no departure.
+/// The departure's rule (migrations 20261116000020, 20261117000040): a resource departs once, and
+/// only from a home it is leaving. A deleted resource's deletion is its one departure, so moving it
+/// afterwards writes no second one. A move to the home the resource is already in is no departure.
 ///
-/// FAILS IF: the departure skips the live check (then the deleted resource's move departs), or the
-/// same-home check (then the same-home move departs).
+/// FAILS IF: the departure skips the live check (then the deleted resource's move departs a second
+/// time), the deletion writes no departure, or the same-home check is skipped (then the same-home
+/// move departs).
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn a_resource_departs_once_and_only_from_a_home_it_leaves(pool: PgPool) {
     let (owner, emitter, home) = setup(&pool).await;
@@ -951,10 +1004,13 @@ async fn a_resource_departs_once_and_only_from_a_home_it_leaves(pool: PgPool) {
             .map(|e| e["kind"].as_str().unwrap())
             .collect()
     };
-    assert!(kinds(gone.uuid()).contains(&"resource_deleted"), "{got:?}");
-    assert!(
-        !kinds(gone.uuid()).contains(&"resource_departed"),
-        "a deleted resource departs again when moved: {got:?}"
+    assert_eq!(
+        kinds(gone.uuid())
+            .iter()
+            .filter(|k| **k == "resource_departed")
+            .count(),
+        1,
+        "a deleted resource departs once, by its deletion, and not again when moved: {got:?}"
     );
     assert!(
         kinds(stays.uuid()).contains(&"resource_rehomed"),
@@ -1784,5 +1840,130 @@ async fn a_read_scans_at_most_its_budget(pool: PgPool) {
         subjects_of_kind(&rest, "resource_created"),
         vec![r.uuid().to_string()],
         "resuming past the run reaches the change after it"
+    );
+}
+
+/// Owner ruling 2026-11-06 (migration 20261117000040, cross-review recommendation 5). A change to a
+/// content block names the block's resource as its subject and the block as `block`, because a
+/// block is re-read through its resource: no door takes a block id alone. `block_mutated` named
+/// only the block before; `block_created` named the resource but dropped the block. No entry names
+/// `kb_content_blocks` as its subject any more.
+///
+/// FAILS IF: a block entry's subject is the block (drop the second lateral's mapping), or the block
+/// id is not carried beside the resource (drop `block` from the entry).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_block_entry_names_its_resource_and_the_block(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    let r = create(&pool, owner, emitter, home, "blocks", "first", &[]).await;
+    let first: Uuid =
+        sqlx::query_scalar("SELECT id FROM kb_content_blocks WHERE resource_id = $1 AND seq = 0")
+            .bind(r.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    let revised = temper_substrate::content::prepare_block_deferred(0, None, "first, revised");
+    let mut tx = pool.begin().await.unwrap();
+    fire(
+        &mut tx,
+        SeedAction::BlockMutate {
+            incorporated: &[],
+            block: first.into(),
+            chunks: &revised.chunks,
+            raw: None,
+            replaces_body: false,
+            emitter,
+        },
+    )
+    .await
+    .expect("the block mutates");
+    tx.commit().await.unwrap();
+
+    let appended = temper_substrate::content::prepare_block_deferred(1, None, "second");
+    let second = writes::append_block(
+        &pool,
+        writes::AppendParams {
+            resource: r,
+            block: &appended,
+            sources: vec![],
+            emitter,
+        },
+    )
+    .await
+    .expect("the block appends");
+
+    let (got, _) = drain(&pool, owner, home, (BEGINNING.0.into(), BEGINNING.1), 1000).await;
+    let of_kind = |kind: &str| -> Vec<&serde_json::Value> {
+        got.iter().filter(|e| e["kind"] == kind).collect()
+    };
+    for (kind, block) in [("block_mutated", first), ("block_created", second.uuid())] {
+        let found = of_kind(kind);
+        assert_eq!(found.len(), 1, "one {kind}: {got:?}");
+        assert_eq!(
+            found[0]["subject"],
+            serde_json::json!({ "table": "kb_resources", "id": r.uuid() }),
+            "{kind} names the block's resource: {got:?}"
+        );
+        assert_eq!(
+            found[0]["block"],
+            serde_json::json!(block),
+            "{kind} names the block: {got:?}"
+        );
+    }
+    assert!(
+        got.iter()
+            .all(|e| e["subject"]["table"] != "kb_content_blocks"),
+        "a block is named as a subject: {got:?}"
+    );
+    assert!(
+        got.iter()
+            .filter(|e| e["kind"] == "resource_created")
+            .all(|e| e.get("block").is_none()),
+        "a change to the resource itself names a block: {got:?}"
+    );
+}
+
+/// Cross-review recommendation 6 (migration 20261117000040). An event's subject table comes from its
+/// payload. The feed serves an entry only when that table is one it names subjects in
+/// (`kb_resources`, `kb_edges`, `kb_blobs`, `kb_contexts`) with an id; anything else is withheld,
+/// never served on a guess. Inserted directly: no write path stores such a payload today.
+///
+/// FAILS IF: the allow-list is dropped (then the forged table is served as a subject).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_subject_outside_the_feeds_tables_is_withheld(pool: PgPool) {
+    let (owner, emitter, home) = setup(&pool).await;
+    // An owner id that is not a uuid never lands: the ledger refuses it at insert.
+    for owner_payload in
+        [serde_json::json!({ "owner": { "table": "kb_forgedzq", "id": Uuid::now_v7() } })]
+    {
+        sqlx::query(
+            "INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, \
+             producing_anchor_id, payload, category) \
+             SELECT id, $1, 'kb_contexts', $2, $3, category \
+               FROM kb_event_types WHERE name = 'property_set'",
+        )
+        .bind(emitter)
+        .bind(home.uuid())
+        .bind(&owner_payload)
+        .execute(&pool)
+        .await
+        .expect("the row lands");
+    }
+    let r = create(&pool, owner, emitter, home, "after", "a", &[]).await;
+
+    let (got, _) = drain(&pool, owner, home, (BEGINNING.0.into(), BEGINNING.1), 1000).await;
+    let text = serde_json::to_string(&got).unwrap();
+    assert!(
+        !text.contains("kb_forgedzq"),
+        "the forged table was served: {text}"
+    );
+    assert!(
+        subjects_of_kind(&got, "property_set").is_empty(),
+        "a subject outside the feed's tables was served: {got:?}"
+    );
+    assert_eq!(
+        subjects_of_kind(&got, "resource_created"),
+        vec![r.uuid().to_string()],
+        "the change after them is served"
     );
 }

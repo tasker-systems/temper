@@ -42,8 +42,13 @@ pub struct EventCursorResponse {
 pub struct ContextChange {
     /// The ledger's event-type name, verbatim (for example `property_set`, `resource_departed`).
     pub kind: String,
-    /// The thing the change was made to.
+    /// The thing the change was made to. A change to one of a resource's content blocks names the
+    /// resource here, and the block in [`block`](Self::block).
     pub subject: ContextChangeSubject,
+    /// The content block the change was made to, when it was made to one (`kb_content_blocks.id`).
+    /// The subject is then the block's resource, which is the door a reader re-reads it through.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block: Option<Uuid>,
     /// The acting entity (`kb_entities.id`).
     pub actor: Uuid,
     /// When the acting transaction began. Not the feed's order: entries are in commit order.
@@ -57,7 +62,7 @@ pub struct ContextChange {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct ContextChangeSubject {
-    /// `kb_resources`, `kb_edges`, `kb_content_blocks`, `kb_blobs` or `kb_contexts`.
+    /// `kb_resources`, `kb_edges`, `kb_blobs` or `kb_contexts`.
     pub table: String,
     pub id: Uuid,
 }

@@ -372,6 +372,8 @@ async fn a_bound_or_kind_out_of_range_is_refused_never_clamped(pool: PgPool) {
         "webhook_received",
         "subscription_delivery_disposed",
         "property_set,webhook_received",
+        // A deletion is served as its departure (migration 20261117000040).
+        "resource_deleted",
     ] {
         let err = read(&pool, owner.profile, ctx, q(None, None, Some(kinds)))
             .await
@@ -391,6 +393,7 @@ async fn a_bound_or_kind_out_of_range_is_refused_never_clamped(pool: PgPool) {
 }
 
 /// FAILS IF: reading the feed writes anything, or changes what the context cursor answers.
+/// (What the cursor answers for an admin act is `an_admin_act_never_moves_the_cursor`.)
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn reading_records_nothing_and_the_cursor_answers_as_before(pool: PgPool) {
     let owner = reader(&pool, "owner").await;
@@ -436,6 +439,113 @@ async fn reading_records_nothing_and_the_cursor_answers_as_before(pool: PgPool) 
         .await
         .unwrap();
     assert_eq!(keys, 1, "one key per deployment");
+}
+
+/// Owner ruling 2026-11-06 (migration 20261117000040). An admin act's events never move the context
+/// cursor, which reads them through the feed's own definition, `_event_is_admin_act`. An erasure
+/// folds the erased resource's edges in their home context, and the cursor's uuidv7 dated an
+/// erasure the feed never shows. That holds for a legacy act too: rows written before the order
+/// columns (NULL `xact_id`) match a legacy act record by correlation id and emitter.
+///
+/// FAILS IF: the cursor reads every event anchored on the context (bite probe: drop the
+/// `_event_is_admin_act` filter from `latest_event_id_for_context`, and the act's change becomes the
+/// cursor), or the legacy span is not matched (bite probe: `=` for `IS NOT DISTINCT FROM` on
+/// `xact_id`, and the legacy act's change becomes the cursor).
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_admin_act_never_moves_the_cursor(pool: PgPool) {
+    let admin = reader(&pool, "admin").await;
+    let ctx = own_context(&pool, admin.profile, "work").await;
+    let cursor = |pool: PgPool| async move {
+        event_service::latest_event_id_for_context(
+            &pool,
+            ProfileId::from(admin.profile),
+            ContextId::from(ctx),
+        )
+        .await
+        .unwrap()
+    };
+    let event_of = |pool: PgPool, subject: Uuid| async move {
+        sqlx::query_scalar::<_, Uuid>(
+            "SELECT id FROM kb_events WHERE payload->>'resource_id' = $1::text",
+        )
+        .bind(subject)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+
+    let corr = Uuid::now_v7();
+    let before = correlated(&pool, ctx, admin.emitter, corr, false).await;
+    assert_eq!(
+        cursor(pool.clone()).await,
+        Some(event_of(pool.clone(), before).await),
+        "anti-vacuity: an authored change moves the cursor"
+    );
+    let within = correlated(&pool, ctx, admin.emitter, corr, true).await;
+    assert_eq!(
+        cursor(pool.clone()).await,
+        Some(event_of(pool.clone(), before).await),
+        "the act's own change ({within}) moved the cursor"
+    );
+
+    // A legacy act: the admin record and its change written as replay restores pre-order rows.
+    let legacy_corr = Uuid::now_v7();
+    let legacy = Uuid::now_v7();
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT set_config('temper.replaying', 'on', true)")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    for (sql, what) in [
+        (
+            "INSERT INTO kb_events (event_type_id, emitter_entity_id, correlation_id, category, \
+                                    payload, xact_id, seq) \
+             SELECT id, $1, $2, 'admin', '{}'::jsonb, NULL, NULL \
+               FROM kb_event_types WHERE name = 'resource_erased'",
+            "a legacy admin record",
+        ),
+        (
+            "INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, \
+                                    producing_anchor_id, correlation_id, payload, xact_id, seq) \
+             SELECT id, $1, 'kb_contexts', $3, $2, jsonb_build_object('resource_id', $4::uuid), \
+                    NULL, NULL \
+               FROM kb_event_types WHERE name = 'property_set'",
+            "a legacy change",
+        ),
+    ] {
+        sqlx::query(sql)
+            .bind(admin.emitter)
+            .bind(legacy_corr)
+            .bind(ctx)
+            .bind(legacy)
+            .execute(&mut *tx)
+            .await
+            .expect(what);
+    }
+    tx.commit().await.unwrap();
+    let legacy_rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events WHERE correlation_id = $1 AND xact_id IS NULL",
+    )
+    .bind(legacy_corr)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        legacy_rows, 2,
+        "anti-vacuity: both legacy rows have no order"
+    );
+    assert_eq!(
+        cursor(pool.clone()).await,
+        Some(event_of(pool.clone(), before).await),
+        "the legacy act's change ({legacy}) moved the cursor"
+    );
+
+    let after = correlated(&pool, ctx, admin.emitter, corr, false).await;
+    assert_eq!(
+        cursor(pool.clone()).await,
+        Some(event_of(pool.clone(), after).await),
+        "an authored change after the act moves the cursor"
+    );
 }
 
 /// One event per transaction, sharing correlation id `corr` and emitter `emitter`: a domain change
