@@ -3090,16 +3090,6 @@ impl Backend for DbBackend {
         // lock and R's row would make other writers and an erasure act wait that long (found by
         // both second-round reviews).
         let prepared = writes::prepare_update_body(&mut params, defer).map_err(api_err)?;
-        // The home a move leaves, read before the write re-points it: its regions still count the
-        // resource as a member, so it is settled after the commit as a deletion's home is (below).
-        // Best-effort like every clock enqueue: an unreadable home only means no settle is queued.
-        let left_home = match rehome_to {
-            Some(_) => region_clocks::home_of(&self.pool, new_id)
-                .await
-                .ok()
-                .flatten(),
-            None => None,
-        };
         let mut tx = self.begin_floored(ResourceId::from(new_id)).await?;
         // GOAL ROWS FIRST: a goal patch locks the goal rows it touches before the update and the
         // goal-edge folds lock edge, block and remote-source rows — the NEW goal's (a set), whose
@@ -3122,6 +3112,27 @@ impl Backend for DbBackend {
         writes::update_resource_in_tx_prepared(&mut tx, params, prepared, act_ctx.clone())
             .await
             .map_err(write_err)?;
+        // The home a move left, read from the departure this transaction just wrote: written under
+        // the resource's row lock, so a concurrent move cannot make it name the wrong home. Its
+        // regions still count the resource as a member, so it is settled after the commit as a
+        // deletion's home is (below). None when the update moved nothing, or moved the resource to
+        // the home it was already in.
+        let left_home = match rehome_to {
+            Some(_) => sqlx::query!(
+                r#"SELECT e.producing_anchor_table AS "anchor_table!", e.producing_anchor_id AS "anchor_id!"
+                     FROM kb_events e
+                     JOIN kb_event_types et ON et.id = e.event_type_id
+                    WHERE et.name = 'resource_departed'
+                      AND e.xact_id = pg_current_xact_id()
+                      AND e.payload->>'resource_id' = $1::uuid::text"#,
+                new_id,
+            )
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(tx_err)?
+            .and_then(|r| HomeAnchor::from_parts(&r.anchor_table, r.anchor_id)),
+            None => None,
+        };
 
         // Project the goal-edge patch (issue 019f3d55). `Set` folds any existing `advances`→goal
         // edge and asserts the new one (replace-in-place); `Clear` folds without re-asserting;
@@ -3211,9 +3222,7 @@ impl Backend for DbBackend {
         // settle follows either exit, so the old home's readers cannot tell a move from a deletion
         // by what follows the departure (owner ruling 2026-11-06; migration 20261117000040).
         if let Some(left) = left_home {
-            if rehome_to.map(HomeAnchor::Context) != Some(left) {
-                self.queue_region_clocks(left, emitter).await;
-            }
+            self.queue_region_clocks(left, emitter).await;
         }
 
         // If this update rehomed the resource, enqueue a shape-reconcile job for the destination

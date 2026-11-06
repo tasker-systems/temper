@@ -24,8 +24,9 @@ impl<'a> EventClient<'a> {
         Self { http }
     }
 
-    /// GET /api/events/{kb_context_id}/cursor — the most recent event id for
-    /// a context.
+    /// GET /api/events/{kb_context_id}/cursor — the newest event id on a context among the events
+    /// its change feed would serve the caller. `None` when the context is unreadable, has no such
+    /// event, or none of its newest events qualifies; compare it for equality, never order.
     pub async fn latest_for_context(&self, kb_context_id: Uuid) -> Result<Option<Uuid>> {
         let token = self.http.resolve_token()?;
         let op = &ops::CURSOR;

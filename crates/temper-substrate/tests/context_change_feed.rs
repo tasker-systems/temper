@@ -1975,7 +1975,7 @@ async fn cursor_entry(
     context: ContextId,
 ) -> Option<(String, String)> {
     sqlx::query_as::<_, (String, String)>(
-        "SELECT coalesce(_feed_served_kind(et.name, e.xact_id, e.payload), 'WITHHELD:' || et.name), \
+        "SELECT coalesce(_feed_served_kind(et.name, e.xact_id, e.payload, e.producing_anchor_table, e.producing_anchor_id), 'WITHHELD:' || et.name), \
                 coalesce(e.payload->>'resource_id', e.payload->>'edge_id', $2::text) \
            FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
           WHERE e.id = context_cursor($1, $2)",
@@ -2020,8 +2020,12 @@ async fn newest_entry(
 /// A deletion moves both to its one departure. A deletion written before this migration, with no
 /// departure in its transaction, is served as `resource_departed` and moves both too.
 ///
-/// FAILS IF: the cursor reads past a withheld class the feed skips (bite probe: drop any one
-/// predicate from `context_cursor`), the feed serves the system-computed kinds (drop them from
+/// It also holds for an event naming a subject outside the feed's tables, and for one of a category
+/// the feed does not serve.
+///
+/// FAILS IF: the cursor reads past a withheld class the feed skips (bite probe: drop the admin-act,
+/// served-kind, edge, category or subject-table predicate from `context_cursor`), the feed serves the
+/// system-computed kinds (drop them from
 /// `_feed_withholds_kind`), or a departure-less deletion is silent (make `_feed_served_kind`
 /// return NULL for every `resource_deleted`).
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
@@ -2091,6 +2095,42 @@ async fn the_cursor_is_the_newest_event_the_feed_serves(pool: PgPool) {
     tx.commit().await.unwrap();
     agree("an admin act", ("resource_created", a1.uuid())).await;
 
+    // A subject outside the feed's tables, and an event of a category the feed does not serve.
+    sqlx::query(
+        "INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, \
+                                producing_anchor_id, payload, category) \
+         SELECT id, $1, 'kb_contexts', $2, $3, category \
+           FROM kb_event_types WHERE name = 'property_set'",
+    )
+    .bind(emitter)
+    .bind(shared.uuid())
+    .bind(serde_json::json!({ "owner": { "table": "kb_forgedzq", "id": Uuid::now_v7() } }))
+    .execute(&pool)
+    .await
+    .unwrap();
+    agree(
+        "a subject outside the feed's tables",
+        ("resource_created", a1.uuid()),
+    )
+    .await;
+    let landed = sqlx::query(
+        "INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, \
+                                producing_anchor_id, payload, category) \
+         SELECT id, $1, 'kb_contexts', $2, '{}'::jsonb, category \
+           FROM kb_event_types WHERE category = 'system' ORDER BY name LIMIT 1",
+    )
+    .bind(emitter)
+    .bind(shared.uuid())
+    .execute(&pool)
+    .await
+    .unwrap()
+    .rows_affected();
+    assert_eq!(
+        landed, 1,
+        "anti-vacuity: a non-domain event landed on the context"
+    );
+    agree("a non-domain event", ("resource_created", a1.uuid())).await;
+
     let hidden = edge(&pool, emitter, shared, a1, p1).await;
     assert!(
         ledger_edge_entries(&pool, shared, hidden).await >= 1,
@@ -2126,4 +2166,77 @@ async fn the_cursor_is_the_newest_event_the_feed_serves(pool: PgPool) {
 
     let b = create(&pool, owner, emitter, shared, "b", "b", &[]).await;
     agree("a later change", ("resource_created", b.uuid())).await;
+}
+
+/// Review round 2, M1 (migration 20261117000040, item 9). The staleness door's clock answers a
+/// deletion and a move out the same way. An edge homed in the context to an endpoint that leaves it
+/// kept counting as a touch when the endpoint was deleted (it is still homed there) and stopped when
+/// it moved out (neither readable nor homed there), so `latest_touch` told the context's readers which
+/// exit it was. The departure is now a touch itself: after either exit, a reader's `latest_touch` is
+/// the departure's time.
+///
+/// FAILS IF: the departure arm is dropped from `anchor_staleness` (then the deleted endpoint's
+/// context answers the edge's touch and the moved one's answers nothing).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_staleness_clock_answers_a_deletion_and_a_move_alike(pool: PgPool) {
+    let (owner, emitter, _) = setup(&pool).await;
+    let team = common::create_team(&pool, "stale-team").await;
+    let reader = ProfileId::from(common::create_profile(&pool, "stale@example.test").await);
+    common::add_team_member(&pool, team, reader.uuid()).await;
+    let private = ContextId::from(
+        common::insert_context(&pool, "kb_profiles", owner.uuid(), "private", "private")
+            .await
+            .unwrap(),
+    );
+
+    let mut answers = Vec::new();
+    for (slug, moves) in [("deletes", false), ("moves", true)] {
+        let ctx = ContextId::from(
+            common::insert_context(&pool, "kb_teams", team, slug, slug)
+                .await
+                .unwrap(),
+        );
+        let x = create(&pool, owner, emitter, ctx, &format!("{slug}-x"), "x", &[]).await;
+        let y = create(&pool, owner, emitter, ctx, &format!("{slug}-y"), "y", &[]).await;
+        edge(&pool, emitter, ctx, x, y).await;
+        if moves {
+            let mut tx = pool.begin().await.unwrap();
+            fire(
+                &mut tx,
+                SeedAction::ResourceRehome {
+                    resource: y,
+                    home: AnchorRef::context(private),
+                    emitter,
+                },
+            )
+            .await
+            .expect("the move");
+            tx.commit().await.unwrap();
+        } else {
+            writes::delete_resource(&pool, y, emitter).await.unwrap();
+        }
+        let departed: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
+            "SELECT e.occurred_at FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+              WHERE et.name = 'resource_departed' AND e.payload->>'resource_id' = $1::text",
+        )
+        .bind(y.uuid())
+        .fetch_one(&pool)
+        .await
+        .expect("one departure");
+        let touch: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
+            "SELECT latest_touch FROM anchor_staleness('kb_contexts', $1, 'profile', $2)",
+        )
+        .bind(ctx.uuid())
+        .bind(reader.uuid())
+        .fetch_one(&pool)
+        .await
+        .expect("the reader reads the context's staleness");
+        assert_eq!(
+            touch,
+            Some(departed),
+            "{slug}: the reader's latest touch is not the departure"
+        );
+        answers.push(touch.is_some());
+    }
+    assert_eq!(answers, vec![true, true], "the two exits answer alike");
 }

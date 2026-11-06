@@ -73,6 +73,12 @@
 --      deletion from a move. The exception is removed (crates/temper-substrate/src/readback): a
 --      deleted resource is unreadable there as everywhere else.
 --
+--   9. THE STALENESS DOOR COUNTS AN EXIT (review round 2, M1). anchor_staleness's edge-touch arm
+--      kept counting an edge whose endpoint was deleted (still homed here) and stopped counting one
+--      whose endpoint moved out, so latest_touch told a deletion from a move. A departure from the
+--      anchor is now a touch itself, so both exits move the clock to the same moment. The function
+--      is 20260825000020's, with that one arm added.
+--
 -- context_changes_after's signature and result type are unchanged; its entries gain the optional
 -- key `block`, and `kind` is the served kind (item 6). resource_delete's signature is unchanged.
 
@@ -93,9 +99,11 @@ COMMENT ON FUNCTION _feed_withholds_kind(text) IS
 
 -- The kind a feed or cursor read serves an event as, or NULL when it serves none (items 1, 5, 6).
 -- A resource_deleted is served as resource_departed only when its transaction wrote no departure
--- for the resource (deletions from before this migration, and legacy rows the cursor reads);
+-- for the resource from the same anchor (deletions from before this migration, and legacy rows the
+-- cursor reads);
 -- otherwise the departure is the deletion's one exit and the deletion itself is withheld.
-CREATE FUNCTION _feed_served_kind(p_kind text, p_xact xid8, p_payload jsonb)
+CREATE FUNCTION _feed_served_kind(p_kind text, p_xact xid8, p_payload jsonb,
+                                  p_anchor_table text, p_anchor_id uuid)
 RETURNS text LANGUAGE sql STABLE AS $$
     SELECT CASE
                WHEN p_kind = 'resource_deleted' THEN
@@ -105,6 +113,8 @@ RETURNS text LANGUAGE sql STABLE AS $$
                               JOIN kb_event_types dt ON dt.id = d.event_type_id
                              WHERE d.xact_id = p_xact
                                AND dt.name = 'resource_departed'
+                               AND d.producing_anchor_table = p_anchor_table
+                               AND d.producing_anchor_id = p_anchor_id
                                AND d.payload->>'resource_id' = p_payload->>'resource_id')
                         THEN NULL ELSE 'resource_departed' END
                WHEN _feed_withholds_kind(p_kind) THEN NULL
@@ -252,7 +262,8 @@ CREATE OR REPLACE FUNCTION context_changes_after(
                      END AS block
           ) subj
           -- The kind it is served as, if any (items 1, 5, 6).
-          CROSS JOIN LATERAL (SELECT _feed_served_kind(et.name, e.xact_id, e.payload) AS kind) sk
+          CROSS JOIN LATERAL (SELECT _feed_served_kind(et.name, e.xact_id, e.payload,
+                                                  e.producing_anchor_table, e.producing_anchor_id) AS kind) sk
          WHERE e.category = 'domain'
            -- Only a subject the feed knows how to name (item 4).
            AND subj.t IN ('kb_resources', 'kb_edges', 'kb_blobs', 'kb_contexts')
@@ -364,11 +375,12 @@ CREATE OR REPLACE FUNCTION context_changes_after(
 $$;
 -- ── 7. The cursor: the newest event the feed would serve ────────────────────
 CREATE INDEX idx_kb_events_anchor_occurred
-    ON kb_events (producing_anchor_table, producing_anchor_id, occurred_at DESC);
+    ON kb_events (producing_anchor_table, producing_anchor_id, occurred_at DESC, id DESC);
 
 -- The newest event anchored on p_context that context_changes_after would serve p_profile, or NULL
 -- (item 7). Gated by the context read like the feed: an unreadable context answers NULL. The
--- predicates below are context_changes_after's, repeated verbatim except for the `kinds` filter;
+-- predicates below are context_changes_after's, repeated verbatim except for the `kinds` filter and
+-- the event-type lookup (a lateral, so the walk keeps the index order);
 -- crates/temper-substrate/tests/context_change_feed.rs
 -- (the_cursor_is_the_newest_event_the_feed_serves) pins the two together.
 CREATE FUNCTION context_cursor(p_profile uuid, p_context uuid)
@@ -381,15 +393,20 @@ RETURNS uuid LANGUAGE sql STABLE AS $$
     )
     SELECT e.id
           -- The budget: at most _feed_scan_budget() of the context's newest events.
-          FROM (SELECT e0.*
+          -- Only the columns the predicates read, in index order, so the walk below streams and
+          -- stops at the first event served: the event type is a per-row lookup, not a join that
+          -- would hash away the order and filter the whole budget before the LIMIT.
+          FROM (SELECT e0.id, e0.event_type_id, e0.category, e0.payload, e0.xact_id,
+                       e0.correlation_id, e0.emitter_entity_id, e0.occurred_at,
+                       e0.producing_anchor_table, e0.producing_anchor_id
                   FROM kb_events e0
                   CROSS JOIN gate g0
                  WHERE g0.ok
                    AND e0.producing_anchor_table = 'kb_contexts'
                    AND e0.producing_anchor_id = p_context
-                 ORDER BY e0.occurred_at DESC
+                 ORDER BY e0.occurred_at DESC, e0.id DESC
                  LIMIT _feed_scan_budget()) e
-          JOIN kb_event_types et ON et.id = e.event_type_id
+          CROSS JOIN LATERAL (SELECT t.name FROM kb_event_types t WHERE t.id = e.event_type_id) et
           -- The subject as the payload names it (20261117000000's derivation, unchanged).
           CROSS JOIN LATERAL (
               SELECT CASE
@@ -423,7 +440,8 @@ RETURNS uuid LANGUAGE sql STABLE AS $$
                      END AS block
           ) subj
           -- The kind it is served as, if any (items 1, 5, 6).
-          CROSS JOIN LATERAL (SELECT _feed_served_kind(et.name, e.xact_id, e.payload) AS kind) sk
+          CROSS JOIN LATERAL (SELECT _feed_served_kind(et.name, e.xact_id, e.payload,
+                                                  e.producing_anchor_table, e.producing_anchor_id) AS kind) sk
          WHERE e.category = 'domain'
            -- Only a subject the feed knows how to name (item 4).
            AND subj.t IN ('kb_resources', 'kb_edges', 'kb_blobs', 'kb_contexts')
@@ -469,8 +487,221 @@ COMMENT ON FUNCTION context_cursor(uuid, uuid) IS
   'The context cursor (20261117000040): the newest event on the context that the change feed would '
   'serve the reader, or NULL. Reads at most _feed_scan_budget() of the newest events.';
 
+-- ── 9. The staleness door counts an exit ────────────────────────────────────
+-- 20260825000020's body (read back from the live definition), with the departure arm added.
+CREATE OR REPLACE FUNCTION anchor_staleness(p_anchor_table text, p_anchor_id uuid, p_principal_kind text, p_principal_id uuid)
+ RETURNS TABLE(materialized_at timestamp with time zone, latest_touch timestamp with time zone, is_stale boolean)
+ LANGUAGE sql
+ STABLE
+AS $function$
+    WITH vis AS MATERIALIZED (
+        -- Computed ONCE for the regions arm. Empty for a non-profile principal, which is why the
+        -- cogmap self-read arms below are exemptions rather than redundancies. Carried from
+        -- 20260823000010:36-38 / 20260713000050:250-252.
+        SELECT v.resource_id FROM resources_visible_to(p_principal_id) v
+    ),
+    gate AS (
+        -- VERBATIM from anchor_shape's gate CTE (20260823000010:59-66), EXISTS conjunct included.
+        -- Always exactly one row (no FROM).
+        --
+        -- THE EXISTS CONJUNCT IS CARRIED FOR SAMENESS, NOT BECAUSE IT IS LOAD-BEARING HERE, and the
+        -- difference is worth stating so nobody later "simplifies" the sibling by analogy with this
+        -- one. In anchor_shape the EXISTS is load-bearing: that function forces a row via
+        -- `LEFT JOIN ... ON true` (20260823000010:181) to carry its envelope, so a tautological
+        -- cogmap self-read arm would hand back `emptiness` and `materialized_at` for an invented
+        -- uuid -- the oracle argued at :43-58. THIS function ends in `FROM mat, touch`, and `mat` is
+        -- empty for a uuid naming no anchor, so the cross join yields ZERO ROWS however the gate
+        -- answers. Measured, not reasoned: the INCUMBENT has no gate at all and already returns 0
+        -- rows for an invented uuid.
+        --
+        -- So it is kept because one rule in two places must read identically to stay in sync, not
+        -- because removing it would open a hole here. Claiming otherwise would be a safety claim
+        -- that is true of one function and false of another -- exactly the kind of prose
+        -- 20260823000010:55-58 exists to stop outliving the person who knew the difference.
+        SELECT (
+            (p_principal_kind = 'profile'
+                 AND anchor_readable_by_profile(p_principal_id, p_anchor_table, p_anchor_id))
+            OR (p_principal_kind = 'cogmap'
+                 AND p_anchor_table = 'kb_cogmaps'
+                 AND p_principal_id = p_anchor_id
+                 AND EXISTS (SELECT 1 FROM kb_cogmaps m WHERE m.id = p_anchor_id))
+        ) AS readable
+    ),
+    mat AS (
+        -- UNCHANGED from 20260823000020:57-67. Its inner UNION ALL subquery is byte-identical to the
+        -- one in anchor_shape's `clock` CTE (20260823000010:95-101) and must stay so: the two read
+        -- the SAME column off the SAME two tables, and a divergence between them would be a
+        -- divergence between what a shape read calls "materialized" and what a staleness read
+        -- compares against. (The two CTEs are not byte-identical in full: `clock` additionally
+        -- projects `a.eid`, which its `never_clustered` arm needs and this function has no use for.)
+        --
+        -- Deliberately NOT gated in place: the deny path is the outer WHERE, which yields zero rows,
+        -- so the watermark is never projected to a caller who fails the gate. Gating here as well
+        -- would put the same predicate in two places for one function to disagree with itself later.
+        SELECT ev.occurred_at AS materialized_at
+        FROM (
+            SELECT c.shape_materialized_event_id AS eid FROM kb_contexts c
+             WHERE p_anchor_table = 'kb_contexts' AND c.id = p_anchor_id
+            UNION ALL
+            SELECT m.shape_materialized_event_id FROM kb_cogmaps m
+             WHERE p_anchor_table = 'kb_cogmaps' AND m.id = p_anchor_id
+        ) a
+        LEFT JOIN kb_events ev ON ev.id = a.eid
+    ),
+    touch AS (
+        SELECT max(occurred_at) AS latest_touch FROM (
+            SELECT ev.occurred_at FROM kb_cogmap_regions reg
+              JOIN kb_events ev ON ev.id = reg.last_event_id
+             WHERE reg.home_anchor_table = p_anchor_table
+               AND reg.home_anchor_id    = p_anchor_id
+               -- NO `NOT reg.is_folded` HERE, AND THAT IS CORRECT. See header §2. A fold advances
+               -- last_event_id and IS a touch; narrowing this arm makes a stale anchor read fresh,
+               -- silently. Do not "tighten" it to match anchor_shape's region select.
+               --
+               -- The member rule, same words and same reason as both incumbent doors
+               -- (20260823000010:87-88 as a count, 20260713000050:262-268 as this EXISTS): a region
+               -- you can see nothing in is not a region you can see, so its clock is not your clock.
+               -- The EXISTS form is taken over the CROSS JOIN LATERAL count because nothing here
+               -- needs the cardinality -- only whether the region is enumerable at all.
+               -- The cogmap self-read arm is exempt for the same reason it is exempt there.
+               AND (p_principal_kind = 'cogmap' OR EXISTS (
+                     SELECT 1
+                     FROM kb_cogmap_region_members m
+                     JOIN vis v ON v.resource_id = m.member_id
+                     JOIN kb_resources r ON r.id = m.member_id AND r.is_active
+                     WHERE m.region_id = reg.id AND m.member_table = 'kb_resources'
+               ))
+            UNION ALL
+            SELECT ev.occurred_at FROM kb_edges e
+              JOIN kb_events ev ON ev.id = e.last_event_id
+             WHERE e.home_anchor_table = p_anchor_table
+               AND e.home_anchor_id    = p_anchor_id
+               -- Again NO `NOT e.is_folded`, deliberately, and the covering index built for this
+               -- exact folded-inclusive scan is idx_kb_edges_home_all (20260708000008:21-22).
+               --
+               -- WHY HALF OF AN INCUMBENT AND NOT THE INCUMBENT. The obvious call here is
+               -- `edges_visible_to` (20260712000010:295-309), and it is the WRONG call: it mixes the
+               -- two predicate classes in one expression -- `NOT e.is_folded` at :297 (CURRENCY)
+               -- alongside endpoint visibility at :302-309 (AUTHORIZATION). Calling it would import
+               -- the fold narrowing this function must not have, through the back door and without a
+               -- line of code to notice. What is needed is only its authorization half, and the
+               -- schema already exposes that half under its own name --
+               -- `endpoint_readable_by_profile` (20260624000002:292) -- which is also exactly what
+               -- element_trail_edge composes for the same purpose (20260719000010:167-168). So:
+               -- both endpoints, independently, and the home half is already handled by `gate`.
+               --
+               -- THIS ARM CANNOT BE TOO TIGHT ON AN UNKNOWN TABLE, AND THAT IS A CONSTRAINT
+               -- ARGUMENT, NOT A ROW COUNT. `endpoint_readable_by_profile` falls closed on an
+               -- unrecognised table via its `ELSE false` (20260624000002:297). That branch is
+               -- UNREACHABLE for a kb_edges endpoint: `kb_edges_source_table_check` and
+               -- `kb_edges_target_table_check` constrain both columns to exactly
+               -- ARRAY['kb_resources','kb_cogmaps'], which is precisely the domain the CASE
+               -- dispatches on. Being drawn from a CHECK constraint rather than from present data,
+               -- that holds for rows that do not exist yet.
+               --
+               -- ── THE `is_active` DISJUNCT, AND WHY IT IS NOT OPTIONAL ────────────────────────
+               --
+               -- `endpoint_readable_by_profile` is NOT purely an authorization predicate, and
+               -- taking it for one is a real defect that an adversarial review caught here before
+               -- this shipped. Its kb_resources branch resolves to
+               -- `IN (SELECT resource_id FROM resources_visible_to(p_profile))`, and that function
+               -- ENDS in the soft-delete read floor -- `JOIN kb_resources r ON ... AND r.is_active`
+               -- (20260807000010:223-225), commented in the schema as "a deleted resource is
+               -- invisible on every axis".
+               --
+               -- So `is_active` wears both hats, and for THIS function the currency hat is the one
+               -- that matters. A `resource_deleted` is a STRUCTURAL event
+               -- (crates/temper-substrate/src/replay.rs:737-744) -- the resource leaves the node set
+               -- (substrate.rs:93-99, `AND r.is_active`), so the partition genuinely changes and the
+               -- anchor genuinely IS stale. `_project_resource_deleted` flips `is_active` and
+               -- NOTHING ELSE: it folds no edge and advances no `last_event_id`, so the edge stays
+               -- live and unfolded, still carrying its real post-watermark stamp.
+               --
+               -- Gate on readability ALONE and the sequence below tells the OWNER a lie:
+               --   t0 materialize        -> fresh
+               --   t1 assert edge X->Y   -> stale   (correct, both versions)
+               --   t2 delete Y           -> stale under the incumbent, FRESH under a readable-only
+               --                            gate -- and the anchor is MORE out of date at t2, not
+               --                            less. Nothing is denied to the owner; they simply
+               --                            cannot see Y because Y is DEAD.
+               -- That is the same silent failure §2 refuses for `is_folded`, arriving through
+               -- `is_active` instead, and the gate can only ever REMOVE touches, so every
+               -- differential it produces is an under-report.
+               --
+               -- The fix is the second disjunct: an endpoint homed in THIS anchor still moves this
+               -- anchor's clock, alive or dead. It is disclosure-safe rather than merely convenient,
+               -- and the argument is exact: the outer WHERE has already established that this
+               -- principal may read this anchor, and anchor-readability IMPLIES visibility of every
+               -- ACTIVE resource homed in it -- `resources_visible_to`'s context arm calls
+               -- `contexts_readable_by` with the same argument `context_readable_by_profile` does,
+               -- and its cogmap arms are `cogmap_readable_by_profile`'s two disjuncts verbatim. So
+               -- for an admitted caller this disjunct adds back EXACTLY the dead-but-homed
+               -- endpoints and nothing else. It is redundant for live ones, deliberately: stating
+               -- the rule as "readable, or part of the formation you are already reading" is what
+               -- makes it self-documenting.
+               --
+               -- A cross-anchor endpoint -- one NOT homed here -- still requires readability. That
+               -- is the disclosure this arm exists to close, and it is untouched. Such an edge is
+               -- also formation-irrelevant, so gating it out removes a pre-existing over-report --
+               -- but the citation for that takes TWO hops, and an earlier draft of this comment
+               -- collapsed them into one wrong pointer. `substrate.rs:107-112` loads edges by HOME
+               -- ANCHOR alone and applies no endpoint filter; the both-endpoints-must-be-members
+               -- test is downstream in `affinity.rs:229`
+               -- (`if members.contains(&e.src) && members.contains(&e.tgt)`), where `members`
+               -- derives from the `nodes` set built at `substrate.rs:93-99`.
+               --
+               -- `kb_resource_homes` is the right table to ask: the delete projection does not
+               -- touch it, so the home row survives the soft-delete. `kb_cogmaps` endpoints have no
+               -- home row and are unaffected -- they keep the readability test alone, which is
+               -- correct, since a cogmap endpoint is never part of a resource formation.
+               AND (p_principal_kind = 'cogmap' OR (
+                     (endpoint_readable_by_profile(p_principal_id, e.source_table, e.source_id)
+                      OR EXISTS (SELECT 1 FROM kb_resource_homes h
+                                  WHERE h.resource_id  = e.source_id
+                                    AND h.anchor_table = p_anchor_table
+                                    AND h.anchor_id    = p_anchor_id))
+                 AND (endpoint_readable_by_profile(p_principal_id, e.target_table, e.target_id)
+                      OR EXISTS (SELECT 1 FROM kb_resource_homes h
+                                  WHERE h.resource_id  = e.target_id
+                                    AND h.anchor_table = p_anchor_table
+                                    AND h.anchor_id    = p_anchor_id))
+               ))
+            UNION ALL
+            -- A member that left by an authored act (20261117000040, review round 2 M1). Both exits,
+            -- a deletion and a move out, write one resource_departed on the home they leave, and
+            -- that departure is the touch: the formation lost a member. Without it an edge to a
+            -- deleted endpoint kept counting (it is still homed here) while one to a moved-out
+            -- endpoint stopped (it is neither readable nor homed here), so latest_touch told this
+            -- anchor's readers which exit it was. With it both exits move the clock to the same
+            -- moment, which is later than any edge touch the moved endpoint stops contributing.
+            -- Read newest-first through idx_kb_events_anchor_occurred, bounded below by the
+            -- watermark, so it stops at the first departure or at the materialize.
+            SELECT d.occurred_at
+              FROM (SELECT d0.occurred_at
+                      FROM kb_events d0
+                     WHERE d0.producing_anchor_table = p_anchor_table
+                       AND d0.producing_anchor_id    = p_anchor_id
+                       AND d0.event_type_id = (SELECT dt.id FROM kb_event_types dt
+                                                WHERE dt.name = 'resource_departed')
+                       AND d0.occurred_at > coalesce((SELECT materialized_at FROM mat),
+                                                     '-infinity'::timestamptz)
+                     ORDER BY d0.occurred_at DESC
+                     LIMIT 1) d
+        ) t
+    )
+    SELECT mat.materialized_at, touch.latest_touch,
+           COALESCE(touch.latest_touch > mat.materialized_at, mat.materialized_at IS NULL)
+    FROM mat, touch
+    -- Deny yields ZERO ROWS, never a NULL row and never an error -- the "no view from nowhere"
+    -- pattern (20260628000001:1-3), and the same thing this function already does for an anchor that
+    -- does not exist (`mat` contributes no row). A NULL `readable` rejects the row, so this fails
+    -- CLOSED: `readable` is an expression over another function, and its two-valuedness is that
+    -- function's property, not this one's (20260823000010:135-141 makes the same argument).
+    WHERE (SELECT readable FROM gate);
+$function$;
+
 SELECT declare_migration(
     20261117000040,
     'additive',
-    'Adds _feed_served_kind(text, xid8, jsonb), context_cursor(uuid, uuid) and the index idx_kb_events_anchor_occurred on kb_events (producing_anchor_table, producing_anchor_id, occurred_at DESC). Replaces _feed_withholds_kind, resource_delete, _resource_departure_append, _event_is_admin_act and context_changes_after, each with its signature and result type unchanged. The feed and the cursor withhold region_materialized, salience_refreshed and relationship_decayed; a resource_deleted with no departure in its transaction is served as resource_departed. A deletion also appends resource_departed (an existing kind) before it projects; the feed withholds resource_deleted, names a block''s resource as the subject of a block entry with an optional `block` key beside it, and serves only subjects in kb_resources, kb_edges, kb_blobs or kb_contexts. _event_is_admin_act matches legacy rows (NULL xact_id) to legacy act records. Nothing an older binary reads is dropped, renamed or reshaped: an older binary ignores the new `block` key, and refuses resource_deleted in `kinds` as the new one does, since both ask _feed_withholds_kind.'
+    'Adds _feed_served_kind(text, xid8, jsonb, text, uuid), context_cursor(uuid, uuid) and the index idx_kb_events_anchor_occurred on kb_events (producing_anchor_table, producing_anchor_id, occurred_at DESC, id DESC). Replaces anchor_staleness (a departure is a touch), _feed_withholds_kind, resource_delete, _resource_departure_append, _event_is_admin_act and context_changes_after, each with its signature and result type unchanged. The feed and the cursor withhold region_materialized, salience_refreshed and relationship_decayed; a resource_deleted with no departure in its transaction is served as resource_departed. A deletion also appends resource_departed (an existing kind) before it projects; the feed withholds resource_deleted, names a block''s resource as the subject of a block entry with an optional `block` key beside it, and serves only subjects in kb_resources, kb_edges, kb_blobs or kb_contexts. _event_is_admin_act matches legacy rows (NULL xact_id) to legacy act records. Nothing an older binary reads is dropped, renamed or reshaped: an older binary ignores the new `block` key, and refuses resource_deleted in `kinds` as the new one does, since both ask _feed_withholds_kind.'
 );
