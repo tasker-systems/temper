@@ -12,13 +12,13 @@
 --                                                     plus the public_within arm under p_reading
 --   _resources_visible(p, p_reading)                  resources_visible_to's body verbatim from
 --                                                     20260807000010:164
---   contexts_readable_by_teams, resources_visible_to  wrappers passing public_within_reading(p)
+--   contexts_readable_by_teams, resources_visible_to  wrappers passing p_reading = true
 --   resources_visible_by_membership, contexts_readable_by_membership, can_read_by_membership
 --                                                     the membership entry points (p_reading false)
 --   resources_public_within(p)                        the arm's delta: reading minus membership
 --
--- The fence runs inside the wrappers, so no caller can forget it; with the switch off it costs one
--- settings read and the arm never runs. The audit finding and grant attenuation move to membership
+-- The machine fence runs inside contexts_public_within, so no caller can forget it, and only when a
+-- candidate row exists: with no row anchored in the reader's closure the arm is one index probe. The audit finding and grant attenuation move to membership
 -- in the next migration and in Rust; references stay on reading, because a reference is a read.
 
 -- ── 1. The context read set ───────────────────────────────────────────────────────────────────────
@@ -63,22 +63,27 @@ AS $function$
 
     UNION
 
+    -- 5. public_within: the owned contexts of a team opened to a team in the closure. The candidate
+    --    probe is repeated here as a one-time filter so a reader with no row anchored in its
+    --    closure never enters contexts_public_within at all.
     SELECT pw.context_id
     FROM contexts_public_within(p_profile, p_teams) pw
-    WHERE p_reading;
+    WHERE p_reading
+      AND EXISTS (SELECT 1 FROM kb_team_public_within pwr WHERE pwr.anchor_id = ANY(p_teams));
 $function$;
 
 COMMENT ON FUNCTION _contexts_readable_by_teams(uuid, uuid[], boolean) IS
-$c$THE context read-set body, taking an already-expanded team closure (p_teams) and a switch.
+$c$THE context read-set body, taking an already-expanded team closure (p_teams) and p_reading.
 
 Arms 1-4 are membership visibility, verbatim from 20261110000100: the profile's personal contexts,
 contexts owned by a team in the closure, contexts shared to one, and contexts granted to the
 profile or to a team in the closure; each floored by is_active or context_is_dead.
 
 The public_within arm: contexts owned by a team T whose effective public_within row is
-anchored on a team in the closure (contexts_public_within). It counts only when p_reading is true.
-Callers do not pass p_reading themselves: contexts_readable_by_teams passes
-public_within_reading(p_profile), so only a person reads through it, and the membership doors pass
+anchored on a team in the closure (contexts_public_within). It counts only when p_reading is true,
+and contexts_public_within applies the machine fence itself, so only a person reads through it.
+Callers do not pass p_reading themselves: contexts_readable_by_teams passes true, and the
+membership doors pass
 false. Any future read-time filter (sensitivity, say) sits at or below this body, so that public
 reach never exceeds member reach.$c$;
 
@@ -88,14 +93,14 @@ CREATE OR REPLACE FUNCTION contexts_readable_by_teams(p_profile uuid, p_teams uu
  STABLE
 AS $function$
     SELECT r.context_id
-    FROM _contexts_readable_by_teams(p_profile, p_teams, public_within_reading(p_profile)) r;
+    FROM _contexts_readable_by_teams(p_profile, p_teams, true) r;
 $function$;
 
 COMMENT ON FUNCTION contexts_readable_by_teams(uuid, uuid[]) IS
 $c$The context read-set for a profile, taking an already-expanded team closure: READING visibility.
-A body-only wrapper over _contexts_readable_by_teams, which holds the arms, passing
-public_within_reading(p_profile), so the public_within arm counts for a person and never for a
-machine, a connection agent or a profile without a human auth link. Signature unchanged since
+A body-only wrapper over _contexts_readable_by_teams, which holds the arms, passing p_reading =
+true. The public_within arm still counts only for a person, never for a machine, a connection agent
+or a profile without a human auth link: the fence runs inside contexts_public_within. Signature unchanged since
 20260807000010; contexts_readable_by(uuid) still expands the closure and delegates here. A NULL or
 empty p_teams reaches nothing through the team arms, and nothing through public_within.$c$;
 
@@ -190,8 +195,8 @@ resources_visible_to's six arms verbatim from 20260807000010, expanding the team
 (the fold site reachable_teams_one_definition_test probes) and threading it through every arm.
 The context arm calls _contexts_readable_by_teams with p_reading, so p_reading = true is reading
 visibility (public_within included) and false is membership visibility. Never called with a
-caller-chosen p_reading: resources_visible_to passes public_within_reading(p_profile), and
-resources_visible_by_membership passes false.$c$;
+caller-chosen p_reading: resources_visible_to passes true, and resources_visible_by_membership passes
+false. The machine fence is applied inside contexts_public_within.$c$;
 
 CREATE OR REPLACE FUNCTION resources_visible_to(p_profile uuid)
 RETURNS TABLE(resource_id uuid)
@@ -199,13 +204,14 @@ LANGUAGE sql
 STABLE
 AS $$
     SELECT v.resource_id
-    FROM _resources_visible(p_profile, public_within_reading(p_profile)) v;
+    FROM _resources_visible(p_profile, true) v;
 $$;
 
 COMMENT ON FUNCTION resources_visible_to(uuid) IS
 $c$THE consumer-axis read predicate: every resource a profile may see, on any axis. READING
-visibility: a body-only wrapper over _resources_visible, passing public_within_reading(p_profile),
-so a person also reads what an effective public_within row opens to them and a machine never does.
+visibility: a body-only wrapper over _resources_visible, passing p_reading = true, so a person also
+reads what an effective public_within row opens to them; the machine fence inside
+contexts_public_within keeps a machine from ever doing so.
 Signature unchanged. Still computed per call from base tables; there is no cache.$c$;
 
 CREATE FUNCTION resources_visible_by_membership(p_profile uuid)
@@ -248,27 +254,33 @@ other subject kinds (cogmaps) answer exactly can(read). Never wider than can(rea
 
 CREATE FUNCTION resources_public_within(p_profile uuid)
 RETURNS TABLE(resource_id uuid)
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
+ROWS 10
 AS $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM kb_team_public_within) THEN
+        RETURN;
+    END IF;
+    RETURN QUERY
     SELECT h.resource_id
-    FROM contexts_public_within(
-             p_profile,
-             coalesce((SELECT array_agg(team_id) FROM profile_reachable_teams(p_profile)),
-                      '{}'::uuid[])
-         ) pw
-    JOIN kb_resource_homes h ON h.anchor_table = 'kb_contexts' AND h.anchor_id = pw.context_id
-    JOIN kb_resources r ON r.id = h.resource_id AND r.is_active
-    WHERE public_within_reading(p_profile);
+      FROM contexts_public_within(
+               p_profile,
+               coalesce((SELECT array_agg(t.team_id) FROM profile_reachable_teams(p_profile) t),
+                        '{}'::uuid[])) pw
+      JOIN kb_resource_homes h ON h.anchor_table = 'kb_contexts' AND h.anchor_id = pw.context_id
+      JOIN kb_resources r ON r.id = h.resource_id AND r.is_active;
+END;
 $$;
 
 COMMENT ON FUNCTION resources_public_within(uuid) IS
 $c$The resources the public_within arm alone opens to a profile: those homed in a context
-contexts_public_within opens to its closure, live, and only for a person (public_within_reading).
+contexts_public_within opens to its closure, live, and only for a person (the fence inside it).
 Reading visibility is exactly membership visibility UNION this set (the visibility harness holds
 the equality), so a caller that needs both can derive reading from membership without a second full
-scan. On a switched-off instance it is one settings read: public_within_reading is a one-time filter, so neither the closure nor
-contexts_public_within runs.$c$;
+scan. On an instance with no public_within row nothing past one probe runs: the closure is never
+expanded and nothing is planned beyond that probe (PL/pgSQL plans a statement only when it first
+runs).$c$;
 
 -- ── 3. The element trail ──────────────────────────────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION public.element_trail_node(p_profile uuid, p_resource uuid)
@@ -349,7 +361,7 @@ other trail read costs what it did.$c$;
 COMMENT ON FUNCTION contexts_readable_by(uuid) IS
     'Context read predicate, the profile-shaped entry point: expands the team closure once and '
     'delegates to contexts_readable_by_teams, which wraps _contexts_readable_by_teams with the '
-    'reader fence. Same signature, same callers; the read arms live in that one body.';
+    'public_within arm. Same signature, same callers; the read arms live in that one body.';
 
 SELECT declare_migration(
     20261120000010,
@@ -360,9 +372,9 @@ SELECT declare_migration(
     'membership entry points resources_visible_by_membership, contexts_readable_by_membership, can_read_by_membership and '
     'resources_public_within. '
     'contexts_readable_by_teams and resources_visible_to become body-only wrappers at unchanged '
-    'signatures passing public_within_reading(p); no DROP and no overload. element_trail_node keeps '
+    'signatures passing p_reading = true; no DROP and no overload. element_trail_node keeps '
     'its signature and filters the trail of a reader who reaches the resource only through '
     'public_within to T''s contexts. Answers change only '
-    'for a person under the anchor of an effective public_within row, and no row is effective '
-    'while public_within_enabled is false, its default; an older binary reads the same sets.'
+    'for a person under the anchor of an effective public_within row, and a row needs both sides, '
+    'so on an instance with none every set is unchanged; an older binary reads the same sets.'
 );

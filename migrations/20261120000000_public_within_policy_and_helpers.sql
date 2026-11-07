@@ -3,39 +3,34 @@
 -- Design: temper-artifacts specs/2026-11-06-public-within-design.md.
 --
 -- A `public_within(T, A)` row lets the people under the anchor team A read the contexts T owns. This
--- migration adds the row, the two policy switches over it, and the predicates that say whether a row
--- confers; the read arm that consults them is 20261120000010, so on its own this changes no answer.
+-- migration adds the row, the forbid over it, and the predicates that say whether a row confers; the
+-- read arm that consults them is 20261120000010. With no row, every read set answers as before.
+-- There is no instance setting: a forbid on the root is the admin's instance-wide off.
 --
---   kb_system_settings.public_within_enabled   the instance switch, false by default, never backfilled.
---   kb_teams.public_within_forbidden           an owner's forbid over everything beneath it.
+--   kb_teams.public_within_forbidden           a forbid over everything beneath a team; on the root,
+--                                              over every team.
 --   kb_team_public_within                      the rows; a trigger and CHECKs refuse barred shapes.
 --   team_is_root_or_gating, team_ancestors_any, public_within_allowed_over,
 --   anchor_subtree_holds_pool (20261120000005 adds its auto-join arm), public_within_row_effective,
 --   contexts_public_within, public_within_reading   the predicates, one COMMENT ON each.
---   _admin_public_within_switch_write          the instance switch and its record, one statement.
 --   team_public_within_changed, public_within_effect_changed, public_within_policy_changed.
 --
 -- `team_live_descendants` (20261119000020) is reused, not redefined. Every rationale lives in
 -- COMMENT ON FUNCTION, never in a body: the guard scans read pg_get_functiondef.
 
--- ── 1. The switch and the forbid ──────────────────────────────────────────────────────────────────
-ALTER TABLE kb_system_settings
-    ADD COLUMN public_within_enabled boolean NOT NULL DEFAULT false;
-
-COMMENT ON COLUMN kb_system_settings.public_within_enabled IS
-$c$The instance switch for public_within. False by default on every deployment. While
-it is false no kb_team_public_within row confers anything and every open is refused; close and
-list still work. Set by a system admin through _admin_public_within_switch_write, which records
-public_within_policy_changed.$c$;
-
+-- ── 1. The forbid ─────────────────────────────────────────────────────────────────────────────────
 ALTER TABLE kb_teams
     ADD COLUMN public_within_forbidden boolean NOT NULL DEFAULT false;
 
 COMMENT ON COLUMN kb_teams.public_within_forbidden IS
-$c$An owner's forbid: no public_within row confers for any team beneath this one, by
-any path, live or dead (public_within_allowed_over walks team_ancestors_any). A lower owner cannot
-lift it; only leaving the subtree does. Not available on the root (its policy is the instance
-switch) or on personal teams; that is enforced by the door that sets it.$c$;
+$c$A forbid: no public_within row confers for any team beneath this one, by any path,
+live or dead (public_within_allowed_over walks team_ancestors_any). A lower owner cannot lift it;
+only leaving the subtree does. On the root (temper-system) it is the instance-wide off: every
+row, an admin's instance_wide row included, confers nothing while it is set, whether or not the
+team's tree is linked under the root (public_within_allowed_over reads the root's flag directly,
+since anyone may create a parentless team). Only a system admin may set it on the root, and an
+owner elsewhere; never on a personal team. No door sets it yet; the one that does will enforce
+those rules, not this column.$c$;
 
 -- ── 2. The rows ───────────────────────────────────────────────────────────────────────────────────
 CREATE TABLE kb_team_public_within (
@@ -151,23 +146,21 @@ only (team_ancestors' is_active floor), because a dead team confers nothing.$c$;
 
 CREATE FUNCTION public_within_allowed_over(p_team uuid)
 RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT CASE
-        WHEN COALESCE((SELECT s.public_within_enabled FROM kb_system_settings s WHERE s.id = 1), false)
-        THEN NOT EXISTS (
-            SELECT 1
-              FROM team_ancestors_any(p_team) a
-              JOIN kb_teams t ON t.id = a.team_id
-             WHERE t.public_within_forbidden)
-        ELSE false
-    END;
+    SELECT NOT EXISTS (
+        SELECT 1
+          FROM team_ancestors_any(p_team) a
+          JOIN kb_teams t ON t.id = a.team_id
+         WHERE t.public_within_forbidden)
+       AND NOT EXISTS (
+        SELECT 1 FROM kb_teams r WHERE r.slug = 'temper-system' AND r.public_within_forbidden);
 $$;
 
 COMMENT ON FUNCTION public_within_allowed_over(uuid) IS
-$c$Policy allows a public_within row for team p_team: the instance switch is on, and no team
-in team_ancestors_any(p_team), p_team included, live or dead, forbids. T's chain, not A's: A is an
-ancestor of T, so T's chain covers A's, a forbid between A and T, and a forbid on T's second
-parent. The switch is read first, inside a CASE so the order is guaranteed: a born-denied
-instance pays one settings read per row and never walks the tree.$c$;
+$c$Policy allows a public_within row for team p_team: no team in team_ancestors_any(p_team),
+p_team included, live or dead, forbids. T's chain, not A's: A is an ancestor of T, so T's chain
+covers A's, a forbid between A and T, and a forbid on T's second parent. A forbid on the root (the
+instance-wide off) is read directly as well as along the walk: a parentless team's chain never
+reaches the root, and the off must reach it too. It runs only for a candidate row.$c$;
 
 CREATE FUNCTION anchor_subtree_holds_pool(p_anchor uuid)
 RETURNS boolean LANGUAGE sql STABLE AS $$
@@ -203,8 +196,8 @@ $$;
 
 COMMENT ON FUNCTION public_within_row_effective(uuid, uuid, boolean) IS
 $c$Does one public_within row confer right now? All of:
-  * policy allows it over the team (public_within_allowed_over: the switch, then no forbid above T),
-    evaluated first, inside a CASE, so a switched-off instance never walks the tree;
+  * policy allows it over the team (public_within_allowed_over: no forbid above T, the root's
+    included), evaluated first, inside a CASE;
   * the team is not the root or the gating team: the shape trigger refuses that at write time, and
     this keeps a later gating-slug change from making such a row confer;
   * the anchor is a strict ancestor of the team along a LIVE chain: team_ancestors returns T only if
@@ -215,19 +208,48 @@ $c$Does one public_within row confer right now? All of:
 Every condition is read-time, so an act that breaks one makes the row inert at once, whatever the
 open-time checks said.$c$;
 
+CREATE FUNCTION public_within_reading(p_profile uuid)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (
+               SELECT 1 FROM kb_profile_auth_links l
+                WHERE l.profile_id = p_profile
+                  AND l.auth_provider <> 'auth0-m2m')
+       AND NOT EXISTS (SELECT 1 FROM kb_machine_clients m WHERE m.profile_id = p_profile)
+       AND NOT EXISTS (SELECT 1 FROM kb_connections k WHERE k.profile_id = p_profile);
+$$;
+
+COMMENT ON FUNCTION public_within_reading(uuid) IS
+$c$The machine fence: machine principals never read through public_within. True only for a
+PERSON: a profile with a human auth link
+(any kb_profile_auth_links row whose provider is not the machine provider auth0-m2m) and with no
+kb_machine_clients row (revoked or not; the same test as is_machine_profile) and no kb_connections
+row (a connection's agent profile). Everything else is false, fail-closed: machine clients,
+connection agents, stewards and auditors (machine clients themselves), and any profile with no
+human auth link.
+
+Keyed on the profile alone: no GUC, no setting and no request-scoped state. Called only by
+contexts_public_within, and only when a candidate row exists. The fence is the principal,
+never the token or the surface, so a person reads with any token that identifies them, including
+the Slack mention path's act-as-the-human mint.$c$;
+
 CREATE FUNCTION contexts_public_within(p_profile uuid, p_teams uuid[])
-RETURNS TABLE(context_id uuid) LANGUAGE sql STABLE AS $$
-    WITH candidates AS MATERIALIZED (
-        SELECT pw.team_id
-          FROM kb_team_public_within pw
-         WHERE pw.anchor_id = ANY(p_teams)
-           AND public_within_row_effective(pw.team_id, pw.anchor_id, pw.instance_wide)
-    )
+RETURNS TABLE(context_id uuid) LANGUAGE plpgsql STABLE ROWS 10 AS $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM kb_team_public_within pw WHERE pw.anchor_id = ANY(p_teams)) THEN
+        RETURN;
+    END IF;
+    IF NOT public_within_reading(p_profile) THEN
+        RETURN;
+    END IF;
+    RETURN QUERY
     SELECT c.id
-      FROM candidates cand
+      FROM kb_team_public_within pw
       JOIN kb_contexts c
-        ON c.owner_table = 'kb_teams' AND c.owner_id = cand.team_id AND c.is_active
-     WHERE NOT EXISTS (SELECT 1 FROM kb_connections k WHERE k.home_context_id = c.id);
+        ON c.owner_table = 'kb_teams' AND c.owner_id = pw.team_id AND c.is_active
+     WHERE pw.anchor_id = ANY(p_teams)
+       AND public_within_row_effective(pw.team_id, pw.anchor_id, pw.instance_wide)
+       AND NOT EXISTS (SELECT 1 FROM kb_connections k WHERE k.home_context_id = c.id);
+END;
 $$;
 
 COMMENT ON FUNCTION contexts_public_within(uuid, uuid[]) IS
@@ -241,38 +263,13 @@ state, revoked included: the exclusion keys on kb_connections.home_context_id. E
 home is a context created for it alone, so no ordinary working context is affected, and T's own
 members read the intake exactly as before.
 
-The candidate rows are hoisted into a MATERIALIZED CTE so the per-row effect checks run once per
-row, never per context. p_profile is carried for the read-set signature. It applies NO reader
-fence itself: every caller must, and both do (_contexts_readable_by_teams through p_reading,
-resources_public_within through public_within_reading). Do not call it from anywhere else.$c$;
-
-CREATE FUNCTION public_within_reading(p_profile uuid)
-RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT CASE
-        WHEN COALESCE((SELECT s.public_within_enabled FROM kb_system_settings s WHERE s.id = 1), false)
-        THEN EXISTS (
-                 SELECT 1 FROM kb_profile_auth_links l
-                  WHERE l.profile_id = p_profile
-                    AND l.auth_provider <> 'auth0-m2m')
-         AND NOT EXISTS (SELECT 1 FROM kb_machine_clients m WHERE m.profile_id = p_profile)
-         AND NOT EXISTS (SELECT 1 FROM kb_connections k WHERE k.profile_id = p_profile)
-        ELSE false
-    END;
-$$;
-
-COMMENT ON FUNCTION public_within_reading(uuid) IS
-$c$The machine fence: machine principals never read through public_within. False whenever the
-instance switch is off, read first so that every read-set call on a born-denied instance pays one
-settings read and nothing more. With it on, true only for a PERSON: a profile with a human auth link
-(any kb_profile_auth_links row whose provider is not the machine provider auth0-m2m) and with no
-kb_machine_clients row (revoked or not; the same test as is_machine_profile) and no kb_connections
-row (a connection's agent profile). Everything else is false, fail-closed: machine clients,
-connection agents, stewards and auditors (machine clients themselves), and any profile with no
-human auth link.
-
-Keyed on the profile and the instance setting alone: no GUC and no request-scoped state. The fence is the principal,
-never the token or the surface, so a person reads with any token that identifies them, including
-the Slack mention path's act-as-the-human mint.$c$;
+THE MACHINE FENCE LIVES HERE, and it is lazy. The first statement asks for a candidate row (a row
+anchored on a team in the closure: an index probe on anchor_id). Only when one exists is the reader
+fence (public_within_reading(p_profile)) evaluated, once, and only for a person are the per-row
+effect checks run. With no candidate row, a read costs that one probe: no fence call, no tree walk
+and no context scan. PL/pgSQL, not SQL, so that callers do not inline (and plan, on every call) a
+body that almost always returns at its first statement. Every path through the public_within arm comes through here, so a machine reads nothing
+through it whatever rows exist.$c$;
 
 -- ── 4. The admin event types ──────────────────────────────────────────────────────────────────────
 -- The payload schema literals below are the committed fixtures
@@ -366,7 +363,7 @@ $JS$::jsonb, 1, 'admin'),
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "PublicWithinEffectChanged",
-  "description": "`public_within_effect_changed` — a `public_within` row started or stopped conferring, without\nbeing opened or closed. The cause is liveness (a team on the path was deleted or restored) or\npolicy (the instance switch, a forbid, or a pool team under the anchor). Both the team and the\nanchor are `subject` references.",
+  "description": "`public_within_effect_changed` — a `public_within` row started or stopped conferring, without\nbeing opened or closed. The cause is liveness (a team on the path was deleted or restored) or\npolicy (a forbid, the root's included, or a pool at the anchor). Both the team and the\nanchor are `subject` references.",
   "type": "object",
   "properties": {
     "act": {
@@ -419,7 +416,7 @@ $JS$::jsonb, 1, 'admin'),
           "const": "liveness"
         },
         {
-          "description": "The instance switch, a forbid above the team, or a pool team under the anchor.",
+          "description": "A forbid above the team (the root's included), or a pool at the anchor.",
           "type": "string",
           "const": "policy"
         }
@@ -447,7 +444,7 @@ $JS$::jsonb, 1, 'admin'),
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "PublicWithinPolicyChanged",
-  "description": "`public_within_policy_changed` — the instance switch (`public_within_enabled`) or a team's forbid\n(`public_within_forbidden`) changed. The only record of the instance switch: settings updates\nare otherwise not ledgered. A team-scope record carries the team as its `subject` reference; an\ninstance-scope record carries none, and is read by system admins.",
+  "description": "`public_within_policy_changed` — a team's forbid (`public_within_forbidden`) changed. A forbid\non the root (`temper-system`) is the instance-wide off: it makes every row confer nothing,\nwhether or not the team's tree is linked under the root. The record carries the team as its\n`subject` reference.",
   "type": "object",
   "properties": {
     "actor": {
@@ -461,18 +458,15 @@ $JS$::jsonb, 1, 'admin'),
       ]
     },
     "from": {
-      "description": "The value before: the switch's `enabled`, or the team's `forbidden`.",
+      "description": "The forbid before.",
       "type": "boolean"
     },
     "scope": {
       "$ref": "#/$defs/PublicWithinPolicyScope"
     },
     "team_id": {
-      "description": "The team whose forbid changed; absent for the instance switch.",
-      "type": [
-        "string",
-        "null"
-      ],
+      "description": "The team whose forbid changed.",
+      "type": "string",
       "format": "uuid"
     },
     "to": {
@@ -482,6 +476,7 @@ $JS$::jsonb, 1, 'admin'),
   },
   "required": [
     "scope",
+    "team_id",
     "from",
     "to"
   ],
@@ -495,12 +490,7 @@ $JS$::jsonb, 1, 'admin'),
       "description": "Which policy a [`PublicWithinPolicyChanged`] record is about.",
       "oneOf": [
         {
-          "description": "`kb_system_settings.public_within_enabled`, set by a system admin.",
-          "type": "string",
-          "const": "instance"
-        },
-        {
-          "description": "`kb_teams.public_within_forbidden`, set by the team's owner or an admin.",
+          "description": "`kb_teams.public_within_forbidden`, set by the team's owner or an admin; on the root, by a\nsystem admin only.",
           "type": "string",
           "const": "team"
         }
@@ -510,57 +500,14 @@ $JS$::jsonb, 1, 'admin'),
 }
 $JS$::jsonb, 1, 'admin');
 
--- ── 5. The instance switch's writer ───────────────────────────────────────────────────────────────
-CREATE FUNCTION _admin_public_within_switch_write(
-    p_emitter     uuid,
-    p_actor       uuid,
-    p_to          boolean,
-    p_correlation uuid DEFAULT NULL
-) RETURNS text
-LANGUAGE plpgsql
-SET search_path = public, pg_temp
-AS $$
-DECLARE
-    v_from boolean;
-BEGIN
-    SELECT s.public_within_enabled INTO v_from FROM kb_system_settings s WHERE s.id = 1 FOR UPDATE;
-    IF NOT FOUND THEN
-        RETURN 'absent';
-    END IF;
-    IF v_from = p_to THEN
-        RETURN 'noop';
-    END IF;
-    UPDATE kb_system_settings SET public_within_enabled = p_to, updated = now() WHERE id = 1;
-
-    PERFORM _event_append(
-        'public_within_policy_changed', p_emitter, NULL, NULL,
-        jsonb_strip_nulls(jsonb_build_object(
-            'scope', 'instance',
-            'from',  v_from,
-            'to',    p_to,
-            'actor', p_actor)),
-        p_correlation => p_correlation);
-
-    RETURN 'changed';
-END;
-$$;
-
-COMMENT ON FUNCTION _admin_public_within_switch_write(uuid, uuid, boolean, uuid) IS
-$c$Set the public_within instance switch and append its public_within_policy_changed record (scope
-instance), atomically, under the settings row lock. Returns changed | noop | absent; only changed
-writes or emits. The record names no team, so only system admins read it. It NEVER AUTHORIZES:
-access_service::update_system_settings holds the SystemAdmin proof before calling it. The row
-effect transitions are to be hooked here, in the same transaction as the switch.$c$;
-
 SELECT declare_migration(
     20261120000000,
     'additive',
-    'public_within schema, policy and helpers: adds kb_system_settings.public_within_enabled (default false, no '
-    'backfill), kb_teams.public_within_forbidden (default false), the kb_team_public_within table '
-    'with its shape trigger, the helpers team_ancestors_any, public_within_allowed_over, '
+    'public_within schema, policy and helpers: adds kb_teams.public_within_forbidden (default '
+    'false; on the root, the instance-wide off), the kb_team_public_within table with its shape '
+    'trigger and CHECKs, the helpers team_ancestors_any, public_within_allowed_over, '
     'anchor_subtree_holds_pool, team_is_root_or_gating, public_within_row_effective, '
-    'contexts_public_within and public_within_reading, the writer _admin_public_within_switch_write, and three admin event '
-    'types. New columns have defaults and nothing reads them yet, so an older binary is '
-    'unaffected; no existing function changes. kb_team_public_within also carries a CHECK that an '
-    'instance_wide row is an admin act, and anchor_subtree_holds_pool counts the root as a pool.'
+    'contexts_public_within and public_within_reading, and three admin event types. The new column '
+    'has a default and no existing function changes, so an older binary is unaffected. A row needs '
+    'both sides; with none, nothing reads through the arm.'
 );

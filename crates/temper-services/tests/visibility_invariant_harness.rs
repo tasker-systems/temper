@@ -675,8 +675,8 @@ async fn insert_world(pool: &PgPool, plan: &Plan) -> sqlx::Result<World> {
         resources.push(id);
     }
 
-    // The one public_within row: pub opened to eng's subtree, with the instance switch on. Written
-    // directly, as the plan's fixture helper does; the open door is a later phase.
+    // The one public_within row: pub opened to eng's subtree. Written directly; no door that
+    // opens a row exists yet.
     sqlx::query(
         "INSERT INTO kb_team_public_within (team_id, anchor_id, opened_by) VALUES ($1, $2, $3)",
     )
@@ -685,9 +685,6 @@ async fn insert_world(pool: &PgPool, plan: &Plan) -> sqlx::Result<World> {
     .bind(profiles[P_GINA])
     .execute(pool)
     .await?;
-    sqlx::query("UPDATE kb_system_settings SET public_within_enabled = true WHERE id = 1")
-        .execute(pool)
-        .await?;
 
     // Tombstones — flipped, not omitted, so every door must actively exclude them.
     for (table, column, id) in [
@@ -1943,7 +1940,7 @@ const ENROLLED: &[&str] = &[
     // above are now body-only wrappers over, and the membership entry points beside them: driven
     // by `public_within_reads_for_people_under_the_anchor_and_nobody_else`, which holds reading =
     // membership + the public_within arm for every profile in the world, membership as reading
-    // minus that arm, and the wrappers equal to their bodies at the switch they pass.
+    // minus that arm, and the wrappers equal to their bodies.
     "_contexts_readable_by_teams",
     "_resources_visible",
     "resources_visible_by_membership",
@@ -1953,7 +1950,7 @@ const ENROLLED: &[&str] = &[
     // equal to reading minus membership by the same test.
     "resources_public_within",
     // the public_within arm and the predicates it is built from — driven by the same test, each
-    // at both answers: over the world's one row, under a pool, under a forbid and switched off.
+    // at both answers: over the world's one row, under a pool and under a forbid.
     "contexts_public_within",
     "public_within_row_effective",
     "public_within_allowed_over",
@@ -2255,8 +2252,8 @@ async fn the_world_exercises_its_arms(pool: PgPool) -> sqlx::Result<()> {
 
 /// public_within's arm and its fences, over every profile in the world.
 ///
-/// - **Layering.** Each wrapper equals its body at the switch it passes: `resources_visible_to(p)`
-///   is `_resources_visible(p, public_within_reading(p))`, `resources_visible_by_membership(p)` is
+/// - **Layering.** Each wrapper equals its body with the arm on: `resources_visible_to(p)` is
+///   `_resources_visible(p, true)`, `resources_visible_by_membership(p)` is
 ///   `_resources_visible(p, false)`, and the context pair likewise.
 /// - **Reading = membership + the public_within arm.** Membership ⊆ reading, and every resource
 ///   in reading but not membership is homed in a context `contexts_public_within` opens to that
@@ -2265,7 +2262,8 @@ async fn the_world_exercises_its_arms(pool: PgPool) -> sqlx::Result<()> {
 /// - **The witnesses.** dana (a person under eng) reads r_pub and ctx-pub, but not by membership,
 ///   so `can_read_by_membership` refuses them where `can(read)` admits. ella (above the anchor)
 ///   and robot (a machine under it) read neither. The row's predicates answer as the world says.
-/// - **The switch.** Off, the row confers nothing and reading equals membership for everyone.
+/// - **The forbid.** With a forbid at the top of the world's tree, the row confers nothing and
+///   reading equals membership for everyone.
 /// - **The delta.** Reading is exactly membership UNION `resources_public_within`, which is what
 ///   lets the audit queue and the element trail derive one from the other without a second scan.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
@@ -2286,19 +2284,17 @@ async fn public_within_reads_for_people_under_the_anchor_and_nobody_else(
         }
     };
 
-    for switch_on in [true, false] {
-        sqlx::query("UPDATE kb_system_settings SET public_within_enabled = $1 WHERE id = 1")
-            .bind(switch_on)
+    for forbidden in [false, true] {
+        sqlx::query("UPDATE kb_teams SET public_within_forbidden = $1 WHERE id = $2")
+            .bind(forbidden)
+            .bind(w.teams[T_EPD])
             .execute(&pool)
             .await?;
         for (i, &p) in w.profiles.iter().enumerate() {
-            let who = format!("{} (switch {switch_on})", PROFILE_HANDLES[i]);
+            let who = format!("{} (forbid at top {forbidden})", PROFILE_HANDLES[i]);
             let reading = set("SELECT resource_id FROM resources_visible_to($1)", p).await?;
-            let reading_body = set(
-                "SELECT resource_id FROM _resources_visible($1, public_within_reading($1))",
-                p,
-            )
-            .await?;
+            let reading_body =
+                set("SELECT resource_id FROM _resources_visible($1, true)", p).await?;
             let member = set(
                 "SELECT resource_id FROM resources_visible_by_membership($1)",
                 p,
@@ -2310,7 +2306,7 @@ async fn public_within_reads_for_people_under_the_anchor_and_nobody_else(
             let creading_body = set(
                 "SELECT context_id FROM _contexts_readable_by_teams($1, \
                    coalesce((SELECT array_agg(team_id) FROM profile_reachable_teams($1)), '{}'), \
-                   public_within_reading($1))",
+                   true)",
                 p,
             )
             .await?;
@@ -2353,26 +2349,22 @@ async fn public_within_reads_for_people_under_the_anchor_and_nobody_else(
                 ));
             }
             let extra: Vec<&Uuid> = reading.iter().filter(|r| !member.contains(r)).collect();
-            if !switch_on && person {
-                violations.push(format!(
-                    "{who}: public_within_reading is true with the switch off"
-                ));
-            }
             if !person && !extra.is_empty() {
                 violations.push(format!(
                     "{who}: not a person, yet reads {extra:?} beyond membership"
                 ));
             }
-            if !switch_on && !extra.is_empty() {
+            if forbidden && (!extra.is_empty() || !delta.is_empty()) {
                 violations.push(format!(
-                    "{who}: the switch is off, yet reads {extra:?} beyond membership"
+                    "{who}: under a forbid above the team, yet reads {extra:?} beyond membership"
                 ));
             }
         }
     }
 
-    // The witnesses, with the switch back on.
-    sqlx::query("UPDATE kb_system_settings SET public_within_enabled = true WHERE id = 1")
+    // The witnesses, with the forbid cleared.
+    sqlx::query("UPDATE kb_teams SET public_within_forbidden = false WHERE id = $1")
+        .bind(w.teams[T_EPD])
         .execute(&pool)
         .await?;
     let ask = |sql: &'static str, a: Uuid, b: Uuid| {
@@ -2540,23 +2532,25 @@ async fn public_within_reads_for_people_under_the_anchor_and_nobody_else(
         .bind(t_eng)
         .execute(&pool)
         .await?;
-    // The switch off.
-    sqlx::query("UPDATE kb_system_settings SET public_within_enabled = false WHERE id = 1")
+    // A forbid at the top of the world's tree, above the anchor.
+    sqlx::query("UPDATE kb_teams SET public_within_forbidden = true WHERE id = $1")
+        .bind(w.teams[T_EPD])
         .execute(&pool)
         .await?;
-    let off_allowed = ask(
+    let top_allowed = ask(
         "SELECT public_within_allowed_over($1) AND $2 IS NOT NULL",
         t_pub,
         t_pub,
     )
     .await?;
-    let off_row = ask(
+    let top_row = ask(
         "SELECT public_within_row_effective($1, $2, false)",
         t_pub,
         t_eng,
     )
     .await?;
-    sqlx::query("UPDATE kb_system_settings SET public_within_enabled = true WHERE id = 1")
+    sqlx::query("UPDATE kb_teams SET public_within_forbidden = false WHERE id = $1")
+        .bind(w.teams[T_EPD])
         .execute(&pool)
         .await?;
     for (got, want, what) in [
@@ -2576,14 +2570,14 @@ async fn public_within_reads_for_people_under_the_anchor_and_nobody_else(
             "public_within_allowed_over(pub) under a forbid on eng",
         ),
         (
-            off_allowed,
+            top_allowed,
             false,
-            "public_within_allowed_over(pub) with the switch off",
+            "public_within_allowed_over(pub) under a forbid at the top",
         ),
         (
-            off_row,
+            top_row,
             false,
-            "public_within_row_effective(pub, eng) with the switch off",
+            "public_within_row_effective(pub, eng) under a forbid at the top",
         ),
     ] {
         if got != want {

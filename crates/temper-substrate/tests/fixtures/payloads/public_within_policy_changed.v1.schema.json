@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "PublicWithinPolicyChanged",
-  "description": "`public_within_policy_changed` — the instance switch (`public_within_enabled`) or a team's forbid\n(`public_within_forbidden`) changed. The only record of the instance switch: settings updates\nare otherwise not ledgered. A team-scope record carries the team as its `subject` reference; an\ninstance-scope record carries none, and is read by system admins.",
+  "description": "`public_within_policy_changed` — a team's forbid (`public_within_forbidden`) changed. A forbid\non the root (`temper-system`) is the instance-wide off: it makes every row confer nothing,\nwhether or not the team's tree is linked under the root. The record carries the team as its\n`subject` reference.",
   "type": "object",
   "properties": {
     "actor": {
@@ -15,18 +15,15 @@
       ]
     },
     "from": {
-      "description": "The value before: the switch's `enabled`, or the team's `forbidden`.",
+      "description": "The forbid before.",
       "type": "boolean"
     },
     "scope": {
       "$ref": "#/$defs/PublicWithinPolicyScope"
     },
     "team_id": {
-      "description": "The team whose forbid changed; absent for the instance switch.",
-      "type": [
-        "string",
-        "null"
-      ],
+      "description": "The team whose forbid changed.",
+      "type": "string",
       "format": "uuid"
     },
     "to": {
@@ -36,6 +33,7 @@
   },
   "required": [
     "scope",
+    "team_id",
     "from",
     "to"
   ],
@@ -49,12 +47,7 @@
       "description": "Which policy a [`PublicWithinPolicyChanged`] record is about.",
       "oneOf": [
         {
-          "description": "`kb_system_settings.public_within_enabled`, set by a system admin.",
-          "type": "string",
-          "const": "instance"
-        },
-        {
-          "description": "`kb_teams.public_within_forbidden`, set by the team's owner or an admin.",
+          "description": "`kb_teams.public_within_forbidden`, set by the team's owner or an admin; on the root, by a\nsystem admin only.",
           "type": "string",
           "const": "team"
         }

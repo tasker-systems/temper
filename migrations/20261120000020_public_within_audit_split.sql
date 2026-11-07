@@ -14,10 +14,11 @@
 -- The queue must use the gate's sets or it livelocks offering refused work; humans see the queue.
 --
 -- Each function derives both sets once per call, MATERIALIZED, as the single set was (the hoist is
--- load-bearing: `20260828000020` measured the per-finding form as 97% of the sweep). `readable` is
--- `member` plus `resources_public_within`, never a second full scan: reading is exactly membership
--- UNION that delta (the visibility harness holds the equality). For a machine, or with the switch
--- off, the delta is a one-time filter that never runs.
+-- load-bearing: `20260828000020` measured the per-finding form as 97% of the sweep). A cited source
+-- is readable when it is in `member` or in `delta` (`resources_public_within`), never a second full
+-- scan and never a copy of `member`: reading is exactly membership UNION that delta (the visibility
+-- harness holds the equality). With no public_within row the delta is one table probe; for a
+-- machine the fence inside contexts_public_within makes it empty.
 --
 -- Everything else in the three bodies is unchanged from `20261101400000`; read it for why each is
 -- shaped as it is.
@@ -27,9 +28,7 @@ RETURNS TABLE(finding_id uuid, block_id uuid, source_id uuid) LANGUAGE sql STABL
     WITH member AS MATERIALIZED (
         SELECT resource_id FROM resources_visible_by_membership(p_principal)
     ),
-    readable AS MATERIALIZED (
-        SELECT resource_id FROM member
-        UNION
+    delta AS MATERIALIZED (
         SELECT resource_id FROM resources_public_within(p_principal)
     ),
     gated AS (
@@ -44,7 +43,8 @@ RETURNS TABLE(finding_id uuid, block_id uuid, source_id uuid) LANGUAGE sql STABL
       CROSS JOIN LATERAL (
           SELECT l.block_id, l.source_id
             FROM resource_live_citations(g.fid) l
-           WHERE l.source_id IN (SELECT resource_id FROM readable)
+           WHERE (l.source_id IN (SELECT resource_id FROM member)
+               OR l.source_id IN (SELECT resource_id FROM delta))
       ) lc
       JOIN kb_content_blocks b  ON b.id  = lc.block_id
       JOIN kb_events         be ON be.id = b.last_event_id
@@ -74,9 +74,7 @@ RETURNS TABLE(block_id uuid, source_id uuid) LANGUAGE sql STABLE AS $$
     WITH member AS MATERIALIZED (
         SELECT resource_id FROM resources_visible_by_membership(p_principal)
     ),
-    readable AS MATERIALIZED (
-        SELECT resource_id FROM member
-        UNION
+    delta AS MATERIALIZED (
         SELECT resource_id FROM resources_public_within(p_principal)
     ),
     gated AS (
@@ -86,7 +84,8 @@ RETURNS TABLE(block_id uuid, source_id uuid) LANGUAGE sql STABLE AS $$
     SELECT lc.block_id, lc.source_id
       FROM gated g
       CROSS JOIN LATERAL resource_live_citations(g.fid) lc
-     WHERE lc.source_id IN (SELECT resource_id FROM readable)
+     WHERE (lc.source_id IN (SELECT resource_id FROM member)
+         OR lc.source_id IN (SELECT resource_id FROM delta))
        AND NOT EXISTS (
            SELECT 1
              FROM kb_citation_audits a
@@ -106,9 +105,7 @@ LANGUAGE sql STABLE AS $$
     WITH member AS MATERIALIZED (
         SELECT resource_id FROM resources_visible_by_membership(p_principal)
     ),
-    readable AS MATERIALIZED (
-        SELECT resource_id FROM member
-        UNION
+    delta AS MATERIALIZED (
         SELECT resource_id FROM resources_public_within(p_principal)
     ),
     candidates AS (
@@ -136,7 +133,8 @@ LANGUAGE sql STABLE AS $$
                             AND a.source_kind = 'resource'
                             AND a.source_id   = lc.source_id))::int AS coverage
                 FROM resource_live_citations(c.finding_id) lc
-               WHERE lc.source_id IN (SELECT resource_id FROM readable)
+               WHERE (lc.source_id IN (SELECT resource_id FROM member)
+                   OR lc.source_id IN (SELECT resource_id FROM delta))
           ) rc
     ),
     -- THE SHORT-CIRCUIT, set-wise (`20260828000020`): only findings the uncovered arm did not admit.
@@ -209,6 +207,5 @@ SELECT declare_migration(
     'gates the finding on resources_visible_by_membership and the cited source on reading '
     'visibility, deliberately reversing the single shared set of 20261101400000. For '
     'every principal not under the anchor of an effective public_within row the two sets are '
-    'equal, and no row is effective while public_within_enabled is false (its default), so every '
-    'answer is unchanged until an admin turns the switch on.'
+    'equal, and a row needs both sides, so every answer is unchanged until a row exists.'
 );

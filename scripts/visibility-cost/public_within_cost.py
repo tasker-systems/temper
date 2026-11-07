@@ -10,21 +10,22 @@ Builds TWO scratch databases on the local dev server and the same synthetic worl
   * `temper_pw_cost_head`: every migration in the tree (the public_within arm, the wrappers, the
     audit split).
 
-Then it times the five doors the plan names, for a handful of profiles, on base and on head in
-four cases:
+Then it times the read doors, for a handful of profiles, in three cases:
 
-  base        no switch and no arm exist
-  off         head, switch off, 50 rows plus a root row present (the born-denied instance)
-  on-0        head, switch on, no rows
-  on-51       head, switch on, 50 rows plus one admin root row
+  base        the read path without the public_within arm
+  head-0      head with no public_within rows (every instance until a row is opened)
+  head-51     head with 50 rows plus one admin instance-wide row on the root
 
-The merge bar: `off` is within noise of `base`.
+Each head case is timed against base sample by sample: a third scratch database,
+`temper_pw_cost_driver`, holds one warm dblink connection to each and alternates the call, so drift
+and contention on the host land on both sides of every pair. The merge bar: `head-0` is within
+noise of `base`.
 
-Each number is the median wall time of one call, over all samples for all measured profiles,
-timed inside one session per door after two warm-up calls per profile: a server's pooled
+Each number is the median wall time of one call, over all samples (cycling through the measured
+profiles), on connections that have already run every door twice per profile: a server's pooled
 connections have already planned every function body, so a fresh session per sample would charge
-each sample a one-off planning cost a server does not pay. Absolute milliseconds are this host's;
-read the ratios.
+each sample a one-off planning cost a server does not pay. The time includes the dblink round
+trip, which is the same on both sides. Absolute milliseconds are this host's; read the ratios.
 
 The world: a root-linked `org`, 10 divisions, 5 squads each; 300 people, each on two squads; one
 context per squad (40 resources) and per division (20 resources); 4000 edges, each homed in its
@@ -36,7 +37,7 @@ and the root row opens one squad to `temper-system`, which every person's closur
 the visibility hand-off and the empty k-NN, not a vector search; the hand-off is what the public_within
 arm touches.
 
-It WRITES only to the two scratch databases, and drops and recreates them on every run.
+It WRITES only to the three scratch databases, and drops and recreates them on every run.
 """
 
 import argparse
@@ -50,6 +51,7 @@ import tempfile
 SERVER = "postgresql://temper:temper@localhost:5437"
 BASE_DB = "temper_pw_cost_base"
 HEAD_DB = "temper_pw_cost_head"
+DRIVER_DB = "temper_pw_cost_driver"
 # This work's first migration; the base is every migration before it.
 HEAD_FIRST = 20261120000000
 
@@ -215,61 +217,97 @@ DOORS = {
 }
 
 
+# Alternates one call on `a` and one on `b` per sample, flipping which goes first, on two warm
+# connections. The doors take the profile as `$1`; it is spliced in as a literal for dblink.
 BENCH = """
-CREATE FUNCTION pg_temp.bench(q text, profiles uuid[], warm int, n int) RETURNS SETOF float8
-LANGUAGE plpgsql AS $b$
-DECLARE p uuid; t0 timestamptz; c record;
+CREATE FUNCTION pg_temp.bench(q text, a text, b text, handles text[], warm int, n int)
+RETURNS TABLE(side text, ms float8) LANGUAGE plpgsql AS $b$
+DECLARE
+    t0 timestamptz;
+    d text;
+    ids text[];
+    pa text[];
+    pb text[];
+    call text;
 BEGIN
-    FOREACH p IN ARRAY profiles LOOP
-        FOR i IN 1..warm LOOP EXECUTE q INTO c USING p; END LOOP;
-        FOR i IN 1..n LOOP
-            t0 := clock_timestamp();
-            EXECUTE q INTO c USING p;
-            RETURN NEXT extract(epoch FROM clock_timestamp() - t0) * 1000;
+    PERFORM dblink_connect('a', a);
+    PERFORM dblink_connect('b', b);
+    FOREACH d IN ARRAY ARRAY['a', 'b'] LOOP
+        ids := ARRAY(SELECT x FROM dblink(d, format(
+            'SELECT id::text FROM kb_profiles WHERE handle = ANY(%L) ORDER BY handle', handles))
+            AS t(x text));
+        IF d = 'a' THEN pa := ids; ELSE pb := ids; END IF;
+        FOR k IN 1..array_length(ids, 1) LOOP
+            FOR w IN 1..warm LOOP
+                PERFORM * FROM dblink(d, replace(q, '$1', quote_literal(ids[k]) || '::uuid'))
+                    AS t(c text);
+            END LOOP;
         END LOOP;
     END LOOP;
+    FOR i IN 1..n LOOP
+        FOREACH d IN ARRAY CASE WHEN i % 2 = 0 THEN ARRAY['a', 'b'] ELSE ARRAY['b', 'a'] END LOOP
+            ids := CASE WHEN d = 'a' THEN pa ELSE pb END;
+            call := replace(q, '$1', quote_literal(ids[1 + i % array_length(ids, 1)]) || '::uuid');
+            t0 := clock_timestamp();
+            PERFORM * FROM dblink(d, call) AS t(c text);
+            side := d;
+            ms := extract(epoch FROM clock_timestamp() - t0) * 1000;
+            RETURN NEXT;
+        END LOOP;
+    END LOOP;
+    PERFORM dblink_disconnect('a');
+    PERFORM dblink_disconnect('b');
 END $b$;
 """
 
 
-def measure(dsn, profiles, samples):
-    # One session per door: a server keeps its pooled connections, so the timed calls run on a
-    # session that has already planned every function body. A fresh session per sample would charge
-    # each sample that one-off planning instead.
+def measure(driver, handles, samples):
+    """Per door, the median ms on base and on head, timed in alternating pairs."""
     out = {}
-    arr = "ARRAY[" + ", ".join(f"'{p}'::uuid" for p in profiles) + "]"
+    arr = "ARRAY[" + ", ".join(f"'{h}'" for h in handles) + "]"
+    a = f"dbname={BASE_DB} user=temper password=temper"
+    b = f"dbname={HEAD_DB} user=temper password=temper"
     for name, sql in DOORS.items():
-        q = sql.replace("'", "''")
-        rows = psql(dsn, BENCH + f"SELECT pg_temp.bench('{q}', {arr}, 2, {samples});")
-        times = [float(x) for x in rows.split()]
-        out[name] = statistics.median(times)
+        q = f"SELECT count(*)::text FROM ({sql}) door".replace("'", "''")
+        rows = psql(
+            driver,
+            BENCH
+            + f"SELECT side, ms FROM pg_temp.bench('{q}', '{a}', '{b}', {arr}, 2, {samples});",
+        )
+        times = {"a": [], "b": []}
+        for line in rows.split():
+            side, ms = line.split("|")
+            times[side].append(float(ms))
+        out[name] = (statistics.median(times["a"]), statistics.median(times["b"]))
     return out
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--samples", type=int, default=9)
+    ap.add_argument("--samples", type=int, default=200)
     ap.add_argument("--profiles", type=int, default=5)
     args = ap.parse_args()
 
     base_src = base_migrations()
-    base = fresh(BASE_DB, base_src)
+    fresh(BASE_DB, base_src)
     head = fresh(HEAD_DB, os.path.join(REPO, "migrations"))
-    for dsn in (base, head):
-        psql(dsn, WORLD)
-    handles = ", ".join(f"'p{k}'" for k in range(1, 300, 300 // args.profiles))
-    profiles = psql(head, f"SELECT id FROM kb_profiles WHERE handle IN ({handles})").split()
-    base_profiles = psql(base, f"SELECT id FROM kb_profiles WHERE handle IN ({handles})").split()
+    for db in (BASE_DB, HEAD_DB):
+        psql(f"{SERVER}/{db}", WORLD)
+    psql(f"{SERVER}/postgres", f"DROP DATABASE IF EXISTS {DRIVER_DB} WITH (FORCE)")
+    psql(f"{SERVER}/postgres", f"CREATE DATABASE {DRIVER_DB} TEMPLATE template0")
+    driver = f"{SERVER}/{DRIVER_DB}"
+    psql(driver, "CREATE EXTENSION dblink")
+    handles = [f"p{k}" for k in range(1, 300, 300 // args.profiles)]
 
-    results = {"base": measure(base, base_profiles, args.samples)}
+    zero = measure(driver, handles, args.samples)
     psql(head, ROWS)
-    psql(head, "UPDATE kb_system_settings SET public_within_enabled = false WHERE id = 1")
-    results["off"] = measure(head, profiles, args.samples)
-    psql(head, "DELETE FROM kb_team_public_within")
-    psql(head, "UPDATE kb_system_settings SET public_within_enabled = true WHERE id = 1")
-    results["on-0"] = measure(head, profiles, args.samples)
-    psql(head, ROWS)
-    results["on-51"] = measure(head, profiles, args.samples)
+    rows = measure(driver, handles, args.samples)
+    results = {
+        "base": {d: zero[d][0] for d in DOORS},
+        "head-0": {d: zero[d][1] for d in DOORS},
+        "base'": {d: rows[d][0] for d in DOORS},
+        "head-51": {d: rows[d][1] for d in DOORS},
+    }
 
     reads = psql(
         head,
@@ -281,19 +319,19 @@ def main():
         "(SELECT id FROM kb_profiles WHERE handle='p1'))",
     ).strip()
 
-    cases = ["base", "off", "on-0", "on-51"]
+    cases = ["base", "head-0", "base'", "head-51"]
     print(
-        f"median ms, {args.profiles} profiles x {args.samples} samples (p1 reads {reads}, "
-        f"{member} by membership, in on-51)\n"
+        f"median ms, {len(handles)} profiles, {args.samples} alternating pairs per door; base' is "
+        f"base timed beside head-51 (p1 reads {reads}, {member} by membership, in head-51)\n"
     )
-    print(f"| door | {' | '.join(cases)} | off/base | on-51/base |")
+    print(f"| door | {' | '.join(cases)} | head-0/base | head-51/base' |")
     print(f"|---|{'---|' * len(cases)}---|---|")
     for door in DOORS:
         row = [results[c][door] for c in cases]
         print(
             f"| `{door}` | "
             + " | ".join(f"{v:.2f}" for v in row)
-            + f" | {row[1] / row[0]:.2f} | {row[3] / row[0]:.2f} |"
+            + f" | {row[1] / row[0]:.2f} | {row[3] / row[2]:.2f} |"
         )
     shutil.rmtree(base_src, ignore_errors=True)
 

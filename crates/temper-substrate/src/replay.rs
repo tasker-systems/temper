@@ -1052,8 +1052,8 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // auto_join_role) is replayed from the kb_teams input table.
             | EventKind::TeamLifecycleChanged
             // The public_within records: the same posture. Row STATE is replayed from the
-            // kb_team_public_within input table; the switch and the forbid ride kb_teams and
-            // settings, which replay does not rebuild from events either.
+            // kb_team_public_within input table; the forbid rides kb_teams, which replay does not
+            // rebuild from events either.
             | EventKind::TeamPublicWithinChanged
             | EventKind::PublicWithinEffectChanged
             | EventKind::PublicWithinPolicyChanged

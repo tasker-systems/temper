@@ -33,5 +33,5 @@ SELECT declare_migration(
     'additive',
     'Body-only CREATE OR REPLACE, signature and return type unchanged, of anchor_subtree_holds_pool: '
     'an auto-join team under the anchor counts as a pool, as the root and the gating team already do. No row is '
-    'rewritten, and nothing reads the function while public_within_enabled is false, its default.'
+    'rewritten, and the function runs only for a candidate public_within row.'
 );

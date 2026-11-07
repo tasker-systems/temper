@@ -22,9 +22,6 @@ module Temper::Generated
     # Human-facing instance name.
     attr_accessor :instance_name
 
-    # The instance switch for `public_within`: whether a team's owned contexts may be opened to an ancestor's subtree at all. Off by default. Turning it off makes every row confer nothing; turning it on revives the rows no other cause holds dormant. Recorded as `public_within_policy_changed`. `None` leaves it unchanged.
-    attr_accessor :public_within_enabled
-
     # URI of the terms-of-service resource.
     attr_accessor :terms_resource_uri
 
@@ -36,7 +33,6 @@ module Temper::Generated
       {
         :'gating_team_slug' => :'gating_team_slug',
         :'instance_name' => :'instance_name',
-        :'public_within_enabled' => :'public_within_enabled',
         :'terms_resource_uri' => :'terms_resource_uri',
         :'terms_version' => :'terms_version'
       }
@@ -57,7 +53,6 @@ module Temper::Generated
       {
         :'gating_team_slug' => :'String',
         :'instance_name' => :'String',
-        :'public_within_enabled' => :'Boolean',
         :'terms_resource_uri' => :'String',
         :'terms_version' => :'String'
       }
@@ -68,7 +63,6 @@ module Temper::Generated
       Set.new([
         :'gating_team_slug',
         :'instance_name',
-        :'public_within_enabled',
         :'terms_resource_uri',
         :'terms_version'
       ])
@@ -96,10 +90,6 @@ module Temper::Generated
 
       if attributes.key?(:'instance_name')
         self.instance_name = attributes[:'instance_name']
-      end
-
-      if attributes.key?(:'public_within_enabled')
-        self.public_within_enabled = attributes[:'public_within_enabled']
       end
 
       if attributes.key?(:'terms_resource_uri')
@@ -133,7 +123,6 @@ module Temper::Generated
       self.class == o.class &&
           gating_team_slug == o.gating_team_slug &&
           instance_name == o.instance_name &&
-          public_within_enabled == o.public_within_enabled &&
           terms_resource_uri == o.terms_resource_uri &&
           terms_version == o.terms_version
     end
@@ -147,7 +136,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [gating_team_slug, instance_name, public_within_enabled, terms_resource_uri, terms_version].hash
+      [gating_team_slug, instance_name, terms_resource_uri, terms_version].hash
     end
 
     # Builds the object from hash

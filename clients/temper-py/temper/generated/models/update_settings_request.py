@@ -17,7 +17,7 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional
 from typing import Optional, Set
 from typing_extensions import Self
@@ -29,10 +29,9 @@ class UpdateSettingsRequest(BaseModel):
     """ # noqa: E501
     gating_team_slug: Optional[StrictStr] = Field(default=None, description="Gating team slug recorded in instance settings. Ownership of it confers no authorization: `is_system_admin` reads the principal-governance grant. `None` leaves it unchanged.")
     instance_name: Optional[StrictStr] = Field(default=None, description="Human-facing instance name.")
-    public_within_enabled: Optional[StrictBool] = Field(default=None, description="The instance switch for `public_within`: whether a team's owned contexts may be opened to an ancestor's subtree at all. Off by default. Turning it off makes every row confer nothing; turning it on revives the rows no other cause holds dormant. Recorded as `public_within_policy_changed`. `None` leaves it unchanged.")
     terms_resource_uri: Optional[StrictStr] = Field(default=None, description="URI of the terms-of-service resource.")
     terms_version: Optional[StrictStr] = Field(default=None, description="Terms-of-service version label.")
-    __properties: ClassVar[List[str]] = ["gating_team_slug", "instance_name", "public_within_enabled", "terms_resource_uri", "terms_version"]
+    __properties: ClassVar[List[str]] = ["gating_team_slug", "instance_name", "terms_resource_uri", "terms_version"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -83,11 +82,6 @@ class UpdateSettingsRequest(BaseModel):
         if self.instance_name is None and "instance_name" in self.model_fields_set:
             _dict['instance_name'] = None
 
-        # set to None if public_within_enabled (nullable) is None
-        # and model_fields_set contains the field
-        if self.public_within_enabled is None and "public_within_enabled" in self.model_fields_set:
-            _dict['public_within_enabled'] = None
-
         # set to None if terms_resource_uri (nullable) is None
         # and model_fields_set contains the field
         if self.terms_resource_uri is None and "terms_resource_uri" in self.model_fields_set:
@@ -112,7 +106,6 @@ class UpdateSettingsRequest(BaseModel):
         _obj = cls.model_validate({
             "gating_team_slug": obj.get("gating_team_slug"),
             "instance_name": obj.get("instance_name"),
-            "public_within_enabled": obj.get("public_within_enabled"),
             "terms_resource_uri": obj.get("terms_resource_uri"),
             "terms_version": obj.get("terms_version")
         })

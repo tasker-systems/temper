@@ -16,8 +16,8 @@
 //!
 //! T owns `ctx-t`. `ctx-shared` (sales') is shared TO T; `ctx-sales` holds a resource granted to T; a
 //! cogmap is bound to T with an edge homed in it. `eng-sec-red` owns `ctx-red`. The readers author in
-//! `ctx-web`. The row is written directly by [`open`], the plan's fixture helper: the open door is a
-//! later phase. The switch is on unless a test says otherwise.
+//! `ctx-web`. The row is written directly by [`open`]: no door that opens a row exists yet. There is
+//! no instance setting: a forbid on the root is the instance-wide off.
 //!
 //! **Deviation from the plan's world, recorded.** The plan's world puts an auto-join `eng-pool`
 //! under `eng`. Present by default, it makes every `(eng-sec, eng)` row inert
@@ -315,14 +315,6 @@ async fn close(pool: &PgPool, t: Uuid, a: Uuid) {
         .expect("close");
 }
 
-async fn switch(pool: &PgPool, on: bool) {
-    sqlx::query("UPDATE kb_system_settings SET public_within_enabled = $1 WHERE id = 1")
-        .bind(on)
-        .execute(pool)
-        .await
-        .expect("switch");
-}
-
 async fn reads(pool: &PgPool, who: Uuid, resource: Uuid) -> bool {
     sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM resources_visible_to($1) v WHERE v.resource_id = $2)",
@@ -523,7 +515,6 @@ async fn world(pool: &PgPool) -> World {
     .await
     .expect("cogmap-homed edge");
 
-    switch(pool, true).await;
     open(pool, eng_sec, eng, false, sec_owner).await;
 
     World {
@@ -569,13 +560,7 @@ async fn world(pool: &PgPool) -> World {
 // =================================================================================================
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn every_new_setting_is_off_or_empty_by_default(pool: PgPool) {
-    let enabled: bool =
-        sqlx::query_scalar("SELECT public_within_enabled FROM kb_system_settings WHERE id = 1")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert!(!enabled, "the instance switch is born off");
+async fn no_forbid_and_no_row_exist_by_default(pool: PgPool) {
     let forbidden: i64 =
         sqlx::query_scalar("SELECT count(*) FROM kb_teams WHERE public_within_forbidden")
             .fetch_one(&pool)
@@ -587,8 +572,6 @@ async fn every_new_setting_is_off_or_empty_by_default(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(rows, 0);
-    let settings = access_service::get_system_settings(&pool).await.unwrap();
-    assert!(!settings.public_within_enabled);
 }
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
@@ -760,10 +743,6 @@ async fn a_forbid_anywhere_above_t_fails_policy_closed(pool: PgPool) {
         allowed(pool.clone(), w.eng_sec).await,
         "T left the forbidding subtree"
     );
-
-    // The switch is read first.
-    switch(&pool, false).await;
-    assert!(!allowed(pool.clone(), w.eng_sec).await, "the switch is off");
 }
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
@@ -828,12 +807,6 @@ async fn public_within_reading_is_for_people_only(pool: PgPool) {
         "a profile with no auth link"
     );
     assert!(reading(pool.clone(), w.web_member).await, "a person");
-    switch(&pool, false).await;
-    assert!(
-        !reading(pool.clone(), w.web_member).await,
-        "nobody reads through public_within with the switch off"
-    );
-    switch(&pool, true).await;
     assert!(
         reading(pool.clone(), slack_person).await,
         "a person whose only link is Slack's: a Slack-minted token is the person"
@@ -853,106 +826,6 @@ async fn public_within_reading_is_for_people_only(pool: PgPool) {
         !reading(pool.clone(), m2m_only).await,
         "a machine-provider link alone"
     );
-}
-
-/// `update_system_settings` writes the switch in a transaction with its record.
-#[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn the_instance_switch_is_recorded_once_per_change(pool: PgPool) {
-    let admin = person(&pool, "switch-admin").await;
-    test_support::approved_admin(&pool, admin).await;
-    let proof = test_support::system_admin_proof_for(&pool, admin).await;
-    let records = |pool: PgPool| async move {
-        sqlx::query_scalar::<_, i64>(
-            "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
-              WHERE t.name = 'public_within_policy_changed' \
-                AND e.payload->>'scope' = 'instance'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap()
-    };
-    let on = temper_core::types::admin::UpdateSettingsRequest {
-        public_within_enabled: Some(true),
-        ..Default::default()
-    };
-    let s = access_service::update_system_settings(&pool, &proof, &on)
-        .await
-        .unwrap();
-    assert!(s.public_within_enabled);
-    assert_eq!(records(pool.clone()).await, 1);
-    access_service::update_system_settings(&pool, &proof, &on)
-        .await
-        .unwrap();
-    assert_eq!(
-        records(pool.clone()).await,
-        1,
-        "a value already held records nothing"
-    );
-    let off = temper_core::types::admin::UpdateSettingsRequest {
-        public_within_enabled: Some(false),
-        ..Default::default()
-    };
-    let s = access_service::update_system_settings(&pool, &proof, &off)
-        .await
-        .unwrap();
-    assert!(!s.public_within_enabled);
-    assert_eq!(records(pool.clone()).await, 2);
-
-    // A failure AFTER the switch write rolls the switch and its record back with it: they ride the
-    // settings update's transaction. A test-local trigger fails the final settings UPDATE (the one
-    // that sets instance_name), which runs after `_admin_public_within_switch_write`.
-    sqlx::query(
-        "CREATE FUNCTION public_within_test_fail_late() RETURNS trigger LANGUAGE plpgsql AS $f$ \
-         BEGIN IF NEW.instance_name = 'fail-late' THEN RAISE EXCEPTION 'late failure'; END IF; \
-         RETURN NEW; END $f$",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "CREATE TRIGGER fail_late BEFORE UPDATE ON kb_system_settings \
-         FOR EACH ROW EXECUTE FUNCTION public_within_test_fail_late()",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    let late = temper_core::types::admin::UpdateSettingsRequest {
-        public_within_enabled: Some(true),
-        instance_name: Some("fail-late".into()),
-        ..Default::default()
-    };
-    access_service::update_system_settings(&pool, &proof, &late)
-        .await
-        .expect_err("the late failure surfaces");
-    assert!(
-        !access_service::get_system_settings(&pool)
-            .await
-            .unwrap()
-            .public_within_enabled,
-        "the switch write rolled back with the failed update"
-    );
-    assert_eq!(records(pool.clone()).await, 2, "and so did its record");
-    sqlx::query("DROP TRIGGER fail_late ON kb_system_settings")
-        .execute(&pool)
-        .await
-        .unwrap();
-
-    // A refused gating slug is checked before anything is written.
-    let bad = temper_core::types::admin::UpdateSettingsRequest {
-        public_within_enabled: Some(true),
-        gating_team_slug: Some("no-such-team".into()),
-        ..Default::default()
-    };
-    access_service::update_system_settings(&pool, &proof, &bad)
-        .await
-        .expect_err("a nonexistent gating team is refused");
-    assert!(
-        !access_service::get_system_settings(&pool)
-            .await
-            .unwrap()
-            .public_within_enabled
-    );
-    assert_eq!(records(pool.clone()).await, 2);
 }
 
 // =================================================================================================
@@ -1770,9 +1643,11 @@ async fn a_row_is_inert_when(pool: PgPool) {
     let p = w.web_member;
     assert!(reads(&pool, p, w.r_t).await);
 
-    switch(&pool, false).await;
-    assert!(!reads(&pool, p, w.r_t).await, "the switch is off");
-    switch(&pool, true).await;
+    // The instance-wide off: a forbid on the root.
+    link(&pool, w.root, w.org).await;
+    forbid(&pool, w.root, true).await;
+    assert!(!reads(&pool, p, w.r_t).await, "the root forbids");
+    forbid(&pool, w.root, false).await;
     assert!(reads(&pool, p, w.r_t).await);
 
     for (forbidder, what) in [
@@ -2107,6 +1982,85 @@ async fn a_connections_intake_context_is_never_opened(pool: PgPool) {
     assert!(ctx_reads(&pool, w.sec_member, intake).await);
 }
 
+/// The admin's instance-wide off is a forbid on the root. With org linked under the root, it makes
+/// every row inert, an admin's instance_wide row anchored on the root included. Clearing it revives
+/// them.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_root_forbid_turns_every_row_off_and_clearing_it_revives_them(pool: PgPool) {
+    let w = world(&pool).await;
+    link(&pool, w.root, w.org).await;
+    open(&pool, w.eng_sec_red, w.root, true, w.admin).await;
+    let anyone = person(&pool, "anyone").await;
+    assert!(
+        reads(&pool, w.web_member, w.r_t).await,
+        "precondition: the (T, eng) row"
+    );
+    assert!(
+        reads(&pool, anyone, w.r_red).await,
+        "precondition: the root row"
+    );
+
+    forbid(&pool, w.root, true).await;
+    assert!(
+        !reads(&pool, w.web_member, w.r_t).await,
+        "the (T, eng) row is off"
+    );
+    assert!(
+        !reads(&pool, anyone, w.r_red).await,
+        "the admin's instance_wide root row is off too"
+    );
+    for (t, a, iw) in [(w.eng_sec, w.eng, false), (w.eng_sec_red, w.root, true)] {
+        assert!(
+            !scalar_bool_2(
+                &pool,
+                &format!("SELECT public_within_row_effective($1, $2, {iw})"),
+                t,
+                a
+            )
+            .await
+        );
+    }
+
+    forbid(&pool, w.root, false).await;
+    assert!(
+        reads(&pool, w.web_member, w.r_t).await,
+        "clearing it revives the (T, eng) row"
+    );
+    assert!(reads(&pool, anyone, w.r_red).await, "and the root row");
+}
+
+/// Anyone may create a parentless team, so a tree need not sit under the root. A root forbid still
+/// turns its rows off: the root's flag is read directly, not only along the ancestor walk.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_root_forbid_reaches_a_tree_not_under_the_root(pool: PgPool) {
+    let w = world(&pool).await;
+    assert!(
+        reads(&pool, w.web_member, w.r_t).await,
+        "precondition: the (T, eng) row, in a tree with no link to the root"
+    );
+
+    forbid(&pool, w.root, true).await;
+    assert!(
+        !reads(&pool, w.web_member, w.r_t).await,
+        "a root forbid turns off a row in a parentless tree"
+    );
+    assert!(
+        !scalar_bool_2(
+            &pool,
+            "SELECT public_within_row_effective($1, $2, false)",
+            w.eng_sec,
+            w.eng
+        )
+        .await
+    );
+
+    forbid(&pool, w.root, false).await;
+    assert!(
+        reads(&pool, w.web_member, w.r_t).await,
+        "clearing it revives the row"
+    );
+}
+
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn no_row_means_no_sideways_read(pool: PgPool) {
     let w = world(&pool).await;
@@ -2129,8 +2083,8 @@ async fn no_row_means_no_sideways_read(pool: PgPool) {
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn reading_never_flows_sideways_or_down_with_an_inert_row(pool: PgPool) {
     let w = world(&pool).await;
-    // The row is inert.
-    switch(&pool, false).await;
+    // The row is inert: a forbid above T.
+    forbid(&pool, w.org, true).await;
     // Sideways: eng-web does not read its sibling's context.
     assert!(!ctx_reads(&pool, w.web_member, w.ctx_t).await);
     // Down: eng's own roster does not read its child's context, and T does not read eng-web's.
@@ -2141,8 +2095,8 @@ async fn reading_never_flows_sideways_or_down_with_an_inert_row(pool: PgPool) {
     // Up still flows: a T member reads an ancestor's context.
     let ctx_eng = context(&pool, w.eng, "ctx-eng").await;
     assert!(ctx_reads(&pool, w.sec_member, ctx_eng).await);
-    // And with the switch on, only the row's own audience gains, and only T's owned contexts.
-    switch(&pool, true).await;
+    // And with the forbid lifted, only the row's own audience gains, and only T's owned contexts.
+    forbid(&pool, w.org, false).await;
     assert!(
         !ctx_reads(&pool, w.sec_member, w.ctx_web).await,
         "the arm is one-way"

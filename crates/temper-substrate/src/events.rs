@@ -186,7 +186,8 @@ pub enum EventKind {
     /// A `public_within` row started or stopped conferring without being opened or closed.
     /// Category `admin`, NULL-anchored.
     PublicWithinEffectChanged,
-    /// The instance switch or a team's forbid changed. Category `admin`, NULL-anchored.
+    /// A team's `public_within` forbid changed (on the root, the instance-wide off). Category
+    /// `admin`, NULL-anchored.
     PublicWithinPolicyChanged,
     /// An auditor's signed verdict on one `(block, source)` citation (Set 5, spec §4.1-4.2).
     /// Append-only — fires `citation_audited`, projected by `_project_citation_audited` into

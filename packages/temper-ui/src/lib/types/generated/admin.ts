@@ -139,11 +139,4 @@ terms_version: string | null,
 /**
  * URI of the terms-of-service resource.
  */
-terms_resource_uri: string | null, 
-/**
- * The instance switch for `public_within`: whether a team's owned contexts may be opened to
- * an ancestor's subtree at all. Off by default. Turning it off makes every row confer
- * nothing; turning it on revives the rows no other cause holds dormant. Recorded as
- * `public_within_policy_changed`. `None` leaves it unchanged.
- */
-public_within_enabled: boolean | null, };
+terms_resource_uri: string | null, };

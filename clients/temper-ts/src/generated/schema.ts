@@ -11709,14 +11709,6 @@ export interface components {
             /** Format: int32 */
             id: number;
             instance_name?: string | null;
-            /**
-             * @description The instance switch for `public_within`: whether a team's owned contexts may be opened to
-             *     the people under an anchor team. Off by default on every deployment: while it is off, no
-             *     `public_within` row confers anything. Not `required` on the
-             *     wire (`serde(default)`): a client built with this field still parses the response of a
-             *     server that predates it, where the absent value means off.
-             */
-            public_within_enabled?: boolean;
             terms_resource_uri?: string | null;
             terms_version?: string | null;
             /** Format: date-time */
@@ -11994,13 +11986,6 @@ export interface components {
             gating_team_slug?: string | null;
             /** @description Human-facing instance name. */
             instance_name?: string | null;
-            /**
-             * @description The instance switch for `public_within`: whether a team's owned contexts may be opened to
-             *     an ancestor's subtree at all. Off by default. Turning it off makes every row confer
-             *     nothing; turning it on revives the rows no other cause holds dormant. Recorded as
-             *     `public_within_policy_changed`. `None` leaves it unchanged.
-             */
-            public_within_enabled?: boolean | null;
             /** @description URI of the terms-of-service resource. */
             terms_resource_uri?: string | null;
             /** @description Terms-of-service version label. */

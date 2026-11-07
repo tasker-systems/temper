@@ -1002,9 +1002,7 @@ pub(crate) async fn cogmap_write_requires_admin_on(
 pub async fn get_system_settings(pool: &PgPool) -> ApiResult<SystemSettings> {
     let row = sqlx::query_as!(
         SystemSettings,
-        "SELECT id, gating_team_slug, terms_version, terms_resource_uri, instance_name, \
-                public_within_enabled, updated \
-           FROM kb_system_settings LIMIT 1",
+        "SELECT id, gating_team_slug, terms_version, terms_resource_uri, instance_name, updated FROM kb_system_settings LIMIT 1",
     )
     .fetch_one(pool)
     .await?;
@@ -1042,14 +1040,9 @@ pub async fn admin_get_settings(pool: &PgPool, _admin: &SystemAdmin) -> ApiResul
 /// a null slug can no longer lock anyone out of the instance.
 pub async fn update_system_settings(
     pool: &PgPool,
-    admin: &SystemAdmin,
+    _admin: &SystemAdmin,
     req: &UpdateSettingsRequest,
 ) -> ApiResult<SystemSettings> {
-    // One transaction: the `public_within_enabled` switch is written with its
-    // `public_within_policy_changed` record, and later work hooks the row-effect transitions into
-    // the same statement. The checks below read inside it, so a refusal writes nothing.
-    let mut tx = pool.begin().await?;
-
     // If a gating team is being set, it must name a real team, and never a personal one: person
     // erasure erases everything in the subject's personal team, so a personal gating team would let
     // one erasure take the org's content with it. The database refuses it too
@@ -1059,7 +1052,7 @@ pub async fn update_system_settings(
             r#"SELECT personal_of IS NOT NULL AS "personal!" FROM kb_teams WHERE slug = $1"#,
             slug
         )
-        .fetch_optional(&mut *tx)
+        .fetch_optional(pool)
         .await?;
         match personal {
             None => {
@@ -1077,27 +1070,6 @@ pub async fn update_system_settings(
         }
     }
 
-    // The instance switch, through its writer: the column and its ledger record in one statement,
-    // under the settings row lock. A value already held is a no-op and records nothing.
-    if let Some(enabled) = req.public_within_enabled {
-        let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, admin.actor(), "web")
-            .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?;
-        let outcome = sqlx::query_scalar!(
-            r#"SELECT _admin_public_within_switch_write($1, $2, $3, NULL) AS "outcome!""#,
-            emitter.uuid(),
-            *admin.actor(),
-            enabled,
-        )
-        .fetch_one(&mut *tx)
-        .await?;
-        if outcome == "absent" {
-            return Err(ApiError::Internal(
-                "kb_system_settings has no row to update".to_owned(),
-            ));
-        }
-    }
-
     let row = sqlx::query_as!(
         SystemSettings,
         r#"
@@ -1109,17 +1081,16 @@ pub async fn update_system_settings(
                updated            = now()
          WHERE id = 1
         RETURNING id, gating_team_slug, terms_version,
-                  terms_resource_uri, instance_name, public_within_enabled, updated
+                  terms_resource_uri, instance_name, updated
         "#,
         req.gating_team_slug,
         req.instance_name,
         req.terms_version,
         req.terms_resource_uri,
     )
-    .fetch_one(&mut *tx)
+    .fetch_one(pool)
     .await?;
 
-    tx.commit().await?;
     Ok(row)
 }
 

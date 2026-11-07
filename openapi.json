@@ -28954,10 +28954,6 @@
               "null"
             ]
           },
-          "public_within_enabled": {
-            "type": "boolean",
-            "description": "The instance switch for `public_within`: whether a team's owned contexts may be opened to\nthe people under an anchor team. Off by default on every deployment: while it is off, no\n`public_within` row confers anything. Not `required` on the\nwire (`serde(default)`): a client built with this field still parses the response of a\nserver that predates it, where the absent value means off."
-          },
           "terms_resource_uri": {
             "type": [
               "string",
@@ -29501,13 +29497,6 @@
               "null"
             ],
             "description": "Human-facing instance name."
-          },
-          "public_within_enabled": {
-            "type": [
-              "boolean",
-              "null"
-            ],
-            "description": "The instance switch for `public_within`: whether a team's owned contexts may be opened to\nan ancestor's subtree at all. Off by default. Turning it off makes every row confer\nnothing; turning it on revives the rows no other cause holds dormant. Recorded as\n`public_within_policy_changed`. `None` leaves it unchanged."
           },
           "terms_resource_uri": {
             "type": [

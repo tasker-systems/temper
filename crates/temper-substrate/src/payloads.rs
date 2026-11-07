@@ -1920,7 +1920,7 @@ pub enum PublicWithinAct {
 
 /// `public_within_effect_changed` — a `public_within` row started or stopped conferring, without
 /// being opened or closed. The cause is liveness (a team on the path was deleted or restored) or
-/// policy (the instance switch, a forbid, or a pool team under the anchor). Both the team and the
+/// policy (a forbid, the root's included, or a pool at the anchor). Both the team and the
 /// anchor are `subject` references.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
@@ -1956,22 +1956,21 @@ pub enum PublicWithinEffect {
 pub enum PublicWithinCause {
     /// The team, the anchor, or every live path between them, was soft-deleted or restored.
     Liveness,
-    /// The instance switch, a forbid above the team, or a pool team under the anchor.
+    /// A forbid above the team (the root's included), or a pool at the anchor.
     Policy,
 }
 
-/// `public_within_policy_changed` — the instance switch (`public_within_enabled`) or a team's forbid
-/// (`public_within_forbidden`) changed. The only record of the instance switch: settings updates
-/// are otherwise not ledgered. A team-scope record carries the team as its `subject` reference; an
-/// instance-scope record carries none, and is read by system admins.
+/// `public_within_policy_changed` — a team's forbid (`public_within_forbidden`) changed. A forbid
+/// on the root (`temper-system`) is the instance-wide off: it makes every row confer nothing,
+/// whether or not the team's tree is linked under the root. The record carries the team as its
+/// `subject` reference.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct PublicWithinPolicyChanged {
     pub scope: PublicWithinPolicyScope,
-    /// The team whose forbid changed; absent for the instance switch.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub team_id: Option<Uuid>,
-    /// The value before: the switch's `enabled`, or the team's `forbidden`.
+    /// The team whose forbid changed.
+    pub team_id: Uuid,
+    /// The forbid before.
     pub from: bool,
     /// The value after.
     pub to: bool,
@@ -1984,9 +1983,8 @@ pub struct PublicWithinPolicyChanged {
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum PublicWithinPolicyScope {
-    /// `kb_system_settings.public_within_enabled`, set by a system admin.
-    Instance,
-    /// `kb_teams.public_within_forbidden`, set by the team's owner or an admin.
+    /// `kb_teams.public_within_forbidden`, set by the team's owner or an admin; on the root, by a
+    /// system admin only.
     Team,
 }
 
@@ -2931,29 +2929,21 @@ mod tests {
             );
         }
 
-        let instance = PublicWithinPolicyChanged {
-            scope: PublicWithinPolicyScope::Instance,
-            team_id: None,
+        let team = PublicWithinPolicyChanged {
+            scope: PublicWithinPolicyScope::Team,
+            team_id,
             from: false,
             to: true,
             actor,
         };
-        let team = PublicWithinPolicyChanged {
-            scope: PublicWithinPolicyScope::Team,
-            team_id: Some(team_id),
-            ..instance.clone()
-        };
-        for event in [&instance, &team] {
-            let v = serde_json::to_value(event).unwrap();
-            no_trail_key(&v, "public_within_policy_changed");
-            assert_eq!(
-                &serde_json::from_value::<PublicWithinPolicyChanged>(v).unwrap(),
-                event
-            );
-        }
-        let v = serde_json::to_value(&instance).unwrap();
-        assert_eq!(v["scope"], "instance");
-        assert!(v.get("team_id").is_none());
+        let v = serde_json::to_value(&team).unwrap();
+        no_trail_key(&v, "public_within_policy_changed");
+        assert_eq!(
+            serde_json::from_value::<PublicWithinPolicyChanged>(v.clone()).unwrap(),
+            team
+        );
+        assert_eq!(v["scope"], "team");
+        assert_eq!(v["team_id"], serde_json::json!(team_id));
     }
 
     /// `team_membership_changed` (team-role rank spec C8): the three act shapes round-trip, the
