@@ -580,3 +580,63 @@ async fn a_restored_subtree_that_grows_while_the_act_waits_is_retryable(pool: Pg
         .expect("the retry");
     assert!(live(&pool, r).await);
 }
+
+/// The gating slug is held for the re-check. An admin repoints `gating_team_slug` at G, a team in
+/// D's subtree, and holds that change open (with G's row, as a gating-team rename would) while a
+/// non-admin attaches D under the hub. The act waits on the gating hold before it takes any team
+/// row, so there is no lock cycle with the admin; once the admin commits, the re-check sees the
+/// gating team below D and refuses.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_gating_slug_repointed_into_the_subtree_concurrently_is_seen(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let (d, _x, g) = chain(&pool, &f.admin, None, "spq", "g", None).await;
+    own(&pool, d, *f.mgr.profile_id()).await;
+
+    let mut holder = pool.begin().await.unwrap();
+    sqlx::query("SELECT _gating_team_lock(true)")
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    sqlx::query("SELECT id FROM kb_teams WHERE id = $1 FOR UPDATE")
+        .bind(g)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'spq-g' WHERE id = 1")
+        .execute(&mut *holder)
+        .await
+        .expect("the admin's repoint, uncommitted");
+
+    let pool2 = pool.clone();
+    let mgr = f.mgr.clone();
+    let hub = f.hub;
+    let contender =
+        tokio::spawn(async move { team_service::attach_child(&pool2, &mgr, hub, d).await });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let waiting: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM pg_stat_activity \
+              WHERE datname = current_database() AND wait_event_type = 'Lock' \
+                AND query ILIKE '%_gating_team_lock(false)%')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        if waiting {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the contender never waited on the gating hold"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    holder.commit().await.unwrap();
+
+    let refusal = contender
+        .await
+        .unwrap()
+        .expect_err("the gating team is in the subtree by the time the re-check runs");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    assert!(!linked(&pool, f.hub, d).await, "nothing is written");
+}

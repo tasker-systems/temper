@@ -13,8 +13,8 @@ through a dead team. Migration 20261119000020 adds team_live_descendants(p_team)
 down-walk that mirrors team_ancestors.
 
 The check runs in the pool pre-check and again under row locks. For a non-admin those locks cover
-every team below the child, live and dead, taken in one statement in ascending id order, and the
-system settings row is read under a share lock. If the subtree changes while the act waits for its
+every team below the child, live and dead, taken in one statement in ascending id order, after a
+shared hold on the gating slug that a gating slug change must wait for. If the subtree changes while the act waits for its
 locks and the re-check finds no pool, the act is refused with a retryable 409 Conflict ("the team
 tree changed while this act was being checked; retry").
 
