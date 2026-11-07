@@ -10,7 +10,7 @@
 --     do that to T's findings (R-o), so the finding is gated on MEMBERSHIP visibility
 --     (resources_visible_by_membership).
 --   * The cited source is a reference: an auditor in A's subtree may judge its own team's finding
---     that cites T. Refusing that would be a permanent coverage hole (R-m), so the source is gated
+--     that cites T. Refusing that would leave such findings unauditable on that side (R-m), so the source is gated
 --     on READING visibility.
 --
 -- What now keeps them from drifting is not a shared CTE but a shared rule, applied identically in
@@ -22,10 +22,12 @@
 --
 -- THE TWO SETS, AND THEIR COST. Each function derives both sets once per call, MATERIALIZED, as the
 -- single set was (the hoist is still load-bearing: `20260828000020` measured the per-finding form as
--- 97% of the sweep). `readable` is `member` plus, for a person only, the reading set: for a machine
--- or any non-person, `public_within_reading` is false and the second scan is a one-time filter that
--- never runs, so an auditor (a machine) pays for exactly one set, as before.
---
+-- 97% of the sweep). `readable` is `member` plus `resources_public_within`, the arm-5 delta, never a
+-- second full scan: reading is exactly membership UNION that delta (the visibility harness holds the
+-- equality). For a machine, or with the switch off, the delta is a one-time filter that never runs.
+-- For a person with the switch on, the delta walks the team closure a second time; that walk is small
+-- next to the set it avoids recomputing, and is measured with the rest (scripts/visibility-cost/).
+
 -- Everything else in the three bodies is unchanged from `20261101400000`; read it for why each is
 -- shaped as it is.
 
@@ -37,8 +39,7 @@ RETURNS TABLE(finding_id uuid, block_id uuid, source_id uuid) LANGUAGE sql STABL
     readable AS MATERIALIZED (
         SELECT resource_id FROM member
         UNION
-        SELECT resource_id FROM resources_visible_to(p_principal)
-         WHERE public_within_reading(p_principal)
+        SELECT resource_id FROM resources_public_within(p_principal)
     ),
     gated AS (
         SELECT f.fid
@@ -85,8 +86,7 @@ RETURNS TABLE(block_id uuid, source_id uuid) LANGUAGE sql STABLE AS $$
     readable AS MATERIALIZED (
         SELECT resource_id FROM member
         UNION
-        SELECT resource_id FROM resources_visible_to(p_principal)
-         WHERE public_within_reading(p_principal)
+        SELECT resource_id FROM resources_public_within(p_principal)
     ),
     gated AS (
         SELECT p_finding AS fid
@@ -118,8 +118,7 @@ LANGUAGE sql STABLE AS $$
     readable AS MATERIALIZED (
         SELECT resource_id FROM member
         UNION
-        SELECT resource_id FROM resources_visible_to(p_principal)
-         WHERE public_within_reading(p_principal)
+        SELECT resource_id FROM resources_public_within(p_principal)
     ),
     candidates AS (
         SELECT h.anchor_id AS cogmap_id, r.id AS finding_id
