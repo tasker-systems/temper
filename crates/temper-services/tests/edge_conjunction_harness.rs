@@ -40,7 +40,9 @@ use std::path::{Path, PathBuf};
 
 use sqlx::{PgPool, Row};
 use temper_substrate::affinity::EdgeKind;
-use temper_substrate::ids::{ContextId, EdgeId, EntityId, ResourceId};
+use temper_substrate::events::{fire, EdgeHome, SeedAction};
+use temper_substrate::ids::{CogmapId, ContextId, EdgeId, EntityId, ResourceId};
+use temper_substrate::payloads::AnchorRef;
 use temper_substrate::payloads::EdgePolarity;
 use temper_substrate::writes;
 use uuid::Uuid;
@@ -70,6 +72,9 @@ const CLASSIFIED: &[(&str, Class)] = &[
     ("edges_visible_to", Class::Definition),
     // ── Delegates ─────────────────────────────────────────────────────────────────────────────
     ("__temper_ungated_follow_from_homed", Class::Delegates),
+    // Its 'profile' arm calls edges_visible_to; its 'cogmap' arm (the map reading itself) is
+    // pinned by `cogmap_regulation_admits_only_visible_edges`.
+    ("cogmap_regulation", Class::Delegates),
     ("graph_atlas_nodes", Class::Delegates),
     ("graph_atlas_nodes_cogmap", Class::Delegates),
     ("graph_atlas_nodes_visible", Class::Delegates),
@@ -211,21 +216,11 @@ const CLASSIFIED: &[(&str, Class)] = &[
     ),
     // ── Known violations ──────────────────────────────────────────────────────────────────────
     (
-        "cogmap_regulation",
-        Class::KnownViolation(
-            "known_violation_cogmap_regulation_ignores_the_edge_home: the telos's express edges \
-             are gated on the target only. Reached by cogmap_analytics (GET cogmap analytics, MCP \
-             cogmap_analytics). Not a one-line gate: its `cogmap` principal kind has no \
-             edges_visible_to equivalent",
-        ),
-    ),
-    (
         "resource_contradiction_balance",
         Class::KnownViolation(
             "known_violation_standing_scores_unreadable_edges: sums supports/contradicts edges \
              with no gate and no principal. Reached by resource_standing_shape, which gates only \
-             the finding. No product caller today (registry declares it, nothing emits it). \
-             Needs a principal-taking body",
+             the finding, behind GET /api/resources/{id}/evidence",
         ),
     ),
 ];
@@ -831,12 +826,11 @@ async fn staleness_is_touched_only_by_visible_edges(pool: PgPool) {
 // KNOWN VIOLATIONS: probes that fail on purpose until the function is fixed.
 // =================================================================================================
 
-/// `cogmap_regulation` returns the telos's `express` edges gated on the target alone: an edge
-/// homed in a context the reader cannot read still surfaces its label.
+/// `cogmap_regulation` returns the telos's `express` edges only under the conjunction. For a
+/// profile: an edge homed where the reader cannot read never surfaces. For the map's own principal:
+/// only an edge homed in the map itself surfaces, never one homed in a context.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-#[ignore = "KNOWN VIOLATION (spec P12): cogmap_regulation does not check the edge's home; \
-            fails on purpose until it does. See CLASSIFIED."]
-async fn known_violation_cogmap_regulation_ignores_the_edge_home(pool: PgPool) {
+async fn cogmap_regulation_admits_only_visible_edges(pool: PgPool) {
     let w = world(&pool).await;
     let cogmap: Uuid = sqlx::query_scalar(
         "INSERT INTO kb_cogmaps (id, name, telos_resource_id) VALUES (uuid_generate_v7(), \
@@ -886,6 +880,64 @@ async fn known_violation_cogmap_regulation_ignores_the_edge_home(pool: PgPool) {
         !targets.contains(&w.c),
         "an express edge homed in a context the reader cannot read surfaced through \
          cogmap_regulation"
+    );
+
+    // The map reading itself. Move the telos and `b` into the map's own interior, so both
+    // endpoints are ones the map can access (a team-owned context is not in its reach). Only an
+    // edge homed in the map counts: the context-homed a→b edge above still never surfaces to it.
+    sqlx::query(
+        "UPDATE kb_resource_homes SET anchor_table = 'kb_cogmaps', anchor_id = $1 \
+          WHERE resource_id = ANY($2)",
+    )
+    .bind(cogmap)
+    .bind(vec![w.a, w.b])
+    .execute(&pool)
+    .await
+    .unwrap();
+    let as_map = |pool: PgPool| async move {
+        sqlx::query_scalar::<_, Uuid>("SELECT resource_id FROM cogmap_regulation($1, 'cogmap', $1)")
+            .bind(cogmap)
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .collect::<BTreeSet<Uuid>>()
+    };
+    assert!(
+        as_map(pool.clone()).await.is_empty(),
+        "the map principal sees no edge homed in a context, though it can access both endpoints"
+    );
+    let mut tx = pool.begin().await.unwrap();
+    fire(
+        &mut tx,
+        SeedAction::RelationshipAssert {
+            src: AnchorRef::resource(ResourceId::from(w.a)),
+            tgt: AnchorRef::resource(ResourceId::from(w.b)),
+            kind: EdgeKind::Express,
+            polarity: EdgePolarity::Forward,
+            label: Some("regulates"),
+            weight: 1.0,
+            home: EdgeHome::Cogmap(CogmapId::from(cogmap)),
+            emitter: EntityId::from(w.emitter),
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(
+        as_map(pool.clone()).await,
+        BTreeSet::from([w.b]),
+        "an edge homed in the map itself surfaces to the map principal"
+    );
+    let other: i64 = sqlx::query_scalar("SELECT count(*) FROM cogmap_regulation($1, 'cogmap', $2)")
+        .bind(cogmap)
+        .bind(w.team_a)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        other, 0,
+        "a cogmap principal other than the map itself admits nothing"
     );
 }
 
@@ -940,7 +992,6 @@ enum RustClass {
     /// The query spells the conjunction (home readable, both endpoints readable) inline.
     InlineConjunction(&'static str),
     NotCallerFacing(&'static str),
-    KnownViolation(&'static str),
 }
 
 /// `(file under the repo root, enclosing fn)` → class.
@@ -1050,12 +1101,7 @@ const RUST_CLASSIFIED: &[(&str, &str, RustClass)] = &[
     (
         "crates/temper-services/src/backend/substrate_read.rs",
         "filtered_visible_page",
-        RustClass::KnownViolation(
-            "the browse list's goal filter keeps a visible resource when ANY live `advances` \
-             edge joins it to the goal, with no home or endpoint check, so the filter answers \
-             whether a hidden edge exists. Needs an edges_visible_to join on the list's hot \
-             path, which is a cost question for its own change",
-        ),
+        RustClass::Delegates,
     ),
 ];
 
@@ -1166,9 +1212,7 @@ fn every_rust_side_kb_edges_read_is_classified() {
     for (file, name, class) in RUST_CLASSIFIED {
         let reason = match class {
             RustClass::Delegates => continue,
-            RustClass::InlineConjunction(r)
-            | RustClass::NotCallerFacing(r)
-            | RustClass::KnownViolation(r) => r,
+            RustClass::InlineConjunction(r) | RustClass::NotCallerFacing(r) => r,
         };
         assert!(!reason.trim().is_empty(), "{file}::{name}: give the reason");
     }
