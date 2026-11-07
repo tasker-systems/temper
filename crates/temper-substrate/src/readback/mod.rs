@@ -190,6 +190,33 @@ pub async fn is_resource_visible(
     Ok(visible)
 }
 
+/// "Can `principal` see `resource` by **membership**?", under `resources_visible_by_membership`.
+///
+/// The membership twin of [`is_resource_visible`], for the one act on a resource that is authorized
+/// by readability: the citation audit's **finding** probe. Grading a
+/// finding writes about it, and a reader who sees a team's material only through `public_within`
+/// may read and reference it, never act on it. The membership set is reading
+/// visibility without that arm, so this is never true where [`is_resource_visible`] is false.
+///
+/// A separate function, not a flag on [`is_resource_visible`], because that one also serves the
+/// standing read beside the audit gate, which stays on the reading set.
+pub async fn is_resource_visible_by_membership(
+    pool: &PgPool,
+    principal: ProfileId,
+    resource: ResourceId,
+) -> Result<bool> {
+    let visible = sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+             SELECT 1 FROM resources_visible_by_membership($1) v WHERE v.resource_id = $2
+           ) AS "visible!""#,
+        principal.uuid(),
+        resource.uuid(),
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(visible)
+}
+
 /// WS2 consumer-axis gate for single-resource reads: error unless `new_id` is visible to
 /// `principal` under `resources_visible_to` (delegates the check itself to
 /// [`is_resource_visible`]). The set reads (`list`/`fts_search`/`vector_search`/`neighbors`) instead

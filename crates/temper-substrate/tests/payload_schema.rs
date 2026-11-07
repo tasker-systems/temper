@@ -71,6 +71,9 @@ fn payload_schemas_match_snapshots() {
     check::<p::TeamMembershipChanged>("team_membership_changed");
     check::<p::TeamParentLinkChanged>("team_parent_link_changed");
     check::<p::TeamLifecycleChanged>("team_lifecycle_changed");
+    check::<p::TeamPublicWithinChanged>("team_public_within_changed");
+    check::<p::PublicWithinEffectChanged>("public_within_effect_changed");
+    check::<p::PublicWithinPolicyChanged>("public_within_policy_changed");
 }
 
 /// `EventContext` serializes an act's authorship, and nothing else, into `kb_events.metadata`.
@@ -193,6 +196,14 @@ fn the_migration_literal_matches_the_committed_fixture() {
         (
             "20261118000010_team_lifecycle_changed.sql",
             &["team_lifecycle_changed.v1.schema.json"],
+        ),
+        (
+            "20261120000000_public_within_policy_and_helpers.sql",
+            &[
+                "team_public_within_changed.v1.schema.json",
+                "public_within_effect_changed.v1.schema.json",
+                "public_within_policy_changed.v1.schema.json",
+            ],
         ),
     ] {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../migrations/");

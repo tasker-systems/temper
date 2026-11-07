@@ -117,11 +117,12 @@ pub(crate) async fn can_administer_grant(
 // may be conferred — that is attenuation, and both belong to one decision:
 // [`authorize_capability_grant`]. Every grant sink should call that, not the bare resolve.
 
-/// The four capabilities a grant can carry. A closed set with a fixed SQL spelling — an enum rather
-/// than bare `&str` literals so a typo is a compile error and the set cannot silently grow.
+/// The write-shaped capabilities a grant can carry, as `can(...)` probes them. A closed set with a
+/// fixed SQL spelling — an enum rather than bare `&str` literals so a typo is a compile error and
+/// the set cannot silently grow. Read is not here: attenuation asks it of the MEMBERSHIP set
+/// (`can_read_by_membership`), never of `can(read)`: `public_within` reach confers no act.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AccessAction {
-    Read,
     Write,
     Delete,
     Grant,
@@ -131,7 +132,6 @@ impl AccessAction {
     /// The `p_action` spelling `can(...)` dispatches on (`profile_explicit_grant`'s CASE arms).
     const fn as_sql(self) -> &'static str {
         match self {
-            Self::Read => "read",
             Self::Write => "write",
             Self::Delete => "delete",
             Self::Grant => "grant",
@@ -152,6 +152,27 @@ pub(crate) async fn profile_can(
         "SELECT can('kb_profiles', $1, $2, $3, $4)",
         *caller,
         action.as_sql(),
+        subject_table,
+        subject_id,
+    )
+    .fetch_one(pool)
+    .await?
+    .unwrap_or(false);
+    Ok(ok)
+}
+
+/// `can(read)` narrowed to the caller's **membership** visibility (`can_read_by_membership`,
+/// which excludes `public_within` reach): what grant attenuation checks before a delegated granter
+/// confers read.
+async fn profile_can_read_by_membership(
+    pool: &PgPool,
+    caller: ProfileId,
+    subject_table: &str,
+    subject_id: Uuid,
+) -> ApiResult<bool> {
+    let ok = sqlx::query_scalar!(
+        "SELECT can_read_by_membership($1, $2, $3)",
+        *caller,
         subject_table,
         subject_id,
     )
@@ -237,8 +258,21 @@ pub(crate) async fn authorize_capability_grant(
             Ok(proof)
         }
         GrantAuthority::Delegated => {
+            // Read is conferred only on material the granter reads through membership: conferring
+            // read is an act on the material, and `public_within` reach confers no act. The other
+            // three are write-shaped and never consult a read set, so `can()` answers them as before.
+            if caps.read
+                && !profile_can_read_by_membership(
+                    pool,
+                    caller.profile_id(),
+                    subject.kind.as_str(),
+                    subject.id,
+                )
+                .await?
+            {
+                return Err(ApiError::Forbidden);
+            }
             for (requested, action) in [
-                (caps.read, AccessAction::Read),
                 (caps.write, AccessAction::Write),
                 (caps.delete, AccessAction::Delete),
                 (caps.grant, AccessAction::Grant),
@@ -968,7 +1002,9 @@ pub(crate) async fn cogmap_write_requires_admin_on(
 pub async fn get_system_settings(pool: &PgPool) -> ApiResult<SystemSettings> {
     let row = sqlx::query_as!(
         SystemSettings,
-        "SELECT id, gating_team_slug, terms_version, terms_resource_uri, instance_name, updated FROM kb_system_settings LIMIT 1",
+        "SELECT id, gating_team_slug, terms_version, terms_resource_uri, instance_name, \
+                public_within_enabled, updated \
+           FROM kb_system_settings LIMIT 1",
     )
     .fetch_one(pool)
     .await?;
@@ -1006,9 +1042,14 @@ pub async fn admin_get_settings(pool: &PgPool, _admin: &SystemAdmin) -> ApiResul
 /// a null slug can no longer lock anyone out of the instance.
 pub async fn update_system_settings(
     pool: &PgPool,
-    _admin: &SystemAdmin,
+    admin: &SystemAdmin,
     req: &UpdateSettingsRequest,
 ) -> ApiResult<SystemSettings> {
+    // One transaction: the `public_within_enabled` switch is written with its
+    // `public_within_policy_changed` record, and later work hooks the row-effect transitions into
+    // the same statement. The checks below read inside it, so a refusal writes nothing.
+    let mut tx = pool.begin().await?;
+
     // If a gating team is being set, it must name a real team, and never a personal one: person
     // erasure erases everything in the subject's personal team, so a personal gating team would let
     // one erasure take the org's content with it. The database refuses it too
@@ -1018,7 +1059,7 @@ pub async fn update_system_settings(
             r#"SELECT personal_of IS NOT NULL AS "personal!" FROM kb_teams WHERE slug = $1"#,
             slug
         )
-        .fetch_optional(pool)
+        .fetch_optional(&mut *tx)
         .await?;
         match personal {
             None => {
@@ -1036,6 +1077,27 @@ pub async fn update_system_settings(
         }
     }
 
+    // The instance switch, through its writer: the column and its ledger record in one statement,
+    // under the settings row lock. A value already held is a no-op and records nothing.
+    if let Some(enabled) = req.public_within_enabled {
+        let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, admin.actor(), "web")
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+        let outcome = sqlx::query_scalar!(
+            r#"SELECT _admin_public_within_switch_write($1, $2, $3, NULL) AS "outcome!""#,
+            emitter.uuid(),
+            *admin.actor(),
+            enabled,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if outcome == "absent" {
+            return Err(ApiError::Internal(
+                "kb_system_settings has no row to update".to_owned(),
+            ));
+        }
+    }
+
     let row = sqlx::query_as!(
         SystemSettings,
         r#"
@@ -1047,16 +1109,17 @@ pub async fn update_system_settings(
                updated            = now()
          WHERE id = 1
         RETURNING id, gating_team_slug, terms_version,
-                  terms_resource_uri, instance_name, updated
+                  terms_resource_uri, instance_name, public_within_enabled, updated
         "#,
         req.gating_team_slug,
         req.instance_name,
         req.terms_version,
         req.terms_resource_uri,
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
 
+    tx.commit().await?;
     Ok(row)
 }
 

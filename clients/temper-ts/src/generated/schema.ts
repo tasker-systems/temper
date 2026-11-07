@@ -570,7 +570,7 @@ export interface paths {
         };
         /**
          * Read the admin ledger
-         * @description Returns a page of recorded administrative acts, newest first, on exactly one axis. `subject` (`<kind>:<uuid>`, e.g. `kb_resources:<uuid>`) returns the acts performed on that subject, limited to the act families the caller may read about it: a system admin reads all of them except grant acts on someone else's personal context or a resource homed in one, a caller who may administer grants on the subject reads its grant acts, and an owner or maintainer of a team (`kb_teams:<uuid>`) reads that team's membership changes, the linking or detaching of its child teams, and its lifecycle acts (created, deleted, restored, renamed, auto-join changed) (on the gating team and temper-system, only a system admin does). `actor` returns the acts a profile performed: any caller may read their own, and only a system admin may read another's, without the grant acts that fall in someone else's personal space. A read the caller is not allowed is answered 404, not 403, so a refusal reveals nothing about the subject. `epoch` is when recording began; acts before it were not recorded. `limit` defaults to 50 and is capped at 200.
+         * @description Returns a page of recorded administrative acts, newest first, on exactly one axis. `subject` (`<kind>:<uuid>`, e.g. `kb_resources:<uuid>`) returns the acts performed on that subject, limited to the act families the caller may read about it: a system admin reads all of them except grant acts on someone else's personal context or a resource homed in one, a caller who may administer grants on the subject reads its grant acts, and an owner or maintainer of a team (`kb_teams:<uuid>`) reads that team's membership changes, the linking or detaching of its child teams, its lifecycle acts (created, deleted, restored, renamed, auto-join changed), and the public-within records that name it as the opened team or the anchor (opened, closed, lapsed, a change of effect, a change of its forbid) (on the gating team and temper-system, only a system admin does). `actor` returns the acts a profile performed: any caller may read their own, and only a system admin may read another's, without the grant acts that fall in someone else's personal space. A read the caller is not allowed is answered 404, not 403, so a refusal reveals nothing about the subject. `epoch` is when recording began; acts before it were not recorded. `limit` defaults to 50 and is capped at 200.
          */
         get: operations["list_admin_ledger"];
         put?: never;
@@ -11709,6 +11709,14 @@ export interface components {
             /** Format: int32 */
             id: number;
             instance_name?: string | null;
+            /**
+             * @description The instance switch for `public_within`: whether a team's owned contexts may be opened to
+             *     the people under an anchor team. Off by default on every deployment: while it is off, no
+             *     `public_within` row confers anything. Not `required` on the
+             *     wire (`serde(default)`): a client built with this field still parses the response of a
+             *     server that predates it, where the absent value means off.
+             */
+            public_within_enabled?: boolean;
             terms_resource_uri?: string | null;
             terms_version?: string | null;
             /** Format: date-time */
@@ -11986,6 +11994,13 @@ export interface components {
             gating_team_slug?: string | null;
             /** @description Human-facing instance name. */
             instance_name?: string | null;
+            /**
+             * @description The instance switch for `public_within`: whether a team's owned contexts may be opened to
+             *     an ancestor's subtree at all. Off by default. Turning it off makes every row confer
+             *     nothing; turning it on revives the rows no other cause holds dormant. Recorded as
+             *     `public_within_policy_changed`. `None` leaves it unchanged.
+             */
+            public_within_enabled?: boolean | null;
             /** @description URI of the terms-of-service resource. */
             terms_resource_uri?: string | null;
             /** @description Terms-of-service version label. */

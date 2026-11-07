@@ -180,6 +180,14 @@ pub enum EventKind {
     /// lifecycle doors D8). Category `admin`, NULL-anchored, written only by
     /// `_admin_team_lifecycle_write` in the same statement as the `kb_teams` change.
     TeamLifecycleChanged,
+    /// A `public_within` row opened, closed, lapsed or cascade-deleted.
+    /// Category `admin`, NULL-anchored. Row STATE is replayed from `kb_team_public_within`.
+    TeamPublicWithinChanged,
+    /// A `public_within` row started or stopped conferring without being opened or closed.
+    /// Category `admin`, NULL-anchored.
+    PublicWithinEffectChanged,
+    /// The instance switch or a team's forbid changed. Category `admin`, NULL-anchored.
+    PublicWithinPolicyChanged,
     /// An auditor's signed verdict on one `(block, source)` citation (Set 5, spec §4.1-4.2).
     /// Append-only — fires `citation_audited`, projected by `_project_citation_audited` into
     /// `kb_citation_audits` with no supersession. Registered permissive (NULL `payload_schema`),
@@ -276,6 +284,9 @@ impl EventKind {
             EventKind::TeamMembershipChanged => "team_membership_changed",
             EventKind::TeamParentLinkChanged => "team_parent_link_changed",
             EventKind::TeamLifecycleChanged => "team_lifecycle_changed",
+            EventKind::TeamPublicWithinChanged => "team_public_within_changed",
+            EventKind::PublicWithinEffectChanged => "public_within_effect_changed",
+            EventKind::PublicWithinPolicyChanged => "public_within_policy_changed",
             EventKind::CitationAudited => "citation_audited",
             EventKind::BlobCommitted => "blob_committed",
             EventKind::ResourceReblocked => "resource_reblocked",
@@ -341,6 +352,9 @@ impl EventKind {
             "team_membership_changed" => EventKind::TeamMembershipChanged,
             "team_parent_link_changed" => EventKind::TeamParentLinkChanged,
             "team_lifecycle_changed" => EventKind::TeamLifecycleChanged,
+            "team_public_within_changed" => EventKind::TeamPublicWithinChanged,
+            "public_within_effect_changed" => EventKind::PublicWithinEffectChanged,
+            "public_within_policy_changed" => EventKind::PublicWithinPolicyChanged,
             "citation_audited" => EventKind::CitationAudited,
             "blob_committed" => EventKind::BlobCommitted,
             "resource_reblocked" => EventKind::ResourceReblocked,

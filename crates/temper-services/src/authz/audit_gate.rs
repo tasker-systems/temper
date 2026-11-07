@@ -270,13 +270,14 @@ pub(crate) async fn citation_subject(
 /// speak for the queue, not for a citation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AuditAuthority {
-    /// A principal that can read the finding and the cited source, and did not contribute the
-    /// citation. **The only arm that admits an audit** — machine or human alike.
+    /// A principal that reads the finding by membership and can read the cited source, and did not
+    /// contribute the citation. **The only arm that admits an audit** — machine or human alike.
     Auditor,
     /// DENIAL — the caller contributed this citation (or can still modify the finding, the
     /// belt-and-braces proxy). The self-audit prohibition of spec §7: enforced here or nowhere.
     Author,
-    /// DENIAL — the caller cannot see the finding at all.
+    /// DENIAL — the caller cannot see the finding by membership: not at all, or only through
+    /// `public_within` reach, which reads and never grades (`is_resource_visible_by_membership`).
     Unreadable,
     /// DENIAL — the caller can see the finding but not the cited source. A verdict weighs a source
     /// against a claim, so a caller who cannot read the source has nothing to weigh. Same refusal
@@ -300,10 +301,12 @@ impl ScopedAuthority for AuditAuthority {
     ///
     /// Every probe is a **call into a SQL predicate, never a restatement** of one (`mod.rs:65-66`):
     ///
-    /// * Readability, of the finding and of the cited source, is [`readback::is_resource_visible`],
-    ///   extracted by Task 4 for exactly this reason — the standing read this gate sits beside asks
-    ///   the same question through the same function, so the two cannot drift
-    ///   (`readback/mod.rs:133-162`).
+    /// * Readability of the cited source is [`readback::is_resource_visible`], extracted by Task 4
+    ///   for exactly this reason — the standing read this gate sits beside asks the same question
+    ///   through the same function, so the two cannot drift (`readback/mod.rs:133-162`).
+    ///   Readability of the **finding** is [`readback::is_resource_visible_by_membership`]: the
+    ///   finding is acted on, so it is judged on membership, never on `public_within` reach.
+    ///   The queue's SQL asks the same two sets.
     /// * Citation authorship is `citation_contributed_by_profile`
     ///   (`20260724000110_citation_audits.sql`) — the exact historical fact, see the module doc.
     /// * The authorship proxy is `can_modify_resource`, the same call and the same query text as
@@ -314,13 +317,18 @@ impl ScopedAuthority for AuditAuthority {
         subject: CitationSubject,
     ) -> ApiResult<Self> {
         let caller = caller.profile_id();
-        if !readback::is_resource_visible(pool, caller, subject.finding)
+        // The finding, on MEMBERSHIP visibility: a verdict writes about the finding, and a reader
+        // who sees it only through `public_within` may read it but never act on it. The queue
+        // (`audit_drift_sweep` and its two siblings) gates the finding on the same set, so it never
+        // offers what this refuses.
+        if !readback::is_resource_visible_by_membership(pool, caller, subject.finding)
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?
         {
             return Ok(AuditAuthority::Unreadable);
         }
-        // The cited source, through the same predicate: the verdict is about it.
+        // The cited source, on READING visibility: it is a reference, not an act on it, so an
+        // auditor may judge its own side's finding that cites a public team's material.
         if !readback::is_resource_visible(pool, caller, ResourceId::from(subject.source))
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?

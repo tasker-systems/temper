@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        UPDATE kb_system_settings\n           SET gating_team_slug   = COALESCE($1, gating_team_slug),\n               instance_name      = COALESCE($2, instance_name),\n               terms_version      = COALESCE($3, terms_version),\n               terms_resource_uri = COALESCE($4, terms_resource_uri),\n               updated            = now()\n         WHERE id = 1\n        RETURNING id, gating_team_slug, terms_version,\n                  terms_resource_uri, instance_name, updated\n        ",
+  "query": "SELECT id, gating_team_slug, terms_version, terms_resource_uri, instance_name, public_within_enabled, updated FROM kb_system_settings LIMIT 1",
   "describe": {
     "columns": [
       {
@@ -30,17 +30,17 @@
       },
       {
         "ordinal": 5,
+        "name": "public_within_enabled",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
         "name": "updated",
         "type_info": "Timestamptz"
       }
     ],
     "parameters": {
-      "Left": [
-        "Varchar",
-        "Varchar",
-        "Varchar",
-        "Text"
-      ]
+      "Left": []
     },
     "nullable": [
       false,
@@ -48,8 +48,9 @@
       true,
       true,
       true,
+      false,
       false
     ]
   },
-  "hash": "8d3a3ceb868b96cdcb1459728d53cde4e286605efb015895d7f7829892f519ab"
+  "hash": "81a8d2abc790c33d8d03e91c5da600c9e916c0f68bd0321727a34d9635f69c66"
 }

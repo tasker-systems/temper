@@ -494,6 +494,20 @@ current_gates() {
 # 27 -> 38, the same doors' service docs plus the widened detach (a manager of either side, R1).
 # `temper-core/src/types/team.rs` 4 -> 5: `SetAutoJoinRequest` says "system admin only", which
 # the handler's `require_system_admin` enforces.
+# REVIEWED 2026-11-07 (public within: the schema, the policy and the read arm) — two gates moved,
+# both re-read in this commit.
+# `ledger_subject` 065f24b99bbb -> current: `readable_event_types`' team arm (a manager of the
+# subject team) now also pushes the three public-within families. Who reads moved nowhere; only what
+# they read grew, and every row record names both its team and its anchor as `subject`, so a manager
+# of either side reads it. The subject-axis description in `handlers/admin_ledger.rs` now names
+# those records; its module doc names no family. The five claims in `openapi.rs` name the ledger
+# generically and still hold. `audit_gate` 021f87ca4bed -> current: `AuditAuthority::resolve`'s
+# finding probe moved to `readback::is_resource_visible_by_membership` (a verdict acts on the
+# finding, so public reach to it does not admit an audit); the cited
+# source stays on `is_resource_visible`. No claim is bound to the file's prose about who may audit
+# beyond "can read the finding and the cited source", which now reads "by membership" for the
+# finding in the gate's own doc. Pinned in `public_within_test.rs` (`reading_authorizes_no_act_on_t`,
+# `the_audit_queue_matches_the_gate`).
 # REVIEWED 2026-11-06 (same doors, Phase 7: team management on MCP for people, ruling R7
 # reversed) — `temper-mcp/src/service.rs` 4 -> 6 and new `tools/teams.rs` 4, unbound (`-`). The
 # `team_manage` and `team_read` descriptions and the module doc restate the API's gates (a manager
@@ -575,13 +589,13 @@ claim crates/temper-services/src/services/standing_service.rs 2 -
 claim crates/temper-services/src/services/subscription_service.rs 9 subscription
 claim crates/temper-services/src/services/subscription_test_support.rs 1 subscription
 claim crates/temper-services/src/services/team_service.rs 39 require_manage_on_team,can_manage,team_membership,is_system_admin
-gate audit_gate 021f87ca4bed
+gate audit_gate d25214a0b269
 gate connection 66c36643c716
 gate context_admin b07eeb1d5289
 gate grant bccea040b6cf
 gate machine eb4042c5c963
 gate read_gates 6a6ce4847fbc
-gate ledger_subject 065f24b99bbb
+gate ledger_subject ca2677683e96
 gate subscription f45d76e9be69
 gate two_sided 92995b75cab8
 gate reconcile_regime 5339d74ce2eb

@@ -2,7 +2,8 @@
 //!
 //! CONFORM to `handlers::steward`, deliberately and closely: `sweep` (GET) is a service-direct read
 //! whose principal scoping lives in SQL (`audit_drift_sweep` routes through
-//! `steward_candidate_cogmaps` and `resources_visible_to`), and `dispatch` (POST) dispatches ONE
+//! `steward_candidate_cogmaps`, the membership set for the finding and the reading set for each cited
+//! source), and `dispatch` (POST) dispatches ONE
 //! operations command through the `Backend` trait. No persistence here.
 //!
 //! The auditor authenticates as its OWN registered machine principal, never the steward's — one
@@ -35,7 +36,7 @@
 //!    either.** Deleting one of a matched pair leaves the next reader deriving why the auditor
 //!    surface is missing a read the steward has — asymmetry costs more than the route does.
 //! 3. **It is not an enumeration oracle and it is not free-running.** `audit_drift_sweep` gates on
-//!    `steward_candidate_cogmaps(caller)` *and* a per-finding `resources_visible_to(caller)`, and
+//!    `steward_candidate_cogmaps(caller)` *and* the caller's membership set for each finding, and
 //!    `cap` is validated here and clamped in `clamp_auditor_cap`. What remains is the scan cost the
 //!    review names (the `scored` CTE prices every candidate before `p_limit` applies), which is a
 //!    property of the sweep itself and applies equally to `/dispatch`.

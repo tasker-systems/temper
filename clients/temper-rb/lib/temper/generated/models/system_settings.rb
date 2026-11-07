@@ -22,6 +22,9 @@ module Temper::Generated
 
     attr_accessor :instance_name
 
+    # The instance switch for `public_within`: whether a team's owned contexts may be opened to the people under an anchor team. Off by default on every deployment: while it is off, no `public_within` row confers anything. Not `required` on the wire (`serde(default)`): a client built with this field still parses the response of a server that predates it, where the absent value means off.
+    attr_accessor :public_within_enabled
+
     attr_accessor :terms_resource_uri
 
     attr_accessor :terms_version
@@ -34,6 +37,7 @@ module Temper::Generated
         :'gating_team_slug' => :'gating_team_slug',
         :'id' => :'id',
         :'instance_name' => :'instance_name',
+        :'public_within_enabled' => :'public_within_enabled',
         :'terms_resource_uri' => :'terms_resource_uri',
         :'terms_version' => :'terms_version',
         :'updated' => :'updated'
@@ -56,6 +60,7 @@ module Temper::Generated
         :'gating_team_slug' => :'String',
         :'id' => :'Integer',
         :'instance_name' => :'String',
+        :'public_within_enabled' => :'Boolean',
         :'terms_resource_uri' => :'String',
         :'terms_version' => :'String',
         :'updated' => :'Time'
@@ -100,6 +105,10 @@ module Temper::Generated
 
       if attributes.key?(:'instance_name')
         self.instance_name = attributes[:'instance_name']
+      end
+
+      if attributes.key?(:'public_within_enabled')
+        self.public_within_enabled = attributes[:'public_within_enabled']
       end
 
       if attributes.key?(:'terms_resource_uri')
@@ -170,6 +179,7 @@ module Temper::Generated
           gating_team_slug == o.gating_team_slug &&
           id == o.id &&
           instance_name == o.instance_name &&
+          public_within_enabled == o.public_within_enabled &&
           terms_resource_uri == o.terms_resource_uri &&
           terms_version == o.terms_version &&
           updated == o.updated
@@ -184,7 +194,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [gating_team_slug, id, instance_name, terms_resource_uri, terms_version, updated].hash
+      [gating_team_slug, id, instance_name, public_within_enabled, terms_resource_uri, terms_version, updated].hash
     end
 
     # Builds the object from hash

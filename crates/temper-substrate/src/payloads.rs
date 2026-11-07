@@ -1881,6 +1881,115 @@ pub enum TeamLifecycleAct {
     AutoJoinChanged,
 }
 
+/// `team_public_within_changed` — a `public_within` row was opened, closed, lapsed or cascade-deleted.
+/// The row lets the people under the anchor team read the team's owned contexts. Both the team (T)
+/// and the anchor (A) are the event's `subject` references, so the managers of either side read it
+/// on the subject axis.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct TeamPublicWithinChanged {
+    /// The team whose owned contexts the row opens (T).
+    pub team_id: Uuid,
+    /// The ancestor team whose subtree reads them (A).
+    pub anchor_id: Uuid,
+    pub act: PublicWithinAct,
+    /// True when a system admin stood in for the anchor side.
+    pub admin_act: bool,
+    /// True when the row survives a pool team under the anchor (only an admin opens such a row).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_wide: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<ProfileId>,
+}
+
+/// What happened to the row in a [`TeamPublicWithinChanged`] record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum PublicWithinAct {
+    /// A manager of the team and a manager of the anchor (or an admin for it) opened the row.
+    Opened,
+    /// A manager of either side, or an admin, closed the row.
+    Closed,
+    /// The anchor stopped being an ancestor of the team by any path; the row was deleted and
+    /// never revives.
+    Lapsed,
+    /// The team or the anchor was erased or hard-deleted, taking the row with it.
+    CascadeDeleted,
+}
+
+/// `public_within_effect_changed` — a `public_within` row started or stopped conferring, without
+/// being opened or closed. The cause is liveness (a team on the path was deleted or restored) or
+/// policy (the instance switch, a forbid, or a pool team under the anchor). Both the team and the
+/// anchor are `subject` references.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct PublicWithinEffectChanged {
+    pub team_id: Uuid,
+    pub anchor_id: Uuid,
+    pub from: PublicWithinEffect,
+    pub to: PublicWithinEffect,
+    pub cause: PublicWithinCause,
+    /// The admin event type of the act that caused the change, such as `team_lifecycle_changed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub act: Option<String>,
+    /// The correlation id shared by the causing act's records, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub act_ref: Option<Uuid>,
+}
+
+/// Whether a `public_within` row confers, in a [`PublicWithinEffectChanged`] record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum PublicWithinEffect {
+    /// The row confers reading on the anchor's subtree.
+    Effective,
+    /// The row exists and confers nothing until its cause is undone.
+    Dormant,
+}
+
+/// Why a row's effect changed, in a [`PublicWithinEffectChanged`] record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum PublicWithinCause {
+    /// The team, the anchor, or every live path between them, was soft-deleted or restored.
+    Liveness,
+    /// The instance switch, a forbid above the team, or a pool team under the anchor.
+    Policy,
+}
+
+/// `public_within_policy_changed` — the instance switch (`public_within_enabled`) or a team's forbid
+/// (`public_within_forbidden`) changed. The only record of the instance switch: settings updates
+/// are otherwise not ledgered. A team-scope record carries the team as its `subject` reference; an
+/// instance-scope record carries none, and is read by system admins.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct PublicWithinPolicyChanged {
+    pub scope: PublicWithinPolicyScope,
+    /// The team whose forbid changed; absent for the instance switch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_id: Option<Uuid>,
+    /// The value before: the switch's `enabled`, or the team's `forbidden`.
+    pub from: bool,
+    /// The value after.
+    pub to: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<ProfileId>,
+}
+
+/// Which policy a [`PublicWithinPolicyChanged`] record is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum PublicWithinPolicyScope {
+    /// `kb_system_settings.public_within_enabled`, set by a system admin.
+    Instance,
+    /// `kb_teams.public_within_forbidden`, set by the team's owner or an admin.
+    Team,
+}
+
 /// `subscription_delivery_disposed` — a steward's judgment on one routed event (S2 chunk C).
 ///
 /// The disposition is an **act**, not a column write. `acted` cites what was authored; `declined`
@@ -2067,7 +2176,7 @@ impl FoldDisposition {
 }
 
 /// The typed event names — the registry-stamping and snapshot surfaces iterate this.
-pub const TYPED_EVENT_NAMES: [&str; 37] = [
+pub const TYPED_EVENT_NAMES: [&str; 40] = [
     "cogmap_seeded",
     "resource_created",
     "relationship_asserted",
@@ -2105,6 +2214,9 @@ pub const TYPED_EVENT_NAMES: [&str; 37] = [
     "team_membership_changed",
     "team_parent_link_changed",
     "team_lifecycle_changed",
+    "team_public_within_changed",
+    "public_within_effect_changed",
+    "public_within_policy_changed",
 ];
 
 /// FOREIGN event names — registered permissive (NULL `payload_schema`) because their body is a
@@ -2124,7 +2236,7 @@ pub const FOREIGN_EVENT_NAMES: [&str; 1] = ["webhook_received"];
 /// `20260718000020`). The migration stamps these on an existing registry; this const is what
 /// re-stamps them on a path that rebuilds the registry from scratch (`bootseed::seed_system` after
 /// a `reset_schema` truncate), so the classification cannot be lost to a reseed.
-pub const ADMIN_EVENT_NAMES: [&str; 15] = [
+pub const ADMIN_EVENT_NAMES: [&str; 18] = [
     "admin_ledger_opened",
     "grant_created",
     "grant_revoked",
@@ -2140,6 +2252,9 @@ pub const ADMIN_EVENT_NAMES: [&str; 15] = [
     "team_membership_changed",
     "team_parent_link_changed",
     "team_lifecycle_changed",
+    "team_public_within_changed",
+    "public_within_effect_changed",
+    "public_within_policy_changed",
 ];
 
 /// The event names classified `kb_event_types.category = 'system'` — configuration acts, which are
@@ -2276,6 +2391,15 @@ pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> 
                 }
                 "team_lifecycle_changed" => {
                     serde_json::from_value::<TeamLifecycleChanged>(r.payload.clone())?;
+                }
+                "team_public_within_changed" => {
+                    serde_json::from_value::<TeamPublicWithinChanged>(r.payload.clone())?;
+                }
+                "public_within_effect_changed" => {
+                    serde_json::from_value::<PublicWithinEffectChanged>(r.payload.clone())?;
+                }
+                "public_within_policy_changed" => {
+                    serde_json::from_value::<PublicWithinPolicyChanged>(r.payload.clone())?;
                 }
                 // Unlisted types (e.g. taxonomy entries no write path emits yet) are intentionally
                 // not roundtripped here; add an arm when a write path begins emitting one.
@@ -2736,6 +2860,100 @@ mod tests {
         assert!(v.get("to").is_none());
         let v = serde_json::to_value(&events[1]).unwrap();
         assert!(v.get("actor").is_none() && v.get("from").is_none());
+    }
+
+    /// The three `public_within` admin records: every act, effect, cause and scope round-trips,
+    /// absent fields stay absent on the wire, and no field is a trail join key.
+    #[test]
+    fn public_within_records_round_trip() {
+        let team_id = Uuid::now_v7();
+        let anchor_id = Uuid::now_v7();
+        let actor = Some(ProfileId::from(Uuid::now_v7()));
+        for act in [
+            PublicWithinAct::Opened,
+            PublicWithinAct::Closed,
+            PublicWithinAct::Lapsed,
+            PublicWithinAct::CascadeDeleted,
+        ] {
+            let event = TeamPublicWithinChanged {
+                team_id,
+                anchor_id,
+                act,
+                admin_act: act == PublicWithinAct::Opened,
+                instance_wide: (act == PublicWithinAct::Opened).then_some(true),
+                actor,
+            };
+            let v = serde_json::to_value(&event).unwrap();
+            no_trail_key(&v, "team_public_within_changed");
+            assert_eq!(
+                serde_json::from_value::<TeamPublicWithinChanged>(v).unwrap(),
+                event
+            );
+        }
+        let lapsed = serde_json::to_value(TeamPublicWithinChanged {
+            team_id,
+            anchor_id,
+            act: PublicWithinAct::Lapsed,
+            admin_act: false,
+            instance_wide: None,
+            actor: None,
+        })
+        .unwrap();
+        assert_eq!(lapsed["act"], "lapsed");
+        assert!(lapsed.get("actor").is_none() && lapsed.get("instance_wide").is_none());
+
+        for (from, to, cause) in [
+            (
+                PublicWithinEffect::Effective,
+                PublicWithinEffect::Dormant,
+                PublicWithinCause::Liveness,
+            ),
+            (
+                PublicWithinEffect::Dormant,
+                PublicWithinEffect::Effective,
+                PublicWithinCause::Policy,
+            ),
+        ] {
+            let event = PublicWithinEffectChanged {
+                team_id,
+                anchor_id,
+                from,
+                to,
+                cause,
+                act: Some("team_lifecycle_changed".into()),
+                act_ref: Some(Uuid::now_v7()),
+            };
+            let v = serde_json::to_value(&event).unwrap();
+            no_trail_key(&v, "public_within_effect_changed");
+            assert_eq!(
+                serde_json::from_value::<PublicWithinEffectChanged>(v).unwrap(),
+                event
+            );
+        }
+
+        let instance = PublicWithinPolicyChanged {
+            scope: PublicWithinPolicyScope::Instance,
+            team_id: None,
+            from: false,
+            to: true,
+            actor,
+        };
+        let team = PublicWithinPolicyChanged {
+            scope: PublicWithinPolicyScope::Team,
+            team_id: Some(team_id),
+            ..instance.clone()
+        };
+        for event in [&instance, &team] {
+            let v = serde_json::to_value(event).unwrap();
+            no_trail_key(&v, "public_within_policy_changed");
+            assert_eq!(
+                &serde_json::from_value::<PublicWithinPolicyChanged>(v).unwrap(),
+                event
+            );
+        }
+        let v = serde_json::to_value(&instance).unwrap();
+        assert_eq!(v["scope"], "instance");
+        assert!(v.get("team_id").is_none());
     }
 
     /// `team_membership_changed` (team-role rank spec C8): the three act shapes round-trip, the

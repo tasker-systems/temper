@@ -123,14 +123,20 @@ const T_ENG: usize = 1;
 const T_PAYROLL: usize = 2;
 const T_SQUAD: usize = 3;
 const T_SEC: usize = 4;
-const T_GHOST: usize = 5; // tombstoned below — confers nothing
-const TEAM_SLUGS: [&str; 6] = ["epd", "eng", "payroll", "squad", "sec", "ghost"];
-const TEAM_PARENTS: [(usize, usize); 5] = [
+// Tombstoned below — confers nothing.
+const T_GHOST: usize = 5;
+// public_within's T: a NEW team under eng, opened to eng's subtree by the one public_within row
+// this world holds. Deliberately not `sec`: opening (sec, eng) would break dana's sibling-deny
+// control and hollow the r_owned_anywhere / r_ancestor_grant witnesses.
+const T_PUB: usize = 6;
+const TEAM_SLUGS: [&str; 7] = ["epd", "eng", "payroll", "squad", "sec", "ghost", "pub"];
+const TEAM_PARENTS: [(usize, usize); 6] = [
     (T_EPD, T_ENG),
     (T_ENG, T_PAYROLL),
     (T_PAYROLL, T_SQUAD),
     (T_ENG, T_SEC),
     (T_ENG, T_GHOST),
+    (T_ENG, T_PUB),
 ];
 
 // Profiles, by index: (handle, forced (team, role) memberships).
@@ -140,13 +146,22 @@ const P_FRANK: usize = 2;
 const P_GINA: usize = 3;
 const P_OWNER: usize = 4;
 const P_OUTSIDER: usize = 5;
-const PROFILE_HANDLES: [&str; 6] = ["dana", "henry", "frank", "gina", "owner", "outsider"];
+// The public_within controls: `ella` is a person on epd, ABOVE the anchor and so outside
+// its subtree; `robot` is a machine principal on squad, inside the subtree. Neither may read pub's
+// context. Both are kept out of the randomized matrix, like `owner` and `outsider`.
+const P_ELLA: usize = 6;
+const P_ROBOT: usize = 7;
+const PROFILE_HANDLES: [&str; 8] = [
+    "dana", "henry", "frank", "gina", "owner", "outsider", "ella", "robot",
+];
 // `owner` and `outsider` stay teamless — the negative controls the precedent file demands.
-const FORCED_MEMBERSHIPS: [(usize, usize, &str); 4] = [
+const FORCED_MEMBERSHIPS: [(usize, usize, &str); 6] = [
     (P_DANA, T_SQUAD, "member"),
     (P_HENRY, T_GHOST, "member"), // only reach is through the tombstoned team
     (P_FRANK, T_SEC, "watcher"),  // read-only role
     (P_GINA, T_ENG, "maintainer"),
+    (P_ELLA, T_EPD, "member"),    // above the anchor: outside its subtree
+    (P_ROBOT, T_SQUAD, "member"), // a machine inside the subtree
 ];
 
 // Contexts: (slug, owner kind, owner index, shared-to team or NONE, alive).
@@ -155,12 +170,14 @@ const C_SEC: usize = 1;
 const C_SHARED: usize = 2;
 const C_PERSONAL: usize = 3;
 const C_TOMB: usize = 4; // tombstoned below
-const CONTEXT_SPECS: [(&str, &str, usize, Option<usize>); 5] = [
+const C_PUB: usize = 5; // owned by T_PUB — readable by people under eng through public_within only
+const CONTEXT_SPECS: [(&str, &str, usize, Option<usize>); 6] = [
     ("ctx-eng", "kb_teams", T_ENG, None),
     ("ctx-sec", "kb_teams", T_SEC, None),
     ("ctx-shared", "kb_teams", T_ENG, Some(T_SQUAD)),
     ("ctx-personal", "kb_profiles", P_OWNER, None),
     ("ctx-tomb", "kb_teams", T_ENG, None),
+    ("ctx-pub", "kb_teams", T_PUB, None),
 ];
 
 // Cogmaps: (name, joined teams).
@@ -188,7 +205,8 @@ const R_ANCESTOR_GRANT: usize = 8; // grant to ENG below — ancestor-grant arm,
 const R_MAP_GRANT: usize = 9; // cogmap-grant arm, seed-independent
 const R_MAP_BRIDGE: usize = 10; // interior of the BRIDGE map — machine-principal interior arm
 const R_TOMB: usize = 11; // tombstoned below
-const RESOURCE_SPECS: [(&str, Anchor, usize); 12] = [
+const R_PUB: usize = 12; // homed in ctx-pub — the public_within arm's witness
+const RESOURCE_SPECS: [(&str, Anchor, usize); 13] = [
     ("r_ctx_eng", Anchor::Context(C_ENG), P_OWNER),
     ("r_ctx_sec", Anchor::Context(C_SEC), P_OWNER),
     ("r_shared", Anchor::Context(C_SHARED), P_OWNER),
@@ -201,6 +219,7 @@ const RESOURCE_SPECS: [(&str, Anchor, usize); 12] = [
     ("r_map_grant", Anchor::Cogmap(M_GRANT), P_OWNER),
     ("r_map_bridge", Anchor::Cogmap(M_BRIDGE), P_OWNER),
     ("r_tomb", Anchor::Context(C_ENG), P_OWNER),
+    ("r_pub", Anchor::Context(C_PUB), P_OWNER),
 ];
 
 // Edges: (source resource, target resource, home anchor, folded).
@@ -310,7 +329,7 @@ impl Plan {
             .chain((0..CONTEXT_SPECS.len()).map(Subject::Context))
             .chain((0..COGMAP_SPECS.len()).map(Subject::Cogmap));
         let principals: Vec<Principal> = (0..PROFILE_HANDLES.len())
-            .filter(|&p| p != P_OWNER && p != P_OUTSIDER)
+            .filter(|&p| p != P_OWNER && p != P_OUTSIDER && p != P_ELLA && p != P_ROBOT)
             .map(Principal::Profile)
             .chain([
                 Principal::Team(T_ENG),
@@ -325,12 +344,19 @@ impl Plan {
             // r_ctx_sec that means the whole CONTEXT, not just the resource — a grant on the
             // context admits its interior at once. C_PERSONAL is the owner's personal context,
             // the personal-arm negative.
+            //
+            // r_pub and ctx-pub are grant-immune for the same reason: the public_within controls
+            // (ella above the anchor, robot the machine) must read nothing of them on every seed.
+            // Skipped before any draw, so the generator's stream, and every older seed's world, is
+            // unchanged by their arrival.
             if matches!(
                 subject,
                 Subject::Resource(R_CTX_SEC)
                     | Subject::Context(C_SEC)
                     | Subject::Resource(R_PERSONAL)
                     | Subject::Context(C_PERSONAL)
+                    | Subject::Resource(R_PUB)
+                    | Subject::Context(C_PUB)
             ) {
                 continue;
             }
@@ -512,6 +538,34 @@ async fn insert_world(pool: &PgPool, plan: &Plan) -> sqlx::Result<World> {
         .await?;
         profiles.push(id);
     }
+    // Every profile but the machine is a PERSON: a human auth link and no machine-client row, which
+    // is what public_within_reading asks. The machine carries the machine provider's link and a
+    // registration, as prod does.
+    for (i, id) in profiles.iter().enumerate() {
+        let provider = if i == P_ROBOT {
+            "auth0-m2m"
+        } else {
+            "harness-idp"
+        };
+        sqlx::query(
+            "INSERT INTO kb_profile_auth_links (id, profile_id, auth_provider, auth_provider_user_id) \
+             VALUES (uuid_generate_v7(), $1, $2, $3)",
+        )
+        .bind(id)
+        .bind(provider)
+        .bind(PROFILE_HANDLES[i])
+        .execute(pool)
+        .await?;
+    }
+    sqlx::query(
+        "INSERT INTO kb_machine_clients (client_id, label, profile_id, registered_by_profile_id) \
+         VALUES ('robot', 'robot', $1, $2)",
+    )
+    .bind(profiles[P_ROBOT])
+    .bind(profiles[P_OWNER])
+    .execute(pool)
+    .await?;
+
     for (profile, team, role) in FORCED_MEMBERSHIPS {
         sqlx::query(
             "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, $3::team_role)",
@@ -620,6 +674,20 @@ async fn insert_world(pool: &PgPool, plan: &Plan) -> sqlx::Result<World> {
         .await?;
         resources.push(id);
     }
+
+    // The one public_within row: pub opened to eng's subtree, with the instance switch on. Written
+    // directly, as the plan's fixture helper does; the open door is a later phase.
+    sqlx::query(
+        "INSERT INTO kb_team_public_within (team_id, anchor_id, opened_by) VALUES ($1, $2, $3)",
+    )
+    .bind(teams[T_PUB])
+    .bind(teams[T_ENG])
+    .bind(profiles[P_GINA])
+    .execute(pool)
+    .await?;
+    sqlx::query("UPDATE kb_system_settings SET public_within_enabled = true WHERE id = 1")
+        .execute(pool)
+        .await?;
 
     // Tombstones — flipped, not omitted, so every door must actively exclude them.
     for (table, column, id) in [
@@ -1871,11 +1939,39 @@ const ENROLLED: &[&str] = &[
     "search_exact",
     "search_wide",
     "search_graph_expand",
+    // public_within. The read-set BODIES, which the two set authorities
+    // above are now body-only wrappers over, and the membership entry points beside them: driven
+    // by `public_within_reads_for_people_under_the_anchor_and_nobody_else`, which holds reading =
+    // membership + the public_within arm for every profile in the world, membership as reading
+    // minus that arm, and the wrappers equal to their bodies at the switch they pass.
+    "_contexts_readable_by_teams",
+    "_resources_visible",
+    "resources_visible_by_membership",
+    "contexts_readable_by_membership",
+    "can_read_by_membership",
+    // the public_within delta the audit queue and the element trail derive reading from: held
+    // equal to reading minus membership by the same test.
+    "resources_public_within",
+    // the public_within arm and the predicates it is built from — driven by the same test, each
+    // at both answers: over the world's one row, under a pool, under a forbid and switched off.
+    "contexts_public_within",
+    "public_within_row_effective",
+    "public_within_allowed_over",
+    "public_within_reading",
+    "anchor_subtree_holds_pool",
 ];
 
 /// The substrate the substrate-existence half pins; excluded from the scan because these are the
 /// PRIMITIVES every answer routes through, not answers themselves.
-const PRIMITIVES: &[&str] = &["team_ancestors", "profile_effective_teams", "vis_team"];
+const PRIMITIVES: &[&str] = &[
+    "team_ancestors",
+    "profile_effective_teams",
+    "vis_team",
+    // The DAG walks public_within's predicates are built from: the live down-walk and the
+    // live-or-dead up-walk the forbid uses. Structure, never an answer about who reads what.
+    "team_live_descendants",
+    "team_ancestors_any",
+];
 
 /// Acknowledged CONSUMERS of the substrate: functions that CALL the driven authorities (which is
 /// how the scan caught them) but have no bespoke invariant here.
@@ -2097,8 +2193,22 @@ async fn the_world_exercises_its_arms(pool: PgPool) -> sqlx::Result<()> {
         );
     }
     assert!(
+        sees(P_DANA, R_PUB).await?,
+        "arm broken: dana cannot see r_pub via public_within: a context owned by a team opened \
+         to the subtree of an ancestor dana is under"
+    );
+    assert!(
         !sees(P_DANA, R_CTX_SEC).await?,
         "negative control broken: dana sees a sibling team's context resource"
+    );
+    assert!(
+        !sees(P_ELLA, R_PUB).await?,
+        "negative control broken: ella, above the anchor and so outside its subtree, reads r_pub"
+    );
+    assert!(
+        !sees(P_ROBOT, R_PUB).await?,
+        "negative control broken: a machine principal under the anchor reads r_pub through \
+         public_within"
     );
     assert!(
         !sees(P_DANA, R_PERSONAL).await?,
@@ -2140,6 +2250,353 @@ async fn the_world_exercises_its_arms(pool: PgPool) -> sqlx::Result<()> {
         );
     }
 
+    Ok(())
+}
+
+/// public_within's arm and its fences, over every profile in the world.
+///
+/// - **Layering.** Each wrapper equals its body at the switch it passes: `resources_visible_to(p)`
+///   is `_resources_visible(p, public_within_reading(p))`, `resources_visible_by_membership(p)` is
+///   `_resources_visible(p, false)`, and the context pair likewise.
+/// - **Reading = membership + the public_within arm.** Membership ⊆ reading, and every resource
+///   in reading but not membership is homed in a context `contexts_public_within` opens to that
+///   profile's closure.
+///   Only a person (`public_within_reading`) has any difference at all.
+/// - **The witnesses.** dana (a person under eng) reads r_pub and ctx-pub, but not by membership,
+///   so `can_read_by_membership` refuses them where `can(read)` admits. ella (above the anchor)
+///   and robot (a machine under it) read neither. The row's predicates answer as the world says.
+/// - **The switch.** Off, the row confers nothing and reading equals membership for everyone.
+/// - **The delta.** Reading is exactly membership UNION `resources_public_within`, which is what
+///   lets the audit queue and the element trail derive one from the other without a second scan.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn public_within_reads_for_people_under_the_anchor_and_nobody_else(
+    pool: PgPool,
+) -> sqlx::Result<()> {
+    let plan = Plan::generate(harness_seed());
+    let w = insert_world(&pool, &plan).await?;
+    let mut violations: Vec<Violation> = Vec::new();
+
+    let set = |sql: &'static str, p: Uuid| {
+        let pool = pool.clone();
+        async move {
+            let mut v: Vec<Uuid> = sqlx::query_scalar(sql).bind(p).fetch_all(&pool).await?;
+            v.sort();
+            v.dedup();
+            Ok::<_, sqlx::Error>(v)
+        }
+    };
+
+    for switch_on in [true, false] {
+        sqlx::query("UPDATE kb_system_settings SET public_within_enabled = $1 WHERE id = 1")
+            .bind(switch_on)
+            .execute(&pool)
+            .await?;
+        for (i, &p) in w.profiles.iter().enumerate() {
+            let who = format!("{} (switch {switch_on})", PROFILE_HANDLES[i]);
+            let reading = set("SELECT resource_id FROM resources_visible_to($1)", p).await?;
+            let reading_body = set(
+                "SELECT resource_id FROM _resources_visible($1, public_within_reading($1))",
+                p,
+            )
+            .await?;
+            let member = set(
+                "SELECT resource_id FROM resources_visible_by_membership($1)",
+                p,
+            )
+            .await?;
+            let member_body =
+                set("SELECT resource_id FROM _resources_visible($1, false)", p).await?;
+            let creading = set("SELECT context_id FROM contexts_readable_by($1)", p).await?;
+            let creading_body = set(
+                "SELECT context_id FROM _contexts_readable_by_teams($1, \
+                   coalesce((SELECT array_agg(team_id) FROM profile_reachable_teams($1)), '{}'), \
+                   public_within_reading($1))",
+                p,
+            )
+            .await?;
+            let cmember = set(
+                "SELECT context_id FROM contexts_readable_by_membership($1)",
+                p,
+            )
+            .await?;
+            let delta = set("SELECT resource_id FROM resources_public_within($1)", p).await?;
+            let mut union: Vec<Uuid> = member.iter().chain(delta.iter()).copied().collect();
+            union.sort();
+            union.dedup();
+            if union != reading {
+                violations.push(format!(
+                    "{who}: reading is not membership UNION resources_public_within"
+                ));
+            }
+            let person: bool = sqlx::query_scalar("SELECT public_within_reading($1)")
+                .bind(p)
+                .fetch_one(&pool)
+                .await?;
+
+            if reading != reading_body {
+                violations.push(format!("{who}: resources_visible_to differs from its body"));
+            }
+            if member != member_body {
+                violations.push(format!(
+                    "{who}: resources_visible_by_membership differs from _resources_visible(p, false)"
+                ));
+            }
+            if creading != creading_body {
+                violations.push(format!("{who}: contexts_readable_by differs from its body"));
+            }
+            if !member.iter().all(|r| reading.contains(r)) {
+                violations.push(format!("{who}: membership is not a subset of reading"));
+            }
+            if !cmember.iter().all(|c| creading.contains(c)) {
+                violations.push(format!(
+                    "{who}: context membership is not a subset of reading"
+                ));
+            }
+            let extra: Vec<&Uuid> = reading.iter().filter(|r| !member.contains(r)).collect();
+            if !switch_on && person {
+                violations.push(format!(
+                    "{who}: public_within_reading is true with the switch off"
+                ));
+            }
+            if !person && !extra.is_empty() {
+                violations.push(format!(
+                    "{who}: not a person, yet reads {extra:?} beyond membership"
+                ));
+            }
+            if !switch_on && !extra.is_empty() {
+                violations.push(format!(
+                    "{who}: the switch is off, yet reads {extra:?} beyond membership"
+                ));
+            }
+        }
+    }
+
+    // The witnesses, with the switch back on.
+    sqlx::query("UPDATE kb_system_settings SET public_within_enabled = true WHERE id = 1")
+        .execute(&pool)
+        .await?;
+    let ask = |sql: &'static str, a: Uuid, b: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, bool>(sql)
+                .bind(a)
+                .bind(b)
+                .fetch_one(&pool)
+                .await
+        }
+    };
+    let (dana, ella, robot) = (w.profiles[P_DANA], w.profiles[P_ELLA], w.profiles[P_ROBOT]);
+    let (r_pub, c_pub) = (w.resources[R_PUB], w.contexts[C_PUB]);
+    let (t_pub, t_eng) = (w.teams[T_PUB], w.teams[T_ENG]);
+    for (got, want, what) in [
+        (
+            ask(
+                "SELECT can('kb_profiles', $1, 'read', 'kb_resources', $2)",
+                dana,
+                r_pub,
+            )
+            .await?,
+            true,
+            "dana can(read) r_pub",
+        ),
+        (
+            ask(
+                "SELECT can_read_by_membership($1, 'kb_resources', $2)",
+                dana,
+                r_pub,
+            )
+            .await?,
+            false,
+            "dana can_read_by_membership r_pub",
+        ),
+        (
+            ask("SELECT context_visible_to($1, $2)", dana, c_pub).await?,
+            true,
+            "dana context_visible_to ctx-pub",
+        ),
+        (
+            ask(
+                "SELECT can_read_by_membership($1, 'kb_contexts', $2)",
+                dana,
+                c_pub,
+            )
+            .await?,
+            false,
+            "dana can_read_by_membership ctx-pub",
+        ),
+        (
+            ask("SELECT context_visible_to($1, $2)", ella, c_pub).await?,
+            false,
+            "ella context_visible_to ctx-pub",
+        ),
+        (
+            ask("SELECT context_visible_to($1, $2)", robot, c_pub).await?,
+            false,
+            "robot context_visible_to ctx-pub",
+        ),
+        (
+            ask(
+                "SELECT public_within_reading($1) AND $2 IS NOT NULL",
+                dana,
+                dana,
+            )
+            .await?,
+            true,
+            "public_within_reading(dana)",
+        ),
+        (
+            ask(
+                "SELECT public_within_reading($1) AND $2 IS NOT NULL",
+                robot,
+                robot,
+            )
+            .await?,
+            false,
+            "public_within_reading(robot)",
+        ),
+        (
+            ask(
+                "SELECT public_within_row_effective($1, $2, false)",
+                t_pub,
+                t_eng,
+            )
+            .await?,
+            true,
+            "public_within_row_effective(pub, eng)",
+        ),
+        (
+            ask(
+                "SELECT public_within_allowed_over($1) AND $2 IS NOT NULL",
+                t_pub,
+                t_pub,
+            )
+            .await?,
+            true,
+            "public_within_allowed_over(pub)",
+        ),
+        (
+            ask(
+                "SELECT anchor_subtree_holds_pool($1) AND $2 IS NOT NULL",
+                t_eng,
+                t_eng,
+            )
+            .await?,
+            false,
+            "anchor_subtree_holds_pool(eng)",
+        ),
+        (
+            // `eng` and pub are not each other's ancestors in the other direction.
+            ask(
+                "SELECT public_within_row_effective($1, $2, false)",
+                t_eng,
+                t_pub,
+            )
+            .await?,
+            false,
+            "public_within_row_effective(eng, pub): the anchor is not an ancestor",
+        ),
+    ] {
+        if got != want {
+            violations.push(format!("{what}: expected {want}, got {got}"));
+        }
+    }
+
+    // The other answer of each predicate. A pool under the anchor: make eng the gating team.
+    let gating: Option<String> =
+        sqlx::query_scalar("SELECT gating_team_slug FROM kb_system_settings WHERE id = 1")
+            .fetch_one(&pool)
+            .await?;
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'eng' WHERE id = 1")
+        .execute(&pool)
+        .await?;
+    let pool_true = ask(
+        "SELECT anchor_subtree_holds_pool($1) AND $2 IS NOT NULL",
+        t_eng,
+        t_eng,
+    )
+    .await?;
+    let pool_row = ask(
+        "SELECT public_within_row_effective($1, $2, false)",
+        t_pub,
+        t_eng,
+    )
+    .await?;
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = $1 WHERE id = 1")
+        .bind(&gating)
+        .execute(&pool)
+        .await?;
+    // A forbid above T.
+    sqlx::query("UPDATE kb_teams SET public_within_forbidden = true WHERE id = $1")
+        .bind(t_eng)
+        .execute(&pool)
+        .await?;
+    let forbid_allowed = ask(
+        "SELECT public_within_allowed_over($1) AND $2 IS NOT NULL",
+        t_pub,
+        t_pub,
+    )
+    .await?;
+    sqlx::query("UPDATE kb_teams SET public_within_forbidden = false WHERE id = $1")
+        .bind(t_eng)
+        .execute(&pool)
+        .await?;
+    // The switch off.
+    sqlx::query("UPDATE kb_system_settings SET public_within_enabled = false WHERE id = 1")
+        .execute(&pool)
+        .await?;
+    let off_allowed = ask(
+        "SELECT public_within_allowed_over($1) AND $2 IS NOT NULL",
+        t_pub,
+        t_pub,
+    )
+    .await?;
+    let off_row = ask(
+        "SELECT public_within_row_effective($1, $2, false)",
+        t_pub,
+        t_eng,
+    )
+    .await?;
+    sqlx::query("UPDATE kb_system_settings SET public_within_enabled = true WHERE id = 1")
+        .execute(&pool)
+        .await?;
+    for (got, want, what) in [
+        (
+            pool_true,
+            true,
+            "anchor_subtree_holds_pool(eng) with eng the gating team",
+        ),
+        (
+            pool_row,
+            false,
+            "public_within_row_effective(pub, eng) under a pool",
+        ),
+        (
+            forbid_allowed,
+            false,
+            "public_within_allowed_over(pub) under a forbid on eng",
+        ),
+        (
+            off_allowed,
+            false,
+            "public_within_allowed_over(pub) with the switch off",
+        ),
+        (
+            off_row,
+            false,
+            "public_within_row_effective(pub, eng) with the switch off",
+        ),
+    ] {
+        if got != want {
+            violations.push(format!("{what}: expected {want}, got {got}"));
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "public_within invariants violated:\n{}\n\nworld:\n{}",
+        violations.join("\n"),
+        w.render()
+    );
     Ok(())
 }
 
