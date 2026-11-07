@@ -1,79 +1,63 @@
 # Memories
 
-> **Memories are resources.** Durable working knowledge is stored as resources of type `memory`,
-> carrying `open_meta.status` (`active` / `superseded`) and `open_meta.verified` (the date the claim
-> was last checked). Read the active ones and honour them. A `verified` date far in the past means
-> **nobody has re-checked the claim** — not that it is false.
+Read this when saving, correcting or reinforcing a durable memory, or deciding whether an existing
+one still holds.
 
-## Populating the store is not a separate mechanism
+## The model
 
-A memory is authored, corrected and superseded with the ordinary resource tools, as doc type
-`memory`, in whichever context the team already reads.
+- **A memory is a resource of type `memory`.** Author, correct and supersede it with the ordinary
+  resource tools, in the context whose readers it is for. Tools: `create_resource` →
+  `update_resource_meta`.
+- **`open_meta.status` is `active` or `superseded`.** Read the active ones and honour them.
+- **`open_meta.verified` is the date the claim was last checked. `verified` is a judgment, not a
+  timestamp:** advance it only after re-checking the claim against the system it describes; moving,
+  re-rendering, re-reading or amending the body never advances it. An old date means nobody
+  re-checked, not that it is false.
+- **Correct by supersession.** Set the old account's `status` to `superseded` and leave it readable;
+  it stays addressable and searchable.
+- **A memory carries no reach of its own.** Its audience is whoever reads the context it lives in,
+  so choosing the context is choosing the audience.
+- **Nothing validates the open tier at write time.** These rules hold only if you follow them.
+- Some memories carry `open_meta.source_file`: they were migrated from a contributor's machine by
+  the CLI. Nothing on this surface runs that migration; once here, such a memory is an ordinary
+  resource.
 
-Tools: `create_resource` → `update_resource_meta`
+## Near-duplicates are for a human to judge
 
-Four things about the open tier are worth knowing before you write one, because **nothing validates
-it at write time**:
+Before authoring into a context others write to, read what is already there.
+**Compare the claim, not the wording**: two memories naming the same subsystem, command or CI job
+often assert unrelated things, and a shared context accumulates exactly that vocabulary. Expect
+three outcomes:
 
-- **`verified` is a judgment, not a timestamp.** Advance it only when the claim has actually been
-  re-checked against the system it describes. Moving, re-rendering, or merely re-reading a memory
-  must never advance it — a claim reading as checked when nobody checked it is the more dangerous
-  direction of the two.
-- **Correct by supersession.** Set the prior account's `status` to `superseded` and leave it
-  readable, rather than editing the record of having been wrong out of existence. It stays
-  addressable and searchable either way; falling out of a summary is never falling out of the
-  record.
-- **A memory carries no reach of its own.** Where it applies is a consequence of which context it
-  lives in and who can read there, never something the memory asserts about itself. Choosing the
-  context *is* choosing the audience.
-- **A near-duplicate is for a human to judge.** Two accounts of nearly the same thing are surfaced
-  for a decision, never merged automatically — one of them may be the account someone wanted to
-  compare against. Nothing detects them for you, so before authoring into a context others write
-  to, read what is already there and **compare the claim, not the wording**. Shared project
-  vocabulary is not overlap of claim: two memories naming the same subsystem, command or CI job
-  routinely assert unrelated things, and a shared context accumulates exactly that vocabulary.
-  Expect three outcome kinds, because an author who expects only the first mis-handles the other
-  two — a **duplicate** (one incident recorded twice, often from two machines; resolved by keeping
-  the older, richer account, which no similarity score encodes), a **supersession** (a newer
-  account strictly richer than the one it covers), and **both stale** (both out of date, the newer
-  one still the more wrong — recency arbitrates nothing). Surface the short list; resolving one is
-  a human's call, not the authoring agent's. Nothing enforces this — it is judgement, not a gate.
+- **Duplicate**: one incident recorded twice, often from two machines. Keep the older, richer one.
+- **Supersession**: a newer account strictly richer than the one it covers.
+- **Both stale**: both out of date, the newer one still wrong. Recency arbitrates nothing.
+
+Surface the short list; resolving it is a human's call. **Never merge automatically.** This is
+guidance, not a gate.
 
 ## Recording that a memory was load-bearing
 
-Call `update_resource` with `open_meta_add`, which unions over the stored list instead of replacing
-it:
+Call `update_resource` with `open_meta_add`, which unions over the stored list:
 
 ```json
 { "open_meta_add": { "reinforced": ["2026-08-02"] } }
 ```
 
-`open_meta.reinforced` is a list of bare ISO dates: the days this memory did work. **Two things
-count as a day's work, and the second is the one that matters.** The situation the memory describes
-*recurred* — the trap it names actually fired. Or the memory *caught you*, and a mistake did not get
-made because of it.
+`open_meta.reinforced` is a list of bare ISO dates: the days the memory did work. Two things count:
+the situation it describes recurred, or **it caught you** before the mistake. Count the catch,
+because a memory that works prevents its own situation from recurring.
 
-Counting only recurrence would be broken in a way worth understanding: **a memory that works
-prevents its own situation from recurring.** It would go unreinforced, decay out of any summary, and
-then the situation would recur — a loop that oscillates, each swing costing whatever the memory was
-preventing. Counting the catch dissolves that.
+If the catch exposed a case the body does not describe, **amend the body**; a metadata note about
+the gap is not the fix. Amending the body does not advance `verified`.
 
-**Use `open_meta_add`, never `open_meta`, for this key.** `open_meta` replaces each key it names, so
-writing one date there discards every date already stored — silently, with a success response.
+## Traps
 
-The date is bare, and the contract is bare deliberately. **No `by` field** — the update already
-emits a `property_set` event carrying the acting principal, so the trail answers *who*, and a
-self-asserted copy in a tier nothing validates could only ever disagree with the record that is
-already right. **No note field** — a free-text note makes every record structurally unique, which
-stops the union from collapsing same-day duplicates and loses the one-a-day grain that comes free
-from the stored shape.
-
-**The harder half: if the catch revealed a shape the memory's body does not describe, amend the
-body — that is the act.** A metadata note *about* the gap is a breadcrumb standing in for the fix.
-Reinforce the date *and* rewrite what the memory says. Amending a body is **not** re-checking the
-claim, so it does not advance `verified`.
-
-Some memories began as files on a contributor's machine and were moved in by a command-line
-migration; those carry `open_meta.source_file`, naming the file they came from. That migration is a
-machine-local concern and nothing on this surface runs it — but a memory that arrived that way is
-an ordinary resource once it is here, and is read and corrected exactly like one authored here.
+- **`open_meta` instead of `open_meta_add`**: replaces the `reinforced` list and silently discards
+  every stored date, with a success response.
+- **Adding a `by` or note field to a reinforcement**: the `property_set` event already records who,
+  and a note makes every entry unique, so same-day duplicates stop collapsing.
+- **Advancing `verified` because you read or moved a memory**: a claim that reads as checked when
+  nobody checked it is the more dangerous error.
+- **Treating a superseded memory as gone**: it is still in the record; falling out of a summary is
+  not falling out of the record.

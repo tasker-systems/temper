@@ -78,14 +78,8 @@ static MEMORIES_CLI_MD: &str = include_str!("../../skill-content/memories-cli.md
 /// two `open_meta` keys, never a CLI command or a user's context — see `MEMORIES_CLI_MD` above for
 /// why this is a plain const rather than the other branch of a shared template.
 static MEMORIES_MCP_MD: &str = include_str!("../../skill-content/mcp/memories.md");
-static SUBAGENT_GUIDANCE_MD: &str = include_str!("../../skill-content/subagent-guidance.md");
-/// Review-gate discipline: when a change owes a code review and/or a security review
-/// before its PR, and what each pass must be. Names no command on either surface — the
-/// trigger rules are about the *change*, and the reviewer mechanics are client-side — so
-/// it ships to both surfaces verbatim, like the grounding pair.
-static REVIEW_GATES_MD: &str = include_str!("../../skill-content/review-gates.md");
-static PLAN_VERIFICATION_MD: &str = include_str!("../../skill-content/plan-verification.md");
-static SESSION_WRAP_MD: &str = include_str!("../../skill-content/session-wrap.md");
+/// Grounding, plan verification, subagent briefing and review gates. Names no command on either
+/// surface, so it ships to both verbatim.
 static IMPLEMENTATION_GROUNDING_MD: &str =
     include_str!("../../skill-content/implementation-grounding.md");
 static COGNITIVE_MAPS_MD: &str = include_str!("../../skill-content/cognitive-maps.md");
@@ -104,316 +98,102 @@ static PROJECT_SETUP_MD: &str = include_str!("../../skill-content/project-setup.
 static ADMIN_MD: &str = include_str!("../../skill-content/admin.md");
 static KNOWLEDGE_BASE_MD: &str =
     include_str!("../../../../skills/temper-knowledge-base/knowledge-base.md");
-static WF_BUILD_SMALL: &str = include_str!("../../skill-content/workflows/build-small.md");
-static WF_BUILD_MEDIUM: &str = include_str!("../../skill-content/workflows/build-medium.md");
-static WF_BUILD_LARGE: &str = include_str!("../../skill-content/workflows/build-large.md");
-static WF_PLAN_SMALL: &str = include_str!("../../skill-content/workflows/plan-small.md");
-static WF_PLAN_MEDIUM: &str = include_str!("../../skill-content/workflows/plan-medium.md");
-static WF_PLAN_LARGE: &str = include_str!("../../skill-content/workflows/plan-large.md");
 
 static REFERENCE_FOOTER: &str = r#"
 ## Resource Types
 
-These are the recognized set, each with a schema (see *Template Access*). A type outside it is
-accepted but carries no type schema; `evidence`, a goal's evidence record, is the one the skill uses
-on purpose:
+The recognized set, each with a schema (`resource create --type <t> --show-template` prints it). A
+type outside it is accepted without a schema; `evidence`, a goal's evidence record, is the one the
+skill uses on purpose:
 
 {{ doc_type_table }}
 
 ## Task Stages
 
-| Stage | Meaning |
-|-------|---------|
-| backlog | Not yet started |
-| in-progress | Actively being worked |
-| done | Completed |
-| cancelled | Abandoned or no longer relevant |
+`backlog` → `in-progress` → `done`, or `cancelled`.
 
-## Modes
+## Modes and Effort
 
-| Mode | Purpose |
-|------|---------|
-| plan | Research, design, discovery -- understanding before building |
-| build | Implementation -- producing artifacts |
-
-## Effort Levels
-
-| Effort | Scope |
-|--------|-------|
-| small | Single session, focused deliverable |
-| medium | Multi-step, bounded to a clear outcome |
-| large | Multi-session, may require decomposition |
+Mode is `plan` (the output is a decision or spec) or `build` (the output is code). Effort is
+`small` (one session), `medium` (bounded) or `large` (multi-session; decompose).
 
 ## Managed vs Open Frontmatter
 
-`managed_meta` is a **closed, temper-owned vocabulary** -- the `temper-*`
-workflow/provenance keys (stage, mode, effort, status, seq, branch, pr,
-llm-model, llm-run, provenance). It is optional metadata with smart defaults;
-you never *have* to send it. An unknown key under `managed_meta` is rejected --
-put caller-defined ("bring-your-own") fields in `open_meta`, the free-form tier.
-
-**Slug:** the slug is always derived from the title -- it is not a caller
-input on any surface. Addressing is trailing-UUID-only (a bare UUID or the
-decorated `sluggify(title)-<uuid>` ref), so the slug is display decoration
-only; there is no CLI `--slug` flag and the MCP/API request schemas no longer
-carry a `slug` field. A slug placed in managed frontmatter is likewise inert.
-
-## Discovery Workflow
-
-1. `temper search "<topic>"` -- find relevant documents and notes
-2. `temper warmup --context @me/<ctx>` -- a context primer: active goals, in-progress tasks,
-   recent session pointers, and what is pending for you
-3. Use search results to guide targeted file reads
-4. Reach for `--without body` / `--fields` on `resource show`, or `--with
-   open-meta` on `resource list`, when you need cheap orientation rather than
-   full bodies (see below)
-
-Search first, read second. Don't guess at file paths.
-
-## Listing: truncation, sort, and filters
-
-`temper resource list` returns a **capped page** — 20 rows by default, whatever
-sections you ask for. **Never conclude a resource is absent, or that a set is
-complete, from a default `list`.** A goal/task/session you "don't see" may just
-be past the cap.
-
-Every list response carries the signal to catch this:
-
-| Envelope key | Meaning |
-|--------------|---------|
-| `total` | Count of ALL rows matching the filters (before the page cap). |
-| `returned` | Rows in THIS page. |
-| `truncated` | `true` when `total` exceeds what this page shows — there is more. |
-
-When `truncated` is `true`, the CLI also prints a stderr hint. Before asserting
-absence or completeness, **expand or narrow**:
-
-| Flag | Use |
-|------|-----|
-| `--all` | Return every matching row (no cap). Reach for this before claiming a set is complete. Conflicts with `--limit`. |
-| `--limit <n>` | A bigger page. It is a DEFAULT, not a cap — whatever you pass is honoured, and there is no server-side clamp. |
-| `--page <n>` / `--offset <n>` | Walk the set, in pages or in rows. `--page` is 1-indexed and counts in the effective `--limit`, so `--page 3 --limit 5` starts at row 10. The two are mutually exclusive, as is either with `--all`. |
-| `--sort <field>[:asc\|desc]` | Order by `updated`, `created`, `title`, `stage`, `seq`, `context`, or `doctype`. Direction defaults per field (time/seq → desc, text → asc); default sort is `updated:desc`. |
-| `--title-contains <substr>` | Case-insensitive title filter — narrow instead of paging blind (for topical/semantic search use `temper search`). |
-| `--stage <s>` / `--goal <ref>` (task) · `--status <s>` (goal) | Type-specific filters. Naming a `--type` they don't apply to is an error, not a silent no-op. |
-| `--tag <t>` (repeatable) | Filter by tag. Repeating **narrows** — `--tag ci --tag security` returns only resources carrying both. Exact match, case-insensitive. Not type-specific: tags span every doc type. |
-| `--type <t>` | Optional. Omit it to list across every doc type — which is how you enumerate a whole tag axis in one call instead of once per type. |
-
-```bash
-# WRONG: "no maintenance goal exists" — read off a 20-row default page.
-temper resource list --type goal --context @me/temper
-
-# RIGHT: narrow, or enumerate fully, before asserting absence.
-temper resource list --type goal --context @me/temper --title-contains maintenance
-temper resource list --type goal --context @me/temper --all
-
-# Enumerate a program axis across every doc type — no --type.
-temper resource list --tag ci --all
-temper resource list --tag ci --tag security --all   # carries BOTH
-```
-
-## Orientation Projection (cheap reads)
-
-The read-side projection flags let you peek at structure without paying for
-full bodies — useful when triaging a context, comparing a few resources, or
-deciding whether to read more deeply.
-
-| Pattern | What it returns |
-|---------|-----------------|
-| `temper resource show <ref> --without body` | The full `show` view — identity, home, attribution, plus both the managed and open meta tiers — minus the reconstructed body. Skips the body round-trip rather than discarding it. |
-| `temper resource list --type <t> --context @me/<ctx> --with open-meta` | Each row as a full payload **plus** the open tier (no bodies). The default `list` carries only the managed tier, so this triages a whole context on open-meta fields in one call. `body` is not a section `list` offers — use `show` per row. |
-| `--fields <a,b,c>` on either of the above | Subselects top-level response keys. The anchor key `id` is always preserved. Pipe through `jq` for nested projection. |
-| `temper resource show <ref> --edges` | Adds the graph edges connected to this resource. The long spelling is `--with edges`, and it **composes** with `--without body`. |
-
-## Referencing Other Resources — full UUIDv7, and link it
-
-**A UUID is not a SHA. Never abbreviate one.** A UUIDv7's leading bits are a
-**timestamp**, so resources created near each other share a prefix *by
-construction* — a goal and the task written a minute later routinely agree on
-their first seven characters:
-
-```
-019fbb77-72a3-72e1-bbbd-13eb6aa64982   <- a goal
-019fbb78-657b-7380-9063-212727cfe390   <- its task, 62 seconds later
-```
-
-A prefix is therefore *systematically* ambiguous between exactly the resources
-most likely to be cited together, and resolves to nothing a reader can follow.
-Write the full 36 characters everywhere — prose, tables, `open_meta`, commits.
-
-**When a document refers to another resource, write it as a markdown link:**
-
-```markdown
-[<the resource's exact title>](./<full-uuidv7>)
-```
-
-Resources are addressed **flatly**; there is no directory tree to be relative
-to, so `./<uuid>` is the entire path and it resolves wherever the body renders.
-The reader then sees *what* is cited without a round-trip, and can navigate to
-it instead of copying an id into `resource show`.
-
-Take the title from `resource list`/`show`, not from memory — an approximate
-title inside a link is a citation that looks precise and is not. Escape any
-`[`, `]`, `(` or `)` the title contains, or the link will not render.
-
-To delete a resource server-side, run `temper resource delete <ref> [--force]`
-(the `<ref>` is the resource's `ref` field from `list`/`show`).
+`managed_meta` is a closed, temper-owned vocabulary (`temper-*` keys); an unknown key is rejected, so
+caller-defined fields go in `open_meta`. The slug is always derived from the title and is display
+only — addressing is by trailing UUID.
 
 ## Context Requirement
 
-| Verb | `--context` takes... |
-|------|----------------------|
-| `resource list` | optional — omitting it lists across all contexts |
-| `resource create` | **required** — the context the resource is created into |
+`resource create` requires `--context`; `resource list` takes it as an optional filter;
+`show`/`update`/`delete` take a ref and no context. A context is `@me/<slug>`, `+team-slug/<slug>`
+or a bare UUID — never a bare name.
 
-`resource show`/`update`/`delete` address a single resource by `<ref>` and take no
-`--context`. A context is addressed by **ref**: `@me/<slug>` for your own contexts,
-`+team-slug/<slug>` for team contexts, or a bare UUID. Bare context names are **not
-accepted**.
+## Listing: truncation, sort, and filters
 
-## Template Access
+`resource list` returns a page of 20 by default. **Never conclude a resource is absent, or a set
+complete, from a default list.** Every response carries `total`, `returned` and `truncated`; when
+`truncated` is true there is more, and the CLI also hints on stderr.
 
-Use `--show-template` on `resource create` to display the expected frontmatter and body
-structure without creating anything:
+| Flag | Use |
+|------|-----|
+| `--all` | Every matching row. Reach for it before claiming completeness |
+| `--limit <n>`, `--page <n>`, `--offset <n>` | A bigger page, or walk the set (`--page` is 1-indexed in units of `--limit`) |
+| `--sort <field>[:asc\|desc]` | `updated` (default, desc), `created`, `title`, `stage`, `seq`, `context`, `doctype` |
+| `--title-contains <s>` | Narrow instead of paging blind (topical search is `temper search`) |
+| `--stage`, `--goal` (task) · `--status` (goal) · `--tag` (repeat narrows) | Filters; a type-specific one on the wrong `--type` is an error |
 
-```bash
-temper resource create --type session --show-template
-temper resource create --type task --show-template
-temper resource create --type research --show-template
-```
+Omit `--type` to list across every doc type, e.g. a whole tag axis: `temper resource list --tag ci --all`.
 
-## Body Source (`resource create` / `resource update`)
+## Orientation Projection
 
-Where the markdown body comes from on a write is resolved by a **first-match-wins
-precedence**. Get this wrong and you silently clobber a body — so it is spelled
-out here.
+`show <ref> --without body` (everything but the body), `list … --with open-meta` (rows plus the open
+tier), `--fields a,b,c` (top-level keys; `id` always kept), `show <ref> --edges` (composes with
+`--without body`). `temper warmup --context @me/<ctx>` primes a session.
 
-| Precedence | Form | Behavior |
-|-----------|------|----------|
-| 1 | `--body @<path>` | Read the file. **stdin is ignored entirely.** Empty file → error (refuses to write an empty body). |
-| 2 | `--body -` | Read stdin explicitly. Blocks until EOF. Errors on a TTY or on empty input. |
-| 3 | implicit (no `--body`) | Read stdin **only** when it is a non-TTY that has input *ready* and non-empty — the `cat new.md \| temper resource update <ref>` case. An open-but-idle pipe, or empty stdin, is treated as **no body**. |
-| 4 | none of the above | Body is left unchanged; on `update`, only frontmatter is PATCHed. |
+## Body Source
 
-> **Footgun — implicit stdin is a body rewrite.** `resource update` treats an
-> implicit non-TTY stdin as a full-body replace. Two ways this bites an agent:
->
-> - **Redirected loop inheritance.** Inside
->   `while read n ref; do temper resource update "$ref" --title "…"; done < refs.txt`,
->   every `update` inherits the loop's redirected stdin (`refs.txt`) and rewrites
->   the resource body with the *leftover loop lines* — clobbering one resource and
->   consuming the remaining iterations, with no error.
-> - **`< /dev/null` "safety".** Redirecting from `/dev/null` used to set the body
->   to empty. (Current CLI treats empty implicit stdin as *no body* — but relying
->   on that is fragile; older installed binaries still clobber.)
->
-> **Rules of thumb:**
-> - To change **frontmatter only** (e.g. `--title`, `--stage`), invoke `update`
->   **one resource per call with stdin untouched** — never inside a
->   `while read … done < file` loop.
-> - To rewrite a **body**, do it with an explicit, intended
->   `cat file.md | temper resource update <ref>` (or `--body @file.md`).
-> - `--body @<path>` always wins over stdin — reach for it when you want to be
->   unambiguous.
+On `resource create`/`update` the body comes from the first that applies:
+
+1. `--body @<path>` — the file; stdin ignored; an empty file is refused.
+2. `--body -` — stdin, explicitly; refused on a TTY or empty input.
+3. Implicit — stdin only when it is a non-TTY with input ready; an idle or empty pipe means no body.
+4. None — the body is untouched; `update` patches frontmatter only.
+
+**Footgun: implicit stdin is a body rewrite.** Inside `while read n ref; do temper resource update
+"$ref" --title "…"; done < refs.txt`, every `update` inherits the loop's stdin and overwrites a body
+with the leftover lines, with no error. Change frontmatter one call at a time with stdin untouched;
+rewrite a body only on purpose, preferably with `--body @file`.
 
 ## Block-Grain Ingest & Attribution
 
-A resource body is not always one opaque blob. The ingest surface lets you build
-it as an **enumerated sequence of distinctly addressable, individually
-attributable content blocks**, and attach **per-block provenance** (which
-sources each block was distilled from) and **per-act authorship** (confidence,
-reasoning, the model that wrote it). Reach for this when constructing a large or
-citation-graded document instead of defaulting to a whole-body `create`/`update`.
+A body can be built as distinctly addressable blocks, each with provenance (the sources it was
+distilled from) and authorship (confidence, reasoning, model). Reach for it for large or
+citation-graded documents. It builds and attributes blocks; it does not edit one block's text in a
+finished resource — that is still a whole-body `update`.
 
-**Boundary — what this is NOT.** These verbs *build* and *attribute* blocks; they
-do **not** surgically rewrite one existing block's text in a finalized resource.
-An in-place text edit is still a whole-body `resource update`. `annotate` is
-**provenance-only** — it never touches block text, `body_hash`, or embeddings.
-
-### Per-block provenance & authorship (on any write)
-
-`resource create` and `resource update` both take:
-
-- `--sources <a,b,…>` — comma-separated **resource refs** (UUID or decorated
-  `slug-<uuid>`) and/or **http(s) URLs**. Each becomes a block-provenance record
-  on the body block. A URL may carry a `#L<start>-L<end>` span locator (e.g.
-  `https://ex.com/doc.md#L120-L180`) — preserved verbatim end-to-end and surfaced
-  in provenance reads. On `update`, `--sources` requires a body update (there is
-  no block to attribute otherwise).
-- `--content-block <block-uuid>` — which block the body revise + `--sources`
-  target. Omit to address the resource's sole body block; **required** once a
-  resource has more than one block.
-- Authorship/correlation flags (`--confidence <tentative|probable|confident>`,
-  `--reasoning`, `--rationale`, `--persona`, `--model`, `--invocation`,
-  `--correlation`). `--confidence` is **required** whenever any other authorship
-  flag is supplied.
-
-`resource create` also has `--from <url|path>` (extract markdown from a source,
-which by default seeds a Remote provenance record — `--no-source` opts out) and
-`--sources-as-edges` (also assert a `derived_from` edge to each resource-valued
-source).
-
-### `resource annotate <ref> --sources … [--content-block <uuid>]`
-
-The **annotate-only backfill**: attach provenance sources to a block **without a
-body revise**. `body_hash` and embeddings are unchanged, so a corpus imported
-without sources can be made citation-grade cheaply. At least one `--sources`
-entry is required; `--content-block` is required for a multi-block resource.
-Verify with `resource show --provenance`.
-
-### Reading provenance
-
-- `temper resource show <ref> --provenance` — itemized per-block provenance: the
-  sources each of the resource's content blocks was distilled from, in
-  (block, accretion) order.
-
-### Segmented ingest lifecycle (large / resumable builds)
-
-For a body too large for one call, the CLI streams it automatically (the
-`resource create` path segments internally past ~256 KB and resumes an
-interrupted upload). The **MCP** surface exposes the lifecycle explicitly as
-one tool, `segmented_ingest`, whose `action` field selects the step:
-
-| `action` | Role |
-|------|------|
-| `begin` | Lands segment 0, creates the resource, returns `resource_id` + landed block set + an opaque `body_hash`. Takes every `create_resource` field plus `content_hash`. |
-| `append` | Lands segment N (`seq` starts at **1**, in order). **Idempotent** — a re-append of an already-landed seq is a safe no-op, so retry/resume is safe. Optional per-segment `sources`. |
-| `blocks` | Reads the landed segment set back — how a stateless caller resumes after an interruption. |
-| `finalize` | Declares the session complete: pass `expected_blocks` and **echo the `body_hash` verbatim** (opaque — never parse or recompute it). Fails loudly on a gap. |
-
-See `knowledge-base.md` for the MCP tool details.
+- **On any write:** `--sources <refs-or-urls>` (a URL may carry `#L<start>-L<end>`),
+  `--content-block <uuid>` (required once a resource has more than one block), and authorship flags,
+  where `--confidence` is required if any other is given. `create --from <url|path>` extracts and
+  records the source; `--sources-as-edges` also asserts `derived_from` edges.
+- **`resource annotate <ref> --sources …`** backfills provenance with no body revise: `body_hash` and
+  embeddings are unchanged.
+- **Reading:** `resource show <ref> --provenance`.
+- **Large bodies:** the CLI segments and resumes automatically. On MCP, `segmented_ingest` exposes the
+  lifecycle by `action`: `begin` (creates the resource, returns an opaque `body_hash`), `append`
+  (segments from seq 1, idempotent), `blocks` (read back to resume), `finalize` (pass
+  `expected_blocks` and echo `body_hash` verbatim; a gap fails). See `knowledge-base.md`.
 
 ## Error Handling (JSON mode)
 
-When piping `temper` output through `jq` (or any JSON consumer), **check the exit
-code first.** A non-zero exit means the command failed; in JSON mode the explanation
-is a structured payload on **stdout**, not stderr prose:
-
-```bash
-temper resource show <ref> > out.json 2>err.log
-if [ $? -ne 0 ]; then
-  # parse the structured error from stdout — never assume success
-  jq -r '.error.code // "?", .error.message // "?", .error.hint // ""' out.json
-  exit 1
-fi
-# success — out.json is the result; it may carry a `diagnostics` array (see below)
-```
-
-The shape is `{ "error": { "code": "<stable-code>", "message": "<human text>", "hint": "<optional>" } }`. The `code` field is a `&'static str` stable across releases; `hint` is optional. Treat the `code` as the machine-readable key and `message` as the human text — do not grep `message` for control flow.
-
-Successful results are unchanged: the same `jq` recipes (e.g. `jq -r .content`, `jq -r .id`) work as before. A successful payload **may** carry a `diagnostics` array — advisory notices (degraded arms, truncated lists, empty scope) surfaced from the API. They are non-fatal: the exit code is zero and the result is usable. Inspect `.diagnostics[]` if you want to surface them to a user, but do **not** treat a non-empty `diagnostics` as a failure. (In a non-TTY script `temper` emits JSON by default; pin the format explicitly when the script's stdout may be a TTY.)
+Check the exit code before reading output. On failure stdout carries
+`{ "error": { "code", "message", "hint" } }`; branch on `code`, never on `message`. A success may
+carry an advisory `diagnostics` array, which is not a failure.
 
 ## Skill-Only Commands
 
-These commands are handled by the skill routing layer, not the temper CLI directly.
-They compose multiple CLI commands into guided workflows.
-
-| Skill Command | What It Does |
-|---------------|--------------|
-| `task start <slug>` | Shows task, moves to in-progress, routes to workflow |
-| `task resume <slug>` | Shows task, reads last session, continues workflow |
-| `task create` | Guided interactive task creation with prompts |
-| `session start` | Start a session without a predefined task |
+Handled by the skill router, not the CLI: `task start <slug>`, `task resume <slug>`, `task create`,
+`session start`, `session wrap`. See `SKILL.md`.
 "#;
 
 // ── Generated frontmatter reference ──────────────────────────────────────────
@@ -717,21 +497,10 @@ pub fn generate_reference(include_admin: bool) -> String {
     let mut out = String::new();
     out.push_str("# CLI Reference\n\n");
     out.push_str("## Invocation\n\n");
-    out.push_str("**Always run `temper` directly from PATH.** Never use `cargo run -p temper-cli`, `python`,\n");
-    out.push_str("full paths, or any indirect invocation method — an on-PATH install is what this skill assumes,\n");
+    out.push_str("Run `temper` from PATH (`which temper`). If it is missing, say so and stop: never fall back to\n");
     out.push_str(
-        "and indirect invocations reach a different binary than the one the user installed.\n\n",
+        "`cargo run` or a full path, which reach a different binary than the one installed.\n\n",
     );
-    out.push_str("**Before running any temper command**, verify the binary exists:\n");
-    out.push_str("```bash\nwhich temper\n```\n");
-    out.push_str("If `temper` is not on PATH, **stop and warn the user**:\n");
-    out.push_str(
-        "> \"The `temper` binary is not installed or not on PATH. Install it from the temper\n",
-    );
-    out.push_str(
-        "> releases (see the project README), or ensure `~/.cargo/bin` is in your PATH.\"\n\n",
-    );
-    out.push_str("Do not fall back to `cargo run` as a workaround.\n\n");
     out.push_str("## Commands\n\n");
     out.push_str("| Command | Syntax |\n");
     out.push_str("|---------|--------|\n");
@@ -896,25 +665,11 @@ pub fn generate_agent_skill_files() -> Result<HashMap<String, String>> {
         render_working_a_goal(SURFACE_MCP)?,
     );
     files.insert("memories.md".to_string(), MEMORIES_MCP_MD.to_string());
-    // Shipped to both surfaces verbatim: these three name no command on either, so they are the
-    // same bytes in both trees rather than two renders of one template.
-    files.insert(
-        "subagent-guidance.md".to_string(),
-        SUBAGENT_GUIDANCE_MD.to_string(),
-    );
-    files.insert(
-        "plan-verification.md".to_string(),
-        PLAN_VERIFICATION_MD.to_string(),
-    );
+    // Names no command on either surface, so both trees carry the same bytes.
     files.insert(
         "implementation-grounding.md".to_string(),
         IMPLEMENTATION_GROUNDING_MD.to_string(),
     );
-    files.insert("review-gates.md".to_string(), REVIEW_GATES_MD.to_string());
-    // Same rule: it names no command, because every command it would name lives in
-    // `session-lifecycle.md`. That is a design choice rather than an accident — the wrap doc is
-    // about what to WRITE, and giving the mechanics two homes is how they drift.
-    files.insert("session-wrap.md".to_string(), SESSION_WRAP_MD.to_string());
 
     Ok(files)
 }
@@ -957,6 +712,9 @@ pub struct InstallReport {
     /// Installer-era duplicate files removed from `guidance/` (byte-matched against the exact
     /// revisions the old installer shipped — user-modified files are never touched).
     pub removed_legacy: Vec<String>,
+    /// Files earlier releases shipped and this one no longer does, removed when their bytes match
+    /// a revision the installer shipped (see [`RETIRED_SKILL_FILES`]).
+    pub removed_retired: Vec<String>,
     /// Admin files removed because this install ran WITHOUT `--include-admin` over a tree that
     /// had them. Byte-matched against what the installer ships — a file the user has edited is
     /// theirs, not ours to delete.
@@ -965,7 +723,10 @@ pub struct InstallReport {
 
 impl InstallReport {
     pub fn is_no_op(&self) -> bool {
-        self.changed.is_empty() && self.removed_legacy.is_empty() && self.removed_admin.is_empty()
+        self.changed.is_empty()
+            && self.removed_legacy.is_empty()
+            && self.removed_retired.is_empty()
+            && self.removed_admin.is_empty()
     }
 }
 
@@ -1026,11 +787,12 @@ pub fn install(
         total: files.len(),
         changed: Vec::new(),
         removed_legacy: Vec::new(),
+        removed_retired: Vec::new(),
         removed_admin: Vec::new(),
     };
 
     // Ensure skill_dir and subdirectories exist
-    for sub in &["workflows", "guidance"] {
+    for sub in &["guidance"] {
         let dir = skill_dir.join(sub);
         std::fs::create_dir_all(&dir).map_err(|e| {
             TemperError::Config(format!("cannot create directory {}: {}", dir.display(), e))
@@ -1075,6 +837,7 @@ pub fn install(
     }
 
     report.removed_legacy = remove_legacy_guidance_duplicates(skill_dir)?;
+    report.removed_retired = remove_retired_files(skill_dir, &RETIRED_SKILL_FILES)?;
     if !include_admin {
         report.removed_admin = remove_admin_files(skill_dir)?;
     }
@@ -1095,7 +858,9 @@ fn remove_admin_files(skill_dir: &Path) -> Result<Vec<String>> {
             // Absent is the expected state; unreadable is not ours to judge by hash.
             Err(_) => continue,
         };
-        if bytes == content.as_bytes() {
+        let shipped_earlier =
+            ADMIN_SHIPPED_REVISIONS.contains(&hex::encode(Sha256::digest(&bytes)).as_str());
+        if bytes == content.as_bytes() || shipped_earlier {
             std::fs::remove_file(&path).map_err(|e| {
                 TemperError::Config(format!("cannot remove {}: {}", path.display(), e))
             })?;
@@ -1104,6 +869,20 @@ fn remove_admin_files(skill_dir: &Path) -> Result<Vec<String>> {
     }
     Ok(removed)
 }
+
+/// SHA-256 of every revision of `admin.md` that reached `main`, so an install made by an earlier
+/// release is recognized as ours to retract, not only one matching the current bytes.
+const ADMIN_SHIPPED_REVISIONS: [&str; 9] = [
+    "1f39616f4d83f59be3c9d069a297d1b4d2ea5111b681964e190e258c84e91535",
+    "2db09a7648f824d0483087bc6886816b4f1d92ade99680d157bd60b655e9d309",
+    "347aa2c00d557547b1fcdafb539c3908e1a27f3f34dc6dd34bf85f3b22f6d6d8",
+    "5046dcc0e29c618bf346ecfd91cbbd8f9e40e1bf4ed0b34c67fce0ab06d3446d",
+    "59bf151766f6f2bc0971603873c286da051ef061e853bf83af0715823a39acb5",
+    "6c052656c1371c210607d53513c2500f0db838c5cee332da44379f612f90a51e",
+    "71553a12e9f42b55d11e6672fea86fba75c97ba05fd0025a41fd882b66b0214b",
+    "ea83382bad6770ee03a1dc0bf4071227d0cd0e0690bc5c862ce5d7539ab87e91",
+    "f7518d65d12d434604a7d72275cb2de2371bfaeb76d0cd7034b3cb85fb57613b",
+];
 
 /// The pre-root-shipping installer wrote the grounding pair into `guidance/`. It now ships at the
 /// skill root and writes nothing into `guidance/` (the user's namespace), so those copies survive
@@ -1142,6 +921,208 @@ fn remove_legacy_guidance_duplicates(skill_dir: &Path) -> Result<Vec<String>> {
             })?;
             removed.push(rel_path.to_string());
         }
+    }
+    Ok(removed)
+}
+
+/// Files earlier releases installed and this one no longer ships, with the SHA-256 of every
+/// revision of each that ever reached `main` (so an install from any release is recognized). Without
+/// this, a retired file survives every upgrade and an agent browsing the skill directory reads it as
+/// current. A file whose bytes match none of these was edited by its owner and is left alone.
+const RETIRED_SKILL_FILES: [(&str, &str); 43] = [
+    (
+        "plan-verification.md",
+        "8869c9972e65a0798e3ae97bd4cbb70a76130387794a67b1f2edd3fc297a5d33",
+    ),
+    (
+        "review-gates.md",
+        "fa1fd7581b6afe92a428a361550ee2c09ce6ce67e9564c5ccb9f5a944ccfd5bf",
+    ),
+    (
+        "session-wrap.md",
+        "077be522dd65c9597dc4bc2f0b50e443a66b0384c891810add1ef35625b190bc",
+    ),
+    (
+        "session-wrap.md",
+        "811b81a3f18c23654be9008fbd41b3296cffbd5515075b67cd967ca3d1339ef8",
+    ),
+    (
+        "session-wrap.md",
+        "8c748bcfa6d8ef3a273a9ff9657d71dbf612e82c6ac87e9f58dee1de4956ef39",
+    ),
+    (
+        "session-wrap.md",
+        "8d945d1954f1e66acb2b630ad908f277c92aa5e84147819b3b8701944d72c339",
+    ),
+    (
+        "session-wrap.md",
+        "be02c96eddea0c66ec43fa0922e25477f9a8578a9f4cab672d47217b72fd0753",
+    ),
+    (
+        "subagent-guidance.md",
+        "24d80ae8cba411a9abb6e5d7367f64f61b89519c8a4f99430b64adc631fa9ccc",
+    ),
+    (
+        "workflows/build-large.md",
+        "068eabd607aba5b1dd695f37a06f63adeb911cd283aa86230783db64f39f8d82",
+    ),
+    (
+        "workflows/build-large.md",
+        "2ecea58a9f4c02fe506b909769ac78a460f719892cb44b414f0595a64add16be",
+    ),
+    (
+        "workflows/build-large.md",
+        "309bd05c42c021b91134368023b4fae529aa89597c80a9f98a122323c9041dfc",
+    ),
+    (
+        "workflows/build-large.md",
+        "a3955c146e2b14fb7dcbf73d37b04d4544ebbfbc2fd29cb67ade309987369ebc",
+    ),
+    (
+        "workflows/build-large.md",
+        "d333a801f1393e5d83228dbdd510d04e27b7f3f31bd1c77576be48f0f6967cc9",
+    ),
+    (
+        "workflows/build-large.md",
+        "f4471bd71d510efa6fba2ae2a9ae259dbb7ca09309b43af798c9f4f334f226fb",
+    ),
+    (
+        "workflows/build-medium.md",
+        "33d9684da1f66f829b47386bfadb21536933cfceeb43f48d62b3f4c3a7f8678c",
+    ),
+    (
+        "workflows/build-medium.md",
+        "9277cae4cec56192ab90187aeb26f0fb8fc2ac3c00d68ecfee17430dddbe978f",
+    ),
+    (
+        "workflows/build-medium.md",
+        "99ce3a178db82d96783ab200c314220ef2ea898b6ceaa44c0e1ba914038bdcad",
+    ),
+    (
+        "workflows/build-medium.md",
+        "a7fc57587392c240c2fe8aa4a6f4ea7be3def1bb3ad8a3f31b586de079c65cc6",
+    ),
+    (
+        "workflows/build-medium.md",
+        "c257ada56a7d265d9b707e9f80ae7606bb9cb930d38ce706503ec7c0d7b0b79e",
+    ),
+    (
+        "workflows/build-medium.md",
+        "ef70635b85b8efefd096ded57358c92e7f92fdf1c1fb661fb762ce164b58630b",
+    ),
+    (
+        "workflows/build-small.md",
+        "05d305d12a5cfdaee6875c3863616a9d69a1edc63b7d6fbe2c9d1a9dc108bc87",
+    ),
+    (
+        "workflows/build-small.md",
+        "3766a251a991a5821e1b0d3f9f37f6f5caeaf81297ef269a324b956fbae9d1bb",
+    ),
+    (
+        "workflows/build-small.md",
+        "ccab827499e9110edd86401fb3d5281027b10ae900031b5a03d67c0d3af7cd3a",
+    ),
+    (
+        "workflows/build-small.md",
+        "f58062547c827cb4dc676a1b8c624dde83babf7d7dc21bba7712331dc91e3f08",
+    ),
+    (
+        "workflows/build-small.md",
+        "feb4c080bdbf98008e91050e080d302d7c9e914ff513ad293737c5f624de45f5",
+    ),
+    (
+        "workflows/plan-large.md",
+        "2567dd3a69fc7deef2f8183b14bb5bbde336025177fad7af60de8e50fa2ff789",
+    ),
+    (
+        "workflows/plan-large.md",
+        "4b174b6ea16782545ed116bc44b89473dda6c386f8a9df4e1798ccff18919580",
+    ),
+    (
+        "workflows/plan-large.md",
+        "563452c6b1e667935a0614d0ac19f0d6338a02d3b06a1fa34fadd683d03978d0",
+    ),
+    (
+        "workflows/plan-large.md",
+        "5b96b670d9de4ea967d959177c12bee10b90c81ac6dc19e7fcfe83a1e3617fac",
+    ),
+    (
+        "workflows/plan-large.md",
+        "5d144e2d7171deb65ca003ab8511cc70215749ea4a117319dac81550822f464a",
+    ),
+    (
+        "workflows/plan-large.md",
+        "6e6d0bfbdbed63e642d91d977e29ff96a37b1fd9f18a35ef972845d1e5927fa8",
+    ),
+    (
+        "workflows/plan-large.md",
+        "b44fbd4dfe6cfa99fc4bad579dcf009476c3e6883f52ae8a4d1da9830623c7d2",
+    ),
+    (
+        "workflows/plan-medium.md",
+        "438c7ab4391944bdae5ad5be4534227237b32242505369121137c912fb6d0e14",
+    ),
+    (
+        "workflows/plan-medium.md",
+        "4c26045182ed173ea7666c1ba12b33a2d354cfc3240a1cdc6786ce35dac00e7e",
+    ),
+    (
+        "workflows/plan-medium.md",
+        "5dab6e12d7aa474dfd2917948c2b4872528eec12adfec056ae3fe4a981e9757a",
+    ),
+    (
+        "workflows/plan-medium.md",
+        "5e79dd2b271b37aae1439a2df423fec29e93f0e0010420dd070f7ab60a24aa52",
+    ),
+    (
+        "workflows/plan-medium.md",
+        "8698afe267bff26dbfade2dff6703d3ad5249ef2fadb8d242121507049b776a7",
+    ),
+    (
+        "workflows/plan-medium.md",
+        "e4549f49c0fb43a05b210cb9d41a2c7280fecab8cc6025eff2ab128af4c3a1b8",
+    ),
+    (
+        "workflows/plan-small.md",
+        "03c2fc145cc5f41866dfcde0b8298e8a6bda7f267b3128e6ec891df2e9b9df91",
+    ),
+    (
+        "workflows/plan-small.md",
+        "177bfcdc26479749323ded5c47b11eff19c1784b32db848be834ad06aed9d4c3",
+    ),
+    (
+        "workflows/plan-small.md",
+        "22b12e8f4029c931727ce4c0fda0e7bd4859d1d0380fb427ac686a909bc0cc22",
+    ),
+    (
+        "workflows/plan-small.md",
+        "7c03a9b637e4f24f229901da847a79670de8f9737c204727dc9882fd2d2e0728",
+    ),
+    (
+        "workflows/plan-small.md",
+        "99cd0b0325b26ce974b01f61caa8aef1665596ab411219dc91441b60d17e8402",
+    ),
+];
+
+/// Remove each retired file whose bytes hash to one of its shipped revisions in `retired`, then
+/// remove a `workflows/` directory left empty. Returns the paths removed.
+fn remove_retired_files(skill_dir: &Path, retired: &[(&str, &str)]) -> Result<Vec<String>> {
+    let mut removed = Vec::new();
+    for (rel_path, shipped_hash) in retired {
+        let path = skill_dir.join(rel_path);
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        if hex::encode(Sha256::digest(&bytes)) == *shipped_hash {
+            std::fs::remove_file(&path).map_err(|e| {
+                TemperError::Config(format!("cannot remove {}: {}", path.display(), e))
+            })?;
+            removed.push((*rel_path).to_string());
+        }
+    }
+    let workflows = skill_dir.join("workflows");
+    if std::fs::read_dir(&workflows).is_ok_and(|mut d| d.next().is_none()) {
+        let _ = std::fs::remove_dir(&workflows);
     }
     Ok(removed)
 }
@@ -1186,24 +1167,17 @@ fn check_expected_files(skill_dir: &Path) {
     let expected_files = [
         "SKILL.md",
         "reference.md",
-        "subagent-guidance.md",
-        "plan-verification.md",
         "implementation-grounding.md",
-        "review-gates.md",
         "outcome-registers.md",
+        "working-a-goal.md",
         "data-artifacts.md",
         "session-lifecycle.md",
-        "session-wrap.md",
+        "memories.md",
         "cognitive-maps.md",
         "teams.md",
         "querying.md",
         "knowledge-base.md",
-        "workflows/build-small.md",
-        "workflows/build-medium.md",
-        "workflows/build-large.md",
-        "workflows/plan-small.md",
-        "workflows/plan-medium.md",
-        "workflows/plan-large.md",
+        "project-setup.md",
     ];
 
     let mut all_present = true;
@@ -1328,24 +1302,12 @@ pub fn generate_skill_files_with_hash(
         "reference.md".to_string(),
         generate_reference(include_admin),
     );
-    files.insert(
-        "subagent-guidance.md".to_string(),
-        SUBAGENT_GUIDANCE_MD.to_string(),
-    );
-    // The grounding pair. Shipped at the skill root beside `subagent-guidance.md` — NOT into
-    // `guidance/`, which is the user's namespace (install only creates it; it writes nothing
-    // there, and shipping into it would clobber user files on every regen).
-    files.insert(
-        "plan-verification.md".to_string(),
-        PLAN_VERIFICATION_MD.to_string(),
-    );
+    // Shipped at the skill root, never into `guidance/`, which is the user's namespace (install
+    // only creates it; writing there would clobber user files on every regen).
     files.insert(
         "implementation-grounding.md".to_string(),
         IMPLEMENTATION_GROUNDING_MD.to_string(),
     );
-    // Review-gate discipline, same shipping rule as the grounding pair: it names no
-    // command on either surface, so both trees carry the same bytes.
-    files.insert("review-gates.md".to_string(), REVIEW_GATES_MD.to_string());
     // The outcome-register discipline. Root, not `guidance/`, for the same reason as the grounding
     // pair: `guidance/` is the project's namespace and this is universal, repo-agnostic discipline.
     files.insert(
@@ -1364,7 +1326,6 @@ pub fn generate_skill_files_with_hash(
         "working-a-goal.md".to_string(),
         render_working_a_goal(SURFACE_CLI)?,
     );
-    files.insert("session-wrap.md".to_string(), SESSION_WRAP_MD.to_string());
     files.insert("memories.md".to_string(), MEMORIES_CLI_MD.to_string());
     files.insert(
         "cognitive-maps.md".to_string(),
@@ -1380,31 +1341,6 @@ pub fn generate_skill_files_with_hash(
     files.insert(
         "knowledge-base.md".to_string(),
         KNOWLEDGE_BASE_MD.to_string(),
-    );
-
-    files.insert(
-        "workflows/build-small.md".to_string(),
-        WF_BUILD_SMALL.to_string(),
-    );
-    files.insert(
-        "workflows/build-medium.md".to_string(),
-        WF_BUILD_MEDIUM.to_string(),
-    );
-    files.insert(
-        "workflows/build-large.md".to_string(),
-        WF_BUILD_LARGE.to_string(),
-    );
-    files.insert(
-        "workflows/plan-small.md".to_string(),
-        WF_PLAN_SMALL.to_string(),
-    );
-    files.insert(
-        "workflows/plan-medium.md".to_string(),
-        WF_PLAN_MEDIUM.to_string(),
-    );
-    files.insert(
-        "workflows/plan-large.md".to_string(),
-        WF_PLAN_LARGE.to_string(),
     );
 
     // The admin set rides LAST and only under the flag: a default render's file map never
@@ -1500,18 +1436,14 @@ mod tests {
         let unrouted: Vec<&String> = files
             .keys()
             .filter(|name| {
-                // Three exclusions, each for a different reason:
+                // Two exclusions:
                 //
                 // - `SKILL.md` is the router; it cannot route to itself.
-                // - `workflows/*` are named by PATTERN (`workflows/{mode}-{effort}.md`) rather
-                //   than individually, deliberately: exactly one of the six is read per task.
                 // - `command-wrapper.md` is not a supporting file at all. `install` writes it to
                 //   `~/.claude/commands/temper.md` and excludes it from the skill dir (see the
                 //   write loop above). It is the ENTRY POINT — the `/temper` slash command — so a
                 //   router naming it would point backwards, at the thing that invoked the router.
-                name.as_str() != "SKILL.md"
-                    && name.as_str() != "command-wrapper.md"
-                    && !name.starts_with("workflows/")
+                name.as_str() != "SKILL.md" && name.as_str() != "command-wrapper.md"
             })
             .filter(|name| !skill_md.contains(name.as_str()))
             .collect();
@@ -1519,8 +1451,7 @@ mod tests {
         assert!(
             unrouted.is_empty(),
             "SKILL.md never mentions {unrouted:?}, so no session will read them — name them in the \
-             router (Supporting Files AND, where they answer a question, the routing table) or do \
-             not ship them at all"
+             router's Read-when table or do not ship them at all"
         );
     }
 
@@ -1531,10 +1462,7 @@ mod tests {
 
         assert!(files.contains_key("SKILL.md"));
         assert!(files.contains_key("reference.md"));
-        assert!(files.contains_key("subagent-guidance.md"));
-        assert!(files.contains_key("plan-verification.md"));
         assert!(files.contains_key("implementation-grounding.md"));
-        assert!(files.contains_key("review-gates.md"));
         assert!(files.contains_key("outcome-registers.md"));
         assert!(files.contains_key("data-artifacts.md"));
         assert!(files.contains_key("session-lifecycle.md"));
@@ -1544,13 +1472,15 @@ mod tests {
         assert!(files.contains_key("teams.md"));
         assert!(files.contains_key("project-setup.md"));
         assert!(files.contains_key("knowledge-base.md"));
-        assert!(files.contains_key("workflows/build-small.md"));
-        assert!(files.contains_key("workflows/build-medium.md"));
-        assert!(files.contains_key("workflows/build-large.md"));
-        assert!(files.contains_key("workflows/plan-small.md"));
-        assert!(files.contains_key("workflows/plan-medium.md"));
-        assert!(files.contains_key("workflows/plan-large.md"));
         assert!(files.contains_key("command-wrapper.md"));
+        // None of the retired files ships again: a path in both lists would be installed and then
+        // deleted by the same install.
+        for (retired, _) in RETIRED_SKILL_FILES {
+            assert!(
+                !files.contains_key(retired),
+                "{retired} is retired but still shipped"
+            );
+        }
     }
 
     #[test]
@@ -1597,24 +1527,21 @@ mod tests {
     }
 
     /// The referencing convention is the reason sessions stop writing unresolvable id prefixes.
-    /// It lives in two places — SKILL.md (read every session) and reference.md — and a silent
-    /// drop from either is invisible until documents start citing nothing again.
+    /// It lives in SKILL.md, the one file every session reads; a silent drop is invisible until
+    /// documents start citing nothing again.
     #[test]
-    fn test_reference_convention_is_stated_in_skill_and_reference() {
+    fn test_reference_convention_is_stated_in_the_router() {
         let config = test_config();
         let files = generate_skill_files_with_hash(&config, "testhash", false).unwrap();
-
-        for name in ["SKILL.md", "reference.md"] {
-            let body = files.get(name).unwrap_or_else(|| panic!("{name} missing"));
-            assert!(
-                body.contains("A UUID is not a SHA"),
-                "{name} must state that UUIDs are never abbreviated"
-            );
-            assert!(
-                body.contains("](./<full-uuidv7>)"),
-                "{name} must show the [title](./uuid) reference form"
-            );
-        }
+        let skill_md = &files["SKILL.md"];
+        assert!(
+            skill_md.contains("Never abbreviate a UUID"),
+            "SKILL.md must state that UUIDs are never abbreviated"
+        );
+        assert!(
+            skill_md.contains("](./<full-uuid>)"),
+            "SKILL.md must show the [title](./uuid) reference form"
+        );
     }
 
     // ── The MCP projection ───────────────────────────────────────────────────
@@ -1632,12 +1559,8 @@ mod tests {
                 "implementation-grounding.md",
                 "memories.md",
                 "outcome-registers.md",
-                "plan-verification.md",
                 "references/frontmatter.md",
-                "review-gates.md",
                 "session-lifecycle.md",
-                "session-wrap.md",
-                "subagent-guidance.md",
                 "working-a-goal.md",
             ],
             "the emitted set moved — the drift gate only ever compares what appears here, so a file \
@@ -1988,11 +1911,11 @@ mod tests {
         let files = generate_agent_skill_files().unwrap();
         let skill_md = files.get("SKILL.md").unwrap();
         assert!(
-            skill_md.contains("A UUID is not a SHA"),
+            skill_md.contains("Never abbreviate a UUID"),
             "the MCP SKILL.md must state that UUIDs are never abbreviated"
         );
         assert!(
-            skill_md.contains("](./<full-uuidv7>)"),
+            skill_md.contains("](./<full-uuid>)"),
             "the MCP SKILL.md must show the [title](./uuid) reference form"
         );
     }
@@ -2306,24 +2229,19 @@ mod tests {
     fn skill_md_files_stay_under_their_size_budgets() {
         let cli = generate_skill_files_with_hash(&test_config(), "testhash", false).unwrap();
         let cli_skill_md = cli.get("SKILL.md").expect("SKILL.md").len();
+        // A router that models read only the top of: ~4.9KB at the 2026-11 slimming (from ~17KB).
         assert!(
-            cli_skill_md <= 18_432,
-            "the CLI SKILL.md render is {cli_skill_md} bytes; the budget is 18,432 (the rework \
-             shipped ~17.1KB). Grow the budget deliberately, with a reason, never by accretion."
+            cli_skill_md <= 6_144,
+            "the CLI SKILL.md render is {cli_skill_md} bytes; the budget is 6,144. Grow it \
+             deliberately, with a reason, never by accretion."
         );
 
         let mcp = generate_agent_skill_files().unwrap();
         let mcp_skill_md = mcp.get("SKILL.md").expect("SKILL.md").len();
-        // 11,955 → 12,100, deliberately: the always-loaded Outcome Discipline gained the
-        // altitude qualifier and the bounded-enabling-work rule. A first pass trimmed them to
-        // fit the old budget and an independent review found the trim had made the hole rule
-        // vacuous ("answers to a clause" without "it can be judged against"), so the meaning
-        // was restored and the budget moved instead.
         assert!(
-            mcp_skill_md <= 12_100,
-            "the MCP SKILL.md is {mcp_skill_md} bytes; the budget is 12,100 — the pre-rework \
-             size plus the outcome-discipline amendment. Any further growth needs a deliberate \
-             budget edit, with its reason, never accretion."
+            mcp_skill_md <= 5_120,
+            "the MCP SKILL.md is {mcp_skill_md} bytes; the budget is 5,120 (~4.0KB at the \
+             2026-11 slimming). Grow it deliberately, with a reason, never by accretion."
         );
     }
 
@@ -2456,7 +2374,7 @@ mod tests {
             "the admin router never names admin.md"
         );
         assert!(
-            skill_md.contains("Read `admin.md`"),
+            skill_md.contains("| `admin.md` | Administering the deployment"),
             "the admin router has no routing row sending an admin question to admin.md"
         );
         let reference = files.get("reference.md").expect("reference.md");
@@ -2609,8 +2527,7 @@ mod tests {
     }
 
     /// **A fresh default install ships no admin file, and `guidance/` ships empty** — the
-    /// per-project fundamentals files are machine-local user data the installer never writes
-    /// (the two-level pointer scheme ships as prose, not as bundled content).
+    /// fundamentals index is machine-local user data the installer never writes.
     #[test]
     fn a_fresh_default_install_ships_no_admin_file_and_no_guidance_content() {
         use tempfile::TempDir;
@@ -2653,35 +2570,78 @@ mod tests {
         });
     }
 
-    /// The two-level fundamentals resolution — index → per-project pointer → repo — must be
-    /// described where it is executed: the router's always-read Extension Files section and the
-    /// Task Start step both walk both hops, and the per-project file's name is part of the
-    /// scheme (`guidance/<project>/fundamentals.md`), not decoration.
+    /// The fundamentals index must be described where it is used: the router names the index file
+    /// and says the repo it points at is the authority. A cold machine cannot resolve a scheme the
+    /// router does not describe.
     #[test]
-    fn the_router_describes_the_two_level_fundamentals_resolution() {
+    fn the_router_describes_the_fundamentals_index() {
         let skill_md = generate_skill_files_with_hash(&test_config(), "testhash", false)
             .unwrap()
             .remove("SKILL.md")
             .unwrap();
 
-        for fragment in [
-            "guidance/fundamentals.md",
-            "guidance/<project>/fundamentals.md",
-            "two levels of pointer",
-        ] {
+        for fragment in ["guidance/fundamentals.md", "the repo wins", "/temper init"] {
             assert!(
                 skill_md.contains(fragment),
-                "the router's fundamentals prose never states `{fragment}` — a cold machine \
-                 cannot resolve the scheme it does not describe"
+                "the router's fundamentals prose never states `{fragment}`"
             );
         }
-        let index_hop = skill_md.find("guidance/fundamentals.md").unwrap();
-        let project_hop = skill_md.find("guidance/<project>/fundamentals.md").unwrap();
+    }
+
+    /// A retired file is removed only when its bytes match a revision the installer shipped; an
+    /// edited copy is the user's and stays. An emptied `workflows/` directory goes with its files.
+    #[test]
+    fn retired_files_are_removed_only_when_unedited() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let shipped = "shipped bytes\n";
+        let hash = hex::encode(Sha256::digest(shipped.as_bytes()));
+        let table = [
+            ("workflows/build-small.md", hash.as_str()),
+            ("subagent-guidance.md", hash.as_str()),
+        ];
+        std::fs::create_dir_all(dir.path().join("workflows")).unwrap();
+        std::fs::write(dir.path().join("workflows/build-small.md"), shipped).unwrap();
+        std::fs::write(
+            dir.path().join("subagent-guidance.md"),
+            "edited by its owner\n",
+        )
+        .unwrap();
+
+        let removed = remove_retired_files(dir.path(), &table).unwrap();
+
+        assert_eq!(removed, vec!["workflows/build-small.md".to_string()]);
         assert!(
-            index_hop < project_hop,
-            "the router presents the index before the per-project hop — resolution order is \
-             part of the scheme"
+            !dir.path().join("workflows").exists(),
+            "an emptied workflows/ stays behind"
         );
+        assert!(
+            dir.path().join("subagent-guidance.md").exists(),
+            "an edited retired file was deleted"
+        );
+    }
+
+    /// Every hash in the retired table is a well-formed SHA-256, and no path repeats a hash: a typo
+    /// here would silently stop recognizing a shipped revision.
+    #[test]
+    fn the_retired_table_is_well_formed() {
+        let mut seen = std::collections::HashSet::new();
+        for (path, hash) in RETIRED_SKILL_FILES {
+            assert_eq!(hash.len(), 64, "{path}: {hash} is not a SHA-256");
+            assert!(
+                hash.bytes().all(|b| b.is_ascii_hexdigit()),
+                "{path}: {hash}"
+            );
+            assert!(seen.insert((path, hash)), "{path} lists {hash} twice");
+        }
+        for hash in ADMIN_SHIPPED_REVISIONS {
+            assert_eq!(hash.len(), 64, "admin.md: {hash} is not a SHA-256");
+            assert!(
+                hash.bytes().all(|b| b.is_ascii_hexdigit()),
+                "admin.md: {hash}"
+            );
+        }
     }
 
     /// `--include-admin` defaults to false at the parse layer: the default install is the

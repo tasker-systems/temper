@@ -743,7 +743,7 @@ scripts/wayfind-spike/h1-orient.sql" \
 # that reads them. Each assertion below fails against the pre-fix script.
 # ---------------------------------------------------------------------------
 run_test "skill-content .md: source of the agent-skills projection, runs skills-drift" \
-    "crates/temper-cli/skill-content/workflows/plan-small.md" \
+    "crates/temper-cli/skill-content/querying.md" \
     "DOCS_ONLY=false" \
     "SKIP_ALL=false" \
     "RUN_CODE_QUALITY=true" \
