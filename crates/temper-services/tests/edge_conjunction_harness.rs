@@ -1639,11 +1639,36 @@ fn rust_side_reads() -> BTreeMap<(String, String), (usize, String)> {
     out
 }
 
-/// `body` with Rust `//` comments and SQL `--` comments removed, each to the end of its line, so a
-/// DELEGATES fn cannot pass on a comment that merely names `edges_visible_to`. Over-stripping (a
-/// `--` inside a string literal) can only fail the check, never pass it.
+/// `body` with `/* ... */` block comments removed (nested, each replaced by a space so no two
+/// tokens are joined; an unterminated one runs to the end), then Rust `//` and SQL `--` comments
+/// each to the end of its line, so a DELEGATES fn cannot pass on a comment that merely names
+/// `edges_visible_to`. Stripping only removes text, so over-stripping (a comment marker inside a
+/// string literal) can only fail the check, never pass it.
 fn strip_comments(body: &str) -> String {
-    body.lines()
+    // Block comments first, nesting as Rust and Postgres both nest them, and each replaced by a
+    // space so the text either side is never joined into one token.
+    let mut text = String::with_capacity(body.len());
+    let mut depth = 0usize;
+    let mut rest = body;
+    while !rest.is_empty() {
+        if rest.starts_with("/*") {
+            depth += 1;
+            rest = &rest[2..];
+        } else if depth > 0 && rest.starts_with("*/") {
+            depth -= 1;
+            rest = &rest[2..];
+            if depth == 0 {
+                text.push(' ');
+            }
+        } else {
+            let ch = rest.chars().next().expect("non-empty");
+            if depth == 0 {
+                text.push(ch);
+            }
+            rest = &rest[ch.len_utf8()..];
+        }
+    }
+    text.lines()
         .map(|l| {
             let cut = [l.find("//"), l.find("--")]
                 .into_iter()
@@ -1658,10 +1683,20 @@ fn strip_comments(body: &str) -> String {
 
 #[test]
 fn strip_comments_drops_rust_and_sql_comments() {
-    let body =
-        "let a = 1; // edges_visible_to\n  -- edges_visible_to\nJOIN edges_visible_to($1) ev";
+    let body = "let a = 1; // edges_visible_to\n  -- edges_visible_to\n/* edges_visible_to\n \
+                edges_visible_to */ JOIN edges_visible_to($1) ev";
     let s = strip_comments(body);
     assert_eq!(s.matches("edges_visible_to").count(), 1, "{s}");
+}
+
+#[test]
+fn strip_comments_nests_and_never_joins() {
+    let nested = strip_comments("/* a /* b */ edges_visible_to */ x");
+    assert!(!nested.contains("edges_visible_to"), "{nested}");
+    let joined = strip_comments("edges_visible/**/_to($1)");
+    assert!(!joined.contains("edges_visible_to"), "{joined}");
+    let open = strip_comments("x /* edges_visible_to");
+    assert!(!open.contains("edges_visible_to"), "{open}");
 }
 
 /// Every Rust-side table reference to `kb_edges` is classified, counted per fn, and nothing

@@ -2458,8 +2458,8 @@ impl DbBackend {
     ///
     /// **The memo is not a read surface, and must not become one** (`20261119000040`). The read's
     /// `contradiction_balance` is per reader: it counts only the edges the caller can see. The
-    /// column here sums every edge, hidden ones included, so serving it to a caller would leak what
-    /// the read withholds, and an edge-incident refresh would not fix that. A consumer that needs a
+    /// memo counts edges a reader may not see; it is never a read surface, and an edge-incident
+    /// refresh would not change that. A consumer that needs a
     /// finding's standing calls `resource_standing_shape` with its principal.
     async fn tick_resource_standing(&self, finding: ResourceId) {
         match temper_substrate::write::refresh_resource_standing(&self.pool, finding).await {
