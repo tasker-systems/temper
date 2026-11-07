@@ -897,7 +897,7 @@ fn a_walk_compiles_to_the_provenance_core_and_carries_its_via_column() {
     let sql = &compiled.sql;
 
     assert!(
-        sql.contains("__temper_ungated_follow_from"),
+        sql.contains("__temper_ungated_follow_from_homed"),
         "the walk emits the ungated core, not the absent placeholder; got:\n{sql}"
     );
     assert!(
@@ -925,12 +925,19 @@ fn a_walk_compiles_to_the_provenance_core_and_carries_its_via_column() {
     // opposite things; asserting that each merely appears would pass against a body that swapped
     // them. The fragment's signature is positional, so the assertion is too — argument 1 is the
     // seed set and argument 6 is the bound, per `20260814000030`.
-    let call = core_call_args(sql, "__temper_ungated_follow_from");
+    let call = core_call_args(sql, "__temper_ungated_follow_from_homed");
     let args: Vec<&str> = split_top_level(&call);
     assert_eq!(
         args.len(),
-        10,
-        "the walk core takes ten arguments; got:\n{call}"
+        11,
+        "the walk core takes eleven arguments; got:\n{call}"
+    );
+    // `[2026-11-07]` The eleventh is the anchor reader (`20261119000010`): the compiler's
+    // own `$1`, so the walk can refuse an edge whose HOME the principal cannot read. Any other
+    // value here would gate the edges against someone else.
+    assert_eq!(
+        args[10], "$1",
+        "the walk's anchor reader is the compiler's principal bind; got:\n{call}"
     );
     // **The arity IS the function selection here** `[2026-08-15]`. `20260815000010` widened the
     // walk by adding a ninth parameter with NO default, precisely so the eight-parameter incumbent
@@ -1009,7 +1016,7 @@ fn a_walk_without_an_edge_filter_narrows_on_neither_axis() {
     let v = validate(&c, &mut ShapeContext::empty().session())
         .expect("an unfiltered walk is well-formed");
     let compiled = compile(&v, ProfileId::new()).expect("it compiles");
-    let call = core_call_args(&compiled.sql, "__temper_ungated_follow_from");
+    let call = core_call_args(&compiled.sql, "__temper_ungated_follow_from_homed");
     assert!(
         call.contains("NULL::text[], NULL::text[]"),
         "both edge axes are NULL — unbounded — and never an empty array; got:\n{call}"
@@ -1076,9 +1083,9 @@ fn an_edge_property_predicate_is_bound_as_the_serialized_typed_value() {
         .expect("a walk with an edge property predicate is well-formed");
     let compiled = compile(&v, ProfileId::new()).expect("it compiles");
 
-    let call = core_call_args(&compiled.sql, "__temper_ungated_follow_from");
+    let call = core_call_args(&compiled.sql, "__temper_ungated_follow_from_homed");
     let args = split_top_level(&call);
-    assert_eq!(args.len(), 10, "the widened arity; got:\n{call}");
+    assert_eq!(args.len(), 11, "the widened arity; got:\n{call}");
     assert!(
         args[8].starts_with('$') && args[8].ends_with("::jsonb"),
         "the predicate list is BOUND, never interpolated — an open key space is caller text;          got {}",
@@ -1157,9 +1164,19 @@ fn a_declared_offset_reaches_the_walks_tenth_slot_and_an_absent_one_still_fills_
     let mut terms = std::collections::BTreeMap::new();
     terms.insert(BoundTerm::Offset, 137);
     let compiled = walk_with(terms);
-    let call = core_call_args(&compiled.sql, "__temper_ungated_follow_from");
+    // One gate per composition, the walk included: the statement computes `resources_visible_to`
+    // once (the hoist) and no edge-visibility set at all. The walk core checks each candidate
+    // edge's home itself, against the reader's readable contexts computed once, so it needs neither (its body is pinned by
+    // `the_walk_core_computes_no_visible_set_of_its_own` in search_graph_expand.rs).
+    assert_eq!(compiled.sql.matches("resources_visible_to(").count(), 1);
+    assert_eq!(compiled.sql.matches("edges_visible_to(").count(), 0);
+    let call = core_call_args(&compiled.sql, "__temper_ungated_follow_from_homed");
     let args = split_top_level(&call);
-    assert_eq!(args.len(), 10, "the offset-widened arity; got:\n{call}");
+    assert_eq!(
+        args.len(),
+        11,
+        "the offset-widened arity, plus the anchor reader; got:\n{call}"
+    );
     assert!(
         args[9].starts_with('$') && args[9].ends_with("::int"),
         "the offset is BOUND in the tenth slot, after the edge-property jsonb; got `{}` in:\n{call}",
@@ -1204,11 +1221,11 @@ fn a_declared_offset_reaches_the_walks_tenth_slot_and_an_absent_one_still_fills_
     // No offset declared: the slot is the literal `0`, and it is still THERE. Nine arguments would
     // resolve against the 9-arity that cannot page — valid SQL, no error, no second page ever.
     let bare = walk_with(std::collections::BTreeMap::new());
-    let bare_call = core_call_args(&bare.sql, "__temper_ungated_follow_from");
+    let bare_call = core_call_args(&bare.sql, "__temper_ungated_follow_from_homed");
     let bare_args = split_top_level(&bare_call);
     assert_eq!(
         bare_args.len(),
-        10,
+        11,
         "an undeclared offset does not remove the argument; got:\n{bare_call}"
     );
     assert_eq!(

@@ -249,6 +249,71 @@ async fn list_filters_tasks_by_goal_edge(pool: PgPool) {
     );
 }
 
+/// The goal filter counts only an `advances` edge the caller sees as `edges_visible_to` defines
+/// it. A reader granted the task alone sees the task, but neither the goal nor the context the
+/// edge is homed in: filtering by that goal must not tell them the edge exists.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_goal_filter_counts_only_edges_the_caller_sees(pool: PgPool) {
+    let (backend, context, owner) = backend_with_context(&pool, "goal-owner@example.com").await;
+    let goal = backend
+        .create_resource(create_cmd(context, "goal", "hidden-goal", None))
+        .await
+        .expect("goal")
+        .value
+        .id;
+    let task = backend
+        .create_resource(create_cmd(context, "task", "shared-task", Some(goal)))
+        .await
+        .expect("task")
+        .value
+        .id;
+
+    let (_, _, reader) = backend_with_context(&pool, "goal-reader@example.com").await;
+    sqlx::query(
+        "INSERT INTO kb_access_grants \
+           (id, subject_table, subject_id, principal_table, principal_id, \
+            can_read, can_write, can_delete, can_grant, granted_by_profile_id) \
+         VALUES (uuid_generate_v7(), 'kb_resources', $1, 'kb_profiles', $2, \
+                 true, false, false, false, $3)",
+    )
+    .bind(Uuid::from(task))
+    .bind(Uuid::from(reader))
+    .bind(Uuid::from(owner))
+    .execute(&pool)
+    .await
+    .expect("grant the task alone");
+
+    let list = |goal: Option<Uuid>| {
+        let pool = pool.clone();
+        async move {
+            temper_services::backend::substrate_read::list_select(
+                &pool,
+                reader,
+                ResourceListParams {
+                    doc_type_name: Some("task".to_string()),
+                    goal,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("list")
+            .rows
+            .iter()
+            .map(|r| Uuid::from(r.id))
+            .collect::<Vec<Uuid>>()
+        }
+    };
+    assert_eq!(
+        list(None).await,
+        vec![Uuid::from(task)],
+        "control: the reader sees the task"
+    );
+    assert!(
+        list(Some(Uuid::from(goal))).await.is_empty(),
+        "the reader cannot see the goal or the edge's home, so the goal filter keeps nothing"
+    );
+}
+
 fn update_goal(resource: ResourceId, goal: Option<GoalPatch>) -> UpdateResource {
     UpdateResource {
         open_meta_add: None,

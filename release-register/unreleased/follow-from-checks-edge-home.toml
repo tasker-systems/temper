@@ -1,0 +1,26 @@
+title    = "The follow-from walk and graph_traverse admit an edge only if its home anchor is readable, as well as both endpoints"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["schema", "http", "mcp"]
+status   = "signal-only"
+body = '''
+Migration 20261119000010. The follow-from walk behind a `follow-from` stage of
+/api/query (and so MCP run_query), query_follow_from and search_graph_expand admits an edge only if
+it is live, both endpoints are in the caller's visible set, and the caller can read the edge's home
+anchor. The walk lives in __temper_ungated_follow_from_homed, which takes the principal and admits a
+context home by membership in the reader's readable contexts, computed once per call, and a cogmap
+home by cogmap_readable_by_profile. query_follow_from passes its
+principal, and the compiler emits the new body with its own principal bind. graph_traverse (no
+product caller) admits only edges edges_visible_to admits, and its depth is clamped at 10.
+
+Additive: no DROP and no new arity of an existing name. The 10-arity __temper_ungated_follow_from
+stays, as a wrapper passing a NULL reader, which admits no edge. Skew: this narrows, never widens.
+An older binary still emits that 10-arity call, so its follow-from stages return no rows until the
+new binary is live. Cost: four follow stages in one statement on a synthetic 30k-resource,
+30k-edge corpus with 3000 distinct homes take 47 ms, against 41 ms for a walk with no home check. Who observes: a caller
+whose walk would cross an edge homed in a context or cogmap they cannot read; that neighbour and
+its `via` entry are not returned. Response shapes are unchanged. Witnesses:
+`follow_from_admits_only_visible_edges`, `graph_traverse_admits_only_visible_edges` and
+`graph_traverse_clamps_its_depth_on_a_cycle` in
+`crates/temper-services/tests/edge_conjunction_harness.rs`. Release relevance: signal-only.
+'''

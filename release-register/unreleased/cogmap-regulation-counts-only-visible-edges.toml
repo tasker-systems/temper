@@ -1,0 +1,17 @@
+title    = "A cognitive map's regulation rows include only telos edges the caller can see"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp", "schema"]
+status   = "signal-only"
+body = '''
+Migration 20261119000030. cogmap_regulation, the `regulation` list in cognitive-map analytics,
+includes a telos `express` edge only if edges_visible_to admits it for the caller: live, home
+anchor readable, both endpoints readable. For the map's own principal it includes only an edge
+homed in the map itself, with a source the map can access. Any other principal kind includes no
+edge. Signature and columns are unchanged.
+
+Who observes: a reader of a map whose telos has an edge homed in a context or cogmap they cannot
+read; that row is not in their `regulation` list. Response shapes are unchanged in both skew
+directions. Witness: `cogmap_regulation_admits_only_visible_edges` in
+`crates/temper-services/tests/edge_conjunction_harness.rs`. Release relevance: signal-only.
+'''

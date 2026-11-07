@@ -189,3 +189,49 @@ retired) — join the region metrics under this exception.
 The two classes this record covers now stand symmetrically: region metrics bounded by the member
 gate, standing components bounded by the finding gate, both reader-independent by decision and
 stated at their fields, with the scope condition governing both.
+
+## Amendment — 2026-11-07: `contradiction_balance` is computed per reader
+
+`[ruled — 2026-11-07, Cole]` Option (b): compute `contradiction_balance` per reader.
+
+`[provisional — 2026-11-07, judgement call]` The rationale, the implementation and the analysis of
+the other five components below.
+
+Scope-condition trigger 2 fired for that component. The balance is a signed sum of edge weights over
+a finding's `supports` / `corroborates` / `contradicts` edges, and those edges are sparse, so on a
+small finding the value is invertible by construction. A per-reader balance is a function only of
+edges the reader can see.
+
+The implementation chosen in the change (migration `20261119000040_contradiction_balance_per_reader.sql`):
+
+- `resource_standing_shape` calls `_resource_contradiction_balance(finding, principal kind,
+  principal)`, which counts an edge only if the reader can see it:
+  - **profile:** the edge is in `edges_visible_to`;
+  - **cogmap** (a map reading for itself): the edge is homed in that map and both endpoints are in
+    `resources_accessible_to_cogmap`;
+  - **context** (a context's own interior): the edge is homed in that context and both endpoints are
+    in its interior (`resources_readable_by('context', …)`);
+  - **any other kind:** no edge counts.
+
+  There is no profile-shaped edge definition for a map or a context, so those arms admit only what
+  that principal indisputably reads. `band` follows, because `standing_band` takes the balance.
+- The 1-arg `resource_contradiction_balance` and the `kb_resource_standing` memo are unchanged. The
+  memo is not a read surface, and its table comment now says so.
+
+The other five components stay reader-independent, because each is computed from material every
+reader of the finding already reads:
+
+- **`citation_magnitude`:** the distinct live sources the finding's own blocks cite.
+  `resource_block_provenance` returns those source ids to every reader of the finding.
+- **`audit_coverage`:** whether each of those citations has been audited.
+  `resource_citation_audit_trail` returns every audit, with its auditor, to every reader of the
+  finding.
+- **`citation_quality`:** the decay-weighted audit values over that same trail.
+- **`freshness`, `r_parent`:** the finding's own blocks and provenance rows.
+
+The posture is stated at the fields (`crates/temper-core/src/types/standing.rs`) and in the
+functions' `COMMENT ON FUNCTION`.
+
+Witnesses: `the_balance_and_band_ignore_an_edge_the_reader_cannot_see` in
+`crates/temper-api/tests/evidence_handler_test.rs`, and `standing_scores_only_edges_the_reader_sees`
+(profile, cogmap and context arms) in `crates/temper-services/tests/edge_conjunction_harness.rs`.

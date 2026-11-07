@@ -1906,6 +1906,18 @@ const CONSUMES: &[&str] = &[
     "artifacts_matching_ask",
     "audit_drift_sweep",
     "cogmap_analytics",
+    // cogmap_regulation — cogmap_analytics' regulation rows (20261119000030). Its profile arm
+    // gates each telos edge on edges_visible_to and its target on resources_readable_by; the map
+    // principal's arm reads resources_accessible_to_cogmap. It restates no rule. The edge
+    // conjunction, both arms, is pinned by edge_conjunction_harness.rs
+    // (cogmap_regulation_admits_only_visible_edges).
+    "cogmap_regulation",
+    // _resource_contradiction_balance — the evidence read's per-reader balance (20261119000040).
+    // Its profile arm counts only edges in edges_visible_to; the map principal's arm reads
+    // resources_accessible_to_cogmap; the context principal's arm reads
+    // resources_readable_by('context', ..). It restates no rule; the conjunction is pinned by
+    // edge_conjunction_harness.rs (standing_scores_only_edges_the_reader_sees).
+    "_resource_contradiction_balance",
     "cogmap_foundations",
     "cogmap_list_rows",
     "element_trail_edge",
