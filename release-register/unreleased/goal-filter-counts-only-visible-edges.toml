@@ -1,0 +1,19 @@
+title    = "The resource list's goal filter keeps a resource only through an advances edge the caller can see"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "mcp", "cli-stdout", "clients"]
+status   = "signal-only"
+body = '''
+The `goal` filter of the resource list (GET /api/resources, MCP list_resources, `temper list
+--goal`) kept a visible resource whenever any live `advances` edge joined it to the goal. That held
+even when the caller could not read the edge's home or the goal itself. It now counts only an edge
+edges_visible_to admits for the caller, hoisted once per statement as a materialized set. A list
+without `goal` runs no edge set at all.
+
+Who observes: a caller filtering by a goal they cannot see, or through an edge homed where they
+cannot read. Those resources are no longer listed. There is no migration, and request and response
+shapes are unchanged. Cost on a synthetic 30k-resource, 30k-edge corpus: a list without `goal` is
+unchanged; with `goal`, about 20 ms more under a generic plan and faster under a custom one.
+Witness: `the_goal_filter_counts_only_edges_the_caller_sees` in
+`crates/temper-api/tests/goal_edge_projection_test.rs`. Release relevance: signal-only.
+'''
