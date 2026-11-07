@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH RECURSIVE down AS (\n               SELECT tp.child_id AS team_id FROM kb_teams_parents tp WHERE tp.parent_id = $1\n               UNION\n               SELECT tp.child_id FROM kb_teams_parents tp JOIN down ON tp.parent_id = down.team_id\n           )\n           SELECT team_id AS \"team_id!\" FROM down",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "team_id!",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "33a1e0c1e23ab8d0fe1430c16760c34c7d6791484efdf38cd388fd10b087e05f"
+}

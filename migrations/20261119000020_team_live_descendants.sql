@@ -30,9 +30,8 @@ COMMENT ON FUNCTION team_live_descendants(uuid) IS
 $c$The team DAG walked DOWN, live teams only: p_team itself if live, then every team reachable
 through live child links. The exact mirror of team_ancestors' is_active floor, so the two agree on
 what a dead team means: neither returned nor walked through. Used by team_service's subtree check
-for attach, reparent and restore (is there an auto-join or gating team below?), and to lock that
-subtree's rows before the check is repeated. A structural primitive, not a visibility arm: it never
-decides what anyone reads.$c$;
+for attach, reparent and restore (is there an auto-join or gating team below?). A structural
+primitive, not a visibility arm: it never decides what anyone reads.$c$;
 
 SELECT declare_migration(
     20261119000020,

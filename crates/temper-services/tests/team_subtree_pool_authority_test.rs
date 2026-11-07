@@ -358,3 +358,94 @@ async fn a_pool_linked_under_the_subtree_concurrently_is_seen_by_the_recheck(poo
     assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
     assert!(!linked(&pool, f.hub, d).await, "nothing is written");
 }
+
+/// The same race through a DEAD team. D is soft-deleted, with a pool P below it, so the live
+/// subtree of R stops at D. An admin restoring D (and holding D's row) while a non-admin attaches R
+/// under the hub must not let P land under the hub: the non-admin's lock set covers dead teams too,
+/// so it waits for the restore, re-checks, finds P live below R, and is refused.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_concurrent_restore_below_the_subtree_is_seen_by_the_recheck(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let (r, _x, dead) = chain(&pool, &f.admin, None, "spd", "d", None).await;
+    create(
+        &pool,
+        &f.admin,
+        "spd-pool",
+        Some("spd-d"),
+        Some(TeamRole::Watcher),
+    )
+    .await;
+    team_service::delete_team(&pool, &f.admin, dead)
+        .await
+        .expect("soft-delete D");
+    own(&pool, r, *f.mgr.profile_id()).await;
+
+    let mut holder = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM kb_teams WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(dead)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE kb_teams SET is_active = true WHERE id = $1")
+        .bind(dead)
+        .execute(&mut *holder)
+        .await
+        .expect("the admin's restore, uncommitted");
+
+    let pool2 = pool.clone();
+    let mgr = f.mgr.clone();
+    let hub = f.hub;
+    let contender =
+        tokio::spawn(async move { team_service::attach_child(&pool2, &mgr, hub, r).await });
+    test_support::await_team_lock_waiter(&pool).await;
+    holder.commit().await.unwrap();
+
+    let refusal = contender
+        .await
+        .unwrap()
+        .expect_err("the restored pool is in the subtree by the time the re-check runs");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    assert!(!linked(&pool, f.hub, r).await, "nothing is written");
+}
+
+/// A subtree that grows while the act waits for its locks, by a team that is no pool, is refused
+/// as retryable (`409`), never acted on: the new team's own subtree was not locked.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_subtree_that_grows_while_the_act_waits_is_refused_as_retryable(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let (d, _x, g) = chain(&pool, &f.admin, None, "spg", "g", None).await;
+    let plain = create(&pool, &f.admin, "spg-plain", None, None).await;
+    own(&pool, d, *f.mgr.profile_id()).await;
+
+    let mut holder = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM kb_teams WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(g)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO kb_teams_parents (parent_id, child_id) VALUES ($1, $2)")
+        .bind(g)
+        .bind(plain)
+        .execute(&mut *holder)
+        .await
+        .expect("a concurrent link, uncommitted");
+
+    let pool2 = pool.clone();
+    let mgr = f.mgr.clone();
+    let hub = f.hub;
+    let contender =
+        tokio::spawn(async move { team_service::attach_child(&pool2, &mgr, hub, d).await });
+    test_support::await_team_lock_waiter(&pool).await;
+    holder.commit().await.unwrap();
+
+    let refusal = contender
+        .await
+        .unwrap()
+        .expect_err("the subtree changed under the act");
+    assert!(matches!(refusal, ApiError::Conflict(_)), "{refusal:?}");
+    assert!(!linked(&pool, f.hub, d).await, "nothing is written");
+    // A retry, against the settled tree, succeeds: the new team is no pool.
+    team_service::attach_child(&pool, &f.mgr, f.hub, d)
+        .await
+        .expect("the retry");
+}

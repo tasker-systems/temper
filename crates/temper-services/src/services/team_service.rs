@@ -985,8 +985,11 @@ pub async fn restore_team(
     if admin {
         lock_teams_ascending(&mut tx, &[team_id]).await?;
     } else {
-        lock_teams_and_subtree(&mut tx, &[], team_id).await?;
+        let stable = lock_teams_and_subtree(&mut tx, &[], team_id).await?;
         restore_authority(&mut tx, caller, team_id).await?;
+        if !stable {
+            return Err(subtree_changed());
+        }
     }
     let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
         .await
@@ -1046,9 +1049,8 @@ async fn restore_authority(
         return Err(ApiError::Forbidden);
     }
     let row = sqlx::query!(
-        r#"SELECT tm.role AS "role: TeamRole", t.auto_join_role IS NOT NULL AS "auto_join!"
+        r#"SELECT tm.role AS "role: TeamRole"
              FROM kb_team_members tm
-             JOIN kb_teams t ON t.id = tm.team_id
             WHERE tm.team_id = $1 AND tm.profile_id = $2"#,
         team_id,
         *caller.profile_id(),
@@ -1056,7 +1058,8 @@ async fn restore_authority(
     .fetch_optional(&mut *conn)
     .await?;
     match row {
-        Some(r) if r.role == TeamRole::Owner && !r.auto_join => Ok(()),
+        // An auto-join team itself was refused above, with the rest of its subtree.
+        Some(r) if r.role == TeamRole::Owner => Ok(()),
         _ => Err(ApiError::Forbidden),
     }
 }
@@ -1407,11 +1410,12 @@ pub async fn reparent(
     attach_precheck(pool, caller, admin, to, child_id).await?;
 
     let mut tx = pool.begin().await?;
-    if admin {
+    let stable = if admin {
         lock_teams_ascending(&mut tx, &[from, to, child_id]).await?;
+        true
     } else {
-        lock_teams_and_subtree(&mut tx, &[from, to], child_id).await?;
-    }
+        lock_teams_and_subtree(&mut tx, &[from, to], child_id).await?
+    };
     for team in [to, child_id] {
         if !link_side(&mut tx, team)
             .await?
@@ -1423,6 +1427,9 @@ pub async fn reparent(
         }
     }
     attach_authority(pool, &mut tx, caller, admin, to, child_id).await?;
+    if !stable {
+        return Err(subtree_changed());
+    }
 
     let correlation = Uuid::now_v7();
     let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
@@ -1496,6 +1503,10 @@ async fn link_side(conn: &mut sqlx::PgConnection, team_id: Uuid) -> ApiResult<Op
 /// asks it while it is still dead. Below it, the walk is `team_live_descendants` from each child,
 /// so a dead team is neither counted nor walked through, matching `team_ancestors` (reach does not
 /// pass through a dead team either).
+///
+/// The root and gating test is `access_service::is_root_or_gating_team_on`'s, applied to every team
+/// in the set: the same root-slug constant and the same `kb_system_settings` read. Change the two
+/// together.
 async fn subtree_holds_pool_on(conn: &mut sqlx::PgConnection, team_id: Uuid) -> ApiResult<bool> {
     let holds = sqlx::query_scalar!(
         r#"SELECT EXISTS(
@@ -1508,10 +1519,11 @@ async fn subtree_holds_pool_on(conn: &mut sqlx::PgConnection, team_id: Uuid) -> 
                       WHERE tp.parent_id = $1) s
                JOIN kb_teams t ON t.id = s.id
               WHERE t.auto_join_role IS NOT NULL
-                 OR t.slug = 'temper-system'
+                 OR t.slug = $2
                  OR t.slug = (SELECT ss.gating_team_slug FROM kb_system_settings ss WHERE ss.id = 1))
            AS "e!: bool""#,
         team_id,
+        crate::services::access_service::ROOT_TEAM_SLUG,
     )
     .fetch_one(&mut *conn)
     .await?;
@@ -1677,11 +1689,12 @@ pub async fn attach_child(
     attach_precheck(pool, caller, admin, parent_id, child_id).await?;
 
     let mut tx = pool.begin().await?;
-    if admin {
+    let stable = if admin {
         lock_teams_ascending(&mut tx, &[parent_id, child_id]).await?;
+        true
     } else {
-        lock_teams_and_subtree(&mut tx, &[parent_id], child_id).await?;
-    }
+        lock_teams_and_subtree(&mut tx, &[parent_id], child_id).await?
+    };
     for team in [parent_id, child_id] {
         if !link_side(&mut tx, team)
             .await?
@@ -1693,6 +1706,9 @@ pub async fn attach_child(
         }
     }
     attach_authority(pool, &mut tx, caller, admin, parent_id, child_id).await?;
+    if !stable {
+        return Err(subtree_changed());
+    }
 
     let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
         .await
@@ -1716,54 +1732,68 @@ pub async fn attach_child(
     })
 }
 
-/// Take `FOR NO KEY UPDATE` on each team row, in ascending id order, so two doors locking the same
-/// pair cannot deadlock. A missing row takes no lock and is not an error here; the caller re-reads.
-/// Lock `teams`, `root` and every live team below `root`, in ascending id order, before a
-/// non-admin act re-checks that subtree for an instance pool (`subtree_holds_pool_on`).
+/// Lock `teams`, `root` and every team below `root`, in one ascending id order, before a non-admin
+/// act re-checks that subtree for an instance pool (`subtree_holds_pool_on`).
 ///
 /// Without these locks the re-check reads a subtree another transaction can still change: an
-/// admin attaching a pool team under a grandchild of `root` while a non-admin attaches `root`
-/// under a hub would each pass their own check, and the pool would land under the hub with no
-/// admin consenting to that reach. Locking the subtree makes the two acts take a common row lock,
-/// so the second one re-checks against the first one's committed link.
-///
-/// The subtree is walked, locked, then walked again until a walk adds nothing new: a team can only
-/// be linked in below a locked team by locking that team first, so once a pass adds nothing the
-/// set is stable. The first pass locks everything in one ascending order; a later pass (a link
-/// committed between the walk and the lock) locks only its additions, still ascending among
-/// themselves. `root` is walked below whether or not it is live, because a restore asks this
+/// admin attaching a pool team under a grandchild of `root`, or restoring a dead team with a pool
+/// below it, while a non-admin attaches `root` under a hub, would each pass their own check, and
+/// the pool would land under the hub with no admin consenting to that reach. Either admin act
+/// locks the row it links under or restores, so locking every team below `root`, DEAD ONES
+/// INCLUDED, gives the two acts a common row lock, and the second re-checks against the first's
+/// committed state. `root` is walked below whether or not it is live, because a restore asks this
 /// while the team is still dead.
+///
+/// One ascending pass, never a second: a later pass would take rows out of order and could
+/// deadlock against another door's ascending pass. So the subtree is walked, locked, and walked
+/// again. Returns whether the second walk found nothing new. When it found a team linked in while
+/// this act waited for the locks, the caller still runs its re-check (which reads committed state,
+/// so it refuses a pool that arrived that way), and if the re-check passes, refuses with
+/// [`subtree_changed`] rather than acting on a subtree it has not locked in full.
 async fn lock_teams_and_subtree(
     tx: &mut sqlx::PgConnection,
     teams: &[Uuid],
     root: Uuid,
-) -> ApiResult<()> {
-    let mut locked: std::collections::BTreeSet<Uuid> = std::collections::BTreeSet::new();
-    loop {
-        let below = sqlx::query_scalar!(
-            r#"SELECT d.team_id AS "team_id!"
-                 FROM kb_teams_parents tp
-                 CROSS JOIN LATERAL team_live_descendants(tp.child_id) d
-                WHERE tp.parent_id = $1"#,
-            root,
-        )
-        .fetch_all(&mut *tx)
-        .await?;
-        let fresh: Vec<Uuid> = teams
-            .iter()
-            .copied()
-            .chain(std::iter::once(root))
-            .chain(below)
-            .filter(|t| !locked.contains(t))
-            .collect();
-        if fresh.is_empty() {
-            return Ok(());
-        }
-        lock_teams_ascending(tx, &fresh).await?;
-        locked.extend(fresh);
-    }
+) -> ApiResult<bool> {
+    let below = every_team_below(tx, root).await?;
+    let all: Vec<Uuid> = teams
+        .iter()
+        .copied()
+        .chain(std::iter::once(root))
+        .chain(below.iter().copied())
+        .collect();
+    lock_teams_ascending(tx, &all).await?;
+    Ok(every_team_below(tx, root).await?.is_subset(&below))
 }
 
+/// The retryable refusal when the subtree grew while the act waited for its locks.
+fn subtree_changed() -> ApiError {
+    ApiError::Conflict("the team tree changed while this act was being checked; retry".to_string())
+}
+
+/// Every team below `root` through `kb_teams_parents`, live or dead: the lock set's walk, which must
+/// not stop at a dead team (see `lock_teams_and_subtree`).
+async fn every_team_below(
+    tx: &mut sqlx::PgConnection,
+    root: Uuid,
+) -> ApiResult<std::collections::BTreeSet<Uuid>> {
+    Ok(sqlx::query_scalar!(
+        r#"WITH RECURSIVE down AS (
+               SELECT tp.child_id AS team_id FROM kb_teams_parents tp WHERE tp.parent_id = $1
+               UNION
+               SELECT tp.child_id FROM kb_teams_parents tp JOIN down ON tp.parent_id = down.team_id
+           )
+           SELECT team_id AS "team_id!" FROM down"#,
+        root,
+    )
+    .fetch_all(&mut *tx)
+    .await?
+    .into_iter()
+    .collect())
+}
+
+/// Take `FOR NO KEY UPDATE` on each team row, in ascending id order, so two doors locking the same
+/// pair cannot deadlock. A missing row takes no lock and is not an error here; the caller re-reads.
 async fn lock_teams_ascending(tx: &mut sqlx::PgConnection, teams: &[Uuid]) -> ApiResult<()> {
     let mut ids = teams.to_vec();
     ids.sort();

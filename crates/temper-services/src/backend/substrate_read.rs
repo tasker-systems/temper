@@ -419,8 +419,8 @@ async fn filtered_visible_page(
             AND ($6::uuid IS NULL OR r.id IN (SELECT gs.source_id FROM goal_src gs))
             AND ($8::uuid[] IS NULL OR (h.anchor_table = 'kb_cogmaps' AND h.anchor_id = ANY($8)
                  AND cogmap_readable_by_profile($1, h.anchor_id)))
-            -- Tag filter. A correlated subquery in the same idiom as the goal filter above,
-            -- rather than a join: tags live in `kb_properties` under the single key `tags`, not as
+            -- Tag filter. A correlated subquery rather than a join: tags live in `kb_properties`
+            -- under the single key `tags`, not as
             -- a column on the `kb_resource_workflow_props` pivot (which holds one scalar per key).
             -- So this cannot be a sixth pivot column the way `status` was.
             --
