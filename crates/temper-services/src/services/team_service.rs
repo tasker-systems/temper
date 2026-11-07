@@ -1776,7 +1776,9 @@ async fn lock_teams_and_subtree(
     // gating slug change takes exclusively (the settings trigger, and every rename). Taken AFTER
     // the team rows, in the order `rename_slug` takes them (its team row, then the exclusive
     // lock), so this act never holds the advisory lock while waiting on a row. It never touches
-    // the settings row, whose writer takes the row and then the exclusive lock.
+    // the settings row, whose writer takes the row and then the exclusive lock. (A rename of the
+    // gating team against a settings update repointing the slug is an inversion between those
+    // two writers alone; it predates this act and is tracked separately.)
     sqlx::query_scalar!(r#"SELECT 1 AS "one!" FROM (SELECT _gating_team_lock(false)) g"#)
         .fetch_one(&mut *tx)
         .await?;

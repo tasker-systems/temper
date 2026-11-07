@@ -4,8 +4,7 @@
 //!
 //! An auto-join team's roster is every approved profile, and the gating team's roster is the access
 //! pool. So putting either one *anywhere* below a team hands that team's material to the whole
-//! instance. Attach, reparent and restore used to ask only whether the child (or the restored team)
-//! was itself such a team. These tests pin the subtree form: the act is a system admin's when the
+//! instance. These tests pin the subtree form: the act is a system admin's when the
 //! child's live subtree holds one, and a soft-deleted pool team below does not count, because reach
 //! does not walk through a dead team either.
 //!

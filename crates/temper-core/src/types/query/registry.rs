@@ -565,8 +565,9 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // `resource_standing_shape`. `temper resource evidence <ref>` is the CLI door.
             //
             // The function was never hidden — `VisibilityProfile`'s own doc comment cites
-            // `resource_standing_shape` BY NAME as the worked gated-and-therefore-agnostic example,
-            // three declarations above the one claiming it did not exist.
+            // `resource_standing_shape` BY NAME as a worked example, three declarations above the
+            // one claiming it did not exist. Since 2026-11-07 the example is two-sided: its finding
+            // gate is a gate, and its `contradiction_balance` is a per-reader filter.
             //
             // Same defect shape as the `follow-from` misclassification corrected the same day, and
             // again in the safe direction: `Unbuilt` under-claims, so nothing broke and nothing
