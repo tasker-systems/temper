@@ -339,6 +339,14 @@ temper/generated/models/provenance_source_one_of2.py
 temper/generated/models/provision_connection_request.py
 temper/generated/models/provision_machine_request.py
 temper/generated/models/public_system_settings.py
+temper/generated/models/public_within_audience.py
+temper/generated/models/public_within_in_ref.py
+temper/generated/models/public_within_open_kind.py
+temper/generated/models/public_within_outcome.py
+temper/generated/models/public_within_policy_outcome.py
+temper/generated/models/public_within_policy_request.py
+temper/generated/models/public_within_ref.py
+temper/generated/models/public_within_row_ref.py
 temper/generated/models/quantity_scale.py
 temper/generated/models/quantity_scale_one_of.py
 temper/generated/models/quantity_scale_one_of1.py

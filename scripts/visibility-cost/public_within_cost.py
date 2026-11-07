@@ -2,11 +2,13 @@
 """What does `public_within`'s read arm cost?
 
     python3 scripts/visibility-cost/public_within_cost.py [--samples N] [--profiles K]
+                                                          [--head-first VERSION] [--server DSN]
 
 Builds TWO scratch databases on the local dev server and the same synthetic world in each:
 
-  * `temper_pw_cost_base`: every migration before this work's first (the read path without the
-    public_within arm);
+  * `temper_pw_cost_base`: every migration before `--head-first` (by default this work's first,
+    so the read path without the public_within arm; pass a later version to compare against the
+    tree as it stood before that migration);
   * `temper_pw_cost_head`: every migration in the tree (the public_within arm, the wrappers, the
     audit split).
 
@@ -32,6 +34,12 @@ context per squad (40 resources) and per division (20 resources); 4000 edges, ea
 source's context; a cognitive map per division joined to it, with 20 findings citing two squad
 resources each, for the audit sweep. A row opens squad j of division i to division i (50 rows),
 and the root row opens one squad to `temper-system`, which every person's closure holds.
+
+A door is one SQL text run on both sides, or a pair: the text the base's code ran and the text the
+head's code runs. `list_visible` is timed both ways: as `main`'s text on both sides (the cost
+before the set-based rewrite) and as the pair (`list_visible (set)`: base runs `main`'s text, head
+runs the text `context_service::list_visible` runs now, which evaluates the reader's context set
+and resource set once per call rather than once per context).
 
 `search_wide` is driven with a constant vector over a world with no chunk rows, so its number is
 the visibility hand-off and the empty k-NN, not a vector search; the hand-off is what the public_within
@@ -69,19 +77,19 @@ def psql(dsn, sql):
     return run(["psql", dsn, "-X", "-q", "-t", "-A", "-v", "ON_ERROR_STOP=1", "-c", sql])
 
 
-def fresh(db, source):
-    dsn = f"{SERVER}/{db}"
-    psql(f"{SERVER}/postgres", f"DROP DATABASE IF EXISTS {db} WITH (FORCE)")
-    psql(f"{SERVER}/postgres", f"CREATE DATABASE {db} TEMPLATE template0")
+def fresh(server, db, source):
+    dsn = f"{server}/{db}"
+    psql(f"{server}/postgres", f"DROP DATABASE IF EXISTS {db} WITH (FORCE)")
+    psql(f"{server}/postgres", f"CREATE DATABASE {db} TEMPLATE template0")
     run(["sqlx", "migrate", "run", "--source", source, "--database-url", dsn])
     return dsn
 
 
-def base_migrations():
+def base_migrations(head_first):
     tmp = tempfile.mkdtemp(prefix="pw-cost-")
     src = os.path.join(REPO, "migrations")
     for f in os.listdir(src):
-        if f.endswith(".sql") and int(f.split("_", 1)[0]) < HEAD_FIRST:
+        if f.endswith(".sql") and int(f.split("_", 1)[0]) < head_first:
             shutil.copy(os.path.join(src, f), tmp)
     return tmp
 
@@ -205,8 +213,21 @@ LIST_VISIBLE = """SELECT c.id,
          WHERE rh.anchor_table = 'kb_contexts' AND rh.anchor_id = c.id)
   FROM kb_contexts c WHERE context_visible_to($1, c.id) ORDER BY c.name"""
 
+# `context_service::list_visible` since the set-based rewrite: the same predicates, each evaluated
+# once per call.
+LIST_VISIBLE_SET = """WITH readable AS MATERIALIZED (SELECT r.context_id FROM contexts_readable_by($1) r),
+     visible AS MATERIALIZED (SELECT v.resource_id FROM resources_visible_to($1) v)
+SELECT c.id,
+       context_authorable_by_profile($1, c.id),
+       (SELECT count(*) FROM kb_resource_homes rh
+          JOIN visible v ON v.resource_id = rh.resource_id
+          JOIN kb_resources r ON r.id = rh.resource_id AND r.is_active
+         WHERE rh.anchor_table = 'kb_contexts' AND rh.anchor_id = c.id)
+  FROM kb_contexts c WHERE c.id IN (SELECT rc.context_id FROM readable rc) ORDER BY c.name"""
+
 DOORS = {
     "list_visible": LIST_VISIBLE,
+    "list_visible (set)": (LIST_VISIBLE, LIST_VISIBLE_SET),
     "resources_visible_to": "SELECT count(*) FROM resources_visible_to($1)",
     "edges_visible_to": "SELECT count(*) FROM edges_visible_to($1)",
     "search_wide": "SELECT count(*) FROM search_wide($1, array_fill(0.01::real, ARRAY[768])::vector, "
@@ -220,7 +241,7 @@ DOORS = {
 # Alternates one call on `a` and one on `b` per sample, flipping which goes first, on two warm
 # connections. The doors take the profile as `$1`; it is spliced in as a literal for dblink.
 BENCH = """
-CREATE FUNCTION pg_temp.bench(q text, a text, b text, handles text[], warm int, n int)
+CREATE FUNCTION pg_temp.bench(qa text, qb text, a text, b text, handles text[], warm int, n int)
 RETURNS TABLE(side text, ms float8) LANGUAGE plpgsql AS $b$
 DECLARE
     t0 timestamptz;
@@ -239,7 +260,8 @@ BEGIN
         IF d = 'a' THEN pa := ids; ELSE pb := ids; END IF;
         FOR k IN 1..array_length(ids, 1) LOOP
             FOR w IN 1..warm LOOP
-                PERFORM * FROM dblink(d, replace(q, '$1', quote_literal(ids[k]) || '::uuid'))
+                PERFORM * FROM dblink(d, replace(CASE WHEN d = 'a' THEN qa ELSE qb END, '$1',
+                                                 quote_literal(ids[k]) || '::uuid'))
                     AS t(c text);
             END LOOP;
         END LOOP;
@@ -247,7 +269,8 @@ BEGIN
     FOR i IN 1..n LOOP
         FOREACH d IN ARRAY CASE WHEN i % 2 = 0 THEN ARRAY['a', 'b'] ELSE ARRAY['b', 'a'] END LOOP
             ids := CASE WHEN d = 'a' THEN pa ELSE pb END;
-            call := replace(q, '$1', quote_literal(ids[1 + i % array_length(ids, 1)]) || '::uuid');
+            call := replace(CASE WHEN d = 'a' THEN qa ELSE qb END, '$1',
+                            quote_literal(ids[1 + i % array_length(ids, 1)]) || '::uuid');
             t0 := clock_timestamp();
             PERFORM * FROM dblink(d, call) AS t(c text);
             side := d;
@@ -268,11 +291,15 @@ def measure(driver, handles, samples):
     a = f"dbname={BASE_DB} user=temper password=temper"
     b = f"dbname={HEAD_DB} user=temper password=temper"
     for name, sql in DOORS.items():
-        q = f"SELECT count(*)::text FROM ({sql}) door".replace("'", "''")
+        base_sql, head_sql = sql if isinstance(sql, tuple) else (sql, sql)
+        qa, qb = (
+            f"SELECT count(*)::text FROM ({s}) door".replace("'", "''")
+            for s in (base_sql, head_sql)
+        )
         rows = psql(
             driver,
-            BENCH
-            + f"SELECT side, ms FROM pg_temp.bench('{q}', '{a}', '{b}', {arr}, 2, {samples});",
+            BENCH + f"SELECT side, ms FROM pg_temp.bench('{qa}', '{qb}', '{a}', '{b}', {arr}, 2, "
+            f"{samples});",
         )
         times = {"a": [], "b": []}
         for line in rows.split():
@@ -286,16 +313,19 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--samples", type=int, default=200)
     ap.add_argument("--profiles", type=int, default=5)
+    ap.add_argument("--head-first", type=int, default=HEAD_FIRST)
+    ap.add_argument("--server", default=SERVER)
     args = ap.parse_args()
+    server = args.server
 
-    base_src = base_migrations()
-    fresh(BASE_DB, base_src)
-    head = fresh(HEAD_DB, os.path.join(REPO, "migrations"))
+    base_src = base_migrations(args.head_first)
+    fresh(server, BASE_DB, base_src)
+    head = fresh(server, HEAD_DB, os.path.join(REPO, "migrations"))
     for db in (BASE_DB, HEAD_DB):
-        psql(f"{SERVER}/{db}", WORLD)
-    psql(f"{SERVER}/postgres", f"DROP DATABASE IF EXISTS {DRIVER_DB} WITH (FORCE)")
-    psql(f"{SERVER}/postgres", f"CREATE DATABASE {DRIVER_DB} TEMPLATE template0")
-    driver = f"{SERVER}/{DRIVER_DB}"
+        psql(f"{server}/{db}", WORLD)
+    psql(f"{server}/postgres", f"DROP DATABASE IF EXISTS {DRIVER_DB} WITH (FORCE)")
+    psql(f"{server}/postgres", f"CREATE DATABASE {DRIVER_DB} TEMPLATE template0")
+    driver = f"{server}/{DRIVER_DB}"
     psql(driver, "CREATE EXTENSION dblink")
     handles = [f"p{k}" for k in range(1, 300, 300 // args.profiles)]
 

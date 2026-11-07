@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT _admin_public_within_write($1, $2, $3, $4, 'closed', $5, false, NULL) AS \"o!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "o!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "f7bcf74a2fa7620c6c5a9272ff98ebd375dc8c31a3240b7cbcd691ee7a1f3a1b"
+}

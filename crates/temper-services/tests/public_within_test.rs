@@ -2110,3 +2110,1010 @@ async fn reading_never_flows_sideways_or_down_with_an_inert_row(pool: PgPool) {
         "A's own roster is the audience"
     );
 }
+
+// =================================================================================================
+// The doors: open, close, the forbid, the detail, discovery, the ledger and a hard delete
+// =================================================================================================
+//
+// The world above opens `(eng-sec, eng)` directly; every door test starts by closing it, so the row
+// that exists is the one a door wrote. `eng` gets an owner here, the anchor side's manager.
+
+use temper_core::types::team::{PublicWithinOpenKind, PublicWithinRef};
+use temper_services::auth::HumanPrincipal;
+use temper_services::error::ApiError;
+use temper_services::services::admin_ledger_service;
+use temper_services::services::team_service::{
+    self, PUBLIC_WITHIN_ADMIN_ANCHOR, PUBLIC_WITHIN_FORBIDDEN_HERE,
+};
+use temper_substrate::payloads::{AnchorTable, RefTarget};
+
+struct Doors {
+    w: World,
+    /// A direct owner of the anchor `eng`, and nothing else.
+    eng_owner: Uuid,
+    /// A direct owner of T and of `eng`: both sides in one person.
+    both: Uuid,
+    /// A direct owner of `org`, above both sides, managing neither.
+    org_owner: Uuid,
+    /// A direct owner of `ops`, T's other parent: an ancestor manager of T on another branch.
+    ops_owner: Uuid,
+}
+
+async fn doors(pool: &PgPool) -> Doors {
+    let w = world(pool).await;
+    close(pool, w.eng_sec, w.eng).await;
+    let eng_owner = person(pool, "eng-owner").await;
+    join(pool, w.eng, eng_owner, "owner").await;
+    let both = person(pool, "both-sides").await;
+    join(pool, w.eng, both, "owner").await;
+    join(pool, w.eng_sec, both, "maintainer").await;
+    let org_owner = person(pool, "org-owner").await;
+    join(pool, w.org, org_owner, "owner").await;
+    let ops_owner = person(pool, "ops-owner").await;
+    join(pool, w.ops, ops_owner, "owner").await;
+    Doors {
+        w,
+        eng_owner,
+        both,
+        org_owner,
+        ops_owner,
+    }
+}
+
+async fn hp(pool: &PgPool, who: Uuid) -> HumanPrincipal {
+    test_support::human_principal_for(pool, who).await
+}
+
+async fn open_by(
+    pool: &PgPool,
+    who: Uuid,
+    t: Uuid,
+    a: Uuid,
+) -> Result<temper_core::types::team::PublicWithinOutcome, ApiError> {
+    team_service::open_public_within(pool, &hp(pool, who).await, t, a).await
+}
+
+async fn close_by(pool: &PgPool, who: Uuid, t: Uuid, a: Uuid) -> Result<(), ApiError> {
+    team_service::close_public_within(pool, &hp(pool, who).await, t, a).await
+}
+
+async fn policy_by(
+    pool: &PgPool,
+    who: Uuid,
+    team: Uuid,
+    forbidden: bool,
+) -> Result<temper_core::types::team::PublicWithinPolicyOutcome, ApiError> {
+    team_service::set_public_within_policy(pool, &hp(pool, who).await, team, forbidden).await
+}
+
+async fn row_exists(pool: &PgPool, t: Uuid, a: Uuid) -> bool {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM kb_team_public_within WHERE team_id = $1 AND anchor_id = $2)",
+    )
+    .bind(t)
+    .bind(a)
+    .fetch_one(pool)
+    .await
+    .expect("row exists")
+}
+
+/// How many admin records of `event_type` name both `t` and `a` (the row records), or `t` alone
+/// when `a` is `None` (the policy record).
+async fn records(pool: &PgPool, event_type: &str, t: Uuid, a: Option<Uuid>) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE et.name = $1 AND (e.payload ->> 'team_id')::uuid = $2 \
+            AND ($3::uuid IS NULL OR (e.payload ->> 'anchor_id')::uuid = $3)",
+    )
+    .bind(event_type)
+    .bind(t)
+    .bind(a)
+    .fetch_one(pool)
+    .await
+    .expect("records")
+}
+
+fn forbidden_here(err: &ApiError) -> bool {
+    matches!(err, ApiError::ForbiddenDetail(m) if m == PUBLIC_WITHIN_FORBIDDEN_HERE)
+}
+
+fn admin_anchor(err: &ApiError) -> bool {
+    matches!(err, ApiError::ForbiddenDetail(m) if m == PUBLIC_WITHIN_ADMIN_ANCHOR)
+}
+
+/// Wait until a backend in this test's database is blocked on a lock held by `holder`.
+async fn await_blocked_by(pool: &PgPool, holder: i32) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let waiting: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM pg_stat_activity \
+                             WHERE datname = current_database() AND wait_event_type = 'Lock' \
+                               AND $1 = ANY (pg_blocking_pids(pid)))",
+        )
+        .bind(holder)
+        .fetch_one(pool)
+        .await
+        .expect("lock waiters");
+        if waiting {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the contender never blocked on the holder"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+async fn backend_pid(conn: &mut sqlx::PgConnection) -> i32 {
+    sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *conn)
+        .await
+        .expect("pid")
+}
+
+// ── Open ──────────────────────────────────────────────────────────────────────────────────────────
+
+/// The open's rules, each refusal in its order, and then the open itself: the row, its one record,
+/// and the audience.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn open_refuses_in_rule_order_and_then_opens(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+
+    // Rule 1: the root's forbid, the instance-wide off, refuses even a caller on both sides.
+    forbid(&pool, w.root, true).await;
+    let err = open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap_err();
+    assert!(forbidden_here(&err), "rule 1: {err:?}");
+    forbid(&pool, w.root, false).await;
+
+    // Rule 2: the anchor's owner alone is not the team's consent.
+    let err = open_by(&pool, d.eng_owner, w.eng_sec, w.eng)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ApiError::Forbidden), "rule 2: {err:?}");
+    // Rule 3: the team's owner alone is not the anchor's.
+    let err = open_by(&pool, w.sec_owner, w.eng_sec, w.eng)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ApiError::Forbidden), "rule 3: {err:?}");
+
+    // Rule 4: a leftover owner row on the root is not an admin.
+    join(&pool, w.root, d.both, "owner").await;
+    let err = open_by(&pool, d.both, w.eng_sec, w.root).await.unwrap_err();
+    assert!(admin_anchor(&err), "rule 4: {err:?}");
+
+    // Rule 5: an auto-join team under the anchor makes it an admin's open.
+    let pool_team = team(&pool, "eng-pool", &[w.eng]).await;
+    sqlx::query("UPDATE kb_teams SET auto_join_role = 'member' WHERE id = $1")
+        .bind(pool_team)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let err = open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap_err();
+    assert!(admin_anchor(&err), "rule 5: {err:?}");
+    sqlx::query("UPDATE kb_teams SET auto_join_role = NULL WHERE id = $1")
+        .bind(pool_team)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // Rule 6: a forbid above the team.
+    forbid(&pool, w.org, true).await;
+    let err = open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap_err();
+    assert!(forbidden_here(&err), "rule 6: {err:?}");
+    forbid(&pool, w.org, false).await;
+
+    // Rule 7: the anchor is not above the team.
+    join(&pool, w.sales, d.both, "owner").await;
+    let err = open_by(&pool, d.both, w.eng_sec, w.sales)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, ApiError::BadRequest(m) if m.contains("above this one")),
+        "rule 7: {err:?}"
+    );
+
+    // Rule 8: a personal team is never opened (its owner manages it; the root anchor needs the
+    // admin, so the caller is one).
+    let personal: Uuid = sqlx::query_scalar("SELECT id FROM kb_teams WHERE personal_of = $1")
+        .bind(w.admin)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let err = open_by(&pool, w.admin, personal, w.root).await.unwrap_err();
+    assert!(
+        matches!(&err, ApiError::BadRequest(m) if m.contains("personal team")),
+        "rule 8: {err:?}"
+    );
+
+    // Nothing was written by any refusal.
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM kb_team_public_within")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        records(&pool, "team_public_within_changed", w.eng_sec, None).await,
+        0
+    );
+
+    // Both sides: opened, recorded once, and the people under eng now read T.
+    let out = open_by(&pool, d.both, w.eng_sec, w.eng)
+        .await
+        .expect("open");
+    assert_eq!(out.outcome, PublicWithinOpenKind::Opened);
+    assert!(!out.instance_wide);
+    assert!(
+        out.audience.teams >= 3,
+        "eng, eng-web, eng-sec: {:?}",
+        out.audience
+    );
+    assert!(out.audience.principals >= 4, "{:?}", out.audience);
+    assert!(reads(&pool, w.web_member, w.r_t).await);
+    assert_eq!(
+        records(&pool, "team_public_within_changed", w.eng_sec, Some(w.eng)).await,
+        1
+    );
+    let admin_act: bool = sqlx::query_scalar(
+        "SELECT admin_act FROM kb_team_public_within WHERE team_id = $1 AND anchor_id = $2",
+    )
+    .bind(w.eng_sec)
+    .bind(w.eng)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!admin_act, "two managers opened it; no admin stood in");
+
+    // Again: exists, nothing written.
+    let again = open_by(&pool, d.both, w.eng_sec, w.eng)
+        .await
+        .expect("reopen");
+    assert_eq!(again.outcome, PublicWithinOpenKind::Exists);
+    assert_eq!(
+        records(&pool, "team_public_within_changed", w.eng_sec, Some(w.eng)).await,
+        1
+    );
+}
+
+/// A caller who manages neither side learns nothing: the same bare 403 for a real row, a team that
+/// does not exist, and a team under a forbid.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_caller_on_no_side_gets_one_identical_refusal(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    forbid(&pool, w.ops, true).await;
+    for (t, a) in [
+        (w.eng_sec, w.eng),
+        (Uuid::now_v7(), w.eng),
+        (w.eng_sec_red, w.eng_sec),
+        (w.eng_web, w.eng),
+    ] {
+        for who in [w.web_member, w.org_only, w.sales_member, d.org_owner] {
+            let err = open_by(&pool, who, t, a).await.unwrap_err();
+            assert!(matches!(err, ApiError::Forbidden), "{t} {a}: {err:?}");
+        }
+    }
+}
+
+/// An admin never stands in for the team side, and does stand in for the anchor side alone.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_admin_stands_in_for_the_anchor_side_only(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    // The admin manages neither side: refused at the team side, though they may stand in for A.
+    let err = open_by(&pool, w.admin, w.eng_sec, w.eng).await.unwrap_err();
+    assert!(matches!(err, ApiError::Forbidden), "{err:?}");
+    assert!(!row_exists(&pool, w.eng_sec, w.eng).await);
+
+    // T's owner, made an admin, opens with no role on the anchor: the admin is the anchor side.
+    test_support::approved_admin(&pool, w.sec_owner).await;
+    let out = open_by(&pool, w.sec_owner, w.eng_sec, w.eng)
+        .await
+        .expect("open");
+    assert_eq!(out.outcome, PublicWithinOpenKind::Opened);
+    let admin_act: bool = sqlx::query_scalar(
+        "SELECT admin_act FROM kb_team_public_within WHERE team_id = $1 AND anchor_id = $2",
+    )
+    .bind(w.eng_sec)
+    .bind(w.eng)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(admin_act, "the admin stood in for the anchor");
+}
+
+/// PINS CURRENT BEHAVIOUR: an admin promoted with `--team T` holds an owner row on T that nothing
+/// tells apart from a real one, so it satisfies the team side. A later fix that makes the `--team`
+/// promotion write no team role flips this: the open is then refused, and this test is inverted.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_admin_promoted_onto_the_team_satisfies_the_team_side_today(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    let promoted = person(&pool, "promoted").await;
+    let proof = test_support::system_admin_proof_for(&pool, w.admin).await;
+    access_service::promote_admin(&pool, &proof, promoted, Some(w.eng_sec))
+        .await
+        .expect("promote onto T");
+    let out = open_by(&pool, promoted, w.eng_sec, w.eng)
+        .await
+        .expect("today: the promoted admin is the team side and stands in for the anchor");
+    assert_eq!(out.outcome, PublicWithinOpenKind::Opened);
+}
+
+/// An admin's open over the root is `instance_wide`: every person reads T, and the root's forbid
+/// turns it off like any other row.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_admin_open_over_the_root_is_instance_wide(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    link(&pool, w.root, w.org).await;
+    test_support::approved_admin(&pool, w.sec_owner).await;
+    let out = open_by(&pool, w.sec_owner, w.eng_sec, w.root)
+        .await
+        .expect("open");
+    assert!(out.instance_wide);
+    let (iw, aa): (bool, bool) = sqlx::query_as(
+        "SELECT instance_wide, admin_act FROM kb_team_public_within \
+          WHERE team_id = $1 AND anchor_id = $2",
+    )
+    .bind(w.eng_sec)
+    .bind(w.root)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(iw && aa);
+    assert!(
+        reads(&pool, w.sales_member, w.r_t).await,
+        "every person reads T"
+    );
+    assert!(!reads(&pool, w.robot, w.r_t).await, "never a machine");
+
+    policy_by(&pool, w.admin, w.root, true)
+        .await
+        .expect("instance-wide off");
+    assert!(!reads(&pool, w.sales_member, w.r_t).await);
+}
+
+/// Authority runs twice: a T manager demoted while the open waits on the team's lock opens nothing.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_caller_demoted_while_the_open_waits_opens_nothing(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    let mut holder = pool.begin().await.unwrap();
+    let pid = backend_pid(&mut holder).await;
+    sqlx::query("SELECT id FROM kb_teams WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(w.eng_sec)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE kb_team_members SET role = 'member' WHERE team_id = $1 AND profile_id = $2",
+    )
+    .bind(w.eng_sec)
+    .bind(d.both)
+    .execute(&mut *holder)
+    .await
+    .unwrap();
+
+    let p2 = pool.clone();
+    let (both, t, a) = (d.both, w.eng_sec, w.eng);
+    let contender = tokio::spawn(async move { open_by(&p2, both, t, a).await });
+    await_blocked_by(&pool, pid).await;
+    holder.commit().await.unwrap();
+
+    let err = contender.await.unwrap().unwrap_err();
+    assert!(matches!(err, ApiError::Forbidden), "{err:?}");
+    assert!(!row_exists(&pool, w.eng_sec, w.eng).await);
+    assert_eq!(
+        records(&pool, "team_public_within_changed", w.eng_sec, None).await,
+        0
+    );
+}
+
+/// The race with the instance-wide off, forbid first: a root forbid committed while the open waits
+/// is seen by the open's re-check, and nothing is opened.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_root_forbid_committed_first_refuses_a_concurrent_open(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    let admin_emitter = emitter_of(&pool, w.admin).await;
+
+    let mut holder = pool.begin().await.unwrap();
+    let pid = backend_pid(&mut holder).await;
+    let _: serde_json::Value =
+        sqlx::query_scalar("SELECT _admin_public_within_policy_write($1, $2, $3, true, NULL)")
+            .bind(admin_emitter)
+            .bind(w.admin)
+            .bind(w.root)
+            .fetch_one(&mut *holder)
+            .await
+            .unwrap();
+
+    let p2 = pool.clone();
+    let (both, t, a) = (d.both, w.eng_sec, w.eng);
+    let contender = tokio::spawn(async move { open_by(&p2, both, t, a).await });
+    await_blocked_by(&pool, pid).await;
+    holder.commit().await.unwrap();
+
+    let err = contender.await.unwrap().unwrap_err();
+    assert!(forbidden_here(&err), "{err:?}");
+    assert!(!row_exists(&pool, w.eng_sec, w.eng).await);
+}
+
+/// The same race, open first: an open committed while the root forbid waits is in the forbid's
+/// scan, so it goes inert with its `public_within_effect_changed` recorded, and the answer names it.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_open_committed_first_is_made_inert_and_recorded_by_the_root_forbid(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    let emitter = emitter_of(&pool, d.both).await;
+
+    let mut holder = pool.begin().await.unwrap();
+    let pid = backend_pid(&mut holder).await;
+    sqlx::query("SELECT _public_within_open_locks($1, $2)")
+        .bind(w.eng_sec)
+        .bind(w.eng)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let _: String = sqlx::query_scalar(
+        "SELECT _admin_public_within_write($1, $2, $3, $4, 'opened', false, false, NULL)",
+    )
+    .bind(emitter)
+    .bind(d.both)
+    .bind(w.eng_sec)
+    .bind(w.eng)
+    .fetch_one(&mut *holder)
+    .await
+    .unwrap();
+
+    let p2 = pool.clone();
+    let (admin, root) = (w.admin, w.root);
+    let contender = tokio::spawn(async move { policy_by(&p2, admin, root, true).await });
+    await_blocked_by(&pool, pid).await;
+    holder.commit().await.unwrap();
+
+    let out = contender.await.unwrap().expect("forbid");
+    assert!(out.changed);
+    assert_eq!(out.dormant.len(), 1, "{out:?}");
+    assert_eq!(out.dormant[0].team.id, w.eng_sec);
+    assert_eq!(out.dormant[0].anchor.id, w.eng);
+    assert_eq!(
+        records(
+            &pool,
+            "public_within_effect_changed",
+            w.eng_sec,
+            Some(w.eng)
+        )
+        .await,
+        1
+    );
+    assert!(!reads(&pool, w.web_member, w.r_t).await);
+}
+
+// ── Close ─────────────────────────────────────────────────────────────────────────────────────────
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn either_side_closes_alone_and_a_non_manager_learns_nothing(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+
+    // Nobody else closes, and the refusal is the same whether or not a row exists.
+    for who in [w.web_member, w.sec_member, d.org_owner, d.ops_owner] {
+        for (t, a) in [
+            (w.eng_sec, w.eng),
+            (w.eng_web, w.eng),
+            (Uuid::now_v7(), w.eng),
+        ] {
+            let err = close_by(&pool, who, t, a).await.unwrap_err();
+            assert!(matches!(err, ApiError::Forbidden), "{err:?}");
+        }
+    }
+    assert!(row_exists(&pool, w.eng_sec, w.eng).await);
+
+    // The team side.
+    close_by(&pool, w.sec_owner, w.eng_sec, w.eng)
+        .await
+        .expect("T side");
+    assert!(!row_exists(&pool, w.eng_sec, w.eng).await);
+    // A side manager on a missing row: 404.
+    let err = close_by(&pool, d.eng_owner, w.eng_sec, w.eng)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ApiError::NotFound(_)), "{err:?}");
+    // The anchor side.
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    close_by(&pool, d.eng_owner, w.eng_sec, w.eng)
+        .await
+        .expect("A side");
+    assert!(!row_exists(&pool, w.eng_sec, w.eng).await);
+    assert_eq!(
+        records(&pool, "team_public_within_changed", w.eng_sec, Some(w.eng)).await,
+        4,
+        "two opens and two closes, one record each"
+    );
+}
+
+/// Closing works whatever either side's liveness: the live side closes when the other is dead, and
+/// an admin when both are.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_dead_side_does_not_stop_a_close(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    set_team_live(&pool, w.eng, false).await;
+    // A dead team confers nothing, its managers' standing included...
+    let err = close_by(&pool, d.eng_owner, w.eng_sec, w.eng)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ApiError::Forbidden), "{err:?}");
+    // ...but the live side closes.
+    close_by(&pool, w.sec_owner, w.eng_sec, w.eng)
+        .await
+        .expect("T side");
+
+    set_team_live(&pool, w.eng, true).await;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    set_team_live(&pool, w.eng, false).await;
+    set_team_live(&pool, w.eng_sec, false).await;
+    close_by(&pool, w.admin, w.eng_sec, w.eng)
+        .await
+        .expect("admin");
+    assert!(!row_exists(&pool, w.eng_sec, w.eng).await);
+}
+
+/// On a root anchor, a leftover owner row on the root closes nothing; the team side and an admin do.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_root_anchor_is_closed_from_the_anchor_side_by_an_admin_only(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    link(&pool, w.root, w.org).await;
+    test_support::approved_admin(&pool, w.sec_owner).await;
+    open_by(&pool, w.sec_owner, w.eng_sec, w.root)
+        .await
+        .unwrap();
+    let leftover = person(&pool, "root-leftover").await;
+    join(&pool, w.root, leftover, "owner").await;
+    let err = close_by(&pool, leftover, w.eng_sec, w.root)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ApiError::Forbidden), "{err:?}");
+    close_by(&pool, w.admin, w.eng_sec, w.root)
+        .await
+        .expect("admin");
+    assert!(!row_exists(&pool, w.eng_sec, w.root).await);
+}
+
+// ── The forbid ────────────────────────────────────────────────────────────────────────────────────
+
+/// Who may forbid: the direct owner (not a maintainer), an admin; on the root an admin only, a
+/// non-admin owner row there included; never on a personal team.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_forbid_is_the_owners_and_on_the_root_an_admins_alone(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    let org_maint = person(&pool, "org-maint").await;
+    join(&pool, w.org, org_maint, "maintainer").await;
+    let err = policy_by(&pool, org_maint, w.org, true).await.unwrap_err();
+    assert!(matches!(err, ApiError::Forbidden), "{err:?}");
+    let err = policy_by(&pool, w.web_member, w.org, true)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ApiError::Forbidden), "{err:?}");
+    assert!(
+        policy_by(&pool, d.org_owner, w.org, true)
+            .await
+            .unwrap()
+            .changed
+    );
+    assert!(
+        policy_by(&pool, w.admin, w.org, false)
+            .await
+            .unwrap()
+            .changed
+    );
+
+    // A non-admin who holds an owner row on the root cannot turn the instance off.
+    let root_owner = person(&pool, "root-owner").await;
+    join(&pool, w.root, root_owner, "owner").await;
+    let err = policy_by(&pool, root_owner, w.root, true)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ApiError::Forbidden), "{err:?}");
+    assert!(
+        policy_by(&pool, w.admin, w.root, true)
+            .await
+            .unwrap()
+            .changed
+    );
+    let unchanged = policy_by(&pool, w.admin, w.root, true).await.unwrap();
+    assert!(!unchanged.changed, "already so: nothing recorded");
+    assert_eq!(
+        records(&pool, "public_within_policy_changed", w.root, None).await,
+        1
+    );
+
+    // A personal team has no forbid, for its owner or an admin.
+    let personal: Uuid = sqlx::query_scalar("SELECT id FROM kb_teams WHERE personal_of = $1")
+        .bind(w.web_member)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    for who in [w.web_member, w.admin] {
+        let err = policy_by(&pool, who, personal, true).await.unwrap_err();
+        assert!(matches!(err, ApiError::BadRequest(_)), "{err:?}");
+    }
+}
+
+/// A forbid at `org` makes `(eng-sec, eng)` inert and answers it: named to an admin, counted for an
+/// owner who manages neither side; clearing it revives the row.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_forbid_above_makes_the_row_inert_and_answers_it(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    assert!(reads(&pool, w.web_member, w.r_t).await);
+
+    let out = policy_by(&pool, d.org_owner, w.org, true).await.unwrap();
+    assert!(
+        out.dormant.is_empty(),
+        "org's owner manages neither side: {out:?}"
+    );
+    assert_eq!(out.dormant_unnamed, 1);
+    assert!(!reads(&pool, w.web_member, w.r_t).await);
+    assert_eq!(
+        records(
+            &pool,
+            "public_within_effect_changed",
+            w.eng_sec,
+            Some(w.eng)
+        )
+        .await,
+        1
+    );
+
+    let out = policy_by(&pool, w.admin, w.org, false).await.unwrap();
+    assert_eq!(out.revived.len(), 1, "{out:?}");
+    assert_eq!(out.revived[0].team.id, w.eng_sec);
+    assert!(reads(&pool, w.web_member, w.r_t).await);
+    assert_eq!(
+        records(
+            &pool,
+            "public_within_effect_changed",
+            w.eng_sec,
+            Some(w.eng)
+        )
+        .await,
+        2
+    );
+}
+
+/// What does not lift a forbid: a lower owner's own allow, and soft-deleting the forbidding team.
+/// What does: moving T out of the forbidding team's subtree.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn only_leaving_the_subtree_lifts_a_forbid(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    policy_by(&pool, d.org_owner, w.org, true).await.unwrap();
+
+    // eng's owner forbids and allows their own team: one more restriction, never a lift.
+    policy_by(&pool, d.eng_owner, w.eng, true).await.unwrap();
+    let out = policy_by(&pool, d.eng_owner, w.eng, false).await.unwrap();
+    assert!(
+        out.revived.is_empty() && out.revived_unnamed == 0,
+        "{out:?}"
+    );
+    assert!(!reads(&pool, w.web_member, w.r_t).await);
+
+    // Soft-deleting the forbidding team does not lift it.
+    set_team_live(&pool, w.org, false).await;
+    assert!(!reads(&pool, w.web_member, w.r_t).await);
+    set_team_live(&pool, w.org, true).await;
+    policy_by(&pool, d.org_owner, w.org, false).await.unwrap();
+
+    // A forbid on T's other parent; detaching T from it lifts it, since T is no longer beneath.
+    policy_by(&pool, d.ops_owner, w.ops, true).await.unwrap();
+    assert!(!reads(&pool, w.web_member, w.r_t).await);
+    unlink(&pool, w.ops, w.eng_sec).await;
+    assert!(reads(&pool, w.web_member, w.r_t).await);
+}
+
+/// A forbid reaches a row below a dead team: the forbid fails closed, so its transition scan walks
+/// through dead teams as the forbid itself does.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_forbid_records_a_row_below_a_dead_team(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    // top → mid (dead) → org → eng → eng-sec: top's forbid reaches the row through the dead team.
+    let top = team(&pool, "top", &[]).await;
+    let top_owner = person(&pool, "top-owner").await;
+    join(&pool, top, top_owner, "owner").await;
+    let mid = team(&pool, "mid", &[top]).await;
+    link(&pool, mid, w.org).await;
+    set_team_live(&pool, mid, false).await;
+    let out = policy_by(&pool, top_owner, top, true).await.unwrap();
+    assert_eq!(out.dormant_unnamed, 1, "{out:?}");
+    assert!(!reads(&pool, w.web_member, w.r_t).await);
+}
+
+// ── The detail ────────────────────────────────────────────────────────────────────────────────────
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_detail_shows_each_side_to_its_own_audience_only(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    let eng_member = person(&pool, "eng-member").await;
+    join(&pool, w.eng, eng_member, "member").await;
+
+    // T's members (any role) and admins see `public_within`.
+    for who in [w.sec_member, w.sec_owner, w.admin] {
+        let caller = test_support::caller_for(&pool, who).await;
+        let detail = team_service::team_detail(&pool, &caller, w.eng_sec)
+            .await
+            .unwrap();
+        assert_eq!(detail.public_within.len(), 1, "{who}");
+        assert_eq!(detail.public_within[0].anchor.id, w.eng);
+        assert!(detail.public_within[0].effective);
+    }
+    // An ancestor's manager on another branch does not, whether or not they read the detail.
+    let caller = test_support::caller_for(&pool, d.ops_owner).await;
+    let detail = team_service::team_detail(&pool, &caller, w.eng_sec)
+        .await
+        .expect("an ancestor's manager reads the detail");
+    assert!(detail.public_within.is_empty());
+    // Nor does a machine member of T: it never reads through a row.
+    join(&pool, w.eng_sec, w.robot, "member").await;
+    let robot = test_support::machine_caller_for(&pool, w.robot).await;
+    let detail = team_service::team_detail(&pool, &robot, w.eng_sec)
+        .await
+        .expect("a member reads the detail");
+    assert!(detail.public_within.is_empty());
+    // Nor a connection agent, which classifies as a human caller but is outside the read arm's
+    // fence: the detail follows the fence, not the caller kind.
+    join(&pool, w.eng_sec, w.agent, "member").await;
+    let agent = test_support::caller_for(&pool, w.agent).await;
+    assert!(matches!(agent, temper_services::auth::Caller::Human(_)));
+    let detail = team_service::team_detail(&pool, &agent, w.eng_sec)
+        .await
+        .expect("a member reads the detail");
+    assert!(detail.public_within.is_empty());
+
+    // A's managers and admins see `public_within_in`; A's plain member does not.
+    for (who, sees) in [(d.eng_owner, true), (w.admin, true), (eng_member, false)] {
+        let caller = test_support::caller_for(&pool, who).await;
+        let detail = team_service::team_detail(&pool, &caller, w.eng)
+            .await
+            .unwrap();
+        assert_eq!(detail.public_within_in.len(), usize::from(sees), "{who}");
+        assert!(detail.public_within.is_empty());
+    }
+
+    // `effective` is a boolean and names nothing: under a forbid the entry's keys are unchanged.
+    forbid(&pool, w.org, true).await;
+    let caller = test_support::caller_for(&pool, w.sec_member).await;
+    let detail = team_service::team_detail(&pool, &caller, w.eng_sec)
+        .await
+        .unwrap();
+    let entry: &PublicWithinRef = &detail.public_within[0];
+    assert!(!entry.effective);
+    let v = serde_json::to_value(entry).unwrap();
+    let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "anchor",
+            "audience",
+            "effective",
+            "instance_wide",
+            "opened_at"
+        ]
+    );
+    assert!(v["effective"].is_boolean());
+}
+
+// ── Discovery ─────────────────────────────────────────────────────────────────────────────────────
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn discovery_lists_only_rows_that_confer_on_the_caller(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    let mine = team_service::list_public_within(&pool, &hp(&pool, w.web_member).await)
+        .await
+        .unwrap();
+    assert_eq!(mine.len(), 1);
+    assert_eq!((mine[0].team.id, mine[0].anchor.id), (w.eng_sec, w.eng));
+    // Outside the closure.
+    let theirs = team_service::list_public_within(&pool, &hp(&pool, w.sales_member).await)
+        .await
+        .unwrap();
+    assert!(theirs.is_empty());
+    // Inert.
+    forbid(&pool, w.org, true).await;
+    let mine = team_service::list_public_within(&pool, &hp(&pool, w.web_member).await)
+        .await
+        .unwrap();
+    assert!(mine.is_empty());
+}
+
+// ── The ledger ────────────────────────────────────────────────────────────────────────────────────
+
+/// Both sides' managers read all three record types on their own team; nobody else does.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn both_sides_managers_read_the_records_and_nobody_else(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    policy_by(&pool, w.sec_owner, w.eng_sec, true)
+        .await
+        .unwrap();
+    policy_by(&pool, w.sec_owner, w.eng_sec, false)
+        .await
+        .unwrap();
+
+    let types_seen = |entries: &[admin_ledger_service::AdminLedgerEntry]| {
+        let mut t: Vec<String> = entries.iter().map(|e| e.event_type.clone()).collect();
+        t.sort();
+        t.dedup();
+        t
+    };
+    let read = |who: Uuid, team: Uuid| {
+        let pool = pool.clone();
+        async move {
+            admin_ledger_service::list_by_subject(
+                &pool,
+                &hp(&pool, who).await,
+                RefTarget {
+                    kind: AnchorTable::Teams,
+                    id: team,
+                },
+                100,
+                0,
+            )
+            .await
+        }
+    };
+
+    let t_side = read(w.sec_owner, w.eng_sec).await.unwrap();
+    let seen = types_seen(&t_side);
+    for ty in [
+        "public_within_effect_changed",
+        "public_within_policy_changed",
+        "team_public_within_changed",
+    ] {
+        assert!(seen.iter().any(|s| s == ty), "T side reads {ty}: {seen:?}");
+    }
+    let a_side = read(d.eng_owner, w.eng).await.unwrap();
+    let seen = types_seen(&a_side);
+    for ty in ["public_within_effect_changed", "team_public_within_changed"] {
+        assert!(seen.iter().any(|s| s == ty), "A side reads {ty}: {seen:?}");
+    }
+
+    for (who, team) in [
+        (w.sec_member, w.eng_sec),
+        (w.web_member, w.eng),
+        (d.org_owner, w.eng_sec),
+        (d.ops_owner, w.eng_sec),
+    ] {
+        let err = read(who, team).await.unwrap_err();
+        assert!(matches!(err, ApiError::NotFound(_)), "{who}: {err:?}");
+    }
+}
+
+// ── Hard delete ───────────────────────────────────────────────────────────────────────────────────
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_hard_deleted_team_records_each_row_before_the_cascade(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    let t2 = team(&pool, "eng-tmp", &[w.eng]).await;
+    join(&pool, t2, d.both, "owner").await;
+    open_by(&pool, d.both, t2, w.eng).await.unwrap();
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    sqlx::query("DELETE FROM kb_teams WHERE id = $1")
+        .bind(t2)
+        .execute(&pool)
+        .await
+        .expect("hard delete");
+    assert!(!row_exists(&pool, t2, w.eng).await);
+    let acts: Vec<String> = sqlx::query_scalar(
+        "SELECT e.payload ->> 'act' FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE et.name = 'team_public_within_changed' AND (e.payload ->> 'team_id')::uuid = $1 \
+          ORDER BY e.id",
+    )
+    .bind(t2)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(acts, ["opened", "cascade_deleted"]);
+    assert!(
+        row_exists(&pool, w.eng_sec, w.eng).await,
+        "another team's row is untouched"
+    );
+}
+
+/// The open's lock set is computed before it waits: a link committed while it waited gives T an
+/// ancestor whose forbid would not serialize with it. The open sees the grown set and refuses with a
+/// retryable conflict, writing nothing.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_ancestor_gained_while_the_open_waits_is_a_retryable_conflict(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    let q = team(&pool, "q", &[]).await;
+
+    let mut holder = pool.begin().await.unwrap();
+    let pid = backend_pid(&mut holder).await;
+    sqlx::query("SELECT id FROM kb_teams WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(w.eng_sec)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO kb_teams_parents (parent_id, child_id) VALUES ($1, $2)")
+        .bind(q)
+        .bind(w.eng_sec)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+
+    let p2 = pool.clone();
+    let (both, t, a) = (d.both, w.eng_sec, w.eng);
+    let contender = tokio::spawn(async move { open_by(&p2, both, t, a).await });
+    await_blocked_by(&pool, pid).await;
+    holder.commit().await.unwrap();
+
+    let err = contender.await.unwrap().unwrap_err();
+    assert!(matches!(err, ApiError::Conflict(_)), "{err:?}");
+    assert!(!row_exists(&pool, w.eng_sec, w.eng).await);
+    // Retried, it opens.
+    open_by(&pool, d.both, w.eng_sec, w.eng)
+        .await
+        .expect("retry");
+}
+
+/// The forbid's answer counts the rows it may not name; its effect records are the system's, so the
+/// forbidder's own history in the ledger does not name them either.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_forbidders_ledger_history_does_not_name_withheld_rows(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    let out = policy_by(&pool, d.org_owner, w.org, true).await.unwrap();
+    assert_eq!(out.dormant_unnamed, 1);
+    let mine = admin_ledger_service::list_by_actor(
+        &pool,
+        &hp(&pool, d.org_owner).await,
+        ProfileId::from(d.org_owner),
+        100,
+        0,
+    )
+    .await
+    .expect("own history");
+    assert!(mine
+        .iter()
+        .any(|e| e.event_type == "public_within_policy_changed"));
+    assert!(
+        !mine
+            .iter()
+            .any(|e| e.event_type == "public_within_effect_changed"),
+        "{mine:?}"
+    );
+    assert_eq!(
+        records(
+            &pool,
+            "public_within_effect_changed",
+            w.eng_sec,
+            Some(w.eng)
+        )
+        .await,
+        1,
+        "the record exists, on the subject axis of both sides"
+    );
+}

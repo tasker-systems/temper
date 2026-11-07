@@ -361,6 +361,14 @@ __all__ = [
     "ProvisionConnectionRequest",
     "ProvisionMachineRequest",
     "PublicSystemSettings",
+    "PublicWithinAudience",
+    "PublicWithinInRef",
+    "PublicWithinOpenKind",
+    "PublicWithinOutcome",
+    "PublicWithinPolicyOutcome",
+    "PublicWithinPolicyRequest",
+    "PublicWithinRef",
+    "PublicWithinRowRef",
     "QuantityScale",
     "QuantityScaleOneOf",
     "QuantityScaleOneOf1",
@@ -890,6 +898,14 @@ from temper.generated.models.provenance_source_one_of2 import ProvenanceSourceOn
 from temper.generated.models.provision_connection_request import ProvisionConnectionRequest as ProvisionConnectionRequest
 from temper.generated.models.provision_machine_request import ProvisionMachineRequest as ProvisionMachineRequest
 from temper.generated.models.public_system_settings import PublicSystemSettings as PublicSystemSettings
+from temper.generated.models.public_within_audience import PublicWithinAudience as PublicWithinAudience
+from temper.generated.models.public_within_in_ref import PublicWithinInRef as PublicWithinInRef
+from temper.generated.models.public_within_open_kind import PublicWithinOpenKind as PublicWithinOpenKind
+from temper.generated.models.public_within_outcome import PublicWithinOutcome as PublicWithinOutcome
+from temper.generated.models.public_within_policy_outcome import PublicWithinPolicyOutcome as PublicWithinPolicyOutcome
+from temper.generated.models.public_within_policy_request import PublicWithinPolicyRequest as PublicWithinPolicyRequest
+from temper.generated.models.public_within_ref import PublicWithinRef as PublicWithinRef
+from temper.generated.models.public_within_row_ref import PublicWithinRowRef as PublicWithinRowRef
 from temper.generated.models.quantity_scale import QuantityScale as QuantityScale
 from temper.generated.models.quantity_scale_one_of import QuantityScaleOneOf as QuantityScaleOneOf
 from temper.generated.models.quantity_scale_one_of1 import QuantityScaleOneOf1 as QuantityScaleOneOf1

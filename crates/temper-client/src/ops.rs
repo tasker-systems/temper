@@ -361,6 +361,10 @@ registry! {
         RESTORE_TEAM = Post "/api/teams/{id}/restore" => "restore_team";
         RENAME_TEAM_SLUG = Post "/api/teams/{id}/rename-slug" => "rename_team_slug";
         SET_TEAM_AUTO_JOIN = Put "/api/teams/{id}/auto-join" => "set_team_auto_join";
+        LIST_PUBLIC_WITHIN = Get "/api/teams/public-within" => "list_public_within";
+        OPEN_PUBLIC_WITHIN = Put "/api/teams/{id}/public-within/{anchor_id}" => "open_public_within";
+        CLOSE_PUBLIC_WITHIN = Delete "/api/teams/{id}/public-within/{anchor_id}" => "close_public_within";
+        SET_PUBLIC_WITHIN_POLICY = Put "/api/teams/{id}/public-within-policy" => "set_public_within_policy";
         LIST_TEAM_INVITATIONS = Get "/api/teams/{id}/invitations" => "list_team_invitations";
         REVOKE_TEAM_INVITATION = Delete "/api/teams/{id}/invitations/{invitation_id}" => "revoke_team_invitation";
         CREATE_TEAM_INVITATION = Post "/api/teams/{id}/invite" => "create_team_invitation";

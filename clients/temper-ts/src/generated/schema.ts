@@ -3466,6 +3466,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/teams/public-within": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the openings that confer on you
+         * @description The `public_within` rows anchored on a team you are under that confer right now: each names the
+         *     team whose owned contexts you read through it, and the anchor. An inert row is absent.
+         */
+        get: operations["list_public_within"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/teams/{id}": {
         parameters: {
             query?: never;
@@ -3648,6 +3672,72 @@ export interface paths {
         head?: never;
         /** Change a member's role */
         patch: operations["change_role"];
+        trace?: never;
+    };
+    "/api/teams/{id}/public-within-policy": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Forbid or allow public_within over a team's subtree
+         * @description `forbidden: true` makes every `public_within` row over this team, and over every team beneath it
+         *     by any path, live or dead, confer nothing; a lower team's own setting never lifts it. On
+         *     temper-system it is the instance-wide off. Rows are kept and revive when the forbid is cleared.
+         *     The team's direct owner, or a system admin; temper-system and the gating team: a system admin
+         *     only. Recorded as `public_within_policy_changed`, with one `public_within_effect_changed` per row
+         *     whose effect it flips.
+         */
+        put: operations["set_public_within_policy"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/teams/{id}/public-within/{anchor_id}": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Open a team's contexts to an ancestor's subtree
+         * @description `public_within(T, A)`: the people under the anchor (on its roster or on a live team beneath it,
+         *     at any role) read every context the team owns, and reference it from homes they author. Never a
+         *     write into the team, and never a machine or a connection agent. Not inherited by the team's
+         *     children. Both sides consent: the caller is a direct owner or maintainer of the team (a system
+         *     admin is held to this too), and of the anchor, or is a system admin. An anchor that is
+         *     temper-system or the gating team, or whose subtree holds an auto-join or the gating team, is a
+         *     system admin's act (`instance_wide`). The audience grows with the anchor's subtree: every manager
+         *     of a team under the anchor, identity-provider group sync and an admin can widen it. Either side
+         *     closes alone. Recorded as `team_public_within_changed`.
+         */
+        put: operations["open_public_within"];
+        post?: never;
+        /**
+         * Close a team's opening to an ancestor's subtree
+         * @description Deletes the `public_within` row. Either side closes alone, whatever the policy or either team's
+         *     liveness: a direct owner or maintainer of the team, of the anchor (temper-system or the gating
+         *     team as the anchor: a system admin only), or a system admin. What readers already read is not
+         *     recalled. Recorded as `team_public_within_changed`.
+         */
+        delete: operations["close_public_within"];
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/teams/{id}/reassign": {
@@ -8782,6 +8872,94 @@ export interface components {
             terms_version?: string | null;
         };
         /**
+         * @description How many teams and people a `public_within` row reads to: the live teams in the anchor's
+         *     subtree, and the distinct people on them. Machines and connection agents never read through a
+         *     row, so they are not counted. A count, never a list.
+         */
+        PublicWithinAudience: {
+            /** Format: int64 */
+            principals: number;
+            /** Format: int64 */
+            teams: number;
+        };
+        /** @description One team opened to this team's subtree, on the anchor's [`TeamDetail`]. */
+        PublicWithinInRef: {
+            /** @description Whether the row confers right now. Only a boolean, as on [`PublicWithinRef`]. */
+            effective: boolean;
+            team: components["schemas"]["TeamRef"];
+        };
+        /**
+         * @description What `PUT /api/teams/{id}/public-within/{anchor_id}` did.
+         * @enum {string}
+         */
+        PublicWithinOpenKind: "opened" | "exists";
+        /**
+         * @description Response body for `PUT /api/teams/{id}/public-within/{anchor_id}`. The team's owned contexts are
+         *     readable by the people under the anchor while the row is effective. `audience` is who that is
+         *     now; it grows with the anchor's subtree, which every manager of a team under the anchor can
+         *     change, as can an identity provider's group sync and an admin.
+         */
+        PublicWithinOutcome: {
+            audience: components["schemas"]["PublicWithinAudience"];
+            /**
+             * @description The row survives a pool team (the root, the gating team or an auto-join team) under the
+             *     anchor: only a system admin opens such a row.
+             */
+            instance_wide: boolean;
+            outcome: components["schemas"]["PublicWithinOpenKind"];
+        };
+        /**
+         * @description Response body for `PUT /api/teams/{id}/public-within-policy`: the rows the change made inert
+         *     (`dormant`) or made confer again (`revived`). A row is named only to a caller who manages its team
+         *     or its anchor, or is a system admin; the others are counted in `dormant_unnamed` and
+         *     `revived_unnamed`.
+         */
+        PublicWithinPolicyOutcome: {
+            /** @description False when the forbid already held the value: nothing was written or recorded. */
+            changed: boolean;
+            dormant: components["schemas"]["PublicWithinRowRef"][];
+            /** Format: int32 */
+            dormant_unnamed: number;
+            /** @description The forbid now. */
+            forbidden: boolean;
+            revived: components["schemas"]["PublicWithinRowRef"][];
+            /** Format: int32 */
+            revived_unnamed: number;
+            /** Format: uuid */
+            team_id: string;
+        };
+        /**
+         * @description Request body for `PUT /api/teams/{id}/public-within-policy`: `true` forbids every
+         *     `public_within` row over this team and every team beneath it; `false` clears this team's forbid
+         *     (a forbid set higher up still holds). On the root (`temper-system`) it is the instance-wide off,
+         *     and only a system admin sets it.
+         */
+        PublicWithinPolicyRequest: {
+            forbidden: boolean;
+        };
+        /** @description One anchor this team is opened to, on the team's own [`TeamDetail`]. */
+        PublicWithinRef: {
+            anchor: components["schemas"]["TeamRef"];
+            audience: components["schemas"]["PublicWithinAudience"];
+            /**
+             * @description Whether the row confers right now. Only a boolean: when it does not, nothing says which
+             *     forbid, dead team or pool team stops it.
+             */
+            effective: boolean;
+            /** @description Opened by a system admin over an anchor whose subtree reaches the whole instance. */
+            instance_wide: boolean;
+            /** Format: date-time */
+            opened_at: string;
+        };
+        /**
+         * @description A `public_within` row named by both of its teams: `team` (whose owned contexts are opened) and
+         *     `anchor` (whose subtree reads them).
+         */
+        PublicWithinRowRef: {
+            anchor: components["schemas"]["TeamRef"];
+            team: components["schemas"]["TeamRef"];
+        };
+        /**
          * @description The scale of an act's ordering quantity.
          *
          *     Carried because assuming `[0,1]` is the **live** mistake in this family, not a hypothetical one.
@@ -11779,6 +11957,19 @@ export interface components {
              *     or move it. Deliberately not symmetrical with `children`, which stays managers-only.
              */
             parents?: components["schemas"]["TeamRef"][];
+            /**
+             * @description The ancestors this team's owned contexts are opened to (`public_within` rows with this team
+             *     as T), for every member of this team (any role) and for system admins: the same audience as
+             *     `parents`, and not an ancestor's manager, since an anchor on another branch is not theirs to
+             *     see. Empty for everyone else.
+             */
+            public_within?: components["schemas"]["PublicWithinRef"][];
+            /**
+             * @description The teams opened to this team's subtree (`public_within` rows with this team as the anchor),
+             *     for a caller who manages this team or is a system admin (on the root or the gating team, a
+             *     system admin only). Empty for everyone else.
+             */
+            public_within_in?: components["schemas"]["PublicWithinInRef"][];
             slug: string;
         };
         /**
@@ -21697,6 +21888,38 @@ export interface operations {
             };
         };
     };
+    list_public_within: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The rows that confer on the caller */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicWithinRowRef"][];
+                };
+            };
+            /** @description The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal): a machine never reads through public_within */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     detail: {
         parameters: {
             query?: never;
@@ -22286,6 +22509,145 @@ export interface operations {
             };
             /** @description Cannot demote the last owner (grant `owner` to another member first), or a SAML-provisioned row; or the membership changed since it was read (retry) */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    set_public_within_policy: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Team ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublicWithinPolicyRequest"];
+            };
+        };
+        responses: {
+            /** @description Set, cleared, or already so; the rows it made inert or revived */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicWithinPolicyOutcome"];
+                };
+            };
+            /** @description The team is a personal team */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forbidden: the caller is not the team's direct owner and not a system admin (temper-system or the gating team: not a system admin); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The team does not exist or is soft-deleted (told only to a system admin) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    open_public_within: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description The team whose owned contexts are opened (T) */
+                id: string;
+                /** @description The ancestor team whose subtree reads them (A) */
+                anchor_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Opened, or already open */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicWithinOutcome"];
+                };
+            };
+            /** @description The anchor is not a live team above this one; or the team is a personal team, temper-system or the gating team, or the anchor is a personal team */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forbidden: the caller is not a direct owner or maintainer of the team, or of the anchor and not a system admin; or (`FORBIDDEN_DETAIL`) `public_within_forbidden_here`, a forbid applies over the team (temper-system's is the instance-wide off), or the anchor needs a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    close_public_within: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description The team whose owned contexts are opened (T) */
+                id: string;
+                /** @description The ancestor team whose subtree reads them (A) */
+                anchor_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Closed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forbidden: the caller manages neither side and is not a system admin (whether or not the row exists); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such row (told only to a caller on a side, or a system admin) */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

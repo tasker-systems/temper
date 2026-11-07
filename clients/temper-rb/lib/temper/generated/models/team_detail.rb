@@ -34,6 +34,12 @@ module Temper::Generated
     # The team's live parent teams, for every member of this team (any role) and for system admins (team DAG doors D9, ruling R2 as amended). A member already reads everything attached to these teams, so their names disclose nothing new; a child's manager needs them to detach or move it. Deliberately not symmetrical with `children`, which stays managers-only.
     attr_accessor :parents
 
+    # The ancestors this team's owned contexts are opened to (`public_within` rows with this team as T), for every member of this team (any role) and for system admins: the same audience as `parents`, and not an ancestor's manager, since an anchor on another branch is not theirs to see. Empty for everyone else.
+    attr_accessor :public_within
+
+    # The teams opened to this team's subtree (`public_within` rows with this team as the anchor), for a caller who manages this team or is a system admin (on the root or the gating team, a system admin only). Empty for everyone else.
+    attr_accessor :public_within_in
+
     attr_accessor :slug
 
     class EnumAttributeValidator
@@ -69,6 +75,8 @@ module Temper::Generated
         :'members' => :'members',
         :'name' => :'name',
         :'parents' => :'parents',
+        :'public_within' => :'public_within',
+        :'public_within_in' => :'public_within_in',
         :'slug' => :'slug'
       }
     end
@@ -94,6 +102,8 @@ module Temper::Generated
         :'members' => :'Array<TeamMemberDetail>',
         :'name' => :'String',
         :'parents' => :'Array<TeamRef>',
+        :'public_within' => :'Array<PublicWithinRef>',
+        :'public_within_in' => :'Array<PublicWithinInRef>',
         :'slug' => :'String'
       }
     end
@@ -165,6 +175,18 @@ module Temper::Generated
       if attributes.key?(:'parents')
         if (value = attributes[:'parents']).is_a?(Array)
           self.parents = value
+        end
+      end
+
+      if attributes.key?(:'public_within')
+        if (value = attributes[:'public_within']).is_a?(Array)
+          self.public_within = value
+        end
+      end
+
+      if attributes.key?(:'public_within_in')
+        if (value = attributes[:'public_within_in']).is_a?(Array)
+          self.public_within_in = value
         end
       end
 
@@ -278,6 +300,8 @@ module Temper::Generated
           members == o.members &&
           name == o.name &&
           parents == o.parents &&
+          public_within == o.public_within &&
+          public_within_in == o.public_within_in &&
           slug == o.slug
     end
 
@@ -290,7 +314,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [auto_join_role, children, created, description, id, members, name, parents, slug].hash
+      [auto_join_role, children, created, description, id, members, name, parents, public_within, public_within_in, slug].hash
     end
 
     # Builds the object from hash

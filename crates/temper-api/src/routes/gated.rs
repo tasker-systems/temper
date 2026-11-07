@@ -152,6 +152,7 @@ pub(super) fn gated_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::contexts::materialize))
         .routes(routes!(handlers::contexts::analytics))
         .routes(routes!(handlers::teams::list, handlers::teams::create))
+        .routes(routes!(handlers::teams::list_public_within))
         .routes(routes!(handlers::teams::add_member))
         .routes(routes!(handlers::invitations::create))
         .routes(routes!(handlers::invitations::list))
@@ -173,6 +174,11 @@ pub(super) fn gated_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::teams::reparent))
         .routes(routes!(handlers::teams::restore))
         .routes(routes!(handlers::teams::rename_slug))
+        .routes(routes!(
+            handlers::teams::open_public_within,
+            handlers::teams::close_public_within
+        ))
+        .routes(routes!(handlers::teams::set_public_within_policy))
         // System admin only: the handler mints `SystemAdmin` before anything else.
         .routes(routes!(handlers::teams::set_auto_join))
         .routes(routes!(handlers::ingest::create))

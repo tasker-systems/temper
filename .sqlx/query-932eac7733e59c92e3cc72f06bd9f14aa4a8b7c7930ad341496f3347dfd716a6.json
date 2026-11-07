@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT team_is_root_or_gating($2)                     AS \"anchor_root_or_gating!\",\n                  anchor_subtree_holds_pool($2)                  AS \"pool!\",\n                  public_within_allowed_over($1)                 AS \"allowed!\",\n                  ($1 <> $2 AND EXISTS (SELECT 1 FROM team_ancestors($1) a\n                                         WHERE a.team_id = $2))  AS \"ancestor!\",\n                  EXISTS (SELECT 1 FROM kb_teams t\n                           WHERE t.id = $1 AND t.personal_of IS NOT NULL)\n                    OR team_is_root_or_gating($1)\n                    OR EXISTS (SELECT 1 FROM kb_teams t\n                                WHERE t.id = $2 AND t.personal_of IS NOT NULL) AS \"barred!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "anchor_root_or_gating!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "pool!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "allowed!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "ancestor!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
+        "name": "barred!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "932eac7733e59c92e3cc72f06bd9f14aa4a8b7c7930ad341496f3347dfd716a6"
+}

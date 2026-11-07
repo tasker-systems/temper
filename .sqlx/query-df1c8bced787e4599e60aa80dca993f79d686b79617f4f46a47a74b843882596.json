@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT _admin_public_within_policy_write($1, $2, $3, $4, NULL) AS \"w!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "w!",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "df1c8bced787e4599e60aa80dca993f79d686b79617f4f46a47a74b843882596"
+}

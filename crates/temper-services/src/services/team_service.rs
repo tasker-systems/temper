@@ -23,11 +23,12 @@ use crate::error::{ApiError, ApiResult};
 use temper_core::types::ids::ProfileId;
 use temper_core::types::reassign::{RemoveMemberOutcome, ResidualContext, ResidualOwnedReach};
 use temper_core::types::team::{
-    AddMemberRequest, AttachChildOutcome, AttachOutcome, RenameTeamSlugOutcome,
-    RenameTeamSlugRequest, ReparentOutcome, ReparentRequest, RestoreTeamOutcome,
-    SetAutoJoinOutcome, TeamChildRef, TeamCreateRequest, TeamDetail, TeamMemberDetail,
-    TeamMemberRow, TeamMemberSource, TeamRef, TeamRole, TeamRow, TeamUpdateRequest,
-    MAX_CREATE_PARENTS,
+    AddMemberRequest, AttachChildOutcome, AttachOutcome, PublicWithinAudience, PublicWithinInRef,
+    PublicWithinOpenKind, PublicWithinOutcome, PublicWithinPolicyOutcome, PublicWithinRef,
+    PublicWithinRowRef, RenameTeamSlugOutcome, RenameTeamSlugRequest, ReparentOutcome,
+    ReparentRequest, RestoreTeamOutcome, SetAutoJoinOutcome, TeamChildRef, TeamCreateRequest,
+    TeamDetail, TeamMemberDetail, TeamMemberRow, TeamMemberSource, TeamRef, TeamRole, TeamRow,
+    TeamUpdateRequest, MAX_CREATE_PARENTS,
 };
 
 /// The slug prefix of every personal team (`personal-<handle>`), which `sync_personal_team`
@@ -744,6 +745,30 @@ pub async fn team_detail(pool: &PgPool, caller: &Caller, team_id: Uuid) -> ApiRe
     } else {
         Vec::new()
     };
+    // public_within, as the team (T): the same audience as `parents`, never an ancestor's manager,
+    // since an anchor on another branch is not theirs to see. As the anchor (A): the same audience
+    // as `children`, its managers (on the root or the gating team, a system admin only). People
+    // only, by the read arm's own fence (`public_within_reading`): a machine, a connection agent or
+    // a profile with no human auth link never reads through a row, so it is not shown the rows
+    // either.
+    let person = (admin || member || manages)
+        && matches!(caller, Caller::Human(_))
+        && sqlx::query_scalar!(
+            r#"SELECT public_within_reading($1) AS "person!""#,
+            *caller.profile_id()
+        )
+        .fetch_one(pool)
+        .await?;
+    let public_within = if person && (admin || member) {
+        public_within_of(pool, team_id).await?
+    } else {
+        Vec::new()
+    };
+    let public_within_in = if person && manages {
+        public_within_in_of(pool, team_id).await?
+    } else {
+        Vec::new()
+    };
 
     Ok(TeamDetail {
         id: team.id,
@@ -755,6 +780,8 @@ pub async fn team_detail(pool: &PgPool, caller: &Caller, team_id: Uuid) -> ApiRe
         members,
         children,
         parents,
+        public_within,
+        public_within_in,
     })
 }
 
@@ -1939,6 +1966,539 @@ pub async fn change_role(
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to commit transaction: {e}")))?;
     Ok(row)
+}
+
+// =================================================================================================
+// public_within: the doors (open, close, the forbid) and the discovery list
+// =================================================================================================
+
+/// The refusal for an open over a team some forbid covers (its own, one above it, or the root's,
+/// which is the instance-wide off). Shown only to a caller who has already passed the side checks
+/// that read it: the root's forbid is the same for every team, and a subtree forbid is answered
+/// only to a manager of the team.
+pub const PUBLIC_WITHIN_FORBIDDEN_HERE: &str =
+    "public_within_forbidden_here: a forbid applies over this team (on it, on a team above it, or \
+     on temper-system)";
+
+/// The refusal to a manager of the anchor when the anchor is the root or the gating team, or its
+/// subtree holds an auto-join or the gating team: only a system admin opens such a row. One message
+/// for every case, so it does not say which pool team sits below.
+pub const PUBLIC_WITHIN_ADMIN_ANCHOR: &str =
+    "opening to this anchor requires a system admin: its subtree reaches the whole instance";
+
+async fn caller_is_admin(pool: &PgPool, caller: &HumanPrincipal) -> ApiResult<bool> {
+    Ok(crate::authz::Principal::Human(caller)
+        .system_admin(pool)
+        .await?
+        .is_some())
+}
+
+/// [`caller_is_admin`] on the transaction's own connection, under its locks: a re-check never takes
+/// a second pooled connection while the transaction holds rows.
+async fn caller_is_admin_on(
+    conn: &mut sqlx::PgConnection,
+    caller: &HumanPrincipal,
+) -> ApiResult<bool> {
+    match crate::auth::require_system_admin_on(conn, caller).await {
+        Ok(_) => Ok(true),
+        Err(ApiError::Forbidden) => Ok(false),
+        Err(other) => Err(other),
+    }
+}
+
+/// A direct, live `owner` or `maintainer` row on the team.
+async fn manages_on(
+    conn: &mut sqlx::PgConnection,
+    team_id: Uuid,
+    caller: ProfileId,
+) -> ApiResult<bool> {
+    Ok(role_on_team_on(conn, team_id, caller)
+        .await?
+        .is_some_and(can_manage))
+}
+
+/// What an open decided, once its rules passed.
+#[derive(Debug, Clone, Copy)]
+struct OpenDecision {
+    admin_act: bool,
+    instance_wide: bool,
+}
+
+/// The open's rules, in order, on `conn` (the pool for the pre-check, the transaction under the
+/// open's locks for the decision). `admin` is the caller's system-admin standing, read by the
+/// caller of this function each time.
+///
+/// 1. The root forbid, the instance-wide off: the same for every team, so it says nothing about
+///    this one.
+/// 2. A direct, live manager of the team. No admin bypass: the team's consent is always given by
+///    one of its own managers.
+/// 3. A direct, live manager of the anchor, or a system admin.
+/// 4. The anchor is the root or the gating team: a system admin only.
+/// 5. The anchor's live subtree holds an auto-join or the gating team: a system admin only, and the
+///    row is `instance_wide`.
+/// 6. No forbid over the team, by any path, live or dead.
+/// 7. The anchor is a live strict ancestor of the team.
+/// 8. The team is not personal, the root or the gating team; the anchor is not personal.
+///
+/// A caller who manages neither side stops at rule 2 or 3 with the bare `403`, whatever the teams
+/// are; a subtree forbid is named only after rule 2, to a manager of the team.
+async fn open_rules(
+    conn: &mut sqlx::PgConnection,
+    caller: &HumanPrincipal,
+    admin: bool,
+    team_id: Uuid,
+    anchor_id: Uuid,
+) -> ApiResult<OpenDecision> {
+    let me = caller.profile_id();
+    let root_forbidden = sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM kb_teams
+                           WHERE slug = 'temper-system' AND public_within_forbidden) AS "f!""#
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    if root_forbidden {
+        return Err(ApiError::ForbiddenDetail(
+            PUBLIC_WITHIN_FORBIDDEN_HERE.to_string(),
+        ));
+    }
+    if !manages_on(conn, team_id, me).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let manages_anchor = manages_on(conn, anchor_id, me).await?;
+    if !manages_anchor && !admin {
+        return Err(ApiError::Forbidden);
+    }
+    let shape = sqlx::query!(
+        r#"SELECT team_is_root_or_gating($2)                     AS "anchor_root_or_gating!",
+                  anchor_subtree_holds_pool($2)                  AS "pool!",
+                  public_within_allowed_over($1)                 AS "allowed!",
+                  ($1 <> $2 AND EXISTS (SELECT 1 FROM team_ancestors($1) a
+                                         WHERE a.team_id = $2))  AS "ancestor!",
+                  EXISTS (SELECT 1 FROM kb_teams t
+                           WHERE t.id = $1 AND t.personal_of IS NOT NULL)
+                    OR team_is_root_or_gating($1)
+                    OR EXISTS (SELECT 1 FROM kb_teams t
+                                WHERE t.id = $2 AND t.personal_of IS NOT NULL) AS "barred!""#,
+        team_id,
+        anchor_id,
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    let admin_required = shape.anchor_root_or_gating || shape.pool;
+    if admin_required && !admin {
+        return Err(ApiError::ForbiddenDetail(
+            PUBLIC_WITHIN_ADMIN_ANCHOR.to_string(),
+        ));
+    }
+    if !shape.allowed {
+        return Err(ApiError::ForbiddenDetail(
+            PUBLIC_WITHIN_FORBIDDEN_HERE.to_string(),
+        ));
+    }
+    if !shape.ancestor {
+        return Err(ApiError::BadRequest(
+            "the anchor must be a live team above this one".to_string(),
+        ));
+    }
+    if shape.barred {
+        return Err(ApiError::BadRequest(
+            "a personal team, temper-system or the gating team cannot be opened, and a personal \
+             team cannot be an anchor"
+                .to_string(),
+        ));
+    }
+    Ok(OpenDecision {
+        admin_act: admin && (admin_required || !manages_anchor),
+        instance_wide: shape.pool,
+    })
+}
+
+/// Open team `team_id`'s owned contexts to the people under `anchor_id` (`public_within(T, A)`).
+///
+/// Both sides consent: the caller manages the team directly, and manages the anchor directly or is
+/// a system admin; the rules and their order are on `open_rules`. They run on the pool, then
+/// again in the transaction after `_public_within_open_locks` has locked the team and the anchor
+/// (and, shared, every team whose forbid reaches the team), so a demotion or a forbid committed
+/// while the open waited is seen. If the team gained an ancestor while the open waited, the lock
+/// set is stale and the open answers a retryable `409`. The row and its `team_public_within_changed` record are one
+/// statement. `exists` when the row is already there: nothing is written.
+pub async fn open_public_within(
+    pool: &PgPool,
+    caller: &HumanPrincipal,
+    team_id: Uuid,
+    anchor_id: Uuid,
+) -> ApiResult<PublicWithinOutcome> {
+    {
+        let admin = caller_is_admin(pool, caller).await?;
+        let mut conn = pool.acquire().await?;
+        open_rules(&mut conn, caller, admin, team_id, anchor_id).await?;
+    }
+
+    let mut tx = pool.begin().await?;
+    let stable = sqlx::query_scalar!(
+        r#"SELECT _public_within_open_locks($1, $2) AS "stable!""#,
+        team_id,
+        anchor_id,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if !stable {
+        return Err(subtree_changed());
+    }
+    let admin = caller_is_admin_on(&mut tx, caller).await?;
+    let decision = open_rules(&mut tx, caller, admin, team_id, anchor_id).await?;
+    let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let written = sqlx::query_scalar!(
+        r#"SELECT _admin_public_within_write($1, $2, $3, $4, 'opened', $5, $6, NULL) AS "o!""#,
+        emitter.uuid(),
+        *caller.profile_id(),
+        team_id,
+        anchor_id,
+        decision.admin_act,
+        decision.instance_wide,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    let instance_wide = sqlx::query_scalar!(
+        "SELECT instance_wide FROM kb_team_public_within WHERE team_id = $1 AND anchor_id = $2",
+        team_id,
+        anchor_id,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    let audience = audience_on(&mut tx, anchor_id).await?;
+    tx.commit().await?;
+    Ok(PublicWithinOutcome {
+        outcome: if written == "opened" {
+            PublicWithinOpenKind::Opened
+        } else {
+            PublicWithinOpenKind::Exists
+        },
+        audience,
+        instance_wide,
+    })
+}
+
+async fn audience_on(
+    conn: &mut sqlx::PgConnection,
+    anchor_id: Uuid,
+) -> ApiResult<PublicWithinAudience> {
+    let row = sqlx::query!(
+        r#"SELECT teams AS "teams!", principals AS "principals!"
+             FROM public_within_audience($1)"#,
+        anchor_id,
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    Ok(PublicWithinAudience {
+        teams: row.teams,
+        principals: row.principals,
+    })
+}
+
+/// The close's arms: a direct, live manager of the team; a direct, live manager of the anchor
+/// unless the anchor is the root or the gating team (a leftover owner row there confers nothing);
+/// or a system admin. `Some(true)` when only the admin arm admits the caller.
+async fn close_authority(
+    conn: &mut sqlx::PgConnection,
+    caller: &HumanPrincipal,
+    admin: bool,
+    team_id: Uuid,
+    anchor_id: Uuid,
+) -> ApiResult<bool> {
+    let me = caller.profile_id();
+    if manages_on(conn, team_id, me).await? {
+        return Ok(false);
+    }
+    if manages_on(conn, anchor_id, me).await?
+        && !crate::services::access_service::is_root_or_gating_team_on(conn, anchor_id).await?
+    {
+        return Ok(false);
+    }
+    if admin {
+        return Ok(true);
+    }
+    Err(ApiError::Forbidden)
+}
+
+/// Close `public_within(team_id, anchor_id)`: delete the row and record it (`closed`). Either side
+/// closes alone, whatever the policy or either team's liveness says: a direct, live manager of the
+/// team, a direct, live manager of the anchor (on the root or the gating team, an admin only), or a
+/// system admin. A caller on no arm gets the bare `403` whether or not the row or the teams exist;
+/// a caller on an arm gets `404` when there is no such row. The arms run again under both team rows'
+/// locks.
+pub async fn close_public_within(
+    pool: &PgPool,
+    caller: &HumanPrincipal,
+    team_id: Uuid,
+    anchor_id: Uuid,
+) -> ApiResult<()> {
+    {
+        let admin = caller_is_admin(pool, caller).await?;
+        let mut conn = pool.acquire().await?;
+        close_authority(&mut conn, caller, admin, team_id, anchor_id).await?;
+    }
+    let mut tx = pool.begin().await?;
+    lock_teams_ascending(&mut tx, &[team_id, anchor_id]).await?;
+    let admin = caller_is_admin_on(&mut tx, caller).await?;
+    let admin_act = close_authority(&mut tx, caller, admin, team_id, anchor_id).await?;
+    let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let written = sqlx::query_scalar!(
+        r#"SELECT _admin_public_within_write($1, $2, $3, $4, 'closed', $5, false, NULL) AS "o!""#,
+        emitter.uuid(),
+        *caller.profile_id(),
+        team_id,
+        anchor_id,
+        admin_act,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if written != "closed" {
+        return Err(ApiError::NotFound(
+            "no public_within row for this team and anchor".to_string(),
+        ));
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Who may set a team's forbid. One rule for every team: on the root (`temper-system`, where the
+/// forbid is the instance-wide off) and on the gating team, a system admin only, and an owner row
+/// there confers nothing; elsewhere the team's direct, live `owner`, or a system admin. A caller on
+/// no arm gets the bare `403`. A personal team has no forbid (`400`), for its owner and an admin
+/// alike; that is checked after the arms, so it is answered only to someone on one.
+async fn policy_authority(
+    conn: &mut sqlx::PgConnection,
+    caller: &HumanPrincipal,
+    admin: bool,
+    team_id: Uuid,
+) -> ApiResult<()> {
+    let admitted = if crate::services::access_service::is_root_or_gating_team_on(conn, team_id)
+        .await?
+    {
+        admin
+    } else {
+        admin || role_on_team_on(conn, team_id, caller.profile_id()).await? == Some(TeamRole::Owner)
+    };
+    if !admitted {
+        return Err(ApiError::Forbidden);
+    }
+    if personal_of_on(conn, team_id).await?.is_some() {
+        return Err(ApiError::BadRequest(
+            "a personal team has no public_within policy".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// One effect transition the forbid writer reported.
+#[derive(Debug, serde::Deserialize)]
+struct EffectChange {
+    team_id: Uuid,
+    anchor_id: Uuid,
+    effective: bool,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct PolicyWrite {
+    outcome: String,
+    #[serde(default)]
+    changes: Vec<EffectChange>,
+}
+
+/// Set or clear `team_id`'s `public_within` forbid (`kb_teams.public_within_forbidden`).
+///
+/// A forbid makes every row over this team, and over every team beneath it by any path, live or
+/// dead, inert; a lower owner's own allow never lifts it. On the root it is the instance-wide off.
+/// Authority is `policy_authority`, run on the pool and again under the team row's lock. The flag,
+/// its `public_within_policy_changed` record and one `public_within_effect_changed` per row whose
+/// effect flips are one statement (`_admin_public_within_policy_write`). The team row's lock is
+/// what serializes it with a concurrent open, which holds a shared lock on every team whose forbid
+/// reaches its team: an open is either refused by the forbid or recorded by it. The answer lists the rows made inert and the rows
+/// revived, each named only to a caller who manages its team or anchor or is a system admin, and
+/// counted otherwise.
+pub async fn set_public_within_policy(
+    pool: &PgPool,
+    caller: &HumanPrincipal,
+    team_id: Uuid,
+    forbidden: bool,
+) -> ApiResult<PublicWithinPolicyOutcome> {
+    {
+        let admin = caller_is_admin(pool, caller).await?;
+        let mut conn = pool.acquire().await?;
+        policy_authority(&mut conn, caller, admin, team_id).await?;
+    }
+    let mut tx = pool.begin().await?;
+    lock_teams_ascending(&mut tx, &[team_id]).await?;
+    // The shared gating lock after the row, as every team door takes it: a repoint of the gating
+    // slug cannot land between the re-check below and the write.
+    sqlx::query_scalar!(r#"SELECT 1 AS "one!" FROM (SELECT _gating_team_lock(false)) g"#)
+        .fetch_one(&mut *tx)
+        .await?;
+    let admin = caller_is_admin_on(&mut tx, caller).await?;
+    policy_authority(&mut tx, caller, admin, team_id).await?;
+    let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let raw = sqlx::query_scalar!(
+        r#"SELECT _admin_public_within_policy_write($1, $2, $3, $4, NULL) AS "w!""#,
+        emitter.uuid(),
+        *caller.profile_id(),
+        team_id,
+        forbidden,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    let write: PolicyWrite = serde_json::from_value(raw)
+        .map_err(|e| ApiError::Internal(format!("_admin_public_within_policy_write: {e}")))?;
+    if write.outcome == "absent" {
+        return Err(ApiError::NotFound(
+            "team not found or not readable".to_string(),
+        ));
+    }
+
+    let mut outcome = PublicWithinPolicyOutcome {
+        team_id,
+        forbidden,
+        changed: write.outcome == "changed",
+        dormant: Vec::new(),
+        revived: Vec::new(),
+        dormant_unnamed: 0,
+        revived_unnamed: 0,
+    };
+    let me = caller.profile_id();
+    for change in write.changes {
+        let named = admin
+            || manages_on(&mut tx, change.team_id, me).await?
+            || (manages_on(&mut tx, change.anchor_id, me).await?
+                && !crate::services::access_service::is_root_or_gating_team_on(
+                    &mut tx,
+                    change.anchor_id,
+                )
+                .await?);
+        match (named, change.effective) {
+            (true, effective) => {
+                let row = PublicWithinRowRef {
+                    team: team_ref_of(&mut tx, change.team_id).await?,
+                    anchor: team_ref_of(&mut tx, change.anchor_id).await?,
+                };
+                if effective {
+                    outcome.revived.push(row);
+                } else {
+                    outcome.dormant.push(row);
+                }
+            }
+            (false, true) => outcome.revived_unnamed += 1,
+            (false, false) => outcome.dormant_unnamed += 1,
+        }
+    }
+    tx.commit().await?;
+    Ok(outcome)
+}
+
+/// The `public_within` rows that confer on the caller right now: effective rows anchored on a team
+/// in the caller's closure, for a person (never a machine or a connection agent, which never read
+/// through a row). An inert row, and a row anchored outside the closure, are absent.
+pub async fn list_public_within(
+    pool: &PgPool,
+    caller: &HumanPrincipal,
+) -> ApiResult<Vec<PublicWithinRowRef>> {
+    let rows = sqlx::query!(
+        r#"SELECT t.id AS "team_id!", t.slug AS "team_slug!", t.name AS "team_name!",
+                  a.id AS "anchor_id!", a.slug AS "anchor_slug!", a.name AS "anchor_name!"
+             FROM kb_team_public_within pw
+             JOIN kb_teams t ON t.id = pw.team_id
+             JOIN kb_teams a ON a.id = pw.anchor_id
+            WHERE pw.anchor_id IN (SELECT r.team_id FROM profile_reachable_teams($1) r)
+              AND public_within_reading($1)
+              AND public_within_row_effective(pw.team_id, pw.anchor_id, pw.instance_wide)
+            ORDER BY t.slug, a.slug"#,
+        *caller.profile_id(),
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| PublicWithinRowRef {
+            team: TeamRef {
+                id: r.team_id,
+                slug: r.team_slug,
+                name: r.team_name,
+            },
+            anchor: TeamRef {
+                id: r.anchor_id,
+                slug: r.anchor_slug,
+                name: r.anchor_name,
+            },
+        })
+        .collect())
+}
+
+/// The `public_within` rows with `team_id` as T, for its detail.
+async fn public_within_of(pool: &PgPool, team_id: Uuid) -> ApiResult<Vec<PublicWithinRef>> {
+    let rows = sqlx::query!(
+        r#"SELECT a.id AS "anchor_id!", a.slug AS "anchor_slug!", a.name AS "anchor_name!",
+                  public_within_row_effective(pw.team_id, pw.anchor_id, pw.instance_wide)
+                      AS "effective!",
+                  pw.instance_wide, pw.opened_at,
+                  au.teams AS "teams!", au.principals AS "principals!"
+             FROM kb_team_public_within pw
+             JOIN kb_teams a ON a.id = pw.anchor_id
+             CROSS JOIN LATERAL public_within_audience(pw.anchor_id) au
+            WHERE pw.team_id = $1
+            ORDER BY a.slug"#,
+        team_id,
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| PublicWithinRef {
+            anchor: TeamRef {
+                id: r.anchor_id,
+                slug: r.anchor_slug,
+                name: r.anchor_name,
+            },
+            effective: r.effective,
+            instance_wide: r.instance_wide,
+            opened_at: r.opened_at,
+            audience: PublicWithinAudience {
+                teams: r.teams,
+                principals: r.principals,
+            },
+        })
+        .collect())
+}
+
+/// The `public_within` rows with `anchor_id` as A, for its detail.
+async fn public_within_in_of(pool: &PgPool, anchor_id: Uuid) -> ApiResult<Vec<PublicWithinInRef>> {
+    let rows = sqlx::query!(
+        r#"SELECT t.id AS "team_id!", t.slug AS "team_slug!", t.name AS "team_name!",
+                  public_within_row_effective(pw.team_id, pw.anchor_id, pw.instance_wide)
+                      AS "effective!"
+             FROM kb_team_public_within pw
+             JOIN kb_teams t ON t.id = pw.team_id
+            WHERE pw.anchor_id = $1
+            ORDER BY t.slug"#,
+        anchor_id,
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| PublicWithinInRef {
+            team: TeamRef {
+                id: r.team_id,
+                slug: r.team_slug,
+                name: r.team_name,
+            },
+            effective: r.effective,
+        })
+        .collect())
 }
 
 #[cfg(test)]
