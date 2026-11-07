@@ -5,7 +5,7 @@
 
 Builds TWO scratch databases on the local dev server and the same synthetic world in each:
 
-  * `temper_pw_cost_base`: every migration up to Phase 0's last (the read path without arm 5);
+  * `temper_pw_cost_base`: every migration before this work's first (the read path without arm 5);
   * `temper_pw_cost_head`: every migration in the tree (arm 5, the wrappers, the audit split).
 
 Then it times the five doors the plan names, for a handful of profiles, on base and on head in
@@ -18,8 +18,11 @@ four cases:
 
 The merge bar (plan 2.6): `off` is within noise of `base`.
 
-Each number is the median `Execution Time` of `EXPLAIN (ANALYZE, FORMAT JSON)` over all samples
-for all measured profiles. Absolute milliseconds are this host's; read the ratios.
+Each number is the median wall time of one call, over all samples for all measured profiles,
+timed inside one session per door after two warm-up calls per profile: a server's pooled
+connections have already planned every function body, so a fresh session per sample would charge
+each sample a one-off planning cost a server does not pay. Absolute milliseconds are this host's;
+read the ratios.
 
 The world: a root-linked `org`, 10 divisions, 5 squads each; 300 people, each on two squads; one
 context per squad (40 resources) and per division (20 resources); 4000 edges, each homed in its
@@ -34,7 +37,6 @@ It WRITES only to the two scratch databases, and drops and recreates them on eve
 """
 
 import argparse
-import json
 import os
 import shutil
 import statistics
@@ -45,8 +47,8 @@ import tempfile
 SERVER = "postgresql://temper:temper@localhost:5437"
 BASE_DB = "temper_pw_cost_base"
 HEAD_DB = "temper_pw_cost_head"
-# Phase 0's last migration; everything after it is this work.
-BASE_LAST = 20261119000020
+# This work's first migration; the base is every migration before it.
+HEAD_FIRST = 20261120000000
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -74,7 +76,7 @@ def base_migrations():
     tmp = tempfile.mkdtemp(prefix="pw-cost-")
     src = os.path.join(REPO, "migrations")
     for f in os.listdir(src):
-        if f.endswith(".sql") and int(f.split("_", 1)[0]) <= BASE_LAST:
+        if f.endswith(".sql") and int(f.split("_", 1)[0]) < HEAD_FIRST:
             shutil.copy(os.path.join(src, f), tmp)
     return tmp
 
@@ -210,19 +212,33 @@ DOORS = {
 }
 
 
-def time_once(dsn, sql, profile):
-    stmt = sql.replace("$1", f"'{profile}'::uuid")
-    out = psql(dsn, f"EXPLAIN (ANALYZE, FORMAT JSON) {stmt}")
-    return json.loads(out[out.index("[") : out.rindex("]") + 1])[0]["Execution Time"]
+BENCH = """
+CREATE FUNCTION pg_temp.bench(q text, profiles uuid[], warm int, n int) RETURNS SETOF float8
+LANGUAGE plpgsql AS $b$
+DECLARE p uuid; t0 timestamptz; c record;
+BEGIN
+    FOREACH p IN ARRAY profiles LOOP
+        FOR i IN 1..warm LOOP EXECUTE q INTO c USING p; END LOOP;
+        FOR i IN 1..n LOOP
+            t0 := clock_timestamp();
+            EXECUTE q INTO c USING p;
+            RETURN NEXT extract(epoch FROM clock_timestamp() - t0) * 1000;
+        END LOOP;
+    END LOOP;
+END $b$;
+"""
 
 
 def measure(dsn, profiles, samples):
+    # One session per door: a server keeps its pooled connections, so the timed calls run on a
+    # session that has already planned every function body. A fresh session per sample would charge
+    # each sample that one-off planning instead.
     out = {}
+    arr = "ARRAY[" + ", ".join(f"'{p}'::uuid" for p in profiles) + "]"
     for name, sql in DOORS.items():
-        times = []
-        for p in profiles:
-            time_once(dsn, sql, p)  # warm
-            times += [time_once(dsn, sql, p) for _ in range(samples)]
+        q = sql.replace("'", "''")
+        rows = psql(dsn, BENCH + f"SELECT pg_temp.bench('{q}', {arr}, 2, {samples});")
+        times = [float(x) for x in rows.split()]
         out[name] = statistics.median(times)
     return out
 
