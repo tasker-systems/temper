@@ -646,7 +646,7 @@ async fn graph_walks_never_materialize_a_blob_node(pool: sqlx::PgPool) {
     );
 
     let walked: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT resource_id FROM __temper_ungated_follow_from($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        "SELECT resource_id FROM __temper_ungated_follow_from_homed($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
     )
     .bind(&visible)
     .bind([resource.uuid()])
@@ -658,6 +658,7 @@ async fn graph_walks_never_materialize_a_blob_node(pool: sqlx::PgPool) {
     .bind(50i32)
     .bind::<Option<serde_json::Value>>(None)
     .bind::<Option<i32>>(None)
+    .bind(owner.uuid())
     .fetch_all(&pool)
     .await
     .unwrap();

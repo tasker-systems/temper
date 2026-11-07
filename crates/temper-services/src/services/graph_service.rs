@@ -741,9 +741,10 @@ pub async fn entry_orientation_slice(
 /// `graph_induced_edges` is the graph family's own undirected walk, the same body chunk A uses at
 /// depth 0. The retired `graph_traverse` was the directed one and is not used.
 ///
-/// Note the graph family's walk is **stricter** than the composition's: it additionally requires
-/// `anchor_readable_by_profile` on the edge's home anchor, which `__temper_ungated_follow_from`
-/// does not check at all. That difference is pre-existing and is not resolved here.
+/// Both walks admit an edge only under the same conjunction: live, home anchor readable, both
+/// endpoints readable. This one reads `edges_visible_to`; the composition's walk did not check the
+/// home until `20261119000010`, and now checks each candidate edge's home inside
+/// `__temper_ungated_follow_from_homed`, against the visible set it is handed for the endpoints.
 pub async fn traversal_slice(
     pool: &PgPool,
     profile_id: ProfileId,

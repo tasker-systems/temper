@@ -269,9 +269,10 @@ pub enum VisibilityProfile {
     ///
     /// **The discriminator against `PrincipalAgnostic` is gate vs filter, and the two look
     /// identical to a grep.** A visibility *gate* (`WHERE subject IN (visible)`) is all-or-nothing
-    /// on the subject and cannot change the answer — `resource_standing_shape` is gated and is
-    /// agnostic, measured. A visibility *filter* (`JOIN vis ON vis.id = m.member_id`) removes rows
-    /// from the aggregate's own input and does.
+    /// on the subject and cannot change the answer — `resource_standing_shape`'s finding gate is one,
+    /// measured. A visibility *filter* (`JOIN vis ON vis.id = m.member_id`) removes rows
+    /// from the aggregate's own input and does — `resource_standing_shape`'s
+    /// `contradiction_balance` is one since 2026-11-07: it counts only the edges the caller sees.
     AgnosticInValueRelativeInDomain,
     PrincipalRelative,
 }

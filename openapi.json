@@ -28672,7 +28672,7 @@
       },
       "StandingShape": {
         "type": "object",
-        "description": "A finding's evidential-standing shape (SQL `resource_standing_shape`). All fields are\nnon-nullable: the access gate is INSIDE the SQL (a `gated` CTE over `resources_readable_by`),\nso an unreadable finding yields zero rows — never a partial/nullable row — and the caller-side\nread returns `Option<StandingShape>`, `None` for \"not readable.\"\n\nReader-independent by decision: one value for every caller who can read the finding, with\nper-contributor attribution on the citation-audit trail, never on the shape (stored-aggregates\nexception: `internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`).",
+        "description": "A finding's evidential-standing shape (SQL `resource_standing_shape`). All fields are\nnon-nullable: the access gate is INSIDE the SQL (a `gated` CTE over `resources_readable_by`),\nso an unreadable finding yields zero rows — never a partial/nullable row — and the caller-side\nread returns `Option<StandingShape>`, `None` for \"not readable.\"\n\nFive components are reader-independent by decision: one value for every caller who can read\nthe finding, with per-contributor attribution on the citation-audit trail, never on the shape.\n`contradiction_balance`, and so `band`, are per reader: counted only over the edges the caller\ncan see (stored-aggregates exception and its 2026-11-07 amendment:\n`internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`).",
         "required": [
           "finding_id",
           "citation_magnitude",
@@ -28691,7 +28691,7 @@
           },
           "band": {
             "type": "string",
-            "description": "Lossy read-time summary band (`provisional` / `reinforced` / `disputed` / `near-canonical`)\ncomputed over the shape above. Carried WITH the shape, never presented instead of it\n(spec §1.1).\n\nReader-independent by decision: one value for every caller who can read the finding, with\nper-contributor attribution on the citation-audit trail, never on the shape\n(stored-aggregates exception:\n`internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`)."
+            "description": "Lossy read-time summary band (`provisional` / `reinforced` / `disputed` / `near-canonical`)\ncomputed over the shape above. Carried WITH the shape, never presented instead of it\n(spec §1.1).\n\nPer reader, because it is computed from `contradiction_balance`, which is per reader; the\nother inputs are reader-independent\n(`internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`, amendment of\n2026-11-07)."
           },
           "citation_magnitude": {
             "type": "integer",
@@ -28706,7 +28706,7 @@
           "contradiction_balance": {
             "type": "number",
             "format": "double",
-            "description": "Supports minus contradicts, as a vector-sum over declared edges (spec §1) — not a headcount.\n\nReader-independent by decision: one value for every caller who can read the finding, with\nper-contributor attribution on the citation-audit trail, never on the shape\n(stored-aggregates exception:\n`internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`)."
+            "description": "Supports minus contradicts, as a vector-sum over declared edges (spec §1) — not a headcount.\n\nPer reader: summed only over the supports / corroborates / contradicts edges the caller\ncan see (live, home readable, both endpoints readable), so two callers may read different\nvalues. The one component that is not reader-independent\n(`internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`, amendment of\n2026-11-07)."
           },
           "finding_id": {
             "$ref": "#/components/schemas/ResourceId",

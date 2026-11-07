@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT tm.role AS \"role: TeamRole\", t.auto_join_role IS NOT NULL AS \"auto_join!\"\n             FROM kb_team_members tm\n             JOIN kb_teams t ON t.id = tm.team_id\n            WHERE tm.team_id = $1 AND tm.profile_id = $2",
+  "query": "SELECT tm.role AS \"role: TeamRole\"\n             FROM kb_team_members tm\n            WHERE tm.team_id = $1 AND tm.profile_id = $2",
   "describe": {
     "columns": [
       {
@@ -19,11 +19,6 @@
             }
           }
         }
-      },
-      {
-        "ordinal": 1,
-        "name": "auto_join!",
-        "type_info": "Bool"
       }
     ],
     "parameters": {
@@ -33,9 +28,8 @@
       ]
     },
     "nullable": [
-      false,
-      null
+      false
     ]
   },
-  "hash": "9c69e16f7c8d0072d699b06d10d0771437b0c666334482041f6331cf12fd280f"
+  "hash": "f688c3e4e7bdf64151934d815ee0fd2d84ae50af731cf6d60a8a595ce4a8e378"
 }

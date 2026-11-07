@@ -1,0 +1,20 @@
+title    = "The evidence read's contradiction balance and band count only edges the caller can see"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp", "schema"]
+status   = "signal-only"
+body = '''
+Migration 20261119000040. GET /api/resources/{id}/evidence (resource_standing_shape) scores
+`contradiction_balance` only over the supports, corroborates and contradicts edges the caller can
+see, through _resource_contradiction_balance: for a profile, the edges edges_visible_to admits; for
+a map's or a context's own principal, edges homed there with both endpoints in its interior; for
+any other kind, none. `band`, which takes the balance, follows. The other five components stay
+reader-independent. The kb_resource_standing memo and its producer are unchanged; the memo is not a
+read surface.
+
+Who observes: a reader of a finding with a support or contradiction edge they cannot see; their
+balance and band are computed without it, so two readers of one finding may see different values.
+Response shapes are unchanged. Witnesses: `the_balance_and_band_ignore_an_edge_the_reader_cannot_see`
+in `crates/temper-api/tests/evidence_handler_test.rs` and `standing_scores_only_edges_the_reader_sees`
+in `crates/temper-services/tests/edge_conjunction_harness.rs`. Release relevance: signal-only.
+'''

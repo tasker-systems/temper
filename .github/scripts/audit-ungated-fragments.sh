@@ -280,6 +280,28 @@ PREFIX='__temper_ungated_'
 #   only to carry its position. Its EXECUTE text is still constant with every value in `USING`. A
 #   later edit that moved a conjunct out of this body into a caller, or computed the page from the
 #   governance relations directly, is the shape to refuse.
+#
+# REVIEWED 2026-11-07 (`__temper_ungated_follow_from_homed`, migration 20261119000010: the
+# follow-from walk checks each edge's HOME, a context home by membership in
+# contexts_readable_by(reader), materialized once per call, a cogmap home with
+# cogmap_readable_by_profile). The function-NAME set grows by one and the SQL-file set by one.
+# contexts_readable_by and cogmap_readable_by_profile are anchor_readable_by_profile's own arms, so
+# the verdict is that function's. The relation watch does not move: the new body reads those two
+# functions, which the derivation does not list, and otherwise exactly the relations the 10-arity
+# body read.
+# The Rust half does not move either: `EMIT_FOLLOW_FROM` stays the one line in `query_plan.rs`
+# naming the walk, now spelling the new name.
+#   VERDICT: unchanged for resources. `p_visible_ids` is still the first argument and the walk's
+#     only resource gate; the core computes no visible set of its own. The new eleventh argument,
+#     `p_anchor_reader`, is the principal, and the body admits a candidate edge only if
+#     its home is readable by the reader: a context home in `contexts_readable_by(p_anchor_reader)`,
+#     materialized once per call, a cogmap home by `cogmap_readable_by_profile`. A
+#     NULL reader admits no edge. `query_follow_from` computes `resources_visible_to(p_principal)`
+#     once and passes `p_principal` as the reader. The retired 10-arity name passes a NULL reader,
+#     so it walks nowhere.
+#   EMITTER: `emit_ungated_core_call`'s `CoreCall::Walk` arm writes `VISIBLE_IDS` first and
+#     `PRINCIPAL_BIND` last. No caller-supplied value reaches either.
+#   RESIDUE: unchanged and accepted.
 read -r -d '' SQL_BASELINE <<'EOF' || true
 __temper_ungated_artifact_ask_counts
 __temper_ungated_artifact_ask_population
@@ -288,6 +310,7 @@ __temper_ungated_find_exact
 __temper_ungated_find_resources_with
 __temper_ungated_find_wide
 __temper_ungated_follow_from
+__temper_ungated_follow_from_homed
 __temper_ungated_governed_artifact_states
 __temper_ungated_governed_artifact_states_in
 __temper_ungated_governed_artifacts
@@ -663,6 +686,7 @@ read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20261104000000_find_resources_with_artifact_asks.sql
 20261105000000_artifact_ask_population_counts.sql
 20261106000000_artifact_ask_batch_read.sql
+20261119000010_follow_from_home_gate.sql
 EOF
 
 # ── THE RELATION WATCH — derived from what the cores READ, not what names them ──

@@ -2454,11 +2454,13 @@ impl DbBackend {
     /// `assert_relationship` / `retype` / `reweight` / `fold_relationship`. So the
     /// `kb_resource_standing.contradiction_balance` **column** is stale after an edge write until the
     /// next of those writes over the finding re-drives it. That is harmless **only** because the read
-    /// recomputes it live and never trusts the column, exactly as it does for `freshness`. Hence the
-    /// standing obligation, which replaces the discharged TODO rather than removing it:
-    /// **any future consumer that reads `kb_resource_standing` directly instead of calling
-    /// `resource_standing_shape` must FIRST wire an edge-incident refresh for
-    /// `contradiction_balance` (both edge endpoints).**
+    /// recomputes it live and never trusts the column, exactly as it does for `freshness`.
+    ///
+    /// **The memo is not a read surface, and must not become one** (`20261119000040`). The read's
+    /// `contradiction_balance` is per reader: it counts only the edges the caller can see. The
+    /// column here sums every edge, hidden ones included, so serving it to a caller would leak what
+    /// the read withholds, and an edge-incident refresh would not fix that. A consumer that needs a
+    /// finding's standing calls `resource_standing_shape` with its principal.
     async fn tick_resource_standing(&self, finding: ResourceId) {
         match temper_substrate::write::refresh_resource_standing(&self.pool, finding).await {
             Ok(()) => tracing::debug!(

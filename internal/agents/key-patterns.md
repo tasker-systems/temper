@@ -53,7 +53,9 @@ authority; read that before changing the thing it describes.
   aggregation order — within an auditor, then across auditors weighted by freshest audit, then
   across sources — is what defeats actor-count inflation; do not flatten it. **Agents with partial
   visibility do not read stored aggregates**, and that covers `StandingShape` and the evidence
-  doors: the components are reader-independent, bounded only by the finding's gate.
+  doors: five components are reader-independent, bounded only by the finding's gate;
+  `contradiction_balance`, and so the band, are per reader, over the support/contradiction edges
+  the caller can see (the decision's 2026-11-07 amendment).
   See `internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`.
 - **Citation audits are append-only events** (they cannot be edges), with no supersession.
   `AuditAuthority` adds a self-audit denial to readability, and both denials render 404. The
