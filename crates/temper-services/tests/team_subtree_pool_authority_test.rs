@@ -1,6 +1,6 @@
 #![cfg(feature = "test-db")]
 
-//! R6 over the whole subtree (PW-1; temper-artifacts `plans/2026-11-06-public-within.md` Phase 0.2).
+//! R6 over the whole subtree.
 //!
 //! An auto-join team's roster is every approved profile, and the gating team's roster is the access
 //! pool. So putting either one *anywhere* below a team hands that team's material to the whole

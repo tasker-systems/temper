@@ -932,7 +932,7 @@ fn a_walk_compiles_to_the_provenance_core_and_carries_its_via_column() {
         11,
         "the walk core takes eleven arguments; got:\n{call}"
     );
-    // `[2026-11-07]` The eleventh is the anchor reader (`20261119000010`, PW-6): the compiler's
+    // `[2026-11-07]` The eleventh is the anchor reader (`20261119000010`): the compiler's
     // own `$1`, so the walk can refuse an edge whose HOME the principal cannot read. Any other
     // value here would gate the edges against someone else.
     assert_eq!(

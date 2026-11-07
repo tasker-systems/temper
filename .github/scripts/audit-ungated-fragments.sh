@@ -281,9 +281,10 @@ PREFIX='__temper_ungated_'
 #   later edit that moved a conjunct out of this body into a caller, or computed the page from the
 #   governance relations directly, is the shape to refuse.
 #
-# REVIEWED 2026-11-07 (`__temper_ungated_follow_from_homed`, migration 20261119000010: the
-# follow-from walk checks each edge's HOME). The function-NAME set grows by one and the SQL-file set
-# by one. The relation watch does not move: the new body reads `anchor_readable_by_profile`, a
+# REVIEWED 2026-11-07 (`__temper_ungated_follow_from_homed`, migrations 20261119000010 and
+# 20261119000050: the follow-from walk checks each edge's HOME; 000050 replaces 000010's
+# edges_visible_to join with the per-home check, same signature). The function-NAME set grows by one
+# and the SQL-file set by two. The relation watch does not move: the new body reads `anchor_readable_by_profile`, a
 # function the derivation does not list, and otherwise exactly the relations the 10-arity body read.
 # The Rust half does not move either: `EMIT_FOLLOW_FROM` stays the one line in `query_plan.rs`
 # naming the walk, now spelling the new name.
@@ -682,6 +683,7 @@ read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20261105000000_artifact_ask_population_counts.sql
 20261106000000_artifact_ask_batch_read.sql
 20261119000010_follow_from_home_gate.sql
+20261119000050_follow_from_checks_each_home_once.sql
 EOF
 
 # ── THE RELATION WATCH — derived from what the cores READ, not what names them ──

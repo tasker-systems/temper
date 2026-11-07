@@ -1756,13 +1756,22 @@ async fn lock_teams_and_subtree(
     root: Uuid,
 ) -> ApiResult<bool> {
     let below = every_team_below(tx, root).await?;
-    let all: Vec<Uuid> = teams
+    let mut all: Vec<Uuid> = teams
         .iter()
         .copied()
         .chain(std::iter::once(root))
         .chain(below.iter().copied())
         .collect();
-    lock_teams_ascending(tx, &all).await?;
+    all.sort();
+    all.dedup();
+    // One statement, one round trip: the row lock sits above the sort, so the rows are locked in
+    // ascending id order, the same order `lock_teams_ascending` takes them in.
+    sqlx::query_scalar!(
+        r#"SELECT id AS "id!" FROM kb_teams WHERE id = ANY($1) ORDER BY id FOR NO KEY UPDATE"#,
+        &all,
+    )
+    .fetch_all(&mut *tx)
+    .await?;
     Ok(every_team_below(tx, root).await?.is_subset(&below))
 }
 
