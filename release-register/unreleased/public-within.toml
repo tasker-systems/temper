@@ -4,24 +4,26 @@ classes  = ["additive"]
 surfaces = ["http", "clients", "schema", "erasure-policy"]
 status   = "signal-only"
 body = '''
-Phases 1 and 2 of public_within (temper-artifacts specs/2026-11-06-public-within-design.md). Grown
-as later phases land.
+The schema, policy and read arm of public_within. Grown as the rest lands.
 
 Schema (migrations 20261120000000, 20261120000005, 20261120000010, 20261120000020): kb_system_settings gains
 public_within_enabled (default false, no backfill), kb_teams gains public_within_forbidden (default
 false), and a new kb_team_public_within table holds the rows (opened_by required on insert, SET NULL
 when that profile is deleted), with a trigger refusing a personal, root or gating T and a personal
-anchor. New helpers: team_ancestors_any, public_within_allowed_over,
+anchor, and a CHECK that an instance_wide row is an admin's act. A root anchor counts as a pool, so
+only an admin's instance_wide row anchored on the root confers. New helpers: team_ancestors_any, public_within_allowed_over,
 anchor_subtree_holds_pool, public_within_row_effective, contexts_public_within and
 public_within_reading (the machine fence: true only for a person, and only with the switch on),
-team_is_root_or_gating, and resources_public_within (the resources arm 5 adds). Three admin event types:
-team_public_within_changed, public_within_effect_changed, public_within_policy_changed. The read
-arm is layered without overloads: _contexts_readable_by_teams and _resources_visible hold the bodies,
-contexts_readable_by_teams and resources_visible_to are body-only wrappers at unchanged signatures,
-and resources_visible_by_membership, contexts_readable_by_membership and can_read_by_membership are
-the membership entry points. The citation-audit queue gates the finding on membership and the cited
-source on reading (ruling R-m); grant attenuation checks read by membership; element_trail_node
-filters an arm-5-only reader's trail to T's contexts.
+team_is_root_or_gating, and resources_public_within (the resources the public_within arm adds).
+Three admin event types: team_public_within_changed, public_within_effect_changed,
+public_within_policy_changed. The read arm is layered without overloads:
+_contexts_readable_by_teams and _resources_visible hold the bodies, contexts_readable_by_teams and
+resources_visible_to are body-only wrappers at unchanged signatures, and
+resources_visible_by_membership, contexts_readable_by_membership and can_read_by_membership are the
+membership entry points. The citation-audit queue gates the finding on membership and the cited
+source on reading, since a verdict acts on the finding; grant attenuation checks read by
+membership; element_trail_node filters the trail of a reader who reaches a resource only through
+public_within to T's contexts.
 
 Erasure policy: public_within_effect_changed's /act (the event type of the causing act) is declared
 structural.
@@ -31,7 +33,7 @@ UpdateSettingsRequest gains an optional public_within_enabled; turning it on or 
 public_within_policy_changed. Both are additions.
 
 Who observes: nobody, until a system admin turns the switch on and a row exists. No door opens a row
-yet (Phase 3). While the switch is off, every read set and every gate answers exactly as before.
+yet. While the switch is off, every read set and every gate answers exactly as before.
 Witnesses: crates/temper-services/tests/public_within_test.rs, visibility_invariant_harness.rs,
 reachable_teams_one_definition_test.rs. Release relevance: additive; signal-only.
 '''

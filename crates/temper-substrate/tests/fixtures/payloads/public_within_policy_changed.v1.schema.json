@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "PublicWithinPolicyChanged",
-  "description": "`public_within_policy_changed` — the instance switch (`public_within_enabled`) or a team's forbid\n(`public_within_forbidden`) changed (spec P4). The only record of the instance switch: settings\nupdates are otherwise not ledgered. A team-scope record carries the team as its `subject`\nreference; an instance-scope record carries none, and is read by system admins.",
+  "description": "`public_within_policy_changed` — the instance switch (`public_within_enabled`) or a team's forbid\n(`public_within_forbidden`) changed. The only record of the instance switch: settings updates\nare otherwise not ledgered. A team-scope record carries the team as its `subject` reference; an\ninstance-scope record carries none, and is read by system admins.",
   "type": "object",
   "properties": {
     "actor": {

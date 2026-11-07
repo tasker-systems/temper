@@ -1,32 +1,23 @@
--- public_within, Phase 2b: the citation audit is split. The FINDING is judged on membership; the
--- cited SOURCE on reading (ruling R-m, spec P7, R-o; review PW-5/F1, F2).
+-- public_within: the citation audit is split. The FINDING is judged on membership; the cited
+-- SOURCE on reading. Public reach can be read and referenced, never acted on.
 --
 -- THIS DELIBERATELY REVERSES `20261101400000:7-8`, which gated both ends on one shared `visible` CTE
--- "so the finding gate and the source gate cannot drift apart". They now answer two different
--- questions, on purpose:
+-- "so the finding gate and the source gate cannot drift apart". Grading a finding is a write about
+-- it (a kb_events row in its home and a standing memo, 20260909000020:36-43), so a public reader
+-- may not grade T's findings: the finding is gated on MEMBERSHIP. The cited source is a reference:
+-- an auditor under A may judge its own team's finding that cites T, so the source is gated on
+-- READING.
 --
---   * Grading a finding is a write about it: the verdict appends a kb_events row anchored in the
---     finding's home and upserts its standing memo (20260909000020:36-43). A public reader may not
---     do that to T's findings (R-o), so the finding is gated on MEMBERSHIP visibility
---     (resources_visible_by_membership).
---   * The cited source is a reference: an auditor in A's subtree may judge its own team's finding
---     that cites T. Refusing that would leave such findings unauditable on that side (R-m), so the source is gated
---     on READING visibility.
+-- What keeps them from drifting is a shared rule, applied identically in the gate
+-- (`authz/audit_gate.rs`, via `readback::is_resource_visible_by_membership`) and in the queue below,
+-- and the test that the sweep never offers what the gate refuses (`the_audit_queue_matches_the_gate`).
+-- The queue must use the gate's sets or it livelocks offering refused work; humans see the queue.
 --
--- What now keeps them from drifting is not a shared CTE but a shared rule, applied identically in
--- the gate (`authz/audit_gate.rs`, whose finding probe moves to
--- `readback::is_resource_visible_by_membership`) and in the queue below, and the test that the
--- sweep never offers what the gate refuses (`the_audit_queue_matches_the_gate`). The queue must use
--- the gate's sets, or it livelocks offering work the gate refuses (PW-5/F1); humans see the queue
--- (`/api/auditor/sweep` takes any principal), so the split is required here, not only in the gate.
---
--- THE TWO SETS, AND THEIR COST. Each function derives both sets once per call, MATERIALIZED, as the
--- single set was (the hoist is still load-bearing: `20260828000020` measured the per-finding form as
--- 97% of the sweep). `readable` is `member` plus `resources_public_within`, the arm-5 delta, never a
--- second full scan: reading is exactly membership UNION that delta (the visibility harness holds the
--- equality). For a machine, or with the switch off, the delta is a one-time filter that never runs.
--- For a person with the switch on, the delta walks the team closure a second time; that walk is small
--- next to the set it avoids recomputing, and is measured with the rest (scripts/visibility-cost/).
+-- Each function derives both sets once per call, MATERIALIZED, as the single set was (the hoist is
+-- load-bearing: `20260828000020` measured the per-finding form as 97% of the sweep). `readable` is
+-- `member` plus `resources_public_within`, never a second full scan: reading is exactly membership
+-- UNION that delta (the visibility harness holds the equality). For a machine, or with the switch
+-- off, the delta is a one-time filter that never runs.
 --
 -- Everything else in the three bodies is unchanged from `20261101400000`; read it for why each is
 -- shaped as it is.
@@ -192,9 +183,11 @@ $c$The citations of this finding THIS principal should weigh — the auditor's u
 PER PRINCIPAL, which is NOT the coverage grain: `resource_audit_coverage` asks whether anyone
 weighed a source. A citation another principal weighed is still returned here (cross-principal
 audit is the premise); a citation this principal weighed is withheld until it goes stale.
+A finding is never skipped because some of its citations are weighed — it is dispatched with the
+remainder.
 
 The finding must be readable by MEMBERSHIP, and only citations whose cited source this principal
-can READ are returned (`20261120000020`, R-m): the same two sets the write gate asks. An
+can READ are returned (`20261120000020`): the same two sets the write gate asks. An
 unreadable finding returns zero rows, matching the write gate's zero-rows-to-404 dialect, so this
 cannot become an existence oracle.$c$;
 
@@ -202,7 +195,7 @@ COMMENT ON FUNCTION audit_drift_sweep(uuid, int) IS
 $c$Findings this principal should audit: incompletely covered, OR materially changed since it looked.
 
 A finding is offered only when the principal reads it by MEMBERSHIP, the set the audit gate's
-finding probe asks, so the queue never offers what the gate refuses (`20261120000020`, R-m). Both
+finding probe asks, so the queue never offers what the gate refuses (`20261120000020`). Both
 arms count only citations whose cited source the principal can READ (public_within included for a
 person): `uncovered` is readable magnitude minus readable coverage, computed inline because
 `resource_citation_magnitude` and `resource_audit_coverage` are reader-independent by decision
@@ -211,10 +204,10 @@ person): `uncovered` is readable magnitude minus readable coverage, computed inl
 SELECT declare_migration(
     20261120000020,
     'additive',
-    'public_within Phase 2: body-only CREATE OR REPLACE, signatures and return types unchanged, of '
+    'public_within audit split: body-only CREATE OR REPLACE, signatures and return types unchanged, of '
     'resource_stale_citations_multi, resource_auditable_citations and audit_drift_sweep. Each '
     'gates the finding on resources_visible_by_membership and the cited source on reading '
-    'visibility, deliberately reversing the single shared set of 20261101400000 (ruling R-m). For '
+    'visibility, deliberately reversing the single shared set of 20261101400000. For '
     'every principal not under the anchor of an effective public_within row the two sets are '
     'equal, and no row is effective while public_within_enabled is false (its default), so every '
     'answer is unchanged until an admin turns the switch on.'

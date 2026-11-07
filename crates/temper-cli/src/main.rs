@@ -1065,8 +1065,8 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         instance_name,
                         terms_version,
                         terms_resource_uri,
-                        // The `--public-within` flag is a later phase (public within, spec
-                        // § Surfaces); until then the CLI leaves the switch as it is.
+                        // The CLI has no `--public-within` flag yet, so it leaves the
+                        // instance switch as it is.
                         public_within_enabled: None,
                     };
                     temper_cli::commands::admin::settings_remote(client, req, output_format).await

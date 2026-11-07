@@ -31,7 +31,7 @@ class SystemSettings(BaseModel):
     gating_team_slug: Optional[StrictStr] = None
     id: StrictInt
     instance_name: Optional[StrictStr] = None
-    public_within_enabled: Optional[StrictBool] = Field(default=None, description="The instance switch for `public_within` (public within, spec P4). Off by default on every deployment: while it is off, no `public_within` row confers anything. Not `required` on the wire (`serde(default)`): a client built before the field existed still parses, and an absent value means off, which is the default.")
+    public_within_enabled: Optional[StrictBool] = Field(default=None, description="The instance switch for `public_within`: whether a team's owned contexts may be opened to the people under an anchor team. Off by default on every deployment: while it is off, no `public_within` row confers anything. Not `required` on the wire (`serde(default)`): a client built with this field still parses the response of a server that predates it, where the absent value means off.")
     terms_resource_uri: Optional[StrictStr] = None
     terms_version: Optional[StrictStr] = None
     updated: datetime

@@ -1881,10 +1881,10 @@ pub enum TeamLifecycleAct {
     AutoJoinChanged,
 }
 
-/// `team_public_within_changed` — a `public_within` row was opened, closed, lapsed or cascade-deleted
-/// (public within, spec P2, P3, P5). The row lets the people under the anchor team read the team's
-/// owned contexts. Both the team (T) and the anchor (A) are the event's `subject` references, so the
-/// managers of either side read it on the subject axis.
+/// `team_public_within_changed` — a `public_within` row was opened, closed, lapsed or cascade-deleted.
+/// The row lets the people under the anchor team read the team's owned contexts. Both the team (T)
+/// and the anchor (A) are the event's `subject` references, so the managers of either side read it
+/// on the subject axis.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct TeamPublicWithinChanged {
@@ -1895,7 +1895,7 @@ pub struct TeamPublicWithinChanged {
     pub act: PublicWithinAct,
     /// True when a system admin stood in for the anchor side.
     pub admin_act: bool,
-    /// True when the row survives a pool team under the anchor (an admin's open, spec P2 rule 5).
+    /// True when the row survives a pool team under the anchor (only an admin opens such a row).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instance_wide: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1919,9 +1919,9 @@ pub enum PublicWithinAct {
 }
 
 /// `public_within_effect_changed` — a `public_within` row started or stopped conferring, without
-/// being opened or closed (spec P5). The cause is liveness (a team on the path was deleted or
-/// restored) or policy (the instance switch, a forbid, or a pool team under the anchor). Both the
-/// team and the anchor are `subject` references.
+/// being opened or closed. The cause is liveness (a team on the path was deleted or restored) or
+/// policy (the instance switch, a forbid, or a pool team under the anchor). Both the team and the
+/// anchor are `subject` references.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct PublicWithinEffectChanged {
@@ -1961,9 +1961,9 @@ pub enum PublicWithinCause {
 }
 
 /// `public_within_policy_changed` — the instance switch (`public_within_enabled`) or a team's forbid
-/// (`public_within_forbidden`) changed (spec P4). The only record of the instance switch: settings
-/// updates are otherwise not ledgered. A team-scope record carries the team as its `subject`
-/// reference; an instance-scope record carries none, and is read by system admins.
+/// (`public_within_forbidden`) changed. The only record of the instance switch: settings updates
+/// are otherwise not ledgered. A team-scope record carries the team as its `subject` reference; an
+/// instance-scope record carries none, and is read by system admins.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct PublicWithinPolicyChanged {
@@ -2862,8 +2862,8 @@ mod tests {
         assert!(v.get("actor").is_none() && v.get("from").is_none());
     }
 
-    /// The three `public_within` admin records (public within, spec P9): every act, effect, cause and
-    /// scope round-trips, absent fields stay absent on the wire, and no field is a trail join key.
+    /// The three `public_within` admin records: every act, effect, cause and scope round-trips,
+    /// absent fields stay absent on the wire, and no field is a trail join key.
     #[test]
     fn public_within_records_round_trip() {
         let team_id = Uuid::now_v7();

@@ -123,10 +123,11 @@ const T_ENG: usize = 1;
 const T_PAYROLL: usize = 2;
 const T_SQUAD: usize = 3;
 const T_SEC: usize = 4;
-const T_GHOST: usize = 5; // tombstoned below — confers nothing
-                          // public_within's T (public within, plan 2.2): a NEW team under eng, opened to eng's subtree by the
-                          // one public_within row this world holds. Deliberately not `sec`: opening (sec, eng) would break
-                          // dana's sibling-deny control and hollow the r_owned_anywhere / r_ancestor_grant witnesses (PW-9).
+// Tombstoned below — confers nothing.
+const T_GHOST: usize = 5;
+// public_within's T: a NEW team under eng, opened to eng's subtree by the one public_within row
+// this world holds. Deliberately not `sec`: opening (sec, eng) would break dana's sibling-deny
+// control and hollow the r_owned_anywhere / r_ancestor_grant witnesses.
 const T_PUB: usize = 6;
 const TEAM_SLUGS: [&str; 7] = ["epd", "eng", "payroll", "squad", "sec", "ghost", "pub"];
 const TEAM_PARENTS: [(usize, usize); 6] = [
@@ -145,7 +146,7 @@ const P_FRANK: usize = 2;
 const P_GINA: usize = 3;
 const P_OWNER: usize = 4;
 const P_OUTSIDER: usize = 5;
-// The public_within controls (plan 2.2): `ella` is a person on epd, ABOVE the anchor and so outside
+// The public_within controls: `ella` is a person on epd, ABOVE the anchor and so outside
 // its subtree; `robot` is a machine principal on squad, inside the subtree. Neither may read pub's
 // context. Both are kept out of the randomized matrix, like `owner` and `outsider`.
 const P_ELLA: usize = 6;
@@ -1938,21 +1939,21 @@ const ENROLLED: &[&str] = &[
     "search_exact",
     "search_wide",
     "search_graph_expand",
-    // public_within (public within, plan 2.2). The read-set BODIES, which the two set authorities
+    // public_within. The read-set BODIES, which the two set authorities
     // above are now body-only wrappers over, and the membership entry points beside them: driven
     // by `public_within_reads_for_people_under_the_anchor_and_nobody_else`, which holds reading =
-    // membership + arm 5 for every profile in the world, membership as reading minus arm 5, and the
-    // wrappers equal to their bodies at the switch they pass.
+    // membership + the public_within arm for every profile in the world, membership as reading
+    // minus that arm, and the wrappers equal to their bodies at the switch they pass.
     "_contexts_readable_by_teams",
     "_resources_visible",
     "resources_visible_by_membership",
     "contexts_readable_by_membership",
     "can_read_by_membership",
-    // the arm-5 delta the audit queue and the element trail derive reading from: held equal to
-    // reading minus membership by the same test.
+    // the public_within delta the audit queue and the element trail derive reading from: held
+    // equal to reading minus membership by the same test.
     "resources_public_within",
-    // arm 5 and the predicates it is built from — driven by the same test, each at its own answer
-    // over the world's one row, and with the switch flipped off.
+    // the public_within arm and the predicates it is built from — driven by the same test, each
+    // at both answers: over the world's one row, under a pool, under a forbid and switched off.
     "contexts_public_within",
     "public_within_row_effective",
     "public_within_allowed_over",
@@ -1966,7 +1967,7 @@ const PRIMITIVES: &[&str] = &[
     "team_ancestors",
     "profile_effective_teams",
     "vis_team",
-    // The DAG walks public_within's predicates are built from: the live down-walk (Phase 0) and the
+    // The DAG walks public_within's predicates are built from: the live down-walk and the
     // live-or-dead up-walk the forbid uses. Structure, never an answer about who reads what.
     "team_live_descendants",
     "team_ancestors_any",
@@ -2252,13 +2253,14 @@ async fn the_world_exercises_its_arms(pool: PgPool) -> sqlx::Result<()> {
     Ok(())
 }
 
-/// public_within's arm and its fences, over every profile in the world (public within, plan 2.2).
+/// public_within's arm and its fences, over every profile in the world.
 ///
 /// - **Layering.** Each wrapper equals its body at the switch it passes: `resources_visible_to(p)`
 ///   is `_resources_visible(p, public_within_reading(p))`, `resources_visible_by_membership(p)` is
 ///   `_resources_visible(p, false)`, and the context pair likewise.
-/// - **Reading = membership + arm 5.** Membership ⊆ reading, and every resource in reading but not
-///   membership is homed in a context `contexts_public_within` opens to that profile's closure.
+/// - **Reading = membership + the public_within arm.** Membership ⊆ reading, and every resource
+///   in reading but not membership is homed in a context `contexts_public_within` opens to that
+///   profile's closure.
 ///   Only a person (`public_within_reading`) has any difference at all.
 /// - **The witnesses.** dana (a person under eng) reads r_pub and ctx-pub, but not by membership,
 ///   so `can_read_by_membership` refuses them where `can(read)` admits. ella (above the anchor)
@@ -2492,6 +2494,96 @@ async fn public_within_reads_for_people_under_the_anchor_and_nobody_else(
             .await?,
             false,
             "public_within_row_effective(eng, pub): the anchor is not an ancestor",
+        ),
+    ] {
+        if got != want {
+            violations.push(format!("{what}: expected {want}, got {got}"));
+        }
+    }
+
+    // The other answer of each predicate. A pool under the anchor: make eng the gating team.
+    let gating: Option<String> =
+        sqlx::query_scalar("SELECT gating_team_slug FROM kb_system_settings WHERE id = 1")
+            .fetch_one(&pool)
+            .await?;
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'eng' WHERE id = 1")
+        .execute(&pool)
+        .await?;
+    let pool_true = ask(
+        "SELECT anchor_subtree_holds_pool($1) AND $2 IS NOT NULL",
+        t_eng,
+        t_eng,
+    )
+    .await?;
+    let pool_row = ask(
+        "SELECT public_within_row_effective($1, $2, false)",
+        t_pub,
+        t_eng,
+    )
+    .await?;
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = $1 WHERE id = 1")
+        .bind(&gating)
+        .execute(&pool)
+        .await?;
+    // A forbid above T.
+    sqlx::query("UPDATE kb_teams SET public_within_forbidden = true WHERE id = $1")
+        .bind(t_eng)
+        .execute(&pool)
+        .await?;
+    let forbid_allowed = ask(
+        "SELECT public_within_allowed_over($1) AND $2 IS NOT NULL",
+        t_pub,
+        t_pub,
+    )
+    .await?;
+    sqlx::query("UPDATE kb_teams SET public_within_forbidden = false WHERE id = $1")
+        .bind(t_eng)
+        .execute(&pool)
+        .await?;
+    // The switch off.
+    sqlx::query("UPDATE kb_system_settings SET public_within_enabled = false WHERE id = 1")
+        .execute(&pool)
+        .await?;
+    let off_allowed = ask(
+        "SELECT public_within_allowed_over($1) AND $2 IS NOT NULL",
+        t_pub,
+        t_pub,
+    )
+    .await?;
+    let off_row = ask(
+        "SELECT public_within_row_effective($1, $2, false)",
+        t_pub,
+        t_eng,
+    )
+    .await?;
+    sqlx::query("UPDATE kb_system_settings SET public_within_enabled = true WHERE id = 1")
+        .execute(&pool)
+        .await?;
+    for (got, want, what) in [
+        (
+            pool_true,
+            true,
+            "anchor_subtree_holds_pool(eng) with eng the gating team",
+        ),
+        (
+            pool_row,
+            false,
+            "public_within_row_effective(pub, eng) under a pool",
+        ),
+        (
+            forbid_allowed,
+            false,
+            "public_within_allowed_over(pub) under a forbid on eng",
+        ),
+        (
+            off_allowed,
+            false,
+            "public_within_allowed_over(pub) with the switch off",
+        ),
+        (
+            off_row,
+            false,
+            "public_within_row_effective(pub, eng) with the switch off",
         ),
     ] {
         if got != want {

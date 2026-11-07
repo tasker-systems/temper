@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""What does `public_within`'s read arm cost? (temper-artifacts plans/2026-11-06-public-within.md 2.6)
+"""What does `public_within`'s read arm cost?
 
     python3 scripts/visibility-cost/public_within_cost.py [--samples N] [--profiles K]
 
 Builds TWO scratch databases on the local dev server and the same synthetic world in each:
 
-  * `temper_pw_cost_base`: every migration before this work's first (the read path without arm 5);
-  * `temper_pw_cost_head`: every migration in the tree (arm 5, the wrappers, the audit split).
+  * `temper_pw_cost_base`: every migration before this work's first (the read path without the
+    public_within arm);
+  * `temper_pw_cost_head`: every migration in the tree (the public_within arm, the wrappers, the
+    audit split).
 
 Then it times the five doors the plan names, for a handful of profiles, on base and on head in
 four cases:
@@ -16,7 +18,7 @@ four cases:
   on-0        head, switch on, no rows
   on-51       head, switch on, 50 rows plus one admin root row
 
-The merge bar (plan 2.6): `off` is within noise of `base`.
+The merge bar: `off` is within noise of `base`.
 
 Each number is the median wall time of one call, over all samples for all measured profiles,
 timed inside one session per door after two warm-up calls per profile: a server's pooled
@@ -31,7 +33,8 @@ resources each, for the audit sweep. A row opens squad j of division i to divisi
 and the root row opens one squad to `temper-system`, which every person's closure holds.
 
 `search_wide` is driven with a constant vector over a world with no chunk rows, so its number is
-the visibility hand-off and the empty k-NN, not a vector search; the hand-off is what arm 5 touches.
+the visibility hand-off and the empty k-NN, not a vector search; the hand-off is what the public_within
+arm touches.
 
 It WRITES only to the two scratch databases, and drops and recreates them on every run.
 """

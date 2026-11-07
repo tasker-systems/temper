@@ -1,12 +1,9 @@
 #![cfg(feature = "test-db")]
 
-//! `public_within`: the fixture world, Phase 1 (schema, policy, helpers) and Phase 2 (the read arm
-//! and the membership set for every act on T's material).
+//! `public_within`: the fixture world, the schema, policy and helpers, and the read arm with the
+//! membership set for every act on T's material.
 //!
-//! Design: temper-artifacts `specs/2026-11-06-public-within-design.md` (P1, P4–P8, P12; rulings
-//! R-a … R-o). Plan: `plans/2026-11-06-public-within.md` Phases 1 and 2, test table 2.5.
-//!
-//! **The world** (plan 0.3, built here because Phase 0 did not land it):
+//! **The world** (the plan's fixture world, built here):
 //!
 //! ```text
 //! temper-system (root)
@@ -22,9 +19,9 @@
 //! `ctx-web`. The row is written directly by [`open`], the plan's fixture helper: the open door is a
 //! later phase. The switch is on unless a test says otherwise.
 //!
-//! **Deviation from plan 0.3, recorded.** The plan's world puts an auto-join `eng-pool` under `eng`.
-//! Present by default, it makes every `(eng-sec, eng)` row inert (PW-1, `anchor_subtree_holds_pool`),
-//! so every reading test would read nothing. It is created by the tests that need it instead.
+//! **Deviation from the plan's world, recorded.** The plan's world puts an auto-join `eng-pool`
+//! under `eng`. Present by default, it makes every `(eng-sec, eng)` row inert
+//! (`anchor_subtree_holds_pool`), so every reading test would read nothing. It is created by the tests that need it instead.
 //!
 //! Resources are created through the real write path with caller-supplied chunks (no ONNX), so the
 //! events, blocks and change feed are the production ones.
@@ -490,7 +487,8 @@ async fn world(pool: &PgPool) -> World {
     .await
     .expect("grant held by T");
 
-    // A cognitive map bound to T, and an edge homed in it between two T resources (N8).
+    // A cognitive map bound to T, and an edge homed in it between two T resources: none of it is
+    // passed on.
     let telos: Uuid = sqlx::query_scalar(
         "INSERT INTO kb_resources (title, origin_uri) VALUES ('map-t telos', '') RETURNING id",
     )
@@ -567,7 +565,7 @@ async fn world(pool: &PgPool) -> World {
 }
 
 // =================================================================================================
-// Phase 1 — schema, policy, helpers
+// Schema, policy, helpers
 // =================================================================================================
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
@@ -577,7 +575,7 @@ async fn every_new_setting_is_off_or_empty_by_default(pool: PgPool) {
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert!(!enabled, "the instance switch is born off (R-e)");
+    assert!(!enabled, "the instance switch is born off");
     let forbidden: i64 =
         sqlx::query_scalar("SELECT count(*) FROM kb_teams WHERE public_within_forbidden")
             .fetch_one(&pool)
@@ -594,7 +592,7 @@ async fn every_new_setting_is_off_or_empty_by_default(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn the_trigger_and_the_check_refuse_what_p1_bars(pool: PgPool) {
+async fn the_trigger_and_the_checks_refuse_the_barred_shapes(pool: PgPool) {
     let w = world(&pool).await;
     let personal: Uuid = sqlx::query_scalar("SELECT id FROM kb_teams WHERE personal_of = $1")
         .bind(w.web_member)
@@ -669,6 +667,35 @@ async fn the_trigger_and_the_check_refuse_what_p1_bars(pool: PgPool) {
     .expect("replay restores an opener-less row");
     tx.rollback().await.unwrap();
 
+    // An instance_wide row is an admin's act, on insert and on update.
+    let err = sqlx::query(
+        "INSERT INTO kb_team_public_within (team_id, anchor_id, opened_by, instance_wide, admin_act) \
+         VALUES ($1, $2, $3, true, false)",
+    )
+    .bind(w.eng_sec_red)
+    .bind(w.eng)
+    .bind(w.admin)
+    .execute(&pool)
+    .await
+    .expect_err("instance_wide without admin_act is refused on insert");
+    assert_eq!(
+        err.as_database_error().and_then(|e| e.constraint()),
+        Some("kb_team_public_within_instance_wide_is_admin")
+    );
+    open(&pool, w.eng_sec_red, w.eng, false, w.admin).await;
+    let err = sqlx::query(
+        "UPDATE kb_team_public_within SET instance_wide = true WHERE team_id = $1 AND anchor_id = $2",
+    )
+    .bind(w.eng_sec_red)
+    .bind(w.eng)
+    .execute(&pool)
+    .await
+    .expect_err("instance_wide without admin_act is refused on update");
+    assert_eq!(
+        err.as_database_error().and_then(|e| e.constraint()),
+        Some("kb_team_public_within_instance_wide_is_admin")
+    );
+
     // The anchor may be the root or the gating team: that is an admin's open, decided by the door.
     open(&pool, w.eng_sec, w.org, true, w.admin).await;
     open(&pool, w.eng_sec, w.root, true, w.admin).await;
@@ -718,7 +745,8 @@ async fn a_forbid_anywhere_above_t_fails_policy_closed(pool: PgPool) {
         "a forbid between A and T"
     );
 
-    // On a DEAD ancestor: soft-deleting the forbidding team does not lift it (PW-2/F5).
+    // On a DEAD ancestor: soft-deleting the forbidding team does not lift it (a forbid fails
+    // closed).
     set_team_live(&pool, w.eng, false).await;
     assert!(
         !allowed(pool.clone(), w.eng_sec).await,
@@ -780,7 +808,7 @@ async fn anchor_subtree_holds_pool_counts_live_pools_only(pool: PgPool) {
     );
 }
 
-/// The machine fence (P6, PW-4) and the R-n pin: a person reads with ANY token, a Slack-minted one
+/// The machine fence, and the token pin: a person reads with ANY token, a Slack-minted one
 /// included, because the fence is the principal, not the token.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn public_within_reading_is_for_people_only(pool: PgPool) {
@@ -803,12 +831,12 @@ async fn public_within_reading_is_for_people_only(pool: PgPool) {
     switch(&pool, false).await;
     assert!(
         !reading(pool.clone(), w.web_member).await,
-        "nobody reads arm 5 with the switch off"
+        "nobody reads through public_within with the switch off"
     );
     switch(&pool, true).await;
     assert!(
         reading(pool.clone(), slack_person).await,
-        "a person whose only link is Slack's: a Slack-minted token is the person (R-n)"
+        "a person whose only link is Slack's: a Slack-minted token is the person"
     );
 
     // A revoked machine registration is still a machine: fail closed.
@@ -827,7 +855,7 @@ async fn public_within_reading_is_for_people_only(pool: PgPool) {
     );
 }
 
-/// `update_system_settings` writes the switch in a transaction with its record (plan 1.13).
+/// `update_system_settings` writes the switch in a transaction with its record.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn the_instance_switch_is_recorded_once_per_change(pool: PgPool) {
     let admin = person(&pool, "switch-admin").await;
@@ -870,7 +898,46 @@ async fn the_instance_switch_is_recorded_once_per_change(pool: PgPool) {
     assert!(!s.public_within_enabled);
     assert_eq!(records(pool.clone()).await, 2);
 
-    // A refused update writes nothing: the switch and its record ride the same transaction.
+    // A failure AFTER the switch write rolls the switch and its record back with it: they ride the
+    // settings update's transaction. A test-local trigger fails the final settings UPDATE (the one
+    // that sets instance_name), which runs after `_admin_public_within_switch_write`.
+    sqlx::query(
+        "CREATE FUNCTION public_within_test_fail_late() RETURNS trigger LANGUAGE plpgsql AS $f$ \
+         BEGIN IF NEW.instance_name = 'fail-late' THEN RAISE EXCEPTION 'late failure'; END IF; \
+         RETURN NEW; END $f$",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TRIGGER fail_late BEFORE UPDATE ON kb_system_settings \
+         FOR EACH ROW EXECUTE FUNCTION public_within_test_fail_late()",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let late = temper_core::types::admin::UpdateSettingsRequest {
+        public_within_enabled: Some(true),
+        instance_name: Some("fail-late".into()),
+        ..Default::default()
+    };
+    access_service::update_system_settings(&pool, &proof, &late)
+        .await
+        .expect_err("the late failure surfaces");
+    assert!(
+        !access_service::get_system_settings(&pool)
+            .await
+            .unwrap()
+            .public_within_enabled,
+        "the switch write rolled back with the failed update"
+    );
+    assert_eq!(records(pool.clone()).await, 2, "and so did its record");
+    sqlx::query("DROP TRIGGER fail_late ON kb_system_settings")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // A refused gating slug is checked before anything is written.
     let bad = temper_core::types::admin::UpdateSettingsRequest {
         public_within_enabled: Some(true),
         gating_team_slug: Some("no-such-team".into()),
@@ -889,7 +956,7 @@ async fn the_instance_switch_is_recorded_once_per_change(pool: PgPool) {
 }
 
 // =================================================================================================
-// Phase 2 — the read arm (plan 2.5)
+// The read arm
 // =================================================================================================
 
 /// At every role on eng-web, through every read-door family.
@@ -1088,7 +1155,7 @@ async fn the_audience_is_the_anchors_subtree_only(pool: PgPool) {
     assert!(reads(&pool, w.web_member, w.r_t).await);
 }
 
-/// N10, and the R-n pin.
+/// Machines and connection agents never read through public_within; a person does, with any token.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn machines_and_agents_never_read_through_the_arm(pool: PgPool) {
     let w = world(&pool).await;
@@ -1106,14 +1173,14 @@ async fn machines_and_agents_never_read_through_the_arm(pool: PgPool) {
     }
 
     // A person reading with any token does read T: the Slack mention path mints the person's own
-    // token, and the principal is the person (R-n). The token never reaches SQL, so the pin is that
+    // token, and the principal is the person. The token never reaches SQL, so the pin is that
     // a person whose only link is Slack's reads T exactly as any person does.
     let slack_person = person_via(&pool, "slack-reader", "slack").await;
     join(&pool, w.eng_web, slack_person, "member").await;
     assert!(reads(&pool, slack_person, w.r_t).await);
 }
 
-/// N8: shares, grants and maps held by T, and the edges homed in a map, are not passed on.
+/// Shares, grants and maps held by T, and the edges homed in a map, are not passed on.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn shares_grants_maps_and_their_edges_are_not_passed_on(pool: PgPool) {
     let w = world(&pool).await;
@@ -1162,7 +1229,7 @@ async fn shares_grants_maps_and_their_edges_are_not_passed_on(pool: PgPool) {
     );
 }
 
-/// R-a: not inherited.
+/// A row is not inherited: T's children stay private.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn ts_children_stay_private(pool: PgPool) {
     let w = world(&pool).await;
@@ -1171,19 +1238,92 @@ async fn ts_children_stay_private(pool: PgPool) {
     assert!(!reads(&pool, w.sec_member, w.r_red).await);
     assert!(!reads(&pool, w.web_member, w.r_red).await);
     assert!(!ctx_reads(&pool, w.web_member, w.ctx_red).await);
-    // A row on T confers nothing on T's child, even as T's own team: a separate team needs its own.
-    let child_row_effective = scalar_bool_2(
+    // The row on T does not open T's child's context: the arm itself never yields it.
+    let opened = scalar_bool_2(
         &pool,
-        "SELECT EXISTS (SELECT 1 FROM kb_team_public_within WHERE team_id = $1 AND $2 IS NOT NULL)",
-        w.eng_sec_red,
-        w.eng_sec_red,
+        "SELECT $2 IN (SELECT context_id FROM contexts_public_within($1, \
+           ARRAY(SELECT team_id FROM profile_reachable_teams($1))))",
+        w.web_member,
+        w.ctx_red,
     )
     .await;
-    assert!(!child_row_effective, "no row was opened for the child");
+    assert!(!opened, "contexts_public_within opens T's child's context");
+    // ...while it does open T's own context, so the probe is live.
+    assert!(
+        scalar_bool_2(
+            &pool,
+            "SELECT $2 IN (SELECT context_id FROM contexts_public_within($1, \
+               ARRAY(SELECT team_id FROM profile_reachable_teams($1))))",
+            w.web_member,
+            w.ctx_t,
+        )
+        .await
+    );
 }
 
-/// N2, N8: for a public reader, every act ON T's material refuses; an audit of the reader's own
-/// side's finding that CITES T is admitted (R-m).
+/// Read is conferred only on material the granter reads through membership. No grant row reaches
+/// the fence today (`kb_access_grants_check` makes every grant authority carry `can_read`, and a grant
+/// row is itself a membership arm), so this drops the CHECK in its own database to put a
+/// grant-capable holder whose only read of `r_t` is `public_within` in front of the fence.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn read_is_conferred_only_on_what_the_granter_reads_by_membership(pool: PgPool) {
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .expect("bootseed");
+    let w = world(&pool).await;
+    let holder = w.web_member;
+    assert!(reads(&pool, holder, w.r_t).await, "precondition: reads T");
+    assert!(
+        !scalar_bool_2(
+            &pool,
+            "SELECT can_read_by_membership($1, 'kb_resources', $2)",
+            holder,
+            w.r_t
+        )
+        .await,
+        "precondition: only through public_within"
+    );
+    sqlx::query("ALTER TABLE kb_access_grants DROP CONSTRAINT kb_access_grants_check")
+        .execute(&pool)
+        .await
+        .unwrap();
+    for (subject, read) in [(w.r_t, false), (w.r_web, true)] {
+        sqlx::query(
+            "INSERT INTO kb_access_grants (subject_table, subject_id, principal_table, principal_id, \
+               can_read, can_grant, granted_by_profile_id) \
+             VALUES ('kb_resources', $1, 'kb_profiles', $2, $3, true, $4)",
+        )
+        .bind(subject)
+        .bind(holder)
+        .bind(read)
+        .bind(w.admin)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let human = test_support::human_principal_for(&pool, holder).await;
+    let confer = |subject: Uuid| temper_core::types::cognitive_maps::GrantCapabilityRequest {
+        subject_table: "kb_resources".into(),
+        subject_id: subject,
+        principal_table: "kb_profiles".into(),
+        principal_id: w.sales_member,
+        can_read: true,
+        can_write: false,
+        can_delete: false,
+        can_grant: false,
+    };
+    let refused = access_service::grant_capability(&pool, &human, &confer(w.r_t)).await;
+    assert!(
+        matches!(refused, Err(temper_services::error::ApiError::Forbidden)),
+        "conferring read on T material read only through public_within: {refused:?}"
+    );
+    access_service::grant_capability(&pool, &human, &confer(w.r_web))
+        .await
+        .expect("the same holder confers read on material it reads by membership");
+}
+
+/// For a public reader, every act ON T's material refuses; an audit of the reader's own side's
+/// finding that CITES T is admitted, because citing is a reference, not an act.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn reading_authorizes_no_act_on_t(pool: PgPool) {
     temper_substrate::scenario::bootseed::seed_system(&pool)
@@ -1279,17 +1419,26 @@ async fn reading_authorizes_no_act_on_t(pool: PgPool) {
         },
     )
     .await;
-    assert!(grant.is_err(), "grant on a T resource: {grant:?}");
+    assert!(
+        matches!(grant, Err(temper_services::error::ApiError::Forbidden)),
+        "grant on a T resource: {grant:?}"
+    );
 
     // Reassign (a two-sided act) of T's context to the reader's team.
     let reassign = context_service::reassign(&pool, &human, w.ctx_t, w.eng_web).await;
-    assert!(reassign.is_err(), "reassign ctx-t: {reassign:?}");
+    assert!(
+        matches!(reassign, Err(temper_services::error::ApiError::Forbidden)),
+        "reassign ctx-t: {reassign:?}"
+    );
 
     // An edge whose SOURCE is a T resource: T's home is not authorable.
     let from_t = DbBackend::new(pool.clone(), ProfileId::from(owner))
         .assert_relationship(assert_cmd(w.r_t, w.r_web))
         .await;
-    assert!(from_t.is_err(), "an edge sourced on a T resource");
+    assert!(
+        matches!(from_t, Err(temper_core::error::TemperError::Forbidden)),
+        "an edge sourced on a T resource: {from_t:?}"
+    );
     // ... while the same edge the other way, from the owner's own home, is a reference.
     DbBackend::new(pool.clone(), ProfileId::from(owner))
         .assert_relationship(assert_cmd(w.r_web, w.r_t))
@@ -1298,14 +1447,18 @@ async fn reading_authorizes_no_act_on_t(pool: PgPool) {
 
     let backend = DbBackend::new(pool.clone(), ProfileId::from(p));
 
-    // An audit of a T finding (R-o): T's finding cites r-web; the reader can read both, by reading.
+    // An audit of a T finding refuses: T's finding cites r-web; the reader can read both, by
+    // reading.
     let t_finding_block = cite(&pool, w.r_t2, w.r_web).await;
     let audit_t = backend
         .record_citation_audit(audit_cmd(t_finding_block, w.r_web))
         .await;
-    assert!(audit_t.is_err(), "auditing T's own finding: {audit_t:?}");
+    assert!(
+        matches!(audit_t, Err(temper_core::error::TemperError::NotFound(_))),
+        "auditing T's own finding: {audit_t:?}"
+    );
 
-    // An audit of the reader's own side's finding, CITING T, is admitted (R-m). The finding is
+    // An audit of the reader's own side's finding, CITING T, is admitted. The finding is
     // authored by another member, so p is not its author.
     let own_finding = resource(&pool, w.ctx_web, w.web_member, "own-finding").await;
     let own_block = cite(&pool, own_finding, w.r_t).await;
@@ -1364,7 +1517,7 @@ async fn cite(pool: &PgPool, finding: Uuid, source: Uuid) -> Uuid {
     block
 }
 
-/// C6, R-j: references from the reader's own home are admitted, and homed there. A machine on the
+/// References from the reader's own home are admitted, and homed there. A machine on the
 /// same team is refused all three, because T is not readable to it.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_person_references_t_from_their_own_home(pool: PgPool) {
@@ -1462,7 +1615,7 @@ async fn relate(
     .await
 }
 
-/// N12: the reference is visible exactly under the conjunction.
+/// A reference to T's material is visible exactly under the conjunction.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_reference_is_visible_only_under_the_conjunction(pool: PgPool) {
     let w = world(&pool).await;
@@ -1531,15 +1684,15 @@ async fn a_reference_vanishes_with_access_and_returns_with_it(pool: PgPool) {
     forbid(&pool, w.org, false).await;
     assert!(sees_edge(&pool, w.web_member, e).await, "the forbid lifted");
 
-    // A lapse: T is moved out from under A. Phase 4 deletes the row; here the read-time condition
-    // already makes it confer nothing, and only a fresh open restores it once T is back.
+    // A lapse: T is moved out from under A. The lapse will delete the row; here the read-time
+    // condition already makes it confer nothing, and only a fresh open restores it once T is back.
     unlink(&pool, w.eng, w.eng_sec).await;
     assert!(
         !sees_edge(&pool, w.web_member, e).await,
         "lapsed: A is no longer above T"
     );
     link(&pool, w.eng, w.eng_sec).await;
-    close(&pool, w.eng_sec, w.eng).await; // what Phase 4's lapse does to the row
+    close(&pool, w.eng_sec, w.eng).await; // what the lapse does to the row
     assert!(
         !sees_edge(&pool, w.web_member, e).await,
         "a lapsed row does not revive"
@@ -1560,7 +1713,8 @@ async fn a_reference_vanishes_with_access_and_returns_with_it(pool: PgPool) {
     assert!(!folded, "the reference was never folded");
 }
 
-/// The queue never offers what the gate refuses, and offers what it admits (R-m, PW-5/F1).
+/// The queue never offers what the gate refuses, and offers what it admits; otherwise an auditor
+/// livelocks on work the gate refuses.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn the_audit_queue_matches_the_gate(pool: PgPool) {
     temper_substrate::scenario::bootseed::seed_system(&pool)
@@ -1588,10 +1742,13 @@ async fn the_audit_queue_matches_the_gate(pool: PgPool) {
         queued(pool.clone(), w.r_t2).await.is_empty(),
         "the queue offers T's finding"
     );
-    assert!(backend
+    let refused = backend
         .record_citation_audit(audit_cmd(t_block, w.r_web))
-        .await
-        .is_err());
+        .await;
+    assert!(
+        matches!(refused, Err(temper_core::error::TemperError::NotFound(_))),
+        "the gate refuses T's finding: {refused:?}"
+    );
     // The reader's own side's finding citing T: offered, and admitted.
     assert_eq!(queued(pool.clone(), own).await, vec![own_block]);
     backend
@@ -1606,7 +1763,7 @@ async fn the_audit_queue_matches_the_gate(pool: PgPool) {
     assert!(reads(&pool, p, w.r_t2).await);
 }
 
-/// N9: each cause makes the row inert; undoing it restores reading, except the structural lapse.
+/// Each cause makes the row inert; undoing it restores reading, except the structural lapse.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_row_is_inert_when(pool: PgPool) {
     let w = world(&pool).await;
@@ -1767,7 +1924,7 @@ async fn an_instance_wide_admin_row_survives_a_pool_under_a(pool: PgPool) {
     assert_eq!(opened_by, None);
 }
 
-/// PW-7: a resource re-homed into T shows a public reader only the trail produced in T.
+/// A resource re-homed into T shows a public reader only the trail produced in T.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn the_trail_of_a_rehomed_resource_starts_in_t(pool: PgPool) {
     let w = world(&pool).await;
@@ -1836,6 +1993,38 @@ async fn an_admin_root_row_reaches_everyone(pool: PgPool) {
     assert!(!reads(&pool, w.robot, w.r_t).await, "but never a machine");
 }
 
+/// The root is a pool: every personal team sits under it, so a row anchored on the root reads
+/// instance-wide and confers only as an admin's instance_wide row — whatever the gating slug says.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_root_anchored_row_confers_only_when_instance_wide(pool: PgPool) {
+    let w = world(&pool).await;
+    link(&pool, w.root, w.org).await;
+    // No gating team and no auto-join team: the root must be a pool on its own account.
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = NULL WHERE id = 1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE kb_teams SET auto_join_role = NULL")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(scalar_bool(&pool, "SELECT anchor_subtree_holds_pool($1)", w.root).await);
+    let anyone = person(&pool, "anyone").await;
+
+    open(&pool, w.eng_sec, w.root, false, w.admin).await;
+    assert!(
+        !reads(&pool, anyone, w.r_t).await,
+        "a root-anchored row that is not instance_wide is inert, with no gating team configured"
+    );
+    close(&pool, w.eng_sec, w.root).await;
+
+    open(&pool, w.eng_sec, w.root, true, w.admin).await;
+    assert!(
+        reads(&pool, anyone, w.r_t).await,
+        "an admin's instance_wide root row confers"
+    );
+}
+
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn no_row_means_no_sideways_read(pool: PgPool) {
     let w = world(&pool).await;
@@ -1858,8 +2047,9 @@ async fn no_row_means_no_sideways_read(pool: PgPool) {
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn reading_never_flows_sideways_or_down_with_an_inert_row(pool: PgPool) {
     let w = world(&pool).await;
-    switch(&pool, false).await; // the row is inert
-                                // Sideways: eng-web does not read its sibling's context.
+    // The row is inert.
+    switch(&pool, false).await;
+    // Sideways: eng-web does not read its sibling's context.
     assert!(!ctx_reads(&pool, w.web_member, w.ctx_t).await);
     // Down: eng's own roster does not read its child's context, and T does not read eng-web's.
     let eng_member = person(&pool, "eng-member").await;

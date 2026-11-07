@@ -100,9 +100,9 @@ const ADMIN_EVENT_TYPES: &[&str] = &[
     // D8): the team is the subject, and its managers read it through the same arm.
     "team_lifecycle_changed",
     // A public_within row opened, closed, lapsed or cascade-deleted, its effect changed, or the
-    // switch or a forbid changed (public within, spec P9). Each row record names BOTH the team and
-    // the anchor as `subject` references, so a manager of either side reads it through the same
-    // arm. An instance-switch record names no team and stays admin-only.
+    // switch or a forbid changed. Each row record names BOTH the team and the anchor as `subject`
+    // references, so a manager of either side reads it through the same arm. An instance-switch
+    // record names no team and stays admin-only.
     "team_public_within_changed",
     "public_within_effect_changed",
     "public_within_policy_changed",

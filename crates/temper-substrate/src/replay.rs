@@ -174,7 +174,7 @@ const INPUT_TABLES: &[&str] = &[
     "kb_team_contexts",
     // public_within rows are INPUT, restored after kb_teams and kb_profiles (both foreign keys).
     // Their events are no-ops in the walk below, like the other team records: the rows' final
-    // state rides in here (PW-20).
+    // state rides in here.
     "kb_team_public_within",
     // Grants are INPUT, not projection: replay restores kb_access_grants verbatim (the 5 pre-epoch
     // grants have no events, so rebuilding from events would report them spurious forever). The
@@ -337,7 +337,7 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             | EventKind::TeamParentLinkChanged
             // A team lifecycle act (team DAG and lifecycle doors D8): the same posture.
             | EventKind::TeamLifecycleChanged
-            // The public_within records (public within, spec P9): the same posture.
+            // The public_within records: the same posture.
             | EventKind::TeamPublicWithinChanged
             | EventKind::PublicWithinEffectChanged
             | EventKind::PublicWithinPolicyChanged

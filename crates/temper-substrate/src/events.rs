@@ -180,13 +180,13 @@ pub enum EventKind {
     /// lifecycle doors D8). Category `admin`, NULL-anchored, written only by
     /// `_admin_team_lifecycle_write` in the same statement as the `kb_teams` change.
     TeamLifecycleChanged,
-    /// A `public_within` row opened, closed, lapsed or cascade-deleted (public within, spec P2-P5).
+    /// A `public_within` row opened, closed, lapsed or cascade-deleted.
     /// Category `admin`, NULL-anchored. Row STATE is replayed from `kb_team_public_within`.
     TeamPublicWithinChanged,
-    /// A `public_within` row started or stopped conferring without being opened or closed (spec P5).
+    /// A `public_within` row started or stopped conferring without being opened or closed.
     /// Category `admin`, NULL-anchored.
     PublicWithinEffectChanged,
-    /// The instance switch or a team's forbid changed (spec P4). Category `admin`, NULL-anchored.
+    /// The instance switch or a team's forbid changed. Category `admin`, NULL-anchored.
     PublicWithinPolicyChanged,
     /// An auditor's signed verdict on one `(block, source)` citation (Set 5, spec §4.1-4.2).
     /// Append-only — fires `citation_audited`, projected by `_project_citation_audited` into

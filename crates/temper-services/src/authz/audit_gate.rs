@@ -305,8 +305,8 @@ impl ScopedAuthority for AuditAuthority {
     ///   for exactly this reason — the standing read this gate sits beside asks the same question
     ///   through the same function, so the two cannot drift (`readback/mod.rs:133-162`).
     ///   Readability of the **finding** is [`readback::is_resource_visible_by_membership`]: the
-    ///   finding is acted on, so it is judged on membership, never on `public_within` reach
-    ///   (public within, ruling R-m). The queue's SQL asks the same two sets.
+    ///   finding is acted on, so it is judged on membership, never on `public_within` reach.
+    ///   The queue's SQL asks the same two sets.
     /// * Citation authorship is `citation_contributed_by_profile`
     ///   (`20260724000110_citation_audits.sql`) — the exact historical fact, see the module doc.
     /// * The authorship proxy is `can_modify_resource`, the same call and the same query text as
@@ -317,10 +317,10 @@ impl ScopedAuthority for AuditAuthority {
         subject: CitationSubject,
     ) -> ApiResult<Self> {
         let caller = caller.profile_id();
-        // The finding, on MEMBERSHIP visibility (public within, ruling R-m): a verdict writes about
-        // the finding, and a reader who sees it only through `public_within` may not act on it
-        // (R-o). The queue (`audit_drift_sweep` and its two siblings) gates the finding on the same
-        // set, so it never offers what this refuses.
+        // The finding, on MEMBERSHIP visibility: a verdict writes about the finding, and a reader
+        // who sees it only through `public_within` may read it but never act on it. The queue
+        // (`audit_drift_sweep` and its two siblings) gates the finding on the same set, so it never
+        // offers what this refuses.
         if !readback::is_resource_visible_by_membership(pool, caller, subject.finding)
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?
@@ -328,7 +328,7 @@ impl ScopedAuthority for AuditAuthority {
             return Ok(AuditAuthority::Unreadable);
         }
         // The cited source, on READING visibility: it is a reference, not an act on it, so an
-        // auditor may judge its own side's finding that cites a public team's material (R-m).
+        // auditor may judge its own side's finding that cites a public team's material.
         if !readback::is_resource_visible(pool, caller, ResourceId::from(subject.source))
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?

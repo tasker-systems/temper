@@ -28956,7 +28956,7 @@
           },
           "public_within_enabled": {
             "type": "boolean",
-            "description": "The instance switch for `public_within` (public within, spec P4). Off by default on every\ndeployment: while it is off, no `public_within` row confers anything. Not `required` on the\nwire (`serde(default)`): a client built before the field existed still parses, and an\nabsent value means off, which is the default."
+            "description": "The instance switch for `public_within`: whether a team's owned contexts may be opened to\nthe people under an anchor team. Off by default on every deployment: while it is off, no\n`public_within` row confers anything. Not `required` on the\nwire (`serde(default)`): a client built with this field still parses the response of a\nserver that predates it, where the absent value means off."
           },
           "terms_resource_uri": {
             "type": [

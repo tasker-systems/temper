@@ -120,7 +120,7 @@ pub(crate) async fn can_administer_grant(
 /// The write-shaped capabilities a grant can carry, as `can(...)` probes them. A closed set with a
 /// fixed SQL spelling — an enum rather than bare `&str` literals so a typo is a compile error and
 /// the set cannot silently grow. Read is not here: attenuation asks it of the MEMBERSHIP set
-/// (`can_read_by_membership`, public within spec P7), never of `can(read)`.
+/// (`can_read_by_membership`), never of `can(read)`: `public_within` reach confers no act.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AccessAction {
     Write,
@@ -162,7 +162,8 @@ pub(crate) async fn profile_can(
 }
 
 /// `can(read)` narrowed to the caller's **membership** visibility (`can_read_by_membership`,
-/// public within, spec P7): what grant attenuation checks before a delegated granter confers read.
+/// which excludes `public_within` reach): what grant attenuation checks before a delegated granter
+/// confers read.
 async fn profile_can_read_by_membership(
     pool: &PgPool,
     caller: ProfileId,
@@ -257,10 +258,9 @@ pub(crate) async fn authorize_capability_grant(
             Ok(proof)
         }
         GrantAuthority::Delegated => {
-            // Read attenuates against MEMBERSHIP visibility (public within, spec P7, PW-5/F13):
-            // conferring read is an act on the material, and a holder who reads it only through
-            // `public_within` may read and reference it, never confer it. The other three are
-            // write-shaped and never consult a read set, so `can()` answers them as before.
+            // Read is conferred only on material the granter reads through membership: conferring
+            // read is an act on the material, and `public_within` reach confers no act. The other
+            // three are write-shaped and never consult a read set, so `can()` answers them as before.
             if caps.read
                 && !profile_can_read_by_membership(
                     pool,
@@ -1045,8 +1045,8 @@ pub async fn update_system_settings(
     admin: &SystemAdmin,
     req: &UpdateSettingsRequest,
 ) -> ApiResult<SystemSettings> {
-    // One transaction (public within, R-l): the `public_within_enabled` switch is written with its
-    // `public_within_policy_changed` record, and later phases hook the row-effect transitions into
+    // One transaction: the `public_within_enabled` switch is written with its
+    // `public_within_policy_changed` record, and later work hooks the row-effect transitions into
     // the same statement. The checks below read inside it, so a refusal writes nothing.
     let mut tx = pool.begin().await?;
 

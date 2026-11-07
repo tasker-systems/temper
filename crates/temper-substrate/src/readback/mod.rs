@@ -193,9 +193,9 @@ pub async fn is_resource_visible(
 /// "Can `principal` see `resource` by **membership**?", under `resources_visible_by_membership`.
 ///
 /// The membership twin of [`is_resource_visible`], for the one act on a resource that is authorized
-/// by readability: the citation audit's **finding** probe (public within, ruling R-m). Grading a
+/// by readability: the citation audit's **finding** probe. Grading a
 /// finding writes about it, and a reader who sees a team's material only through `public_within`
-/// may read and reference it, never act on it (spec P7, R-o). The membership set is reading
+/// may read and reference it, never act on it. The membership set is reading
 /// visibility without that arm, so this is never true where [`is_resource_visible`] is false.
 ///
 /// A separate function, not a flag on [`is_resource_visible`], because that one also serves the

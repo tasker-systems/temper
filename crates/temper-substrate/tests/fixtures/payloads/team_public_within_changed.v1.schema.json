@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "TeamPublicWithinChanged",
-  "description": "`team_public_within_changed` — a `public_within` row was opened, closed, lapsed or cascade-deleted\n(public within, spec P2, P3, P5). The row lets the people under the anchor team read the team's\nowned contexts. Both the team (T) and the anchor (A) are the event's `subject` references, so the\nmanagers of either side read it on the subject axis.",
+  "description": "`team_public_within_changed` — a `public_within` row was opened, closed, lapsed or cascade-deleted.\nThe row lets the people under the anchor team read the team's owned contexts. Both the team (T)\nand the anchor (A) are the event's `subject` references, so the managers of either side read it\non the subject axis.",
   "type": "object",
   "properties": {
     "act": {
@@ -27,7 +27,7 @@
       "format": "uuid"
     },
     "instance_wide": {
-      "description": "True when the row survives a pool team under the anchor (an admin's open, spec P2 rule 5).",
+      "description": "True when the row survives a pool team under the anchor (only an admin opens such a row).",
       "type": [
         "boolean",
         "null"

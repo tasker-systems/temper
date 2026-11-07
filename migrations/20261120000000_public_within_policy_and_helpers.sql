@@ -1,41 +1,29 @@
--- public_within, Phase 1: the schema, the policy and the helpers. Nothing reads through them yet.
+-- public_within: the schema, the policy and the helpers. Nothing reads through them yet.
 --
--- Design: temper-artifacts specs/2026-11-06-public-within-design.md (P1, P4, P5, P6, P9; rulings
--- R-a .. R-o). Plan: plans/2026-11-06-public-within.md Phase 1.
+-- Design: temper-artifacts specs/2026-11-06-public-within-design.md.
 --
 -- A `public_within(T, A)` row lets the people under the anchor team A read the contexts T owns. This
 -- migration adds the row, the two policy switches over it, and the predicates that say whether a row
--- confers. The read arm that consults them is the next migration (Phase 2), so on its own this one
--- changes no answer anywhere.
+-- confers; the read arm that consults them is 20261120000010, so on its own this changes no answer.
 --
---   kb_system_settings.public_within_enabled   the instance switch, false by default everywhere (R-e).
---                                              There is no backfill to true, here or in any seed.
---   kb_teams.public_within_forbidden           an owner's forbid over everything beneath it (P4).
---   kb_team_public_within                      the rows; a trigger refuses the shapes P1 bars.
---   team_is_root_or_gating                     the root or the current gating team (both checks).
---   team_ancestors_any                         the live-or-dead up-walk, for the forbid ONLY.
---   public_within_allowed_over                 the switch, then no forbid on any ancestor of T.
---   anchor_subtree_holds_pool                  the gating team at or under A (PW-1); 20261120000005
---                                              adds auto-join teams.
---   public_within_row_effective                one row's read-time conditions (P5, N9).
---   contexts_public_within                     the contexts effective rows open to a team closure.
---   public_within_reading                      the machine fence: is this profile a person? (R-n)
+--   kb_system_settings.public_within_enabled   the instance switch, false by default, never backfilled.
+--   kb_teams.public_within_forbidden           an owner's forbid over everything beneath it.
+--   kb_team_public_within                      the rows; a trigger and CHECKs refuse barred shapes.
+--   team_is_root_or_gating, team_ancestors_any, public_within_allowed_over,
+--   anchor_subtree_holds_pool (20261120000005 adds its auto-join arm), public_within_row_effective,
+--   contexts_public_within, public_within_reading   the predicates, one COMMENT ON each.
 --   _admin_public_within_switch_write          the instance switch and its record, one statement.
---   three admin event types                    team_public_within_changed,
---                                              public_within_effect_changed,
---                                              public_within_policy_changed (P9).
+--   team_public_within_changed, public_within_effect_changed, public_within_policy_changed.
 --
--- `team_live_descendants` already exists (20261119000020, Phase 0) and is reused, not redefined.
---
--- Every rationale lives in COMMENT ON FUNCTION, never in a body: the guard scans read
--- pg_get_functiondef (PW-9).
+-- `team_live_descendants` (20261119000020) is reused, not redefined. Every rationale lives in
+-- COMMENT ON FUNCTION, never in a body: the guard scans read pg_get_functiondef.
 
 -- ── 1. The switch and the forbid ──────────────────────────────────────────────────────────────────
 ALTER TABLE kb_system_settings
     ADD COLUMN public_within_enabled boolean NOT NULL DEFAULT false;
 
 COMMENT ON COLUMN kb_system_settings.public_within_enabled IS
-$c$The instance switch for public_within (spec P4, R-e). False by default on every deployment. While
+$c$The instance switch for public_within. False by default on every deployment. While
 it is false no kb_team_public_within row confers anything and every open is refused; close and
 list still work. Set by a system admin through _admin_public_within_switch_write, which records
 public_within_policy_changed.$c$;
@@ -44,7 +32,7 @@ ALTER TABLE kb_teams
     ADD COLUMN public_within_forbidden boolean NOT NULL DEFAULT false;
 
 COMMENT ON COLUMN kb_teams.public_within_forbidden IS
-$c$An owner's forbid (spec P4, R-f): no public_within row confers for any team beneath this one, by
+$c$An owner's forbid: no public_within row confers for any team beneath this one, by
 any path, live or dead (public_within_allowed_over walks team_ancestors_any). A lower owner cannot
 lift it; only leaving the subtree does. Not available on the root (its policy is the instance
 switch) or on personal teams; that is enforced by the door that sets it.$c$;
@@ -58,16 +46,17 @@ CREATE TABLE kb_team_public_within (
     admin_act     boolean     NOT NULL DEFAULT false,
     instance_wide boolean     NOT NULL DEFAULT false,
     PRIMARY KEY (team_id, anchor_id),
-    CONSTRAINT kb_team_public_within_not_self CHECK (team_id <> anchor_id)
+    CONSTRAINT kb_team_public_within_not_self CHECK (team_id <> anchor_id),
+    CONSTRAINT kb_team_public_within_instance_wide_is_admin CHECK (NOT instance_wide OR admin_act)
 );
 
 CREATE INDEX idx_kb_team_public_within_anchor ON kb_team_public_within (anchor_id);
 
 COMMENT ON TABLE kb_team_public_within IS
 $c$public_within(T, A): the people under anchor team A read the contexts team T owns, while the row
-is effective (public_within_row_effective). Opened by both sides (P2), closed by either (P3). A
-structural lapse deletes the row (P5); liveness and policy causes leave it dormant. Owned contexts
-only: a share to T, a grant held by T and a map bound to T are never exposed (N8).$c$;
+is effective (public_within_row_effective). Opened by both sides, closed by either. A structural
+lapse deletes the row; liveness and policy causes leave it dormant. Owned contexts only: a share to
+T, a grant held by T and a map bound to T are never exposed.$c$;
 COMMENT ON COLUMN kb_team_public_within.team_id IS 'T: the team whose owned contexts are opened.';
 COMMENT ON COLUMN kb_team_public_within.anchor_id IS
     'A: a strict ancestor of T whose subtree reads them.';
@@ -75,10 +64,10 @@ COMMENT ON COLUMN kb_team_public_within.opened_by IS
     'Who opened the row. Required on insert (the shape guard); NULL only once that profile is '
     'deleted, when the ledger record keeps the act.';
 COMMENT ON COLUMN kb_team_public_within.admin_act IS
-    'A system admin stood in for the anchor side (P2 rule 3). Never for the T side (R-k).';
+    'A system admin stood in for the anchor side. An admin never stands in for the T side.';
 COMMENT ON COLUMN kb_team_public_within.instance_wide IS
-$c$Opened by an admin over an anchor whose subtree holds an auto-join or gating team (P2 rule 5).
-Only such a row survives a pool team under A at read time (PW-1).$c$;
+$c$Opened by an admin over an anchor that is the root or whose subtree holds an auto-join or gating
+team. Only such a row survives a pool under A at read time. Implies admin_act (a CHECK).$c$;
 
 CREATE FUNCTION team_is_root_or_gating(p_team uuid)
 RETURNS boolean LANGUAGE sql STABLE AS $$
@@ -124,13 +113,13 @@ $$;
 
 COMMENT ON FUNCTION kb_team_public_within_shape_guard() IS
 $c$Refuses a public_within row whose team is personal, the root (temper-system) or the gating team,
-or whose anchor is personal (spec P1, P2 rule 8, PW-13), and an insert that names no opener. The
+or whose anchor is personal, and an insert that names no opener. The
 guard runs on an insert and on a change of team or anchor, never on any other update (so the
 opened_by SET NULL cascade and a later flag change pass), and not under replay (temper.replaying),
 which restores rows as they stand: a row whose opener was since deleted, or whose team has since
 become the gating team, is restored, not re-judged (the kb_events precedent). The constraint name on each refusal is
 what Rust renders the reason from. The anchor may be the root or the gating team: that is an
-admin's open (P2 rule 4), decided by the door, not here.$c$;
+admin's open, decided by the door, not here.$c$;
 
 CREATE TRIGGER kb_team_public_within_shape
     BEFORE INSERT OR UPDATE OF team_id, anchor_id ON kb_team_public_within
@@ -155,10 +144,10 @@ COMMENT ON FUNCTION team_ancestors_any(uuid) IS
 $c$The team DAG walked UP with NO liveness floor: p_team itself, then every parent through every
 link, live or soft-deleted. It exists for exactly one caller, public_within_allowed_over, because
 a forbid is a restriction and a restriction fails closed: soft-deleting the forbidding team, or a
-team between it and T, must not lift it (spec P4, PW-2/F5).
+team between it and T, must not lift it.
 
-NEVER USE IT FOR REACH. A dead team confers nothing (team_ancestors' is_active floor); a walk that
-passes through dead teams would let a soft-delete widen what anyone reads.$c$;
+NEVER USE IT FOR REACH. A forbid counts on every ancestor, live or dead; reach counts live teams
+only (team_ancestors' is_active floor), because a dead team confers nothing.$c$;
 
 CREATE FUNCTION public_within_allowed_over(p_team uuid)
 RETURNS boolean LANGUAGE sql STABLE AS $$
@@ -174,11 +163,11 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
 $$;
 
 COMMENT ON FUNCTION public_within_allowed_over(uuid) IS
-$c$Policy allows a public_within row for team p_team (spec P4): the instance switch is on, and no team
+$c$Policy allows a public_within row for team p_team: the instance switch is on, and no team
 in team_ancestors_any(p_team), p_team included, live or dead, forbids. T's chain, not A's: A is an
 ancestor of T, so T's chain covers A's, a forbid between A and T, and a forbid on T's second
-parent (PW-2). The switch is read first, inside a CASE so the order is guaranteed: a born-denied
-instance pays one settings read per row and never walks the tree (PW-19).$c$;
+parent. The switch is read first, inside a CASE so the order is guaranteed: a born-denied
+instance pays one settings read per row and never walks the tree.$c$;
 
 CREATE FUNCTION anchor_subtree_holds_pool(p_anchor uuid)
 RETURNS boolean LANGUAGE sql STABLE AS $$
@@ -186,13 +175,15 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
         SELECT 1
           FROM kb_teams t
          WHERE (t.id = p_anchor OR t.id IN (SELECT d.team_id FROM team_live_descendants(p_anchor) d))
-           AND t.slug = (SELECT s.gating_team_slug FROM kb_system_settings s WHERE s.id = 1));
+           AND ( t.slug = 'temper-system'
+              OR t.slug = (SELECT s.gating_team_slug FROM kb_system_settings s WHERE s.id = 1)));
 $$;
 
 COMMENT ON FUNCTION anchor_subtree_holds_pool(uuid) IS
-$c$True when the anchor itself, or a live team beneath it, is the gating team (PW-1); 20261120000005
-also counts an auto-join team. Such a team brings the whole instance into the anchor's subtree, so a public_within row
-over it would read instance-wide; only an admin's instance_wide row survives it
+$c$True when the anchor is the root (temper-system), or the anchor itself or a live team beneath it
+is the gating team; 20261120000005 also counts an auto-join team. Each brings the whole instance
+into the anchor's subtree (every personal team sits under the root), so a public_within row over it
+would read instance-wide; only an admin's instance_wide row survives it
 (public_within_row_effective). A pool team below a dead team is not counted, because it confers
 nothing upward (team_live_descendants does not walk through a dead team). The auto-join arm
 is kept apart because it reads kb_teams.auto_join_role, which temper-substrate's pre-auto-join test
@@ -211,7 +202,7 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
 $$;
 
 COMMENT ON FUNCTION public_within_row_effective(uuid, uuid, boolean) IS
-$c$Does one public_within row confer right now (spec P5, N9)? All of:
+$c$Does one public_within row confer right now? All of:
   * policy allows it over the team (public_within_allowed_over: the switch, then no forbid above T),
     evaluated first, inside a CASE, so a switched-off instance never walks the tree;
   * the team is not the root or the gating team: the shape trigger refuses that at write time, and
@@ -219,8 +210,8 @@ $c$Does one public_within row confer right now (spec P5, N9)? All of:
   * the anchor is a strict ancestor of the team along a LIVE chain: team_ancestors returns T only if
     T is live and walks only through live teams, so T dead, A dead, or every path between them dead
     each makes the row dormant (liveness);
-  * the anchor's live subtree holds no auto-join or gating team, unless the row is an admin's
-    instance_wide row (PW-1).
+  * the anchor is not the root and its live subtree holds no auto-join or gating team
+    (anchor_subtree_holds_pool), unless the row is an admin's instance_wide row.
 Every condition is read-time, so an act that breaks one makes the row inert at once, whatever the
 open-time checks said.$c$;
 
@@ -239,14 +230,14 @@ RETURNS TABLE(context_id uuid) LANGUAGE sql STABLE AS $$
 $$;
 
 COMMENT ON FUNCTION contexts_public_within(uuid, uuid[]) IS
-$c$Arm 5 of the context read set (spec P6): the contexts OWNED by every team T whose public_within row
-is anchored on a team in p_teams (the caller's reachable closure) and is effective. Owned contexts
-only (R-b): never a context shared to T, a grant held by T or a map bound to T (N8). Not inherited
-(R-a): T's children stay private. A retired context is floored by is_active; a context of a dead
-team never appears, because public_within_row_effective requires T live.
+$c$The public_within arm of the context read set: the contexts OWNED by every team T whose
+public_within row is anchored on a team in p_teams (the caller's reachable closure) and is
+effective. Owned contexts only: never a context shared to T, a grant held by T or a map bound to T.
+Not inherited: T's children stay private. A retired context is floored by is_active; a context of
+a dead team never appears, because public_within_row_effective requires T live.
 
 The candidate rows are hoisted into a MATERIALIZED CTE so the per-row effect checks run once per
-row, never per context (PW-19). p_profile is carried for the read-set signature. It applies NO reader
+row, never per context. p_profile is carried for the read-set signature. It applies NO reader
 fence itself: every caller must, and both do (_contexts_readable_by_teams through p_reading,
 resources_public_within through public_within_reading). Do not call it from anywhere else.$c$;
 
@@ -265,16 +256,16 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
 $$;
 
 COMMENT ON FUNCTION public_within_reading(uuid) IS
-$c$The machine fence (spec P6, PW-4, R-n). False whenever the instance switch is off, read first so
-that every read-set call on a born-denied instance pays one settings read and nothing more. With it
-on, true only for a PERSON: a profile with a human auth link
+$c$The machine fence: machine principals never read through public_within. False whenever the
+instance switch is off, read first so that every read-set call on a born-denied instance pays one
+settings read and nothing more. With it on, true only for a PERSON: a profile with a human auth link
 (any kb_profile_auth_links row whose provider is not the machine provider auth0-m2m) and with no
 kb_machine_clients row (revoked or not; the same test as is_machine_profile) and no kb_connections
 row (a connection's agent profile). Everything else is false, fail-closed: machine clients,
 connection agents, stewards and auditors (machine clients themselves), and any profile with no
 human auth link.
 
-Keyed on the profile and the instance setting alone (R-n): no GUC and no request-scoped state. The fence is the principal,
+Keyed on the profile and the instance setting alone: no GUC and no request-scoped state. The fence is the principal,
 never the token or the surface, so a person reads with any token that identifies them, including
 the Slack mention path's act-as-the-human mint.$c$;
 
@@ -288,7 +279,7 @@ INSERT INTO kb_event_types (name, payload_schema, schema_version, category) VALU
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "TeamPublicWithinChanged",
-  "description": "`team_public_within_changed` — a `public_within` row was opened, closed, lapsed or cascade-deleted\n(public within, spec P2, P3, P5). The row lets the people under the anchor team read the team's\nowned contexts. Both the team (T) and the anchor (A) are the event's `subject` references, so the\nmanagers of either side read it on the subject axis.",
+  "description": "`team_public_within_changed` — a `public_within` row was opened, closed, lapsed or cascade-deleted.\nThe row lets the people under the anchor team read the team's owned contexts. Both the team (T)\nand the anchor (A) are the event's `subject` references, so the managers of either side read it\non the subject axis.",
   "type": "object",
   "properties": {
     "act": {
@@ -314,7 +305,7 @@ INSERT INTO kb_event_types (name, payload_schema, schema_version, category) VALU
       "format": "uuid"
     },
     "instance_wide": {
-      "description": "True when the row survives a pool team under the anchor (an admin's open, spec P2 rule 5).",
+      "description": "True when the row survives a pool team under the anchor (only an admin opens such a row).",
       "type": [
         "boolean",
         "null"
@@ -370,7 +361,7 @@ $JS$::jsonb, 1, 'admin'),
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "PublicWithinEffectChanged",
-  "description": "`public_within_effect_changed` — a `public_within` row started or stopped conferring, without\nbeing opened or closed (spec P5). The cause is liveness (a team on the path was deleted or\nrestored) or policy (the instance switch, a forbid, or a pool team under the anchor). Both the\nteam and the anchor are `subject` references.",
+  "description": "`public_within_effect_changed` — a `public_within` row started or stopped conferring, without\nbeing opened or closed. The cause is liveness (a team on the path was deleted or restored) or\npolicy (the instance switch, a forbid, or a pool team under the anchor). Both the team and the\nanchor are `subject` references.",
   "type": "object",
   "properties": {
     "act": {
@@ -451,7 +442,7 @@ $JS$::jsonb, 1, 'admin'),
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "PublicWithinPolicyChanged",
-  "description": "`public_within_policy_changed` — the instance switch (`public_within_enabled`) or a team's forbid\n(`public_within_forbidden`) changed (spec P4). The only record of the instance switch: settings\nupdates are otherwise not ledgered. A team-scope record carries the team as its `subject`\nreference; an instance-scope record carries none, and is read by system admins.",
+  "description": "`public_within_policy_changed` — the instance switch (`public_within_enabled`) or a team's forbid\n(`public_within_forbidden`) changed. The only record of the instance switch: settings updates\nare otherwise not ledgered. A team-scope record carries the team as its `subject` reference; an\ninstance-scope record carries none, and is read by system admins.",
   "type": "object",
   "properties": {
     "actor": {
@@ -553,18 +544,18 @@ COMMENT ON FUNCTION _admin_public_within_switch_write(uuid, uuid, boolean, uuid)
 $c$Set the public_within instance switch and append its public_within_policy_changed record (scope
 instance), atomically, under the settings row lock. Returns changed | noop | absent; only changed
 writes or emits. The record names no team, so only system admins read it. It NEVER AUTHORIZES:
-access_service::update_system_settings holds the SystemAdmin proof before calling it. Phase 4 hooks
-the effect transitions here (R-l).$c$;
+access_service::update_system_settings holds the SystemAdmin proof before calling it. The row
+effect transitions are to be hooked here, in the same transaction as the switch.$c$;
 
 SELECT declare_migration(
     20261120000000,
     'additive',
-    'public_within Phase 1: adds kb_system_settings.public_within_enabled (default false, no '
+    'public_within schema, policy and helpers: adds kb_system_settings.public_within_enabled (default false, no '
     'backfill), kb_teams.public_within_forbidden (default false), the kb_team_public_within table '
     'with its shape trigger, the helpers team_ancestors_any, public_within_allowed_over, '
     'anchor_subtree_holds_pool, team_is_root_or_gating, public_within_row_effective, '
     'contexts_public_within and public_within_reading, the writer _admin_public_within_switch_write, and three admin event '
     'types. New columns have defaults and nothing reads them yet, so an older binary is '
-    'unaffected; no existing function changes. Plan: temper-artifacts '
-    'plans/2026-11-06-public-within.md Phase 1.'
+    'unaffected; no existing function changes. kb_team_public_within also carries a CHECK that an '
+    'instance_wide row is an admin act, and anchor_subtree_holds_pool counts the root as a pool.'
 );

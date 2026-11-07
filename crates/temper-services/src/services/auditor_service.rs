@@ -41,9 +41,10 @@ pub struct CogmapAuditWork {
 /// this replaced wrapped a large `cap` into a negative `LIMIT` (a 500 from user input).
 ///
 /// Auth: the gate is inside the SQL. `audit_drift_sweep` routes through
-/// `steward_candidate_cogmaps(p_principal)` **and** `resources_visible_to(p_principal)`
-/// (`migrations/20260724000130_audit_drift_sweep.sql:89-100`) — the same predicates every other read
-/// uses — so an unreachable cogmap or an unreadable finding simply never appears. There is no
+/// `steward_candidate_cogmaps(p_principal)` **and** a finding the principal reads by membership
+/// (`resources_visible_by_membership`), with each cited source on the reading set
+/// (`migrations/20261120000020_public_within_audit_split.sql`) — the same sets the write gate asks —
+/// so an unreachable cogmap or a finding the principal may not grade simply never appears. There is no
 /// unscoped variant of this call, because a sweep with no principal is a cross-tenant enumeration
 /// oracle (spec §6.3).
 pub async fn drift_sweep(
@@ -122,8 +123,9 @@ pub fn group_by_cogmap(citations: &[(Uuid, AuditCitation)]) -> Vec<CogmapAuditWo
 /// `audit_drift_sweep`'s rank-interleaved ordering, not a plain `uncovered DESC`, since
 /// `20260726000010` — see `expansion_keeps_the_sweeps_priority_order`, which asserts it survives.
 ///
-/// Auth: `resource_auditable_citations` carries the same `resources_visible_to` gate its siblings
-/// do, so an unreadable finding yields zero rows here rather than leaking. The sweep has already
+/// Auth: `resource_auditable_citations` carries the same gate its siblings do (the finding on
+/// membership, each cited source on reading), so a finding the principal may not grade yields zero
+/// rows here rather than leaking. The sweep has already
 /// applied that gate too; this is the defense-in-depth the repo asks for, not a redundant filter.
 pub async fn expand_to_citations(
     pool: &PgPool,
