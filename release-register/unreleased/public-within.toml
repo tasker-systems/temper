@@ -1,0 +1,32 @@
+title    = "public_within: a team's owned contexts can be opened to an ancestor's subtree, for people to read and reference; born off everywhere"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["http", "clients", "schema"]
+status   = "signal-only"
+body = '''
+Phases 1 and 2 of public_within (temper-artifacts specs/2026-11-06-public-within-design.md). Grown
+as later phases land.
+
+Schema (migrations 20261120000000, 20261120000010, 20261120000020): kb_system_settings gains
+public_within_enabled (default false, no backfill), kb_teams gains public_within_forbidden (default
+false), and a new kb_team_public_within table holds the rows, with a trigger refusing a personal,
+root or gating T and a personal anchor. New helpers: team_ancestors_any, public_within_allowed_over,
+anchor_subtree_holds_pool, public_within_row_effective, contexts_public_within and
+public_within_reading (the machine fence: true only for a person). Three admin event types:
+team_public_within_changed, public_within_effect_changed, public_within_policy_changed. The read
+arm is layered without overloads: _contexts_readable_by_teams and _resources_visible hold the bodies,
+contexts_readable_by_teams and resources_visible_to are body-only wrappers at unchanged signatures,
+and resources_visible_by_membership, contexts_readable_by_membership and can_read_by_membership are
+the membership entry points. The citation-audit queue gates the finding on membership and the cited
+source on reading (ruling R-m); grant attenuation checks read by membership; element_trail_node
+filters an arm-5-only reader's trail to T's contexts.
+
+HTTP: GET/PATCH /api/admin/settings (SystemSettings) gains public_within_enabled, and
+UpdateSettingsRequest gains an optional public_within_enabled; turning it on or off is recorded as
+public_within_policy_changed. Both are additions.
+
+Who observes: nobody, until a system admin turns the switch on and a row exists. No door opens a row
+yet (Phase 3). While the switch is off, every read set and every gate answers exactly as before.
+Witnesses: crates/temper-services/tests/public_within_test.rs, visibility_invariant_harness.rs,
+reachable_teams_one_definition_test.rs. Release relevance: additive; signal-only.
+'''

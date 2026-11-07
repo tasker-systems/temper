@@ -2224,7 +2224,7 @@
           "Admin Ledger"
         ],
         "summary": "Read the admin ledger",
-        "description": "Returns a page of recorded administrative acts, newest first, on exactly one axis. `subject` (`<kind>:<uuid>`, e.g. `kb_resources:<uuid>`) returns the acts performed on that subject, limited to the act families the caller may read about it: a system admin reads all of them except grant acts on someone else's personal context or a resource homed in one, a caller who may administer grants on the subject reads its grant acts, and an owner or maintainer of a team (`kb_teams:<uuid>`) reads that team's membership changes, the linking or detaching of its child teams, and its lifecycle acts (created, deleted, restored, renamed, auto-join changed) (on the gating team and temper-system, only a system admin does). `actor` returns the acts a profile performed: any caller may read their own, and only a system admin may read another's, without the grant acts that fall in someone else's personal space. A read the caller is not allowed is answered 404, not 403, so a refusal reveals nothing about the subject. `epoch` is when recording began; acts before it were not recorded. `limit` defaults to 50 and is capped at 200.",
+        "description": "Returns a page of recorded administrative acts, newest first, on exactly one axis. `subject` (`<kind>:<uuid>`, e.g. `kb_resources:<uuid>`) returns the acts performed on that subject, limited to the act families the caller may read about it: a system admin reads all of them except grant acts on someone else's personal context or a resource homed in one, a caller who may administer grants on the subject reads its grant acts, and an owner or maintainer of a team (`kb_teams:<uuid>`) reads that team's membership changes, the linking or detaching of its child teams, its lifecycle acts (created, deleted, restored, renamed, auto-join changed), and the public-within records that name it as the opened team or the anchor (opened, closed, lapsed, a change of effect, a change of its forbid) (on the gating team and temper-system, only a system admin does). `actor` returns the acts a profile performed: any caller may read their own, and only a system admin may read another's, without the grant acts that fall in someone else's personal space. A read the caller is not allowed is answered 404, not 403, so a refusal reveals nothing about the subject. `epoch` is when recording began; acts before it were not recorded. `limit` defaults to 50 and is capped at 200.",
         "operationId": "list_admin_ledger",
         "parameters": [
           {
@@ -28954,6 +28954,10 @@
               "null"
             ]
           },
+          "public_within_enabled": {
+            "type": "boolean",
+            "description": "The instance switch for `public_within` (public within, spec P4). Off by default on every\ndeployment: while it is off, no `public_within` row confers anything. Not `required` on the\nwire (`serde(default)`): a client built before the field existed still parses, and an\nabsent value means off, which is the default."
+          },
           "terms_resource_uri": {
             "type": [
               "string",
@@ -29497,6 +29501,13 @@
               "null"
             ],
             "description": "Human-facing instance name."
+          },
+          "public_within_enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "The instance switch for `public_within`: whether a team's owned contexts may be opened to\nan ancestor's subtree at all. Off by default. Turning it off makes every row confer\nnothing; turning it on revives the rows no other cause holds dormant. Recorded as\n`public_within_policy_changed`. `None` leaves it unchanged."
           },
           "terms_resource_uri": {
             "type": [

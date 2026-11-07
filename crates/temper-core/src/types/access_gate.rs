@@ -105,6 +105,12 @@ pub struct SystemSettings {
     pub terms_version: Option<String>,
     pub terms_resource_uri: Option<String>,
     pub instance_name: Option<String>,
+    /// The instance switch for `public_within` (public within, spec P4). Off by default on every
+    /// deployment: while it is off, no `public_within` row confers anything. Not `required` on the
+    /// wire (`serde(default)`): a client built before the field existed still parses, and an
+    /// absent value means off, which is the default.
+    #[serde(default)]
+    pub public_within_enabled: bool,
     pub updated: DateTime<Utc>,
 }
 

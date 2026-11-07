@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PublicWithinPolicyChanged",
+  "description": "`public_within_policy_changed` — the instance switch (`public_within_enabled`) or a team's forbid\n(`public_within_forbidden`) changed (spec P4). The only record of the instance switch: settings\nupdates are otherwise not ledgered. A team-scope record carries the team as its `subject`\nreference; an instance-scope record carries none, and is read by system admins.",
+  "type": "object",
+  "properties": {
+    "actor": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProfileId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "from": {
+      "description": "The value before: the switch's `enabled`, or the team's `forbidden`.",
+      "type": "boolean"
+    },
+    "scope": {
+      "$ref": "#/$defs/PublicWithinPolicyScope"
+    },
+    "team_id": {
+      "description": "The team whose forbid changed; absent for the instance switch.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "to": {
+      "description": "The value after.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "scope",
+    "from",
+    "to"
+  ],
+  "$defs": {
+    "ProfileId": {
+      "description": "A `kb_profiles.id` value.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "PublicWithinPolicyScope": {
+      "description": "Which policy a [`PublicWithinPolicyChanged`] record is about.",
+      "oneOf": [
+        {
+          "description": "`kb_system_settings.public_within_enabled`, set by a system admin.",
+          "type": "string",
+          "const": "instance"
+        },
+        {
+          "description": "`kb_teams.public_within_forbidden`, set by the team's owner or an admin.",
+          "type": "string",
+          "const": "team"
+        }
+      ]
+    }
+  }
+}

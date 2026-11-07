@@ -975,7 +975,11 @@ async fn fold_probes(pool: &PgPool, o: &Org) -> sqlx::Result<Vec<(&'static str, 
             format!("SELECT EXISTS (SELECT 1 FROM contexts_readable_by('{d}') c WHERE c.context_id='{eng_ctx}')"),
         ),
         (
-            "resources_visible_to",
+            // The fold site moved with the body (public within, PW-8/PW-9): `resources_visible_to`
+            // is now a body-only wrapper over `_resources_visible`, which holds the
+            // `reachable_teams` CTE. The probe still asks through the wrapper, because that is the
+            // name every caller uses; the sabotage lands on the body that owns the fold.
+            "_resources_visible",
             format!("SELECT EXISTS (SELECT 1 FROM resources_visible_to('{d}') v WHERE v.resource_id='{team_read}')"),
         ),
         (

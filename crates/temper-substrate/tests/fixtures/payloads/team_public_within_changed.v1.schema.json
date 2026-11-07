@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TeamPublicWithinChanged",
+  "description": "`team_public_within_changed` — a `public_within` row was opened, closed, lapsed or cascade-deleted\n(public within, spec P2, P3, P5). The row lets the people under the anchor team read the team's\nowned contexts. Both the team (T) and the anchor (A) are the event's `subject` references, so the\nmanagers of either side read it on the subject axis.",
+  "type": "object",
+  "properties": {
+    "act": {
+      "$ref": "#/$defs/PublicWithinAct"
+    },
+    "actor": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProfileId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "admin_act": {
+      "description": "True when a system admin stood in for the anchor side.",
+      "type": "boolean"
+    },
+    "anchor_id": {
+      "description": "The ancestor team whose subtree reads them (A).",
+      "type": "string",
+      "format": "uuid"
+    },
+    "instance_wide": {
+      "description": "True when the row survives a pool team under the anchor (an admin's open, spec P2 rule 5).",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "team_id": {
+      "description": "The team whose owned contexts the row opens (T).",
+      "type": "string",
+      "format": "uuid"
+    }
+  },
+  "required": [
+    "team_id",
+    "anchor_id",
+    "act",
+    "admin_act"
+  ],
+  "$defs": {
+    "ProfileId": {
+      "description": "A `kb_profiles.id` value.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "PublicWithinAct": {
+      "description": "What happened to the row in a [`TeamPublicWithinChanged`] record.",
+      "oneOf": [
+        {
+          "description": "A manager of the team and a manager of the anchor (or an admin for it) opened the row.",
+          "type": "string",
+          "const": "opened"
+        },
+        {
+          "description": "A manager of either side, or an admin, closed the row.",
+          "type": "string",
+          "const": "closed"
+        },
+        {
+          "description": "The anchor stopped being an ancestor of the team by any path; the row was deleted and\nnever revives.",
+          "type": "string",
+          "const": "lapsed"
+        },
+        {
+          "description": "The team or the anchor was erased or hard-deleted, taking the row with it.",
+          "type": "string",
+          "const": "cascade_deleted"
+        }
+      ]
+    }
+  }
+}

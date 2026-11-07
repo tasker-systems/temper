@@ -172,6 +172,10 @@ const INPUT_TABLES: &[&str] = &[
     "kb_team_members",
     "kb_contexts",
     "kb_team_contexts",
+    // public_within rows are INPUT, restored after kb_teams and kb_profiles (both foreign keys).
+    // Their events are no-ops in the walk below, like the other team records: the rows' final
+    // state rides in here (PW-20).
+    "kb_team_public_within",
     // Grants are INPUT, not projection: replay restores kb_access_grants verbatim (the 5 pre-epoch
     // grants have no events, so rebuilding from events would report them spurious forever). The
     // grant_created/grant_revoked walk arms are no-ops (see the match below) precisely because the
@@ -333,6 +337,10 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             | EventKind::TeamParentLinkChanged
             // A team lifecycle act (team DAG and lifecycle doors D8): the same posture.
             | EventKind::TeamLifecycleChanged
+            // The public_within records (public within, spec P9): the same posture.
+            | EventKind::TeamPublicWithinChanged
+            | EventKind::PublicWithinEffectChanged
+            | EventKind::PublicWithinPolicyChanged
             // The erasure act's admin pair (spec 2026-08-31): authority acts about a PERSON,
             // never knowledge. Same NULL-anchored, content-free shape. The snapshot side of the
             // replay redaction needs NOTHING more than this posture, and that is the point:
@@ -1039,6 +1047,12 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // A team lifecycle act: the same posture. Team STATE (is_active, slug,
             // auto_join_role) is replayed from the kb_teams input table.
             | EventKind::TeamLifecycleChanged
+            // The public_within records: the same posture. Row STATE is replayed from the
+            // kb_team_public_within input table; the switch and the forbid ride kb_teams and
+            // settings, which replay does not rebuild from events either.
+            | EventKind::TeamPublicWithinChanged
+            | EventKind::PublicWithinEffectChanged
+            | EventKind::PublicWithinPolicyChanged
             // The erasure act's refusal face (spec 2026-08-31, D6): NULL-anchored, mutates
             // NOTHING by design — one reason-code event, and the refusal set must not admit
             // it. The walk stays a no-op; `PrincipalErased` graduated above.

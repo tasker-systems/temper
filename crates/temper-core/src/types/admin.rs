@@ -32,6 +32,12 @@ pub struct UpdateSettingsRequest {
     pub terms_version: Option<String>,
     /// URI of the terms-of-service resource.
     pub terms_resource_uri: Option<String>,
+    /// The instance switch for `public_within`: whether a team's owned contexts may be opened to
+    /// an ancestor's subtree at all. Off by default. Turning it off makes every row confer
+    /// nothing; turning it on revives the rows no other cause holds dormant. Recorded as
+    /// `public_within_policy_changed`. `None` leaves it unchanged.
+    #[serde(default)]
+    pub public_within_enabled: Option<bool>,
 }
 
 impl UpdateSettingsRequest {
@@ -41,6 +47,7 @@ impl UpdateSettingsRequest {
             && self.instance_name.is_none()
             && self.terms_version.is_none()
             && self.terms_resource_uri.is_none()
+            && self.public_within_enabled.is_none()
     }
 }
 
