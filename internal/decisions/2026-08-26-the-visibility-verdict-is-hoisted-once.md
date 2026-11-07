@@ -132,3 +132,24 @@ Re-review is forced when any of these becomes true:
    `REVOKE` starts buying something, and this accepted residue should be re-priced rather than
    re-affirmed.
 6. Any core gaining a second id set, or `p_principal` moving out of survey's second position.
+
+## Amendment — 2026-11-07: the follow-from core checks edge homes itself
+
+`[provisional — 2026-11-07, judgement call]` The follow-from walk now lives in
+`__temper_ungated_follow_from_homed` (migration `20261119000010_follow_from_home_gate.sql`).
+`__temper_ungated_follow_from` remains as a retired wrapper that passes a NULL reader and admits no
+edge. The core is still ungated for **resources**: `p_visible_ids` is still its first argument and
+its only resource gate, and it computes no visible set of its own.
+
+What changed is the **edge home**. An edge's home anchor is not a resource, so the hoisted set cannot
+answer whether it is readable. Like the find cores' anchor check, that authorization is kept inside
+the core. The core takes `p_anchor_reader` (the emitter's `PRINCIPAL_BIND`) and admits a candidate
+edge only if `anchor_readable_by_profile(p_anchor_reader, home)` holds. The check runs once per
+**distinct home** of the candidate edges, not as a set scan, so the hoist's purpose survives: a
+composition with N follow stages pays no full edge-visibility scan per stage. Measured on a
+synthetic corpus of 30k resources and 50k edges: four follow stages in one statement took 128 ms
+against 78 ms for the ungated body. A per-stage `edges_visible_to` scan took 904 ms.
+
+This amendment is the re-review that trigger 1 asks for: `_homed` is a new `__temper_ungated_*` name,
+and `audit-ungated-fragments.sh` carries its review entry. Trigger 3 holds as amended:
+`PRINCIPAL_BIND` now also reaches the walk core, still only as an anchor reader.

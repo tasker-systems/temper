@@ -1,10 +1,10 @@
--- team_live_descendants: the DAG down-walk, live teams only (PW-1, plan Phase 0.2 / 1.5).
+-- team_live_descendants: the team DAG walked down, live teams only.
 --
--- The R6 rule ("an auto-join or gating team under you hands your material to the whole instance,
--- so bringing one under you is a system admin's act") was checked only against the immediate child
--- of an attach or reparent, and only against the restored team itself on restore. A subtree that
--- CONTAINS such a team passed. team_service now asks the whole live subtree, and needs a down-walk
--- to do it: team_descendants was dropped in 20260709000020, so this is a new primitive.
+-- Bringing an auto-join or gating team under a team hands that team's material to the whole
+-- instance, so it is a system admin's act. Attach, reparent and restore checked this only against
+-- the child (or the restored team) itself. A subtree that CONTAINS such a team passed. team_service
+-- now asks the whole live subtree, and needs a down-walk to do it: team_descendants was dropped in
+-- 20260709000020, so this is a new primitive.
 --
 -- It mirrors team_ancestors (20260703000001) exactly, in the other direction: the seed is returned
 -- only if it is live, and the recursion extends only through live children. A soft-deleted team is
@@ -29,8 +29,8 @@ $$;
 COMMENT ON FUNCTION team_live_descendants(uuid) IS
 $c$The team DAG walked DOWN, live teams only: p_team itself if live, then every team reachable
 through live child links. The exact mirror of team_ancestors' is_active floor, so the two agree on
-what a dead team means: neither returned nor walked through. Used by team_service's R6 subtree
-check (attach, reparent, restore: is there an auto-join or gating team below?). A structural
+what a dead team means: neither returned nor walked through. Used by team_service's subtree check
+for attach, reparent and restore (is there an auto-join or gating team below?). A structural
 primitive, not a visibility arm: it never decides what anyone reads.$c$;
 
 SELECT declare_migration(
@@ -39,6 +39,5 @@ SELECT declare_migration(
     'Adds team_live_descendants(p_team), the live-only DAG down-walk mirroring team_ancestors'' '
     'is_active floor. New function only; nothing existing changes, so an older binary is '
     'unaffected. The new binary''s team_service uses it to refuse a non-admin attach, reparent or '
-    'restore whose live subtree contains an auto-join or gating team (PW-1). Plan: '
-    'temper-artifacts plans/2026-11-06-public-within.md Phase 0.2.'
+    'restore whose live subtree contains an auto-join or gating team.'
 );

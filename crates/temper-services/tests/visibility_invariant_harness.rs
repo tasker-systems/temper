@@ -2007,6 +2007,11 @@ const CONSUMES: &[&str] = &[
     // conjunction, both arms, is pinned by edge_conjunction_harness.rs
     // (cogmap_regulation_admits_only_visible_edges).
     "cogmap_regulation",
+    // _resource_contradiction_balance — the evidence read's per-reader balance (20261119000040).
+    // Its profile arm counts only edges in edges_visible_to; the map principal's arm reads
+    // resources_accessible_to_cogmap. It restates no rule; the conjunction is pinned by
+    // edge_conjunction_harness.rs (standing_scores_only_edges_the_reader_sees).
+    "_resource_contradiction_balance",
     "cogmap_foundations",
     "cogmap_list_rows",
     "element_trail_edge",

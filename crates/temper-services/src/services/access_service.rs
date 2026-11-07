@@ -904,7 +904,7 @@ async fn delegated_may_change_row(
 
 /// The root team's slug: every personal team descends from it, so a grant to it reaches every
 /// profile. Only a system admin grants to it.
-const ROOT_TEAM_SLUG: &str = "temper-system";
+pub(crate) const ROOT_TEAM_SLUG: &str = "temper-system";
 
 /// Delete one access grant. Auth before write: `can_administer_grant`. Absent row ⇒ no-op success
 /// (idempotent, mirrors `bind_team`/`unbind_team`).

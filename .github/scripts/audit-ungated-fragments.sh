@@ -281,18 +281,19 @@ PREFIX='__temper_ungated_'
 #   later edit that moved a conjunct out of this body into a caller, or computed the page from the
 #   governance relations directly, is the shape to refuse.
 #
-# REVIEWED 2026-11-07 (`__temper_ungated_follow_from_homed`, migration 20261119000010, PW-6: the
-# follow-from walk checks the edge's HOME). The function-NAME set grows by one and the SQL-file set
-# by one. The relation watch does not move: the new body reads `edges_visible_to`, a function the
-# derivation does not list, and otherwise exactly the relations the 10-arity body read. The Rust
-# half does not move either: `EMIT_FOLLOW_FROM` stays the one line in `query_plan.rs` naming the
-# walk, now spelling the new name.
+# REVIEWED 2026-11-07 (`__temper_ungated_follow_from_homed`, migration 20261119000010: the
+# follow-from walk checks each edge's HOME). The function-NAME set grows by one and the SQL-file set
+# by one. The relation watch does not move: the new body reads `anchor_readable_by_profile`, a
+# function the derivation does not list, and otherwise exactly the relations the 10-arity body read.
+# The Rust half does not move either: `EMIT_FOLLOW_FROM` stays the one line in `query_plan.rs`
+# naming the walk, now spelling the new name.
 #   VERDICT: unchanged for resources. `p_visible_ids` is still the first argument and the walk's
-#     only resource gate. The new eleventh argument, `p_anchor_reader`, is the principal, and the
-#     body admits an edge only if `edges_visible_to(p_anchor_reader)` does. A NULL reader admits no
-#     edge. `query_follow_from` computes `resources_visible_to(p_principal)` once and passes
-#     `p_principal` as the reader. The retired 10-arity name passes a NULL reader, so it walks
-#     nowhere.
+#     only resource gate; the core computes no visible set of its own. The new eleventh argument,
+#     `p_anchor_reader`, is the principal, and the body admits a candidate edge only if
+#     `anchor_readable_by_profile(p_anchor_reader, home)` holds, checked once per distinct home. A
+#     NULL reader admits no edge. `query_follow_from` computes `resources_visible_to(p_principal)`
+#     once and passes `p_principal` as the reader. The retired 10-arity name passes a NULL reader,
+#     so it walks nowhere.
 #   EMITTER: `emit_ungated_core_call`'s `CoreCall::Walk` arm writes `VISIBLE_IDS` first and
 #     `PRINCIPAL_BIND` last. No caller-supplied value reaches either.
 #   RESIDUE: unchanged and accepted.

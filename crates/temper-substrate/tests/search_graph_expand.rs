@@ -1167,6 +1167,40 @@ async fn the_pages_are_cut_under_a_total_order_and_the_tiebreak_is_still_there(p
     );
 }
 
+/// The walk core computes no visible set of its own, so a composition with N follow stages pays the
+/// hoisted resource gate once and no per-stage edge-visibility scan. It checks each candidate edge's
+/// HOME with one point predicate, `anchor_readable_by_profile`, per distinct home.
+///
+/// Read from `prosrc` with comments stripped, because the property is the body's, and a comment
+/// naming a gate is not a call to it.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_walk_core_computes_no_visible_set_of_its_own(pool: sqlx::PgPool) {
+    let src: String = sqlx::query_scalar(
+        "SELECT regexp_replace(p.prosrc, '--[^\n]*', '', 'g') FROM pg_proc p
+           JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE p.proname = '__temper_ungated_follow_from_homed' AND n.nspname = 'public'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    for gate in [
+        "edges_visible_to(",
+        "resources_visible_to(",
+        "contexts_readable_by(",
+    ] {
+        assert!(
+            !src.contains(gate),
+            "the walk core calls {gate}: each follow stage would pay a full visibility scan the \
+             hoisted `__temper_vis` exists to avoid"
+        );
+    }
+    assert_eq!(
+        src.matches("anchor_readable_by_profile(").count(),
+        1,
+        "the home gate is one point predicate, applied to the distinct homes"
+    );
+}
+
 /// ONE BODY PER ARM, asserted against the catalog rather than trusted from the migration text.
 ///
 /// `20260814000030`'s header states the rule this pins: *"two bodies drift, and the drift is silent

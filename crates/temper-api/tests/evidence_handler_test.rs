@@ -136,3 +136,61 @@ async fn unreadable_finding_is_not_found(pool: PgPool) {
         "an absent finding is NotFound: {absent:?}"
     );
 }
+
+/// One live `express` edge of `label` from `source` to `finding`, homed in `ctx`.
+async fn express_edge(pool: &PgPool, source: Uuid, finding: Uuid, label: &str, ctx: Uuid) {
+    let event: Uuid = sqlx::query_scalar("SELECT id FROM kb_events LIMIT 1")
+        .fetch_one(pool)
+        .await
+        .expect("an event");
+    sqlx::query(
+        "INSERT INTO kb_edges \
+             (source_table, source_id, target_table, target_id, edge_kind, polarity, label, \
+              home_anchor_table, home_anchor_id, asserted_by_event_id, last_event_id) \
+         VALUES ('kb_resources', $1, 'kb_resources', $2, 'express', 'forward', $3, \
+                 'kb_contexts', $4, $5, $5)",
+    )
+    .bind(source)
+    .bind(finding)
+    .bind(label)
+    .bind(ctx)
+    .bind(event)
+    .execute(pool)
+    .await
+    .expect("insert express edge");
+}
+
+/// The contradiction balance (and so the band) counts only edges the reader can see. A second
+/// `supports` edge, from another owner's resource and homed in their context, leaves the reader's
+/// shape exactly as it was.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_balance_and_band_ignore_an_edge_the_reader_cannot_see(pool: PgPool) {
+    let (owner, ctx, goal) = common::seed_context_with_goal_and_tasks(&pool, 0).await;
+    let event: Uuid = sqlx::query_scalar("SELECT id FROM kb_events LIMIT 1")
+        .fetch_one(&pool)
+        .await
+        .expect("an event");
+    // The control: a supporting resource the owner sees, its edge homed in the owner's context.
+    let supporter = common::seed_resource(&pool, ctx, owner, event, "Supporter", "task").await;
+    express_edge(&pool, supporter, goal, "supports", ctx).await;
+    let before = resource_evidence(&pool, owner, goal)
+        .await
+        .expect("owner reads the finding");
+    assert_eq!(
+        before.contradiction_balance, 1.0,
+        "control: the readable supports edge scores: {before:?}"
+    );
+
+    // Someone else's resource, in their own context, supporting the same finding.
+    let (other, other_ctx, _) = common::seed_context_with_goal_and_tasks(&pool, 0).await;
+    let hidden = common::seed_resource(&pool, other_ctx, other, event, "Hidden", "task").await;
+    express_edge(&pool, hidden, goal, "supports", other_ctx).await;
+    let after = resource_evidence(&pool, owner, goal)
+        .await
+        .expect("owner still reads the finding");
+    assert_eq!(
+        after.contradiction_balance, before.contradiction_balance,
+        "an edge the reader cannot see moved the balance: {after:?}"
+    );
+    assert_eq!(after.band, before.band, "and so it must not move the band");
+}
