@@ -807,7 +807,8 @@ async fn follow_from_limit_truncates_the_ranked_nodes(pool: sqlx::PgPool) {
     );
 }
 
-/// The ungated core is ungated: handed a visible set, it applies no gate of its own.
+/// The ungated core is ungated for RESOURCES: handed a visible set, it applies no resource gate of
+/// its own. Edges are gated by the anchor reader it is also handed (`20261119000010`).
 ///
 /// This is the witness the audit script's header calls for — *"a test calling a core directly is
 /// expected; that is how the cores' own witnesses prove they are ungated"* — and it is the negative
@@ -831,12 +832,16 @@ async fn follow_from_core_trusts_the_visible_set_it_is_handed(pool: sqlx::PgPool
         "through the GATED wrapper, a principal who sees nothing gets nothing"
     );
 
+    // The resource gate is the set handed in; the EDGE gate is `edges_visible_to` of the reader
+    // (`20261119000010`, PW-6). With the owner as reader, every edge here is admitted, so what
+    // comes back is decided by the hand-made set alone.
     let rows: Vec<Uuid> = sqlx::query(
-        "SELECT resource_id FROM __temper_ungated_follow_from(\
-         $1::uuid[], $2::uuid[], 2, 0.5, NULL, NULL, NULL, NULL)",
+        "SELECT resource_id FROM __temper_ungated_follow_from_homed(\
+         $1::uuid[], $2::uuid[], 2, 0.5, NULL, NULL, NULL, NULL, NULL, NULL, $3)",
     )
     .bind(vec![a.uuid(), b.uuid()])
     .bind(vec![a.uuid()])
+    .bind(owner.uuid())
     .fetch_all(&pool)
     .await
     .unwrap()
@@ -854,10 +859,11 @@ async fn follow_from_core_trusts_the_visible_set_it_is_handed(pool: sqlx::PgPool
     // And the opposite polarity from the bound, which is the pairing most likely to be got
     // backwards: a NULL visible set admits NOTHING, where a NULL bound is unbounded.
     let none: Vec<Uuid> = sqlx::query(
-        "SELECT resource_id FROM __temper_ungated_follow_from(\
-         NULL, $1::uuid[], 2, 0.5, NULL, NULL, NULL, NULL)",
+        "SELECT resource_id FROM __temper_ungated_follow_from_homed(\
+         NULL, $1::uuid[], 2, 0.5, NULL, NULL, NULL, NULL, NULL, NULL, $2)",
     )
     .bind(vec![a.uuid()])
+    .bind(owner.uuid())
     .fetch_all(&pool)
     .await
     .unwrap()
@@ -867,6 +873,32 @@ async fn follow_from_core_trusts_the_visible_set_it_is_handed(pool: sqlx::PgPool
     assert!(
         none.is_empty(),
         "p_visible_ids NULL admits NOTHING — fail-closed, and the opposite of p_bound_ids"
+    );
+
+    // A NULL reader admits no edge, and the retired 8-arity entry (which reaches the body through
+    // the 10-arity wrapper with a NULL reader) walks nowhere: fail-closed, never wider.
+    let no_reader: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT resource_id FROM __temper_ungated_follow_from_homed(\
+         $1::uuid[], $2::uuid[], 2, 0.5, NULL, NULL, NULL, NULL, NULL, NULL, NULL)",
+    )
+    .bind(vec![a.uuid(), b.uuid()])
+    .bind(vec![a.uuid()])
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(no_reader.is_empty(), "a NULL anchor reader admits no edge");
+    let retired: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT resource_id FROM __temper_ungated_follow_from(\
+         $1::uuid[], $2::uuid[], 2, 0.5, NULL, NULL, NULL, NULL)",
+    )
+    .bind(vec![a.uuid(), b.uuid()])
+    .bind(vec![a.uuid()])
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(
+        retired.is_empty(),
+        "the retired arities have no reader to check a home against, so they admit no edge"
     );
 }
 
@@ -1112,7 +1144,7 @@ async fn the_pages_are_cut_under_a_total_order_and_the_tiebreak_is_still_there(p
     let src: String = sqlx::query(
         "SELECT p.prosrc FROM pg_proc p
            JOIN pg_namespace n ON n.oid = p.pronamespace
-          WHERE p.proname = '__temper_ungated_follow_from' AND n.nspname = 'public'
+          WHERE p.proname = '__temper_ungated_follow_from_homed' AND n.nspname = 'public'
             AND p.prosrc ILIKE '%WITH RECURSIVE%'",
     )
     .fetch_one(&pool)
@@ -1155,10 +1187,35 @@ async fn the_pages_are_cut_under_a_total_order_and_the_tiebreak_is_still_there(p
 async fn the_walk_exists_exactly_once_and_every_other_arity_delegates(pool: sqlx::PgPool) {
     use sqlx::Row;
 
+    // `[2026-11-07]` `20261119000010` (PW-6) moved the walk into `__temper_ungated_follow_from_homed`,
+    // a new NAME rather than an eleventh arity, so no call can resolve to a different overload by
+    // argument count. The rule is unchanged: one body holds the recursion, everything else
+    // delegates.
+    let holders = sqlx::query(
+        "SELECT p.proname::text AS name, p.pronargs::int AS nargs
+           FROM pg_proc p
+           JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname = 'public'
+            AND p.proname IN ('__temper_ungated_follow_from_homed',
+                              '__temper_ungated_follow_from', 'query_follow_from')
+            AND p.prosrc ILIKE '%WITH RECURSIVE%'",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| (r.get::<String, _>("name"), r.get::<i32, _>("nargs")))
+    .collect::<Vec<_>>();
+    assert_eq!(
+        holders,
+        vec![("__temper_ungated_follow_from_homed".to_string(), 11)],
+        "exactly one body may hold the recursion — a second is a silent drift site, both halves \
+         returning plausible rows"
+    );
+
     for name in ["__temper_ungated_follow_from", "query_follow_from"] {
-        let rows = sqlx::query(
-            "SELECT p.pronargs::int AS nargs, (p.prosrc ILIKE '%WITH RECURSIVE%') AS has_walk
-               FROM pg_proc p
+        let arities: Vec<i32> = sqlx::query_scalar(
+            "SELECT p.pronargs::int FROM pg_proc p
                JOIN pg_namespace n ON n.oid = p.pronamespace
               WHERE p.proname = $1 AND n.nspname = 'public'
               ORDER BY p.pronargs",
@@ -1167,42 +1224,11 @@ async fn the_walk_exists_exactly_once_and_every_other_arity_delegates(pool: sqlx
         .fetch_all(&pool)
         .await
         .unwrap();
-
         assert!(
-            rows.len() > 1,
+            arities.len() > 1,
             "{name}: the arity chain is the thing under test — one arity means the re-point never \
-             happened, so the assertions below would be vacuous"
+             happened, so the assertion above would be vacuous"
         );
-
-        let holders: Vec<i32> = rows
-            .iter()
-            .filter(|r| r.get::<bool, _>("has_walk"))
-            .map(|r| r.get::<i32, _>("nargs"))
-            .collect();
-
-        // `query_follow_from` is gated and holds NO recursion at any arity — it computes the
-        // visible set and delegates down. Only the ungated core carries the walk, and only once.
-        let expected = if name == "__temper_ungated_follow_from" {
-            1
-        } else {
-            0
-        };
-        assert_eq!(
-            holders.len(),
-            expected,
-            "{name}: expected {expected} arity to hold the recursion, found {holders:?} — a second \
-             body is a silent drift site, both halves returning plausible rows"
-        );
-
-        if let Some(&holder) = holders.first() {
-            let widest = rows.iter().map(|r| r.get::<i32, _>("nargs")).max().unwrap();
-            assert_eq!(
-                holder, widest,
-                "{name}: the body must sit on the WIDEST arity ({widest}), not {holder} — a \
-                 narrower holder cannot express the parameters the wider signatures accept, so the \
-                 wider ones would have to carry their own copy"
-            );
-        }
     }
 }
 

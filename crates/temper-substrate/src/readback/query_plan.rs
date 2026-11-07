@@ -153,7 +153,11 @@ const WALK_GAMMA: &str = "0.5::double precision";
 /// The provenance-carrying walk (`20260814000030`). Unlike the three above it returns a THIRD
 /// column, `via`, which rides the stage contract beside `id`/`kind`/`quantity` — see the final
 /// select's shared column list, which every act stage and every tally arm must match.
-pub const EMIT_FOLLOW_FROM: &str = "__temper_ungated_follow_from";
+///
+/// `[2026-11-07]` The `_homed` body (`20261119000010`, PW-6): it takes the principal as an 11th
+/// argument and admits an edge only if `edges_visible_to` does, so a walked edge's HOME is readable
+/// as well as its two endpoints. The 10-arity name it replaced now admits no edge at all.
+pub const EMIT_FOLLOW_FROM: &str = "__temper_ungated_follow_from_homed";
 
 /// The survey act (`20260816000020`). Unlike the other cores, this one takes BOTH `p_visible_ids`
 /// (the hoisted resource gate) and `p_principal` (for `wayfind_region_scores`'s internal region
@@ -1037,8 +1041,9 @@ fn emit_ungated_core_call(c: &CoreCall) -> String {
             "{core}({VISIBLE_IDS}, {narrowings}, {artifact_asks}, {anchor_table}, {anchor_id}, \
              {PRINCIPAL_BIND}, {properties})"
         ),
-        // No `PRINCIPAL_BIND`: the walk reads no anchor, so it needs no `p_anchor_reader`. The
-        // visible set is still the first argument, and is still written only here.
+        // The visible set is the first argument, and `PRINCIPAL_BIND` the last (`p_anchor_reader`):
+        // the walk admits an edge only if its HOME anchor is readable too (`20261119000010`, PW-6),
+        // which the resource set alone cannot answer. Both are still written only here.
         CoreCall::Walk {
             core,
             seeds,
@@ -1052,7 +1057,7 @@ fn emit_ungated_core_call(c: &CoreCall) -> String {
             offset,
         } => format!(
             "{core}({VISIBLE_IDS}, {seeds}, {depth}, {gamma}, {edge_kinds}, {labels}, {bound}, \
-             {limit}, {edge_properties}, {offset})"
+             {limit}, {edge_properties}, {offset}, {PRINCIPAL_BIND})"
         ),
         // The ONLY core that takes BOTH `VISIBLE_IDS` and `PRINCIPAL_BIND`: `wayfind_region_scores`
         // applies its own region visibility by principal, so the ungated core needs `$1` for the
