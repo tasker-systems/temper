@@ -748,8 +748,16 @@ pub async fn team_detail(pool: &PgPool, caller: &Caller, team_id: Uuid) -> ApiRe
     // public_within, as the team (T): the same audience as `parents`, never an ancestor's manager,
     // since an anchor on another branch is not theirs to see. As the anchor (A): the same audience
     // as `children`, its managers (on the root or the gating team, a system admin only). People
-    // only: a machine never reads through a row, so it is not shown the rows either.
-    let person = matches!(caller, Caller::Human(_));
+    // only, by the read arm's own fence (`public_within_reading`): a machine, a connection agent or
+    // a profile with no human auth link never reads through a row, so it is not shown the rows
+    // either.
+    let person = matches!(caller, Caller::Human(_))
+        && sqlx::query_scalar!(
+            r#"SELECT public_within_reading($1) AS "person!""#,
+            *caller.profile_id()
+        )
+        .fetch_one(pool)
+        .await?;
     let public_within = if person && (admin || member) {
         public_within_of(pool, team_id).await?
     } else {

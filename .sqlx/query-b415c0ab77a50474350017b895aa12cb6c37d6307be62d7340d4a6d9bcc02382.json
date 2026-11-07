@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT public_within_reading($1) AS \"person!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "person!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "b415c0ab77a50474350017b895aa12cb6c37d6307be62d7340d4a6d9bcc02382"
+}
