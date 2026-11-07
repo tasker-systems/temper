@@ -751,7 +751,8 @@ pub async fn team_detail(pool: &PgPool, caller: &Caller, team_id: Uuid) -> ApiRe
     // only, by the read arm's own fence (`public_within_reading`): a machine, a connection agent or
     // a profile with no human auth link never reads through a row, so it is not shown the rows
     // either.
-    let person = matches!(caller, Caller::Human(_))
+    let person = (admin || member || manages)
+        && matches!(caller, Caller::Human(_))
         && sqlx::query_scalar!(
             r#"SELECT public_within_reading($1) AS "person!""#,
             *caller.profile_id()

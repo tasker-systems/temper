@@ -2875,6 +2875,15 @@ async fn the_detail_shows_each_side_to_its_own_audience_only(pool: PgPool) {
         .await
         .expect("a member reads the detail");
     assert!(detail.public_within.is_empty());
+    // Nor a connection agent, which classifies as a human caller but is outside the read arm's
+    // fence: the detail follows the fence, not the caller kind.
+    join(&pool, w.eng_sec, w.agent, "member").await;
+    let agent = test_support::caller_for(&pool, w.agent).await;
+    assert!(matches!(agent, temper_services::auth::Caller::Human(_)));
+    let detail = team_service::team_detail(&pool, &agent, w.eng_sec)
+        .await
+        .expect("a member reads the detail");
+    assert!(detail.public_within.is_empty());
 
     // A's managers and admins see `public_within_in`; A's plain member does not.
     for (who, sees) in [(d.eng_owner, true), (w.admin, true), (eng_member, false)] {
