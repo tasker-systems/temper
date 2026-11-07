@@ -77,10 +77,10 @@ def psql(dsn, sql):
     return run(["psql", dsn, "-X", "-q", "-t", "-A", "-v", "ON_ERROR_STOP=1", "-c", sql])
 
 
-def fresh(db, source):
-    dsn = f"{SERVER}/{db}"
-    psql(f"{SERVER}/postgres", f"DROP DATABASE IF EXISTS {db} WITH (FORCE)")
-    psql(f"{SERVER}/postgres", f"CREATE DATABASE {db} TEMPLATE template0")
+def fresh(server, db, source):
+    dsn = f"{server}/{db}"
+    psql(f"{server}/postgres", f"DROP DATABASE IF EXISTS {db} WITH (FORCE)")
+    psql(f"{server}/postgres", f"CREATE DATABASE {db} TEMPLATE template0")
     run(["sqlx", "migrate", "run", "--source", source, "--database-url", dsn])
     return dsn
 
@@ -293,12 +293,12 @@ def measure(driver, handles, samples):
     for name, sql in DOORS.items():
         base_sql, head_sql = sql if isinstance(sql, tuple) else (sql, sql)
         qa, qb = (
-            f"SELECT count(*)::text FROM ({s}) door".replace("'", "''") for s in (base_sql, head_sql)
+            f"SELECT count(*)::text FROM ({s}) door".replace("'", "''")
+            for s in (base_sql, head_sql)
         )
         rows = psql(
             driver,
-            BENCH
-            + f"SELECT side, ms FROM pg_temp.bench('{qa}', '{qb}', '{a}', '{b}', {arr}, 2, "
+            BENCH + f"SELECT side, ms FROM pg_temp.bench('{qa}', '{qb}', '{a}', '{b}', {arr}, 2, "
             f"{samples});",
         )
         times = {"a": [], "b": []}
@@ -310,23 +310,22 @@ def measure(driver, handles, samples):
 
 
 def main():
-    global SERVER
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--samples", type=int, default=200)
     ap.add_argument("--profiles", type=int, default=5)
     ap.add_argument("--head-first", type=int, default=HEAD_FIRST)
     ap.add_argument("--server", default=SERVER)
     args = ap.parse_args()
-    SERVER = args.server
+    server = args.server
 
     base_src = base_migrations(args.head_first)
-    fresh(BASE_DB, base_src)
-    head = fresh(HEAD_DB, os.path.join(REPO, "migrations"))
+    fresh(server, BASE_DB, base_src)
+    head = fresh(server, HEAD_DB, os.path.join(REPO, "migrations"))
     for db in (BASE_DB, HEAD_DB):
-        psql(f"{SERVER}/{db}", WORLD)
-    psql(f"{SERVER}/postgres", f"DROP DATABASE IF EXISTS {DRIVER_DB} WITH (FORCE)")
-    psql(f"{SERVER}/postgres", f"CREATE DATABASE {DRIVER_DB} TEMPLATE template0")
-    driver = f"{SERVER}/{DRIVER_DB}"
+        psql(f"{server}/{db}", WORLD)
+    psql(f"{server}/postgres", f"DROP DATABASE IF EXISTS {DRIVER_DB} WITH (FORCE)")
+    psql(f"{server}/postgres", f"CREATE DATABASE {DRIVER_DB} TEMPLATE template0")
+    driver = f"{server}/{DRIVER_DB}"
     psql(driver, "CREATE EXTENSION dblink")
     handles = [f"p{k}" for k in range(1, 300, 300 // args.profiles)]
 
