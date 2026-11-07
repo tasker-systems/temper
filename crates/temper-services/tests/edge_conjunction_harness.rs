@@ -1200,7 +1200,8 @@ async fn cogmap_regulation_admits_only_visible_edges(pool: PgPool) {
 }
 
 /// The standing shape's contradiction balance counts only edges the reader can see: a readable
-/// `supports` edge scores, one homed where the reader cannot read does not.
+/// `supports` edge scores, one homed where the reader cannot read does not. The context and map
+/// principals count only edges homed in that context or map.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn standing_scores_only_edges_the_reader_sees(pool: PgPool) {
     let w = world(&pool).await;
@@ -1250,6 +1251,74 @@ async fn standing_scores_only_edges_the_reader_sees(pool: PgPool) {
         balance().await,
         Some(1.0),
         "a supports edge homed where the reader cannot read must not score"
+    );
+
+    // A context's own principal counts only edges homed in it between its own resources.
+    let as_kind = |kind: &'static str, principal: Uuid| {
+        let pool = pool.clone();
+        let b = w.b;
+        async move {
+            sqlx::query_scalar::<_, Option<f64>>(
+                "SELECT contradiction_balance FROM resource_standing_shape($1, $2, $3)",
+            )
+            .bind(b)
+            .bind(kind)
+            .bind(principal)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(
+        as_kind("context", w.ctx_c).await,
+        Some(1.0),
+        "the context principal counts the edge homed in it, not the one homed in U"
+    );
+
+    // A map's own principal counts only edges homed in that map between resources it can access.
+    let map: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_cogmaps (id, name, telos_resource_id) VALUES (uuid_generate_v7(), \
+         'ec-standing-map', $1) RETURNING id",
+    )
+    .bind(w.a)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE kb_resource_homes SET anchor_table = 'kb_cogmaps', anchor_id = $1 \
+          WHERE resource_id = ANY($2)",
+    )
+    .bind(map)
+    .bind(vec![w.a, w.b])
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        as_kind("cogmap", map).await,
+        Some(0.0),
+        "the map principal counts no edge homed in a context, though it can access both endpoints"
+    );
+    let mut tx = pool.begin().await.unwrap();
+    fire(
+        &mut tx,
+        SeedAction::RelationshipAssert {
+            src: AnchorRef::resource(ResourceId::from(w.a)),
+            tgt: AnchorRef::resource(ResourceId::from(w.b)),
+            kind: EdgeKind::Express,
+            polarity: EdgePolarity::Forward,
+            label: Some("contradicts"),
+            weight: 1.0,
+            home: EdgeHome::Cogmap(CogmapId::from(map)),
+            emitter: EntityId::from(w.emitter),
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(
+        as_kind("cogmap", map).await,
+        Some(-1.0),
+        "an edge homed in the map itself counts for the map principal"
     );
 }
 

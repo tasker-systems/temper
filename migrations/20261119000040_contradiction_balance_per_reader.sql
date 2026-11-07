@@ -38,6 +38,12 @@ AS $$
                AND e.source_table = 'kb_resources' AND e.target_table = 'kb_resources'
                AND e.source_id IN (SELECT a.resource_id FROM resources_accessible_to_cogmap(p_principal_id) a)
                AND e.target_id IN (SELECT a.resource_id FROM resources_accessible_to_cogmap(p_principal_id) a))
+         OR (p_principal_kind = 'context'
+               AND e.home_anchor_table = 'kb_contexts'
+               AND e.home_anchor_id = p_principal_id
+               AND e.source_table = 'kb_resources' AND e.target_table = 'kb_resources'
+               AND e.source_id IN (SELECT r.resource_id FROM resources_readable_by('context', p_principal_id) r)
+               AND e.target_id IN (SELECT r.resource_id FROM resources_readable_by('context', p_principal_id) r))
       );
 $$;
 
@@ -48,15 +54,19 @@ principal can see (20261119000040). A vector sum of edge weights over the suppor
 edges_visible_to admits it: live, home readable, both endpoints readable. For 'cogmap' (a map
 reading for itself) an edge counts only if it is homed in that map and both endpoints are in
 resources_accessible_to_cogmap: there is no profile-shaped edge definition for a map, so the gate is
-what the map's own principal indisputably reads. Fail-closed for any other kind. Read surface:
+what the map's own principal indisputably reads. For 'context' (a context's own interior, as
+resources_readable_by reads it) an edge counts only if it is homed in that context and both
+endpoints are resources in its interior. Fail-closed for any other kind. Read surface:
 resource_standing_shape.$c$;
 
 COMMENT ON FUNCTION resource_contradiction_balance(uuid) IS
 $c$Supports minus contradicts over ALL of the finding's live express edges, whoever can read them --
 a vector sum of edge weights over the support/oppose label set (supports, corroborates,
-contradicts), not a headcount. PRODUCER ONLY since 20261119000040: it feeds refresh_resource_standing
-and the kb_resource_standing memo, which no read path serves. A caller's read goes through
-_resource_contradiction_balance, which counts only edges the reader can see.$c$;
+contradicts), not a headcount. Reader-independent by decision, and for that reason PRODUCER ONLY
+since 20261119000040: it feeds refresh_resource_standing and the kb_resource_standing memo, which no
+read path serves. A caller's read goes through _resource_contradiction_balance, which counts only
+edges the reader can see (internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md,
+amendment of 2026-11-07).$c$;
 
 CREATE OR REPLACE FUNCTION resource_standing_shape(p_finding uuid, p_principal_kind text, p_principal_id uuid)
 RETURNS TABLE(finding_id uuid, citation_magnitude integer, audit_coverage integer,
@@ -89,10 +99,10 @@ $c$The finding's evidential-standing shape: six components plus the lossy band, 
 read -- never the kb_resource_standing memo. Zero rows unless the caller reads the finding: the gate
 (resources_readable_by) is inside this function, so an unreadable finding is indistinguishable from
 an absent one. contradiction_balance (and so band) is computed per reader, over the edges the
-caller can see (_resource_contradiction_balance, 20261119000040). The other five components are
-reader-independent by decision: one value for every caller who can read the finding, computed from
-the finding's own provenance and citation-audit trail, which every reader of the finding already
-reads (internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md).$c$;
+caller can see (_resource_contradiction_balance, 20261119000040). The other five components:
+Reader-independent by decision -- one value for every caller who can read the finding, computed
+from the finding's own provenance and citation-audit trail, which every reader of the finding
+already reads (internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md).$c$;
 
 COMMENT ON TABLE kb_resource_standing IS
 $c$Memoized component scalars of a resource's evidential standing. NOT A READ SURFACE: no read path

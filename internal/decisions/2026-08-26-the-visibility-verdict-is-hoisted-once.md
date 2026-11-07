@@ -136,7 +136,7 @@ Re-review is forced when any of these becomes true:
 ## Amendment — 2026-11-07: the follow-from core checks edge homes itself
 
 `[provisional — 2026-11-07, judgement call]` The follow-from walk now lives in
-`__temper_ungated_follow_from_homed` (migration `20261119000010_follow_from_home_gate.sql`).
+`__temper_ungated_follow_from_homed` (migration `20261119000010_follow_from_home_gate.sql`, which gated it on an `edges_visible_to` scan; `20261119000050_follow_from_checks_each_home_once.sql` gives it the per-home check below).
 `__temper_ungated_follow_from` remains as a retired wrapper that passes a NULL reader and admits no
 edge. The core is still ungated for **resources**: `p_visible_ids` is still its first argument and
 its only resource gate, and it computes no visible set of its own.

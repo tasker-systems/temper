@@ -833,7 +833,7 @@ async fn follow_from_core_trusts_the_visible_set_it_is_handed(pool: sqlx::PgPool
     );
 
     // The resource gate is the set handed in; the EDGE gate is `edges_visible_to` of the reader
-    // (`20261119000010`, PW-6). With the owner as reader, every edge here is admitted, so what
+    // (`20261119000010`). With the owner as reader, every edge here is admitted, so what
     // comes back is decided by the hand-made set alone.
     let rows: Vec<Uuid> = sqlx::query(
         "SELECT resource_id FROM __temper_ungated_follow_from_homed(\
@@ -1221,7 +1221,7 @@ async fn the_walk_core_computes_no_visible_set_of_its_own(pool: sqlx::PgPool) {
 async fn the_walk_exists_exactly_once_and_every_other_arity_delegates(pool: sqlx::PgPool) {
     use sqlx::Row;
 
-    // `[2026-11-07]` `20261119000010` (PW-6) moved the walk into `__temper_ungated_follow_from_homed`,
+    // `[2026-11-07]` `20261119000010` moved the walk into `__temper_ungated_follow_from_homed`,
     // a new NAME rather than an eleventh arity, so no call can resolve to a different overload by
     // argument count. The rule is unchanged: one body holds the recursion, everything else
     // delegates.
