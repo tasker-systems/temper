@@ -626,6 +626,19 @@ async fn the_trigger_and_the_check_refuse_what_p1_bars(pool: PgPool) {
         assert_eq!(db.constraint(), Some(constraint), "{err}");
     }
 
+    // Deleting the profile that opened a row keeps the row: the ledger keeps the act.
+    let opener_rule: String = sqlx::query_scalar(
+        "SELECT confdeltype::text FROM pg_constraint \
+          WHERE conrelid = 'kb_team_public_within'::regclass AND contype = 'f' \
+            AND conkey = ARRAY[(SELECT attnum FROM pg_attribute \
+                                 WHERE attrelid = 'kb_team_public_within'::regclass \
+                                   AND attname = 'opened_by')]",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(opener_rule, "n", "opened_by is ON DELETE SET NULL");
+
     // The anchor may be the root or the gating team: that is an admin's open, decided by the door.
     open(&pool, w.eng_sec, w.org, true, w.admin).await;
     open(&pool, w.eng_sec, w.root, true, w.admin).await;
@@ -757,6 +770,12 @@ async fn public_within_reading_is_for_people_only(pool: PgPool) {
         "a profile with no auth link"
     );
     assert!(reading(pool.clone(), w.web_member).await, "a person");
+    switch(&pool, false).await;
+    assert!(
+        !reading(pool.clone(), w.web_member).await,
+        "nobody reads arm 5 with the switch off"
+    );
+    switch(&pool, true).await;
     assert!(
         reading(pool.clone(), slack_person).await,
         "a person whose only link is Slack's: a Slack-minted token is the person (R-n)"
@@ -1605,6 +1624,19 @@ async fn a_row_is_inert_when(pool: PgPool) {
         .unwrap();
     assert!(reads(&pool, p, w.r_t).await, "the pool cleared");
 
+    // T becomes the gating team after the row was opened: the shape trigger refused that at write
+    // time, and the read-time condition keeps a later slug change from making the row confer.
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'eng-sec' WHERE id = 1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(!reads(&pool, p, w.r_t).await, "T is the gating team");
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = NULL WHERE id = 1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(reads(&pool, p, w.r_t).await, "the gating slug moved away");
+
     // The structural lapse is the exception: moving T out ends reading at once.
     unlink(&pool, w.eng, w.eng_sec).await;
     assert!(
@@ -1680,7 +1712,8 @@ async fn the_trail_of_a_rehomed_resource_starts_in_t(pool: PgPool) {
     );
 }
 
-/// The root hazard (Residuals): a row is a named anchor, never "any ancestor".
+/// An admin row anchored on the root reads for every person, because every closure holds the root:
+/// a row names its anchor, and only that anchor's subtree reads. Never a machine.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn an_admin_root_row_reaches_everyone(pool: PgPool) {
     let w = world(&pool).await;

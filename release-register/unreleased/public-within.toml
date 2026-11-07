@@ -1,7 +1,7 @@
 title    = "public_within: a team's owned contexts can be opened to an ancestor's subtree, for people to read and reference; born off everywhere"
 pr       = "self"
 classes  = ["additive"]
-surfaces = ["http", "clients", "schema"]
+surfaces = ["http", "clients", "schema", "erasure-policy"]
 status   = "signal-only"
 body = '''
 Phases 1 and 2 of public_within (temper-artifacts specs/2026-11-06-public-within-design.md). Grown
@@ -20,6 +20,9 @@ and resources_visible_by_membership, contexts_readable_by_membership and can_rea
 the membership entry points. The citation-audit queue gates the finding on membership and the cited
 source on reading (ruling R-m); grant attenuation checks read by membership; element_trail_node
 filters an arm-5-only reader's trail to T's contexts.
+
+Erasure policy: public_within_effect_changed's /act (the event type of the causing act) is declared
+structural.
 
 HTTP: GET/PATCH /api/admin/settings (SystemSettings) gains public_within_enabled, and
 UpdateSettingsRequest gains an optional public_within_enabled; turning it on or off is recorded as

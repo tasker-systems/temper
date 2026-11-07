@@ -51,7 +51,7 @@ switch) or on personal teams; that is enforced by the door that sets it.$c$;
 CREATE TABLE kb_team_public_within (
     team_id       uuid        NOT NULL REFERENCES kb_teams(id) ON DELETE CASCADE,
     anchor_id     uuid        NOT NULL REFERENCES kb_teams(id) ON DELETE CASCADE,
-    opened_by     uuid        NOT NULL REFERENCES kb_profiles(id),
+    opened_by     uuid            NULL REFERENCES kb_profiles(id) ON DELETE SET NULL,
     opened_at     timestamptz NOT NULL DEFAULT now(),
     admin_act     boolean     NOT NULL DEFAULT false,
     instance_wide boolean     NOT NULL DEFAULT false,
@@ -69,6 +69,8 @@ only: a share to T, a grant held by T and a map bound to T are never exposed (N8
 COMMENT ON COLUMN kb_team_public_within.team_id IS 'T: the team whose owned contexts are opened.';
 COMMENT ON COLUMN kb_team_public_within.anchor_id IS
     'A: a strict ancestor of T whose subtree reads them.';
+COMMENT ON COLUMN kb_team_public_within.opened_by IS
+    'Who opened the row. NULL once that profile is deleted: the ledger record keeps the act.';
 COMMENT ON COLUMN kb_team_public_within.admin_act IS
     'A system admin stood in for the anchor side (P2 rule 3). Never for the T side (R-k).';
 COMMENT ON COLUMN kb_team_public_within.instance_wide IS
@@ -175,15 +177,26 @@ nothing upward (team_live_descendants does not walk through a dead team).$c$;
 
 CREATE FUNCTION public_within_row_effective(p_team uuid, p_anchor uuid, p_instance_wide boolean)
 RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT public_within_allowed_over(p_team)
-       AND p_team <> p_anchor
-       AND EXISTS (SELECT 1 FROM team_ancestors(p_team) a WHERE a.team_id = p_anchor)
-       AND (p_instance_wide OR NOT anchor_subtree_holds_pool(p_anchor));
+    SELECT CASE
+        WHEN public_within_allowed_over(p_team) THEN
+                p_team <> p_anchor
+            AND NOT EXISTS (
+                SELECT 1 FROM kb_teams t
+                 WHERE t.id = p_team
+                   AND ( t.slug = 'temper-system'
+                      OR t.slug = (SELECT s.gating_team_slug FROM kb_system_settings s WHERE s.id = 1)))
+            AND EXISTS (SELECT 1 FROM team_ancestors(p_team) a WHERE a.team_id = p_anchor)
+            AND (p_instance_wide OR NOT anchor_subtree_holds_pool(p_anchor))
+        ELSE false
+    END;
 $$;
 
 COMMENT ON FUNCTION public_within_row_effective(uuid, uuid, boolean) IS
 $c$Does one public_within row confer right now (spec P5, N9)? All of:
-  * policy allows it over the team (public_within_allowed_over: the switch, then no forbid above T);
+  * policy allows it over the team (public_within_allowed_over: the switch, then no forbid above T),
+    evaluated first, inside a CASE, so a switched-off instance never walks the tree;
+  * the team is not the root or the gating team: the shape trigger refuses that at write time, and
+    this keeps a later gating-slug change from making such a row confer;
   * the anchor is a strict ancestor of the team along a LIVE chain: team_ancestors returns T only if
     T is live and walks only through live teams, so T dead, A dead, or every path between them dead
     each makes the row dormant (liveness);
@@ -203,16 +216,15 @@ RETURNS TABLE(context_id uuid) LANGUAGE sql STABLE AS $$
     SELECT c.id
       FROM candidates cand
       JOIN kb_contexts c
-        ON c.owner_table = 'kb_teams' AND c.owner_id = cand.team_id AND c.is_active
-     WHERE NOT context_is_dead(c.id);
+        ON c.owner_table = 'kb_teams' AND c.owner_id = cand.team_id AND c.is_active;
 $$;
 
 COMMENT ON FUNCTION contexts_public_within(uuid, uuid[]) IS
 $c$Arm 5 of the context read set (spec P6): the contexts OWNED by every team T whose public_within row
 is anchored on a team in p_teams (the caller's reachable closure) and is effective. Owned contexts
 only (R-b): never a context shared to T, a grant held by T or a map bound to T (N8). Not inherited
-(R-a): T's children stay private. A retired context, or one owned by a dead team, is floored by
-context_is_dead.
+(R-a): T's children stay private. A retired context is floored by is_active; a context of a dead
+team never appears, because public_within_row_effective requires T live.
 
 The candidate rows are hoisted into a MATERIALIZED CTE so the per-row effect checks run once per
 row, never per context (PW-19). p_profile is carried for the read-set signature; the reader fence
@@ -220,23 +232,29 @@ row, never per context (PW-19). p_profile is carried for the read-set signature;
 
 CREATE FUNCTION public_within_reading(p_profile uuid)
 RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (
-               SELECT 1 FROM kb_profile_auth_links l
-                WHERE l.profile_id = p_profile
-                  AND l.auth_provider <> 'auth0-m2m')
-       AND NOT EXISTS (SELECT 1 FROM kb_machine_clients m WHERE m.profile_id = p_profile)
-       AND NOT EXISTS (SELECT 1 FROM kb_connections k WHERE k.profile_id = p_profile);
+    SELECT CASE
+        WHEN COALESCE((SELECT s.public_within_enabled FROM kb_system_settings s WHERE s.id = 1), false)
+        THEN EXISTS (
+                 SELECT 1 FROM kb_profile_auth_links l
+                  WHERE l.profile_id = p_profile
+                    AND l.auth_provider <> 'auth0-m2m')
+         AND NOT EXISTS (SELECT 1 FROM kb_machine_clients m WHERE m.profile_id = p_profile)
+         AND NOT EXISTS (SELECT 1 FROM kb_connections k WHERE k.profile_id = p_profile)
+        ELSE false
+    END;
 $$;
 
 COMMENT ON FUNCTION public_within_reading(uuid) IS
-$c$The machine fence (spec P6, PW-4, R-n). True only for a PERSON: a profile with a human auth link
+$c$The machine fence (spec P6, PW-4, R-n). False whenever the instance switch is off, read first so
+that every read-set call on a born-denied instance pays one settings read and nothing more. With it
+on, true only for a PERSON: a profile with a human auth link
 (any kb_profile_auth_links row whose provider is not the machine provider auth0-m2m) and with no
 kb_machine_clients row (revoked or not; the same test as is_machine_profile) and no kb_connections
 row (a connection's agent profile). Everything else is false, fail-closed: machine clients,
 connection agents, stewards and auditors (machine clients themselves), and any profile with no
 human auth link.
 
-Keyed on the profile alone (R-n): no GUC and no request-scoped state. The fence is the principal,
+Keyed on the profile and the instance setting alone (R-n): no GUC and no request-scoped state. The fence is the principal,
 never the token or the surface, so a person reads with any token that identifies them, including
 the Slack mention path's act-as-the-human mint.$c$;
 

@@ -23,6 +23,8 @@
 --   resources_visible_by_membership(p)                  wrapper: p_reading := false
 --   contexts_readable_by_membership(p)                  the context-set twin, p_reading := false
 --   can_read_by_membership(p, table, id)                can(read) narrowed to the membership set
+--   resources_public_within(p)                          the resources arm 5 adds: reading minus
+--                                                       membership, computed without either set
 --
 -- The reader fence is evaluated inside the wrappers, per call, so no caller can forget it: a machine,
 -- a connection agent or any profile without a human auth link reads exactly what it read before.
@@ -268,6 +270,30 @@ reads by membership, so a can_grant-without-can_read holder under A cannot confe
 material to anyone (spec P7, PW-5/F13). public_within opens only contexts and what they home, so
 other subject kinds (cogmaps) answer exactly can(read). Never wider than can(read).$c$;
 
+CREATE FUNCTION resources_public_within(p_profile uuid)
+RETURNS TABLE(resource_id uuid)
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT h.resource_id
+    FROM contexts_public_within(
+             p_profile,
+             coalesce((SELECT array_agg(team_id) FROM profile_reachable_teams(p_profile)),
+                      '{}'::uuid[])
+         ) pw
+    JOIN kb_resource_homes h ON h.anchor_table = 'kb_contexts' AND h.anchor_id = pw.context_id
+    JOIN kb_resources r ON r.id = h.resource_id AND r.is_active
+    WHERE public_within_reading(p_profile);
+$$;
+
+COMMENT ON FUNCTION resources_public_within(uuid) IS
+$c$The resources arm 5 alone opens to a profile: those homed in a context contexts_public_within opens
+to its closure, live, and only for a person (public_within_reading). Reading visibility is exactly
+membership visibility UNION this set (the visibility harness holds the equality), so a caller that
+needs both can derive reading from membership without a second full scan. On a switched-off instance
+it is one settings read: public_within_reading is a one-time filter, so neither the closure nor
+contexts_public_within runs.$c$;
+
 -- ── 3. The element trail (PW-7) ───────────────────────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION public.element_trail_node(p_profile uuid, p_resource uuid)
  RETURNS TABLE(event_id uuid, kind text, actor_entity_id uuid, occurred_at timestamp with time zone, metadata jsonb, payload jsonb, actor_name text, correlation_id uuid)
@@ -293,7 +319,9 @@ AS $function$
     ),
     gate AS MATERIALIZED (
         SELECT r.reads,
-               CASE WHEN r.reads AND public_within_reading(p_profile)
+               CASE WHEN r.reads
+                     AND EXISTS (SELECT 1 FROM resources_public_within(p_profile) a
+                                  WHERE a.resource_id = p_resource)
                     THEN NOT EXISTS (
                         SELECT 1 FROM resources_visible_by_membership(p_profile) m
                          WHERE m.resource_id = p_resource)
@@ -334,7 +362,9 @@ admin and received-webhook events never appear. For a resource the profile reads
 public_within (in the reading set, not in the membership set), the trail is filtered to the events
 produced in a context owned by the team that owns the resource's home (spec P7, PW-7): a resource
 re-homed into T does not show the history, the text or the actors of the private context it came
-from. A member, a grantee or a machine sees the whole trail, as before.$c$;
+from. A member, a grantee or a machine sees the whole trail, as before. The membership set is scanned
+only when the resource is one arm 5 opens to the reader (resources_public_within), so every other
+trail read costs what it did.$c$;
 
 SELECT declare_migration(
     20261120000010,
@@ -342,7 +372,8 @@ SELECT declare_migration(
     'public_within Phase 2: adds _contexts_readable_by_teams(uuid,uuid[],boolean) holding arms 1-4 '
     'verbatim plus arm 5 (contexts_public_within, guarded by p_reading), _resources_visible(uuid,'
     'boolean) holding resources_visible_to''s body verbatim, and the membership entry points '
-    'resources_visible_by_membership, contexts_readable_by_membership and can_read_by_membership. '
+    'resources_visible_by_membership, contexts_readable_by_membership, can_read_by_membership and '
+    'resources_public_within. '
     'contexts_readable_by_teams and resources_visible_to become body-only wrappers at unchanged '
     'signatures passing public_within_reading(p); no DROP and no overload. element_trail_node keeps '
     'its signature and filters an arm-5-only reader''s trail to T''s contexts. Answers change only '

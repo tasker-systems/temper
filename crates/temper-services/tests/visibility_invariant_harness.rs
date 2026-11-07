@@ -1948,6 +1948,9 @@ const ENROLLED: &[&str] = &[
     "resources_visible_by_membership",
     "contexts_readable_by_membership",
     "can_read_by_membership",
+    // the arm-5 delta the audit queue and the element trail derive reading from: held equal to
+    // reading minus membership by the same test.
+    "resources_public_within",
     // arm 5 and the predicates it is built from — driven by the same test, each at its own answer
     // over the world's one row, and with the switch flipped off.
     "contexts_public_within",
@@ -2249,6 +2252,8 @@ async fn the_world_exercises_its_arms(pool: PgPool) -> sqlx::Result<()> {
 ///   so `can_read_by_membership` refuses them where `can(read)` admits. ella (above the anchor)
 ///   and robot (a machine under it) read neither. The row's predicates answer as the world says.
 /// - **The switch.** Off, the row confers nothing and reading equals membership for everyone.
+/// - **The delta.** Reading is exactly membership UNION `resources_public_within`, which is what
+///   lets the audit queue and the element trail derive one from the other without a second scan.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn public_within_reads_for_people_under_the_anchor_and_nobody_else(
     pool: PgPool,
@@ -2309,6 +2314,15 @@ async fn public_within_reads_for_people_under_the_anchor_and_nobody_else(
                 p,
             )
             .await?;
+            let delta = set("SELECT resource_id FROM resources_public_within($1)", p).await?;
+            let mut union: Vec<Uuid> = member.iter().chain(delta.iter()).copied().collect();
+            union.sort();
+            union.dedup();
+            if union != reading {
+                violations.push(format!(
+                    "{who}: reading is not membership UNION resources_public_within"
+                ));
+            }
             let person: bool = sqlx::query_scalar("SELECT public_within_reading($1)")
                 .bind(p)
                 .fetch_one(&pool)
@@ -2334,6 +2348,11 @@ async fn public_within_reads_for_people_under_the_anchor_and_nobody_else(
                 ));
             }
             let extra: Vec<&Uuid> = reading.iter().filter(|r| !member.contains(r)).collect();
+            if !switch_on && person {
+                violations.push(format!(
+                    "{who}: public_within_reading is true with the switch off"
+                ));
+            }
             if !person && !extra.is_empty() {
                 violations.push(format!(
                     "{who}: not a person, yet reads {extra:?} beyond membership"

@@ -276,7 +276,8 @@ pub(crate) enum AuditAuthority {
     /// DENIAL — the caller contributed this citation (or can still modify the finding, the
     /// belt-and-braces proxy). The self-audit prohibition of spec §7: enforced here or nowhere.
     Author,
-    /// DENIAL — the caller cannot see the finding at all.
+    /// DENIAL — the caller cannot see the finding by membership: not at all, or only through
+    /// `public_within` reach, which reads and never grades (`is_resource_visible_by_membership`).
     Unreadable,
     /// DENIAL — the caller can see the finding but not the cited source. A verdict weighs a source
     /// against a claim, so a caller who cannot read the source has nothing to weigh. Same refusal
