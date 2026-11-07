@@ -1166,7 +1166,7 @@ fn a_declared_offset_reaches_the_walks_tenth_slot_and_an_absent_one_still_fills_
     let compiled = walk_with(terms);
     // One gate per composition, the walk included: the statement computes `resources_visible_to`
     // once (the hoist) and no edge-visibility set at all. The walk core checks each candidate
-    // edge's home itself, per distinct home, so it needs neither (its body is pinned by
+    // edge's home itself, against the reader's readable contexts computed once, so it needs neither (its body is pinned by
     // `the_walk_core_computes_no_visible_set_of_its_own` in search_graph_expand.rs).
     assert_eq!(compiled.sql.matches("resources_visible_to(").count(), 1);
     assert_eq!(compiled.sql.matches("edges_visible_to(").count(), 0);

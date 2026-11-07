@@ -364,8 +364,8 @@ async fn filtered_visible_page(
     };
     // The goal filter's edges, hoisted. A resource matches `goal` only through a live `advances`
     // edge the caller SEES as `edges_visible_to` defines it: live, home anchor readable, both
-    // endpoints readable (so the goal itself must be visible too). Without that, the filter answered
-    // whether a hidden edge exists. Both CTEs are MATERIALIZED, so the edge set is computed once per
+    // endpoints readable (so the goal itself must be visible too). The filter's answer is a
+    // function of visible edges only. Both CTEs are MATERIALIZED, so the edge set is computed once per
     // statement under a generic plan as well as a custom one; joined directly, the planner pushes
     // the goal predicates into `edges_visible_to` and runs it per candidate (measured 2.4 s against
     // 47 ms on a 30k-edge corpus). `$6 IS NOT NULL` is a one-time filter, so a list with no goal

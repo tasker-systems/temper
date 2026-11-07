@@ -5,13 +5,13 @@ surfaces = ["http", "mcp", "schema"]
 status   = "signal-only"
 body = '''
 Migration 20261119000030. cogmap_regulation, the `regulation` list in cognitive-map analytics,
-returned the map telos's live `express` edges whenever the target was readable. It now also
-requires the edge to be one edges_visible_to admits for the caller: live, home anchor readable,
-both endpoints readable. For the map's own principal it admits only an edge homed in the map
-itself, with a source the map can access. Signature and columns are unchanged.
+includes a telos `express` edge only if edges_visible_to admits it for the caller: live, home
+anchor readable, both endpoints readable. For the map's own principal it includes only an edge
+homed in the map itself, with a source the map can access. Any other principal kind includes no
+edge. Signature and columns are unchanged.
 
 Who observes: a reader of a map whose telos has an edge homed in a context or cogmap they cannot
-read. That row no longer appears in `regulation`. Response shapes are unchanged in both skew
+read; that row is not in their `regulation` list. Response shapes are unchanged in both skew
 directions. Witness: `cogmap_regulation_admits_only_visible_edges` in
 `crates/temper-services/tests/edge_conjunction_harness.rs`. Release relevance: signal-only.
 '''

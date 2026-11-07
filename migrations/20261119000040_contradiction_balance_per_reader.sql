@@ -1,18 +1,16 @@
 -- The evidential-standing shape scores contradiction balance only over edges the reader can see.
 --
--- WHAT CHANGES. resource_standing_shape computed contradiction_balance with
--- resource_contradiction_balance(p_finding): the signed weight sum of every live supports /
--- corroborates / contradicts edge on the finding, whoever could read it. On a finding with few
--- such edges that sum is close to a pointer: a single hidden `supports` edge reads as +1.0. The
--- shape now calls _resource_contradiction_balance(p_finding, p_principal_kind, p_principal_id),
--- which counts only edges the reader can see. `band` follows, since standing_band takes the balance.
+-- resource_standing_shape computes contradiction_balance with
+-- _resource_contradiction_balance(p_finding, p_principal_kind, p_principal_id), the signed weight
+-- sum of the finding's live supports / corroborates / contradicts edges, counted only over edges the
+-- reader can see. `band` follows, since standing_band takes the balance.
 --
--- WHAT DOES NOT. The other five components stay reader-independent. They are computed from the
--- finding's own provenance and its citation-audit trail, both of which every reader of the finding
--- already reads (resource_block_provenance, resource_citation_audit_trail). The 1-arg
--- resource_contradiction_balance stays as the producer behind refresh_resource_standing and the
--- kb_resource_standing memo, which no read path serves. Recorded in
--- internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md (amendment of
+-- The other five components stay reader-independent. They are computed from the finding's own
+-- provenance and its citation-audit trail, both of which every reader of the finding already reads
+-- (resource_block_provenance, resource_citation_audit_trail). The 1-arg
+-- resource_contradiction_balance, which counts every live edge, stays as the producer behind
+-- refresh_resource_standing and the kb_resource_standing memo, which no read path serves. Recorded
+-- in internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md (amendment of
 -- 2026-11-07).
 
 CREATE FUNCTION _resource_contradiction_balance(
@@ -115,11 +113,10 @@ append-only-guarded.$c$;
 SELECT declare_migration(
     20261119000040,
     'additive',
-    'resource_standing_shape (GET /api/resources/{id}/evidence) scored contradiction_balance over '
-    'every live supports/corroborates/contradicts edge on the finding, including edges the reader '
-    'cannot see, so a single hidden edge moved the value. Adds _resource_contradiction_balance '
-    '(finding, principal kind, principal), which counts only edges the reader can see, and points '
-    'the shape at it; band follows. The 1-arg resource_contradiction_balance stays for the memo '
-    'producer. Additive: one new function, one CREATE OR REPLACE at an unchanged signature, '
-    'comments. Values only narrow, so an older binary sees the same columns.'
+    'resource_standing_shape (GET /api/resources/{id}/evidence) scores contradiction_balance, and so '
+    'band, only over the supports/corroborates/contradicts edges the reader can see. Adds '
+    '_resource_contradiction_balance (finding, principal kind, principal) and points the shape at '
+    'it. The 1-arg resource_contradiction_balance stays for the memo producer. Additive: one new '
+    'function, one CREATE OR REPLACE at an unchanged signature, comments. Values only narrow, so an '
+    'older binary sees the same columns.'
 );

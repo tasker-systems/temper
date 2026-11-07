@@ -1,6 +1,6 @@
 #![cfg(feature = "test-db")]
 
-//! R6 over the whole subtree.
+//! Bringing a pool under a team is an admin's act, over the whole subtree.
 //!
 //! An auto-join team's roster is every approved profile, and the gating team's roster is the access
 //! pool. So putting either one *anywhere* below a team hands that team's material to the whole
@@ -448,4 +448,232 @@ async fn a_subtree_that_grows_while_the_act_waits_is_refused_as_retryable(pool: 
     team_service::attach_child(&pool, &f.mgr, f.hub, d)
         .await
         .expect("the retry");
+}
+
+/// An admin's uncommitted link of `child` under `parent`, holding `parent`'s row as every link
+/// does: the concurrent half of the race tests below.
+async fn hold_link(
+    pool: &PgPool,
+    parent: Uuid,
+    child: Uuid,
+) -> sqlx::Transaction<'static, sqlx::Postgres> {
+    let mut holder = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM kb_teams WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(parent)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO kb_teams_parents (parent_id, child_id) VALUES ($1, $2)")
+        .bind(parent)
+        .bind(child)
+        .execute(&mut *holder)
+        .await
+        .expect("the concurrent link, uncommitted");
+    holder
+}
+
+/// A reparent `D: from → hub` by a non-admin, raced against an admin linking `leaf` under D's
+/// grandchild. Returns the act's result once the admin has committed.
+async fn race_reparent(
+    pool: &PgPool,
+    f: &Fixture,
+    p: &str,
+    leaf: Uuid,
+) -> (Uuid, Result<(), ApiError>) {
+    let from = create(pool, &f.admin, &format!("{p}-from"), None, None).await;
+    let (d, _x, g) = chain(pool, &f.admin, Some(&format!("{p}-from")), p, "g", None).await;
+    own(pool, from, *f.mgr.profile_id()).await;
+    own(pool, d, *f.mgr.profile_id()).await;
+    let holder = hold_link(pool, g, leaf).await;
+    let pool2 = pool.clone();
+    let mgr = f.mgr.clone();
+    let req = reparent_req(from, f.hub);
+    let contender = tokio::spawn(async move {
+        team_service::reparent(&pool2, &mgr, d, &req)
+            .await
+            .map(|_| ())
+    });
+    test_support::await_team_lock_waiter(pool).await;
+    holder.commit().await.unwrap();
+    (d, contender.await.unwrap())
+}
+
+/// A restore of dead R by its owner, raced against an admin linking `leaf` under R's grandchild.
+async fn race_restore(
+    pool: &PgPool,
+    f: &Fixture,
+    p: &str,
+    leaf: Uuid,
+) -> (Uuid, Result<(), ApiError>) {
+    let (r, _x, g) = chain(pool, &f.admin, None, p, "g", None).await;
+    own(pool, r, *f.mgr.profile_id()).await;
+    team_service::delete_team(pool, &f.admin, r)
+        .await
+        .expect("soft-delete R");
+    let holder = hold_link(pool, g, leaf).await;
+    let pool2 = pool.clone();
+    let mgr = f.mgr.clone();
+    let contender = tokio::spawn(async move {
+        team_service::restore_team(&pool2, &mgr, r)
+            .await
+            .map(|_| ())
+    });
+    test_support::await_team_lock_waiter(pool).await;
+    holder.commit().await.unwrap();
+    (r, contender.await.unwrap())
+}
+
+/// The reparent re-check under the locks sees a pool linked into the subtree concurrently.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_pool_linked_under_a_reparented_subtree_concurrently_is_seen(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let pool_team = create(&pool, &f.admin, "rrp-pool", None, Some(TeamRole::Watcher)).await;
+    let (d, result) = race_reparent(&pool, &f, "rrp", pool_team).await;
+    let refusal = result.expect_err("the pool is in the subtree by the time the re-check runs");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    assert!(!linked(&pool, f.hub, d).await, "nothing moved");
+}
+
+/// A reparented subtree that grows while the act waits, by a team that is no pool, is a
+/// retryable 409; the retry against the settled tree succeeds.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_reparented_subtree_that_grows_while_the_act_waits_is_retryable(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let plain = create(&pool, &f.admin, "rrg-plain", None, None).await;
+    let (d, result) = race_reparent(&pool, &f, "rrg", plain).await;
+    let refusal = result.expect_err("the subtree changed under the act");
+    assert!(matches!(refusal, ApiError::Conflict(_)), "{refusal:?}");
+    assert!(!linked(&pool, f.hub, d).await, "nothing moved");
+    let from: Uuid = sqlx::query_scalar("SELECT id FROM kb_teams WHERE slug = 'rrg-from'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    team_service::reparent(&pool, &f.mgr, d, &reparent_req(from, f.hub))
+        .await
+        .expect("the retry");
+    assert!(linked(&pool, f.hub, d).await);
+}
+
+/// The restore re-check under the locks sees a pool linked below the dead team concurrently.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_pool_linked_under_a_restored_team_concurrently_is_seen(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let pool_team = create(&pool, &f.admin, "rsp-pool", None, Some(TeamRole::Watcher)).await;
+    let (r, result) = race_restore(&pool, &f, "rsp", pool_team).await;
+    let refusal = result.expect_err("the pool is below R by the time the re-check runs");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    assert!(!live(&pool, r).await, "nothing restored");
+}
+
+/// A restored team's subtree that grows while the act waits, by a team that is no pool, is a
+/// retryable 409; the retry succeeds.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_restored_subtree_that_grows_while_the_act_waits_is_retryable(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let plain = create(&pool, &f.admin, "rsg-plain", None, None).await;
+    let (r, result) = race_restore(&pool, &f, "rsg", plain).await;
+    let refusal = result.expect_err("the subtree changed under the act");
+    assert!(matches!(refusal, ApiError::Conflict(_)), "{refusal:?}");
+    assert!(!live(&pool, r).await, "nothing restored");
+    team_service::restore_team(&pool, &f.mgr, r)
+        .await
+        .expect("the retry");
+    assert!(live(&pool, r).await);
+}
+
+/// The gating slug is held for the re-check. An admin's settings update repoints
+/// `gating_team_slug` at G, a team in D's subtree, and is held open (the settings row, then the
+/// exclusive gating lock, as its trigger takes them) while a non-admin attaches D under the hub.
+/// The act takes its team rows, then waits on the shared gating hold; once the admin commits, the
+/// re-check sees the gating team below D and refuses.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_gating_slug_repointed_into_the_subtree_concurrently_is_seen(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let (d, _x, _g) = chain(&pool, &f.admin, None, "spq", "g", None).await;
+    own(&pool, d, *f.mgr.profile_id()).await;
+
+    let mut holder = pool.begin().await.unwrap();
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'spq-g' WHERE id = 1")
+        .execute(&mut *holder)
+        .await
+        .expect("the admin's repoint, uncommitted");
+
+    let pool2 = pool.clone();
+    let mgr = f.mgr.clone();
+    let hub = f.hub;
+    let contender =
+        tokio::spawn(async move { team_service::attach_child(&pool2, &mgr, hub, d).await });
+    await_gating_waiter(&pool).await;
+    holder.commit().await.unwrap();
+
+    let refusal = contender
+        .await
+        .unwrap()
+        .expect_err("the gating team is in the subtree by the time the re-check runs");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    assert!(!linked(&pool, f.hub, d).await, "nothing is written");
+}
+
+/// The same repoint in a rename's lock order, which is the order that must not deadlock: the
+/// admin holds G's row first (as `rename_slug` does), the act waits on it, and only then does the
+/// admin take the exclusive gating lock and repoint the slug. The act holds no gating lock while
+/// it waits on a row, so the admin is never blocked by it; the act then re-checks and refuses.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_repoint_in_rename_order_does_not_deadlock_the_act(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let (d, _x, g) = chain(&pool, &f.admin, None, "srn", "g", None).await;
+    own(&pool, d, *f.mgr.profile_id()).await;
+
+    let mut holder = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM kb_teams WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(g)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+
+    let pool2 = pool.clone();
+    let mgr = f.mgr.clone();
+    let hub = f.hub;
+    let contender =
+        tokio::spawn(async move { team_service::attach_child(&pool2, &mgr, hub, d).await });
+    test_support::await_team_lock_waiter(&pool).await;
+    sqlx::query("SELECT _gating_team_lock(true)")
+        .execute(&mut *holder)
+        .await
+        .expect("the exclusive gating lock: the act must not be holding the shared side");
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'srn-g' WHERE id = 1")
+        .execute(&mut *holder)
+        .await
+        .expect("the repoint");
+    holder.commit().await.unwrap();
+
+    let refusal = contender
+        .await
+        .unwrap()
+        .expect_err("the gating team is in the subtree by the time the re-check runs");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    assert!(!linked(&pool, f.hub, d).await, "nothing is written");
+}
+
+/// Wait until some backend is blocked acquiring the shared gating hold.
+async fn await_gating_waiter(pool: &PgPool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let waiting: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM pg_stat_activity \
+              WHERE datname = current_database() AND wait_event_type = 'Lock' \
+                AND query ILIKE '%_gating_team_lock(false)%')",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        if waiting {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the contender never waited on the gating hold"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
 }

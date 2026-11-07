@@ -24,6 +24,12 @@
 //!   function's own `p_*` parameters (never NULL, never a literal), and the body's direct
 //!   `kb_edges` references are pinned to a count. A second direct read changes the count and
 //!   fails the scan until it is reviewed.
+//!   What the text check cannot see: a function whose body ALSO admits edges through some other
+//!   principal arm (a new `p_principal_kind` branch over `kb_edges`, conditioned on anything but
+//!   `edges_visible_to`) still passes it, because the pinned count only moves if that arm adds a
+//!   direct `kb_edges` reference. Such arms are guarded by their probes alone:
+//!   `cogmap_regulation_admits_only_visible_edges` and `standing_scores_only_edges_the_reader_sees`
+//!   exercise every principal kind each function accepts.
 //! - [`Class::Probed`]: caller-facing and spelling the conjunction itself. It names a probe below.
 //! - [`Class::History`]: caller-facing and showing folded edges by design (a trail, a lineage, a
 //!   feed, a staleness clock). It names a probe that also folds every edge and asserts the home
@@ -53,7 +59,7 @@ use std::path::{Path, PathBuf};
 use sqlx::{PgPool, Row};
 use temper_substrate::affinity::EdgeKind;
 use temper_substrate::events::{fire, EdgeHome, SeedAction};
-use temper_substrate::ids::{CogmapId, ContextId, EdgeId, EntityId, ResourceId};
+use temper_substrate::ids::{BlobId, CogmapId, ContextId, EdgeId, EntityId, ResourceId};
 use temper_substrate::payloads::{AnchorRef, EdgePolarity};
 use temper_substrate::writes;
 use uuid::Uuid;
@@ -536,12 +542,29 @@ async fn resource(pool: &PgPool, ctx: Uuid, owner: Uuid, title: &str) -> Uuid {
 }
 
 async fn assert_edge(pool: &PgPool, src: Uuid, tgt: Uuid, home: EdgeHome, emitter: Uuid) -> Uuid {
+    assert_anchor_edge(
+        pool,
+        AnchorRef::resource(ResourceId::from(src)),
+        AnchorRef::resource(ResourceId::from(tgt)),
+        home,
+        emitter,
+    )
+    .await
+}
+
+async fn assert_anchor_edge(
+    pool: &PgPool,
+    src: AnchorRef,
+    tgt: AnchorRef,
+    home: EdgeHome,
+    emitter: Uuid,
+) -> Uuid {
     let mut tx = pool.begin().await.unwrap();
     let id: EdgeId = fire(
         &mut tx,
         SeedAction::RelationshipAssert {
-            src: AnchorRef::resource(ResourceId::from(src)),
-            tgt: AnchorRef::resource(ResourceId::from(tgt)),
+            src,
+            tgt,
             kind: EdgeKind::LeadsTo,
             polarity: EdgePolarity::Forward,
             label: Some("derived_from"),
@@ -638,20 +661,16 @@ async fn world(pool: &PgPool) -> World {
     .await;
     let e_end = edge(pool, a, h, ctx_c, emitter).await;
     let e_src = edge(pool, h, a, ctx_c, emitter).await;
-    let e_blob: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_edges (id, source_table, source_id, target_table, target_id, edge_kind, \
-                               label, home_anchor_table, home_anchor_id, asserted_by_event_id, \
-                               last_event_id) \
-         VALUES (uuid_generate_v7(), 'kb_resources', $1, 'kb_blobs', $2, 'leads_to', \
-                 'derived_from', 'kb_contexts', $3, $4, $4) RETURNING id",
+    // Through the real write path and LAST, so its assert event is the newest in the world: the
+    // feed names it and staleness would take its touch if the blob endpoint were not gated.
+    let e_blob = assert_anchor_edge(
+        pool,
+        AnchorRef::resource(ResourceId::from(a)),
+        AnchorRef::blob(BlobId::from(blob)),
+        EdgeHome::Context(ContextId::from(ctx_c)),
+        emitter,
     )
-    .bind(a)
-    .bind(blob)
-    .bind(ctx_c)
-    .bind(event)
-    .fetch_one(pool)
-    .await
-    .expect("e_blob");
+    .await;
 
     let w = World {
         reader,
@@ -706,16 +725,12 @@ async fn fold_all(pool: &PgPool, w: &World) {
     writes::fold_relationship(pool, EdgeId::from(w.e_ok), None, EntityId::from(w.emitter))
         .await
         .expect("fold the control");
-    for (_, e) in w.probes.iter().take(4) {
+    // In world order, so the blob-endpoint edge's fold is the newest event, as its assert was.
+    for (_, e) in &w.probes {
         writes::fold_relationship(pool, EdgeId::from(*e), None, EntityId::from(w.emitter))
             .await
             .expect("fold a probe edge");
     }
-    sqlx::query("UPDATE kb_edges SET is_folded = true WHERE id = $1")
-        .bind(w.probes[4].1)
-        .execute(pool)
-        .await
-        .expect("fold the blob edge");
 }
 
 /// The verdict every probe asserts: the control is seen, no probe edge is.
@@ -829,14 +844,14 @@ async fn graph_traverse_admits_only_visible_edges(pool: PgPool) {
     assert_eq!(reached, BTreeSet::from([w.b]));
 }
 
-/// `graph_traverse` keeps its depth clamp: on a cycle, a huge `p_depth` still stops at 10. Without
-/// the clamp the walk never terminates, because `UNION` keeps every row that differs by depth.
+/// `graph_traverse` keeps its depth clamp: on a cycle, a `p_depth` of 50 still stops at 10. Without
+/// the clamp the walk recurses to `p_depth`, because `UNION` keeps every row that differs by depth.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn graph_traverse_clamps_its_depth_on_a_cycle(pool: PgPool) {
     let w = world(&pool).await;
     edge(&pool, w.b, w.a, w.ctx_c, w.emitter).await; // a ⇄ b, both readable
     let deepest: Option<i32> =
-        sqlx::query_scalar("SELECT max(depth) FROM graph_traverse($1, $2, 1000000)")
+        sqlx::query_scalar("SELECT max(depth) FROM graph_traverse($1, $2, 50)")
             .bind(w.reader)
             .bind(vec![w.a])
             .fetch_one(&pool)
@@ -1060,6 +1075,10 @@ async fn staleness_is_touched_only_by_visible_edges(pool: PgPool) {
             touched_at(&pool, w.probes[3].1).await > ok_at,
             "fixture (folded: {folded}): a probe edge in C is the newer touch"
         );
+        assert!(
+            touched_at(&pool, w.probes[4].1).await > touched_at(&pool, w.probes[3].1).await,
+            "fixture (folded: {folded}): the blob-endpoint edge is the newest touch in C"
+        );
         assert_eq!(
             latest_touch(&pool, &w, w.ctx_c).await,
             Some(ok_at),
@@ -1187,9 +1206,43 @@ async fn cogmap_regulation_admits_only_visible_edges(pool: PgPool) {
         BTreeSet::from([w.b]),
         "an edge homed in the map itself surfaces to the map principal"
     );
+    // Another map that reads `b` itself (moved into its interior; the telos stays in the map), so
+    // every other clause holds for it and only the identity clause can refuse it.
+    let other_map: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_cogmaps (id, name, telos_resource_id) VALUES (uuid_generate_v7(), \
+         'ec-map-2', $1) RETURNING id",
+    )
+    .bind(w.c)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO kb_team_cogmaps (cogmap_id, team_id) VALUES ($1, $2)")
+        .bind(other_map)
+        .bind(w.team_a)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE kb_resource_homes SET anchor_table = 'kb_cogmaps', anchor_id = $1 \
+          WHERE resource_id = $2",
+    )
+    .bind(other_map)
+    .bind(w.b)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let reads_b: bool = sqlx::query_scalar(
+        "SELECT $2 IN (SELECT resource_id FROM resources_readable_by('cogmap', $1))",
+    )
+    .bind(other_map)
+    .bind(w.b)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(reads_b, "fixture: the other map reads the regulated target");
     let other: i64 = sqlx::query_scalar("SELECT count(*) FROM cogmap_regulation($1, 'cogmap', $2)")
         .bind(cogmap)
-        .bind(w.team_a)
+        .bind(other_map)
         .fetch_one(&pool)
         .await
         .unwrap();
@@ -1586,6 +1639,31 @@ fn rust_side_reads() -> BTreeMap<(String, String), (usize, String)> {
     out
 }
 
+/// `body` with Rust `//` comments and SQL `--` comments removed, each to the end of its line, so a
+/// DELEGATES fn cannot pass on a comment that merely names `edges_visible_to`. Over-stripping (a
+/// `--` inside a string literal) can only fail the check, never pass it.
+fn strip_comments(body: &str) -> String {
+    body.lines()
+        .map(|l| {
+            let cut = [l.find("//"), l.find("--")]
+                .into_iter()
+                .flatten()
+                .min()
+                .unwrap_or(l.len());
+            &l[..cut]
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn strip_comments_drops_rust_and_sql_comments() {
+    let body =
+        "let a = 1; // edges_visible_to\n  -- edges_visible_to\nJOIN edges_visible_to($1) ev";
+    let s = strip_comments(body);
+    assert_eq!(s.matches("edges_visible_to").count(), 1, "{s}");
+}
+
 /// Every Rust-side table reference to `kb_edges` is classified, counted per fn, and nothing
 /// classified is stale. A DELEGATES fn must really reach `edges_visible_to`.
 #[test]
@@ -1625,7 +1703,7 @@ fn every_rust_side_kb_edges_read_is_classified() {
         );
         match class {
             RustClass::Delegates => assert!(
-                body.contains("edges_visible_to"),
+                strip_comments(body).contains("edges_visible_to"),
                 "{key:?} is classified Delegates but never reaches edges_visible_to"
             ),
             RustClass::InlineConjunction(r) | RustClass::NotCallerFacing(r) => {

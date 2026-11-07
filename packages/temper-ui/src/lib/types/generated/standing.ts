@@ -7,9 +7,11 @@ import type { ResourceId } from "./ResourceId";
  * so an unreadable finding yields zero rows — never a partial/nullable row — and the caller-side
  * read returns `Option<StandingShape>`, `None` for "not readable."
  *
- * Reader-independent by decision: one value for every caller who can read the finding, with
- * per-contributor attribution on the citation-audit trail, never on the shape (stored-aggregates
- * exception: `internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`).
+ * Five components are reader-independent by decision: one value for every caller who can read
+ * the finding, with per-contributor attribution on the citation-audit trail, never on the shape.
+ * `contradiction_balance`, and so `band`, are per reader: counted only over the edges the caller
+ * can see (stored-aggregates exception and its 2026-11-07 amendment:
+ * `internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`).
  */
 export type StandingShape = { 
 /**
@@ -58,10 +60,11 @@ citation_quality: number,
 /**
  * Supports minus contradicts, as a vector-sum over declared edges (spec §1) — not a headcount.
  *
- * Reader-independent by decision: one value for every caller who can read the finding, with
- * per-contributor attribution on the citation-audit trail, never on the shape
- * (stored-aggregates exception:
- * `internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`).
+ * Per reader: summed only over the supports / corroborates / contradicts edges the caller
+ * can see (live, home readable, both endpoints readable), so two callers may read different
+ * values. The one component that is not reader-independent
+ * (`internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`, amendment of
+ * 2026-11-07).
  */
 contradiction_balance: number, 
 /**
@@ -88,9 +91,9 @@ r_parent: number,
  * computed over the shape above. Carried WITH the shape, never presented instead of it
  * (spec §1.1).
  *
- * Reader-independent by decision: one value for every caller who can read the finding, with
- * per-contributor attribution on the citation-audit trail, never on the shape
- * (stored-aggregates exception:
- * `internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`).
+ * Per reader, because it is computed from `contradiction_balance`, which is per reader; the
+ * other inputs are reader-independent
+ * (`internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`, amendment of
+ * 2026-11-07).
  */
 band: string, };

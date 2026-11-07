@@ -136,7 +136,7 @@ Re-review is forced when any of these becomes true:
 ## Amendment — 2026-11-07: the follow-from core checks edge homes itself
 
 `[provisional — 2026-11-07, judgement call]` The follow-from walk now lives in
-`__temper_ungated_follow_from_homed` (migration `20261119000010_follow_from_home_gate.sql`, which gated it on an `edges_visible_to` scan; `20261119000050_follow_from_checks_each_home_once.sql` gives it the per-home check below).
+`__temper_ungated_follow_from_homed` (migration `20261119000010_follow_from_home_gate.sql`).
 `__temper_ungated_follow_from` remains as a retired wrapper that passes a NULL reader and admits no
 edge. The core is still ungated for **resources**: `p_visible_ids` is still its first argument and
 its only resource gate, and it computes no visible set of its own.
@@ -144,11 +144,26 @@ its only resource gate, and it computes no visible set of its own.
 What changed is the **edge home**. An edge's home anchor is not a resource, so the hoisted set cannot
 answer whether it is readable. Like the find cores' anchor check, that authorization is kept inside
 the core. The core takes `p_anchor_reader` (the emitter's `PRINCIPAL_BIND`) and admits a candidate
-edge only if `anchor_readable_by_profile(p_anchor_reader, home)` holds. The check runs once per
-**distinct home** of the candidate edges, not as a set scan, so the hoist's purpose survives: a
-composition with N follow stages pays no full edge-visibility scan per stage. Measured on a
-synthetic corpus of 30k resources and 50k edges: four follow stages in one statement took 128 ms
-against 78 ms for the ungated body. A per-stage `edges_visible_to` scan took 904 ms.
+edge only if its home is readable by that principal, which is `anchor_readable_by_profile`'s
+verdict: a context home must be in `contexts_readable_by(p_anchor_reader)`, materialized **once per
+call** and only when some candidate edge is homed in a context; a cogmap home must pass
+`cogmap_readable_by_profile`; any other home admits nothing. That is a set over the reader's
+contexts, not over edges or resources, so the hoist's purpose survives: a composition with N follow
+stages pays no full edge-visibility scan per stage.
+
+Measured (median ms, one / four follow stages in one statement):
+
+| Corpus | No home check | `edges_visible_to` per stage | `anchor_readable_by_profile` per distinct home | Readable contexts once (shipped) |
+|---|---|---|---|---|
+| 30k resources, 50k edges, 150 context homes (first run) | 38 / 78 | 78 / 904 | 46 / 128 | not built yet |
+| 30k resources, 40k edges, 150 context homes | 18 / 27 | 38 / 644 | 20 / 33 | 19 / 27 |
+| 30k resources, 30k edges, 3000 context homes | 20 / 41 | 42 / 123 | 52 / 162 | 23 / 47 |
+
+The 150-home rows of the second corpus walk to no readable neighbour for the measured reader, so
+they time the gate rather than the walk; the 3000-home corpus returns rows.
+
+The per-home check, which each recomputes the reader's team closure, lost to the set once homes
+were many; computing the readable contexts once does not depend on how many homes there are.
 
 This amendment is the re-review that trigger 1 asks for: `_homed` is a new `__temper_ungated_*` name,
 and `audit-ungated-fragments.sh` carries its review entry. Trigger 3 holds as amended:

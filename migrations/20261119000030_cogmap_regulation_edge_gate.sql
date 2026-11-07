@@ -1,17 +1,13 @@
 -- cogmap_regulation admits a telos edge only under the edge conjunction.
 --
--- WHAT WAS WRONG. cogmap_regulation (behind cogmap_analytics) returned the map telos's live
--- `express` edges gated on the TARGET alone (`resources_readable_by`). It checked neither the
--- edge's home anchor nor its source, so an edge homed where the caller cannot read surfaced its
--- label beside a readable target.
---
--- THE FIX. Same signature, CREATE OR REPLACE. The edge must also pass a per-principal edge gate:
+-- cogmap_regulation (behind cogmap_analytics) returns the map telos's live `express` edges with
+-- readable targets. Same signature, CREATE OR REPLACE. Each edge must pass a per-principal edge gate:
 --   * 'profile': the edge is in edges_visible_to(p_principal_id) -- live, home readable, both
 --     endpoints readable. The one definition, not a restatement.
 --   * 'cogmap': the map reading itself (cogmap_analytics admits that kind only when the principal
 --     IS the map). No profile-shaped edge definition exists for a map principal, so the gate is
 --     what the map indisputably reads: an edge homed in the map itself, whose source (the telos)
---     is in resources_accessible_to_cogmap. The target is already gated by resources_readable_by.
+--     is in resources_accessible_to_cogmap. The target is gated by resources_readable_by.
 --   * any other kind admits no edge. Fail closed.
 -- Rationale sits in the COMMENT below, not in the body.
 
@@ -54,10 +50,9 @@ context's resources. Any other kind admits nothing.$c$;
 SELECT declare_migration(
     20261119000030,
     'additive',
-    'cogmap_regulation (behind cogmap_analytics) gated the telos''s express edges on the target '
-    'alone, so an edge homed where the caller cannot read surfaced its label. CREATE OR REPLACE at '
-    'the unchanged signature: a profile principal now needs the edge in edges_visible_to, and the '
-    'map principal needs an edge homed in the map itself with an accessible source. Any other '
-    'principal kind admits no edge. Rows only disappear, so an older binary is unaffected beyond '
-    'seeing fewer regulation rows. Columns and shape are unchanged.'
+    'cogmap_regulation (behind cogmap_analytics) admits a telos express edge only under the edge '
+    'conjunction: for a profile, the edge is in edges_visible_to; for the map principal, the edge is '
+    'homed in the map itself with an accessible source; any other principal kind admits no edge. '
+    'CREATE OR REPLACE at the unchanged signature. Rows only disappear, so an older binary sees at '
+    'most fewer regulation rows. Columns and shape are unchanged.'
 );
