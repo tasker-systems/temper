@@ -1298,4 +1298,33 @@ async fn every_standing_comment_states_the_visibility_posture(pool: sqlx::PgPool
              the posture sentence and cite the record. Current COMMENT:\n{comment}"
         );
     }
+
+    // The one per-reader component (amendment of 2026-11-07): the shape, the per-reader balance
+    // and the reader-independent producer must each say which side of that line they are on.
+    const PER_READER: &[(&str, &str)] = &[
+        (
+            "resource_standing_shape(uuid, text, uuid)",
+            "contradiction_balance (and so band) is computed per reader",
+        ),
+        (
+            "_resource_contradiction_balance(uuid, text, uuid)",
+            "counted only over edges the\nprincipal can see",
+        ),
+        ("resource_contradiction_balance(uuid)", "PRODUCER ONLY"),
+    ];
+    for (signature, statement) in PER_READER {
+        let comment: Option<String> =
+            sqlx::query_scalar("SELECT obj_description($1::regprocedure, 'pg_proc')")
+                .bind(signature)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let comment = comment.unwrap_or_default();
+        assert!(
+            // The per-reader body cites its migration rather than the record.
+            comment.contains(statement) && (comment.contains(RECORD) || signature.starts_with('_')),
+            "`{signature}` does not state the per-reader posture of contradiction_balance \
+             (`{statement}`). Current COMMENT:\n{comment}"
+        );
+    }
 }

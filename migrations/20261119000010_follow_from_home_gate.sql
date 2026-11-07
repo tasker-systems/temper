@@ -1,24 +1,32 @@
--- The follow-from walk admits an edge only as edges_visible_to defines it (PW-6).
+-- The follow-from walk admits an edge only if it is live, its home anchor is readable by the
+-- caller, and both endpoints are in the caller's visible set. graph_traverse admits only edges
+-- edges_visible_to admits.
 --
--- WHAT WAS WRONG. `__temper_ungated_follow_from`'s `adj` (latest body 20260828000050) admitted any
--- live edge whose two endpoints were in the caller's visible set. It never asked whether the edge's
--- HOME anchor was readable. So an edge homed in a context or cogmap the caller cannot read, between
--- two resources the caller can, was walked, returned in `via`, and moved `search_graph_expand`'s
--- ranking. `edges_visible_to` is the one definition: live, home readable, both endpoints readable.
---
--- THE FIX, ADDITIVELY (no DROP, no new arity of an existing name):
---   1. `__temper_ungated_follow_from_homed` is the 20260828000050 body VERBATIM plus an 11th
---      parameter `p_anchor_reader` and one join: `adj` joins `edges_visible_to(p_anchor_reader)`,
---      hoisted once into a MATERIALIZED `ve`. The walk now lives here, and only here.
---   2. The 10-arity `__temper_ungated_follow_from` becomes a wrapper passing a NULL reader. It has
---      no principal to check a home against, so it admits no edge: fail-closed, never wider. The
---      8- and 9-arity delegators reach it unchanged.
+-- ADDITIVELY (no DROP, no new arity of an existing name):
+--   1. `__temper_ungated_follow_from_homed` is the 20260828000050 body plus an 11th parameter,
+--      `p_anchor_reader`, and a home gate. The candidate edges (live, both endpoints admitted) are
+--      materialized once, and a candidate enters the adjacency only if its home is readable by the
+--      reader: a context home must be in contexts_readable_by(p_anchor_reader), materialized once
+--      per call and only when some candidate is homed in a context; a cogmap home must pass
+--      cogmap_readable_by_profile; any other home admits nothing. Those are exactly
+--      anchor_readable_by_profile's arms, evaluated as a set for contexts. The walk lives here, and
+--      only here. The endpoints stay gated by the visible set handed in, which is the caller's
+--      verdict; the core computes no visible set of its own.
+--   2. The 10-arity `__temper_ungated_follow_from` is a wrapper passing a NULL reader. It has no
+--      principal to check a home against, so it admits no edge: fail-closed, never wider. The 8-
+--      and 9-arity delegators reach it unchanged.
 --   3. The 10-arity `query_follow_from` (the gated wrapper every gated arity and
 --      `search_graph_expand` reach) passes its own `p_principal` as the reader.
 --   4. The query compiler emits `__temper_ungated_follow_from_homed` with its `$1` principal
 --      (query_plan.rs, same change).
---   5. `graph_traverse` (no Rust caller) gets the same gate in place: both arms join
---      `edges_visible_to(p_profile)`. Same signature, same columns.
+--   5. `graph_traverse` (no Rust caller) joins `edges_visible_to(p_profile)` in both arms, on
+--      20260709000001's body with its depth clamp of 10.
+--
+-- Cost, measured on 30k resources, 30k edges and 3000 distinct context homes (median ms, one /
+-- four follow stages in one statement): this body 23 / 47; no home check 20 / 41; a per-stage
+-- edges_visible_to join 42 / 123; one anchor_readable_by_profile call per distinct home 52 / 162.
+-- Recorded in internal/decisions/2026-08-26-the-visibility-verdict-is-hoisted-once.md (amendment
+-- of 2026-11-07).
 --
 -- Rationale lives in COMMENT ON FUNCTION, not in the bodies: the guard scans read
 -- pg_get_functiondef.
@@ -48,13 +56,10 @@ LANGUAGE sql STABLE AS $$
      WHERE p_bound_ids IS NULL
         OR EXISTS (SELECT 1 FROM unnest(p_bound_ids) AS b(id) WHERE b.id = v.id)
   ),
-  ve AS MATERIALIZED (
-    SELECT ev.edge_id FROM edges_visible_to(p_anchor_reader) ev WHERE p_anchor_reader IS NOT NULL
-  ),
-  adj AS (
-    SELECT e.id AS edge_id, e.source_id, e.target_id, e.weight
+  cand AS MATERIALIZED (
+    SELECT e.id AS edge_id, e.source_id, e.target_id, e.weight,
+           e.home_anchor_table, e.home_anchor_id
       FROM kb_edges e
-      JOIN ve ON ve.edge_id = e.id
       JOIN admitted sa ON sa.id = e.source_id
       JOIN admitted ta ON ta.id = e.target_id
      WHERE e.source_table = 'kb_resources' AND e.target_table = 'kb_resources'
@@ -72,6 +77,30 @@ LANGUAGE sql STABLE AS $$
                    WHERE ep.edge_id = e.id
                      AND ep.property_key = q.property_key
                      AND _temper_property_op_match(q.op, q.vals, q.direction, q.bound, ep.property_value)))))
+  ),
+  homes AS MATERIALIZED (
+    SELECT DISTINCT c.home_anchor_table, c.home_anchor_id FROM cand c
+  ),
+  readable_contexts AS MATERIALIZED (
+    SELECT rc.context_id FROM contexts_readable_by(p_anchor_reader) rc
+     WHERE p_anchor_reader IS NOT NULL
+       AND EXISTS (SELECT 1 FROM homes h WHERE h.home_anchor_table = 'kb_contexts')
+  ),
+  readable_homes AS MATERIALIZED (
+    SELECT h.home_anchor_table, h.home_anchor_id
+      FROM homes h
+     WHERE p_anchor_reader IS NOT NULL
+       AND ( (h.home_anchor_table = 'kb_contexts'
+                AND h.home_anchor_id IN (SELECT context_id FROM readable_contexts))
+          OR (h.home_anchor_table = 'kb_cogmaps'
+                AND cogmap_readable_by_profile(p_anchor_reader, h.home_anchor_id)) )
+  ),
+  adj AS (
+    SELECT c.edge_id, c.source_id, c.target_id, c.weight
+      FROM cand c
+      JOIN readable_homes rh
+        ON rh.home_anchor_table = c.home_anchor_table
+       AND rh.home_anchor_id = c.home_anchor_id
   ),
   -- Undirected adjacency: both orientations once, so `walk` joins plainly and the duplicated LATERAL
   -- disappears. The edge's own source/target are recovered at the end by joining `kb_edges` on the
@@ -147,12 +176,15 @@ LANGUAGE sql STABLE AS $$
 $$;
 COMMENT ON FUNCTION __temper_ungated_follow_from_homed(
     uuid[], uuid[], int, double precision, text[], text[], uuid[], int, jsonb, int, uuid) IS
-$c$The follow-from walk (the ONLY copy of its recursion; 20260828000050's body plus the PW-6 home
-gate of 20261119000010). Ungated in the compiler's sense: the visible-resource set is handed IN
-as p_visible_ids, built once by the caller. The edge gate is decided here against p_anchor_reader:
-`adj` admits an edge only if it is in edges_visible_to(p_anchor_reader) -- live, home anchor
-readable, both endpoints readable -- AND both endpoints are in p_visible_ids (and in p_bound_ids
-when given). A NULL p_anchor_reader admits no edge. Callers: query_follow_from (10-arity) and the
+$c$The follow-from walk (the ONLY copy of its recursion; 20260828000050's body plus a home gate,
+20261119000010). Ungated in the compiler's sense: the
+visible-resource set is handed IN as p_visible_ids, built once by the caller, and the core computes
+no visible set of its own. An edge enters the adjacency only if it is live, both endpoints are in
+p_visible_ids (and in p_bound_ids when given), and its home anchor is readable by p_anchor_reader:
+a context home must be in contexts_readable_by(p_anchor_reader), computed once per call and only
+when a candidate edge is homed in a context; a cogmap home must pass cogmap_readable_by_profile;
+any other home admits nothing. This is anchor_readable_by_profile's verdict, evaluated as a set
+for contexts. A NULL p_anchor_reader admits no edge. Callers: query_follow_from (10-arity) and the
 query compiler's EMIT_FOLLOW_FROM, which passes its $1 principal.$c$;
 
 CREATE OR REPLACE FUNCTION __temper_ungated_follow_from(
@@ -206,9 +238,9 @@ $$;
 COMMENT ON FUNCTION query_follow_from(
     uuid, uuid[], int, double precision, text[], text[], uuid[], int, jsonb, int) IS
 $c$Gated wrapper over __temper_ungated_follow_from_homed: computes resources_visible_to(p_principal)
-once and passes it down, with p_principal as the anchor reader, so every walked edge is one
-edges_visible_to admits (PW-6, 20261119000010). Carries p_offset so a direct caller can page a
-walk. No defaults, for the reason recorded on the core.$c$;
+once and passes it down, with p_principal as the anchor reader, so every walked edge is live, has a
+readable home and two readable endpoints (20261119000010). Carries p_offset so a direct caller can
+page a walk. No defaults, for the reason recorded on the core.$c$;
 
 CREATE OR REPLACE FUNCTION graph_traverse(p_profile uuid, p_seed_ids uuid[], p_depth int)
 RETURNS TABLE (resource_id uuid, source_id uuid, target_id uuid,
@@ -228,31 +260,28 @@ LANGUAGE sql STABLE AS $$
       FROM kb_edges e JOIN walk w ON e.source_id = w.target_id
       JOIN ve ON ve.edge_id = e.id
      WHERE e.source_table='kb_resources' AND e.target_table='kb_resources'
-       AND NOT e.is_folded AND w.depth < p_depth
+       AND NOT e.is_folded AND w.depth < LEAST(p_depth, 10)
        AND e.target_id IN (SELECT id FROM visible)
   )
   SELECT w.target_id, w.source_id, w.target_id, w.edge_kind, w.polarity, w.label, w.depth FROM walk w;
 $$;
 
 COMMENT ON FUNCTION graph_traverse(uuid, uuid[], int) IS
-$c$The directed resource walk (20260624000002), retired from the product: no Rust caller since
-graph_service moved to graph_induced_edges. Kept and gated rather than dropped: 20261119000010 makes
-both arms join edges_visible_to(p_profile), so it admits an edge only if it is live, its home is
-readable and both endpoints are readable (spec P12). Otherwise unchanged.$c$;
+$c$The directed resource walk, retired from the product: no Rust caller since graph_service moved
+to graph_induced_edges. Kept and gated rather than dropped. 20261119000010 has both arms join
+edges_visible_to(p_profile), so it admits an edge only if it is live, its home is readable and
+both endpoints are readable, and keeps 20260709000001's depth clamp (10).$c$;
 
 SELECT declare_migration(
     20261119000010,
     'additive',
-    'PW-6: the follow-from walk admitted any live edge whose two endpoints were visible, without '
-    'checking that the edge''s home anchor was readable, so an edge homed in an unreadable context '
-    'or cogmap was walked and moved search_graph_expand ranking. Adds '
-    '__temper_ungated_follow_from_homed (the 20260828000050 body verbatim, plus p_anchor_reader '
-    'and a join on edges_visible_to). The 10-arity __temper_ungated_follow_from becomes a wrapper '
-    'passing a NULL reader, which admits no edge (fail-closed); the 10-arity query_follow_from '
-    'passes its principal; the compiler emits the new body. NO DROP and no new arity of an existing '
-    'name. graph_traverse has no Rust caller and is fixed in place the same way rather than left '
-    'open, so the edge-conjunction harness can classify it as delegating. Skew: an older binary '
-    'still emits the 10-arity core, whose follow stages then return no rows until the new binary '
-    'is live. That is narrower, never wider. Plan: temper-artifacts '
-    'plans/2026-11-06-public-within.md Phase 0.1.'
+    'The follow-from walk admits an edge only if it is live, both endpoints are in the visible set '
+    'handed in, and its home anchor is readable by the caller. Adds __temper_ungated_follow_from_homed '
+    '(the 20260828000050 body plus p_anchor_reader; context homes checked against '
+    'contexts_readable_by once per call, cogmap homes with cogmap_readable_by_profile). The 10-arity '
+    '__temper_ungated_follow_from becomes a wrapper passing a NULL reader, which admits no edge; the '
+    '10-arity query_follow_from passes its principal; the compiler emits the new body. graph_traverse '
+    'admits only edges edges_visible_to admits, depth clamped at 10. No DROP and no new arity of an '
+    'existing name. Skew, in DEPLOYING.md terms: this narrows, never widens. An older binary still '
+    'emits the 10-arity core, so its follow stages return no rows until the new binary is live.'
 );

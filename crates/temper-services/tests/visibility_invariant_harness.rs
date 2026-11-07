@@ -1914,7 +1914,8 @@ const CONSUMES: &[&str] = &[
     "cogmap_regulation",
     // _resource_contradiction_balance — the evidence read's per-reader balance (20261119000040).
     // Its profile arm counts only edges in edges_visible_to; the map principal's arm reads
-    // resources_accessible_to_cogmap. It restates no rule; the conjunction is pinned by
+    // resources_accessible_to_cogmap; the context principal's arm reads
+    // resources_readable_by('context', ..). It restates no rule; the conjunction is pinned by
     // edge_conjunction_harness.rs (standing_scores_only_edges_the_reader_sees).
     "_resource_contradiction_balance",
     "cogmap_foundations",

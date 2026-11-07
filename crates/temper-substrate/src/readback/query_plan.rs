@@ -156,8 +156,9 @@ const WALK_GAMMA: &str = "0.5::double precision";
 ///
 /// `[2026-11-07]` The `_homed` body (`20261119000010`): it takes the principal as an 11th
 /// argument, the anchor reader, and admits an edge only if that principal can read its HOME, as well
-/// as both endpoints being in the visible set. Homes are checked once per distinct home of the
-/// candidate edges, so each follow stage pays no full edge-visibility scan. The 10-arity name it
+/// as both endpoints being in the visible set. Context homes are checked against the
+/// reader's readable contexts, computed once per call, so each follow stage pays
+/// no full edge-visibility scan. The 10-arity name it
 /// replaced now admits no edge at all.
 pub const EMIT_FOLLOW_FROM: &str = "__temper_ungated_follow_from_homed";
 

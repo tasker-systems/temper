@@ -1169,7 +1169,9 @@ async fn the_pages_are_cut_under_a_total_order_and_the_tiebreak_is_still_there(p
 
 /// The walk core computes no visible set of its own, so a composition with N follow stages pays the
 /// hoisted resource gate once and no per-stage edge-visibility scan. It checks each candidate edge's
-/// HOME with one point predicate, `anchor_readable_by_profile`, per distinct home.
+/// HOME against the reader's readable contexts, computed ONCE per call (`contexts_readable_by`,
+/// which the per-home `anchor_readable_by_profile` would recompute for every distinct home), and a
+/// cogmap home with `cogmap_readable_by_profile` (20261119000010).
 ///
 /// Read from `prosrc` with comments stripped, because the property is the body's, and a comment
 /// naming a gate is not a call to it.
@@ -1183,11 +1185,7 @@ async fn the_walk_core_computes_no_visible_set_of_its_own(pool: sqlx::PgPool) {
     .fetch_one(&pool)
     .await
     .unwrap();
-    for gate in [
-        "edges_visible_to(",
-        "resources_visible_to(",
-        "contexts_readable_by(",
-    ] {
+    for gate in ["edges_visible_to(", "resources_visible_to("] {
         assert!(
             !src.contains(gate),
             "the walk core calls {gate}: each follow stage would pay a full visibility scan the \
@@ -1195,9 +1193,14 @@ async fn the_walk_core_computes_no_visible_set_of_its_own(pool: sqlx::PgPool) {
         );
     }
     assert_eq!(
-        src.matches("anchor_readable_by_profile(").count(),
+        src.matches("contexts_readable_by(").count(),
         1,
-        "the home gate is one point predicate, applied to the distinct homes"
+        "the readable-context set is computed once per call, not per home"
+    );
+    assert_eq!(
+        src.matches("anchor_readable_by_profile(").count(),
+        0,
+        "no per-home point predicate: each call would recompute the reader's team closure"
     );
 }
 

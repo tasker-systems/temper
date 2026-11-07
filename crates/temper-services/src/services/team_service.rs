@@ -1036,7 +1036,7 @@ pub async fn restore_team(
 
 /// The non-admin arm of [`restore_team`]: the team's `owner` on its membership row (the team is
 /// dead, so the blind lookup), never the root or the gating team, and never an auto-join team —
-/// restoring one re-enrols every approved profile, which is a system admin's act (D5, R6). The
+/// restoring one re-enrols every approved profile, which is a system admin's act. The
 /// same holds when such a team sits anywhere in the restored team's live subtree.
 async fn restore_authority(
     conn: &mut sqlx::PgConnection,
@@ -1578,7 +1578,7 @@ async fn attach_authority(
     }
     let instance_parent =
         crate::services::access_service::is_root_or_gating_team_on(conn, parent_id).await?;
-    // An auto-join team (R6) or an instance team (the gating team's roster is the access pool,
+    // An auto-join team or an instance team (the gating team's roster is the access pool,
     // every approved profile) anywhere in the child's live subtree hands the parent's material to
     // the whole instance: the same act as attaching to the root. The child itself is only the
     // first such team, not the only one. A leftover managing row on the gating team confers
@@ -1665,7 +1665,7 @@ async fn attach_precheck(
 ///    under `children`, and learn it exists;
 /// 3. a parent that is the root or the gating team → a system admin only;
 /// 4. a child whose live subtree holds an auto-join or gating team (the child itself, or any live
-///    team below it) → a system admin only (ruling R6): that team's roster is every approved
+///    team below it) → a system admin only: that team's roster is every approved
 ///    profile, so this is the same act as attaching to the root;
 /// 5. structural: a personal team on either side, the root as the child, or the team as its own
 ///    parent is `400`; a link that closes a cycle is `409`; a soft-deleted side is `404`.
@@ -1735,14 +1735,13 @@ pub async fn attach_child(
 /// Lock `teams`, `root` and every team below `root`, in one ascending id order, before a non-admin
 /// act re-checks that subtree for an instance pool (`subtree_holds_pool_on`).
 ///
-/// Without these locks the re-check reads a subtree another transaction can still change: an
-/// admin attaching a pool team under a grandchild of `root`, or restoring a dead team with a pool
-/// below it, while a non-admin attaches `root` under a hub, would each pass their own check, and
-/// the pool would land under the hub with no admin consenting to that reach. Either admin act
-/// locks the row it links under or restores, so locking every team below `root`, DEAD ONES
-/// INCLUDED, gives the two acts a common row lock, and the second re-checks against the first's
-/// committed state. `root` is walked below whether or not it is live, because a restore asks this
-/// while the team is still dead.
+/// The invariant: the re-check reads a subtree no other transaction can change before this one
+/// commits. Every act that can put a pool below `root` (an attach under a team below it, a restore
+/// of a team below it) locks the row it links under or restores, and every one of those rows is in
+/// this lock set, DEAD ONES INCLUDED, so the two acts share a row lock and the later one re-checks
+/// against the earlier one's committed state. `root` is walked below whether or not it is live,
+/// because a restore asks this while the team is still dead. The system settings row is then read
+/// under a share lock, so the gating team cannot be repointed into the subtree mid-act.
 ///
 /// One ascending pass, never a second: a later pass would take rows out of order and could
 /// deadlock against another door's ascending pass. So the subtree is walked, locked, and walked
@@ -1772,6 +1771,11 @@ async fn lock_teams_and_subtree(
     )
     .fetch_all(&mut *tx)
     .await?;
+    // After the team locks: a writer of the settings row locks no team, so this takes no lock
+    // against the ascending order, and it holds the gating slug the re-check reads.
+    sqlx::query_scalar!(r#"SELECT 1 AS "one!" FROM kb_system_settings WHERE id = 1 FOR SHARE"#)
+        .fetch_optional(&mut *tx)
+        .await?;
     Ok(every_team_below(tx, root).await?.is_subset(&below))
 }
 

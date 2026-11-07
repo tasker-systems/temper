@@ -4,19 +4,22 @@ classes  = ["additive", "behavioral"]
 surfaces = ["http", "mcp", "schema"]
 status   = "signal-only"
 body = '''
-Bringing an auto-join team (every approved profile is on it) or the gating team under a team hands
-that team's material to the whole instance, so it is a system admin's act. Attach, reparent and
-restore checked this only for the child, or the restored team, itself. A non-admin who managed both
-sides could attach a team whose child or grandchild was auto-join. team_service now refuses such an
-act to a non-admin with 403 when any team in the child's live subtree, or the restored team's, is
-auto-join, the root or the gating team. The check runs in the pool pre-check and again under the
-row locks. For a non-admin those locks now cover the child's live subtree, so a pool linked into
-the subtree concurrently is seen by the re-check. A soft-deleted team below, and anything under it,
-does not count, because reach does not pass through a dead team. Migration 20261119000020 adds
-team_live_descendants(p_team), the live-only down-walk that mirrors team_ancestors.
+Bringing an auto-join team (every approved profile is on it), the root or the gating team under a
+team hands that team's material to the whole instance, so it is a system admin's act. Attaching,
+reparenting or restoring a team is now refused to a non-admin with 403 when any team in the
+child's live subtree, or the restored team's, is auto-join, the root or the gating team. A
+soft-deleted team below, and anything under it, does not count, because reach does not pass
+through a dead team. Migration 20261119000020 adds team_live_descendants(p_team), the live-only
+down-walk that mirrors team_ancestors.
 
-Who observes: a non-admin team manager attaching, reparenting or restoring such a subtree now gets
-403 where they got success. Admins are unaffected. Request and response shapes are unchanged.
-Witnesses: `crates/temper-services/tests/team_subtree_pool_authority_test.rs`. Release relevance:
-closes an authority gap; signal-only.
+The check runs in the pool pre-check and again under row locks. For a non-admin those locks cover
+every team below the child, live and dead, taken in one statement in ascending id order, and the
+system settings row is read under a share lock. If the subtree changes while the act waits for its
+locks and the re-check finds no pool, the act is refused with a retryable 409 Conflict ("the team
+tree changed while this act was being checked; retry").
+
+Who observes: a non-admin team manager attaching, reparenting or restoring such a subtree gets 403;
+one racing a concurrent change to the same subtree may get 409 and should retry. Admins are
+unaffected. Request and response shapes are unchanged. Witnesses:
+`crates/temper-services/tests/team_subtree_pool_authority_test.rs`. Release relevance: signal-only.
 '''
