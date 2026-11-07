@@ -186,8 +186,7 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
         SELECT 1
           FROM kb_teams t
          WHERE (t.id = p_anchor OR t.id IN (SELECT d.team_id FROM team_live_descendants(p_anchor) d))
-           AND ( t.auto_join_role IS NOT NULL
-              OR t.slug = (SELECT s.gating_team_slug FROM kb_system_settings s WHERE s.id = 1)));
+           AND t.slug = (SELECT s.gating_team_slug FROM kb_system_settings s WHERE s.id = 1));
 $$;
 
 COMMENT ON FUNCTION anchor_subtree_holds_pool(uuid) IS
@@ -195,7 +194,9 @@ $c$True when the anchor itself, or a live team beneath it, is an auto-join team 
 (PW-1). Such a team brings the whole instance into the anchor's subtree, so a public_within row
 over it would read instance-wide; only an admin's instance_wide row survives it
 (public_within_row_effective). A pool team below a dead team is not counted, because it confers
-nothing upward (team_live_descendants does not walk through a dead team).$c$;
+nothing upward (team_live_descendants does not walk through a dead team). This body counts the
+gating team only; 20261120000005 adds the auto-join arm, kept apart because it reads
+kb_teams.auto_join_role, which temper-substrate's pre-auto-join test baseline omits.$c$;
 
 CREATE FUNCTION public_within_row_effective(p_team uuid, p_anchor uuid, p_instance_wide boolean)
 RETURNS boolean LANGUAGE sql STABLE AS $$

@@ -7,7 +7,7 @@ body = '''
 Phases 1 and 2 of public_within (temper-artifacts specs/2026-11-06-public-within-design.md). Grown
 as later phases land.
 
-Schema (migrations 20261120000000, 20261120000010, 20261120000020): kb_system_settings gains
+Schema (migrations 20261120000000, 20261120000005, 20261120000010, 20261120000020): kb_system_settings gains
 public_within_enabled (default false, no backfill), kb_teams gains public_within_forbidden (default
 false), and a new kb_team_public_within table holds the rows (opened_by required on insert, SET NULL
 when that profile is deleted), with a trigger refusing a personal, root or gating T and a personal
