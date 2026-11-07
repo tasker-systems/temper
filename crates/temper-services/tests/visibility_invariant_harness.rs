@@ -3080,3 +3080,130 @@ async fn the_change_feed_answers_exactly_the_readable_contexts(pool: PgPool) -> 
     );
     Ok(())
 }
+
+// =================================================================================================
+// list_visible: the set-based query equals the per-context predicate
+// =================================================================================================
+
+/// `context_service::list_visible`'s per-context form: the rows `context_visible_to` admits, each
+/// counting the live resources homed in it that `resources_visible_to` admits, evaluated per
+/// context. The door now computes both sets once per call; this is what it must still equal.
+const LIST_VISIBLE_PER_CONTEXT: &str = "\
+    SELECT c.id, \
+           (SELECT count(*) FROM kb_resource_homes rh \
+              JOIN resources_visible_to($1) v ON v.resource_id = rh.resource_id \
+              JOIN kb_resources r ON r.id = rh.resource_id AND r.is_active \
+             WHERE rh.anchor_table = 'kb_contexts' AND rh.anchor_id = c.id) \
+      FROM kb_contexts c WHERE context_visible_to($1, c.id)";
+
+/// The door's set-based query with its row gate drifted to the membership twin: what a rewrite
+/// that reached for the wrong set would ship. Used only by the bite below.
+const LIST_VISIBLE_SET_ON_MEMBERSHIP: &str = "\
+    WITH readable AS MATERIALIZED (SELECT r.context_id FROM contexts_readable_by_membership($1) r), \
+         visible AS MATERIALIZED (SELECT v.resource_id FROM resources_visible_to($1) v) \
+    SELECT c.id, \
+           (SELECT count(*) FROM kb_resource_homes rh \
+              JOIN visible v ON v.resource_id = rh.resource_id \
+              JOIN kb_resources r ON r.id = rh.resource_id AND r.is_active \
+             WHERE rh.anchor_table = 'kb_contexts' AND rh.anchor_id = c.id) \
+      FROM kb_contexts c WHERE c.id IN (SELECT rc.context_id FROM readable rc)";
+
+/// Which answer the slice holds against the per-context form: the real door, or (for the bite) a
+/// drifted restatement of its query.
+#[derive(Clone, Copy)]
+enum ListDoor {
+    Real,
+    Drifted,
+}
+
+async fn list_visible_slice(
+    pool: &PgPool,
+    w: &World,
+    door: ListDoor,
+) -> sqlx::Result<Vec<Violation>> {
+    let mut violations = Vec::new();
+    for forbidden in [false, true] {
+        sqlx::query("UPDATE kb_teams SET public_within_forbidden = $1 WHERE id = $2")
+            .bind(forbidden)
+            .bind(w.teams[T_EPD])
+            .execute(pool)
+            .await?;
+        for (i, &p) in w.profiles.iter().enumerate() {
+            let who = format!("{} (forbid at top {forbidden})", PROFILE_HANDLES[i]);
+            let mut expected: Vec<(Uuid, i64)> = sqlx::query_as(LIST_VISIBLE_PER_CONTEXT)
+                .bind(p)
+                .fetch_all(pool)
+                .await?;
+            expected.sort();
+            let mut got: Vec<(Uuid, i64)> = match door {
+                ListDoor::Real => temper_services::services::context_service::list_visible(
+                    pool,
+                    temper_core::types::ids::ProfileId::from(p),
+                )
+                .await
+                .map_err(|e| sqlx::Error::Protocol(format!("list_visible: {e}")))?
+                .into_iter()
+                .map(|r| (Uuid::from(r.id), r.resource_count))
+                .collect(),
+                ListDoor::Drifted => {
+                    sqlx::query_as(LIST_VISIBLE_SET_ON_MEMBERSHIP)
+                        .bind(p)
+                        .fetch_all(pool)
+                        .await?
+                }
+            };
+            got.sort();
+            if got != expected {
+                violations.push(format!(
+                    "I8.list_visible: {who}: list_visible answered {got:?}, the per-context form \
+                     {expected:?}"
+                ));
+            }
+        }
+    }
+    sqlx::query("UPDATE kb_teams SET public_within_forbidden = false WHERE id = $1")
+        .bind(w.teams[T_EPD])
+        .execute(pool)
+        .await?;
+    Ok(violations)
+}
+
+/// `list_visible` computes the reader's context set and resource set once per call. Over every
+/// profile of a generated world, with the public_within row effective and again under a forbid at
+/// the top, its rows are exactly `{c | context_visible_to(p, c)}` and each `resource_count` equals
+/// the per-context count. Either side rewritten later cannot drift from the other silently.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn list_visible_equals_the_per_context_read_predicate(pool: PgPool) -> sqlx::Result<()> {
+    let plan = Plan::generate(harness_seed());
+    let w = insert_world(&pool, &plan).await?;
+    let violations = list_visible_slice(&pool, &w, ListDoor::Real).await?;
+    assert!(
+        violations.is_empty(),
+        "list_visible drifted from the per-context predicate:\n{}\n{}",
+        violations.join("\n"),
+        w.render()
+    );
+    Ok(())
+}
+
+/// The bite: the same slice over the door's query with its row gate on the membership twin must go
+/// red. The world's public_within row opens ctx-pub to the people under eng through reading only,
+/// so a membership gate drops it for them: proof the slice tells the two sets apart.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_harness_bites_a_list_visible_gate_on_the_membership_twin(
+    pool: PgPool,
+) -> sqlx::Result<()> {
+    let plan = Plan::generate(harness_seed());
+    let w = insert_world(&pool, &plan).await?;
+    let bitten = list_visible_slice(&pool, &w, ListDoor::Drifted).await?;
+    assert!(
+        bitten.iter().any(|v| v.contains("I8.list_visible")),
+        "a list_visible gated on contexts_readable_by_membership did NOT turn the slice red"
+    );
+    assert!(
+        bitten.iter().all(|v| v.contains("forbid at top false")),
+        "under a forbid at the top the twin and reading agree, so only the effective case may \
+         differ: {bitten:?}"
+    );
+    Ok(())
+}

@@ -1,7 +1,7 @@
 -- public_within: the doors. Until now a row existed only if a test wrote it; this migration adds
 -- the only writers: open, close, the forbid, and the record a hard delete leaves.
 --
--- Design: temper-artifacts specs/2026-11-06-public-within-design.md (P2, P3, P4, P9).
+-- Design: temper-artifacts specs/2026-11-06-public-within-design.md.
 --
 --   _admin_public_within_write        opens (INSERT) or closes (DELETE) one row and appends its
 --                                     team_public_within_changed record, in one statement.

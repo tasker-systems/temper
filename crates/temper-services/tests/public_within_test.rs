@@ -2425,12 +2425,11 @@ async fn an_admin_stands_in_for_the_anchor_side_only(pool: PgPool) {
     assert!(admin_act, "the admin stood in for the anchor");
 }
 
-/// PINS TODAY'S BEHAVIOUR, to be flipped by the task that makes `promote_admin` refuse a team
-/// (`01a13d9f`): an admin promoted with `--team T` holds an owner row on T that nothing tells apart
-/// from a real one, so it satisfies the team side. When that task lands, this open is refused and
-/// this test is inverted.
+/// PINS CURRENT BEHAVIOUR: an admin promoted with `--team T` holds an owner row on T that nothing
+/// tells apart from a real one, so it satisfies the team side. A later fix that makes the `--team`
+/// promotion write no team role flips this: the open is then refused, and this test is inverted.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn g7_01a13d9f_an_admin_promoted_onto_the_team_satisfies_the_team_side(pool: PgPool) {
+async fn an_admin_promoted_onto_the_team_satisfies_the_team_side_today(pool: PgPool) {
     let d = doors(&pool).await;
     let w = &d.w;
     let promoted = person(&pool, "promoted").await;
