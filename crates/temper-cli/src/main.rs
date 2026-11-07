@@ -1811,6 +1811,9 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 for path in &report.removed_legacy {
                     temper_cli::output::item(format!("removed stale guidance duplicate: {path}"));
                 }
+                for path in &report.removed_retired {
+                    temper_cli::output::item(format!("removed retired skill file: {path}"));
+                }
                 for path in &report.removed_admin {
                     temper_cli::output::item(format!(
                         "removed admin file (no --include-admin): {path}"

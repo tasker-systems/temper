@@ -1,11 +1,8 @@
 # Frontmatter Reference
 
-> **Generated from `temper_workflow`'s embedded JSON Schemas — the same ones the server validates
-> against.** Do not hand-edit: run the emit command and commit the result. It exists in generated
-> form for one reason. Its hand-written predecessor described a set of primitives temper had
-> already retired, and nothing could notice, because a document describing types is not connected
-> to the types. Derived from the validator's own source, this one cannot name a doc type that does
-> not exist, nor omit one that does.
+> Read before any write: the recognized doc types and the two metadata tiers. **Generated from
+> `temper_workflow`'s embedded JSON Schemas — the ones the server validates against** — so it cannot
+> name a doc type that does not exist, nor omit one that does. Do not hand-edit.
 
 A resource's frontmatter has **two tiers**, and the distinction is enforced on write:
 

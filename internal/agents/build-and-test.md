@@ -1,108 +1,41 @@
-# Build & Test Commands
+# Build and Test
 
-> Shared agent guidance — the source of truth for `AGENTS.md` and `CLAUDE.md`.
-
-All commands use **cargo-make**. Rust tests use **cargo-nextest**. Both are pinned in `mise.toml`
-with the rest of the dev tooling, so `mise install` from the repo root installs them (see
-[environment.md](environment.md#tooling-mise)).
+Everything runs through cargo-make; Rust tests use cargo-nextest. Both are pinned in `mise.toml`.
+`cargo make --list-all-steps` is the full menu.
 
 ```bash
-# Quality checks (Rust fmt + clippy + docs + machete, TS typecheck + biome)
-cargo make check
-
-# Auto-fix formatting and lint
-cargo make fix
-
-# Unit tests (no database needed)
-cargo make test
-
-# Integration tests (requires Docker Postgres running)
-cargo make docker-up
-cargo make test-db
-
-# E2E tests (CLI ↔ API ↔ DB through real Axum + Postgres; lives at tests/e2e/, not crates/)
-cargo make test-e2e
-
-# All tests (Rust + TypeScript + integration)
-cargo make test-all
-
-# TypeScript tests only
-cargo make ts-test
-
-# Build everything
-cargo make build
-
-# Run API server locally
-cargo make run
-
-# Generate TypeScript types from Rust structs
+cargo make check            # fmt, clippy, docs, machete, drift gates, TS typecheck + biome
+cargo make fix              # auto-fix formatting and lint
+cargo make test             # unit tests, no database
+cargo make docker-up        # start Postgres on 5437 and apply pending migrations
+cargo make test-db          # DB integration tests
+cargo make test-e2e         # CLI ↔ API ↔ DB (see the test-embed trap in conventions.md)
+cargo make test-all         # Rust + TypeScript + integration
+cargo make openapi          # regenerate openapi.json and all three SDKs
 cargo make generate-ts-types
-
-# Regenerate openapi.json AND all three SDKs — the temper-rb gem, temper-ts's schema.ts,
-# and temper-py's generated package (every one a product of the router)
-cargo make openapi
 ```
 
-> **`cargo make openapi`, `cargo make generate-ts-types`, and `temper skill emit` each restale
-> committed artifacts, and `cargo make check` gates every one of them.** Read the
-> `generated-artifacts` skill before changing a response DTO, a route, a ts-rs-derived type, or a
-> shared skill template under `crates/temper-cli/templates/shared/`.
+**Generated artifacts:** `openapi`, `generate-ts-types` and `temper skill emit` each restale
+committed files that `cargo make check` gates. Read the `generated-artifacts` skill before changing
+a response DTO, a route, a ts-rs type, or a shared skill template.
 
-## Running a single Rust test
+## Narrow runs
+
 ```bash
-cargo nextest run -p temper-api --features test-db test_name          # the crate the test lives in
-cargo nextest run -p temper-api --features test-db --test <target>    # its neighbours in one target
-cargo nextest run -p temper-api -E 'test(test_name)'                  # exact filter
+cargo nextest run -p temper-api --features test-db <test_name>
+cargo nextest run -p temper-api --features test-db --test <target>
 ```
 
-Scope to the crate (`-p`), and to the test target where you know it. `cargo nextest run --workspace
-test_name` also works, but it compiles every crate's test binaries to run one test, so it is the slow
-way to ask a narrow question. CI runs `--workspace` because it wants everything; a local check
-rarely does.
+Scope to the crate; `--workspace` compiles every crate's tests to run one. Under bare `cargo`,
+export `DATABASE_URL=postgresql://temper:temper@localhost:5437/temper_development`.
 
-> An earlier note here said a bare `cargo nextest run -p temper-api` **hangs** listing the
-> `temper-api` bin target. It does not: a bin target is built with the test harness for testing, so
-> its `main()` never runs during listing. `cargo nextest list -p temper-api` enumerates both bins
-> (`temper-api`, `emit-openapi`, 0 tests each) and finishes `[observed — 2026-10-05]`. A run that
-> sits at 0% CPU after compiling is far more likely the macOS Gatekeeper first-exec assessment.
+## Things that look like your bug and are not
 
-Export `DATABASE_URL=postgresql://temper:temper@localhost:5437/temper_development` for
-`#[sqlx::test]` under bare `cargo` (the `cargo make` tasks set it for you).
-
-## Faster DB tests: the migrated test template (CI always, local opt-in)
-
-Every `#[sqlx::test]` database is a copy of the server's `template1`. CI migrates `template1` once
-per job (`.github/scripts/sqlx-test-template.sh`), so each test's migrator applies nothing. That
-takes setup from ~0.5s to ~0.05s per test, and roughly halves a DB shard's test phase. No test
-attribute changes.
-
-Locally it is **opt-in**: set `TEMPER_TEST_TEMPLATE=true` in `.env`. `test-db`, `test-e2e`,
-`test-e2e-embed`, `test-artifacts` and `coverage` then refresh the template first. A refresh rebuilds
-it whenever any file in `migrations/` is added, edited, renamed or removed, and is a no-op otherwise.
-
-| | |
-|---|---|
-| `cargo make test-template` | refresh now, opted in or not |
-| `cargo make test-template-reset` | put `template1` back to pristine: **this is how to opt out** (unsetting the variable alone leaves the last template in place) |
-
-- **Bare `cargo nextest` does not refresh the template.** After *adding* a migration that is harmless, because each test applies the remainder itself, only more slowly. After *editing* one that is already in the template, every test fails with sqlx's "previously applied but has been modified" error. Run `cargo make test-template` to rebuild.
-- **A test that needs an unmigrated database cannot rely on `migrations = false`,** because that stops sqlx from migrating but not Postgres from copying. Create a database `TEMPLATE template0` instead; `sensitivity_default_off_test.rs` shows how.
-
-## Embed-gated e2e tests
-`cargo make test-e2e` only enables `--features test-db`, so it **silently compiles out every `test-embed`-gated test**. CI does not: **every CI test job enables `test-embed`**, and ONNX is installed in all of them. When touching push-body, ingest-pipeline, or YAML fixture loading code, run with both features locally to match CI:
-```bash
-cargo make test-e2e-embed
-```
-
-> **Never add a `-E 'binary(...)'` filter to a CI test job.** Selection is `--workspace` so a new crate or test is picked up with no CI edit. A filter that makes CI green is hiding a test, not fixing one. CI jobs are split by **intention** (what they need from the environment), never by feature flag — see [.github/workflows/CLAUDE.md](../../.github/workflows/CLAUDE.md).
-
-## TypeScript & UI checks
-
-> **`cargo make check` does NOT cover temper-ui.** Its TypeScript step runs `tsc` on temper-cloud, not
-> `svelte-check` on temper-ui. So a change to a **generated shared type** (`cargo make generate-ts-types`
-> → `src/lib/types/generated/*.ts`) that restales a UI fixture — e.g. adding a required field to
-> `ResourceRow`, which then breaks a hand-built `makeRow` test helper — passes `cargo make check` and
-> fails only in CI's UI job. After any shared-type change, run `cd packages/temper-ui && bun run check`
-> yourself. (If it reds on `d3-*` "implicit any" / "cannot find package" in `graph/atlas/layout/*`,
-> that is a stale local `node_modules`, not your change — `bun install` first; CI installs fresh. See
-> [[project_ci_flake_signatures]].)
+- **Editing an already-applied migration** fails every DB test with "previously applied but has
+  been modified" once the test template holds it: `cargo make test-template`. The template is
+  opt-in locally (`TEMPER_TEST_TEMPLATE=true` in `.env`); CI always uses it.
+- **`cargo make check` does not run `svelte-check`.** After a shared-type change, run
+  `cd packages/temper-ui && bun run check`. A red on `d3-*` types there is a stale `node_modules`
+  (`bun install`).
+- **Never add a `-E 'binary(...)'` filter to a CI test job** — a filter that makes CI green is
+  hiding a test. See `.github/workflows/CLAUDE.md`.

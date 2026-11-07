@@ -1,51 +1,22 @@
 # AGENTS.md
 
-This file provides guidance to AI agents working with code in this repository. The shared
-reference material lives in `internal/agents/` — read the relevant file before starting work.
-
-## Quick reference
+Router for agents working in this repository. [CLAUDE.md](CLAUDE.md) carries the same table.
 
 | Topic | Read |
-|-------|------|
-| What Temper is + full architecture (crates, packages, deployment, DB) | [internal/agents/architecture.md](internal/agents/architecture.md) |
-| Build & test commands (cargo make, single tests, embed-gated, TS/UI) | [internal/agents/build-and-test.md](internal/agents/build-and-test.md) |
-| Branch/commit conventions + feature flags | [internal/agents/conventions.md](internal/agents/conventions.md) |
-| Key patterns — the operational invariants you must not break | [internal/agents/key-patterns.md](internal/agents/key-patterns.md) |
-| Code quality rules + SQL query checking | [internal/agents/code-quality.md](internal/agents/code-quality.md) |
-| Environment (Docker Postgres port, DATABASE_URL, pre-commit), tooling via mise + cloud agents | [internal/agents/environment.md](internal/agents/environment.md) |
-| The tasker-systems engineering baseline: each rule, why it exists, and whether a gate enforces it here | [`.claude/skills/tasker-systems-conventions`](.claude/skills/tasker-systems-conventions/SKILL.md) |
+|---|---|
+| Layout and what is not obvious about it | [internal/agents/architecture.md](internal/agents/architecture.md) |
+| Build, test, and the failures that are not yours | [internal/agents/build-and-test.md](internal/agents/build-and-test.md) |
+| Invariants that are easy to break | [internal/agents/key-patterns.md](internal/agents/key-patterns.md) |
+| Code quality and SQL | [internal/agents/code-quality.md](internal/agents/code-quality.md) |
+| Branches, PRs, migration comments, feature-gated tests | [internal/agents/conventions.md](internal/agents/conventions.md) |
+| Local and cloud environment | [internal/agents/environment.md](internal/agents/environment.md) |
+| The tasker-systems engineering baseline, and what a gate enforces here | [`.claude/skills/tasker-systems-conventions`](.claude/skills/tasker-systems-conventions/SKILL.md) |
 
-## The temper workflow
-
-Temper is a knowledge base for AI-assisted development. It maintains a vault of markdown files
-with YAML frontmatter so that goals, tasks, sessions, research, and decisions persist across
-conversations. The `temper` CLI manages the vault; the cloud API syncs it and provides semantic
-search.
-
-To start a work session, run `temper warmup` for a context primer. The `temper` CLI is
-agent-first: with a non-TTY stdout (how agents invoke it) output defaults to JSON and ANSI-free.
-
-## Skills
-
-This repo ships a temper skill that teaches the workflow. Install it with
-`temper skill install --target opencode` (or `--target claude` for Claude Code). The skill teaches
-session lifecycle, grounding, and outcome registers — read it after install.
-
-## The engineering baseline
-
-temper is pinned to the shared tasker-systems baseline in `.conventions/consumer.toml`. It reaches
-agents as the projected skill linked above. Read it before adding a lint suppression, an `unsafe`
-block, a dependency, a CI workflow or a test exception, and before claiming that a rule is enforced.
-Move the pin with `python3 -I .conventions/baseline/tools/conventions.py bump`; never edit
-`.conventions/baseline/`. The `Conventions baseline` job in `quality-gate.yml` checks all of this.
-
-## Where specs and plans go
-
-**Not in this repository.** Specs, plans, reviews, spikes and handoffs live in the
-private [`tasker-systems/temper-artifacts`](https://github.com/tasker-systems/temper-artifacts)
-repository, under `specs/`, `plans/`, `reviews/`, `spikes/` and `handoffs/`. Write
-them in a clone of that repo.
-
-Not `docs/` either — everything in `docs/` is public and synced to the documentation
-site. `.github/scripts/check-no-process-artifacts.sh` fails CI if those trees appear
-here. See `internal/README.md`.
+- **The baseline** is pinned in `.conventions/consumer.toml`; never edit `.conventions/baseline/`.
+  Move the pin with `python3 -I .conventions/baseline/tools/conventions.py bump`.
+  *(gated: `quality-gate.yml#conventions`)*
+- **Specs, plans, reviews, spikes and handoffs go in
+  [`tasker-systems/temper-artifacts`](https://github.com/tasker-systems/temper-artifacts)**, never
+  here — not `docs/` (public), not `internal/`. *(gated: `check-no-process-artifacts.sh`)*
+- **Temper itself:** `temper warmup` primes a session; the workflow skill installs with
+  `temper skill install --target opencode` (or `--target claude`).

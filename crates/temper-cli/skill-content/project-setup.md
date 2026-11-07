@@ -1,51 +1,40 @@
 # Project Setup (/temper init)
 
-Read this when setting a project up for temper-assisted work — the operator invoked `/temper
-init`, or a project has no `guidance/fundamentals.md` and you offered to create it. This flow
-is **agent-authored in conversation**: the CLI wizard configures the machine; you orient the
-project. (CLI-packaging only: the MCP surface has no slash command, no skill directory, and no
-wizard, so it carries no arm of this flow.)
+Read this when the operator runs `/temper init`, or when `guidance/fundamentals.md` has no entry
+for the current project and you offered to add one. CLI only: the MCP surface has no equivalent.
 
-## 1. Config first, if needed
+## The model
 
-If `temper` is not installed, not on PATH, or `temper check` fails, the machine is not
-configured yet — point the operator at the CLI wizard (`temper init`) and stop there. Everything
-below needs a working connection; none of it changes one.
+- **The CLI wizard configures the machine; you orient the project**, in conversation.
+- **A project's fundamentals live in its repo**: its `AGENTS.md`/`CLAUDE.md`, or a file the repo
+  already carries. The repo is always the authority.
+- **`guidance/fundamentals.md` is a one-hop index**: one line per project, matched by repo root,
+  naming what to read in the repo. There is no per-project file between the index and the repo.
+  A global copy of per-repo rules goes stale when the repo moves; a pointer does not.
 
-## 2. Fundamentals — the project's own rules, in the project
+```markdown
+| Project | Repo root | Read |
+|---|---|---|
+| temper | `~/projects/tasker-systems/temper` | `AGENTS.md` (router to `internal/agents/`) |
+```
 
-Fundamentals live **in the repo they describe** — the project's `AGENTS.md`/`CLAUDE.md`, or a
-dedicated file the repo already carries. The skill directory resolves them through **two levels
-of pointer**, and the repo is always the authority: `guidance/fundamentals.md` is the **index**
-(one entry per project, naming that project's per-project pointer file beside it,
-`guidance/<project>/fundamentals.md`), and the per-project file **still a pointer** — it names
-where the project's fundamentals live. A global copy of per-repo rules goes stale the day the
-repo moves; a pointer cannot.
+## The init conversation, in order
 
-Setting a project up, then:
+1. **Config.** If `temper` is missing, not on PATH, or `temper check` fails, point the operator at
+   the CLI wizard (`temper init`) and stop. Nothing below changes a connection.
+2. **Read the project's own material**: `AGENTS.md`/`CLAUDE.md`, `docs/`, the README. If the repo
+   already carries agent fundamentals, that file is its fundamentals.
+3. **If the rules exist only as scattered prose, distill them into a file in the repo**, beside the
+   material it came from and in the repo's own conventions. Write from the project's evidence, not
+   your assumptions, and show the result to the operator.
+4. **Add the index line**: repo root → the repo file to read.
+5. **Introduce the arc.** Long-horizon work is a first-class flow: goals carry registers; work
+   advances task over task, is recorded session over session, decomposes into sub-goals, and
+   closes on purpose. The arc is in `working-a-goal.md`, and an agent picked up mid-goal reads it
+   first. The operator decides when a goal opens and closes.
 
-1. Read the project's own material — its `AGENTS.md`/`CLAUDE.md`, its `docs/`, its README.
-   If the repo already carries agent fundamentals, that file **is** its fundamentals; do not
-   duplicate it.
-2. If the repo carries its rules only in scattered prose, distill them into a fundamentals file
-   **in the repo**, beside the material it distilled (the repo decides where — match its own
-   conventions). Write from the project's evidence, never from your assumptions about it, and
-   show the result to the operator.
-3. Add the **two** pointer halves together: an index row in `guidance/fundamentals.md`
-   (project path → `./<project>/fundamentals.md`) **and** the per-project file
-   `guidance/<project>/fundamentals.md` (project root → the repo's fundamentals location).
-   An index row with no per-project file behind it is a broken pointer, not a stub. Keep the
-   per-project file a bare pointer — if it grows beyond pointing, the content belongs in the
-   repo it describes.
+## Traps
 
-Reading fundamentals before substantive work in a project goes through the pointer: no entry
-for the current project is exactly the `/temper init` offer. An entry whose target has moved
-or rotted is updated — the pointer is refreshed, never the copy rebuilt.
-
-## 3. The arc
-
-Say what this project's agents can do here: long-horizon work is a first-class flow. Goals
-carry registers; work advances task over task, is recorded session over session, decomposes
-into sub-goals, and closes on purpose — the arc lives in `working-a-goal.md`, and an agent
-picked up mid-goal reads it first. The operator chooses when a goal is opened and when it
-closes; the arc is how the space between is walked.
+- **Duplicating the repo's fundamentals into the skill directory**: the copy rots; point instead.
+- **Growing an index line beyond a pointer**: content belongs in the repo it describes.
+- **Rebuilding a copy when a target moves**: update the index line to the new location.

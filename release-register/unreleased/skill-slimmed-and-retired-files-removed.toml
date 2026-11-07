@@ -1,0 +1,31 @@
+# A release-register entry. Scaffold one with:
+#   python3 tools/manifest/manifest.py register new <id>
+# which copies this file to release-register/unreleased/<id>.toml. The id is the file name:
+# lowercase kebab-case, at most 64 characters, never renamed once merged (corrections.json
+# cites entries by id). Every key below is required, and the empty values fail validation
+# until you fill them in. The vocabulary is release-register/vocabulary.toml; what each
+# token means is release-register/README.md.
+
+title = "The temper skill ships as a short router and topic files, and `skill install` removes the files it no longer ships"
+pr = "self"
+classes = ["additive", "behavioral"]
+surfaces = ["cli-stdout"]
+status = "signal-only"
+
+body = '''
+The skill `temper skill install` writes, and the MCP projection `skill emit` writes to
+skills/temper-knowledge-base/, now ship 14 files instead of 25. workflows/*.md and
+subagent-guidance.md are retired; plan-verification.md and review-gates.md fold into
+implementation-grounding.md, and session-wrap.md into session-lifecycle.md.
+
+Behavioral: install removes each retired file whose bytes match a revision any release shipped
+(RETIRED_SKILL_FILES in crates/temper-cli/src/commands/skill.rs), and an install without
+--include-admin now also retracts an admin.md left by an earlier release. A file whose bytes match
+no shipped revision is the user's and is left alone; guidance/ is never touched.
+
+Additive (cli-stdout): `temper skill install` prints `removed retired skill file: <path>` per
+removal, beside the existing removal lines.
+
+Observed by anyone who installs the skill or the MCP skill bundle. Release relevance: content and
+install hygiene only; no HTTP, MCP-tool or schema change.
+'''

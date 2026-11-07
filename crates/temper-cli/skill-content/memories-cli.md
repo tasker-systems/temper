@@ -1,106 +1,61 @@
 # Memories
 
-> **Memories are resources.** Durable working knowledge is stored as resources of type `memory`,
-> carrying `open_meta.status` (`active` / `superseded`) and `open_meta.verified` — the date the
-> claim was last checked. A `verified` date far in the past means **nobody has re-checked it**, not
-> that it is false.
+Read this when saving, correcting or reinforcing a durable memory, moving local memory files into
+Temper, or touching this machine's `MEMORY.md`. Flag detail: `temper memory <cmd> --help`.
 
-This machine's `MEMORY.md` is a **rendered projection** of those resources, written by
-`temper memory emit`. Do not hand-edit it: the record is the store, the file is a cache.
+## The model
 
-## Start with `status` — it works before you have adopted anything
+- **A memory is a resource of type `memory`.** Author and correct it like any resource, in the
+  context whose readers it is for.
+- **`open_meta.status` is `active` or `superseded`.** Read the active ones and honour them.
+- **`open_meta.verified` is the date the claim was last checked. `verified` is a judgment, not a
+  timestamp:** advance it only after re-checking the claim against the system it describes; moving,
+  re-rendering, re-reading or amending the body never advances it. An old date means nobody
+  re-checked, not that it is false.
+- **Correct by supersession.** Set the old account's `status` to `superseded` and leave it readable;
+  it stays addressable and searchable.
+- **A memory carries no reach of its own.** Its audience is whoever reads the context it lives in.
+- **The store is the record; `MEMORY.md` is a projection.** `temper memory emit` renders it. Do not
+  hand-edit it.
+- **`temper memory status` works before you opt in.** It reports opt-in, the contexts read, store
+  and local counts, and which local files have no counterpart in the store. Never adopting is a
+  supported end state.
 
-```bash
-temper memory status
-```
+## Populating the store: `harvest`, then `migrate`
 
-Reports what this machine carries whether or not a `[memory]` section exists in `config.toml`:
-whether it has opted in, which contexts it reads, how many memories are in Temper, how many local
-memory files sit beside the index, and which of those have **no counterpart** in the store.
-Declining is a supported end state — a machine can measure its own divergence and never adopt.
+1. **`temper memory harvest` first.** A memory's title exists only as link text in the hand-written
+   `MEMORY.md`; harvest copies each title into the file it names. Skip it and an `emit` takeover
+   destroys the titles, and `migrate` then skips every file no link names. It is idempotent.
+2. **Check for near-duplicates yourself** (below). `migrate` does not.
+3. **`temper memory migrate --dry-run`, then the real run**, one cohort per run, keyed on the files'
+   frontmatter `type` (`--cohort`, default `feedback`).
 
-## Populating the store — `harvest`, then `migrate`
+`migrate` **reconciles rather than bulk-imports**:
 
-A machine still holding local memory files has not populated anything yet. Two commands do that,
-and **the order is load-bearing**.
+- It matches on `open_meta.source_file` and skips files already in the store. That is the whole
+  reconciliation, and it is why an interrupted run resumes instead of duplicating.
+  It **detects nothing about near-duplicates**.
+- It is interactive by default: one confirmation for the whole batch, defaulting to no. With no
+  terminal it refuses to write unless `--unattended` authorizes the run; that flag skips no check,
+  because there is none.
+- `feedback` lands in the first `shared_contexts` entry; every other cohort in the first
+  `project_contexts` entry; `--context` overrides. **An empty list is a refusal, never a fallback
+  to the other list**: reach comes from which config list names the context.
+- Every skipped file is reported with its reason.
 
-**`temper memory harvest` runs first.** A memory's human-readable title exists in exactly one
-place: the link text in the hand-written `MEMORY.md`. `harvest` copies each curated title into the
-file it names. Skip it, and letting `emit` take the index over destroys those titles — and with
-them `migrate`'s ability to move the remaining files at all, since a file no link names is skipped
-(*"no MEMORY.md link names it, so it has no curated title"*) rather than given a title invented
-from its filename. It is idempotent: a file already carrying a `title:` is skipped. Each stamp also
-pins `metadata.modified` to the file's pre-write mtime, so the write's own mtime bump cannot
-re-date a claim nobody re-checked.
+### Near-duplicates are for a human to judge
 
-**`temper memory migrate` moves the files in, and it reconciles rather than bulk-imports.** The
-reconciliation is exactly one thing: a file already in Temper is matched on `open_meta.source_file`
-and skipped. **It detects nothing about near-duplicates** — it searches nothing and compares
-nothing, so two accounts of one incident written on two machines both land. Three consequences a
-reader who expects a bulk import will trip over:
+Read the local memories against what the target context already holds.
+**Compare the claim, not the wording**: two memories about one subsystem are not an overlap; two
+asserting the same thing are. Shared vocabulary misleads, and a shared context has the most of it.
+Expect three outcomes:
 
-- It is **interactive by default** — one confirmation for the whole batch (count, target context,
-  cohort), defaulting to *no*, and it states plainly there that near-duplicates are not detected.
-  A batch with nothing in it never asks. With no terminal attached it **refuses to write** unless
-  `--unattended` authorizes writing without that confirmation. `--unattended` skips no check;
-  there is no check to skip.
-- `--dry-run` is always permitted and writes nothing. Run it first.
-- Re-running is safe. The `source_file` match is what makes a run interrupted halfway resume rather
-  than duplicate.
+- **Duplicate**: one incident recorded twice, often from two machines. Keep the older, richer one.
+- **Supersession**: a newer account strictly richer than the one it covers.
+- **Both stale**: both out of date, the newer one still wrong. Recency arbitrates nothing.
 
-### Before migrating, read for near-duplicates yourself
-
-A pre-write full-text search used to do this, and it was deleted because it did not work: on a
-real store it surfaced dozens of **collisions of which only a few were genuinely overlapping**
-— most matched on *shared project vocabulary*, not on claim ("run invocations this way"
-surfaced against "never abbreviate a UUID"; "the build tool cannot X" against "the CI gate
-does Y"). Both mention the same tools, or the same project. Full-text search cannot see that
-they make unrelated claims, and this gets **worse in a shared context, not better** — shared
-vocabulary is exactly what a team's context accumulates.
-
-**The rule did not go with the mechanism.** Two accounts of nearly the same thing are surfaced for
-judgment, never merged automatically. What changed is who forms the candidate set and on what
-basis: read the local memories against what the store already holds, and
-**compare the claim, not the wording**. Two memories about one subsystem are not an overlap; two
-memories asserting the same thing are, however differently they are phrased. Bring a short list a
-human can actually adjudicate.
-
-**Three outcome kinds.** A reader who expects only the first will
-mis-handle the other two:
-
-- **Duplicate** — the same incident documented twice, say on two different machines.
-  Resolved by keeping the **older, richer** account: a judgement no confidence score encodes.
-- **Supersession** — a newer account, strictly richer than the one it covers.
-- **Both stale** — both accounts out of date, and the newer one still wrong. **Recency
-  arbitrated nothing** in the observed cases.
-
-**Say what this costs: a compiled-in gate is unskippable, and this is guidance, which is skippable
-by construction.** An agent can simply not do it. The trade is an *enforcement* mechanism for a
-*judgement* mechanism, and it is defensible only because the enforcement traded away was 94% noise
-and was already being switched off under pressure — **not** because guidance is as strong as a
-gate. It is not.
-
-Two repairs that look obvious are **rejected**, not deferred: tuning the score, or swapping
-full-text for embedding cosine — several of those 51 false positives are genuinely *about* the
-same subsystem and would score **higher** under embeddings; and merging automatically above a
-confidence threshold, which is the one thing the rule forbids.
-
-One cohort per run, keyed on the files' own frontmatter `type`:
-
-```bash
-temper memory migrate --dry-run                     # cohort `feedback` — the default
-temper memory migrate --cohort project --dry-run
-temper memory migrate --cohort reference --dry-run
-```
-
-`feedback` is the cross-project cohort and lands in the first `shared_contexts` entry; every other
-cohort lands in the first `project_contexts` entry, beside the resources it discusses. Override
-with `--context <ref>`. A cohort whose list is empty is a refusal, never a silent fallback to the
-other list — **reach is a property of which config list names the context**, and a memory never
-carries one of its own.
-
-Every skipped file is reported with its reason. A file that vanished silently from a migration
-would be indistinguishable from one that migrated.
+Bring a short list a human can adjudicate. **Never merge automatically.** This is guidance, not a
+gate; nothing stops you skipping it.
 
 ## Recording that a memory was load-bearing
 
@@ -108,72 +63,32 @@ would be indistinguishable from one that migrated.
 temper resource update <ref> --open-meta-add '{"reinforced":["2026-08-02"]}'
 ```
 
-`open_meta.reinforced` is a list of bare ISO dates: the days this memory did work. **Two things
-count as a day's work, and the second is the one that matters.** The situation the memory describes
-*recurred* — the trap it names actually fired. Or the memory *caught you*, and a mistake did not get
-made because of it.
+`open_meta.reinforced` is a list of bare ISO dates: the days the memory did work. Two things count:
+the situation it describes recurred, or **it caught you** before the mistake. Count the catch,
+because a memory that works prevents its own situation from recurring.
 
-Counting only recurrence would be broken in a way worth understanding: **a memory that works
-prevents its own situation from recurring.** It would go unreinforced, decay out of the index, and
-then the situation would recur — a loop that oscillates, each swing costing whatever the memory was
-preventing. Counting the catch dissolves that.
-
-**Use `--open-meta-add`, never `--open-meta`.** They differ in exactly the way that matters here:
-`--open-meta '{"reinforced":["2026-08-02"]}'` **replaces** the list, discarding every date already
-stored, silently, with a success response. `--open-meta-add` unions server-side over what is there.
-
-The date is bare, and the contract is bare deliberately. **No `by` field** — `resource update`
-already emits a `property_set` event carrying the acting principal, so the trail answers *who*, and
-a self-asserted copy in a tier nothing validates could only ever disagree with the record that is
-already right. **No note field** — a free-text note makes every record structurally unique, which
-stops the union from collapsing same-day duplicates and loses the one-a-day grain that comes free
-from the stored shape.
-
-**The harder half: if the catch revealed a shape the memory's body does not describe, amend the
-body — that is the act.** A metadata note *about* the gap is the memory-system version of shipping a
-"for now" comment: a breadcrumb standing in for the fix. Reinforce the date *and* rewrite what the
-memory says.
-
-Amending a memory's body is **not** re-checking its claim, so it does not advance `verified`. Those
-are separate judgments and only one of them is about whether the claim still holds.
-
-### What the index does with it — and what it does today, which is nothing
-
-`reinforced_min` in `[memory]` is the number of distinct dates a memory needs to keep its own line
-in the index. **It has no default and is absent everywhere**, so today every memory renders
-individually exactly as it always has. A threshold can only be chosen from months of real
-reinforcement data; until then, reinforcing a memory changes what `temper memory status` reports and
-nothing about the file.
-
-Once one is set, below-threshold memories collapse into a per-section tail line:
-
-```
-- … 47 more in @me/temper, unreinforced — demoted, not dropped: `temper resource list --type memory --context @me/temper --all`
-```
-
-**Demotion, never deletion.** A collapsed memory is still in the record, still addressable, still
-searchable — it has stopped occupying a line in a file that is loaded every session. If you are
-looking for a memory you remember and cannot see, the tail line is where it went, and the command
-on it lists that section's memories, collapsed ones included.
-
-A malformed `reinforced` is a **soft** report: `temper memory status` names it under
-`reinforcement.malformed` and the index renders straight through, treating that memory as
-unreinforced. This is deliberately unlike `status`/`verified`, which fail the whole index — those
-hold up claims the render makes, `reinforced` only orders the list. The accepted cost is that one
-mistyped date demotes a memory into the tail without announcing itself in the index; `status` is
-where it announces itself, and demotion is recoverable because nothing was deleted.
+If the catch exposed a case the body does not describe, **amend the body**; a metadata note about
+the gap is not the fix. Amending the body does not advance `verified`.
 
 ## Rendering and gating the index
 
-```bash
-temper memory emit          # render the index from Temper and write it
-temper memory check         # exits non-zero when the on-disk index has drifted
-```
+- `temper memory emit` renders the index. **It refuses to overwrite a file it did not write**, so
+  move a hand-written `MEMORY.md` aside deliberately, after `harvest`.
+- `emit` refuses the whole index if any memory's `status` or `verified` is malformed.
+- `temper memory check` exits non-zero when the on-disk index has drifted. The index lives outside
+  any repo, so `check` is the gate a person or hook runs.
+- `reinforced_min` in `[memory]` has no default and is unset, so today reinforcing changes what
+  `status` reports and nothing in the file. Once set, memories below it collapse into a per-section
+  tail line whose command lists them: **demoted, never deleted.**
 
-`emit` **refuses to overwrite a file it did not write** — an existing hand-written `MEMORY.md`
-survives until someone deliberately moves it aside — and it refuses the whole index rather than
-render a memory whose `status` or `verified` is malformed. That refusal is the takeover gate, so
-take it only once `harvest` has run. `reinforced` is deliberately **not** in that set — see above.
+## Traps
 
-The index lives outside any repo, so nothing in git can diff it; `check` is what a person or a hook
-runs instead, gating on the exit code.
+- **`--open-meta` instead of `--open-meta-add`**: replaces the `reinforced` list and silently
+  discards every stored date, with a success response.
+- **Adding a `by` or note field to a reinforcement**: the `property_set` event already records who,
+  and a note makes every entry unique, so same-day duplicates stop collapsing.
+- **Reaching for a similarity score or auto-merge above a threshold**: both rejected; scores flag
+  shared vocabulary, and auto-merge is what the rule forbids.
+- **A malformed `reinforced` is soft**: `status` lists it under `reinforcement.malformed` and the
+  index renders it as unreinforced, so check `status` when a memory goes missing from the index.
+- **A memory you remember but cannot see in the index**: look for it on the tail line.
