@@ -282,14 +282,19 @@ def main():
     ).strip()
 
     cases = ["base", "off", "on-0", "on-51"]
-    print(f"median ms, {args.profiles} profiles x {args.samples} samples (p1 reads {reads}, "
-          f"{member} by membership, in on-51)\n")
+    print(
+        f"median ms, {args.profiles} profiles x {args.samples} samples (p1 reads {reads}, "
+        f"{member} by membership, in on-51)\n"
+    )
     print(f"| door | {' | '.join(cases)} | off/base | on-51/base |")
     print(f"|---|{'---|' * len(cases)}---|---|")
     for door in DOORS:
         row = [results[c][door] for c in cases]
-        print(f"| `{door}` | " + " | ".join(f"{v:.2f}" for v in row)
-              + f" | {row[1] / row[0]:.2f} | {row[3] / row[0]:.2f} |")
+        print(
+            f"| `{door}` | "
+            + " | ".join(f"{v:.2f}" for v in row)
+            + f" | {row[1] / row[0]:.2f} | {row[3] / row[0]:.2f} |"
+        )
     shutil.rmtree(base_src, ignore_errors=True)
 
 
