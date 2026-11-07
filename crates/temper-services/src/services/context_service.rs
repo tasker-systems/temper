@@ -97,6 +97,17 @@ pub async fn list_visible(
     // A correlated scalar subquery rather than a join, so the statement stays one row per
     // context with no GROUP BY to hold in step with the select list.
     //
+    //
+    // ── Why the gate and the count read two sets computed once ─────────────────────
+    //
+    // The row gate is `contexts_readable_by($1)`, the body `context_visible_to` delegates to
+    // (20260712000010:135-151), so the rows are exactly the contexts `context_visible_to`
+    // admits and the two doors onto a context cannot disagree. It is evaluated ONCE per call,
+    // as a MATERIALIZED set, and so is `resources_visible_to($1)` for the count: called per
+    // context, each call re-ran the reader's whole read set, the public_within arm with its
+    // fence and per-row effect walks included, once for every context in the table. Same
+    // functions, same rows; one evaluation each instead of one per context.
+    //
     // Kept out of the SQL literal on purpose: sqlx keys the .sqlx cache on the whole query
     // TEXT, comments included, so a prose correction inside the literal orphans the cache
     // entry and forces a regenerate. Reasoning about the query as a whole belongs here,
@@ -104,6 +115,10 @@ pub async fn list_visible(
     let rows = sqlx::query_as!(
         ContextRowWithCounts,
         r#"
+        WITH readable AS MATERIALIZED (
+                 SELECT r.context_id FROM contexts_readable_by($1) r),
+             visible AS MATERIALIZED (
+                 SELECT v.resource_id FROM resources_visible_to($1) v)
         SELECT c.id, c.name,
                c.owner_table AS "kb_owner_table!",
                c.owner_id AS "kb_owner_id!",
@@ -126,11 +141,11 @@ pub async fn list_visible(
                -- accident. The reasoning, and what the witness does NOT isolate, is above.
                (SELECT count(*)
                   FROM kb_resource_homes rh
-                  JOIN resources_visible_to($1) v ON v.resource_id = rh.resource_id
+                  JOIN visible v ON v.resource_id = rh.resource_id
                   JOIN kb_resources r ON r.id = rh.resource_id AND r.is_active
                  WHERE rh.anchor_table = 'kb_contexts' AND rh.anchor_id = c.id) AS "resource_count!"
           FROM kb_contexts c
-         WHERE context_visible_to($1, c.id)
+         WHERE c.id IN (SELECT rc.context_id FROM readable rc)
          ORDER BY c.name
         "#,
         *profile_id

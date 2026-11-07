@@ -234,6 +234,138 @@ pub struct TeamDetail {
     /// or move it. Deliberately not symmetrical with `children`, which stays managers-only.
     #[serde(default)]
     pub parents: Vec<TeamRef>,
+    /// The ancestors this team's owned contexts are opened to (`public_within` rows with this team
+    /// as T), for every member of this team (any role) and for system admins: the same audience as
+    /// `parents`, and not an ancestor's manager, since an anchor on another branch is not theirs to
+    /// see. Empty for everyone else.
+    #[serde(default)]
+    pub public_within: Vec<PublicWithinRef>,
+    /// The teams opened to this team's subtree (`public_within` rows with this team as the anchor),
+    /// for a caller who manages this team or is a system admin (on the root or the gating team, a
+    /// system admin only). Empty for everyone else.
+    #[serde(default)]
+    pub public_within_in: Vec<PublicWithinInRef>,
+}
+
+/// How many teams and people a `public_within` row reads to: the live teams in the anchor's
+/// subtree, and the distinct people on them. Machines and connection agents never read through a
+/// row, so they are not counted. A count, never a list.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublicWithinAudience {
+    #[cfg_attr(feature = "typescript", ts(type = "number"))]
+    pub teams: i64,
+    #[cfg_attr(feature = "typescript", ts(type = "number"))]
+    pub principals: i64,
+}
+
+/// One anchor this team is opened to, on the team's own [`TeamDetail`].
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublicWithinRef {
+    pub anchor: TeamRef,
+    /// Whether the row confers right now. Only a boolean: when it does not, nothing says which
+    /// forbid, dead team or pool team stops it.
+    pub effective: bool,
+    /// Opened by a system admin over an anchor whose subtree reaches the whole instance.
+    pub instance_wide: bool,
+    pub opened_at: DateTime<Utc>,
+    pub audience: PublicWithinAudience,
+}
+
+/// One team opened to this team's subtree, on the anchor's [`TeamDetail`].
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublicWithinInRef {
+    pub team: TeamRef,
+    /// Whether the row confers right now. Only a boolean, as on [`PublicWithinRef`].
+    pub effective: bool,
+}
+
+/// A `public_within` row named by both of its teams: `team` (whose owned contexts are opened) and
+/// `anchor` (whose subtree reads them).
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublicWithinRowRef {
+    pub team: TeamRef,
+    pub anchor: TeamRef,
+}
+
+/// What `PUT /api/teams/{id}/public-within/{anchor_id}` did.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PublicWithinOpenKind {
+    /// The row was written and recorded (`team_public_within_changed`).
+    Opened,
+    /// The row was already there; nothing was written or recorded.
+    Exists,
+}
+
+/// Response body for `PUT /api/teams/{id}/public-within/{anchor_id}`. The team's owned contexts are
+/// readable by the people under the anchor while the row is effective. `audience` is who that is
+/// now; it grows with the anchor's subtree, which every manager of a team under the anchor can
+/// change, as can an identity provider's group sync and an admin.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublicWithinOutcome {
+    pub outcome: PublicWithinOpenKind,
+    pub audience: PublicWithinAudience,
+    /// The row survives a pool team (the root, the gating team or an auto-join team) under the
+    /// anchor: only a system admin opens such a row.
+    pub instance_wide: bool,
+}
+
+/// Request body for `PUT /api/teams/{id}/public-within-policy`: `true` forbids every
+/// `public_within` row over this team and every team beneath it; `false` clears this team's forbid
+/// (a forbid set higher up still holds). On the root (`temper-system`) it is the instance-wide off,
+/// and only a system admin sets it.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublicWithinPolicyRequest {
+    pub forbidden: bool,
+}
+
+/// Response body for `PUT /api/teams/{id}/public-within-policy`: the rows the change made inert
+/// (`dormant`) or made confer again (`revived`). A row is named only to a caller who manages its team
+/// or its anchor, or is a system admin; the others are counted in `dormant_unnamed` and
+/// `revived_unnamed`.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublicWithinPolicyOutcome {
+    pub team_id: Uuid,
+    /// The forbid now.
+    pub forbidden: bool,
+    /// False when the forbid already held the value: nothing was written or recorded.
+    pub changed: bool,
+    pub dormant: Vec<PublicWithinRowRef>,
+    pub revived: Vec<PublicWithinRowRef>,
+    pub dormant_unnamed: u32,
+    pub revived_unnamed: u32,
 }
 
 /// A team named by id, slug and display name — a parent or child on [`TeamDetail`], an ancestor on

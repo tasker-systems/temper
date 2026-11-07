@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT a.id AS \"anchor_id!\", a.slug AS \"anchor_slug!\", a.name AS \"anchor_name!\",\n                  public_within_row_effective(pw.team_id, pw.anchor_id, pw.instance_wide)\n                      AS \"effective!\",\n                  pw.instance_wide, pw.opened_at,\n                  au.teams AS \"teams!\", au.principals AS \"principals!\"\n             FROM kb_team_public_within pw\n             JOIN kb_teams a ON a.id = pw.anchor_id\n             CROSS JOIN LATERAL public_within_audience(pw.anchor_id) au\n            WHERE pw.team_id = $1\n            ORDER BY a.slug",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "anchor_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "anchor_slug!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "anchor_name!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "effective!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
+        "name": "instance_wide",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 5,
+        "name": "opened_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "teams!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 7,
+        "name": "principals!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "84cc77d9df581d1c61c6201827027bbb29b7abfb104bfcfedbb1952bc8e7414f"
+}

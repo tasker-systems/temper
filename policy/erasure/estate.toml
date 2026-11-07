@@ -468,3 +468,7 @@ reason = "the erasure apparatus itself: the deployment's retention policy, which
 [tables.kb_erasure_slack_revocations.grain]
 kind = "declared-out"
 reason = "the erasure apparatus itself: the revocation queue, whose sealed token its own drain (erasure_slack_revocation_service) nulls at revocation or at the retry cap"
+
+[tables.kb_team_public_within.grain]
+kind = "declared-out"
+reason = "no estate holds a row: a personal team is never a row's team or anchor (kb_team_public_within_shape_guard), and opened_by is a reference the profile's pseudonym covers. A hard-deleted team's rows are recorded as cascade_deleted (kb_teams_public_within_cascade) before the foreign-key cascade removes them"

@@ -21,6 +21,8 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional
 from uuid import UUID
+from temper.generated.models.public_within_in_ref import PublicWithinInRef
+from temper.generated.models.public_within_ref import PublicWithinRef
 from temper.generated.models.team_child_ref import TeamChildRef
 from temper.generated.models.team_member_detail import TeamMemberDetail
 from temper.generated.models.team_ref import TeamRef
@@ -41,8 +43,10 @@ class TeamDetail(BaseModel):
     members: List[TeamMemberDetail]
     name: StrictStr
     parents: Optional[List[TeamRef]] = Field(default=None, description="The team's live parent teams, for every member of this team (any role) and for system admins (team DAG doors D9, ruling R2 as amended). A member already reads everything attached to these teams, so their names disclose nothing new; a child's manager needs them to detach or move it. Deliberately not symmetrical with `children`, which stays managers-only.")
+    public_within: Optional[List[PublicWithinRef]] = Field(default=None, description="The ancestors this team's owned contexts are opened to (`public_within` rows with this team as T), for every member of this team (any role) and for system admins: the same audience as `parents`, and not an ancestor's manager, since an anchor on another branch is not theirs to see. Empty for everyone else.")
+    public_within_in: Optional[List[PublicWithinInRef]] = Field(default=None, description="The teams opened to this team's subtree (`public_within` rows with this team as the anchor), for a caller who manages this team or is a system admin (on the root or the gating team, a system admin only). Empty for everyone else.")
     slug: StrictStr
-    __properties: ClassVar[List[str]] = ["auto_join_role", "children", "created", "description", "id", "members", "name", "parents", "slug"]
+    __properties: ClassVar[List[str]] = ["auto_join_role", "children", "created", "description", "id", "members", "name", "parents", "public_within", "public_within_in", "slug"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -104,6 +108,20 @@ class TeamDetail(BaseModel):
                 if _item_parents:
                     _items.append(_item_parents.to_dict())
             _dict['parents'] = _items
+        # override the default output from pydantic by calling `to_dict()` of each item in public_within (list)
+        _items = []
+        if self.public_within:
+            for _item_public_within in self.public_within:
+                if _item_public_within:
+                    _items.append(_item_public_within.to_dict())
+            _dict['public_within'] = _items
+        # override the default output from pydantic by calling `to_dict()` of each item in public_within_in (list)
+        _items = []
+        if self.public_within_in:
+            for _item_public_within_in in self.public_within_in:
+                if _item_public_within_in:
+                    _items.append(_item_public_within_in.to_dict())
+            _dict['public_within_in'] = _items
         # set to None if auto_join_role (nullable) is None
         # and model_fields_set contains the field
         if self.auto_join_role is None and "auto_join_role" in self.model_fields_set:
@@ -134,6 +152,8 @@ class TeamDetail(BaseModel):
             "members": [TeamMemberDetail.from_dict(_item) for _item in obj["members"]] if obj.get("members") is not None else None,
             "name": obj.get("name"),
             "parents": [TeamRef.from_dict(_item) for _item in obj["parents"]] if obj.get("parents") is not None else None,
+            "public_within": [PublicWithinRef.from_dict(_item) for _item in obj["public_within"]] if obj.get("public_within") is not None else None,
+            "public_within_in": [PublicWithinInRef.from_dict(_item) for _item in obj["public_within_in"]] if obj.get("public_within_in") is not None else None,
             "slug": obj.get("slug")
         })
         return _obj

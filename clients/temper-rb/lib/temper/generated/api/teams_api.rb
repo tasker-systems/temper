@@ -259,6 +259,82 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Close a team's opening to an ancestor's subtree
+    # Deletes the `public_within` row. Either side closes alone, whatever the policy or either team's liveness: a direct owner or maintainer of the team, of the anchor (temper-system or the gating team as the anchor: a system admin only), or a system admin. What readers already read is not recalled. Recorded as `team_public_within_changed`.
+    # @param id [String] The team whose owned contexts are opened (T)
+    # @param anchor_id [String] The ancestor team whose subtree reads them (A)
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [nil]
+    def close_public_within(id, anchor_id, opts = {})
+      close_public_within_with_http_info(id, anchor_id, opts)
+      nil
+    end
+
+    # Close a team&#39;s opening to an ancestor&#39;s subtree
+    # Deletes the &#x60;public_within&#x60; row. Either side closes alone, whatever the policy or either team&#39;s liveness: a direct owner or maintainer of the team, of the anchor (temper-system or the gating team as the anchor: a system admin only), or a system admin. What readers already read is not recalled. Recorded as &#x60;team_public_within_changed&#x60;.
+    # @param id [String] The team whose owned contexts are opened (T)
+    # @param anchor_id [String] The ancestor team whose subtree reads them (A)
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(nil, Integer, Hash)>] nil, response status code and response headers
+    def close_public_within_with_http_info(id, anchor_id, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: TeamsApi.close_public_within ...'
+      end
+      # verify the required parameter 'id' is set
+      if @api_client.config.client_side_validation && id.nil?
+        fail ArgumentError, "Missing the required parameter 'id' when calling TeamsApi.close_public_within"
+      end
+      # verify the required parameter 'anchor_id' is set
+      if @api_client.config.client_side_validation && anchor_id.nil?
+        fail ArgumentError, "Missing the required parameter 'anchor_id' when calling TeamsApi.close_public_within"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/teams/{id}/public-within/{anchor_id}'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E')).sub('{anchor_id}', CGI.escape(anchor_id.to_s).gsub('.', '%2E'))
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body]
+
+      # return_type
+      return_type = opts[:debug_return_type]
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"TeamsApi.close_public_within",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:DELETE, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: TeamsApi#close_public_within\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # Create a team
     # @param team_create_request [TeamCreateRequest] 
     # @param [Hash] opts the optional parameters
@@ -544,6 +620,70 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # List the openings that confer on you
+    # The `public_within` rows anchored on a team you are under that confer right now: each names the team whose owned contexts you read through it, and the anchor. An inert row is absent.
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<PublicWithinRowRef>]
+    def list_public_within(opts = {})
+      data, _status_code, _headers = list_public_within_with_http_info(opts)
+      data
+    end
+
+    # List the openings that confer on you
+    # The &#x60;public_within&#x60; rows anchored on a team you are under that confer right now: each names the team whose owned contexts you read through it, and the anchor. An inert row is absent.
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(Array<PublicWithinRowRef>, Integer, Hash)>] Array<PublicWithinRowRef> data, response status code and response headers
+    def list_public_within_with_http_info(opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: TeamsApi.list_public_within ...'
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/teams/public-within'
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body]
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'Array<PublicWithinRowRef>'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"TeamsApi.list_public_within",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:GET, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: TeamsApi#list_public_within\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # List teams you belong to
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -602,6 +742,82 @@ module Temper::Generated
       data, status_code, headers = @api_client.call_api(:GET, local_var_path, new_options)
       if @api_client.config.debugging
         @api_client.config.logger.debug "API called: TeamsApi#list_teams\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
+    # Open a team's contexts to an ancestor's subtree
+    # `public_within(T, A)`: the people under the anchor (on its roster or on a live team beneath it, at any role) read every context the team owns, and reference it from homes they author. Never a write into the team, and never a machine or a connection agent. Not inherited by the team's children. Both sides consent: the caller is a direct owner or maintainer of the team (a system admin is held to this too), and of the anchor, or is a system admin. An anchor that is temper-system or the gating team, or whose subtree holds an auto-join or the gating team, is a system admin's act (`instance_wide`). The audience grows with the anchor's subtree: every manager of a team under the anchor, identity-provider group sync and an admin can widen it. Either side closes alone. Recorded as `team_public_within_changed`.
+    # @param id [String] The team whose owned contexts are opened (T)
+    # @param anchor_id [String] The ancestor team whose subtree reads them (A)
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [PublicWithinOutcome]
+    def open_public_within(id, anchor_id, opts = {})
+      data, _status_code, _headers = open_public_within_with_http_info(id, anchor_id, opts)
+      data
+    end
+
+    # Open a team&#39;s contexts to an ancestor&#39;s subtree
+    # &#x60;public_within(T, A)&#x60;: the people under the anchor (on its roster or on a live team beneath it, at any role) read every context the team owns, and reference it from homes they author. Never a write into the team, and never a machine or a connection agent. Not inherited by the team&#39;s children. Both sides consent: the caller is a direct owner or maintainer of the team (a system admin is held to this too), and of the anchor, or is a system admin. An anchor that is temper-system or the gating team, or whose subtree holds an auto-join or the gating team, is a system admin&#39;s act (&#x60;instance_wide&#x60;). The audience grows with the anchor&#39;s subtree: every manager of a team under the anchor, identity-provider group sync and an admin can widen it. Either side closes alone. Recorded as &#x60;team_public_within_changed&#x60;.
+    # @param id [String] The team whose owned contexts are opened (T)
+    # @param anchor_id [String] The ancestor team whose subtree reads them (A)
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(PublicWithinOutcome, Integer, Hash)>] PublicWithinOutcome data, response status code and response headers
+    def open_public_within_with_http_info(id, anchor_id, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: TeamsApi.open_public_within ...'
+      end
+      # verify the required parameter 'id' is set
+      if @api_client.config.client_side_validation && id.nil?
+        fail ArgumentError, "Missing the required parameter 'id' when calling TeamsApi.open_public_within"
+      end
+      # verify the required parameter 'anchor_id' is set
+      if @api_client.config.client_side_validation && anchor_id.nil?
+        fail ArgumentError, "Missing the required parameter 'anchor_id' when calling TeamsApi.open_public_within"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/teams/{id}/public-within/{anchor_id}'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E')).sub('{anchor_id}', CGI.escape(anchor_id.to_s).gsub('.', '%2E'))
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body]
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'PublicWithinOutcome'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"TeamsApi.open_public_within",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:PUT, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: TeamsApi#open_public_within\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
       end
       return data, status_code, headers
     end
@@ -989,6 +1205,87 @@ module Temper::Generated
       data, status_code, headers = @api_client.call_api(:POST, local_var_path, new_options)
       if @api_client.config.debugging
         @api_client.config.logger.debug "API called: TeamsApi#restore_team\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
+    # Forbid or allow public_within over a team's subtree
+    # `forbidden: true` makes every `public_within` row over this team, and over every team beneath it by any path, live or dead, confer nothing; a lower team's own setting never lifts it. On temper-system it is the instance-wide off. Rows are kept and revive when the forbid is cleared. The team's direct owner, or a system admin; temper-system and the gating team: a system admin only. Recorded as `public_within_policy_changed`, with one `public_within_effect_changed` per row whose effect it flips.
+    # @param id [String] Team ID
+    # @param public_within_policy_request [PublicWithinPolicyRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [PublicWithinPolicyOutcome]
+    def set_public_within_policy(id, public_within_policy_request, opts = {})
+      data, _status_code, _headers = set_public_within_policy_with_http_info(id, public_within_policy_request, opts)
+      data
+    end
+
+    # Forbid or allow public_within over a team&#39;s subtree
+    # &#x60;forbidden: true&#x60; makes every &#x60;public_within&#x60; row over this team, and over every team beneath it by any path, live or dead, confer nothing; a lower team&#39;s own setting never lifts it. On temper-system it is the instance-wide off. Rows are kept and revive when the forbid is cleared. The team&#39;s direct owner, or a system admin; temper-system and the gating team: a system admin only. Recorded as &#x60;public_within_policy_changed&#x60;, with one &#x60;public_within_effect_changed&#x60; per row whose effect it flips.
+    # @param id [String] Team ID
+    # @param public_within_policy_request [PublicWithinPolicyRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(PublicWithinPolicyOutcome, Integer, Hash)>] PublicWithinPolicyOutcome data, response status code and response headers
+    def set_public_within_policy_with_http_info(id, public_within_policy_request, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: TeamsApi.set_public_within_policy ...'
+      end
+      # verify the required parameter 'id' is set
+      if @api_client.config.client_side_validation && id.nil?
+        fail ArgumentError, "Missing the required parameter 'id' when calling TeamsApi.set_public_within_policy"
+      end
+      # verify the required parameter 'public_within_policy_request' is set
+      if @api_client.config.client_side_validation && public_within_policy_request.nil?
+        fail ArgumentError, "Missing the required parameter 'public_within_policy_request' when calling TeamsApi.set_public_within_policy"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/teams/{id}/public-within-policy'.sub('{id}', CGI.escape(id.to_s).gsub('.', '%2E'))
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      # HTTP header 'Content-Type'
+      content_type = @api_client.select_header_content_type(['application/json'])
+      if !content_type.nil?
+          header_params['Content-Type'] = content_type
+      end
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body] || @api_client.object_to_http_body(public_within_policy_request)
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'PublicWithinPolicyOutcome'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"TeamsApi.set_public_within_policy",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:PUT, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: TeamsApi#set_public_within_policy\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
       end
       return data, status_code, headers
     end

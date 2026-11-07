@@ -13,10 +13,11 @@ use temper_core::types::reassign::{
     BulkReassignAck, BulkReassignRequest, RemoveMemberOutcome, ResidualOwnedReach,
 };
 use temper_core::types::team::{
-    AddMemberRequest, AttachChildOutcome, ChangeRoleRequest, RenameTeamSlugOutcome,
-    RenameTeamSlugRequest, ReparentOutcome, ReparentRequest, RestoreTeamOutcome,
-    SetAutoJoinOutcome, SetAutoJoinRequest, TeamCreateRequest, TeamDetail, TeamMemberRow, TeamRow,
-    TeamUpdateRequest,
+    AddMemberRequest, AttachChildOutcome, ChangeRoleRequest, PublicWithinOutcome,
+    PublicWithinPolicyOutcome, PublicWithinPolicyRequest, PublicWithinRowRef,
+    RenameTeamSlugOutcome, RenameTeamSlugRequest, ReparentOutcome, ReparentRequest,
+    RestoreTeamOutcome, SetAutoJoinOutcome, SetAutoJoinRequest, TeamCreateRequest, TeamDetail,
+    TeamMemberRow, TeamRow, TeamUpdateRequest,
 };
 
 /// Sub-client for team lifecycle operations (create / add-member / list /
@@ -185,6 +186,62 @@ impl<'a> TeamsClient<'a> {
         let op = &ops::SET_TEAM_AUTO_JOIN;
         let path = op.path(&[&team_id])?;
         let req = self.http.request(op, &path).json(body);
+        self.http
+            .send_json(&op.method(), &path, req, token.as_deref())
+            .await
+    }
+
+    /// PUT /api/teams/{id}/public-within/{anchor_id} — open the team's owned contexts to the people
+    /// under the anchor (a manager of the team, and a manager of the anchor or a system admin).
+    pub async fn open_public_within(
+        &self,
+        team_id: Uuid,
+        anchor_id: Uuid,
+    ) -> Result<PublicWithinOutcome> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::OPEN_PUBLIC_WITHIN;
+        let path = op.path(&[&team_id, &anchor_id])?;
+        let req = self.http.request(op, &path);
+        self.http
+            .send_json(&op.method(), &path, req, token.as_deref())
+            .await
+    }
+
+    /// DELETE /api/teams/{id}/public-within/{anchor_id} — close the row (either side, or a system
+    /// admin). Returns `()` on a 204.
+    pub async fn close_public_within(&self, team_id: Uuid, anchor_id: Uuid) -> Result<()> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::CLOSE_PUBLIC_WITHIN;
+        let path = op.path(&[&team_id, &anchor_id])?;
+        let req = self.http.request(op, &path);
+        self.http
+            .send(&op.method(), &path, req, token.as_deref())
+            .await?;
+        Ok(())
+    }
+
+    /// PUT /api/teams/{id}/public-within-policy — set or clear the team's forbid (its owner or a
+    /// system admin; on temper-system, the instance-wide off, a system admin only).
+    pub async fn set_public_within_policy(
+        &self,
+        team_id: Uuid,
+        body: &PublicWithinPolicyRequest,
+    ) -> Result<PublicWithinPolicyOutcome> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::SET_PUBLIC_WITHIN_POLICY;
+        let path = op.path(&[&team_id])?;
+        let req = self.http.request(op, &path).json(body);
+        self.http
+            .send_json(&op.method(), &path, req, token.as_deref())
+            .await
+    }
+
+    /// GET /api/teams/public-within — the rows that confer on the caller right now.
+    pub async fn list_public_within(&self) -> Result<Vec<PublicWithinRowRef>> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::LIST_PUBLIC_WITHIN;
+        let path = op.path(&[])?;
+        let req = self.http.request(op, &path);
         self.http
             .send_json(&op.method(), &path, req, token.as_deref())
             .await

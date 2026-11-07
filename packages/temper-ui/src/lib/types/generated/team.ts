@@ -21,6 +21,84 @@ export type AttachOutcome = "linked" | "exists";
 export type ChangeRoleRequest = { role: TeamRole, };
 
 /**
+ * How many teams and people a `public_within` row reads to: the live teams in the anchor's
+ * subtree, and the distinct people on them. Machines and connection agents never read through a
+ * row, so they are not counted. A count, never a list.
+ */
+export type PublicWithinAudience = { teams: number, principals: number, };
+
+/**
+ * One team opened to this team's subtree, on the anchor's [`TeamDetail`].
+ */
+export type PublicWithinInRef = { team: TeamRef, 
+/**
+ * Whether the row confers right now. Only a boolean, as on [`PublicWithinRef`].
+ */
+effective: boolean, };
+
+/**
+ * What `PUT /api/teams/{id}/public-within/{anchor_id}` did.
+ */
+export type PublicWithinOpenKind = "opened" | "exists";
+
+/**
+ * Response body for `PUT /api/teams/{id}/public-within/{anchor_id}`. The team's owned contexts are
+ * readable by the people under the anchor while the row is effective. `audience` is who that is
+ * now; it grows with the anchor's subtree, which every manager of a team under the anchor can
+ * change, as can an identity provider's group sync and an admin.
+ */
+export type PublicWithinOutcome = { outcome: PublicWithinOpenKind, audience: PublicWithinAudience, 
+/**
+ * The row survives a pool team (the root, the gating team or an auto-join team) under the
+ * anchor: only a system admin opens such a row.
+ */
+instance_wide: boolean, };
+
+/**
+ * Response body for `PUT /api/teams/{id}/public-within-policy`: the rows the change made inert
+ * (`dormant`) or made confer again (`revived`). A row is named only to a caller who manages its team
+ * or its anchor, or is a system admin; the others are counted in `dormant_unnamed` and
+ * `revived_unnamed`.
+ */
+export type PublicWithinPolicyOutcome = { team_id: string, 
+/**
+ * The forbid now.
+ */
+forbidden: boolean, 
+/**
+ * False when the forbid already held the value: nothing was written or recorded.
+ */
+changed: boolean, dormant: Array<PublicWithinRowRef>, revived: Array<PublicWithinRowRef>, dormant_unnamed: number, revived_unnamed: number, };
+
+/**
+ * Request body for `PUT /api/teams/{id}/public-within-policy`: `true` forbids every
+ * `public_within` row over this team and every team beneath it; `false` clears this team's forbid
+ * (a forbid set higher up still holds). On the root (`temper-system`) it is the instance-wide off,
+ * and only a system admin sets it.
+ */
+export type PublicWithinPolicyRequest = { forbidden: boolean, };
+
+/**
+ * One anchor this team is opened to, on the team's own [`TeamDetail`].
+ */
+export type PublicWithinRef = { anchor: TeamRef, 
+/**
+ * Whether the row confers right now. Only a boolean: when it does not, nothing says which
+ * forbid, dead team or pool team stops it.
+ */
+effective: boolean, 
+/**
+ * Opened by a system admin over an anchor whose subtree reaches the whole instance.
+ */
+instance_wide: boolean, opened_at: string, audience: PublicWithinAudience, };
+
+/**
+ * A `public_within` row named by both of its teams: `team` (whose owned contexts are opened) and
+ * `anchor` (whose subtree reads them).
+ */
+export type PublicWithinRowRef = { team: TeamRef, anchor: TeamRef, };
+
+/**
  * Response body for `POST /api/teams/{id}/rename-slug`. Addresses change: `+from/...` refs stop
  * resolving (UUID refs are unaffected), and refs stored in content are not rewritten.
  */
@@ -116,7 +194,20 @@ children: Array<TeamChildRef>,
  * to these teams, so their names disclose nothing new; a child's manager needs them to detach
  * or move it. Deliberately not symmetrical with `children`, which stays managers-only.
  */
-parents: Array<TeamRef>, };
+parents: Array<TeamRef>, 
+/**
+ * The ancestors this team's owned contexts are opened to (`public_within` rows with this team
+ * as T), for every member of this team (any role) and for system admins: the same audience as
+ * `parents`, and not an ancestor's manager, since an anchor on another branch is not theirs to
+ * see. Empty for everyone else.
+ */
+public_within: Array<PublicWithinRef>, 
+/**
+ * The teams opened to this team's subtree (`public_within` rows with this team as the anchor),
+ * for a caller who manages this team or is a system admin (on the root or the gating team, a
+ * system admin only). Empty for everyone else.
+ */
+public_within_in: Array<PublicWithinInRef>, };
 
 /**
  * A team member enriched with the profile handle and provenance — the row

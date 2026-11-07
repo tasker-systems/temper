@@ -1,0 +1,46 @@
+title    = "public_within doors: a team's managers open its owned contexts to an ancestor's subtree, either side closes, and an owner (on temper-system, a system admin) forbids"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["http", "clients", "schema", "erasure-policy"]
+status   = "signal-only"
+body = '''
+The doors of public_within (migration 20261121000000; new routes, all refused to a machine
+principal). Until this change a row existed only if something wrote the table directly.
+
+- PUT /api/teams/{id}/public-within/{anchor_id} opens a row (PublicWithinOutcome: opened | exists,
+  the audience as counts, instance_wide). Both sides consent: a direct, live owner or maintainer of
+  the team (no admin bypass), and of the anchor or a system admin. An anchor that is the root or the
+  gating team, or whose live subtree holds an auto-join or the gating team, is an admin's open and
+  is recorded instance_wide. A forbid over the team refuses with 403 public_within_forbidden_here.
+  A team that gained an ancestor while the open waited for its locks answers a retryable 409.
+- DELETE /api/teams/{id}/public-within/{anchor_id} closes it: a manager of either side (the root or
+  gating team as the anchor: an admin only) or an admin, whatever the policy or liveness; 403 to
+  anyone else whether or not the row exists.
+- PUT /api/teams/{id}/public-within-policy { forbidden } sets or clears a team's forbid: its direct
+  owner or an admin; on the root (the instance-wide off) and the gating team an admin only; never on
+  a personal team. The answer lists the rows made dormant or revived, named only to a manager of
+  their team or anchor or an admin, and counted otherwise. Each flipped row is recorded as
+  public_within_effect_changed, emitted by the system entity and correlated with the policy record.
+- GET /api/teams/public-within lists the rows that confer on the caller.
+- GET /api/teams/{id} (TeamDetail) gains public_within (to the team's members and admins, never a
+  machine: each anchor, effective as a boolean, instance_wide, opened_at and the audience counts)
+  and public_within_in (to the anchor's managers and admins). Both default to empty.
+
+Each act and its record are one statement; authority is decided on the pool and again under the
+rows' locks. An open and a forbid over the same team serialize, so a row opened while a forbid
+commits is either refused or recorded by it. A team hard-deleted by any path records each of its
+rows as cascade_deleted before the foreign-key cascade; no door hard-deletes a team today.
+
+Erasure policy: kb_team_public_within is declared out of every estate (a personal team is never a
+row's team or anchor).
+
+GET /api/contexts (list_visible) computes the caller's context read set and resource read set once
+per call instead of once per context. Same predicates, same rows.
+
+Who observes: the managers who open a row, and the people under its anchor, who read the team's
+owned contexts while it is effective. With no row, every read set and every gate answers exactly as
+before.
+Witnesses: crates/temper-services/tests/public_within_test.rs,
+crates/temper-api/tests/public_within_http_test.rs, machine_refusal_table_test.rs,
+erasure_policy_catalog_test.rs. Release relevance: additive; signal-only.
+'''

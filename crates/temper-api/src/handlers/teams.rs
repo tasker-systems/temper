@@ -11,10 +11,11 @@ use crate::middleware::auth::{AnyPrincipal, AuthUser};
 use temper_core::types::ids::ProfileId;
 use temper_core::types::reassign::RemoveMemberOutcome;
 use temper_core::types::team::{
-    AddMemberRequest, AttachChildOutcome, ChangeRoleRequest, RenameTeamSlugOutcome,
-    RenameTeamSlugRequest, ReparentOutcome, ReparentRequest, RestoreTeamOutcome,
-    SetAutoJoinOutcome, SetAutoJoinRequest, TeamCreateRequest, TeamDetail, TeamMemberRow, TeamRow,
-    TeamUpdateRequest,
+    AddMemberRequest, AttachChildOutcome, ChangeRoleRequest, PublicWithinOutcome,
+    PublicWithinPolicyOutcome, PublicWithinPolicyRequest, PublicWithinRowRef,
+    RenameTeamSlugOutcome, RenameTeamSlugRequest, ReparentOutcome, ReparentRequest,
+    RestoreTeamOutcome, SetAutoJoinOutcome, SetAutoJoinRequest, TeamCreateRequest, TeamDetail,
+    TeamMemberRow, TeamRow, TeamUpdateRequest,
 };
 use temper_services::error::ApiResult;
 use temper_services::services::team_service;
@@ -409,6 +410,132 @@ pub async fn rename_slug(
     Json(body): Json<RenameTeamSlugRequest>,
 ) -> ApiResult<Json<RenameTeamSlugOutcome>> {
     team_service::rename_slug(&state.pool, &auth.0, team_id, &body)
+        .await
+        .map(Json)
+}
+
+/// Open a team's contexts to an ancestor's subtree
+///
+/// `public_within(T, A)`: the people under the anchor (on its roster or on a live team beneath it,
+/// at any role) read every context the team owns, and reference it from homes they author. Never a
+/// write into the team, and never a machine or a connection agent. Not inherited by the team's
+/// children. Both sides consent: the caller is a direct owner or maintainer of the team (a system
+/// admin is held to this too), and of the anchor, or is a system admin. An anchor that is
+/// temper-system or the gating team, or whose subtree holds an auto-join or the gating team, is a
+/// system admin's act (`instance_wide`). The audience grows with the anchor's subtree: every manager
+/// of a team under the anchor, identity-provider group sync and an admin can widen it. Either side
+/// closes alone. Recorded as `team_public_within_changed`.
+#[utoipa::path(
+    put,
+    operation_id = "open_public_within",
+    path = "/api/teams/{id}/public-within/{anchor_id}",
+    tag = "Teams",
+    params(
+        ("id" = Uuid, Path, description = "The team whose owned contexts are opened (T)"),
+        ("anchor_id" = Uuid, Path, description = "The ancestor team whose subtree reads them (A)"),
+    ),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Opened, or already open", body = PublicWithinOutcome),
+        (status = 400, description = "The anchor is not a live team above this one; or the team is a personal team, temper-system or the gating team, or the anchor is a personal team"),
+        (status = 403, description = "Forbidden: the caller is not a direct owner or maintainer of the team, or of the anchor and not a system admin; or (`FORBIDDEN_DETAIL`) `public_within_forbidden_here`, a forbid applies over the team (temper-system's is the instance-wide off), or the anchor needs a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+    )
+)]
+pub async fn open_public_within(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((team_id, anchor_id)): Path<(Uuid, Uuid)>,
+) -> ApiResult<Json<PublicWithinOutcome>> {
+    team_service::open_public_within(&state.pool, &auth.0, team_id, anchor_id)
+        .await
+        .map(Json)
+}
+
+/// Close a team's opening to an ancestor's subtree
+///
+/// Deletes the `public_within` row. Either side closes alone, whatever the policy or either team's
+/// liveness: a direct owner or maintainer of the team, of the anchor (temper-system or the gating
+/// team as the anchor: a system admin only), or a system admin. What readers already read is not
+/// recalled. Recorded as `team_public_within_changed`.
+#[utoipa::path(
+    delete,
+    operation_id = "close_public_within",
+    path = "/api/teams/{id}/public-within/{anchor_id}",
+    tag = "Teams",
+    params(
+        ("id" = Uuid, Path, description = "The team whose owned contexts are opened (T)"),
+        ("anchor_id" = Uuid, Path, description = "The ancestor team whose subtree reads them (A)"),
+    ),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 204, description = "Closed"),
+        (status = 403, description = "Forbidden: the caller manages neither side and is not a system admin (whether or not the row exists); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 404, description = "No such row (told only to a caller on a side, or a system admin)"),
+    )
+)]
+pub async fn close_public_within(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((team_id, anchor_id)): Path<(Uuid, Uuid)>,
+) -> ApiResult<StatusCode> {
+    team_service::close_public_within(&state.pool, &auth.0, team_id, anchor_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Forbid or allow public_within over a team's subtree
+///
+/// `forbidden: true` makes every `public_within` row over this team, and over every team beneath it
+/// by any path, live or dead, confer nothing; a lower team's own setting never lifts it. On
+/// temper-system it is the instance-wide off. Rows are kept and revive when the forbid is cleared.
+/// The team's direct owner, or a system admin; temper-system and the gating team: a system admin
+/// only. Recorded as `public_within_policy_changed`, with one `public_within_effect_changed` per row
+/// whose effect it flips.
+#[utoipa::path(
+    put,
+    operation_id = "set_public_within_policy",
+    path = "/api/teams/{id}/public-within-policy",
+    tag = "Teams",
+    params(("id" = Uuid, Path, description = "Team ID")),
+    security(("bearer_auth" = [])),
+    request_body = PublicWithinPolicyRequest,
+    responses(
+        (status = 200, description = "Set, cleared, or already so; the rows it made inert or revived", body = PublicWithinPolicyOutcome),
+        (status = 400, description = "The team is a personal team"),
+        (status = 403, description = "Forbidden: the caller is not the team's direct owner and not a system admin (temper-system or the gating team: not a system admin); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 404, description = "The team does not exist or is soft-deleted (told only to a system admin)"),
+    )
+)]
+pub async fn set_public_within_policy(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(team_id): Path<Uuid>,
+    Json(body): Json<PublicWithinPolicyRequest>,
+) -> ApiResult<Json<PublicWithinPolicyOutcome>> {
+    team_service::set_public_within_policy(&state.pool, &auth.0, team_id, body.forbidden)
+        .await
+        .map(Json)
+}
+
+/// List the openings that confer on you
+///
+/// The `public_within` rows anchored on a team you are under that confer right now: each names the
+/// team whose owned contexts you read through it, and the anchor. An inert row is absent.
+#[utoipa::path(
+    get,
+    operation_id = "list_public_within",
+    path = "/api/teams/public-within",
+    tag = "Teams",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The rows that confer on the caller", body = Vec<PublicWithinRowRef>),
+        (status = 403, description = "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal): a machine never reads through public_within", body = temper_services::error::ErrorBody),
+    )
+)]
+pub async fn list_public_within(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> ApiResult<Json<Vec<PublicWithinRowRef>>> {
+    team_service::list_public_within(&state.pool, &auth.0)
         .await
         .map(Json)
 }

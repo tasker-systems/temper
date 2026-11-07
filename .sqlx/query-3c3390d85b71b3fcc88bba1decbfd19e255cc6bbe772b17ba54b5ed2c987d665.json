@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (SELECT 1 FROM kb_teams\n                           WHERE slug = 'temper-system' AND public_within_forbidden) AS \"f!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "f!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "3c3390d85b71b3fcc88bba1decbfd19e255cc6bbe772b17ba54b5ed2c987d665"
+}

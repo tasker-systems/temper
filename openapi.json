@@ -14912,6 +14912,62 @@
         "x-apidog-folder": "Reference/API Reference/Teams"
       }
     },
+    "/api/teams/public-within": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Teams"
+        ],
+        "summary": "List the openings that confer on you",
+        "description": "The `public_within` rows anchored on a team you are under that confer right now: each names the\nteam whose owned contexts you read through it, and the anchor. An inert row is absent.",
+        "operationId": "list_public_within",
+        "responses": {
+          "200": {
+            "description": "The rows that confer on the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PublicWithinRowRef"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal): a machine never reads through public_within",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Teams"
+      }
+    },
     "/api/teams/{id}": {
       "parameters": [
         {
@@ -15746,6 +15802,219 @@
           },
           "409": {
             "description": "Cannot demote the last owner (grant `owner` to another member first), or a SAML-provisioned row; or the membership changed since it was read (retry)"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Teams"
+      }
+    },
+    "/api/teams/{id}/public-within-policy": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "put": {
+        "tags": [
+          "Teams"
+        ],
+        "summary": "Forbid or allow public_within over a team's subtree",
+        "description": "`forbidden: true` makes every `public_within` row over this team, and over every team beneath it\nby any path, live or dead, confer nothing; a lower team's own setting never lifts it. On\ntemper-system it is the instance-wide off. Rows are kept and revive when the forbid is cleared.\nThe team's direct owner, or a system admin; temper-system and the gating team: a system admin\nonly. Recorded as `public_within_policy_changed`, with one `public_within_effect_changed` per row\nwhose effect it flips.",
+        "operationId": "set_public_within_policy",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Team ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicWithinPolicyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Set, cleared, or already so; the rows it made inert or revived",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicWithinPolicyOutcome"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The team is a personal team"
+          },
+          "403": {
+            "description": "Forbidden: the caller is not the team's direct owner and not a system admin (temper-system or the gating team: not a system admin); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The team does not exist or is soft-deleted (told only to a system admin)"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Teams"
+      }
+    },
+    "/api/teams/{id}/public-within/{anchor_id}": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "put": {
+        "tags": [
+          "Teams"
+        ],
+        "summary": "Open a team's contexts to an ancestor's subtree",
+        "description": "`public_within(T, A)`: the people under the anchor (on its roster or on a live team beneath it,\nat any role) read every context the team owns, and reference it from homes they author. Never a\nwrite into the team, and never a machine or a connection agent. Not inherited by the team's\nchildren. Both sides consent: the caller is a direct owner or maintainer of the team (a system\nadmin is held to this too), and of the anchor, or is a system admin. An anchor that is\ntemper-system or the gating team, or whose subtree holds an auto-join or the gating team, is a\nsystem admin's act (`instance_wide`). The audience grows with the anchor's subtree: every manager\nof a team under the anchor, identity-provider group sync and an admin can widen it. Either side\ncloses alone. Recorded as `team_public_within_changed`.",
+        "operationId": "open_public_within",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The team whose owned contexts are opened (T)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "anchor_id",
+            "in": "path",
+            "description": "The ancestor team whose subtree reads them (A)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Opened, or already open",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicWithinOutcome"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The anchor is not a live team above this one; or the team is a personal team, temper-system or the gating team, or the anchor is a personal team"
+          },
+          "403": {
+            "description": "Forbidden: the caller is not a direct owner or maintainer of the team, or of the anchor and not a system admin; or (`FORBIDDEN_DETAIL`) `public_within_forbidden_here`, a forbid applies over the team (temper-system's is the instance-wide off), or the anchor needs a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Teams"
+      },
+      "delete": {
+        "tags": [
+          "Teams"
+        ],
+        "summary": "Close a team's opening to an ancestor's subtree",
+        "description": "Deletes the `public_within` row. Either side closes alone, whatever the policy or either team's\nliveness: a direct owner or maintainer of the team, of the anchor (temper-system or the gating\nteam as the anchor: a system admin only), or a system admin. What readers already read is not\nrecalled. Recorded as `team_public_within_changed`.",
+        "operationId": "close_public_within",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The team whose owned contexts are opened (T)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "anchor_id",
+            "in": "path",
+            "description": "The ancestor team whose subtree reads them (A)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Closed"
+          },
+          "403": {
+            "description": "Forbidden: the caller manages neither side and is not a system admin (whether or not the row exists); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such row (told only to a caller on a side, or a system admin)"
           }
         },
         "security": [
@@ -24241,6 +24510,178 @@
           }
         }
       },
+      "PublicWithinAudience": {
+        "type": "object",
+        "description": "How many teams and people a `public_within` row reads to: the live teams in the anchor's\nsubtree, and the distinct people on them. Machines and connection agents never read through a\nrow, so they are not counted. A count, never a list.",
+        "required": [
+          "teams",
+          "principals"
+        ],
+        "properties": {
+          "principals": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "teams": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "PublicWithinInRef": {
+        "type": "object",
+        "description": "One team opened to this team's subtree, on the anchor's [`TeamDetail`].",
+        "required": [
+          "team",
+          "effective"
+        ],
+        "properties": {
+          "effective": {
+            "type": "boolean",
+            "description": "Whether the row confers right now. Only a boolean, as on [`PublicWithinRef`]."
+          },
+          "team": {
+            "$ref": "#/components/schemas/TeamRef"
+          }
+        }
+      },
+      "PublicWithinOpenKind": {
+        "type": "string",
+        "description": "What `PUT /api/teams/{id}/public-within/{anchor_id}` did.",
+        "enum": [
+          "opened",
+          "exists"
+        ]
+      },
+      "PublicWithinOutcome": {
+        "type": "object",
+        "description": "Response body for `PUT /api/teams/{id}/public-within/{anchor_id}`. The team's owned contexts are\nreadable by the people under the anchor while the row is effective. `audience` is who that is\nnow; it grows with the anchor's subtree, which every manager of a team under the anchor can\nchange, as can an identity provider's group sync and an admin.",
+        "required": [
+          "outcome",
+          "audience",
+          "instance_wide"
+        ],
+        "properties": {
+          "audience": {
+            "$ref": "#/components/schemas/PublicWithinAudience"
+          },
+          "instance_wide": {
+            "type": "boolean",
+            "description": "The row survives a pool team (the root, the gating team or an auto-join team) under the\nanchor: only a system admin opens such a row."
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/PublicWithinOpenKind"
+          }
+        }
+      },
+      "PublicWithinPolicyOutcome": {
+        "type": "object",
+        "description": "Response body for `PUT /api/teams/{id}/public-within-policy`: the rows the change made inert\n(`dormant`) or made confer again (`revived`). A row is named only to a caller who manages its team\nor its anchor, or is a system admin; the others are counted in `dormant_unnamed` and\n`revived_unnamed`.",
+        "required": [
+          "team_id",
+          "forbidden",
+          "changed",
+          "dormant",
+          "revived",
+          "dormant_unnamed",
+          "revived_unnamed"
+        ],
+        "properties": {
+          "changed": {
+            "type": "boolean",
+            "description": "False when the forbid already held the value: nothing was written or recorded."
+          },
+          "dormant": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicWithinRowRef"
+            }
+          },
+          "dormant_unnamed": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "forbidden": {
+            "type": "boolean",
+            "description": "The forbid now."
+          },
+          "revived": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicWithinRowRef"
+            }
+          },
+          "revived_unnamed": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "team_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "PublicWithinPolicyRequest": {
+        "type": "object",
+        "description": "Request body for `PUT /api/teams/{id}/public-within-policy`: `true` forbids every\n`public_within` row over this team and every team beneath it; `false` clears this team's forbid\n(a forbid set higher up still holds). On the root (`temper-system`) it is the instance-wide off,\nand only a system admin sets it.",
+        "required": [
+          "forbidden"
+        ],
+        "properties": {
+          "forbidden": {
+            "type": "boolean"
+          }
+        }
+      },
+      "PublicWithinRef": {
+        "type": "object",
+        "description": "One anchor this team is opened to, on the team's own [`TeamDetail`].",
+        "required": [
+          "anchor",
+          "effective",
+          "instance_wide",
+          "opened_at",
+          "audience"
+        ],
+        "properties": {
+          "anchor": {
+            "$ref": "#/components/schemas/TeamRef"
+          },
+          "audience": {
+            "$ref": "#/components/schemas/PublicWithinAudience"
+          },
+          "effective": {
+            "type": "boolean",
+            "description": "Whether the row confers right now. Only a boolean: when it does not, nothing says which\nforbid, dead team or pool team stops it."
+          },
+          "instance_wide": {
+            "type": "boolean",
+            "description": "Opened by a system admin over an anchor whose subtree reaches the whole instance."
+          },
+          "opened_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "PublicWithinRowRef": {
+        "type": "object",
+        "description": "A `public_within` row named by both of its teams: `team` (whose owned contexts are opened) and\n`anchor` (whose subtree reads them).",
+        "required": [
+          "team",
+          "anchor"
+        ],
+        "properties": {
+          "anchor": {
+            "$ref": "#/components/schemas/TeamRef"
+          },
+          "team": {
+            "$ref": "#/components/schemas/TeamRef"
+          }
+        }
+      },
       "QuantityScale": {
         "oneOf": [
           {
@@ -29112,6 +29553,20 @@
               "$ref": "#/components/schemas/TeamRef"
             },
             "description": "The team's live parent teams, for every member of this team (any role) and for system\nadmins (team DAG doors D9, ruling R2 as amended). A member already reads everything attached\nto these teams, so their names disclose nothing new; a child's manager needs them to detach\nor move it. Deliberately not symmetrical with `children`, which stays managers-only."
+          },
+          "public_within": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicWithinRef"
+            },
+            "description": "The ancestors this team's owned contexts are opened to (`public_within` rows with this team\nas T), for every member of this team (any role) and for system admins: the same audience as\n`parents`, and not an ancestor's manager, since an anchor on another branch is not theirs to\nsee. Empty for everyone else."
+          },
+          "public_within_in": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicWithinInRef"
+            },
+            "description": "The teams opened to this team's subtree (`public_within` rows with this team as the anchor),\nfor a caller who manages this team or is a system admin (on the root or the gating team, a\nsystem admin only). Empty for everyone else."
           },
           "slug": {
             "type": "string"
