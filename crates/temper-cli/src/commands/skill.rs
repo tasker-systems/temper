@@ -713,7 +713,7 @@ pub struct InstallReport {
     /// revisions the old installer shipped — user-modified files are never touched).
     pub removed_legacy: Vec<String>,
     /// Files earlier releases shipped and this one no longer does, removed when their bytes match
-    /// a revision the installer shipped (see [`RETIRED_SKILL_FILES`]).
+    /// a revision the installer shipped (see `RETIRED_SKILL_FILES`).
     pub removed_retired: Vec<String>,
     /// Admin files removed because this install ran WITHOUT `--include-admin` over a tree that
     /// had them. Byte-matched against what the installer ships — a file the user has edited is
@@ -791,13 +791,15 @@ pub fn install(
         removed_admin: Vec::new(),
     };
 
-    // Ensure skill_dir and subdirectories exist
-    for sub in &["guidance"] {
-        let dir = skill_dir.join(sub);
-        std::fs::create_dir_all(&dir).map_err(|e| {
-            TemperError::Config(format!("cannot create directory {}: {}", dir.display(), e))
-        })?;
-    }
+    // Ensure skill_dir and its guidance/ subdirectory exist
+    let guidance = skill_dir.join("guidance");
+    std::fs::create_dir_all(&guidance).map_err(|e| {
+        TemperError::Config(format!(
+            "cannot create directory {}: {}",
+            guidance.display(),
+            e
+        ))
+    })?;
 
     // Write all files except command-wrapper.md into skill_dir
     for (rel_path, content) in &files {
