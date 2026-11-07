@@ -14,11 +14,11 @@ existing nodes and edges rather than inventing one.
   home, and `resource create` takes `--context` or `--cogmap`, never both, so a context resource
   cannot be re-homed into a map. A node distills one or more sources and points back at them.
 - **The telos-charter decides what is worth a node.** It is the map's purpose: a statement, open
-  questions and framing. Read it before authoring (the `cogmap_read_charter` MCP tool, or
+  questions and framing. Read it before authoring (`cogmap_read` with `view: "charter"` over MCP, or
   `temper cogmap analytics <MAP>` for telos, staleness and regulation). Distill what is salient
   under this charter, not everything true about the source; another telos yields another node.
 - **The authored set is four acts:** `resource create --cogmap` (`create_resource`), `edge assert`
-  (`assert_relationship`), `resource facet` (`facet_set`) and `edge fold` (`fold_relationship`).
+  (MCP `relationship`, `action: "assert"`), `resource facet` (`facet_set`) and `edge fold` (MCP `relationship`, `action: "fold"`).
 - **Every authored act runs under an invocation envelope.** Open one per pass. Every act carries
   `--invocation`, `--confidence` and `--reasoning` (and `--model`). An act missing them is real but
   orphaned: it never appears under `invocation show`, which breaks the accountability chain.
@@ -72,7 +72,7 @@ temper search "<concept>" --cogmap <MAP>
 temper resource show <NODE_REF> --edges        # the stale node's derived_from correlation id
 
 # Open the envelope; create-style responses carry a generic `id`. Check the exit code first:
-# on failure stdout is {"error":{code,message,hint?}} and jq yields "null" for every later step.
+# on failure stdout is {"code","message","hint"?} and jq yields "null" for every later step.
 inv=$(temper invocation open --cogmap <MAP> --trigger-kind manual --format json | jq -r .id)
 
 # Supersede, only if the source materially changed.

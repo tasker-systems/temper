@@ -141,7 +141,8 @@ complete, from a default list.** Every response carries `total`, `returned` and 
 | `--limit <n>`, `--page <n>`, `--offset <n>` | A bigger page, or walk the set (`--page` is 1-indexed in units of `--limit`) |
 | `--sort <field>[:asc\|desc]` | `updated` (default, desc), `created`, `title`, `stage`, `seq`, `context`, `doctype` |
 | `--title-contains <s>` | Narrow instead of paging blind (topical search is `temper search`) |
-| `--stage`, `--goal` (task) · `--status` (goal) · `--tag` (repeat narrows) | Filters; a type-specific one on the wrong `--type` is an error |
+| `--stage` (task) · `--status` (goal) | Type-specific filters; either on the wrong `--type` is an error |
+| `--goal <ref>` · `--tag` (repeat narrows) | Any type: `--goal` finds what advances a goal (tasks, decisions, evidence) |
 
 Omit `--type` to list across every doc type, e.g. a whole tag axis: `temper resource list --tag ci --all`.
 
@@ -187,13 +188,14 @@ finished resource — that is still a whole-body `update`.
 ## Error Handling (JSON mode)
 
 Check the exit code before reading output. On failure stdout carries
-`{ "error": { "code", "message", "hint" } }`; branch on `code`, never on `message`. A success may
+`{ "code", "message", "hint", "details" }` (`hint` and `details` optional); branch on `code`, never on
+`message`. A success may
 carry an advisory `diagnostics` array, which is not a failure.
 
 ## Skill-Only Commands
 
 Handled by the skill router, not the CLI: `task start <slug>`, `task resume <slug>`, `task create`,
-`session start`, `session wrap`. See `SKILL.md`.
+`session start`, `session wrap`, `init`. See `SKILL.md`.
 "#;
 
 // ── Generated frontmatter reference ──────────────────────────────────────────
@@ -202,12 +204,9 @@ Handled by the skill router, not the CLI: `task start <slug>`, `task resume <slu
 /// is meaningless without them — it explains what the derivation *is*.
 static FRONTMATTER_PREAMBLE: &str = r#"# Frontmatter Reference
 
-> **Generated from `temper_workflow`'s embedded JSON Schemas — the same ones the server validates
-> against.** Do not hand-edit: run the emit command and commit the result. It exists in generated
-> form for one reason. Its hand-written predecessor described a set of primitives temper had
-> already retired, and nothing could notice, because a document describing types is not connected
-> to the types. Derived from the validator's own source, this one cannot name a doc type that does
-> not exist, nor omit one that does.
+> Read before any write: the recognized doc types and the two metadata tiers. **Generated from
+> `temper_workflow`'s embedded JSON Schemas — the ones the server validates against** — so it cannot
+> name a doc type that does not exist, nor omit one that does. Do not hand-edit.
 
 A resource's frontmatter has **two tiers**, and the distinction is enforced on write:
 
@@ -496,6 +495,10 @@ pub fn generate_reference(include_admin: bool) -> String {
 
     let mut out = String::new();
     out.push_str("# CLI Reference\n\n");
+    out.push_str("Read when you need a command's syntax, the listing flags, where a write's body comes from, or\n");
+    out.push_str(
+        "block-grain ingest. `temper <command> --help` is the authority for every flag.\n\n",
+    );
     out.push_str("## Invocation\n\n");
     out.push_str("Run `temper` from PATH (`which temper`). If it is missing, say so and stop: never fall back to\n");
     out.push_str(
@@ -716,7 +719,7 @@ pub struct InstallReport {
     /// a revision the installer shipped (see `RETIRED_SKILL_FILES`).
     pub removed_retired: Vec<String>,
     /// Admin files removed because this install ran WITHOUT `--include-admin` over a tree that
-    /// had them. Byte-matched against what the installer ships — a file the user has edited is
+    /// had them. Matched against every revision the installer has shipped — a file the user has edited is
     /// theirs, not ours to delete.
     pub removed_admin: Vec<String>,
 }
@@ -841,7 +844,7 @@ pub fn install(
     report.removed_legacy = remove_legacy_guidance_duplicates(skill_dir)?;
     report.removed_retired = remove_retired_files(skill_dir, &RETIRED_SKILL_FILES)?;
     if !include_admin {
-        report.removed_admin = remove_admin_files(skill_dir)?;
+        report.removed_admin = remove_admin_files(skill_dir, &ADMIN_SHIPPED_REVISIONS)?;
     }
 
     Ok(report)
@@ -851,7 +854,7 @@ pub fn install(
 /// the same rule the legacy-guidance cleanup follows and for the same reason: a file whose bytes
 /// match what the installer ships is ours to retract (the tree must return to a no-admin state),
 /// while a file the user has since edited is theirs and stays.
-fn remove_admin_files(skill_dir: &Path) -> Result<Vec<String>> {
+fn remove_admin_files(skill_dir: &Path, shipped: &[&str]) -> Result<Vec<String>> {
     let mut removed = Vec::new();
     for (rel_path, content) in admin_skill_files() {
         let path = skill_dir.join(rel_path);
@@ -860,8 +863,7 @@ fn remove_admin_files(skill_dir: &Path) -> Result<Vec<String>> {
             // Absent is the expected state; unreadable is not ours to judge by hash.
             Err(_) => continue,
         };
-        let shipped_earlier =
-            ADMIN_SHIPPED_REVISIONS.contains(&hex::encode(Sha256::digest(&bytes)).as_str());
+        let shipped_earlier = shipped.contains(&hex::encode(Sha256::digest(&bytes)).as_str());
         if bytes == content.as_bytes() || shipped_earlier {
             std::fs::remove_file(&path).map_err(|e| {
                 TemperError::Config(format!("cannot remove {}: {}", path.display(), e))
@@ -872,9 +874,12 @@ fn remove_admin_files(skill_dir: &Path) -> Result<Vec<String>> {
     Ok(removed)
 }
 
-/// SHA-256 of every revision of `admin.md` that reached `main`, so an install made by an earlier
-/// release is recognized as ours to retract, not only one matching the current bytes.
-const ADMIN_SHIPPED_REVISIONS: [&str; 9] = [
+/// SHA-256 of every revision of `admin.md` that has shipped, the current one included, so an install
+/// made by an earlier release is recognized as ours to retract. Editing `admin.md` fails
+/// `the_current_admin_revision_is_in_its_table` until its new hash is added here. Recompute a
+/// path's history with `git log --follow --name-only` and `git show <commit>:<path> | shasum -a 256`.
+const ADMIN_SHIPPED_REVISIONS: [&str; 10] = [
+    "08954f96db388ac317a13874ba5bb83cddfc51c7fbae3cef5cb3b19b16772eaf",
     "1f39616f4d83f59be3c9d069a297d1b4d2ea5111b681964e190e258c84e91535",
     "2db09a7648f824d0483087bc6886816b4f1d92ade99680d157bd60b655e9d309",
     "347aa2c00d557547b1fcdafb539c3908e1a27f3f34dc6dd34bf85f3b22f6d6d8",
@@ -2240,10 +2245,13 @@ mod tests {
 
         let mcp = generate_agent_skill_files().unwrap();
         let mcp_skill_md = mcp.get("SKILL.md").expect("SKILL.md").len();
+        // 5,120 → 6,144, deliberately: an old-vs-new Jev comparison showed the slimmed router had
+        // lost the stage keys, purpose-first, `include_content` and the definitions of altitude and
+        // declared hole, and restoring them took it to ~5.2KB.
         assert!(
-            mcp_skill_md <= 5_120,
-            "the MCP SKILL.md is {mcp_skill_md} bytes; the budget is 5,120 (~4.0KB at the \
-             2026-11 slimming). Grow it deliberately, with a reason, never by accretion."
+            mcp_skill_md <= 6_144,
+            "the MCP SKILL.md is {mcp_skill_md} bytes; the budget is 6,144. Grow it deliberately, \
+             with a reason, never by accretion."
         );
     }
 
@@ -2621,6 +2629,80 @@ mod tests {
         assert!(
             dir.path().join("subagent-guidance.md").exists(),
             "an edited retired file was deleted"
+        );
+    }
+
+    /// The table carries the current `admin.md`, so the next edit cannot reopen the stale-copy hole:
+    /// this fails until the edited file's hash is added to `ADMIN_SHIPPED_REVISIONS`.
+    #[test]
+    fn the_current_admin_revision_is_in_its_table() {
+        let current = hex::encode(Sha256::digest(ADMIN_MD.as_bytes()));
+        assert!(
+            ADMIN_SHIPPED_REVISIONS.contains(&current.as_str()),
+            "admin.md changed: add {current} to ADMIN_SHIPPED_REVISIONS"
+        );
+    }
+
+    /// An `admin.md` left by an earlier release is retracted by a default install; bytes matching no
+    /// shipped revision are the user's and stay.
+    #[test]
+    fn an_earlier_admin_revision_is_retracted_and_an_edited_one_kept() {
+        use tempfile::TempDir;
+
+        let shipped_earlier = "an earlier release's admin.md\n";
+        let hash = hex::encode(Sha256::digest(shipped_earlier.as_bytes()));
+
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("admin.md"), shipped_earlier).unwrap();
+        assert_eq!(
+            remove_admin_files(dir.path(), &[hash.as_str()]).unwrap(),
+            vec!["admin.md".to_string()]
+        );
+
+        std::fs::write(dir.path().join("admin.md"), "edited by its owner\n").unwrap();
+        assert!(remove_admin_files(dir.path(), &[hash.as_str()])
+            .unwrap()
+            .is_empty());
+        assert!(dir.path().join("admin.md").exists());
+    }
+
+    /// `install` itself runs the retired-file cleanup: an empty `workflows/` left by an earlier
+    /// release is gone afterwards, while one holding a file of the user's survives with it.
+    #[test]
+    fn install_clears_an_empty_workflows_dir_but_keeps_a_users_file() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let global_config = dir.path().join("global-config.toml");
+        std::fs::write(&global_config, "[vault]\npath = \"/tmp/test-vault\"\n").unwrap();
+        let env = vec![
+            (
+                "TEMPER_GLOBAL_CONFIG".to_string(),
+                Some(global_config.to_string_lossy().into_owned()),
+            ),
+            (
+                "HOME".to_string(),
+                Some(dir.path().to_string_lossy().into_owned()),
+            ),
+        ];
+        let empty = dir.path().join("empty-tree");
+        let kept = dir.path().join("kept-tree");
+        std::fs::create_dir_all(empty.join("workflows")).unwrap();
+        std::fs::create_dir_all(kept.join("workflows")).unwrap();
+        std::fs::write(kept.join("workflows/mine.md"), "the user's own file\n").unwrap();
+
+        temp_env::with_vars(env, || {
+            install(&test_config(), &empty, SkillTarget::Agents, false).unwrap();
+            install(&test_config(), &kept, SkillTarget::Agents, false).unwrap();
+        });
+
+        assert!(
+            !empty.join("workflows").exists(),
+            "install left an empty workflows/"
+        );
+        assert!(
+            kept.join("workflows/mine.md").exists(),
+            "install deleted a user's file"
         );
     }
 

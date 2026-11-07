@@ -12,7 +12,7 @@ evidence record when you need the proof, not to learn where the goal stands.
 
 ```
 Tool: list_resources   Input: { "doc_type_name": "goal", "context_ref": "@me/<ctx>", "status": "active" }
-Tool: get_resource     Input: { "id": "<goal uuid>" }
+Tool: get_resource     Input: { "id": "<goal uuid>", "include_content": true }
 Tool: list_resources   Input: { "doc_type_name": "task", "context_ref": "@me/<ctx>", "goal": "<goal uuid>" }
 Tool: list_resources   Input: { "doc_type_name": "session", "context_ref": "@me/<ctx>" }
 ```
@@ -21,8 +21,7 @@ Tool: list_resources   Input: { "doc_type_name": "session", "context_ref": "@me/
 the goal filter alone can miss live work. Cross-check recent sessions and task titles, and link any
 unlinked goal task you find now. To walk the goal's neighborhood (tasks, decisions, child goals)
 by graph instead of by filter:
-
-The MCP traversal door is `run_query`: its `follow-from` act walks outward from seed refs, and the
+use `run_query`: its `follow-from` act walks outward from seed refs, and the
 `bound` relation keeps a walk inside a set you already found. For a one-off answer, hop by
 `get_resource` on refs you hold, and say so if the picture needs more than that.
 
@@ -39,7 +38,7 @@ goal (§5), not up front.
 
 ## 3. Advance — task over task
 
-Work the task and move its stage as it progresses. When work moves a register criterion, record the
+Work the task and move its stage as it progresses. When work moves a register clause, record the
 evidence in the goal's evidence record, then rewrite only the goal's current-state rows. The session
 note carries the account of the movement; the goal gains no dated line.
 
@@ -59,7 +58,7 @@ task under the parent authors the child, and the child links back to the parent:
 ```
 Tool: create_resource  Input: { "context_ref": "@me/<ctx>", "doc_type_name": "goal", "title": "<sub-goal title>", "content": "…" }
 Tool: relationship     Input: { "action": "assert", "source": "<child goal uuid>", "target": "<parent goal uuid>",
-                                "edge_kind": "leads_to", "label": "derived_from", "polarity": "forward",
+                                "edge_kind": "leads_to", "label": "derived_from", "polarity": "inverse",
                                 "weight": 1.0 }
 ```
 

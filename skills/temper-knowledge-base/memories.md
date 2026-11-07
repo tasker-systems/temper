@@ -6,8 +6,8 @@ one still holds.
 ## The model
 
 - **A memory is a resource of type `memory`.** Author, correct and supersede it with the ordinary
-  resource tools, in the context whose readers it is for. Tools: `create_resource` →
-  `update_resource_meta`.
+  resource tools, in the context whose readers it is for. Tools: `create_resource`, then
+  `update_resource_meta` for status and `update_resource` with `open_meta_add` for reinforcement.
 - **`open_meta.status` is `active` or `superseded`.** Read the active ones and honour them.
 - **`open_meta.verified` is the date the claim was last checked. `verified` is a judgment, not a
   timestamp:** advance it only after re-checking the claim against the system it describes; moving,

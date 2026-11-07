@@ -17,15 +17,15 @@ temper search "<topic>"
 ```
 {%- else %}
 ```
-Tool: list_resources   Input: { "doc_type_name": "goal", "context_ref": "@me/<ctx>" }
-Tool: list_resources   Input: { "doc_type_name": "task", "context_ref": "@me/<ctx>" }
+Tool: list_resources   Input: { "doc_type_name": "goal", "context_ref": "@me/<ctx>", "status": "active" }
+Tool: list_resources   Input: { "doc_type_name": "task", "context_ref": "@me/<ctx>", "stage": "in-progress" }
 Tool: list_resources   Input: { "doc_type_name": "session", "context_ref": "@me/<ctx>" }
 Tool: search           Input: { "query": "<topic>" }
 ```
 Each list returns a page: read `total` and `truncated` before calling anything absent.
 {%- endif %}
 
-Pick out your arc by title, then read that note deliberately. In a goal, note which criteria hold
+Pick out your arc by title, then read that note deliberately. In a goal, note which clauses hold
 and which are **declared uncovered** — a declared hole is information, not an omission to fix.
 
 ## During
@@ -46,16 +46,18 @@ A findings document, not a diary. Its parts, in order:
 3. **What I got wrong** — a claim made and disproved, a rationale invented for correct code, a green
    result that did not mean what it seemed. The class recurs after the instance is fixed.
 4. **What happened** and **Decisions** — brief; decisions with who made them.
-5. **Not done** — what did not run and whose it is, criteria still uncovered, verification skipped
+5. **Not done** — what did not run and whose it is, clauses still uncovered, verification skipped
    and why. Coverage is never inferred from absence.
 6. **Connections** — every resource as `[exact title](./<full-uuid>)`.
 7. **Next steps** — the handoff preamble (below), or a plain statement that the thread closed.
 
 {% if surface == "cli" -%}
 ```bash
-cat note.md | temper resource create --type session --title "<title>" --context @me/<ctx>
+cat note.md | temper resource create --type session --title "<title>" --context @me/<ctx> --task <task-slug>
 ```
-Always pipe the body: without stdin, `create` writes placeholder boilerplate.
+Always pipe the body: without stdin, `create` writes only a title heading. `--task` takes the task's
+`slug` from its list row and links the note to it, which is how a resume finds the task's latest
+note. `create` prints the new resource as JSON; its `ref` is what `--from-session` takes.
 {%- else -%}
 ```
 Tool: create_resource
@@ -96,7 +98,7 @@ There is no slash-command router here, so give the user a block to paste as thei
   `cat register.md | temper resource update <ref>`. Check the exit code first: on error `.content`
   is `null`, and piping that back is a silent wrong answer.
 {%- else %}
-  `get_resource`, edit `content`, `update_resource` with the whole register — `content` replaces the
+  `get_resource` with `"include_content": true`, edit `content`, `update_resource` with the whole register — `content` replaces the
   body, so a fragment truncates the goal.
 {%- endif %}
 - **Extracted scope** becomes a task with the reasoning that moved it; scope only mentioned in a note
@@ -107,9 +109,11 @@ There is no slash-command router here, so give the user a block to paste as thei
   `temper resource update <memory-ref> --open-meta-add '{"reinforced":["YYYY-MM-DD"]}'` —
   never `--open-meta`, which replaces the list and discards every stored date.
 {%- else %}
-  `open_meta` is a per-key set here: read the stored `reinforced` list, merge, then write it whole.
+  `update_resource` with `"open_meta_add": { "reinforced": ["YYYY-MM-DD"] }`, which unions with the
+  stored list; never `open_meta`, which replaces it.
 {%- endif %}
-- **Done work** ends with the note saved and the task's stage set to `done`.
+- **The task's stage:** `done` only when its work is finished; work that continues into another
+  session stays `in-progress`.
 
 ## The closing message
 
@@ -120,7 +124,7 @@ Every note to the user carries a status, or it does not ship:
 | **Hard follow** | Something is broken, or a gap shipped. Act on it |
 | **Accepted** | A recorded tradeoff. No action |
 | **For the record** | Context a later reader needs. No action |
-| **Nothing** | Delete it |
+| **Nothing** | Drop the item from the message |
 
 Say the all-clear when there is no hard follow — clean work may read as clean. State the work's
 standing in one line, and say what you need from the user, or that you need nothing.

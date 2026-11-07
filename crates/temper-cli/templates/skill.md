@@ -21,10 +21,13 @@ refused, so commands take `--context @me/<ctx>`.
 
 ## Always
 
-- **Copy the `ref` from any list, search or show row.** `show`/`update`/`delete` take one ref; only
-  `create`/`list` take `--type`/`--context`. Stages: `backlog`, `in-progress`, `done`, `cancelled`.
+- **Copy the `ref` from any list, search or show row.** A ref is a UUID or `<slug>-<uuid>`; both are
+  accepted, and the slug part is ignored. `show`/`update`/`delete` take one ref; only `create`/`list` take
+  `--type`/`--context`. Stages (`backlog`, `in-progress`, `done`, `cancelled`) change with
+  `temper resource update <ref> --stage <stage>`.
 - **Never abbreviate a UUID** — v7's leading bits are a timestamp, so neighbours share a prefix.
-  Refer to another resource as `[<its exact title>](./<full-uuid>)`.
+  Refer to another resource as `[<its exact title>](./<full-uuid>)`, with the title copied from
+  `list`/`show` (never recalled) and any `[`, `]`, `(` or `)` in it escaped.
 - **A list is a page.** Check `total` and `truncated` before calling anything absent; narrow
   (`--title-contains`, `--stage`) or enumerate (`--all`).
 - **Implicit stdin on `update` is a whole-body rewrite.** Never call `update` inside a
@@ -35,12 +38,15 @@ refused, so commands take `--context @me/<ctx>`.
 ## Outcome discipline — every task, goal or not
 
 - **A clause states what must be true, or must never be true, and names no mechanism still open at
-  its altitude.** The implementer builds what a clause names. A mechanism chosen in a cited decision
-  is a prior: be precise about it.
+  its altitude.** The implementer builds what a clause names. A goal's altitude is how far it sits
+  from the work; a mechanism is open there until a cited `decision`, made by the goal's owner before
+  the clause, chooses it. A chosen one is a prior: be precise about it.
 - **A witness is authored during the build, never in a preamble** — it must fail against the state
-  its clause claims to change. Until then the clause carries a declared hole, not a filed task.
-- **Coverage is never inferred from absence.** No evidence is said explicitly; a retired check
-  leaves a named remainder.
+  its clause claims to change, which nothing can before the mechanism exists. Until then the clause
+  carries a **declared hole**: the register says it is not yet witnessed, and why. A task is filed
+  when someone takes the hole up.
+- **Coverage is never inferred from absence.** A clause with no evidence says so; a retired check
+  names what it no longer covers.
 - **The discipline detects; it does not decide.** Whether to pursue something is the user's call.
 
 ## Project fundamentals
@@ -53,10 +59,10 @@ entry for this project: offer `/temper init` (see `project-setup.md`).
 
 | `/temper …` | Do |
 |---|---|
-| `session start [--context] [--purpose]` | Get the purpose first — ask before anything else if it is missing. If an in-progress task matches it, offer to resume that task. |
-| `task start <slug>` / `task resume <slug>` | Resolve the ref, set `--stage in-progress`, ask for mode and effort if absent. On resume, the latest session note's *Next Steps* is where you start. |
-| `task create` | Title and problem, mode (`plan`: the output is a decision or spec; `build`: code), effort (`small` one session, `medium` bounded, `large` multi-session), acceptance criteria; `--goal <ref>` links it. |
-| `session wrap` | Read `session-lifecycle.md`. Done work ends with a session note and `--stage done`. |
+| `session start [--context] [--purpose] [--from-session <ref>]` | With `--from-session`, read that note first: its *Next Steps* is the purpose. Otherwise get the purpose first — ask before anything else if it is missing. If an in-progress task matches it, offer to resume that task. |
+| `task start <slug>` / `task resume <slug>` | Find the task's ref (`resource list --type task --title-contains …`), set `--stage in-progress`, ask for mode and effort if absent. On resume, the task's latest session note's *Next Steps* is where you start. |
+| `task create` | Title and problem, mode, effort (`small` one session, `medium` bounded, `large` multi-session), acceptance criteria; `--goal <ref>` links it. `plan` work produces a decision, spec or findings, saved as a `research` or `decision` resource (a large plan: a goal and its first linked task); `build` work produces code. |
+| `session wrap` | Read `session-lifecycle.md`. A task is `done` only when its work is finished; work that continues stays `in-progress`. |
 
 ## Read when
 
@@ -64,7 +70,7 @@ entry for this project: offer `/temper init` (see `project-setup.md`).
 |---|---|
 | `outcome-registers.md` | Authoring or amending a goal, or deciding whether a criterion belongs on one |
 | `working-a-goal.md` | Taking up, resuming, advancing, decomposing or closing a goal |
-| `session-lifecycle.md` | Ending a session, checkpointing, or handing off to a successor |
+| `session-lifecycle.md` | Starting, checkpointing or ending a session, or handing off to a successor |
 | `implementation-grounding.md` | Writing a plan, writing code from one, briefing a subagent, or deciding what review a change owes before its PR |
 | `data-artifacts.md` | Storing structured data (JSON, measurements, query plans) a later session must get back whole |
 | `querying.md` | Asking the knowledge base a question — `search` vs `query`, compositions, reading a trace |

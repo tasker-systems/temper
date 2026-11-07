@@ -33,27 +33,33 @@ A plan is a hypothesis; the code is ground truth. That includes a plan you wrote
   both pass while the copy drifts from the incumbent.
 - Trace one level of indirection; a command often delegates.
 - Where the plan's prose and its sketch disagree, the sketch is what ships. Correct it in the brief.
+- **Implementing from a plan,** treat its citations as the only pre-grounded facts: anything it states
+  without one — a name, a behavior, an invariant — is verified on disk before use, or flagged as an
+  assumption.
 
 ## Briefing a subagent
 
 A subagent knows only its brief. Give it the goal and why, what is already ruled out, the files and
 docs to read, and an explicit, narrow scope. For a subagent that writes a plan or code from one,
 include this file's grounding rules verbatim — paraphrase is the loss they exist to prevent — and the
-project's fundamentals (via `guidance/fundamentals.md`). Treat what comes back as a claim to verify,
-not a result.
+project's own agent guidance (its `AGENTS.md` or `CLAUDE.md`; on the CLI, `guidance/fundamentals.md`
+points at it). Name any skills the user relies on for subagents (ask once, when the first dispatch is
+imminent). Treat what comes back as a claim to verify, not a result.
 
 ## Review gates
 
 CI is a safeguard, not a review: a review is a judgment by a reader who did not write the diff.
 
 - **RG-1 — Review is risk-gated.** A code review pass is owed for any change touching auth or authz,
-  a migration, a wire contract (`openapi.json`, an SDK, a ts-rs tree) or the ingest/embed pipeline,
-  at any size; for `build/medium` work (one proportionate pass); and for `build/large` (an intense
-  pass, or several when the work spans surfaces). Not owed for `build/small`, docs-only or test-only.
+  a migration, a wire contract or generated client, or a data pipeline the project names as risky,
+  at any size, `build/small` included; for `build/medium` work (one proportionate pass); and for
+  `build/large` (an intense pass, or several when the work spans surfaces). Otherwise not owed for
+  `build/small`, docs-only or test-only changes.
 - **RG-2 — Security review is its own pass,** always for auth changes and whenever access might move
   (a widened gate, a new door, a new caller of a gate). Its lens: disclosure through returned values,
   gate completeness against the canonical visibility predicate, what a refusal discloses, tenant
-  isolation, credentials, injection.
+  isolation, credentials, injection. **Widening one gate across a family of similar endpoints is unsafe
+  when one member confers more than it reads** — check what each confers before treating them alike.
 - **RG-3 — Reviewers are independent,** each in its own working tree; the author never reviews its own
   diff. A reviewer escalates, never softens.
 - **RG-4 — A review returns coverage, not just verdicts:** findings with locations, and what was

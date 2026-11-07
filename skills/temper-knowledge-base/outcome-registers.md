@@ -24,7 +24,11 @@ and how reversible acting on it is. Under-armoring a consequential goal is the w
    never indices like `C3`: no downstream reader has the goal open in front of them.
 9. **The negative face** — what must **never** become true, whatever act was attempted: a standing
    boundary, not a refusal or a Then: *"read-only members never create resources in that context."*
-10. **Closure**, 11. **Stated silence**, 12. **Current witnessed state** — each below.
+10. **Closure** — which actor × act × state cells were examined (below).
+11. **Stated silence** — what the goal deliberately does not specify, and why. *"We are
+    intentionally not specifying X"* is itself a clause: it records shared incompleteness instead of
+    leaving a reader to infer coverage from absence.
+12. **Current witnessed state** — the table under *Tasks, evidence and current state*.
 
 Put clauses only where drift is catastrophic. *"We are intentionally not specifying X"* is itself a
 clause; a section with nothing real to say says so briefly, since padding reads as coverage.
@@ -33,6 +37,12 @@ clause; a section with nothing real to say says so briefly, since padding reads 
 
 - **A clause** states what must be true or must never be true, **names no mechanism still open at
   its altitude**, and is authored before the work it governs. Implementers build what it names.
+  **Altitude** is how far the goal sits from the work: at a parent goal the mechanism is usually
+  open; it closes only when a cited decision chooses it. A clause that dodges a mechanism everyone
+  has already chosen says less, not more — that is a loss of rigor passing as compliance.
+  *Test it on the goal "a member can take their resources with them":* "as CSV" names a format no
+  decision has chosen, so it is open — the clause says "every resource the member owns is in the
+  export". Once a cited decision picks CSV, a child goal's clause may say "the export is valid CSV".
 - **A witness** is how we know, authored **during the build, as a separately authorized act**. It
   must **fail against the state its clause claims to change**; before the mechanism exists anything
   "fails", so a preamble witness discriminates nothing. Modes: *executable* (shown to fail),
@@ -48,7 +58,8 @@ clause; a section with nothing real to say says so briefly, since padding reads 
   a step, "staging matches the committed definition" a state.
 - **Two floors.** Goal → sub-goal is clause decomposition by **the meaning test** (split a clause
   when its halves can be violated independently), before the work it governs; for enabling work, at
-  uptake. Sub-goal → task is witness decomposition, in the work, by **the demonstrability floor**.
+  uptake. Sub-goal → task is witness decomposition, in the work, by **the demonstrability floor**:
+  split until each piece can be shown, on its own, to hold or fail.
 
 ## Closure
 
@@ -87,7 +98,7 @@ record, then only the current-state rows and exercise status change; the closing
 **hard follow** / **accepted** / **for the record** / **nothing**).
 
 **Before a register lands, ask:** does a clause name a mechanism still open, or one no prior
-decision chose (a flag, function, table or field in a clause body)? Does it hold witnesses (`W1`)
+decision chose (a flag, function, table or field in a clause body)? Does it hold witnesses
 at all? Is every EXTEND/AMEND claim cited (`implementation-grounding.md`)? Is every uncovered clause
 declared so? Could two readers disagree whether a clause holds? Does a clause name an action?
 
@@ -108,12 +119,13 @@ separable delivery*, *what is deferred and must not be foreclosed*, *clause and 
 A task declares **`witnesses`** (it **is** the evidence, so it must bite) or **`enables`** (it makes
 a clause witnessable; no bite, may precede witnesses, and its `clauses` name the judging clause),
 never both. "Make X enumerable (unblocks W2)" is `enables`. Shape: `witnesses: {goal, clauses}`,
-plus the witness itself as `witness: {id, mode, clause, floor, bites_against}`, all in `open_meta`.
+plus the witness itself as `witness: {id, mode, clause, floor, bites_against}`, all in `open_meta`;
+an enabling task carries `enables: {goal, clauses}`. Give witnesses readable ids, like clauses.
 
 The **evidence record** is one `evidence` resource per goal, linked with `goal`, a section per
 clause: witness drafts, proofs, measurements, status history. Create it with the first witness,
-never as a placeholder. **The goal shows shape, not history**: intentions, clauses, exercise status
-and this table, columns in this order (tooling takes the first *witness* header as that column):
+never as a placeholder. **The goal shows shape, not history** — a session's account belongs in its
+session note and never in the goal: intentions, clauses, exercise status and this table, columns in this order (tooling takes the first *witness* header as that column):
 
 ```markdown
 | Clause | Witnesses | State | Evidence |

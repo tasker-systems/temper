@@ -30,7 +30,7 @@ Schema 2020-12. **Declaring is never required to commit**; it is a separate act.
 - **Enforcement** is closed: `advisory` (default) records a non-conforming commit as
   `declared_not_satisfied`; `enforcing` refuses it and says what failed.
 - **Keywords:** `type`, `properties`, `required`, `additionalProperties`, `items` (one schema),
-  `enum` and `const` (scalars), `pattern`, the length, item and numeric bounds, annotations
+  `enum` and `const` (scalars), `pattern`, `minLength`/`maxLength`, `minItems`/`maxItems` and `minimum`/`maximum`, annotations
   (`title`, `description`, `$comment`, `default`, `examples`, `format`), `$schema`/`$id` at the root.
   Every other keyword (`$ref`, `$defs`, `allOf`, `anyOf`, `oneOf`, `not`, `if`, …) is refused at
   declare, as is a schema past its caps; the refusal names the first keyword or cap that failed.
@@ -98,7 +98,8 @@ Send a composition with `run_query` and the batch read with `ask_data_artifacts`
   out resources still ingesting; listing is an addressed read.
 - **An empty stage says why in its trace** (`artifact_asks`: each ask's `population`, `matched`) —
   by-state counts ignore `shape_states`, so many `declared_not_yet_checked` beside a small answer is lag.
-- **Pass a limit when you list** — without one the answer is an unbounded bare array, a retiring default.
+- **Pass a limit when you list** — without one the answer is an unbounded bare array, a retiring
+  default. A page that carries a `next` is not the whole list; pass it back until `next` is `null`.
 {%- if surface == "cli" %}
 - **`temper query --check` loads no shape** — it lists those under `shapes_not_checked`.
 
