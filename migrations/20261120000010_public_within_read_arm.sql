@@ -328,7 +328,9 @@ AS $function$
           AND EXISTS (SELECT 1
                         FROM kb_contexts pc
                         JOIN home_team ht ON pc.owner_table = 'kb_teams' AND pc.owner_id = ht.team_id
-                       WHERE pc.id = ev.producing_anchor_id AND pc.is_active) ) )
+                       WHERE pc.id = ev.producing_anchor_id AND pc.is_active
+                         AND NOT EXISTS (SELECT 1 FROM kb_connections k
+                                          WHERE k.home_context_id = pc.id)) ) )
     ORDER BY ev.id;
 $function$;
 
@@ -336,9 +338,10 @@ COMMENT ON FUNCTION element_trail_node(uuid, uuid) IS
 $c$The domain events about one resource, for a profile that can read it (resources_visible_to);
 admin and received-webhook events never appear. For a resource the profile reads ONLY through
 public_within (in the reading set, not in the membership set), the trail is filtered to the events
-produced in a LIVE context owned by the team that owns the resource's home: a resource re-homed
-into T does not show the history, the text or the actors of the private context it came from, and a
-retired context of T is not opened, so its events stay out too. A member, a
+produced in a context the arm opens, an owned, live, non-intake context of the team that owns the
+resource's home: a resource re-homed into T does not show the history, the text or the actors of
+the private context it came from, and neither a retired context of T nor a connection's intake
+(kb_connections.home_context_id, any connection state) is opened, so their events stay out too. A member, a
 grantee or a machine sees the whole trail, as before. The membership set is scanned only when the
 resource is one the public_within arm opens to the reader (resources_public_within), so every
 other trail read costs what it did.$c$;

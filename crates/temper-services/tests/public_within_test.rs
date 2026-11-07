@@ -1975,6 +1975,48 @@ async fn the_trail_of_a_rehomed_resource_starts_in_t(pool: PgPool) {
         public_trail.iter().all(|(_, _, a)| *a == Some(w.ctx_t)),
         "the public reader sees only T's part of the trail: {public_trail:?}"
     );
+
+    // Born in T's own intake (a connection's home), then re-homed into ctx-t: the intake's history
+    // stays out of the public reader's trail, though T owns it.
+    let intake = context(&pool, w.eng_sec, "ctx-intake").await;
+    connection_agent(&pool, "intake-agent", w.sec_member, intake).await;
+    let from_intake = resource(&pool, intake, w.sec_member, "from-intake").await;
+    sqlx::query("UPDATE kb_resource_homes SET anchor_id = $2 WHERE resource_id = $1")
+        .bind(from_intake)
+        .bind(w.ctx_t)
+        .execute(&pool)
+        .await
+        .unwrap();
+    writes::set_property(
+        &pool,
+        ResourceId::from(from_intake),
+        "status",
+        &serde_json::json!("filed-in-t"),
+        EntityId::from(emitter_of(&pool, w.sec_member).await),
+    )
+    .await
+    .expect("an event in T");
+    let trail_of = |pool: PgPool, who: Uuid| async move {
+        sqlx::query_as::<_, (Uuid, Option<String>, Option<Uuid>)>(
+            "SELECT t.event_id, e.producing_anchor_table, e.producing_anchor_id \
+               FROM element_trail_node($1, $2) t JOIN kb_events e ON e.id = t.event_id",
+        )
+        .bind(who)
+        .bind(from_intake)
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+    };
+    let member_trail = trail_of(pool.clone(), w.sec_member).await;
+    assert!(
+        member_trail.iter().any(|(_, _, a)| *a == Some(intake)),
+        "a T member sees the intake's events: {member_trail:?}"
+    );
+    let public_trail = trail_of(pool.clone(), w.web_member).await;
+    assert!(
+        !public_trail.is_empty() && public_trail.iter().all(|(_, _, a)| *a == Some(w.ctx_t)),
+        "the public reader sees only the events produced after the move: {public_trail:?}"
+    );
 }
 
 /// An admin row anchored on the root reads for every person, because every closure holds the root:
@@ -2023,6 +2065,46 @@ async fn a_root_anchored_row_confers_only_when_instance_wide(pool: PgPool) {
         reads(&pool, anyone, w.r_t).await,
         "an admin's instance_wide root row confers"
     );
+}
+
+/// A connection's home (its intake) is never opened, in any connection state, while an ordinary
+/// context of the same team is; T's own members read the intake as before.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_connections_intake_context_is_never_opened(pool: PgPool) {
+    let w = world(&pool).await;
+    let intake = context(&pool, w.eng_sec, "ctx-intake").await;
+    assert!(
+        ctx_reads(&pool, w.web_member, intake).await,
+        "precondition: before it is a connection's home, the arm opens it"
+    );
+    connection_agent(&pool, "intake-agent", w.sec_member, intake).await;
+    assert!(
+        !ctx_reads(&pool, w.web_member, intake).await,
+        "a connection's intake is not opened to the anchor's subtree"
+    );
+    assert!(
+        ctx_reads(&pool, w.web_member, w.ctx_t).await,
+        "while T's ordinary context still is"
+    );
+    assert!(
+        ctx_reads(&pool, w.sec_member, intake).await,
+        "T's own members read the intake by membership, as before"
+    );
+
+    sqlx::query(
+        "UPDATE kb_connections SET revoked_at = now(), revoked_by_profile_id = $2 \
+          WHERE home_context_id = $1",
+    )
+    .bind(intake)
+    .bind(w.sec_member)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(
+        !ctx_reads(&pool, w.web_member, intake).await,
+        "a revoked connection's intake stays closed"
+    );
+    assert!(ctx_reads(&pool, w.sec_member, intake).await);
 }
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]

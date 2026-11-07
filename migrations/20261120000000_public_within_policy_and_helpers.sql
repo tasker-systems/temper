@@ -226,15 +226,20 @@ RETURNS TABLE(context_id uuid) LANGUAGE sql STABLE AS $$
     SELECT c.id
       FROM candidates cand
       JOIN kb_contexts c
-        ON c.owner_table = 'kb_teams' AND c.owner_id = cand.team_id AND c.is_active;
+        ON c.owner_table = 'kb_teams' AND c.owner_id = cand.team_id AND c.is_active
+     WHERE NOT EXISTS (SELECT 1 FROM kb_connections k WHERE k.home_context_id = c.id);
 $$;
 
 COMMENT ON FUNCTION contexts_public_within(uuid, uuid[]) IS
-$c$The public_within arm of the context read set: the contexts OWNED by every team T whose
-public_within row is anchored on a team in p_teams (the caller's reachable closure) and is
+$c$The public_within arm of the context read set: the owned, live, non-intake contexts of every team T
+whose public_within row is anchored on a team in p_teams (the caller's reachable closure) and is
 effective. Owned contexts only: never a context shared to T, a grant held by T or a map bound to T.
 Not inherited: T's children stay private. A retired context is floored by is_active; a context of
-a dead team never appears, because public_within_row_effective requires T live.
+a dead team never appears, because public_within_row_effective requires T live. A connection's
+home context (its intake: what an external system sends it) is never opened, in any connection
+state, revoked included: the exclusion keys on kb_connections.home_context_id. Each connection's
+home is a context created for it alone, so no ordinary working context is affected, and T's own
+members read the intake exactly as before.
 
 The candidate rows are hoisted into a MATERIALIZED CTE so the per-row effect checks run once per
 row, never per context. p_profile is carried for the read-set signature. It applies NO reader
