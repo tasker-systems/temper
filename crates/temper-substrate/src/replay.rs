@@ -573,8 +573,12 @@ async fn restore_table(pool: &PgPool, table: &str, rows: &serde_json::Value) -> 
     // that predate them (R5, migration 20261116000010). `kb_events_order_recorded` refuses both a
     // NULL order and a foreign transaction id outside replay, so the restore runs under the
     // transaction-local `temper.replaying`, as the walk below does.
+    //
+    // kb_team_public_within restores under the same flag: its shape guard re-judges a row against
+    // today's teams and settings, and a row whose opener was since deleted, or whose team has since
+    // become the gating team, is restored as it stands, not refused.
     let mut tx = pool.begin().await?;
-    if table == "kb_events" {
+    if table == "kb_events" || table == "kb_team_public_within" {
         sqlx::query_scalar!("SELECT set_config('temper.replaying', 'on', true)")
             .fetch_one(&mut *tx)
             .await?;

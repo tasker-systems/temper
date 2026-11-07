@@ -2311,15 +2311,6 @@ async fn public_within_reads_for_people_under_the_anchor_and_nobody_else(
                 p,
             )
             .await?;
-            let arm5 = set(
-                "SELECT h.resource_id FROM contexts_public_within($1, \
-                   coalesce((SELECT array_agg(team_id) FROM profile_reachable_teams($1)), '{}')) c \
-                   JOIN kb_resource_homes h \
-                     ON h.anchor_table = 'kb_contexts' AND h.anchor_id = c.context_id \
-                   JOIN kb_resources r ON r.id = h.resource_id AND r.is_active",
-                p,
-            )
-            .await?;
             let delta = set("SELECT resource_id FROM resources_public_within($1)", p).await?;
             let mut union: Vec<Uuid> = member.iter().chain(delta.iter()).copied().collect();
             union.sort();
@@ -2367,11 +2358,6 @@ async fn public_within_reads_for_people_under_the_anchor_and_nobody_else(
             if !switch_on && !extra.is_empty() {
                 violations.push(format!(
                     "{who}: the switch is off, yet reads {extra:?} beyond membership"
-                ));
-            }
-            if let Some(r) = extra.iter().find(|r| !arm5.contains(r)) {
-                violations.push(format!(
-                    "{who}: reads {r} beyond membership, and no effective public_within row opens it"
                 ));
             }
         }

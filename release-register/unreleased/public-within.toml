@@ -7,12 +7,14 @@ body = '''
 Phases 1 and 2 of public_within (temper-artifacts specs/2026-11-06-public-within-design.md). Grown
 as later phases land.
 
-Schema (migrations 20261120000000, 20261120000010, 20261120000020): kb_system_settings gains
+Schema (migrations 20261120000000, 20261120000010, 20261120000020, 20261120000030): kb_system_settings gains
 public_within_enabled (default false, no backfill), kb_teams gains public_within_forbidden (default
-false), and a new kb_team_public_within table holds the rows, with a trigger refusing a personal,
-root or gating T and a personal anchor. New helpers: team_ancestors_any, public_within_allowed_over,
+false), and a new kb_team_public_within table holds the rows (opened_by required on insert, SET NULL
+when that profile is deleted), with a trigger refusing a personal, root or gating T and a personal
+anchor. New helpers: team_ancestors_any, public_within_allowed_over,
 anchor_subtree_holds_pool, public_within_row_effective, contexts_public_within and
-public_within_reading (the machine fence: true only for a person). Three admin event types:
+public_within_reading (the machine fence: true only for a person, and only with the switch on),
+team_is_root_or_gating, and resources_public_within (the resources arm 5 adds). Three admin event types:
 team_public_within_changed, public_within_effect_changed, public_within_policy_changed. The read
 arm is layered without overloads: _contexts_readable_by_teams and _resources_visible hold the bodies,
 contexts_readable_by_teams and resources_visible_to are body-only wrappers at unchanged signatures,

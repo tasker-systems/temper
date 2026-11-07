@@ -270,8 +270,8 @@ pub(crate) async fn citation_subject(
 /// speak for the queue, not for a citation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AuditAuthority {
-    /// A principal that can read the finding and the cited source, and did not contribute the
-    /// citation. **The only arm that admits an audit** — machine or human alike.
+    /// A principal that reads the finding by membership and can read the cited source, and did not
+    /// contribute the citation. **The only arm that admits an audit** — machine or human alike.
     Auditor,
     /// DENIAL — the caller contributed this citation (or can still modify the finding, the
     /// belt-and-braces proxy). The self-audit prohibition of spec §7: enforced here or nowhere.

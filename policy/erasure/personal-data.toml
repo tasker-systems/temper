@@ -218,6 +218,6 @@
 "kb_subscriptions.created_by_profile_id"           = { class = "reference", ceiling = "pseudonym", achieved = "-" }
 "kb_subscriptions.revoked_by_profile_id"           = { class = "reference", ceiling = "pseudonym", achieved = "-" }
 "kb_team_invitations.invited_by_profile_id"        = { class = "reference", ceiling = "pseudonym", achieved = "-" }
-"kb_team_public_within.opened_by"                  = { class = "reference", ceiling = "pseudonym", achieved = "-" }
 "kb_team_members.profile_id"                       = { class = "reference", ceiling = "pseudonym", achieved = "-" }
+"kb_team_public_within.opened_by"                  = { class = "reference", ceiling = "pseudonym", achieved = "-" }
 "kb_workflow_jobs.claimed_by_profile_id"           = { class = "reference", ceiling = "pseudonym", achieved = "-" }

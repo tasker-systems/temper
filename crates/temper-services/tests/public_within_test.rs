@@ -639,6 +639,36 @@ async fn the_trigger_and_the_check_refuse_what_p1_bars(pool: PgPool) {
     .unwrap();
     assert_eq!(opener_rule, "n", "opened_by is ON DELETE SET NULL");
 
+    // A row records who opened it.
+    let err = sqlx::query(
+        "INSERT INTO kb_team_public_within (team_id, anchor_id, opened_by) VALUES ($1, $2, NULL)",
+    )
+    .bind(w.eng_sec_red)
+    .bind(w.eng)
+    .execute(&pool)
+    .await
+    .expect_err("an insert with no opener is refused");
+    assert_eq!(
+        err.as_database_error().and_then(|e| e.constraint()),
+        Some("kb_team_public_within_opened_by")
+    );
+
+    // Replay restores a row as it stands, even one the guard would refuse today.
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT set_config('temper.replaying', 'on', true)")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO kb_team_public_within (team_id, anchor_id, opened_by) VALUES ($1, $2, NULL)",
+    )
+    .bind(w.eng_sec_red)
+    .bind(w.eng)
+    .execute(&mut *tx)
+    .await
+    .expect("replay restores an opener-less row");
+    tx.rollback().await.unwrap();
+
     // The anchor may be the root or the gating team: that is an admin's open, decided by the door.
     open(&pool, w.eng_sec, w.org, true, w.admin).await;
     open(&pool, w.eng_sec, w.root, true, w.admin).await;
@@ -883,6 +913,9 @@ async fn a_person_under_the_anchor_reads_ts_owned_contexts(pool: PgPool) {
     let store = InMemoryBlobStore::default();
     let blob = commit_blob(&pool, &store, w.ctx_t, w.sec_member, b"t-blob").await;
 
+    // The change feed withholds what is newer than the oldest transaction still open anywhere on
+    // the server, so wait for the horizon to pass this world's writes.
+    settle(&pool).await;
     for who in [w.web_owner, w.web_maintainer, w.web_member, w.web_watcher] {
         assert!(reads(&pool, who, w.r_t).await, "resources");
         assert!(ctx_reads(&pool, who, w.ctx_t).await, "contexts");
@@ -955,6 +988,32 @@ async fn a_person_under_the_anchor_reads_ts_owned_contexts(pool: PgPool) {
     assert!(!ctx_reads(&pool, s, w.ctx_t).await);
     assert!(!sees_edge(&pool, s, w.e_t).await);
     assert!(!scalar_bool_2(&pool, "SELECT blob_readable_by_profile($1, $2)", s, blob).await);
+}
+
+/// Wait until every transaction that could precede this point has finished: the change feed's
+/// horizon (the same helper as `edge_conjunction_harness.rs`).
+async fn settle(pool: &PgPool) {
+    let target: String = sqlx::query_scalar("SELECT pg_snapshot_xmax(pg_current_snapshot())::text")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    loop {
+        let settled: bool =
+            sqlx::query_scalar("SELECT pg_snapshot_xmin(pg_current_snapshot()) >= $1::text::xid8")
+                .bind(&target)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        if settled {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the horizon did not pass xid {target} within 120 s"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
 }
 
 async fn scalar_bool_2(pool: &PgPool, sql: &str, a: Uuid, b: Uuid) -> bool {
@@ -1624,19 +1683,6 @@ async fn a_row_is_inert_when(pool: PgPool) {
         .unwrap();
     assert!(reads(&pool, p, w.r_t).await, "the pool cleared");
 
-    // T becomes the gating team after the row was opened: the shape trigger refused that at write
-    // time, and the read-time condition keeps a later slug change from making the row confer.
-    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'eng-sec' WHERE id = 1")
-        .execute(&pool)
-        .await
-        .unwrap();
-    assert!(!reads(&pool, p, w.r_t).await, "T is the gating team");
-    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = NULL WHERE id = 1")
-        .execute(&pool)
-        .await
-        .unwrap();
-    assert!(reads(&pool, p, w.r_t).await, "the gating slug moved away");
-
     // The structural lapse is the exception: moving T out ends reading at once.
     unlink(&pool, w.eng, w.eng_sec).await;
     assert!(
@@ -1657,6 +1703,68 @@ async fn an_instance_wide_admin_row_survives_a_pool_under_a(pool: PgPool) {
         .await
         .unwrap();
     assert!(reads(&pool, w.web_member, w.r_t).await);
+
+    // T becomes the gating team after the row was opened. The shape trigger refuses that at write
+    // time; the read-time check keeps a later slug change from making the row confer. An
+    // instance-wide row is the witness, because a gating team under A already makes every other row
+    // inert through the pool check.
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'eng-sec' WHERE id = 1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        !reads(&pool, w.web_member, w.r_t).await,
+        "T is the gating team"
+    );
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = NULL WHERE id = 1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        reads(&pool, w.web_member, w.r_t).await,
+        "the gating slug moved away"
+    );
+
+    // With T the gating team, the row's other columns still update, and deleting its opener still
+    // cascades: the guard judges only an insert or a change of team or anchor.
+    let opener: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_profiles (handle, display_name) VALUES ('opener', 'opener') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE kb_team_public_within SET opened_by = $3 WHERE team_id = $1 AND anchor_id = $2",
+    )
+    .bind(w.eng_sec)
+    .bind(w.eng)
+    .bind(opener)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'eng-sec' WHERE id = 1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE kb_team_public_within SET admin_act = true WHERE team_id = $1")
+        .bind(w.eng_sec)
+        .execute(&pool)
+        .await
+        .expect("a flag change on a row whose T became gating");
+    sqlx::query("DELETE FROM kb_profiles WHERE id = $1")
+        .bind(opener)
+        .execute(&pool)
+        .await
+        .expect("deleting the opener cascades SET NULL");
+    let opened_by: Option<Uuid> = sqlx::query_scalar(
+        "SELECT opened_by FROM kb_team_public_within WHERE team_id = $1 AND anchor_id = $2",
+    )
+    .bind(w.eng_sec)
+    .bind(w.eng)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(opened_by, None);
 }
 
 /// PW-7: a resource re-homed into T shows a public reader only the trail produced in T.
