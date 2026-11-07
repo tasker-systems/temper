@@ -1740,8 +1740,8 @@ pub async fn attach_child(
 /// of a team below it) locks the row it links under or restores, and every one of those rows is in
 /// this lock set, DEAD ONES INCLUDED, so the two acts share a row lock and the later one re-checks
 /// against the earlier one's committed state. `root` is walked below whether or not it is live,
-/// because a restore asks this while the team is still dead. The gating slug is held first, through
-/// the shared side of `_gating_team_lock`, so the gating team cannot be repointed into the subtree
+/// because a restore asks this while the team is still dead. The gating slug is then held, through the
+/// shared side of `_gating_team_lock`, so the gating team cannot be repointed into the subtree
 /// mid-act.
 ///
 /// One ascending pass, never a second: a later pass would take rows out of order and could
@@ -1764,14 +1764,6 @@ async fn lock_teams_and_subtree(
         .collect();
     all.sort();
     all.dedup();
-    // The gating slug, held for the re-check: the shared side of `_gating_team_lock`, which every
-    // gating slug change takes exclusively (the settings trigger, and a rename of the gating team).
-    // Taken BEFORE the team rows, in the order a rename takes them (advisory lock, then the team),
-    // so this act never waits on a row while holding one a gating change needs. It never touches
-    // the settings row itself.
-    sqlx::query_scalar!(r#"SELECT 1 AS "one!" FROM (SELECT _gating_team_lock(false)) g"#)
-        .fetch_one(&mut *tx)
-        .await?;
     // One statement, one round trip: the row lock sits above the sort, so the rows are locked in
     // ascending id order, the same order `lock_teams_ascending` takes them in.
     sqlx::query_scalar!(
@@ -1780,6 +1772,14 @@ async fn lock_teams_and_subtree(
     )
     .fetch_all(&mut *tx)
     .await?;
+    // The gating slug, held for the re-check: the shared side of `_gating_team_lock`, which every
+    // gating slug change takes exclusively (the settings trigger, and every rename). Taken AFTER
+    // the team rows, in the order `rename_slug` takes them (its team row, then the exclusive
+    // lock), so this act never holds the advisory lock while waiting on a row. It never touches
+    // the settings row, whose writer takes the row and then the exclusive lock.
+    sqlx::query_scalar!(r#"SELECT 1 AS "one!" FROM (SELECT _gating_team_lock(false)) g"#)
+        .fetch_one(&mut *tx)
+        .await?;
     Ok(every_team_below(tx, root).await?.is_subset(&below))
 }
 
