@@ -1,44 +1,25 @@
 # Asking Temper a Question
 
-Two doors. `temper search` and `temper query`. This file is about **which one**, and how to use the
-second — it deliberately carries no flag syntax, because `reference.md` is generated from the CLI
-itself and will always be right where a copy here would rot.
+Read this when you are asking the knowledge base a question and must choose between `temper search`
+and `temper query`, write a composition, or read a trace. Flag syntax lives in `reference.md`.
 
-## Which door?
+## Which door
 
-`search` is **quick-search**: one question, answered in two arms, fast.
-`query` is **interrogation**: declared acts, piped together, answered in one round trip.
+`search` is **quick-search**: one question, answered in two arms, fast. `query` is
+**interrogation**: declared acts, piped together, answered in one round trip.
 
-That headline orients you. This is the test that decides:
+> **Does answering take more than one step, where a later step depends on what an earlier one
+> found?** No → `temper search`. Yes → `temper query`. **Combining result sets** — union, intersect —
+> across different questions is `query` only.
 
-> **Does answering this take more than one step, where a later step depends on what an earlier step
-> found?**
->
-> - **No** → `temper search`.
-> - **Yes** → `temper query`.
->
-> And: **do you need to combine result sets** — union, intersect — across different questions?
-> **`query` only.** `search` cannot express it.
+**`query` is not a better `search`.** Reach for it because the question has shape, never because it
+sounds more thorough. A composition with one find stage is a slower `search` with more ceremony,
+and answers a strict subset of what `search` does. If you cannot name the second step, you do not
+have a composition.
 
-### `query` is not a better `search`
-
-Reach for it because your question has **shape**, never because it sounds more thorough. A
-composition with one find stage is a slower `temper search` with more ceremony, and today it answers
-a strict **subset** of what `search` does — several per-stage capabilities still refuse.
-
-The failure mode this warns against is real and one-directional: agents reach for `query` because it
-is the more powerful-sounding tool, and get a worse answer more slowly. If you cannot name the
-second step, you do not have a composition.
-
-### What the shape actually buys — a worked case
-
-Asking *"why is a plan declined before it runs"* semantically across everything returned notes about
-subagents, verification and dogfooding: things near the **words**, not the subject.
-
-Composing it — `find-exact "refusal"` to get the set that genuinely uses the term, then
-`find-about-within` to rank semantically **inside** that set — returned the actual refusal material.
-Same question, two doors, and the answers had **no resources in common**. The prefilter is doing work
-no amount of better phrasing to `search` would do.
+What the shape buys: asked semantically, *"why is a plan declined before it runs"* returns material
+near the words. `find-exact "refusal"` first, then `find-about-within` ranking inside that set,
+returns the refusal material itself — a prefilter no phrasing of `search` reproduces.
 
 ## Writing a composition
 
@@ -58,168 +39,71 @@ A plan is JSON: `stages` (a DAG) and `outcome` (which stages return rows).
 }
 ```
 
-Four things carry the design, and each is worth understanding rather than copying:
+- **Every find act carries its own `intention`** — the question lives on the stage, and two stages
+  asking different things is normal. A find act without one is refused.
+- **`inputs` names upstream stages instead of copying ids**, and `as` says what the receiving act
+  does with each set: `bound` narrows to within it, `seed` grows from it. It is a list, so one stage
+  can carry a seed and a bound — a bounded walk. Two inputs in the same relation are refused; merging
+  them is a `union` stage you declare, visible in the trace.
+- **`outcome.returns` is not "the last stage".** Intermediate stages pipe ids, not rows; only what
+  you declare comes back hydrated. You usually want the intermediate stages' trace, not their rows.
+- **An `embedding` on an intention is optional**; omit it and the server computes one.
 
-- **Every find act carries its own `intention`.** The question lives on the stage, not on the
-  envelope — two stages asking different things is the normal case, not an edge case. Omit it on a
-  find act and the plan is refused.
-- **`inputs` names upstream stages rather than copying ids**, and `as` says what the receiving act
-  does with each set: `bound` narrows to within it, `seed` grows from it. There is no way to supply
-  a set without saying which — the relation belongs to the edge.
-
-  It is a **list**, because a stage may carry a seed *and* a bound at once — that is what a bounded
-  walk is. Two inputs in the *same* relation are refused rather than merged: merging them is
-  `union`, which is a stage you declare, that appears in the trace, and whose size a reader can see.
-
-  > **The bound applies to the SEED too, and that is the trap.** `follow-from` starts only from
-  > seeds that are inside the bound, so a walk seeded with a resource the bounding set does not
-  > contain returns **nothing** — validly, silently, and with `--check` reporting `expressible`.
-  > Bound a walk only when the seed is a member of the bounding set; otherwise walk unbounded and
-  > narrow afterwards with `intersect` / `difference`.
-- **`outcome.returns` is not "the last stage".** Intermediate stages pipe **ids**, not rows; only
-  what you declare comes back hydrated. Returning everything is usually the wrong instinct — it is
-  the intermediate stages' *trace* you want, not their rows.
-- **You may supply an `embedding` on an intention, or omit it** and the server computes one. Omitting
-  is correct for every caller that cannot embed.
-
-## Selecting resources by what their data artifacts hold
-
-`find-resources-with` takes `artifact_filter` beside `resource_filter`: a list of **asks**, each
-naming a data-artifact shape by id and predicates over the paths that shape declares. A resource is
-selected when, for **every** ask, one of its artifacts satisfies **all** of that ask's predicates.
-This one asks for resources owning a measurement in milliseconds whose `p99` is above 250, then
-searches inside them:
-
-```json
-{
-  "stages": [
-    { "name": "slow", "act": "find-resources-with",
-      "artifact_filter": [
-        { "shape": "0194b1a0-0000-7000-8000-000000000001",
-          "predicates": [
-            { "path": ["unit"], "op": { "op": "contains", "values": ["ms"] } },
-            { "path": ["p99"], "op": { "op": "compare", "direction": "gt", "value": 250 } }
-          ] }
-      ] },
-    { "name": "why", "act": "find-about-within",
-      "intention": { "query": "why latency regressed" },
-      "inputs": [ { "from": "upstream", "as": "bound", "stage": "slow" } ],
-      "terms": { "limit": 5 } }
-  ],
-  "outcome": { "returns": [ { "stage": "why", "with": [] } ] }
-}
-```
-
-- **This answers resources, never artifacts.** To read the matching artifacts themselves, whole,
-  send the same ask to `temper data-artifact ask` (the data-artifacts guidance has it).
-- **Predicates in one ask hold of one artifact; separate asks may be met by different artifacts.**
-  Split the two predicates above into two asks and a resource owning one artifact in milliseconds
-  and another with a high `p99` is selected too.
-- **Read the shape's vocabulary first** — `temper data-artifact schema show <shape-id>` carries
-  `askable`, every path and the operators it admits. A path, operator or value outside the shape is
-  refused, and the refusal's `teaches` names the vocabulary.
-- **An ask ranges over its shape's home**: live artifacts on resources homed there that you can see
-  and that have finished ingesting. Leave the stage unanchored or anchor it to that home; asks of
-  shapes in two homes need two stages and a `union`. A shape whose home you cannot read is refused
-  as if it did not exist.
-- **`--check` checks an ask's form only.** It loads no shape, so its report lists the shapes it did
-  not check under `shapes_not_checked`; the server checks every ask before anything runs.
-- **A refused ask teaches as data.** Under the JSON output format, `temper query` prints the
-  refusals in the error payload's `details.refusals`, each with its `reason` and `teaches`.
-- **An empty selection explains itself in the trace.** Its `trace.stages` entry carries
-  `artifact_asks`, one per ask in filter order (below).
+**Selecting by data artifacts.** `find-resources-with` takes `artifact_filter` beside
+`resource_filter`: a list of asks, each a shape id and predicates over its paths. It answers
+resources, never artifacts; `temper data-artifact ask` reads the artifacts themselves.
+`data-artifacts.md` carries the ask's semantics and refusals.
 
 ## Read the trace, not just the hits
 
 The response carries `trace.stages` for **every** stage, including ones whose rows never came back.
-Without it a composition is a black box with an answer at the end, and you cannot tell whether a
-stage earned its place.
+Without it you cannot tell whether a stage earned its place.
 
-Two numbers bracket each stage and they answer different questions. `input_ids` is how many ids it
-received from upstream — a bound stage showing `input_ids: 0` narrowed nothing, and its answer is
-the unbounded one wearing a composition's costume. `produced_ids` is how many it then produced, and
-it is carried for **every** stage, including the ones whose rows never came back.
+- **`input_ids`** — ids received from upstream. A bound stage with `input_ids: 0` narrowed nothing;
+  its answer is the unbounded one.
+- **`produced_ids`** — ids the stage produced, on every stage. Read it rather than a downstream
+  `input_ids`: a combinator reports only the sum of its arms, and a terminal one has no downstream.
+  It can exceed the rows returned, because an id that stopped being visible is dropped from the rows
+  but still counted.
+- **`input_unusable`** — ids the act could not use: invisible, nonexistent and malformed are one number.
+- **`terms_applied`** — the page the stage actually ran: your `limit` clamped to the act's ceiling, or
+  the ceiling where you named none. **`extent: partial`** — it filled that page and there may be more.
+  This is the only place a truncated intermediate shows: a `follow-from` clamped to 50 feeding an
+  `intersect` yields a well-formed answer over a cut-off set.
+- **`disposition`** (`answered` / `empty` / `withheld` / `refused`) and **`orders_by`** — on each
+  returned stage. **Two stages' scores are not comparable**; do not re-sort them together.
+- **`artifact_asks`** — on a `find-resources-with` stage that asked artifacts, one entry per ask in
+  filter order: `shape_version` validated against, `in_force` when it ran (`null` if you can no
+  longer read the shape's home), and the `population` counted. An empty selection explains itself:
+  all zeros, nothing governed is visible; counts with `matched: 0`, none satisfied the ask; `matched`
+  above zero, another ask or the `resource_filter` excluded the resources; a large
+  `declared_not_yet_checked`, the sweep is behind your `shape_states` narrowing. The counts are of
+  artifacts, each ask's own, and do not add or intersect into `produced_ids`.
 
-That second one is what makes an intermediate stage legible at all. Do not try to recover it from a
-downstream stage's `input_ids`: a **combinator reports only the SUM of its arms**, so two arms
-collapse into one number identifying neither, and a **terminal combinator has no downstream** to
-read. It counts what the corpus yielded, so for a returned stage it can exceed the rows you got back
-— an id that stopped being visible between the two statements is dropped from the rows and still
-counted here.
+**Settle `partial` by asking for the next page.** It over-reports at the boundary — a stage that
+filled its page exactly looks the same as one with more waiting. Every act that admits `limit` admits
+`offset`, `follow-from` included; an empty second page means the first was the whole set. Narrow the
+walk instead when you wanted a neighbourhood, not an enumeration.
 
-`input_unusable` counts ids the act could not use, for any reason — invisible, nonexistent and
-malformed are deliberately one number.
+## Traps
 
-**A `find-resources-with` stage that asked artifacts carries `artifact_asks`**, one entry per ask
-in `artifact_filter` order: its `position`, the `shape_id` and `shape_version` it was validated
-against, the version `in_force` when the statement ran (`null` if you cannot read the shape's home
-now), and the `population` it counted. That is where an empty selection says why:
-
-- **all zeros** — nothing governed by the shape is in what you can see;
-- **counts above zero, `matched: 0`** — governed artifacts exist and none satisfied the ask;
-- **`matched` above zero on an empty stage** — matches exist, and something else excluded their
-  resources: another ask (asks AND on one resource), or the stage's `resource_filter`, which the
-  population does not apply;
-- **`declared_not_yet_checked` large beside a narrow answer** — you narrowed by `shape_states` and
-  the validation sweep has not reached those artifacts. The by-state counts never apply your
-  `shape_states`; `matched` applies the whole ask.
-
-The counts are of artifacts, not resources, and each ask's are its own — two asks' counts do not
-add up or intersect into the stage's `produced_ids`. They describe the stage's input, so they order
-nothing.
-
-**`extent` and `terms_applied` are on every stage's trace too, and they are the ones that catch a
-silent truncation.** `terms_applied` is the page the stage actually ran — your `limit` clamped to the
-act's published ceiling, or the ceiling itself where you named none. `extent: partial` means it
-filled that page and there may be more behind it. This matters most where you never see the rows: a
-`follow-from` clamped to 50 feeding an `intersect` produces a well-formed final answer computed
-against a set that was cut off, and the walk's trace entry is the only place that says so.
-
-`partial` is a question, not a verdict: it over-reports at the boundary, because a stage that filled
-its page exactly is indistinguishable from one that filled it and had more waiting. **Settle it by
-asking for the next page** — every act that admits `limit` now admits `offset`, `follow-from`
-included, so a second page that comes back empty means the first was the whole set as of that
-moment. Narrowing the walk is the other move, and the right one when the next page is not empty and
-you wanted a neighbourhood rather than an enumeration.
-
-Two limits on that recourse, both worth knowing before you lean on it:
-
-- **Pages are separate statements, not a cursor.** Nothing spans them in a transaction, so a write
-  landing between two requests re-ranks the set: a row can be skipped by both pages or returned by
-  both. Over a quiet graph the pages tile exactly; over a busy one, treat "empty second page" as
-  strong evidence rather than proof.
-- **Do not union per-page answers through a `difference`.** Unioning pages is sound when the paged
-  stage feeds a `union` or an `intersect`, because both distribute over it. `difference` does not:
-  `X − (A∪B)` is not `(X−A) ∪ (X−B)`, and the union of per-page results is strictly over-inclusive —
-  you can get an answer *worse* than the truncated one it was meant to repair. Page the walk, union
-  the **walk's** pages, then take the difference once.
-
-The converse is not a paging surface at all: an act that admits no `limit` returns a set rather than
-a page, so it has no `offset` either and can never report `partial`. `find-resources-with` is the
-one to know — it is row-returning and takes no bound terms, so there is nothing to page past.
-
-Each returned stage also carries `disposition` (`answered` / `empty` / `withheld` / `refused`) and an
-`orders_by` naming the quantity it ranked on. **Two stages' scores are not comparable** — the
-response keys arms separately precisely so there is no merged list for incommensurable rows to fall
-into. Do not re-sort them together.
-
-## Check before you send
-
-`temper query --check` runs the shape pass locally: no network, no token, no server. It reports
-**every** refusal at once, exits non-zero when there are any, and prints them to stdout as data.
-
-Its limit is a real one and it states it in every report: it answers **expressibility** — is this
-plan well-formed against the published contract — and it cannot speak to what the server has built.
-A clean `--check` is not a promise the query will run.
-
-**Do not maintain a list of what refuses.** Ask `--check`. The set of reachable acts and per-stage
-capabilities moves as the surface grows, and a list written here would be wrong before it was read.
-
-## When a plan is refused
-
-A refusal is an answer, not a crash. The server returns **every** refusal at once rather than the
-first, because repairing a plan one refusal per round trip is the experience this contract exists to
-avoid — and the CLI prints all of them, each naming the stage it attaches to. A refusal with no stage
-is about the composition as a whole: a cycle, a dangling reference, a duplicate name.
-
-Read them all before editing. They are frequently one cause with several symptoms.
+- **A bound applies to the seed too.** `follow-from` starts only from seeds inside the bound, so a
+  walk seeded outside its bounding set returns nothing — validly, silently, and `--check` says
+  `expressible`. Bound a walk only when the seed is a member; otherwise walk unbounded and narrow
+  afterwards with `intersect` / `difference`.
+- **Pages are separate statements, not a cursor.** A write between requests re-ranks the set, so a row
+  can be skipped or returned twice; over a busy graph an empty second page is evidence, not proof.
+- **Never union per-page answers through a `difference`.** `X − (A∪B)` is not `(X−A) ∪ (X−B)`; the
+  union is over-inclusive. Page the walk, union the walk's pages, take the difference once. Unioning
+  pages that feed a `union` or `intersect` is sound.
+- **An act that admits no `limit` returns a set, not a page** — no `offset`, never `partial`.
+  `find-resources-with` is the one to know.
+- **A clean `--check` is not a promise the query runs.** It is local (no network, no token), reports
+  every refusal at once with a non-zero exit, and answers expressibility against the published
+  contract only. It loads no shape, so it lists artifact asks under `shapes_not_checked`.
+- **Do not keep a list of what refuses** — ask `--check`; the reachable acts and per-stage
+  capabilities move as the surface grows.
+- **A refusal is an answer, not a crash.** The server returns every refusal at once, each naming its
+  stage; one with no stage is about the whole plan — a cycle, a dangling reference, a duplicate name.
+  Under JSON output they print in `details.refusals`, each with its `reason` and `teaches`. Read them
+  all before editing: they are often one cause with several symptoms.

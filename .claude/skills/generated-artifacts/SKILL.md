@@ -203,10 +203,9 @@ all (proven by the fact that it succeeds where `install` errors with "global con
 found"). If you ever add a config-derived value to the MCP tree, you have silently removed
 its ability to be gated.
 
-**Do not template a file that does not diverge.** `implementation-grounding.md`,
-`plan-verification.md` and `subagent-guidance.md` name no command on either surface, so they
-ship to both trees as the same bytes rather than as two renders of one template. A seam with
-nothing on either side of it is cost without benefit. Conversely `cognitive-maps.md` and
+**Do not template a file that does not diverge.** `implementation-grounding.md` names no
+command on either surface, so it ships to both trees as the same bytes rather than as two
+renders of one template. A seam with nothing on either side of it is cost without benefit. Conversely `cognitive-maps.md` and
 `teams.md` are CLI-shaped throughout — they are **declared absent** from the MCP tree in its
 SKILL.md rather than shipped wrong.
 

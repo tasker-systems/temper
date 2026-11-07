@@ -1,135 +1,99 @@
 # Working a Goal
 
-Read this when **a goal is being worked** — you were pointed at one, it surfaced in standing
-state, or you are deciding what a goal needs next. This file is the *arc*, not a reference: each
-phase points at the discipline that owns its detail, and nothing here restates one.
+Read this when **a goal is being worked**: you were pointed at one, it surfaced in standing state,
+or you are deciding what it needs next. It is the arc — **uptake → resume → advance → record →
+decompose → close** — and defers every register rule to `outcome-registers.md`.
 
-The arc: **uptake → resume → advance → record → decompose → close.** A goal's work advances task
-over task and is recorded session over session; decomposition produces sub-goals; closing is a
-decision recorded on the goal, never a drift into silence.
+## 1. Uptake — read what is in force
 
-## 1. Uptake — take the goal up
-
-Read what is in force before doing anything. The register — clauses, negative face, declared
-holes, current witnessed state — is the goal's in-force state, and a declared hole is information,
-not an omission to fix. The evidence behind that state is in the goal's evidence record; follow its
-link when you need the proof, not to learn where the goal stands:
+The register (clauses, negative face, declared holes, current witnessed state) is the goal's
+in-force state. A declared hole is information, not an omission to fix. Follow the link to the
+evidence record when you need the proof, not to learn where the goal stands.
 {%- if surface == "cli" %}
 
 ```bash
 temper warmup --context @me/<ctx>              # standing state: active goals, in-progress tasks
 temper resource show <goal-ref>                # the register
-```
-{%- else %}
-
-```
-Tool: list_resources   Input: { "doc_type_name": "goal", "context_ref": "@me/<ctx>", "status": "active" }
-Tool: get_resource     Input: { "id": "<goal uuid>" }
-```
-{%- endif %}
-
-Then establish where the arc stands. List the tasks advancing the goal:
-{%- if surface == "cli" %}
-
-```bash
 temper resource list --type task --goal <goal-ref> --all
 temper resource list --type session --context @me/<ctx> --fields ref,title,updated
 ```
 {%- else %}
 
 ```
+Tool: list_resources   Input: { "doc_type_name": "goal", "context_ref": "@me/<ctx>", "status": "active" }
+Tool: get_resource     Input: { "id": "<goal uuid>", "include_content": true }
 Tool: list_resources   Input: { "doc_type_name": "task", "context_ref": "@me/<ctx>", "goal": "<goal uuid>" }
 Tool: list_resources   Input: { "doc_type_name": "session", "context_ref": "@me/<ctx>" }
 ```
 {%- endif %}
 
-**Reconcile the linkage.** A task can advance a goal without carrying the edge — the edge is
-asserted at create and nothing backfills it, so the goal filter alone can miss live work.
-Cross-check recent sessions and task titles for goal work the filter does not show, and link
-every task you create to the goal at create time so the next uptake sees it. To walk the goal's
-whole neighborhood — tasks, decisions, child goals — by graph instead of by filter:
+**Reconcile the linkage.** The `advances` edge is asserted at create and nothing backfills it, so
+the goal filter alone can miss live work. Cross-check recent sessions and task titles, and link any
+unlinked goal task you find now. To walk the goal's neighborhood (tasks, decisions, child goals)
+by graph instead of by filter:
 {%- if surface == "cli" %}
 
 ```bash
 temper graph traverse --from <goal-ref> --depth 2
 ```
 {%- else %}
-
-The MCP traversal door is `run_query`: its `follow-from` act walks outward from seed refs, with
-the `bound` relation keeping a walk inside a set you already found. Hop by `get_resource` on the
-refs you already hold when a one-off answer suffices, and say so if the picture needs more than
-that.
+use `run_query`: its `follow-from` act walks outward from seed refs, and the
+`bound` relation keeps a walk inside a set you already found. For a one-off answer, hop by
+`get_resource` on refs you hold, and say so if the picture needs more than that.
 {%- endif %}
 
-## 2. Resume — return to the arc
+## 2. Resume — pick the next chunk
 
-An in-flight task resumes by the task-resume path in `SKILL.md` — the most recent session note's
-"Next Steps" is where you pick up. With no in-flight task, choose the next chunk from the
-register's declared holes or the roadmap, and create that task linked to the goal. If the task
-will author or amend the register, read `outcome-registers.md` first; witness and `enables`
-declarations belong to it too.
+An in-flight task resumes where its latest session note's *Next Steps* says. With none in flight,
+take the next chunk from the register's declared holes or the roadmap and create its task linked to
+the goal. If the task will author or amend the register, or declare `witnesses` or `enables`, read
+`outcome-registers.md` first.
 
-**Taking up a chunk is when enabling work gets bounded.** Name the clause the chunk will be judged
-against. If it is enabling work and no clause can judge it, that is a missing clause: author it as a
-child or sibling goal now (§5), not up front — `outcome-registers.md`, *Enabling work is bounded*.
+**Taking up a chunk is when enabling work gets bounded.** Name the clause it will be judged
+against. Enabling work no clause can judge is a missing clause: author it now as a child or sibling
+goal (§5), not up front.
 
 ## 3. Advance — task over task
-{%- if surface == "cli" %}
 
-Work the task per its `mode × effort` workflow (`workflows/{mode}-{effort}.md`); stages move as
-it progresses.
-{%- else %}
-
-Work the task per its `mode × effort` workflow; this packaging ships no per-cell workflow files —
-its SKILL.md states the CLI packaging carries them, written against CLI commands. Stages move as
-it progresses.
-{%- endif %}
-
-When work moves a register criterion, record the evidence in the goal's evidence record, then
-rewrite only the goal's current-state rows — `outcome-registers.md` governs both, and the session
-note carries the account of the movement. The goal gains no dated line. The advances edge is asserted
-at create time; a task found unlinked at uptake gets linked then, not left for the next session
-to miss again.
+Work the task and move its stage as it progresses. When work moves a register clause, record the
+evidence in the goal's evidence record, then rewrite only the goal's current-state rows. The session
+note carries the account of the movement; the goal gains no dated line.
 
 ## 4. Record — session over session
 
-Every session saves its note and attaches it to the task it served — the patterns and the
-handoff preamble live in `session-lifecycle.md` and `session-wrap.md`. The notes are what make
-the next uptake cheap; a session that moves the goal without recording it costs the arc its
-continuity.
+Every session saves its note and attaches it to the task it served (`session-lifecycle.md`). The
+notes make the next uptake cheap; a session that moves the goal without recording it costs the arc
+its continuity.
 
 ## 5. Decompose — goal over goal
 
-A sub-goal is **clause decomposition by the meaning test** — split a clause when its halves can
-be violated independently; read `outcome-registers.md` before authoring it. It is also the expected
-response, at uptake, to enabling work no clause can judge: the child states the outcome that work
-makes true, as concretely as whatever its cited decisions have already settled. The practiced shape:
-a task under the parent goal authors the child goal, and the child links back to its parent:
+A sub-goal is **clause decomposition by the meaning test**: split a clause when its halves can be
+violated independently. It is also the response, at uptake, to enabling work no clause can judge:
+the child states the outcome that work makes true, as concretely as its cited decisions settle. A
+task under the parent authors the child, and the child links back to the parent:
 {%- if surface == "cli" %}
 
 ```bash
 temper resource create --type goal --title "<sub-goal title>" --context @me/<ctx>
-temper edge assert <child-goal-ref> <parent-goal-ref> --kind leads-to --polarity forward --label derived_from
+temper edge assert <child-goal-ref> <parent-goal-ref> --kind leads-to --polarity inverse --label derived_from
 ```
 {%- else %}
 
 ```
 Tool: create_resource  Input: { "context_ref": "@me/<ctx>", "doc_type_name": "goal", "title": "<sub-goal title>", "content": "…" }
 Tool: relationship     Input: { "action": "assert", "source": "<child goal uuid>", "target": "<parent goal uuid>",
-                                "edge_kind": "leads_to", "label": "derived_from", "polarity": "forward",
+                                "edge_kind": "leads_to", "label": "derived_from", "polarity": "inverse",
                                 "weight": 1.0 }
 ```
 {%- endif %}
 
-Sibling goals are children of the same parent; the parent's register says which clauses each
-one carries. Once a parent has two or more children, run the *separability check* in
-`outcome-registers.md` before they land, and again when a child is added or its clauses move: the
-parent records one carrier per clause, the hard and soft dependencies, each child's standalone value,
-which children are postponable, and the shipping order that follows.
+Siblings are children of one parent, whose register says which clauses each carries. Once a parent
+has two or more children, run the *separability check* in `outcome-registers.md` before they land,
+and again when a child is added or its clauses move.
 
 ## 6. Close — the goal ends on purpose
 
-A goal closes by decision, with its status set and its register's loose ends named:
+A goal closes by decision, never by drifting into silence:
 {%- if surface == "cli" %}
 
 ```bash
@@ -142,7 +106,15 @@ Tool: update_resource_meta   Input: { "id": "<goal uuid>", "managed_meta": { "te
 ```
 {%- endif %}
 
-The closing note carries one of: **hard follow** / **accepted** / **for the record** /
-**nothing**. Record any last evidence in the evidence record, then update the goal's exercise status
-and current witnessed state — a declared hole that outlives the goal is named in the close, never
-dropped. The full closing discipline is *The loop*, step 8, in `outcome-registers.md`.
+Record any last evidence in the evidence record, then update exercise status and the current
+witnessed state. The closing note carries **hard follow** / **accepted** / **for the record** /
+**nothing**. A declared hole that outlives the goal is named in the close, never dropped.
+
+## Traps
+
+- **Trusting the goal filter alone** — the edge exists only if asserted at create; link every task
+  then, and cross-check sessions at uptake.
+- **Filing a placeholder task against a declared hole** — the hole waits until someone takes it up.
+- **Pre-authoring sub-goals to house work nobody has taken up** — enabling goals are authored at
+  uptake; splitting clauses the parent already states is decomposition and may come earlier.
+- **Writing progress onto the goal** — history goes in the evidence record and session notes.

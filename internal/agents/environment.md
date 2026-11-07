@@ -1,38 +1,36 @@
-# Environment & Cloud Agents
+# Environment
 
-> Shared agent guidance — the source of truth for `AGENTS.md` and `CLAUDE.md`.
+## Local
 
-## Environment
+- Postgres runs in Docker on **5437**:
+  `DATABASE_URL=postgresql://temper:temper@localhost:5437/temper_development`. `cargo make docker-up`
+  starts it and migrates; `cargo make db-migrate` migrates alone.
+- `.env` (from `.env.template`) is required: every cargo-make task loads it.
+- The pre-commit hook is `githooks/pre-commit`. It is not `cargo make check` — it misses the drift
+  gates and `svelte-check`.
 
-- Docker Postgres on port **5437** (not 5432, to avoid conflicts).
-- `DATABASE_URL=postgresql://temper:temper@localhost:5437/temper_development`
-- Pre-commit hook in `githooks/pre-commit`.
+## Tooling
 
-## Tooling (mise)
-
-[`mise.toml`](../../mise.toml) pins the dev tooling the gates call: Python, uv, Node, Bun, the lint
-and secret-scan binaries, cargo-make, cargo-nextest, sqlx-cli, rust-analyzer and scip. It also says
-what is deliberately left out, such as the Rust toolchain, which rustup owns. `mise install` from the
-repo root installs everything.
-
-**Installed is not the same as on PATH.** `mise activate` works through prompt and directory-change
-hooks, which an agent's non-interactive shell may never run. `python3` then falls through to
-whatever the machine has. For example, macOS's `/usr/bin/python3` is 3.9, and the repo's gates need 3.11 or
-later. Put mise's shims on PATH in a file non-interactive shells do read:
+`mise install` from the repo root installs the pinned tools (`mise.toml`); rustup owns the Rust
+toolchain. **Installed is not on PATH** for a non-interactive agent shell, which never runs mise's
+prompt hooks — and macOS's `/usr/bin/python3` (3.9) is too old for the gates. Put the shims in a file
+such shells read:
 
 ```bash
-# ~/.zprofile (macOS); for bash, ~/.profile or ~/.bash_profile
+# ~/.zprofile (macOS); ~/.profile or ~/.bash_profile for bash
 eval "$(mise activate zsh --shims)"
 ```
 
-Shims resolve per directory, so the repo's pins apply inside the checkout and nowhere else. To check
-the setup, `python3 --version` inside the repo should print the `mise.toml` line (3.12.x). `mise
-doctor` reports anything missing.
+## Cloud sessions
 
-Cloud sessions do not use mise yet. They still install tools through `tools/bin/setup-claude-web*.sh`.
-mise needs a committed `mise.lock` there, because a cloud session cannot resolve tool versions
-itself: its GitHub API access is scoped to this repository.
-
-## Cloud Agents
-
-For tasks delegated to cloud-based agent sessions, see [cloud-agents.md](./cloud-agents.md) for the task preparation guide and environment setup.
+- **Setup:** `tools/bin/setup-claude-web.sh` runs on SessionStart (`.claude/settings.json`) and must
+  finish in seconds: env files, PATH, hooks, `bun install`. `tools/bin/setup-claude-web-full.sh` is
+  run by hand when a task needs the toolchain, Docker Postgres and migrations. Cloud sessions do not
+  use mise yet.
+- **Authenticating the CLI without a browser:** `TEMPER_TOKEN` (a JWT, used in memory; a malformed
+  one errors), or `TEMPER_AUTH=ambient` when an egress proxy attaches the credential (no header is
+  sent and disk is never touched; refused beside `TEMPER_TOKEN`). `TEMPER_API_URL` overrides the
+  base URL; `TEMPER_DEVICE_ID` pins a device id.
+- A cloud session starts cold: no local vault or config, and no conversation history. A task
+  written for one carries its own context — the schema it touches, the files to change, and
+  acceptance criteria — or tells it how to read them from temper.

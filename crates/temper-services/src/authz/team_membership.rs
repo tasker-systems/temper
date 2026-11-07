@@ -30,7 +30,7 @@
 //!
 //! `ScopedAuthority::resolve` takes a `&PgPool`. This authority must also be resolved on the write
 //! transaction, after its locks, so its resolve takes a connection. Its arm order is still
-//! load-bearing (`internal/agents/key-patterns.md`): admin, then the gating-team arm, then the
+//! load-bearing (see [`MembershipAuthority::resolve`]): admin, then the gating-team arm, then the
 //! caller's role on this team alone.
 //!
 //! # Personal teams (task `01a19006`)

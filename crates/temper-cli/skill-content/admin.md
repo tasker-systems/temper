@@ -1,161 +1,100 @@
 # The Admin Surface
 
-Read this when the work is **administering a temper deployment** — principals, machine clients,
-connections, subscriptions, or instance settings — or when a refusal makes you suspect you are
-not the admin the surface thinks it needs. Flag syntax lives in `reference.md` (generated from
-the binary itself); this file is the map, the gate model, and the traps.
+Read this when administering a temper deployment (principals, machine clients, connections,
+subscriptions, settings) or when a refusal suggests you lack standing. Flags: `reference.md`.
 
 ## The gate model
 
-Every `temper admin` verb is gated **server-side** on *system-admin standing*, identically in
-cloud and self-host — there is no branch anywhere. Standing is the **principal-governance
-grant** and nothing else:
+- **Every `temper admin` verb is gated server-side on system-admin standing,** identically in cloud
+  and self-host. A CLI flag cannot widen it, and an MCP or API caller is refused by the same rule.
+- **Standing is the principal-governance grant and nothing else.** `admin promote` writes it and
+  `admin demote` revokes it. Owning the gating team does not make you a system admin; `promote`'s
+  `owner` row on a team is a side effect, not the source of admin.
+- **A refusal is the gate working, not a syntax problem.** Check `temper auth status` for your own
+  standing. Escalating past a refusal is an operator decision (a `promote`), never a workaround.
+- **The ledger and erasure deny as 404, never 403.** The ledger is gated per act family; there,
+  "you may not read that" and "there is nothing there" are deliberately indistinguishable.
+- **The CLI is the whole operator surface.** The MCP tree carries no admin tools.
 
-> Owning the gating team does **not** make you a system admin. The gating team is instance
-> state (see `admin settings`); the grant is what `admin promote` writes and `admin demote`
-> revokes.
+## Acts take full profile UUIDs
 
-Consequences worth internalizing before you act:
+Every principal-facing act takes a strict profile UUID. The substring filter never resolves, and a
+prefix is not an id: v7 UUIDs lead with a timestamp, so neighbours share a prefix. Write all 36
+characters, copied from a state card's `profile_id` (the card also names the enablement commands).
 
-- A refusal reads as a structured error, not as "wrong syntax". Check `temper auth status`
-  first — it reports the caller's own standing.
-- Gate checks run server-side, so a CLI flag cannot widen them, and an MCP/API caller is
-  refused by exactly the same rule.
-- The **ledger** is the one read gated per act family rather than wholesale, and it denies as
-  **404, never 403** — on that surface "you may not read that" and "there is nothing there" are
-  deliberately indistinguishable.
+- **Know the email:** `admin profiles show --email <exact>` resolves one state card; zero matches
+  or a verified-address collision answers `not found`, naming the collision; it never guesses.
+- **Know only that someone lacks access:** `admin profiles list` (default filter `needs-access`) is
+  the work queue, including principals with no standing row. Each row's `matched_email` says why it
+  was listed. `admin requests list` is narrower: only principals who signed in and filed a request.
 
 ## The map
 
-| Group | What it is for |
-|-------|----------------|
-| `admin settings` | Instance state: name, terms version/URI, the gating-team slug. Show with no flags; any flag *updates*. |
-| `admin promote` / `admin demote` | Grant / revoke the governance grant (plus approved standing if needed). `promote` adds an `owner` row on a team as a **side effect** — that row is not what confers admin, and `--team` is not where admin comes from. |
-| `admin access` | The standing lifecycle: `approve`, `revoke`, `deactivate`, `reactivate` — legal transitions are narrow (`revoke` only from approved; `deactivate` from any live state; `reactivate` restores prior standing). |
-| `admin requests` | The join queue: `list` pending requests for the gating team, `review` with `--approve`/`--reject`. Approving also enrolls a person (never a machine) in the gating team atomically. |
-| `admin reviews` | Reconsideration requests from revoked principals: `list`, then `close` — which records the decision and **grants nothing**. |
-| `admin profiles` | The operator directory: `list` (default filter `needs-access` — the work queue of everyone who lacks access, including principals with no standing row) and `show` (one principal's state card, by UUID **or exact verified email** — the bridge into the strict-UUID acts). |
-| `admin ledger` | Who granted what, to whom, and when. Every standing and governance act is ledgered — read it after acting, and treat it as the audit trail you are writing into. |
-| `admin saml` | SAML provisioning tooling: `provision` (keys + env bundle + SQL), `map-group` (IdP group → team), `verify`. |
-| `admin machine` | Machine principals (client_credentials): `provision`, `rebind`, `issue`, `rotate-secret`, `list`, `show`, `revoke`. See below — each verb answers a different failure. |
+| Group | For |
+|---|---|
+| `admin settings` | Instance name, terms version/URI, gating-team slug. No flags shows; any flag updates. |
+| `admin promote` / `admin demote` | Grant or revoke governance (plus approved standing if needed). |
+| `admin access` | Standing lifecycle: `approve`, `revoke` (only from approved), `deactivate` (any live state), `reactivate` (restores prior standing). |
+| `admin requests` | The join queue: `list`, then `review --approve`/`--reject`. Approval enrolls a person (never a machine) in the gating team. |
+| `admin reviews` | Reconsideration requests: `list`, then `close`, which records the decision and grants nothing. |
+| `admin profiles` | The operator directory: `list` and `show` (by UUID or exact verified email). |
+| `admin ledger` | Who granted what, to whom, when. Every standing and governance act lands here; read it after acting. |
+| `admin saml` | `provision` (keys, env bundle, SQL), `map-group` (IdP group to team), `verify`. |
+| `admin machine` | Machine principals (client_credentials); see below. |
 | `admin slack` | Account links: `disconnect` (idempotent). |
-| `admin team` | `auto-join <team> <member\|watcher\|none>`: set, change or clear a team's auto-join pool. Every approved person (never a machine) is enrolled and reads everything the team **and its ancestors** hold — the output lists those ancestors. Existing memberships are never changed. Refused on temper-system, the gating team and personal teams. |
-| `admin connection` | Provision and configure the authed link to a remote system (GitHub, Linear). See below — capability is derived, not flagged. |
-| `admin subscription` | Point a team/context/cogmap at a connection's events: `create`, `list`, `show`, `revoke`. The authz gate (authoring-team manage-capable, a reach grant on the connection, **and** authorship of a context or map subscriber) runs server-side. |
-| `admin erasure` | Permanent erasure: `resource`, `principal` (by pseudonym UUID), `block-history` (named blocks' revisions), `field` (a leaked title, origin URI or property, while the resource survives). Each **surveys by default** and acts only with `--execute`. See below. |
-| `admin reembed` / `admin reblock` | Corpus maintenance: re-embed stale vectors; run one bounded re-blocking step. Both are survey-first (`--dry-run`) and idempotent by design. |
+| `admin team` | `auto-join <team> <member\|watcher\|none>`. Every approved person (never a machine) is enrolled and reads what the team and its ancestors hold; existing memberships never change. Refused on temper-system, the gating team and personal teams. |
+| `admin connection` | The authed link to GitHub or Linear; see below. |
+| `admin subscription` | Point a team, context or cogmap at a connection's events: `create`, `list`, `show`, `revoke`. Needs a manage-capable authoring team, reach on the connection, and authorship of a context or map subscriber. |
+| `admin erasure` | Permanent erasure; see below. |
+| `admin reembed` / `admin reblock` | Re-embed stale vectors (staleness is derived, so a stale vector stays searchable until replaced); one bounded re-blocking step. Both survey with `--dry-run` and are idempotent. |
 
-## Resolving a person to an actionable id
+## Machine principals: which verb answers which failure
 
-Every principal-facing *act* takes a strict **profile UUID**, and the substring filter never
-resolves — but `admin profiles` is the bridge from a human to an id:
+- **A new machine's first credential:** `admin machine provision` for a client id your external IdP
+  issued (system admin only; refused where temper runs its own authorization server), or
+  `admin machine issue` for a temper-minted one (team owners too; `dormant` until the instance runs
+  its own AS). Run it before the machine's first call. It creates the agent profile and only the
+  reach you name (`--team`, `--cogmap`); reach is never inferred from `--owner-team`.
+- **The IdP application rotated:** `admin machine rebind` binds the new client id to the profile,
+  keeping authorship, and revokes the old unless `--no-revoke-old`. A new IdP secret needs nothing.
+- **A temper-issued secret is lost:** the secret prints once and is rotated, never recovered.
+  `admin machine rotate-secret` keeps the previous secret valid for a grace window.
+- **Auth must stop:** `admin machine revoke` denies authentication; grants and memberships survive.
+  A system admin revoking the last live credential also revokes standing; a team owner's never does.
 
-1. Know the email → `admin profiles show --email <exact>` resolves it to a single state card;
-   zero matches or a verified-address collision answers `not found` (naming the collision) —
-   the server refuses to guess.
-2. Don't know who, only that someone lacks access → `admin profiles list` (default
-   `needs-access`) is the work queue; rows carry `matched_email` — *why* that person was
-   enumerated.
-3. The card names the enablement commands; copy the `profile_id` from it. Never guess a UUID
-   from a prefix — write all 36 characters (see *Referencing Other Resources* in SKILL.md).
+## Connections: capability is derived, not flagged
 
-`admin requests list` remains the queue-side email bridge for principals who signed in **and**
-filed a join request; the directory's `needs-access` view is wider — it includes principals
-who signed in and never requested.
+- Born `needs_credential`; only `admin connection attach-credential` clears it. Non-empty
+  `set-webhooks` makes it ledger-capable (events land), non-empty `set-tools` reach-capable.
+- **Owning a connection is not reaching it.** Team read-reach is a separate, read-only grant
+  (`grant-reach` / `revoke-reach`).
+- `revoke` keeps the profile, emitter and home context so attributed events still resolve.
+  Subscriptions are revoked, never deleted.
 
-## Machine principals — which verb answers which failure
+## Erasure: the survey is the default
 
-- **First credential for a new machine** → `admin machine provision` for a client id your external
-  IdP issued (system admin only; refused on an instance that runs temper's own authorization
-  server), or `admin machine issue` for a temper-minted one (team owners too; marked `dormant`
-  until the instance runs its own AS). Run it *before* the machine's first call: it creates the
-  agent profile and the reach you name (`--team`, `--cogmap`), and no other membership: a machine
-  joins no team nobody chose for it. Reach is plural and never inferred from `--owner-team`.
-- **IdP application rotated, profile must survive** → `admin machine rebind`. It binds the new
-  client id to the existing profile, preserving authorship history; the old client is revoked
-  unless `--no-revoke-old`. (Rotating only the IdP *secret* needs no temper action at all.)
-- **Temper is the issuer** → `admin machine issue`. The secret is printed **once**; a lost one
-  is rotated, not recovered: `admin machine rotate-secret` keeps the previous secret valid for
-  a grace window so already-issued tokens keep verifying.
-- **Auth must stop** → `admin machine revoke`. It denies authentication; grants and memberships
-  hang off the profile and survive. A system admin revoking the profile's **last** live credential
-  also revokes its standing; a team owner's revoke never touches standing.
+Erasure is the one admin act that cannot be undone. Without `--execute`, each of `resource`,
+`principal`, `block-history` and `field` surveys what it would reach and leave, and records nothing.
+Survey, read it, then re-run with `--execute`.
 
-## Connections — capability is derived, not flagged
+- `principal --execute` needs `--request-reference <uuid>` (the operator's DSAR record). A refused
+  act exits non-zero after printing its answer, which carries the `request_reference`.
+- **An act is sent once and never retried.** If `--execute` ends in an error rather than an answer,
+  whether it ran is unknown: survey again and re-issue only if it did not land. A landed resource
+  surveys `already_erased`; with non-empty `completion_fields` (ledger text from before redaction),
+  `resource --execute` again completes it.
+- `field <resource>` with no `--field` lists what can be scrubbed by handle, never key or value.
+  **Keep is the default:** earlier values are redacted and today's stays; `--clear` says today's
+  value is itself the leak. `properties` cannot be cleared.
 
-A connection is born `needs_credential`; the state is derived from the credential column being
-NULL, and only `admin connection attach-credential` flips it — there is no status flag to set.
-Capability comes in two independent halves:
+## Traps
 
-- **`set-webhooks` non-empty ⇒ ledger-capable** — remote events land and facts accrue.
-- **`set-tools` non-empty ⇒ reach-capable** — agents can read the remote back.
-
-And the rule people get wrong: **owning a connection is not reaching it.** Team read-reach is a
-separate grant (`grant-reach` / `revoke-reach`), and it is read-only. `revoke` keeps the
-profile, emitter entity, and home context alive — events already attributed to the emitter must
-keep resolving. Subscriptions are revoked, never deleted: a revoked one stops matching but stays
-resolvable.
-
-## Erasure — the survey is the default
-
-`admin erasure resource|principal|block-history|field` are the only admin acts that cannot be undone,
-so the command's default is the harmless half: without `--execute` it asks the survey door what
-the act **would** reach and leave, and records nothing. Survey, read it, then run the same command
-with `--execute`.
-
-- `principal --execute` also needs `--request-reference <uuid>` — the operator's DSAR record. A
-  survey takes none. `resource --also-strike-blob <uuid>` (repeatable, `--execute` only) strikes a
-  related blob, which must be in the survey's remainder.
-- The answer prints in full: `targets`, `remainder`, `ledger_remainder`, and a refusal's `reason`
-  and `detail`. A **refused act exits non-zero** after printing its answer — the refusal is
-  recorded, and its `request_reference` is in the answer.
-- An act is sent **once** and never retried by the client. If `--execute` ends in an error rather
-  than an answer, whether the act ran is unknown: re-run **without** `--execute`. A resource
-  already erased surveys as `already_erased`; re-issue only if the survey shows it did not land.
-- A resource erased before ledger redaction shipped still carries its text on the ledger. Its
-  survey reads `already_erased` with a non-empty `completion_fields`, and running `resource
-  --execute` again completes it: one more record, naming only `redacted_fields`. With
-  `completion_fields` empty, the act is refused `already_erased`.
-- `field <resource>` with no `--field` **lists** what can be scrubbed: the title, the origin URI
-  and each property family by its **handle** (an event id), with counts, dates, profile ids and
-  the sensitivity sweep's flags — never a key or a value. Pick the family by its handle; nobody
-  types the leaked text. Then survey with `--field title|origin_uri|property|properties` (and
-  `--family <handle>` for `property`).
-- **Keep is the default.** Without `--clear`, today's value stays and every earlier value of the
-  field is redacted; with nothing earlier, the act answers 400. **`--clear`** says today's value
-  is itself the leak: the act first replaces it (a placeholder title or origin URI, the type
-  `scrubbed` for `doc_type`, or an unset of the family) and then redacts every value the field
-  held. `properties` scrubs every family's earlier history and cannot be cleared.
-- A caller without system-admin standing is answered **404**, like the ledger.
-
-## Maintenance
-
-- `admin reembed`: staleness is **derived, not marked**, so it is safe to re-run and nothing is
-  destroyed — a stale vector stays searchable until a fresh one replaces it. Start with
-  `--dry-run`.
-- `admin reblock`: **exactly one scope** per run. `--all` requires system-administrator
-  standing and must be asked for by name — never the default. Survey (`--dry-run`), run, then
-  survey again to verify; the receipt carries the resume cursor.
-
-## Bootstrap and operator references
-
-First-admin and org provisioning runs through `scripts/bootstrap/system-bootstrap.sh` — an
-idempotent applier over an install profile. Do **not** follow the stale SQL initialization
-template: it grants team ownership but neither standing nor governance, which recreates the
-bootstrap chicken-and-egg.
-
-Per-command reference: `docs/reference/cli/admin.md` (also a committed projection, gated like
-this skill). Deeper reading: `docs/concepts/auth-identity.md`, `docs/concepts/machine-tokens.md`,
-`docs/playbooks/standing-up-a-machine-credential.md`, `docs/concepts/authoring-authorization.md`.
-
-## Boundaries — stated, not inferred
-
-- **The CLI is the complete operator surface.** The MCP tree deliberately carries no admin
-  tools (the ledger/profile implementations exist but are declared off-MCP); an MCP client
-  cannot do this work.
-- **Volume is mostly full dumps.** The ledger and `admin profiles list` paginate (offset-based,
-  default 50, clamp 200, no total/cursor); the other list reads return every row in one
-  response. Treat "the list looked empty" the way SKILL.md's truncation rule teaches: absence
-  needs a second look, though here the trap is volume, not paging.
-- Refusals are the gate working, not a syntax problem — escalating past one is an operator
-  decision (a `promote`), never something to route around.
+- **`admin reblock` takes exactly one scope;** `--all` needs system-admin standing and must be asked
+  for by name. Survey, run, survey again; the receipt carries the resume cursor.
+- **Most admin list reads are full dumps.** Only the ledger and `admin profiles list` paginate
+  (offset, default 50, clamp 200, no total). An empty-looking list still needs a second look.
+- **Bootstrap through `scripts/bootstrap/system-bootstrap.sh`.** The old SQL initialization template
+  grants team ownership but neither standing nor governance.
+- Deeper reading: `docs/reference/cli/admin.md`, `docs/concepts/auth-identity.md`,
+  `docs/concepts/machine-tokens.md`, `docs/playbooks/standing-up-a-machine-credential.md`,
+  `docs/concepts/authoring-authorization.md`.

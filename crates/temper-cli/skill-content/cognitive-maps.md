@@ -1,357 +1,119 @@
 # Cognitive Maps
 
-Read this when a session needs to **read from or author into a cognitive map** — not
-the everyday task/session/resource CRUD the rest of the skill covers. Maps are a
-by-design capability of temper; this file makes them usable without rediscovering the
-model from scratch.
+Read this when a session reads from or authors into a cognitive map. Per-call authoring detail
+(label vocabulary, edge conventions, the steward loop) lives in the steward's `map-stewardship`
+skill where it is installed; without it, take the vocabulary from the map's charter and its
+existing nodes and edges rather than inventing one.
 
-The exhaustive authoring mechanics (label vocabulary, edge kind/polarity/weight
-conventions, the "materially changed" judgment, the steward loop) live in the steward's
-**`map-stewardship`** skill where that skill exists. This file teaches the *model* and the
-human+agent flow; where you need per-call authoring detail and no steward skill is
-installed, derive the vocabulary from the map's own charter and existing nodes rather than
-inventing one.
+## The model
 
-## Map vs context — the duality (the crux)
+- **A context homes resources as they are; a map homes distilled nodes.** A map is a
+  telos-governed graph of nodes, edges, facets and regions, not a folder of your documents. Use a
+  context to do work; use a map to orient across a purpose-shaped understanding of material.
+- **A map node is a new resource, never the same row as its source.** A resource has exactly one
+  home, and `resource create` takes `--context` or `--cogmap`, never both, so a context resource
+  cannot be re-homed into a map. A node distills one or more sources and points back at them.
+- **The telos-charter decides what is worth a node.** It is the map's purpose: a statement, open
+  questions and framing. Read it before authoring (`cogmap_read` with `view: "charter"` over MCP, or
+  `temper cogmap analytics <MAP>` for telos, staleness and regulation). Distill what is salient
+  under this charter, not everything true about the source; another telos yields another node.
+- **The authored set is four acts:** `resource create --cogmap` (`create_resource`), `edge assert`
+  (MCP `relationship`, `action: "assert"`), `resource facet` (`facet_set`) and `edge fold` (MCP `relationship`, `action: "fold"`).
+- **Every authored act runs under an invocation envelope.** Open one per pass. Every act carries
+  `--invocation`, `--confidence` and `--reasoning` (and `--model`). An act missing them is real but
+  orphaned: it never appears under `invocation show`, which breaks the accountability chain.
+- **Confidence has three bands:** `confident` (a dated decision, or a claim the source states
+  outright), `probable` (a synthesis the sources do not state verbatim), `tentative` (thin, noted).
+- **Provenance means two things, and neither goes in a facet.** The server stamps the authorship
+  trio into `managed_meta` from the envelope: `temper-provenance` (`llm-discovered` with `--model`,
+  `user-created` without), `temper-llm-model`, and `temper-llm-run` (the invocation). Pass
+  `managed_meta` only to override; your value wins, a missing one is filled. Source provenance rides
+  on `--sources`, plus one `derived_from` edge per resource-valued source with `--sources-as-edges`.
+  Facets hold semantic properties: a stance, a resolved question, or `as_of`, which anything
+  volatile carries, grounded in a dated source; never assert current state by inference.
+- **Supersession is fold, then recreate.** Never edit a node's body in place. When a source
+  materially changes (the node would now say something different, not a typo fix), fold the stale
+  `derived_from` edge and create a fresh node. In doubt, lower the node's confidence instead.
+- **Regions exist only after a materialize:** `temper cogmap materialize <MAP>`
+  (`cogmap_materialize`), or `temper context materialize` (`context_materialize`) for a context.
+  Currency is `cogmap analytics`; a context's peer (`temper context analytics`, or `context_read`
+  view `analytics`) has three fields, not five: `materialized_at`, `latest_touch`, `is_stale`.
+  Staleness is reported, never blocking, and covers only what you can read, so callers can disagree.
+- **Reading is not authoring.** A team joined to a map reads what it homes. Authoring needs an
+  explicit write grant (`temper cogmap grant … --write`), not membership. A principal who may
+  author a map may also modify the nodes homed in it (`can_modify_resource`'s container arm), so a
+  map-write grant reaches every node in that map.
+- **One map at a time.** `temper search "<query>" --cogmap <MAP>` scopes to one map; a second
+  `--cogmap` is refused, not unioned, and there is no cross-map pooling. Search each map and compare
+  yourself. Name neighbouring maps explicitly if a node should reference one; nothing sweeps them.
 
-A **context** homes resources **as they are**: your tasks, sessions, research — a working
-set you produce and consume directly. `resource create --context …` writes *into* one.
+## Methodology
 
-A **cognitive map** homes **distilled nodes** in a **telos-governed graph**: nodes, edges,
-facets, and emergent regions, all shaped by the map's charter (its telos). A map is not a
-folder of your documents — it is a purpose-built *understanding* of some body of material.
+- **Search the map before creating;** never duplicate a node. Two sources asserting one concept
+  get one node citing both in `--sources`.
+- **One charter question per invocation pass.** Cover many instances thinly and only where you can
+  ground them; skip `tentative` on a first breadth pass. Questions that build: what recurs, where it
+  structurally breaks (themes linking back), what is settled vs still open (dated nodes).
+- **Calibrate on node #1.** Author one node, `resource show` it, and confirm depth and voice with
+  the map owner before batching; check in again between passes.
+- **Keep a node manifest.** Record and commit every created id as you go; skip sources it already
+  records, so a re-run creates only what is missing and `created=0` proves the pass done. It is how
+  the next pass wires edges back to this one.
+- **Link every pass back into the earlier ones.** The substrate does not infer cross-question
+  edges; assert them with labels the map already uses (a theme `breaks →` the concept it defeats,
+  a status node `concerns →` its topic), or you get parallel piles, not a graph.
 
-The crux an agent misses: **a map node is not the same row as its source.** It is a *new*
-resource, created into the map, that **distills** from one or more sources and carries a
-`derived_from` edge + a `sources` provenance list back to them.
-
-- `kb_resource_homes.resource_id` is **UNIQUE** — a resource has exactly **one** home.
-  `resource create` is `--context` **XOR** `--cogmap`; you cannot re-home a context
-  resource into a map.
-- So authoring a node means: read the source(s) → decide what the *telos* makes worth
-  saying → write a fresh node into the map with `--sources` pointing back. Nodes are
-  **distilled, never re-homed.** (An earlier framing called them "often the same rows" —
-  that is wrong in practice; this is the correction.)
-
-| | Context | Cognitive map |
-|---|---------|---------------|
-| Homes | resources as-is | distilled nodes (new resources) |
-| Organizing principle | a working set | a telos (charter) + graph |
-| Structure | flat list | nodes · edges · facets · regions |
-| A "row" is | the thing itself | a distillation of source rows |
-| Authored via | `resource create/update` | the authored-4 under an invocation |
-| Read via | `list` / `show` / `search --context` | `cogmap shape` / `search --cogmap` |
-
-## When to reach for a map vs a context
-
-- **Context** — you are *doing* work: producing and tracking tasks, sessions, research.
-- **Cognitive map** — you want a *purpose-shaped distillation* of material: an understanding
-  a telos decides the shape of. The same sources under a *different* telos yield a
-  *different* map. Reach for a map to **orient across a distilled understanding**, not to store
-  working artifacts.
-
-## The telos-charter — read it first
-
-Every map has a **telos-charter**: its purpose, expressed as a statement + open questions +
-framing. The charter is the **rubric for what is worth distilling** — a node earns its
-place only if it serves the telos.
-
-- Read it **before authoring** — it decides what counts as a node. Agent surface:
-  the `cogmap_read_charter` MCP tool. From the CLI, `temper cogmap analytics <cogmap>`
-  surfaces telos/staleness/regulation.
-- Distill what is **salient under this charter**, not everything true about the source.
-  A `character-modeling` doc read under *"design a narrative system"* yields "what the
-  character model is"; read under *"how would temper's maps manage that information"* it
-  yields "where temper's single-weight edges strain against a relational web." Same
-  source, telos-attributable difference.
-
-## Authoring into a map
-
-### The shape — the authored-4 under an invocation
-
-Open one **invocation envelope** per authoring pass; every authored act carries its id.
+## One authoring pass, end to end
 
 ```bash
-# The server mints the id. In a script stdout is non-TTY, so temper emits JSON by default —
-# read the generic `id` key (every create-style response carries it).
-#
-# ERROR PATH: check the exit code first. A non-zero exit means `invocation open` failed — in JSON
-# mode the explanation is a structured payload on stdout (`{ "error": { code, message, hint? } }`),
-# not the created record. Parse `.error.code` before `.id`; `jq -r .id` on an error payload yields
-# `null`, which silently assigns an empty id and breaks every downstream command, not just this one.
-inv=$(temper invocation open --cogmap <MAP> --trigger-kind manual --format json | jq -r .id)
-# ... read the charter, then for each source you distill:
-
-# 1. create the node INTO the map, citing its source(s). `--sources-as-edges` also asserts
-#    one derived_from edge per resource-valued source, so step 2 is usually unnecessary.
-temper resource create --cogmap <MAP> --type concept --title "<ascii title>" \
-    --sources <SOURCE_REF>[,<SOURCE_REF2>] --sources-as-edges \
-    --invocation <INV> --confidence confident \
-    --reasoning "why this node under this telos" --model "<your-model>" \
-    --body @node-body.md
-
-# 2. only if you did NOT pass --sources-as-edges: assert the provenance edge by hand.
-#    `derived_from` is structurally (leads-to, inverse) — the same triple --sources-as-edges
-#    writes. Asserting it as (express, forward) makes an edge that shares the label but not
-#    the shape, and the region math treats the two differently.
-temper edge assert <NODE_REF> <SOURCE_REF> --kind leads-to --polarity inverse \
-    --label derived_from --weight 1.0 \
-    --invocation <INV> --confidence confident --reasoning "distills <SOURCE_REF>"
-
-# 3. close the invocation
-temper invocation close <INV> --disposition completed \
-    --outcome '{"nodes":N,"edges":E}'
-```
-
-The **authored-4** are `create_resource` · `assert_relationship` · `facet_set` ·
-`fold_relationship`. Every one of them is on the CLI: `resource create --cogmap`,
-`edge assert`, `resource facet`, and `edge fold`. Use `resource facet` for a node's
-*semantic* properties (a resolved question, a stance), never for provenance — and
-"provenance" means two different things here: the **authorship trio**
-(`temper-provenance`/`temper-llm-model`/`temper-llm-run`) is stamped into `managed_meta`
-for you on every `create`; **source provenance** — which source(s) a node was distilled
-from — rides on `--sources` (and, with `--sources-as-edges`, `derived_from` edges), never
-`managed_meta`. Neither belongs in a facet.
-
-**Materialize** (recompute regions) is `temper cogmap materialize <MAP> [--threshold N]`
-on the CLI, or `cogmap_materialize` on the agent surface. A
-CONTEXT materializes the same way: `temper context materialize`, or `context_materialize` on the
-agent surface. Regions only exist *after* a materialize.
-
-**Whether a shape is still current** is `temper cogmap analytics <MAP>`, and a CONTEXT has the
-peer read: `temper context analytics <CONTEXT_REF>`, or `context_read` (view: analytics) on the
-agent surface. **Three fields there, not the map's five** — `materialized_at`, `latest_touch`,
-`is_stale` — because a context has no charter resource and no regulation set, so there is
-nothing there to report rather than nothing found. On both anchors the clock is **yours**:
-`latest_touch` covers only the regions and edges *you* can read, the same member gate `shape`'s
-counts carry, so two callers can legitimately disagree about whether the same anchor is stale.
-Staleness is reported, never blocking — a stale read is still a read.
-
-**A `shape` read with no regions says why.** `cogmap shape` returns an envelope —
-`regions` plus `population`, `emptiness` and `materialized_at` — and when `regions` is empty,
-`emptiness` names which of four things happened: `never_clustered` (materialize it),
-`nothing_visible` (it has materialized, but nothing came back), `lens_narrowed`
-(your `--lens` excluded them all), or `unreadable_or_absent`. Do not read an empty list as
-"not materialized yet"; read the field.
-
-**`nothing_visible` does not mean "you lack a grant."** It covers two situations at once: the
-materialize formed no regions at all, and the materialize formed regions but none of them holds
-a member *you* can read. You cannot tell which, and that is deliberate — telling them apart
-would tell you that resources exist beyond your reach, which the member gate refuses on
-principle. So do not treat this arm as a permissions diagnosis. A first materialize of a small
-map stamps its watermark whether or not anything clustered, so a map that legitimately formed
-nothing reports exactly the same arm. Check what the map holds and re-materialize before
-suspecting access.
-
-**`cogmap list`'s `region_count` and `shape`'s `population` count different things and will
-disagree.** `region_count` is every non-folded region on the map, ungated. `population` is
-the regions holding at least one member *you* can read, across all lenses. A `population`
-below `region_count` means regions exist whose contents are outside your reach — not that
-they are missing, and not that the map needs re-materializing.
-
-### The node manifest — the single highest-leverage habit
-
-A **pass** is: open one invocation → loop `resource create` + `edge assert` from a small
-driver script → **record every created id to a node-manifest file** as you go. The manifest
-is what lets the *next* pass wire edges back to this pass's nodes — without it, cross-pass
-linkage is guesswork.
-
-- **Commit the manifest as you go.** A later revert or a fresh session then inherits the
-  resume/linkage state; a crash, a kill, or an auth expiry mid-run costs nothing.
-- **Make the loop idempotent via the manifest** — skip any source whose id the manifest
-  already records, so a re-run only creates what's missing.
-- **Verify completeness by re-running to a fixpoint.** `created=0` on a clean re-run is a
-  stronger proof that the pass is done than any progress log.
-
-### Cross-question linkage — what makes it a graph, not a pile
-
-Every pass after the first must **link back into the earlier ones**, or you get parallel
-piles, not a graph. The substrate will **not** infer these edges — author them deliberately
-as labeled `edge assert`s:
-
-- a structural-break theme `breaks →` the concept it defeats, and is `exhibited_by →` the
-  fact instances that show it;
-- a status node `settles →` or `concerns →` the concept it reports on, and `classifies →`
-  the patterns a methodology sorts.
-
-(Those arrows are edge **labels** — pick the label vocabulary your map's charter and existing
-edges already use, and stay consistent with them.) The payoff shows at **materialize**: a
-status node about a topic joins
-the region of the concept it concerns.
-
-### The act envelope — a hard invariant
-
-Every authored act carries `--invocation` + `--confidence` + `--reasoning` (and `--model`).
-An act missing them is real but **orphaned** — it will not appear under
-`invocation show`, breaking the accountability chain. No exceptions, not just `create`.
-
-### The confidence-band rubric
-
-`--confidence` is required on every act. Bands:
-
-- **`confident`** — an explicit, dated decision or a direct claim the source states outright.
-- **`probable`** — a synthesis you drew across sources that they don't state verbatim.
-- **`tentative`** — thin or uncertain evidence; noted, not leaned on.
-
-### Breadth-with-confidence before depth
-
-Do **one charter question per invocation-pass** — each is then a clean, reviewable unit.
-Cover many instances **thinly and only where you can ground them**, rather than a few deeply.
-
-- On a first breadth pass, **skip the `tentative` band entirely** — if you can't ground it,
-  it doesn't get a node yet. Depth invites over-committing to claims you haven't reconciled;
-  earn that certainty in later passes.
-- Charter question-shapes that build on each other: **Q1 what recurs?** (concept layer +
-  fact instances) → **Q2 where does it structurally break?** (theme nodes that cross-link
-  back to Q1) → **Q3 what is settled vs still open?** (decision / concern / question nodes,
-  each dated).
-
-### Calibrate the voice on node #1
-
-Author **one** node, `resource show` it, and confirm depth + voice with the map owner
-*before* batching the next twenty. Cheap insurance against redoing a whole layer. Checkpoint
-with the map owner between passes, too.
-
-### Dated grounding — stamp `as_of`
-
-For anything **volatile** (status, "what's still open"), ground the node in a **dated
-source** and stamp an `as_of` facet — never assert current state by inference. Status
-drifts; a node that claims live truth without a date goes wrong silently.
-
-`as_of` is a *semantic* property, so it is a legitimate facet:
-
-```bash
-temper resource facet <NODE_REF> --values '{"as_of":"2026-07-09"}' \
-    --invocation "$inv" --confidence confident --reasoning "dated status source"
-```
-
-Source-provenance still never goes in a facet — that rides on `--sources` /
-`--sources-as-edges`, never a facet or `managed_meta`.
-
-### Distillation, dedup & merge
-
-Before creating a node, **search the map for an existing one**:
-`temper search "<concept>" --cogmap <MAP>`. If a node already covers it, don't duplicate.
-
-When **two sources both assert one concept**, distill **one** node that cites **both** in
-`--sources` — not two near-duplicate nodes. `--sources` records *block provenance*, not
-graph edges; pass `--sources-as-edges` to also assert one `derived_from` edge per
-resource-valued source (remote URLs and event-id sources are both skipped — neither has
-a node to point at). Match
-the source count to what the node honestly distills, not to its label (a `decision`
-synthesized from two sources is fine).
-
-### Supersession — fold, then recreate
-
-**Never edit a node's body in place.** When a source *materially* changes — the distillation
-would now say something different (a new claim, a reversed decision), not a typo fix — **fold**
-the stale node's `derived_from` edge and **create a fresh node**:
-
-```bash
-temper edge fold <CORRELATION_ID> --reason "source materially changed" \
-    --invocation <INV> --confidence probable --reasoning "folding stale derived_from"
-```
-
-When in doubt, prefer leaving the node and lowering confidence over churning a fold.
-
-### Provenance stamping
-
-**The server stamps provenance for you.** Every node gets the trio in **`managed_meta`**
-(the typed home), derived from the act envelope you already pass:
-
-- `temper-provenance` — `"llm-discovered"` when the act carries `--model`, `"user-created"`
-  when it doesn't.
-- `temper-llm-model` — the act's `--model`.
-- `temper-llm-run` — the act's `--invocation`, joining the node back to the run that
-  authored it.
-
-Pass `managed_meta` explicitly only to override a derived value; a value you supply always
-wins, and a missing one is filled rather than overwritten. Read it back with
-`temper resource show <ref> --without body` — that carries both meta tiers without paying for
-the node body (a plain `temper resource show <ref>` carries the tiers too, plus the body).
-
-### Two authoring gotchas
-
-- **Use ASCII characters in node titles.** Slug generation has broken on non-ASCII titles
-  before, failing the create. The ASCII habit costs nothing and stays safe regardless of
-  which build a given map's server is running.
-- **Provenance belongs in `managed_meta`, never `open_meta`.** A provenance key (`temper-llm-model`)
-  once landed in `open_meta` by mistake. You no longer stamp it by hand — but if
-  you do pass it, pass it in `managed_meta`.
-
-## Who may author — the access reality
-
-Reading a map is **not** authoring it.
-
-- **Read** — a team joined to a map can read the resources homed in it.
-- **Author** — needs an **explicit write grant** on the map (`temper cogmap grant … --write`),
-  **not** mere team membership.
-- **Modify an existing node** — needs modify-access **to that node**. Whether a
-  container-level (map) write grant should *confer* node-level write is an **open
-  precedence decision**. The full human+agent re-distill flow's viability tracks that
-  decision, so don't assume a map-write grant lets you fold/supersede a node you don't
-  own until it lands.
-
-## Cross-map — one map at a time, and a composition you run yourself
-
-You have several visible maps. To draw on more than one:
-
-- **Cross-map EDGES are inert at the region layer.** You *can* assert an edge from a node in
-  one map to a node in another, and materialize accepts it — but it contributes nothing to
-  the target map's regions. Don't reach for cross-map edges to make two maps "talk."
-- **Search scopes to ONE map.** `temper search "<query>" --cogmap <MAP>` is the map-scoped
-  read. Passing `--cogmap` twice is refused, not silently unioned: *"search scopes to a
-  single anchor; pass at most one `--cogmap`."* Asking several maps at once is a
-  composition, and you run it — one search per map, and you compare the results yourself.
-- **Cross-map pooling is not currently offered.** There is no flag that ranks regions from
-  several maps against one query. If you need the pooled view, run the per-map searches and
-  pool by hand.
-- **Cross-map linking is a capability, not an instinct.** An agent won't search neighboring
-  maps unprompted. If you *want* a node to reference a concept already present in a visible
-  neighbor rather than re-distilling it, **say so explicitly** — and name the maps, since
-  nothing will sweep them for you.
-
-## Worked example — a human+agent re-distill
-
-A source that a map already has a node for gets materially updated; the human asks the agent
-to bring the map's node current. End to end:
-
-```bash
-# 1. Orient: read the charter so you distill on-telos.
-#    (cogmap_read_charter MCP tool, or:)
+# Orient: the charter, then what the map already holds.
 temper cogmap analytics <MAP>
+temper search "<concept>" --cogmap <MAP>
+temper resource show <NODE_REF> --edges        # the stale node's derived_from correlation id
 
-# 2. Find the existing node and its derived_from edge.
-temper search "relational character web" --cogmap <MAP>
-temper resource show <NODE_REF> --edges          # note the derived_from correlation id
-
-# 3. Open the accountability envelope.
+# Open the envelope; create-style responses carry a generic `id`. Check the exit code first:
+# on failure stdout is {"code","message","hint"?} and jq yields "null" for every later step.
 inv=$(temper invocation open --cogmap <MAP> --trigger-kind manual --format json | jq -r .id)
 
-# 4. Re-read the (changed) source and judge: materially changed? If yes —
+# Supersede, only if the source materially changed.
 temper edge fold <DERIVED_FROM_CORRELATION_ID> --reason "source materially changed" \
     --invocation "$inv" --confidence probable --reasoning "folding stale derived_from"
 
-# 5. Create the FRESH node (never edit in place), citing the source. `--sources-as-edges`
-#    re-asserts the derived_from edge for you, with the canonical (leads-to, inverse) shape.
-temper resource create --cogmap <MAP> --type concept \
-    --title "Relational web edges exceed temper's single-weight edge" \
-    --sources <SOURCE_REF> --sources-as-edges \
-    --invocation "$inv" --confidence confident \
-    --reasoning "distills the updated character-modeling doc under the map's telos" \
-    --model "<your-model>" --body @new-node.md
+# The fresh node. --sources-as-edges asserts derived_from with the canonical shape.
+temper resource create --cogmap <MAP> --type concept --title "<ascii title>" \
+    --sources <SOURCE_REF> --sources-as-edges --body @node-body.md \
+    --invocation "$inv" --confidence confident --model "<your-model>" \
+    --reasoning "why this node under this telos"
 
-# 6. Any INTER-NODE edges (the provenance edge is already asserted by step 5), graded by weight.
+# A semantic facet, and an inter-node edge.
+temper resource facet <NEW_NODE_REF> --values '{"as_of":"2026-07-09"}' \
+    --invocation "$inv" --confidence confident --reasoning "dated status source"
 temper edge assert <NEW_NODE_REF> <OTHER_NODE_REF> --kind near --polarity forward \
     --label relates_to --weight 0.6 \
     --invocation "$inv" --confidence probable --reasoning "adjacent claims under this telos"
 
-# 7. Close, then materialize so regions pick up the change.
-temper invocation close "$inv" --disposition completed --outcome '{"nodes":1,"edges":2,"folds":1}'
+# Recompute regions, close, verify.
 temper cogmap materialize <MAP>
+temper invocation close "$inv" --disposition completed --outcome '{"nodes":1,"edges":2,"folds":1}'
+temper invocation show "$inv"
+temper resource show <NEW_NODE_REF> --edges     # managed_meta trio + the derived_from edge
 ```
 
-The result: one closed invocation correlating every act, a fresh on-telos node with clean
-provenance, the stale node superseded (not mutated), and regions recomputed. That is the
-human+agent authoring loop — the same shape the steward runs on a schedule, done once by
-hand under a human's direction.
+## Traps
+
+- **Hand-assert `derived_from` as `--kind leads-to --polarity inverse`,** the shape that
+  `--sources-as-edges` writes; `express`/`forward` shares the label, not the shape region math reads.
+- **`--sources-as-edges` skips remote URLs and event-id sources:** neither has a node to point at.
+- **Use ASCII in node titles.** Slug generation has failed creates on non-ASCII titles.
+- **Provenance never goes in `open_meta`;** if you pass a provenance key at all, use `managed_meta`.
+- **An empty `cogmap shape` says why in `emptiness`.** Arms: `never_clustered` (materialize it),
+  `nothing_visible`, `lens_narrowed` (your `--lens` excluded them), `unreadable_or_absent`. An
+  empty `regions` list does not mean "not materialized yet".
+- **`nothing_visible` is not a permissions diagnosis.** It covers both "no regions formed" and "no
+  region holds a member you can read", alike by design so it never reveals what is beyond your
+  reach. Check the map's contents and re-materialize before suspecting access.
+- **`cogmap list`'s `region_count` and `shape`'s `population` disagree by design.** `region_count`
+  is every non-folded region, ungated; `population` counts regions holding a member you can read.
+  A lower `population` means regions outside your reach, not missing ones.
+- **Cross-map edges are inert at the region layer.** Materialize accepts them but they add nothing
+  to the target map's regions; do not use them to make two maps "talk".

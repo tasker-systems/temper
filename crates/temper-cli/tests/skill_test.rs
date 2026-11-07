@@ -108,19 +108,12 @@ fn test_skill_install_writes_directory() {
 
         assert!(skill_dir.join("SKILL.md").exists());
         assert!(skill_dir.join("reference.md").exists());
-        assert!(skill_dir.join("subagent-guidance.md").exists());
-        assert!(skill_dir.join("plan-verification.md").exists());
         assert!(skill_dir.join("implementation-grounding.md").exists());
         assert!(skill_dir.join("session-lifecycle.md").exists());
         assert!(skill_dir.join("working-a-goal.md").exists());
         assert!(skill_dir.join("project-setup.md").exists());
         assert!(skill_dir.join("cognitive-maps.md").exists());
-        assert!(skill_dir.join("workflows/build-small.md").exists());
-        assert!(skill_dir.join("workflows/build-medium.md").exists());
-        assert!(skill_dir.join("workflows/build-large.md").exists());
-        assert!(skill_dir.join("workflows/plan-small.md").exists());
-        assert!(skill_dir.join("workflows/plan-medium.md").exists());
-        assert!(skill_dir.join("workflows/plan-large.md").exists());
+        assert!(!skill_dir.join("workflows").exists());
         assert!(skill_dir.join("guidance").is_dir());
     });
 }
@@ -153,7 +146,7 @@ fn test_skill_install_is_idempotent() {
         );
 
         // Mutating one file should make the next install report exactly that file.
-        let mutated = skill_dir.join("subagent-guidance.md");
+        let mutated = skill_dir.join("implementation-grounding.md");
         std::fs::write(&mutated, "stale\n").unwrap();
         let third = temper_cli::commands::skill::install(
             &config,
@@ -162,7 +155,10 @@ fn test_skill_install_is_idempotent() {
             false,
         )
         .unwrap();
-        assert_eq!(third.changed, vec!["subagent-guidance.md".to_string()]);
+        assert_eq!(
+            third.changed,
+            vec!["implementation-grounding.md".to_string()]
+        );
     });
 }
 
