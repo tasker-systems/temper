@@ -154,9 +154,11 @@ const WALK_GAMMA: &str = "0.5::double precision";
 /// column, `via`, which rides the stage contract beside `id`/`kind`/`quantity` — see the final
 /// select's shared column list, which every act stage and every tally arm must match.
 ///
-/// `[2026-11-07]` The `_homed` body (`20261119000010`, PW-6): it takes the principal as an 11th
-/// argument and admits an edge only if `edges_visible_to` does, so a walked edge's HOME is readable
-/// as well as its two endpoints. The 10-arity name it replaced now admits no edge at all.
+/// `[2026-11-07]` The `_homed` body (`20261119000010`): it takes the principal as an 11th
+/// argument, the anchor reader, and admits an edge only if that principal can read its HOME, as well
+/// as both endpoints being in the visible set. Homes are checked once per distinct home of the
+/// candidate edges, so each follow stage pays no full edge-visibility scan. The 10-arity name it
+/// replaced now admits no edge at all.
 pub const EMIT_FOLLOW_FROM: &str = "__temper_ungated_follow_from_homed";
 
 /// The survey act (`20260816000020`). Unlike the other cores, this one takes BOTH `p_visible_ids`
@@ -221,8 +223,9 @@ const NO_UNUSABLE: &str = "0::bigint";
 /// it for **anchor readability, both kinds** — cogmap and context, decided by
 /// `anchor_readable_by_profile` since migration `20260810000010_anchor_readability_both_kinds.sql`
 /// (ADJ-1 `[2026-08-10, Pete]`). That is one boolean per call and a property of no row, so it cannot
-/// ride in `VISIBLE_IDS`. It is not a visibility gate: this parameter exists for anchor readability
-/// only, and must never gain another use.
+/// ride in `VISIBLE_IDS`. The walk core reads it the same way: as the reader of each candidate
+/// edge's HOME anchor (`20261119000010`), which is anchor readability too. It is not a visibility
+/// gate: this parameter exists for anchor readability only, and must never gain another use.
 const PRINCIPAL_BIND: &str = "$1";
 
 /// The ANN candidate width handed to the wide core. Carried over from `/api/search`'s own draw and
@@ -1042,7 +1045,7 @@ fn emit_ungated_core_call(c: &CoreCall) -> String {
              {PRINCIPAL_BIND}, {properties})"
         ),
         // The visible set is the first argument, and `PRINCIPAL_BIND` the last (`p_anchor_reader`):
-        // the walk admits an edge only if its HOME anchor is readable too (`20261119000010`, PW-6),
+        // the walk admits an edge only if its HOME anchor is readable too (`20261119000010`),
         // which the resource set alone cannot answer. Both are still written only here.
         CoreCall::Walk {
             core,

@@ -100,7 +100,7 @@ use super::stage::{ProducedVariant, StageName};
 /// the compiler's `$1`, not a second id set.
 ///
 /// `[changed — 2026-11-07]` `query_follow_from`'s fragment is now `__temper_ungated_follow_from_homed`
-/// (`20261119000010`, PW-6). It also takes the compiler's `$1`, as the anchor reader that decides
+/// (`20261119000010`). It also takes the compiler's `$1`, as the anchor reader that decides
 /// whether a walked edge's home is readable. The 10-arity name it replaced admits no edge.
 const CALLABLE_FRAGMENTS: &[(&str, &str)] = &[
     ("query_find_exact", "__temper_ungated_find_exact"),
