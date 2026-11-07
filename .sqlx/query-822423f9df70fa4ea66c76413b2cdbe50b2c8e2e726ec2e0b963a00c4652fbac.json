@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT d.team_id AS \"team_id!\"\n                 FROM kb_teams_parents tp\n                 CROSS JOIN LATERAL team_live_descendants(tp.child_id) d\n                WHERE tp.parent_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "team_id!",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "822423f9df70fa4ea66c76413b2cdbe50b2c8e2e726ec2e0b963a00c4652fbac"
+}

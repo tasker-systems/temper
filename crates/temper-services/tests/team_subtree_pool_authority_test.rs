@@ -317,3 +317,44 @@ async fn restoring_a_subtree_that_holds_a_pool_is_an_admins_act(pool: PgPool) {
         .expect("a dead pool below does not count");
     assert!(live(&pool, f.rtop2).await);
 }
+
+/// The re-check under the locks sees a pool linked into the subtree concurrently. An admin's
+/// transaction links pool P under grandchild G (and holds G's row) while a non-admin attaches G's
+/// grandparent D under the hub. The non-admin's act locks D's live subtree, so it waits for the
+/// admin's commit, re-checks, finds P below D, and is refused. Without the subtree locks it would
+/// read the subtree before P arrived and land P under the hub.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_pool_linked_under_the_subtree_concurrently_is_seen_by_the_recheck(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let (d, _x, g) = chain(&pool, &f.admin, None, "spl", "g", None).await;
+    let pool_team = create(&pool, &f.admin, "spl-pool", None, Some(TeamRole::Watcher)).await;
+    own(&pool, d, *f.mgr.profile_id()).await;
+
+    let mut holder = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM kb_teams WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(g)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO kb_teams_parents (parent_id, child_id) VALUES ($1, $2)")
+        .bind(g)
+        .bind(pool_team)
+        .execute(&mut *holder)
+        .await
+        .expect("the admin's link, uncommitted");
+
+    let pool2 = pool.clone();
+    let mgr = f.mgr.clone();
+    let hub = f.hub;
+    let contender =
+        tokio::spawn(async move { team_service::attach_child(&pool2, &mgr, hub, d).await });
+    test_support::await_team_lock_waiter(&pool).await;
+    holder.commit().await.unwrap();
+
+    let refusal = contender
+        .await
+        .unwrap()
+        .expect_err("the pool is in the subtree by the time the re-check runs");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    assert!(!linked(&pool, f.hub, d).await, "nothing is written");
+}
