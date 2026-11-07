@@ -1031,13 +1031,16 @@ pub async fn restore_team(
 
 /// The non-admin arm of [`restore_team`]: the team's `owner` on its membership row (the team is
 /// dead, so the blind lookup), never the root or the gating team, and never an auto-join team —
-/// restoring one re-enrols every approved profile, which is a system admin's act (D5, R6).
+/// restoring one re-enrols every approved profile, which is a system admin's act (D5, R6). The
+/// same holds when such a team sits anywhere in the restored team's live subtree (PW-1).
 async fn restore_authority(
     conn: &mut sqlx::PgConnection,
     caller: &HumanPrincipal,
     team_id: Uuid,
 ) -> ApiResult<()> {
-    if crate::services::access_service::is_root_or_gating_team_on(conn, team_id).await? {
+    // The team itself (root, gating or auto-join) or any live team below it (PW-1): restoring
+    // re-links that subtree's reach to everything above the team.
+    if subtree_holds_pool_on(conn, team_id).await? {
         return Err(ApiError::Forbidden);
     }
     let row = sqlx::query!(
@@ -1357,8 +1360,8 @@ async fn team_ref_of(conn: &mut sqlx::PgConnection, team_id: Uuid) -> ApiResult<
 ///
 /// Authority: detach from `from` per D2 and attach to `to` per D1. Attach already requires managing
 /// the child, which is a D2 arm, so a caller who may attach may also leave: the caller manages the
-/// child and `to` (or is a system admin), and a root or gating `to`, or an auto-join child, is a
-/// system admin's act. A caller who does not manage the child learns nothing (`403`, before refs
+/// child and `to` (or is a system admin), and a root or gating `to`, or a child whose live subtree
+/// holds an auto-join or gating team, is a system admin's act. A caller who does not manage the child learns nothing (`403`, before refs
 /// are resolved). `from == to` is `400`; `from` that is not a current parent is `404`.
 ///
 /// One transaction: `from`, `to` and the child are locked in ascending id order and the checks run
@@ -1452,20 +1455,19 @@ pub async fn reparent(
     Ok(outcome)
 }
 
-/// A team's standing for the attach door: live, personal, the root, an auto-join pool.
+/// A team's standing for the attach door: live, personal, the root. Whether it (or anything below
+/// it) is an instance pool is `subtree_holds_pool_on`'s question.
 struct LinkSide {
     live: bool,
     personal: bool,
     root: bool,
-    auto_join: bool,
 }
 
 async fn link_side(conn: &mut sqlx::PgConnection, team_id: Uuid) -> ApiResult<Option<LinkSide>> {
     let row = sqlx::query!(
         r#"SELECT is_active AS "live!",
                   personal_of IS NOT NULL AS "personal!",
-                  slug = 'temper-system' AS "root!",
-                  auto_join_role IS NOT NULL AS "auto_join!"
+                  slug = 'temper-system' AS "root!"
              FROM kb_teams WHERE id = $1"#,
         team_id,
     )
@@ -1475,8 +1477,38 @@ async fn link_side(conn: &mut sqlx::PgConnection, team_id: Uuid) -> ApiResult<Op
         live: r.live,
         personal: r.personal,
         root: r.root,
-        auto_join: r.auto_join,
     }))
+}
+
+/// R6 over the whole subtree (PW-1): is `team_id` itself, or any live team below it, an auto-join
+/// team, the root or the gating team? Any one of them makes every approved profile a member of the
+/// subtree, so linking the subtree under a team (or restoring its top) hands that team's material
+/// to the whole instance.
+///
+/// `team_id` is asked whatever its own liveness, because it is the subject of the act: a restore
+/// asks it while it is still dead. Below it, the walk is `team_live_descendants` from each child,
+/// so a dead team is neither counted nor walked through, matching `team_ancestors` (reach does not
+/// pass through a dead team either).
+async fn subtree_holds_pool_on(conn: &mut sqlx::PgConnection, team_id: Uuid) -> ApiResult<bool> {
+    let holds = sqlx::query_scalar!(
+        r#"SELECT EXISTS(
+             SELECT 1
+               FROM (SELECT $1::uuid AS id
+                     UNION
+                     SELECT d.team_id
+                       FROM kb_teams_parents tp
+                       CROSS JOIN LATERAL team_live_descendants(tp.child_id) d
+                      WHERE tp.parent_id = $1) s
+               JOIN kb_teams t ON t.id = s.id
+              WHERE t.auto_join_role IS NOT NULL
+                 OR t.slug = 'temper-system'
+                 OR t.slug = (SELECT ss.gating_team_slug FROM kb_system_settings ss WHERE ss.id = 1))
+           AS "e!: bool""#,
+        team_id,
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    Ok(holds)
 }
 
 /// Map a refusal from the `kb_teams_parents` triggers to its status: the cycle check is a `409`,
@@ -1506,9 +1538,9 @@ fn map_link_trigger(err: sqlx::Error) -> ApiError {
 }
 
 /// The non-structural attach rules (team DAG doors D1, rules 1–4), on `conn`: the caller manages
-/// the parent and the child (direct, live), unless a system admin; a root or gating parent, or an
-/// auto-join child, is a system admin's act alone. Run as the pool pre-check and again under the
-/// row locks.
+/// the parent and the child (direct, live), unless a system admin; a root or gating parent, or a
+/// child whose live subtree holds an auto-join or gating team, is a system admin's act alone. Run
+/// as the pool pre-check and again under the row locks.
 async fn attach_authority(
     pool: &PgPool,
     conn: &mut sqlx::PgConnection,
@@ -1527,13 +1559,12 @@ async fn attach_authority(
     }
     let instance_parent =
         crate::services::access_service::is_root_or_gating_team_on(conn, parent_id).await?;
-    // An auto-join child (R6) or an instance-team child (the gating team's roster is the access
-    // pool, every approved profile) hands the parent's material to the whole instance: the same
-    // act as attaching to the root. A leftover managing row on the gating team confers nothing.
-    let pool_child = link_side(conn, child_id)
-        .await?
-        .is_some_and(|side| side.auto_join)
-        || crate::services::access_service::is_root_or_gating_team_on(conn, child_id).await?;
+    // An auto-join team (R6) or an instance team (the gating team's roster is the access pool,
+    // every approved profile) anywhere in the child's live subtree hands the parent's material to
+    // the whole instance: the same act as attaching to the root. The child itself is only the
+    // first such team, not the only one (PW-1). A leftover managing row on the gating team confers
+    // nothing.
+    let pool_child = subtree_holds_pool_on(conn, child_id).await?;
     if instance_parent || pool_child {
         // Re-asked, not reused: under the locks a demotion since the pre-check must refuse.
         require_admin_on(pool, caller).await?;
@@ -1571,9 +1602,9 @@ async fn attach_precheck(
     // 3–4, still before any structural answer.
     let instance_parent =
         crate::services::access_service::is_root_or_gating_team_on(&mut conn, parent_id).await?;
-    let instance_child =
-        crate::services::access_service::is_root_or_gating_team_on(&mut conn, child_id).await?;
-    if (instance_parent || instance_child || child.auto_join) && !admin {
+    // The child itself, or any live team below it (PW-1): see `attach_authority`.
+    let pool_child = subtree_holds_pool_on(&mut conn, child_id).await?;
+    if (instance_parent || pool_child) && !admin {
         return Err(ApiError::Forbidden);
     }
     // 5.
@@ -1614,8 +1645,9 @@ async fn attach_precheck(
 /// 2. the caller manages the child: otherwise a parent's manager could adopt any team, list it
 ///    under `children`, and learn it exists;
 /// 3. a parent that is the root or the gating team → a system admin only;
-/// 4. a child that is an auto-join team → a system admin only (ruling R6): its roster is every
-///    approved profile, so this is the same act as attaching to the root;
+/// 4. a child whose live subtree holds an auto-join or gating team (the child itself, or any live
+///    team below it) → a system admin only (ruling R6, PW-1): that team's roster is every approved
+///    profile, so this is the same act as attaching to the root;
 /// 5. structural: a personal team on either side, the root as the child, or the team as its own
 ///    parent is `400`; a link that closes a cycle is `409`; a soft-deleted side is `404`.
 ///
