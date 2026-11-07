@@ -117,11 +117,12 @@ pub(crate) async fn can_administer_grant(
 // may be conferred — that is attenuation, and both belong to one decision:
 // [`authorize_capability_grant`]. Every grant sink should call that, not the bare resolve.
 
-/// The four capabilities a grant can carry. A closed set with a fixed SQL spelling — an enum rather
-/// than bare `&str` literals so a typo is a compile error and the set cannot silently grow.
+/// The write-shaped capabilities a grant can carry, as `can(...)` probes them. A closed set with a
+/// fixed SQL spelling — an enum rather than bare `&str` literals so a typo is a compile error and
+/// the set cannot silently grow. Read is not here: attenuation asks it of the MEMBERSHIP set
+/// (`can_read_by_membership`), never of `can(read)`: `public_within` reach confers no act.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AccessAction {
-    Read,
     Write,
     Delete,
     Grant,
@@ -131,7 +132,6 @@ impl AccessAction {
     /// The `p_action` spelling `can(...)` dispatches on (`profile_explicit_grant`'s CASE arms).
     const fn as_sql(self) -> &'static str {
         match self {
-            Self::Read => "read",
             Self::Write => "write",
             Self::Delete => "delete",
             Self::Grant => "grant",
@@ -152,6 +152,27 @@ pub(crate) async fn profile_can(
         "SELECT can('kb_profiles', $1, $2, $3, $4)",
         *caller,
         action.as_sql(),
+        subject_table,
+        subject_id,
+    )
+    .fetch_one(pool)
+    .await?
+    .unwrap_or(false);
+    Ok(ok)
+}
+
+/// `can(read)` narrowed to the caller's **membership** visibility (`can_read_by_membership`,
+/// which excludes `public_within` reach): what grant attenuation checks before a delegated granter
+/// confers read.
+async fn profile_can_read_by_membership(
+    pool: &PgPool,
+    caller: ProfileId,
+    subject_table: &str,
+    subject_id: Uuid,
+) -> ApiResult<bool> {
+    let ok = sqlx::query_scalar!(
+        "SELECT can_read_by_membership($1, $2, $3)",
+        *caller,
         subject_table,
         subject_id,
     )
@@ -237,8 +258,21 @@ pub(crate) async fn authorize_capability_grant(
             Ok(proof)
         }
         GrantAuthority::Delegated => {
+            // Read is conferred only on material the granter reads through membership: conferring
+            // read is an act on the material, and `public_within` reach confers no act. The other
+            // three are write-shaped and never consult a read set, so `can()` answers them as before.
+            if caps.read
+                && !profile_can_read_by_membership(
+                    pool,
+                    caller.profile_id(),
+                    subject.kind.as_str(),
+                    subject.id,
+                )
+                .await?
+            {
+                return Err(ApiError::Forbidden);
+            }
             for (requested, action) in [
-                (caps.read, AccessAction::Read),
                 (caps.write, AccessAction::Write),
                 (caps.delete, AccessAction::Delete),
                 (caps.grant, AccessAction::Grant),

@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PublicWithinPolicyChanged",
+  "description": "`public_within_policy_changed` — a team's forbid (`public_within_forbidden`) changed. A forbid\non the root (`temper-system`) is the instance-wide off: it makes every row confer nothing,\nwhether or not the team's tree is linked under the root. The record carries the team as its\n`subject` reference.",
+  "type": "object",
+  "properties": {
+    "actor": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProfileId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "from": {
+      "description": "The forbid before.",
+      "type": "boolean"
+    },
+    "scope": {
+      "$ref": "#/$defs/PublicWithinPolicyScope"
+    },
+    "team_id": {
+      "description": "The team whose forbid changed.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "to": {
+      "description": "The value after.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "scope",
+    "team_id",
+    "from",
+    "to"
+  ],
+  "$defs": {
+    "ProfileId": {
+      "description": "A `kb_profiles.id` value.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "PublicWithinPolicyScope": {
+      "description": "Which policy a [`PublicWithinPolicyChanged`] record is about.",
+      "oneOf": [
+        {
+          "description": "`kb_teams.public_within_forbidden`, set by the team's owner or an admin; on the root, by a\nsystem admin only.",
+          "type": "string",
+          "const": "team"
+        }
+      ]
+    }
+  }
+}

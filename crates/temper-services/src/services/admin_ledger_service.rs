@@ -99,6 +99,13 @@ const ADMIN_EVENT_TYPES: &[&str] = &[
     // A team created, deleted, restored, renamed or auto-join-changed (team DAG and lifecycle doors
     // D8): the team is the subject, and its managers read it through the same arm.
     "team_lifecycle_changed",
+    // A public_within row opened, closed, lapsed or cascade-deleted, its effect changed, or a
+    // team's forbid changed. Each row record names BOTH the team and the anchor as `subject`
+    // references, so a manager of either side reads it through the same arm. A forbid record names
+    // its team; on the root (temper-system) only a system admin reads it.
+    "team_public_within_changed",
+    "public_within_effect_changed",
+    "public_within_policy_changed",
 ];
 
 /// The §5 table, evaluated for one subject. Returns the event types `caller` may read about
@@ -174,6 +181,9 @@ async fn readable_event_types(
             readable.push("team_membership_changed");
             readable.push("team_parent_link_changed");
             readable.push("team_lifecycle_changed");
+            readable.push("team_public_within_changed");
+            readable.push("public_within_effect_changed");
+            readable.push("public_within_policy_changed");
         }
     }
 

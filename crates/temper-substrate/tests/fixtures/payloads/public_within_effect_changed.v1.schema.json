@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PublicWithinEffectChanged",
+  "description": "`public_within_effect_changed` — a `public_within` row started or stopped conferring, without\nbeing opened or closed. The cause is liveness (a team on the path was deleted or restored) or\npolicy (a forbid, the root's included, or a pool at the anchor). Both the team and the\nanchor are `subject` references.",
+  "type": "object",
+  "properties": {
+    "act": {
+      "description": "The admin event type of the act that caused the change, such as `team_lifecycle_changed`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "act_ref": {
+      "description": "The correlation id shared by the causing act's records, when it has one.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "anchor_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "cause": {
+      "$ref": "#/$defs/PublicWithinCause"
+    },
+    "from": {
+      "$ref": "#/$defs/PublicWithinEffect"
+    },
+    "team_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "to": {
+      "$ref": "#/$defs/PublicWithinEffect"
+    }
+  },
+  "required": [
+    "team_id",
+    "anchor_id",
+    "from",
+    "to",
+    "cause"
+  ],
+  "$defs": {
+    "PublicWithinCause": {
+      "description": "Why a row's effect changed, in a [`PublicWithinEffectChanged`] record.",
+      "oneOf": [
+        {
+          "description": "The team, the anchor, or every live path between them, was soft-deleted or restored.",
+          "type": "string",
+          "const": "liveness"
+        },
+        {
+          "description": "A forbid above the team (the root's included), or a pool at the anchor.",
+          "type": "string",
+          "const": "policy"
+        }
+      ]
+    },
+    "PublicWithinEffect": {
+      "description": "Whether a `public_within` row confers, in a [`PublicWithinEffectChanged`] record.",
+      "oneOf": [
+        {
+          "description": "The row confers reading on the anchor's subtree.",
+          "type": "string",
+          "const": "effective"
+        },
+        {
+          "description": "The row exists and confers nothing until its cause is undone.",
+          "type": "string",
+          "const": "dormant"
+        }
+      ]
+    }
+  }
+}

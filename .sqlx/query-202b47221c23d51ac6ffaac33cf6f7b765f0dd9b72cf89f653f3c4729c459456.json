@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n             SELECT 1 FROM resources_visible_by_membership($1) v WHERE v.resource_id = $2\n           ) AS \"visible!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "visible!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "202b47221c23d51ac6ffaac33cf6f7b765f0dd9b72cf89f653f3c4729c459456"
+}

@@ -68,6 +68,9 @@ pub async fn reset_schema(pool: &sqlx::PgPool) {
                 // Auto-join skips a soft-deleted team: same post-auto-join world, same missing
                 // column.
                 && !n.contains("auto_join_skips_soft_deleted_teams")
+                // Adds the auto-join arm to anchor_subtree_holds_pool: same post-auto-join world,
+                // same missing column.
+                && !n.contains("public_within_pool_reads_auto_join")
         })
         .collect();
     migrations.sort();

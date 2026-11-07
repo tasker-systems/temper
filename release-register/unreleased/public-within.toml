@@ -1,0 +1,48 @@
+title    = "public_within: a team's owned contexts can be opened to an ancestor's subtree, for people to read and reference; teams stay private until a row exists"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["http", "clients", "schema", "erasure-policy"]
+status   = "signal-only"
+body = '''
+The schema, policy and read arm of public_within. Grown as the rest lands.
+
+Available by default, with no instance setting: a team is private until a two-sided row exists for
+it, and no door in this change opens one. A system admin turns the feature off instance-wide by
+setting public_within_forbidden on the root team (temper-system): a forbid above a team, the root's
+included, makes every row over that team inert, an admin's instance_wide row included, and clearing
+it revives them. The root's flag is read directly, so it also reaches a tree not linked under the
+root. Only a system admin may set it on the root; the door that enforces that comes
+later.
+
+Schema (migrations 20261120000000, 20261120000005, 20261120000010, 20261120000020): kb_teams gains
+public_within_forbidden (default false), and a new kb_team_public_within table holds the rows
+(opened_by required on insert, SET NULL when that profile is deleted), with a trigger refusing a
+personal, root or gating T and a personal anchor, and a CHECK that an instance_wide row is an
+admin's act. A root anchor counts as a pool, so only an admin's instance_wide row anchored on the
+root confers. New helpers: team_ancestors_any, public_within_allowed_over,
+anchor_subtree_holds_pool, public_within_row_effective, contexts_public_within and
+public_within_reading (the machine fence: true only for a person), team_is_root_or_gating, and
+resources_public_within (the resources the public_within arm adds). The fence and the per-row checks
+run only when a row is anchored in the reader's closure; with no row, a read pays one index probe.
+Three admin event types: team_public_within_changed, public_within_effect_changed,
+public_within_policy_changed (a team's forbid, the root's included). The read arm is layered without
+overloads: _contexts_readable_by_teams and _resources_visible hold the bodies,
+contexts_readable_by_teams and resources_visible_to are body-only wrappers at unchanged signatures,
+and resources_visible_by_membership, contexts_readable_by_membership and can_read_by_membership are
+the membership entry points. The citation-audit queue gates the finding on membership and the cited
+source on reading, since a verdict acts on the finding; grant attenuation checks read by
+membership; element_trail_node filters the trail of a reader who reaches a resource only through
+public_within to T's contexts.
+
+Erasure policy: public_within_effect_changed's /act (the event type of the causing act) is declared
+structural.
+
+HTTP: GET /api/admin/ledger can return the three new record kinds, and a team's owners and
+maintainers read the public_within records that name the team (its description and the regenerated
+clients say so). No request or response shape changes.
+
+Who observes: nobody, until a row exists, and no door opens one yet. With no row, every read set and
+every gate answers exactly as before.
+Witnesses: crates/temper-services/tests/public_within_test.rs, visibility_invariant_harness.rs,
+reachable_teams_one_definition_test.rs. Release relevance: additive; signal-only.
+'''

@@ -115,10 +115,15 @@ pub async fn record_citation_audit(
 /// from a refusal, so readability is asked SEPARATELY, first, via
 /// [`readback::is_resource_visible`] — the Rust-callable spelling of the very same predicate
 /// (`resources_readable_by('profile', p)` delegates its profile arm to `resources_visible_to`,
-/// `migrations/20260712000010_context_read_predicates.sql:419`), and the same call
-/// `AuditAuthority`'s readability arm makes for the POST on this path
-/// (`crate::authz::audit_gate`). GET and POST therefore refuse on identical grounds, and nothing
-/// here restates a gate.
+/// `migrations/20260712000010_context_read_predicates.sql:419`). Nothing here restates a gate.
+///
+/// **GET reads; POST acts, and they are judged on different sets on purpose.** Reading a finding's
+/// audit trail is a read, so it asks the READING set, which includes `public_within` reach for a
+/// person. Recording a verdict writes about the finding, so `AuditAuthority` probes the finding on
+/// the MEMBERSHIP set (`readback::is_resource_visible_by_membership`). A person who reads a
+/// finding only through `public_within` therefore gets its trail here and a 404 from the POST. Do
+/// not "restore parity" by widening the POST: a verdict on a public team's own finding is an act on
+/// that team's material.
 ///
 /// **404 on unreadable, `[]` on readable-and-empty — deliberately NOT the collection default.** See
 /// the module doc for the argument; the short form is that returning 200 where the sibling
