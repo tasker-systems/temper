@@ -27,7 +27,7 @@
 -- equality). For a machine, or with the switch off, the delta is a one-time filter that never runs.
 -- For a person with the switch on, the delta walks the team closure a second time; that walk is small
 -- next to the set it avoids recomputing, and is measured with the rest (scripts/visibility-cost/).
-
+--
 -- Everything else in the three bodies is unchanged from `20261101400000`; read it for why each is
 -- shaped as it is.
 

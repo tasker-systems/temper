@@ -15,7 +15,8 @@
 --   team_is_root_or_gating                     the root or the current gating team (both checks).
 --   team_ancestors_any                         the live-or-dead up-walk, for the forbid ONLY.
 --   public_within_allowed_over                 the switch, then no forbid on any ancestor of T.
---   anchor_subtree_holds_pool                  an auto-join or gating team at or under A (PW-1).
+--   anchor_subtree_holds_pool                  the gating team at or under A (PW-1); 20261120000005
+--                                              adds auto-join teams.
 --   public_within_row_effective                one row's read-time conditions (P5, N9).
 --   contexts_public_within                     the contexts effective rows open to a team closure.
 --   public_within_reading                      the machine fence: is this profile a person? (R-n)
@@ -98,8 +99,6 @@ LANGUAGE plpgsql
 SET search_path = public, pg_temp
 AS $$
 BEGIN
-    -- Replay restores rows verbatim, as they stand: a row whose opener was since deleted, or whose
-    -- team has since become the gating team, is restored, not re-judged (the kb_events precedent).
     IF current_setting('temper.replaying', true) = 'on' THEN
         RETURN NEW;
     END IF;
@@ -128,7 +127,8 @@ $c$Refuses a public_within row whose team is personal, the root (temper-system) 
 or whose anchor is personal (spec P1, P2 rule 8, PW-13), and an insert that names no opener. The
 guard runs on an insert and on a change of team or anchor, never on any other update (so the
 opened_by SET NULL cascade and a later flag change pass), and not under replay (temper.replaying),
-which restores rows as they stand. The constraint name on each refusal is
+which restores rows as they stand: a row whose opener was since deleted, or whose team has since
+become the gating team, is restored, not re-judged (the kb_events precedent). The constraint name on each refusal is
 what Rust renders the reason from. The anchor may be the root or the gating team: that is an
 admin's open (P2 rule 4), decided by the door, not here.$c$;
 
@@ -190,13 +190,13 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
 $$;
 
 COMMENT ON FUNCTION anchor_subtree_holds_pool(uuid) IS
-$c$True when the anchor itself, or a live team beneath it, is an auto-join team or the gating team
-(PW-1). Such a team brings the whole instance into the anchor's subtree, so a public_within row
+$c$True when the anchor itself, or a live team beneath it, is the gating team (PW-1); 20261120000005
+also counts an auto-join team. Such a team brings the whole instance into the anchor's subtree, so a public_within row
 over it would read instance-wide; only an admin's instance_wide row survives it
 (public_within_row_effective). A pool team below a dead team is not counted, because it confers
-nothing upward (team_live_descendants does not walk through a dead team). This body counts the
-gating team only; 20261120000005 adds the auto-join arm, kept apart because it reads
-kb_teams.auto_join_role, which temper-substrate's pre-auto-join test baseline omits.$c$;
+nothing upward (team_live_descendants does not walk through a dead team). The auto-join arm
+is kept apart because it reads kb_teams.auto_join_role, which temper-substrate's pre-auto-join test
+baseline omits.$c$;
 
 CREATE FUNCTION public_within_row_effective(p_team uuid, p_anchor uuid, p_instance_wide boolean)
 RETURNS boolean LANGUAGE sql STABLE AS $$
