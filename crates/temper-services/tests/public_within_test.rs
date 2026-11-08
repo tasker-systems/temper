@@ -3419,6 +3419,27 @@ async fn a_plain_gating_slug_write_records_what_it_flips(pool: PgPool) {
     assert_eq!(recs[1]["to"], "effective");
 }
 
+/// The writers' mark is the transaction id, so a mark set for a whole session (or a role) is inert:
+/// a plain write on that session is still recorded.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_session_wide_mark_does_not_switch_recording_off(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    for sql in [
+        "SET temper.gating_slug_recorded = 'on'",
+        "UPDATE kb_system_settings SET gating_team_slug = 'eng-web' WHERE id = 1",
+        "RESET temper.gating_slug_recorded",
+    ] {
+        sqlx::query(sql).execute(&mut *conn).await.unwrap();
+    }
+    drop(conn);
+    assert!(!effective(&pool, w.eng_sec, w.eng).await);
+    let recs = row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng).await;
+    assert_eq!(recs.len(), 1, "{recs:?}");
+}
+
 /// Renaming the gating team moves the slug with it and flips nothing, so it records nothing: the
 /// settings row's own record is skipped for a write the rename already recorded, which would
 /// otherwise be judged against the half-renamed state where no team holds the gating slug.
@@ -3482,7 +3503,8 @@ async fn a_plain_gating_slug_write_and_a_rename_do_not_deadlock(pool: PgPool) {
         .unwrap();
     let admin_emitter = emitter_of(&pool, w.admin).await;
 
-    // The rename's first step, the exclusive gating lock, held while the plain write starts.
+    // The exclusive gating lock held, as a rename holds it before its settings write, while the
+    // plain write starts.
     let mut rename = pool.begin().await.unwrap();
     let pid = backend_pid(&mut rename).await;
     sqlx::query("SELECT _gating_team_lock(true)")

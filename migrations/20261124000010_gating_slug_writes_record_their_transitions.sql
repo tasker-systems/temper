@@ -40,8 +40,9 @@ the slug then takes the exclusive lock, then the settings row, then (recording) 
 and the effects key, which are its own: the order a gating-team rename and
 _admin_gating_team_slug_write take them in. Without it a plain UPDATE took the row first and the
 exclusive lock in the never-personal row trigger, and a concurrent rename (lock first, row last)
-deadlocked with it. It fires even when the slug is set to its own value; the lock is then held
-briefly for nothing, on an admin-only write.$c$;
+deadlocked with it. It fires whenever the statement names gating_team_slug in its SET list, even
+when the value does not change (the settings door's write of other fields names it); the lock is
+then held to the end of that transaction, on an admin-only write.$c$;
 
 CREATE TRIGGER kb_system_settings_gating_lock_first
     BEFORE UPDATE OF gating_team_slug ON kb_system_settings
@@ -53,8 +54,9 @@ LANGUAGE plpgsql
 SET search_path = public, pg_temp
 AS $$
 BEGIN
+    PERFORM set_config('temper.public_within_gating_slug', '', true);
     IF NEW.gating_team_slug IS NOT DISTINCT FROM OLD.gating_team_slug
-       OR current_setting('temper.gating_slug_recorded', true) = 'on'
+       OR current_setting('temper.gating_slug_recorded', true) = pg_current_xact_id()::text
        OR current_setting('temper.replaying', true) = 'on' THEN
         RETURN NEW;
     END IF;
@@ -71,13 +73,21 @@ $$;
 
 COMMENT ON FUNCTION kb_system_settings_gating_before() IS
 $c$Before a row write that changes gating_team_slug and was not marked by its writer
-(temper.gating_slug_recorded = on, set only around the writes of _admin_gating_team_slug_write and
-of a rename in _admin_team_lifecycle_act, which record their own transitions): snapshots every row
+(temper.gating_slug_recorded holding the current transaction id, set only around the writes of
+_admin_gating_team_slug_write and of a rename in _admin_team_lifecycle_act, which record their own
+transitions; a value set for a session or a role names no transaction and marks nothing): first
+clears any snapshot left in temper.public_within_gating_slug, so the AFTER trigger only ever consumes
+the one this row write took, then snapshots every row
 the change can flip with _public_within_effects_before, over the teams holding the old and the new
 slug (the same scope _admin_gating_team_slug_write uses), into the transaction-local setting
 temper.public_within_gating_slug, for kb_system_settings_gating_after. The effects lock it takes
 follows the settings row and the exclusive gating lock (kb_system_settings_gating_lock_first), the
-order of every slug writer. Skipped under replay.$c$;
+order of every slug writer. Skipped under replay.
+
+Hand-written SQL that renames the gating team and then moves the slug, outside
+_admin_team_lifecycle_act, is snapshotted in the half-renamed state (no team holds the old slug) and
+records flips that did not happen; rename through the function, which marks its write. A DELETE or
+re-INSERT of the settings row is not covered (nothing in the product does either).$c$;
 
 CREATE FUNCTION kb_system_settings_gating_after() RETURNS trigger
 LANGUAGE plpgsql
@@ -138,7 +148,7 @@ BEGIN
     v_before := _public_within_effects_before(
         '{}'::uuid[],
         ARRAY(SELECT t.id FROM kb_teams t WHERE t.slug = v_from OR t.slug = p_slug));
-    PERFORM set_config('temper.gating_slug_recorded', 'on', true);
+    PERFORM set_config('temper.gating_slug_recorded', pg_current_xact_id()::text, true);
     UPDATE kb_system_settings SET gating_team_slug = p_slug, updated = now() WHERE id = 1;
     PERFORM set_config('temper.gating_slug_recorded', '', true);
     v_correlation := coalesce(p_correlation, uuid_generate_v7());
@@ -160,7 +170,8 @@ every anchor at or above either team.
 It takes the exclusive gating lock before the settings row (the order a rename takes them in), so
 the shared request inside _public_within_effects_before is its own; a rename takes the same exclusive
 lock, so the existence re-check cannot be raced. It marks its own settings write
-(temper.gating_slug_recorded, cleared straight after) so the settings row triggers do not record the
+(temper.gating_slug_recorded set to the transaction id, cleared straight after) so the settings row
+triggers do not record the
 same transitions again. The settings trigger (gating_team_is_never_personal) still refuses a personal
 team. There is no settings event type, so each effect record carries act NULL and only the
 correlation id. IT NEVER AUTHORIZES: only a system admin reaches it
@@ -217,7 +228,7 @@ BEGIN
         END IF;
         v_before := _public_within_effects_before('{}'::uuid[], ARRAY[p_team]);
         UPDATE kb_teams SET slug = p_to WHERE id = p_team;
-        PERFORM set_config('temper.gating_slug_recorded', 'on', true);
+        PERFORM set_config('temper.gating_slug_recorded', pg_current_xact_id()::text, true);
         UPDATE kb_system_settings SET gating_team_slug = p_to WHERE gating_team_slug = v_from;
         PERFORM set_config('temper.gating_slug_recorded', '', true);
         v_to := p_to;
@@ -269,7 +280,7 @@ through liveness; an auto-join change flips rows whose anchor's live subtree gai
 a rename moves the gating slug with it, so it flips nothing unless it changed which team is the root
 or the gating team (the door refuses the root; renaming onto a gating slug that no team holds makes
 the team the gating team, and those flips are recorded too). A rename marks its settings write
-(temper.gating_slug_recorded, cleared straight after): its own snapshot, taken before the team row
+(temper.gating_slug_recorded set to the transaction id, cleared straight after): its own snapshot, taken before the team row
 changed, is the record, and the settings row triggers would otherwise snapshot the half-renamed
 state, in which no team holds the gating slug. The lifecycle record carries p_correlation, or, when
 there is none, a fresh id that the transitions share, minted whether or not a row was in reach, so
