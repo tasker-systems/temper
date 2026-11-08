@@ -9,8 +9,14 @@
 -- a path only if every team on it, the anchor and P included, is live. Pool teams are few, and found
 -- by index (the slug key; the partial auto-join index added here).
 --
--- A later edit must keep the two arms: `t.id = p_anchor` regardless of liveness (as before), and the
--- live upward walk, which is the mirror of team_live_descendants. Split from 20261124000020 because
+-- A later edit must keep the two arms: `p.id = p_anchor` regardless of liveness (as before), and the
+-- live upward walk, which is the mirror of team_live_descendants; and must keep the pool teams found
+-- first, one indexed probe per kind (a UNION, not an OR over kb_teams): with an OR the planner scans
+-- every team and charges the upward walk to each, and that estimate JIT-compiles the read path.
+--
+-- The trade: the cost grows with the number of auto-join teams times the size of their ancestor DAG.
+-- Instances carry the root and a few auto-join teams; one with hundreds of auto-join teams under a
+-- dense DAG would be slower here than the downward walk was. Split from 20261124000020 because
 -- it reads kb_teams.auto_join_role, which temper-substrate's pre-auto-join test baseline omits; that
 -- harness skips this file by name.
 
@@ -23,12 +29,15 @@ CREATE OR REPLACE FUNCTION anchor_subtree_holds_pool(p_anchor uuid)
 RETURNS boolean LANGUAGE sql STABLE AS $$
     SELECT EXISTS (
         SELECT 1
-          FROM kb_teams t
-         WHERE ( t.auto_join_role IS NOT NULL
-              OR t.slug = 'temper-system'
-              OR t.slug = (SELECT s.gating_team_slug FROM kb_system_settings s WHERE s.id = 1))
-           AND ( t.id = p_anchor
-              OR EXISTS (SELECT 1 FROM team_ancestors(t.id) a WHERE a.team_id = p_anchor)));
+          FROM (SELECT t.id FROM kb_teams t WHERE t.auto_join_role IS NOT NULL
+                UNION
+                SELECT t.id FROM kb_teams t WHERE t.slug = 'temper-system'
+                UNION
+                SELECT t.id FROM kb_teams t
+                 WHERE t.slug = (SELECT s.gating_team_slug FROM kb_system_settings s
+                                  WHERE s.id = 1)) p
+         WHERE p.id = p_anchor
+            OR EXISTS (SELECT 1 FROM team_ancestors(p.id) a WHERE a.team_id = p_anchor));
 $$;
 
 COMMENT ON FUNCTION anchor_subtree_holds_pool(uuid) IS

@@ -17,6 +17,40 @@
 
 ALTER FUNCTION _public_within_effects_before(uuid[], uuid[]) SET jit = off;
 
+COMMENT ON FUNCTION _public_within_effects_before(uuid[], uuid[]) IS
+$c$The first half of the one definition of a public_within transition. Takes
+_public_within_effects_lock, then snapshots every row an act can flip: each row whose team is at or
+below a team in p_team_under, or whose anchor is at or above a team in p_anchor_over, walked through
+every link, live or dead; every row when the root is in p_team_under (its forbid is the instance-wide
+off and reaches trees not linked under it). For each row it records whether the row confers
+(public_within_row_effective, the one effect definition) and whether its anchor is above its team
+along a live chain (the liveness clause of that definition, kept apart only so a transition can say
+which kind of cause flipped it).
+
+Why those two sets suffice. A row (T, A) confers from: the forbids on T's ancestors (any
+liveness) and the root's; whether T is the root or the gating team; a live chain from A down to T;
+and no pool in A's live subtree. So:
+  * a forbid on X can flip only rows with T at or below X: p_team_under = {X};
+  * a delete, restore, auto-join change or rename of X, or the gating team moving to or from X, can
+    flip only rows with A at or above X (X on the chain from A to T, X in A's subtree, or X = T,
+    whose anchors are above it): p_anchor_over = {X};
+  * a link or unlink of parent P over child C can change T's forbidding ancestors only for T at or
+    below C, and the chain, the pool and any path from A only for A at or above P:
+    p_team_under = {C}, p_anchor_over = {P}. Neither set depends on the link itself, so the same
+    rows are read before and after.
+The walks ignore liveness, so they are a superset of the live walks the effect reads. The narrow
+scope is what keeps an act's hold on the effects lock short: rows it cannot flip are never read.
+
+Call it after the act has locked the teams it writes and before it writes; pass the result to
+_public_within_transitions after the write. An empty object means no row can be reached, and
+_public_within_transitions then does nothing. With no public_within row at all it answers that at
+once, after the lock and without walking the tree: the lock is still taken, because a concurrent
+open may be about to commit the first row.
+
+It runs with jit off (20261124000040, an ALTER FUNCTION): its scan's estimated cost would
+JIT-compile it on every act. A later CREATE OR REPLACE of this function must restate SET jit = off,
+or it drops the setting.$c$;
+
 CREATE OR REPLACE FUNCTION _public_within_transitions(p_before jsonb, p_act text, p_correlation uuid)
 RETURNS jsonb
 LANGUAGE plpgsql
