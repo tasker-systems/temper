@@ -2513,6 +2513,221 @@ async fn a_caller_demoted_while_the_open_waits_opens_nothing(pool: PgPool) {
     );
 }
 
+// ── Admin demotion serializes with the admin arm ──────────────────────────────────────────────────
+
+/// Start a demotion of `who` in a transaction left open: the governance row is deleted and locked
+/// until the holder commits. `principal_governance_set` is what `access_service::demote_admin` and
+/// `standing_service::apply` (on Revoke and Deactivate) both run.
+async fn demotion_in_flight(
+    pool: &PgPool,
+    who: Uuid,
+) -> (sqlx::Transaction<'static, sqlx::Postgres>, i32) {
+    let mut holder = pool.begin().await.unwrap();
+    let pid = backend_pid(&mut holder).await;
+    let _: bool = sqlx::query_scalar("SELECT principal_governance_set($1, false, NULL, 'test')")
+        .bind(who)
+        .fetch_one(&mut *holder)
+        .await
+        .unwrap();
+    (holder, pid)
+}
+
+/// Each admin arm (open as the anchor side, close from neither side, the root forbid), with a
+/// demotion of the caller in flight when the door re-checks under its locks: the door waits on the
+/// governance row, and once the demotion commits it is refused and writes nothing. A re-check that
+/// only read the row saw the not-yet-deleted grant, admitted the caller, and committed an admin act
+/// beside a demotion already decided.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_demotion_in_flight_refuses_every_admin_arm(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    // The admin manages T, not the anchor `org`: the admin arm stands in for the anchor side.
+    join(&pool, w.eng_sec, w.admin, "maintainer").await;
+    // A row the admin closes from neither side.
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    let admin = w.admin;
+
+    // Open.
+    let (holder, pid) = demotion_in_flight(&pool, admin).await;
+    let p2 = pool.clone();
+    let (t, a) = (w.eng_sec, w.org);
+    let contender = tokio::spawn(async move { open_by(&p2, admin, t, a).await });
+    await_blocked_by(&pool, pid).await;
+    holder.commit().await.unwrap();
+    let err = contender.await.unwrap().unwrap_err();
+    assert!(matches!(err, ApiError::Forbidden), "open: {err:?}");
+    assert!(!row_exists(&pool, w.eng_sec, w.org).await);
+    test_support::approved_admin(&pool, admin).await;
+
+    // Close, from neither side: the admin leaves T first.
+    sqlx::query("DELETE FROM kb_team_members WHERE team_id = $1 AND profile_id = $2")
+        .bind(w.eng_sec)
+        .bind(admin)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (holder, pid) = demotion_in_flight(&pool, admin).await;
+    let p2 = pool.clone();
+    let (t, a) = (w.eng_sec, w.eng);
+    let contender = tokio::spawn(async move { close_by(&p2, admin, t, a).await });
+    await_blocked_by(&pool, pid).await;
+    holder.commit().await.unwrap();
+    let err = contender.await.unwrap().unwrap_err();
+    assert!(matches!(err, ApiError::Forbidden), "close: {err:?}");
+    assert!(row_exists(&pool, w.eng_sec, w.eng).await);
+    test_support::approved_admin(&pool, admin).await;
+
+    // The forbid on the root, an admin's alone.
+    let (holder, pid) = demotion_in_flight(&pool, admin).await;
+    let p2 = pool.clone();
+    let root = w.root;
+    let contender = tokio::spawn(async move { policy_by(&p2, admin, root, true).await });
+    await_blocked_by(&pool, pid).await;
+    holder.commit().await.unwrap();
+    let err = contender.await.unwrap().unwrap_err();
+    assert!(matches!(err, ApiError::Forbidden), "forbid: {err:?}");
+    assert_eq!(
+        records(&pool, "public_within_policy_changed", w.root, None).await,
+        0
+    );
+    assert!(effective(&pool, w.eng_sec, w.eng).await);
+}
+
+/// An admin whose demotion is rolled back is admitted once it ends: the door waited on the row, not
+/// on the outcome.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_demotion_rolled_back_admits_the_admin(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    join(&pool, w.eng_sec, w.admin, "maintainer").await;
+    let (holder, pid) = demotion_in_flight(&pool, w.admin).await;
+    let p2 = pool.clone();
+    let (admin, t, a) = (w.admin, w.eng_sec, w.org);
+    let contender = tokio::spawn(async move { open_by(&p2, admin, t, a).await });
+    await_blocked_by(&pool, pid).await;
+    holder.rollback().await.unwrap();
+    contender.await.unwrap().expect("still an admin");
+    assert!(row_exists(&pool, w.eng_sec, w.org).await);
+}
+
+/// A demotion committed before the act is seen by it: each admin arm refuses.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_demotion_committed_first_is_seen(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    join(&pool, w.eng_sec, w.admin, "maintainer").await;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    let (holder, _) = demotion_in_flight(&pool, w.admin).await;
+    holder.commit().await.unwrap();
+    let err = open_by(&pool, w.admin, w.eng_sec, w.org).await.unwrap_err();
+    assert!(matches!(err, ApiError::Forbidden), "{err:?}");
+    sqlx::query("DELETE FROM kb_team_members WHERE team_id = $1 AND profile_id = $2")
+        .bind(w.eng_sec)
+        .bind(w.admin)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let err = close_by(&pool, w.admin, w.eng_sec, w.eng)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ApiError::Forbidden), "{err:?}");
+    let err = policy_by(&pool, w.admin, w.root, true).await.unwrap_err();
+    assert!(matches!(err, ApiError::Forbidden), "{err:?}");
+}
+
+/// The other order: a door that has re-checked holds the caller's governance row, and every kind of
+/// demotion waits for it rather than deadlocking with it. The holder takes an open's locks in the
+/// open's order (the team rows, the effects lock, then the governance row) and writes under them;
+/// the demotions are `standing_service::apply` on Revoke (its standing row, then the governance
+/// delete), the same on Deactivate, and an operator's plain DELETE of the row.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn every_demotion_waits_for_a_door_that_rechecked(pool: PgPool) {
+    use temper_principal::{Act, ActorAuthority};
+    use temper_services::services::standing_service::{self, ApplyStandingParams};
+
+    let d = doors(&pool).await;
+    let w = &d.w;
+    let subjects = [
+        w.admin,
+        person(&pool, "admin-two").await,
+        person(&pool, "admin-three").await,
+    ];
+    for who in subjects {
+        test_support::approved_admin(&pool, who).await;
+    }
+
+    for (i, who) in subjects.into_iter().enumerate() {
+        let mut door = pool.begin().await.unwrap();
+        let pid = backend_pid(&mut door).await;
+        sqlx::query("SELECT _public_within_open_locks($1, $2)")
+            .bind(w.eng_sec)
+            .bind(w.org)
+            .execute(&mut *door)
+            .await
+            .unwrap();
+        let held: Option<Uuid> = sqlx::query_scalar(
+            "SELECT profile_id FROM kb_principal_governance WHERE profile_id = $1 FOR KEY SHARE",
+        )
+        .bind(who)
+        .fetch_optional(&mut *door)
+        .await
+        .unwrap();
+        assert!(held.is_some());
+
+        let p2 = pool.clone();
+        let demotion = tokio::spawn(async move {
+            let act = match i {
+                0 => Some(Act::Revoke {
+                    reason: "test".into(),
+                }),
+                1 => Some(Act::Deactivate),
+                _ => None,
+            };
+            match act {
+                Some(act) => standing_service::apply(
+                    &p2,
+                    ApplyStandingParams {
+                        subject: ProfileId::from(who),
+                        act,
+                        actor: None,
+                        authority: ActorAuthority::Admin,
+                    },
+                )
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+                None => sqlx::query("DELETE FROM kb_principal_governance WHERE profile_id = $1")
+                    .bind(who)
+                    .execute(&p2)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| e.to_string()),
+            }
+        });
+        await_blocked_by(&pool, pid).await;
+        sqlx::query(
+            "INSERT INTO kb_team_public_within (team_id, anchor_id, opened_by, admin_act) \
+             VALUES ($1, $2, $3, true) ON CONFLICT DO NOTHING",
+        )
+        .bind(w.eng_sec)
+        .bind(w.org)
+        .bind(who)
+        .execute(&mut *door)
+        .await
+        .unwrap();
+        door.commit().await.unwrap();
+        demotion
+            .await
+            .unwrap()
+            .expect("the demotion completes after the door");
+        assert!(
+            !access_service::is_system_admin(&pool, ProfileId::from(who))
+                .await
+                .unwrap()
+        );
+    }
+}
+
 /// The race with the instance-wide off, forbid first: a root forbid committed while the open waits
 /// is seen by the open's re-check, and nothing is opened.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
