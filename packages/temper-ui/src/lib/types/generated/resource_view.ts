@@ -4,6 +4,7 @@ import type { EmbeddingStatus } from "./EmbeddingStatus";
 import type { ProfileId } from "./ProfileId";
 import type { ResourceId } from "./ResourceId";
 import type { ManagedMeta } from "./managed_meta";
+import type { Reach } from "./reach";
 import type { BodyStorage, IngestEnded, IngestState } from "./resource";
 import type { JsonValue } from "./serde_json/JsonValue";
 
@@ -180,4 +181,16 @@ content?: string | null,
  * read carrying the field discloses nothing about any row the gate did not
  * already admit.
  */
-embedding_status?: EmbeddingStatus | null, };
+embedding_status?: EmbeddingStatus | null, 
+/**
+ * How the reader reaches this resource: `public_within` when it reads the resource only
+ * because a team opened its owned contexts to the reader's part of the team tree,
+ * `membership` for every other route (owner, member, share, grant).
+ *
+ * Answered by the single-resource read (`GET /api/resources/{id}`) only; absent on every
+ * list, search and HTTP write response. A client that reads a write back through that GET
+ * (the MCP resource tools do, for create and update) therefore carries it. Settled in the
+ * same statement as the read's own gate, so it is never answered for a resource the reader
+ * cannot read, and it names no team or person.
+ */
+reach?: Reach | null, };

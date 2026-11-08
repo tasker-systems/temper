@@ -1,0 +1,38 @@
+title    = "public_within: a reader of a team's context can address it by +team/slug, and a context or resource get says whether the reader reaches it by membership or through public_within"
+pr       = "self"
+classes  = ["behavioral", "additive"]
+surfaces = ["http", "mcp", "clients", "schema"]
+status   = "signal-only"
+body = '''
+Behavioral: the +team/slug resolver. Before this change a +team/slug ref resolved only for a
+direct member of the team; anyone else got 403, even someone who could already read the context
+by its id. Now anyone who reads a team's context can address it by +team/slug: a person who reads
+it through public_within, a member of a descendant team who reads its parent's contexts by
+membership, and a member of a team the context is shared to or a holder of a read grant on it.
+This holds everywhere a context ref is accepted (GET /api/contexts/resolve, resource list and
+search scopes, the graph panorama and composition reads, ingest, and a move's context_to). Every
+refusal is unchanged, byte for byte: a non-member who does not read the context gets the same 403
+whether the slug is real, missing, retired or unreadable; a soft-deleted team is the same 404 as a
+team that never existed; a member's slug refusal still names the slug. A machine principal never
+resolves through public_within, since its reading set excludes the arm. Nothing becomes writable:
+create, ingest and move re-check authorship behind the resolved id, so a public reader who
+targets a team's context gets the backend's "cannot author" 403 instead of the resolver's 403,
+and nothing is written.
+
+Additive: GET /api/contexts/{id} and GET /api/resources/{id} carry an optional
+reach: { via: "membership" | "public_within" }. It is public_within when the reader reads the
+object and does not read it by membership; membership otherwise (an owner, a grantee, a share or a
+member). It names no team and no person. Only these two single-object reads answer it; lists,
+search, HTTP create and update, and the admin-axis retired-context read leave it out. The MCP
+resource tools read a resource back through GET /api/resources/{id}, so their get, create and
+update answers carry it too. Two new SQL functions answer
+it (context_reached_via, resource_reached_via); with no public_within row on the object's owning
+team they return after one index probe.
+
+Who observes: a person under the anchor of an effective public_within row; and, with no
+public_within row at all, a member of a descendant team using +parent/slug and a share or grant
+holder using +team/slug. A non-member's +team/slug now evaluates the caller's context read set once
+(the cost of a context list) before answering, where it used to stop at the membership check; the
+answer itself is unchanged. Witnesses: crates/temper-api/tests/context_ref_resolve_test.rs,
+public_within_resolver_test.rs. Release relevance: behavioral + additive; signal-only.
+'''

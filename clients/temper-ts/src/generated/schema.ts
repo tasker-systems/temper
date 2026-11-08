@@ -1541,7 +1541,9 @@ export interface paths {
         /**
          * Resolve a context ref to its id
          * @description The caller's own visibility bounds the answer: a context the caller cannot read answers
-         *     exactly as one that does not exist (uniform 404, no existence oracle). The resolution is
+         *     exactly as one that does not exist (uniform 404, no existence oracle; for a `+team` ref from a
+         *     caller who is not a member of the team, one uniform 403). A `+team/slug` ref resolves for any
+         *     caller who reads that context, member or not. The resolution is
          *     [`context_service::resolve_context_ref`] — the same one every ref-accepting route uses — so
          *     each ref form keeps the refusal it has everywhere else.
          */
@@ -6197,6 +6199,7 @@ export interface components {
              *     Together with `slug`, forms the full decorated context ref `{owner_ref}/{slug}`.
              */
             owner_ref: string;
+            reach?: components["schemas"]["Reach"] | null;
             /**
              * @description Whether this context is retired — invisible to every read path and unwriteable, with
              *     every row it homes preserved.
@@ -9097,6 +9100,26 @@ export interface components {
              */
             count: number;
         };
+        /**
+         * @description How the reader reaches the object. An object of its own, not a bare field, so a later answer
+         *     can grow beside `via` without moving it.
+         */
+        Reach: {
+            /**
+             * @description `public_within` when the reader reads the object and does not read it by membership;
+             *     `membership` otherwise.
+             */
+            via: components["schemas"]["ReachVia"];
+        };
+        /**
+         * @description The route by which the reader reaches the object.
+         *
+         *     A route, never a source: it names neither the team that opened the object nor anyone who did,
+         *     and it is answered only on a read the reader already passed, so it says nothing about an object
+         *     the reader cannot read.
+         * @enum {string}
+         */
+        ReachVia: "membership" | "public_within";
         /** @description API response acknowledging a single reassignment. */
         ReassignAck: {
             /** Format: uuid */
@@ -10696,6 +10719,7 @@ export interface components {
             originator_profile_id: components["schemas"]["ProfileId"];
             owner_handle: string;
             owner_profile_id: components["schemas"]["ProfileId"];
+            reach?: components["schemas"]["Reach"] | null;
             /**
              * @description The decorated, self-resolving address: `sluggify(title)-<uuid>`.
              *
@@ -16608,7 +16632,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description A `+<team>` ref whose team exists but does not count the caller as a member (the shared resolver's membership gate) */
+            /** @description A `+<team>/<slug>` ref whose team exists, from a caller who is not a member of it and does not read a context of that team by that slug. One answer whether the slug is real, missing, retired or unreadable. A non-member who does read the context (a member of a descendant team, a person reading the team through public_within, a share or read grant) resolves it */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -16643,7 +16667,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Context details */
+            /** @description Context details, with `reach`: how the caller reaches it (`membership`, or `public_within` when the caller reads it only through public_within). A retired context an administrator reads on the admin axis carries no `reach` */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -19852,7 +19876,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Resource plus both metadata tiers */
+            /** @description Resource plus both metadata tiers, and `reach`: how the caller reaches it (`membership`, or `public_within` when the caller reads it only through public_within) */
             200: {
                 headers: {
                     [name: string]: unknown;

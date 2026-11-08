@@ -816,7 +816,7 @@ module Temper::Generated
     end
 
     # Resolve a context ref to its id
-    # The caller's own visibility bounds the answer: a context the caller cannot read answers exactly as one that does not exist (uniform 404, no existence oracle). The resolution is [`context_service::resolve_context_ref`] — the same one every ref-accepting route uses — so each ref form keeps the refusal it has everywhere else.
+    # The caller's own visibility bounds the answer: a context the caller cannot read answers exactly as one that does not exist (uniform 404, no existence oracle; for a `+team` ref from a caller who is not a member of the team, one uniform 403). A `+team/slug` ref resolves for any caller who reads that context, member or not. The resolution is [`context_service::resolve_context_ref`] — the same one every ref-accepting route uses — so each ref form keeps the refusal it has everywhere else.
     # @param context_ref [String] The context ref to resolve: &#x60;@me/&lt;slug&gt;&#x60;, &#x60;@&lt;handle&gt;/&lt;slug&gt;&#x60;, &#x60;+&lt;team&gt;/&lt;slug&gt;&#x60;, or a bare UUID. One grammar — &#x60;temper_core::context_ref::parse_context_ref&#x60;, the parser the CLI and the MCP tools use.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -827,7 +827,7 @@ module Temper::Generated
     end
 
     # Resolve a context ref to its id
-    # The caller&#39;s own visibility bounds the answer: a context the caller cannot read answers exactly as one that does not exist (uniform 404, no existence oracle). The resolution is [&#x60;context_service::resolve_context_ref&#x60;] — the same one every ref-accepting route uses — so each ref form keeps the refusal it has everywhere else.
+    # The caller&#39;s own visibility bounds the answer: a context the caller cannot read answers exactly as one that does not exist (uniform 404, no existence oracle; for a &#x60;+team&#x60; ref from a caller who is not a member of the team, one uniform 403). A &#x60;+team/slug&#x60; ref resolves for any caller who reads that context, member or not. The resolution is [&#x60;context_service::resolve_context_ref&#x60;] — the same one every ref-accepting route uses — so each ref form keeps the refusal it has everywhere else.
     # @param context_ref [String] The context ref to resolve: &#x60;@me/&lt;slug&gt;&#x60;, &#x60;@&lt;handle&gt;/&lt;slug&gt;&#x60;, &#x60;+&lt;team&gt;/&lt;slug&gt;&#x60;, or a bare UUID. One grammar — &#x60;temper_core::context_ref::parse_context_ref&#x60;, the parser the CLI and the MCP tools use.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.

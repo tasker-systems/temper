@@ -33,6 +33,9 @@ module Temper::Generated
     # The already-sigil'd owner addressable: `@<handle>` for profiles, `+<team-slug>` for teams. Together with `slug`, forms the full decorated context ref `{owner_ref}/{slug}`.
     attr_accessor :owner_ref
 
+    # How the reader reaches this context: `public_within` when it reads the context only because its owning team opened it to the reader's part of the team tree, `membership` for every other route (owner, member of a team that reaches it, share, grant).  Present on `GET /api/contexts/{id}` only; absent on create, on the list, and on the admin-axis read of a retired context. Settled in the same statement as the read's own gate, so it is never answered for a context the reader cannot read, and it names no team or person.
+    attr_accessor :reach
+
     # Whether this context is retired — invisible to every read path and unwriteable, with every row it homes preserved.  **Polarity is inverted from the column on purpose.** The database stores `is_active`, mirroring `kb_teams`; the wire says `retired`, which is the word the product uses. The inversion is written as the identical SQL literal `NOT c.is_active AS \"retired!\"` in every query that selects this column — the two read-axis queries (`list_visible`, `get_visible`, always `false` there by construction) and the two admin-axis queries (`list_retired_administered`, `get_retired_administered`) — and is never re-derived any other way, e.g. never inverted in Rust after the fact.
     attr_accessor :retired
 
@@ -51,6 +54,7 @@ module Temper::Generated
         :'kb_owner_table' => :'kb_owner_table',
         :'name' => :'name',
         :'owner_ref' => :'owner_ref',
+        :'reach' => :'reach',
         :'retired' => :'retired',
         :'slug' => :'slug',
         :'updated' => :'updated'
@@ -77,6 +81,7 @@ module Temper::Generated
         :'kb_owner_table' => :'String',
         :'name' => :'String',
         :'owner_ref' => :'String',
+        :'reach' => :'Reach',
         :'retired' => :'Boolean',
         :'slug' => :'String',
         :'updated' => :'Time'
@@ -86,6 +91,7 @@ module Temper::Generated
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
+        :'reach',
       ])
     end
 
@@ -145,6 +151,10 @@ module Temper::Generated
         self.owner_ref = attributes[:'owner_ref']
       else
         self.owner_ref = nil
+      end
+
+      if attributes.key?(:'reach')
+        self.reach = attributes[:'reach']
       end
 
       if attributes.key?(:'retired')
@@ -343,6 +353,7 @@ module Temper::Generated
           kb_owner_table == o.kb_owner_table &&
           name == o.name &&
           owner_ref == o.owner_ref &&
+          reach == o.reach &&
           retired == o.retired &&
           slug == o.slug &&
           updated == o.updated
@@ -357,7 +368,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [can_write, created, id, kb_owner_id, kb_owner_table, name, owner_ref, retired, slug, updated].hash
+      [can_write, created, id, kb_owner_id, kb_owner_table, name, owner_ref, reach, retired, slug, updated].hash
     end
 
     # Builds the object from hash

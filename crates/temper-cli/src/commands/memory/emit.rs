@@ -420,6 +420,7 @@ mod tests {
             open_meta: Some(serde_json::Value::Object(open)),
             content: None,
             embedding_status: None,
+            reach: None,
         }
         .with_derived_refs()
     }

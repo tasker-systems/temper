@@ -844,11 +844,42 @@ pub async fn show_view_select(
     id: ResourceId,
     sections: &SectionSet,
 ) -> ApiResult<ResourceView> {
-    let hit = readback::hit_identities(pool, profile_id, &[id])
-        .await
-        .map_err(api_err)?
-        .into_iter()
-        .next();
+    show_view(pool, profile_id, id, sections, false).await
+}
+
+/// [`show_view_select`] for the single-resource read door (`GET /api/resources/{id}`), which also
+/// answers [`ResourceView::reach`]: how the reader reaches this resource.
+///
+/// A separate entry point so the write readbacks and the meta door, which also read through
+/// `show_view_select`, neither pay for nor carry an answer they were not asked for. Reach is
+/// settled in the gate's own statement (`readback::show_identity`), never in a second query.
+pub async fn show_view_with_reach_select(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    id: ResourceId,
+    sections: &SectionSet,
+) -> ApiResult<ResourceView> {
+    show_view(pool, profile_id, id, sections, true).await
+}
+
+async fn show_view(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    id: ResourceId,
+    sections: &SectionSet,
+    with_reach: bool,
+) -> ApiResult<ResourceView> {
+    let hit = if with_reach {
+        readback::show_identity(pool, profile_id, id)
+            .await
+            .map_err(api_err)?
+    } else {
+        readback::hit_identities(pool, profile_id, &[id])
+            .await
+            .map_err(api_err)?
+            .into_iter()
+            .next()
+    };
     let Some(mut view) = hit else {
         let not_found = ApiError::NotFound(format!("resource {id} not found"));
         return Err(erased_or(pool, profile_id, id, not_found).await);

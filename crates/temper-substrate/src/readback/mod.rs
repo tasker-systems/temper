@@ -76,6 +76,7 @@ use crate::ids::{
 };
 use crate::keys::{is_managed_property_key, MANAGED_PROPERTY_KEYS};
 use temper_core::types::managed_meta::ManagedMeta;
+use temper_core::types::reach::{Reach, ReachVia};
 use temper_core::types::resource::{BodyStorage, IngestState, SortOrder};
 use temper_core::types::ResourceView;
 
@@ -2205,6 +2206,37 @@ pub async fn hit_identities(
     principal: ProfileId,
     ids: &[ResourceId],
 ) -> Result<Vec<ResourceView>> {
+    hit_identities_with(pool, principal, ids, false).await
+}
+
+/// One resource as [`hit_identities`] reads it, plus [`ResourceView::reach`]: how the principal
+/// reaches it. `None` when the principal cannot read it.
+///
+/// The single-resource read's door. Reach is settled **in the gate's own statement**, from its
+/// SELECT list, so `resource_reached_via` runs only for the row `resources_visible_to` already
+/// admitted (its precondition) and in the same snapshot. With no public_within row on the owning
+/// team of the resource's home it costs one index probe. Never call this per row of a list:
+/// [`hit_identities`] is the batch read, and it never evaluates reach.
+pub async fn show_identity(
+    pool: &PgPool,
+    principal: ProfileId,
+    id: ResourceId,
+) -> Result<Option<ResourceView>> {
+    Ok(hit_identities_with(pool, principal, &[id], true)
+        .await?
+        .into_iter()
+        .next())
+}
+
+/// The one statement behind [`hit_identities`] and [`show_identity`]. `with_reach` is bound into
+/// the SQL as a `CASE` guard, which Postgres evaluates in order, so a batch read never calls the
+/// reach function at all.
+async fn hit_identities_with(
+    pool: &PgPool,
+    principal: ProfileId,
+    ids: &[ResourceId],
+    with_reach: bool,
+) -> Result<Vec<ResourceView>> {
     if ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -2241,7 +2273,10 @@ pub async fn hit_identities(
                     WHEN 'kb_profiles' THEN '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)
                     ELSE NULL
                   END                        AS "context_owner_ref?",
-                  mm.managed                 AS "managed?"
+                  mm.managed                 AS "managed?",
+                  -- In the SELECT list, so it runs only for a row the gate below admitted: the
+                  -- reach function takes "the principal reads it" as its precondition.
+                  CASE WHEN $4 THEN resource_reached_via($1, r.id) END AS "reach_via?"
              FROM kb_resources r
              JOIN kb_resource_homes h ON h.resource_id = r.id
              -- `AND v.resource_id = ANY($2)` is REDUNDANT AND LOAD-BEARING. Do not delete it.
@@ -2272,6 +2307,7 @@ pub async fn hit_identities(
         principal.uuid(),
         &raw,
         &managed_keys,
+        with_reach,
     )
     .fetch_all(pool)
     .await?;
@@ -2297,6 +2333,18 @@ pub async fn hit_identities(
                 Some((state, ended)) => (Some(state), ended),
                 None => (None, None),
             };
+            // `resource_reached_via` returns one of two literals, so an unknown spelling is a
+            // fault, and it fails the read exactly as the context get's `Reach` decode does,
+            // never silently dropped from one door and an error on the other.
+            let reach = row
+                .reach_via
+                .as_deref()
+                .map(|s| {
+                    ReachVia::from_sql(s)
+                        .map(|via| Reach { via })
+                        .ok_or_else(|| anyhow::anyhow!("unknown reach route {s:?} for {}", row.id))
+                })
+                .transpose()?;
             Ok(ResourceView {
                 id: ResourceId::from(row.id),
                 // Filled by `with_derived_refs` below — neither is a column.
@@ -2327,6 +2375,7 @@ pub async fn hit_identities(
                 open_meta: None,
                 content: None,
                 embedding_status: None,
+                reach,
             }
             .with_derived_refs())
         })

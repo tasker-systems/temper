@@ -26,6 +26,7 @@ from temper.generated.models.embedding_status import EmbeddingStatus
 from temper.generated.models.ingest_ended import IngestEnded
 from temper.generated.models.ingest_state import IngestState
 from temper.generated.models.managed_meta import ManagedMeta
+from temper.generated.models.reach import Reach
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
@@ -58,10 +59,11 @@ class ResourceView(BaseModel):
     originator_profile_id: UUID = Field(description="A `kb_profiles.id` value.")
     owner_handle: StrictStr
     owner_profile_id: UUID = Field(description="A `kb_profiles.id` value.")
+    reach: Optional[Reach] = Field(default=None, description="How the reader reaches this resource: `public_within` when it reads the resource only because a team opened its owned contexts to the reader's part of the team tree, `membership` for every other route (owner, member, share, grant).  Answered by the single-resource read (`GET /api/resources/{id}`) only; absent on every list, search and HTTP write response. A client that reads a write back through that GET (the MCP resource tools do, for create and update) therefore carries it. Settled in the same statement as the read's own gate, so it is never answered for a resource the reader cannot read, and it names no team or person.")
     ref: StrictStr = Field(description="The decorated, self-resolving address: `sluggify(title)-<uuid>`.  Not a column — derived by [`ResourceView::with_derived_refs`] from `title` + `id`. Until this task it was injected render-time by the CLI alone (`temper-cli/src/commands/resource.rs`), so MCP callers never received one even though the shipped skill instructs agents to use it.")
     title: StrictStr
     updated: datetime
-    __properties: ClassVar[List[str]] = ["body_hash", "body_storage", "changed_by_me_at", "cogmap_id", "cogmap_name", "content", "context_name", "context_owner_ref", "context_ref", "context_slug", "created", "doc_type_name", "embedding_status", "id", "ingest_ended", "ingest_state", "is_active", "kb_context_id", "managed_meta", "open_meta", "origin_uri", "originator_profile_id", "owner_handle", "owner_profile_id", "ref", "title", "updated"]
+    __properties: ClassVar[List[str]] = ["body_hash", "body_storage", "changed_by_me_at", "cogmap_id", "cogmap_name", "content", "context_name", "context_owner_ref", "context_ref", "context_slug", "created", "doc_type_name", "embedding_status", "id", "ingest_ended", "ingest_state", "is_active", "kb_context_id", "managed_meta", "open_meta", "origin_uri", "originator_profile_id", "owner_handle", "owner_profile_id", "reach", "ref", "title", "updated"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -105,6 +107,9 @@ class ResourceView(BaseModel):
         # override the default output from pydantic by calling `to_dict()` of managed_meta
         if self.managed_meta:
             _dict['managed_meta'] = self.managed_meta.to_dict()
+        # override the default output from pydantic by calling `to_dict()` of reach
+        if self.reach:
+            _dict['reach'] = self.reach.to_dict()
         # set to None if body_hash (nullable) is None
         # and model_fields_set contains the field
         if self.body_hash is None and "body_hash" in self.model_fields_set:
@@ -180,6 +185,11 @@ class ResourceView(BaseModel):
         if self.open_meta is None and "open_meta" in self.model_fields_set:
             _dict['open_meta'] = None
 
+        # set to None if reach (nullable) is None
+        # and model_fields_set contains the field
+        if self.reach is None and "reach" in self.model_fields_set:
+            _dict['reach'] = None
+
         return _dict
 
     @classmethod
@@ -216,6 +226,7 @@ class ResourceView(BaseModel):
             "originator_profile_id": obj.get("originator_profile_id"),
             "owner_handle": obj.get("owner_handle"),
             "owner_profile_id": obj.get("owner_profile_id"),
+            "reach": Reach.from_dict(obj["reach"]) if obj.get("reach") is not None else None,
             "ref": obj.get("ref"),
             "title": obj.get("title"),
             "updated": obj.get("updated")

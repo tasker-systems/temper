@@ -225,7 +225,72 @@ SELECT c.id,
          WHERE rh.anchor_table = 'kb_contexts' AND rh.anchor_id = c.id)
   FROM kb_contexts c WHERE c.id IN (SELECT rc.context_id FROM readable rc) ORDER BY c.name"""
 
+# The single-object gets, as `main` ran them and as they run with `reach`. Two targets, each a
+# context and the first resource homed in it; the target lookup is the same text on both sides:
+#   * own: a context of one of the reader's own squads. Admitted in every case; with rows every
+#     squad is a T, so the reach function runs its membership probe, which hits.
+#   * public: a context of a sibling squad in the reader's division that the reader is not on.
+#     Unreadable without rows (the gate refuses, reach never runs, as on `main`); with rows the
+#     reader reads it only through public_within, so the membership probe runs and misses.
+OWN_TARGET = """WITH target AS MATERIALIZED (
+    SELECT c.id AS context_id,
+           (SELECT h.resource_id FROM kb_resource_homes h
+             WHERE h.anchor_table = 'kb_contexts' AND h.anchor_id = c.id
+             ORDER BY h.resource_id LIMIT 1) AS resource_id
+      FROM kb_team_members tm
+      JOIN kb_contexts c ON c.owner_table = 'kb_teams' AND c.owner_id = tm.team_id
+     WHERE tm.profile_id = $1
+     ORDER BY c.id LIMIT 1)"""
+
+PUBLIC_TARGET = """WITH target AS MATERIALIZED (
+    SELECT c.id AS context_id,
+           (SELECT h.resource_id FROM kb_resource_homes h
+             WHERE h.anchor_table = 'kb_contexts' AND h.anchor_id = c.id
+             ORDER BY h.resource_id LIMIT 1) AS resource_id
+      FROM kb_team_members tm
+      JOIN kb_teams_parents mine ON mine.child_id = tm.team_id
+      JOIN kb_teams_parents sib ON sib.parent_id = mine.parent_id
+      JOIN kb_contexts c ON c.owner_table = 'kb_teams' AND c.owner_id = sib.child_id
+     WHERE tm.profile_id = $1
+       AND NOT EXISTS (SELECT 1 FROM kb_team_members m
+                        WHERE m.team_id = sib.child_id AND m.profile_id = $1)
+     ORDER BY c.id LIMIT 1)"""
+
+CONTEXT_GET = """
+SELECT c.id, c.name, c.slug, context_authorable_by_profile($1, c.id), NOT c.is_active{reach}
+  FROM kb_contexts c
+ WHERE c.id = (SELECT context_id FROM target)
+   AND context_visible_to($1, c.id)"""
+
+RESOURCE_GET = """
+SELECT r.id, r.title, h.owner_profile_id, c.slug{reach}
+  FROM kb_resources r
+  JOIN kb_resource_homes h ON h.resource_id = r.id
+  JOIN resources_visible_to($1) v
+    ON v.resource_id = r.id AND v.resource_id = ANY(ARRAY[(SELECT resource_id FROM target)])
+  LEFT JOIN kb_contexts c ON c.id = h.anchor_id AND h.anchor_table = 'kb_contexts'
+ WHERE r.id = ANY(ARRAY[(SELECT resource_id FROM target)])"""
+
+CONTEXT_REACH = ", context_reached_via($1, c.id)"
+RESOURCE_REACH = ", CASE WHEN true THEN resource_reached_via($1, r.id) END"
+
 DOORS = {
+    "context get (own)": (
+        OWN_TARGET + CONTEXT_GET.format(reach=""),
+        OWN_TARGET + CONTEXT_GET.format(reach=CONTEXT_REACH),
+    ),
+    "resource get (own)": (
+        OWN_TARGET + RESOURCE_GET.format(reach=""),
+        OWN_TARGET + RESOURCE_GET.format(reach=RESOURCE_REACH),
+    ),
+    "context get (public)": (
+        PUBLIC_TARGET + CONTEXT_GET.format(reach=""),
+        PUBLIC_TARGET + CONTEXT_GET.format(reach=CONTEXT_REACH),
+    ),
+    "resource get (public)": (
+        PUBLIC_TARGET + RESOURCE_GET.format(reach=""),
+        PUBLIC_TARGET + RESOURCE_GET.format(reach=RESOURCE_REACH),
+    ),
     "list_visible": LIST_VISIBLE,
     "list_visible (set)": (LIST_VISIBLE, LIST_VISIBLE_SET),
     "resources_visible_to": "SELECT count(*) FROM resources_visible_to($1)",
@@ -293,7 +358,11 @@ def measure(driver, handles, samples):
     for name, sql in DOORS.items():
         base_sql, head_sql = sql if isinstance(sql, tuple) else (sql, sql)
         qa, qb = (
-            f"SELECT count(*)::text FROM ({s}) door".replace("'", "''")
+            # count(door.*), not count(*): a whole-row reference uses every output column. With
+            # count(*) the planner drops each unused, non-volatile column of the door subquery, so
+            # a STABLE function in a door's SELECT list (reach, a per-context count) never runs
+            # and the door is timed as its WHERE clause alone.
+            f"SELECT count(door.*)::text FROM ({s}) door".replace("'", "''")
             for s in (base_sql, head_sql)
         )
         rows = psql(

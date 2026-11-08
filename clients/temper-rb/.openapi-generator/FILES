@@ -354,6 +354,8 @@ lib/temper/generated/models/quantity_scale_one_of1.rb
 lib/temper/generated/models/quantity_scale_one_of2.rb
 lib/temper/generated/models/query_response.rb
 lib/temper/generated/models/queue_count.rb
+lib/temper/generated/models/reach.rb
+lib/temper/generated/models/reach_via.rb
 lib/temper/generated/models/reassign_ack.rb
 lib/temper/generated/models/reassign_context_outcome.rb
 lib/temper/generated/models/reassign_context_request.rb

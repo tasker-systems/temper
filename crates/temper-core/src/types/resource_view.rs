@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::managed_meta::ManagedMeta;
+use super::reach::Reach;
 use super::resource::{BodyStorage, IngestEnded, IngestState};
 use super::workflow_job::EmbeddingStatus;
 use crate::error::TemperError;
@@ -219,6 +220,17 @@ pub struct ResourceView {
     /// already admit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedding_status: Option<EmbeddingStatus>,
+    /// How the reader reaches this resource: `public_within` when it reads the resource only
+    /// because a team opened its owned contexts to the reader's part of the team tree,
+    /// `membership` for every other route (owner, member, share, grant).
+    ///
+    /// Answered by the single-resource read (`GET /api/resources/{id}`) only; absent on every
+    /// list, search and HTTP write response. A client that reads a write back through that GET
+    /// (the MCP resource tools do, for create and update) therefore carries it. Settled in the
+    /// same statement as the read's own gate, so it is never answered for a resource the reader
+    /// cannot read, and it names no team or person.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reach: Option<Reach>,
 }
 
 impl ResourceView {
@@ -542,6 +554,7 @@ mod tests {
             open_meta: None,
             content: None,
             embedding_status: None,
+            reach: None,
         }
     }
 
