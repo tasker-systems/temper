@@ -97,8 +97,8 @@ pub(crate) async fn role_on_team_on(
 /// which pass it to tell a team that is already deleted (their `is_active` write answers
 /// `NotFound`) from one the caller is not on (`Forbidden`). An authority decision asks
 /// [`role_on_team`].
-async fn membership_row_role(
-    pool: &PgPool,
+async fn membership_row_role<'e, E: sqlx::PgExecutor<'e>>(
+    pool: E,
     team_id: Uuid,
     profile_id: ProfileId,
 ) -> ApiResult<Option<TeamRole>> {
@@ -1124,6 +1124,17 @@ pub async fn delete_team(
     // The write and its `team_lifecycle_changed` record are one statement (lifecycle doors D8). The
     // writer guards the DAG root in its UPDATE's WHERE, so the check and the write stay atomic.
     let mut tx = pool.begin().await?;
+    // Under the team's row lock, the owner arm is decided again on the membership row, as above: a
+    // demotion or removal committed since that check cannot race the delete it would have refused
+    // (nor be told the rows the delete names to the team's owner).
+    lock_teams_ascending(&mut tx, &[team_id]).await?;
+    if !admin
+        && (crate::services::access_service::is_root_or_gating_team_on(&mut tx, team_id).await?
+            || membership_row_role(&mut *tx, team_id, caller.profile_id()).await?
+                != Some(TeamRole::Owner))
+    {
+        return Err(ApiError::Forbidden);
+    }
     let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -2114,9 +2125,8 @@ async fn lock_teams_and_subtree(
     // gating slug change takes exclusively (the settings trigger, and every rename). Taken AFTER
     // the team rows, in the order `rename_slug` takes them (its team row, then the exclusive
     // lock), so this act never holds the advisory lock while waiting on a row. It never touches
-    // the settings row, whose writer takes the row and then the exclusive lock. (A rename of the
-    // gating team against a settings update repointing the slug is an inversion between those
-    // two writers alone; it predates this act and is tracked separately.)
+    // the settings row. (The gating-slug writer, `_admin_gating_team_slug_write`, takes the
+    // exclusive lock before the settings row, the order a rename takes them in.)
     sqlx::query_scalar!(r#"SELECT 1 AS "one!" FROM (SELECT _gating_team_lock(false)) g"#)
         .fetch_one(&mut *tx)
         .await?;

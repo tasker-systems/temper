@@ -48,7 +48,7 @@ the shared request here is then its own. The key is per database, like every adv
 public_within_effects: prefix keeps it out of the other hashtextextended keys.$c$;
 
 -- ── 2. Before ─────────────────────────────────────────────────────────────────────────────────────
-CREATE FUNCTION _public_within_effects_before(p_touched uuid[])
+CREATE FUNCTION _public_within_effects_before(p_team_under uuid[], p_anchor_over uuid[])
 RETURNS jsonb
 LANGUAGE plpgsql
 SET search_path = public, pg_temp
@@ -62,17 +62,15 @@ BEGIN
         RETURN '{}'::jsonb;
     END IF;
     v_all := EXISTS (SELECT 1 FROM kb_teams r
-                      WHERE r.id = ANY(p_touched) AND r.slug = 'temper-system');
-    WITH RECURSIVE up AS (
-        SELECT t.id AS team_id FROM kb_teams t WHERE t.id = ANY(p_touched)
-        UNION
-        SELECT tp.parent_id FROM kb_teams_parents tp JOIN up ON tp.child_id = up.team_id
-    ), down AS (
-        SELECT t.id AS team_id FROM kb_teams t WHERE t.id = ANY(p_touched)
+                      WHERE r.id = ANY(p_team_under) AND r.slug = 'temper-system');
+    WITH RECURSIVE down AS (
+        SELECT t.id AS team_id FROM kb_teams t WHERE t.id = ANY(p_team_under)
         UNION
         SELECT tp.child_id FROM kb_teams_parents tp JOIN down ON tp.parent_id = down.team_id
-    ), near AS (
-        SELECT team_id FROM up UNION SELECT team_id FROM down
+    ), up AS (
+        SELECT t.id AS team_id FROM kb_teams t WHERE t.id = ANY(p_anchor_over)
+        UNION
+        SELECT tp.parent_id FROM kb_teams_parents tp JOIN up ON tp.child_id = up.team_id
     )
     SELECT coalesce(jsonb_object_agg(
                pw.team_id::text || ':' || pw.anchor_id::text,
@@ -85,21 +83,35 @@ BEGIN
       INTO v_snap
       FROM kb_team_public_within pw
      WHERE v_all
-        OR pw.team_id IN (SELECT team_id FROM near)
-        OR pw.anchor_id IN (SELECT team_id FROM near);
+        OR pw.team_id IN (SELECT team_id FROM down)
+        OR pw.anchor_id IN (SELECT team_id FROM up);
     RETURN v_snap;
 END;
 $$;
 
-COMMENT ON FUNCTION _public_within_effects_before(uuid[]) IS
+COMMENT ON FUNCTION _public_within_effects_before(uuid[], uuid[]) IS
 $c$The first half of the one definition of a public_within transition. Takes
-_public_within_effects_lock, then snapshots every row an act on p_touched can reach: each row whose
-team or anchor is in the touched teams' up-set or down-set, walked through every link, live or dead
-(a forbid fails closed, and a dead team's links still carry a forbid); every row when the root is
-touched (its forbid is the instance-wide off and reaches trees not linked under it). For each it
-records whether the row confers (public_within_row_effective, the one effect definition) and whether
-its anchor is above its team along a live chain (the liveness clause of that definition, kept apart
-only so a transition can say which kind of cause flipped it).
+_public_within_effects_lock, then snapshots every row an act can flip: each row whose team is at or
+below a team in p_team_under, or whose anchor is at or above a team in p_anchor_over, walked through
+every link, live or dead; every row when the root is in p_team_under (its forbid is the instance-wide
+off and reaches trees not linked under it). For each row it records whether the row confers
+(public_within_row_effective, the one effect definition) and whether its anchor is above its team
+along a live chain (the liveness clause of that definition, kept apart only so a transition can say
+which kind of cause flipped it).
+
+Why those two sets suffice. A row (T, A) confers from: the forbids on T's ancestors (any
+liveness) and the root's; whether T is the root or the gating team; a live chain from A down to T;
+and no pool in A's live subtree. So:
+  * a forbid on X can flip only rows with T at or below X: p_team_under = {X};
+  * a delete, restore, auto-join change or rename of X, or the gating team moving to or from X, can
+    flip only rows with A at or above X (X on the chain from A to T, X in A's subtree, or X = T,
+    whose anchors are above it): p_anchor_over = {X};
+  * a link or unlink of parent P over child C can change T's forbidding ancestors only for T at or
+    below C, and the chain, the pool and any path from A only for A at or above P:
+    p_team_under = {C}, p_anchor_over = {P}. Neither set depends on the link itself, so the same
+    rows are read before and after.
+The walks ignore liveness, so they are a superset of the live walks the effect reads. The narrow
+scope is what keeps an act's hold on the effects lock short: rows it cannot flip are never read.
 
 Call it after the act has locked the teams it writes and before it writes; pass the result to
 _public_within_transitions after the write. An empty object means no row can be reached, and
@@ -242,7 +254,7 @@ BEGIN
         RAISE EXCEPTION '_admin_team_parent_link_act: p_act must be link or unlink, got %', p_act;
     END IF;
     PERFORM 1 FROM kb_teams WHERE id IN (p_parent, p_child) ORDER BY id FOR NO KEY UPDATE;
-    v_before := _public_within_effects_before(ARRAY[p_parent, p_child]);
+    v_before := _public_within_effects_before(ARRAY[p_child], ARRAY[p_parent]);
 
     IF p_act = 'link' THEN
         INSERT INTO kb_teams_parents (child_id, parent_id)
@@ -287,8 +299,8 @@ admin event, and record what it did to every public_within row, atomically. Answ
 unlinked write or emit. Covers create-with-parents, attach, detach and reparent.
 
 It locks both team rows (ascending, a no-op when the caller holds them, as every door does), then
-snapshots (_public_within_effects_before over the parent and the child), writes, records, and runs
-_public_within_transitions. An unlink that leaves an anchor with no path to its team deletes the row
+snapshots (_public_within_effects_before: teams at or below the child, anchors at or above the
+parent), writes, records, and runs _public_within_transitions. An unlink that leaves an anchor with no path to its team deletes the row
 (lapsed); a link or unlink that changes a forbid above a team, a pool below an anchor or the only
 live path between them records the change of effect. The link record carries p_correlation, or,
 when there is none, a fresh id that the transitions share. The id is minted whether or not a row
@@ -347,14 +359,14 @@ BEGIN
         IF NOT FOUND THEN
             RETURN jsonb_build_object('outcome', 'absent');
         END IF;
-        v_before := _public_within_effects_before(ARRAY[p_team]);
+        v_before := _public_within_effects_before('{}'::uuid[], ARRAY[p_team]);
         UPDATE kb_teams SET is_active = false WHERE id = p_team;
     ELSIF p_act = 'restored' THEN
         PERFORM 1 FROM kb_teams WHERE id = p_team AND NOT is_active FOR NO KEY UPDATE;
         IF NOT FOUND THEN
             RETURN jsonb_build_object('outcome', 'absent');
         END IF;
-        v_before := _public_within_effects_before(ARRAY[p_team]);
+        v_before := _public_within_effects_before('{}'::uuid[], ARRAY[p_team]);
         UPDATE kb_teams SET is_active = true WHERE id = p_team;
     ELSIF p_act = 'renamed' THEN
         IF p_to IS NULL THEN
@@ -368,7 +380,7 @@ BEGIN
         IF v_from = p_to THEN
             RETURN jsonb_build_object('outcome', 'noop');
         END IF;
-        v_before := _public_within_effects_before(ARRAY[p_team]);
+        v_before := _public_within_effects_before('{}'::uuid[], ARRAY[p_team]);
         UPDATE kb_teams SET slug = p_to WHERE id = p_team;
         UPDATE kb_system_settings SET gating_team_slug = p_to WHERE gating_team_slug = v_from;
         v_to := p_to;
@@ -381,7 +393,7 @@ BEGIN
         IF v_from IS NOT DISTINCT FROM p_to THEN
             RETURN jsonb_build_object('outcome', 'noop');
         END IF;
-        v_before := _public_within_effects_before(ARRAY[p_team]);
+        v_before := _public_within_effects_before('{}'::uuid[], ARRAY[p_team]);
         UPDATE kb_teams SET auto_join_role = p_to::team_role WHERE id = p_team;
         v_to := p_to;
     ELSE
@@ -414,11 +426,12 @@ public_within row, atomically. Answers jsonb {outcome: changed | noop | absent, 
 lapsed, changes}; only changed writes or emits. created appends only and changes no row's effect.
 
 Each writing act locks its team row first (rename: the exclusive gating lock, then the row, as
-before), decides absent or noop, then snapshots (_public_within_effects_before over the team), writes,
-records, and runs _public_within_transitions. A delete or restore flips rows through liveness; an
+before), decides absent or noop, then snapshots (_public_within_effects_before: anchors at or above
+the team), writes, records, and runs _public_within_transitions. A delete or restore flips rows through liveness; an
 auto-join change flips rows whose anchor's live subtree gains or loses a pool; a rename moves the
-gating slug with it, so it flips nothing unless it changed which team is the root or the gating team,
-which the door refuses. The lifecycle record carries p_correlation, or, when there is none, a fresh id
+gating slug with it, so it flips nothing unless it changed which team is the root or the gating team
+(the door refuses the root; renaming onto a gating slug that no team holds makes the team the gating
+team, and those flips are recorded too). The lifecycle record carries p_correlation, or, when there is none, a fresh id
 that the transitions share, minted whether or not a row was in reach, so the actor's own record says
 nothing about rows near the team. IT NEVER AUTHORIZES.$c$;
 
@@ -469,6 +482,7 @@ BEGIN
         RETURN jsonb_build_object('outcome', 'no_team');
     END IF;
     v_before := _public_within_effects_before(
+        '{}'::uuid[],
         ARRAY(SELECT t.id FROM kb_teams t WHERE t.slug = v_from OR t.slug = p_slug));
     UPDATE kb_system_settings SET gating_team_slug = p_slug, updated = now() WHERE id = 1;
     v_correlation := coalesce(p_correlation, uuid_generate_v7());
@@ -484,7 +498,7 @@ correlation_id, lapsed, changes}, or {outcome: no_team} (nothing written) when n
 slug once the lock is held: a rename committed since the caller's pre-check took it, and a slug
 naming no team would let any manager become the gating team by renaming onto it. The gating team counts as a pool under any anchor above it, and
 can never be a row's team, so moving it flips rows anchored above the old or the new gating team, and
-rows whose team is either; the snapshot covers both teams' up- and down-sets.
+rows whose team is either; the snapshot covers every anchor at or above either team.
 
 It takes the exclusive gating lock before the settings row (the order a rename takes them in), so
 the shared request inside _public_within_effects_before is its own; a rename takes the same exclusive
@@ -522,7 +536,7 @@ BEGIN
         RETURN jsonb_build_object('outcome', 'noop', 'changes', '[]'::jsonb);
     END IF;
 
-    v_before := _public_within_effects_before(ARRAY[p_team]);
+    v_before := _public_within_effects_before(ARRAY[p_team], '{}'::uuid[]);
 
     UPDATE kb_teams SET public_within_forbidden = p_forbidden WHERE id = p_team;
 
