@@ -633,3 +633,185 @@ async fn a_mention_shaped_request_from_a_reader_reads_and_resolves(pool: PgPool)
         .expect("get");
     assert_eq!(got.status().as_u16(), 200, "the mention path reads T");
 }
+
+// ─── reach.via on the single-object reads ────────────────────────────────────
+
+async fn get_json(app: &common::TestApp, token: &str, path: &str) -> (u16, serde_json::Value) {
+    let resp = app
+        .client
+        .get(app.url(path))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("get");
+    let status = resp.status().as_u16();
+    (status, resp.json().await.unwrap_or(serde_json::Value::Null))
+}
+
+async fn create_in(app: &common::TestApp, token: &str, ctx: Uuid, title: &str) -> String {
+    let resp = app
+        .client
+        .post(app.url("/api/resources"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&json!({
+            "kb_context_id": ctx.to_string(),
+            "doc_type": "research",
+            "origin_uri": format!("test://{title}"),
+            "title": title,
+        }))
+        .send()
+        .await
+        .expect("create");
+    assert!(
+        resp.status().is_success(),
+        "{}",
+        resp.text().await.unwrap_or_default()
+    );
+    let body: serde_json::Value = resp.json().await.expect("json");
+    body["id"].as_str().expect("id").to_string()
+}
+
+/// Context get and resource get say `public_within` to a reader who reads T only through
+/// public_within, and `membership` to a member of T. The answer names no team and no person, and
+/// it is the whole of `reach`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_get_says_how_the_reader_reaches_it(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let w = world(&app.pool).await;
+    let r_t = create_in(&app, &w.sec_member.token, w.ctx_t, "r-t").await;
+
+    let ctx_path = format!("/api/contexts/{}", w.ctx_t);
+    let res_path = format!("/api/resources/{r_t}");
+    for (who, token, via) in [
+        ("public reader", &w.reader.token, "public_within"),
+        ("member", &w.sec_member.token, "membership"),
+    ] {
+        for path in [&ctx_path, &res_path] {
+            let (status, body) = get_json(&app, token, path).await;
+            assert_eq!(status, 200, "{who} reads {path}");
+            assert_eq!(
+                body["reach"],
+                json!({ "via": via }),
+                "{who} on {path}: reach is exactly {{via: {via}}}"
+            );
+        }
+    }
+}
+
+/// A reader who reads T's context both by membership and through public_within reaches it by
+/// membership: membership wins whenever it holds.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn membership_wins_when_both_routes_hold(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let w = world(&app.pool).await;
+    let r_t = create_in(&app, &w.sec_member.token, w.ctx_t, "r-t").await;
+    let res_path = format!("/api/resources/{r_t}");
+
+    // A direct read grant on one resource of T is a membership-shaped route to that resource.
+    let (_, body) = get_json(&app, &w.reader.token, &res_path).await;
+    assert_eq!(
+        body["reach"],
+        json!({ "via": "public_within" }),
+        "precondition"
+    );
+    sqlx::query(
+        "INSERT INTO kb_access_grants \
+           (subject_table, subject_id, principal_table, principal_id, can_read, granted_by_profile_id) \
+         VALUES ('kb_resources', $1::uuid, 'kb_profiles', $2, true, $3)",
+    )
+    .bind(&r_t)
+    .bind(w.reader.id)
+    .bind(w.sec_member.id)
+    .execute(&app.pool)
+    .await
+    .expect("grant the resource to the reader");
+    let (_, body) = get_json(&app, &w.reader.token, &res_path).await;
+    assert_eq!(
+        body["reach"],
+        json!({ "via": "membership" }),
+        "a grant is membership"
+    );
+
+    // Joining T, at any role, makes the context membership too.
+    join(&app.pool, w.eng_sec, w.reader.id, "watcher").await;
+    let (_, body) = get_json(&app, &w.reader.token, &format!("/api/contexts/{}", w.ctx_t)).await;
+    assert_eq!(body["reach"], json!({ "via": "membership" }));
+}
+
+/// With no public_within row anywhere, every get says `membership`: the owner of a personal
+/// context and a descendant member reading its parent's context.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn without_a_row_every_reach_is_membership(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let w = world(&app.pool).await;
+    sqlx::query("DELETE FROM kb_team_public_within")
+        .execute(&app.pool)
+        .await
+        .expect("no rows");
+    let ctx_eng = context(&app.pool, w.eng, "ctx-eng").await;
+    let (status, body) = get_json(&app, &w.reader.token, &format!("/api/contexts/{ctx_eng}")).await;
+    assert_eq!(status, 200);
+    assert_eq!(body["reach"], json!({ "via": "membership" }));
+    let own = create_in(&app, &w.reader.token, w.ctx_web, "own").await;
+    let (_, body) = get_json(&app, &w.reader.token, &format!("/api/resources/{own}")).await;
+    assert_eq!(body["reach"], json!({ "via": "membership" }));
+}
+
+/// Reach never answers for an object the caller cannot read: a stranger's get is the same 404 it
+/// always was, with no `reach` in it; and the lists, which are out of scope, never carry it.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn reach_is_absent_where_it_is_not_answered(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let w = world(&app.pool).await;
+    let r_t = create_in(&app, &w.sec_member.token, w.ctx_t, "r-t").await;
+
+    for path in [
+        format!("/api/contexts/{}", w.ctx_t),
+        format!("/api/resources/{r_t}"),
+    ] {
+        let (status, body) = get_json(&app, &w.stranger.token, &path).await;
+        assert_eq!(status, 404, "{path}");
+        assert!(body.get("reach").is_none(), "{path}: {body}");
+    }
+    let (_, list) = get_json(&app, &w.reader.token, "/api/contexts").await;
+    let list = list.as_array().expect("context list");
+    assert!(
+        list.iter().any(|c| c["id"] == json!(w.ctx_t.to_string())),
+        "reader lists ctx-t"
+    );
+    assert!(
+        list.iter().all(|c| c.get("reach").is_none()),
+        "the list carries no reach"
+    );
+    let (_, resources) = get_json(
+        &app,
+        &w.reader.token,
+        "/api/resources?context_ref=%2Beng-sec%2Fctx-t",
+    )
+    .await;
+    let rows = resources["rows"].as_array().expect("resource list rows");
+    assert!(
+        !rows.is_empty(),
+        "the reader lists T's resource by +T/slug scope"
+    );
+    assert!(
+        rows.iter().all(|r| r.get("reach").is_none()),
+        "the list carries no reach"
+    );
+}
+
+/// A machine principal reaches only by membership, so it never sees `public_within`, and it does
+/// not read T at all.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_machine_never_reaches_through_public_within(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let w = world(&app.pool).await;
+    let robot = machine(&app.pool, "reach-robot", w.reader.id).await;
+    join(&app.pool, w.eng_web, robot, "member").await;
+    let token = common::generate_machine_jwt("reach-robot");
+    let (status, _) = get_json(&app, &token, &format!("/api/contexts/{}", w.ctx_t)).await;
+    assert_eq!(status, 404, "a machine does not read T");
+    let (status, body) = get_json(&app, &token, &format!("/api/contexts/{}", w.ctx_web)).await;
+    assert_eq!(status, 200);
+    assert_eq!(body["reach"], json!({ "via": "membership" }));
+}

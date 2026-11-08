@@ -6504,7 +6504,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Context details",
+            "description": "Context details, with `reach`: how the caller reaches it (`membership`, or `public_within` when the caller reads it only through public_within). A retired context an administrator reads on the admin axis carries no `reach`",
             "content": {
               "application/json": {
                 "schema": {
@@ -11608,7 +11608,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Resource plus both metadata tiers",
+            "description": "Resource plus both metadata tiers, and `reach`: how the caller reaches it (`membership`, or `public_within` when the caller reads it only through public_within)",
             "content": {
               "application/json": {
                 "schema": {
@@ -20190,6 +20190,17 @@
             "type": "string",
             "description": "The already-sigil'd owner addressable: `@<handle>` for profiles, `+<team-slug>` for teams.\nTogether with `slug`, forms the full decorated context ref `{owner_ref}/{slug}`."
           },
+          "reach": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Reach",
+                "description": "How the reader reaches this context: `public_within` when it reads the context only\nbecause its owning team opened it to the reader's part of the team tree, `membership` for\nevery other route (owner, member of a team that reaches it, share, grant).\n\nPresent on `GET /api/contexts/{id}` only; absent on create, on the list, and on the\nadmin-axis read of a retired context. Settled in the same statement as the read's own gate,\nso it is never answered for a context the reader cannot read, and it names no team or\nperson."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "retired": {
             "type": "boolean",
             "description": "Whether this context is retired — invisible to every read path and unwriteable, with\nevery row it homes preserved.\n\n**Polarity is inverted from the column on purpose.** The database stores `is_active`,\nmirroring `kb_teams`; the wire says `retired`, which is the word the product uses. The\ninversion is written as the identical SQL literal `NOT c.is_active AS \"retired!\"` in\nevery query that selects this column — the two read-axis queries (`list_visible`,\n`get_visible`, always `false` there by construction) and the two admin-axis queries\n(`list_retired_administered`, `get_retired_administered`) — and is never re-derived any\nother way, e.g. never inverted in Rust after the fact."
@@ -24868,6 +24879,27 @@
           }
         }
       },
+      "Reach": {
+        "type": "object",
+        "description": "How the reader reaches the object. An object of its own, not a bare field, so a later answer\ncan grow beside `via` without moving it.",
+        "required": [
+          "via"
+        ],
+        "properties": {
+          "via": {
+            "$ref": "#/components/schemas/ReachVia",
+            "description": "`public_within` when the reader reads the object and does not read it by membership;\n`membership` otherwise."
+          }
+        }
+      },
+      "ReachVia": {
+        "type": "string",
+        "description": "The route by which the reader reaches the object.\n\nA route, never a source: it names neither the team that opened the object nor anyone who did,\nand it is answered only on a read the reader already passed, so it says nothing about an object\nthe reader cannot read.",
+        "enum": [
+          "membership",
+          "public_within"
+        ]
+      },
       "ReassignAck": {
         "type": "object",
         "description": "API response acknowledging a single reassignment.",
@@ -27700,6 +27732,17 @@
           },
           "owner_profile_id": {
             "$ref": "#/components/schemas/ProfileId"
+          },
+          "reach": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Reach",
+                "description": "How the reader reaches this resource: `public_within` when it reads the resource only\nbecause a team opened its owned contexts to the reader's part of the team tree,\n`membership` for every other route (owner, member, share, grant).\n\nPresent on the single-resource read (`GET /api/resources/{id}`) only; absent on every\nlist, search and write response. Settled in the same statement as the read's own gate, so\nit is never answered for a resource the reader cannot read, and it names no team or\nperson."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "ref": {
             "type": "string",

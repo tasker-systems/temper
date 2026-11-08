@@ -19,8 +19,9 @@ import json
 
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
-from typing import Any, ClassVar, Dict, List
+from typing import Any, ClassVar, Dict, List, Optional
 from uuid import UUID
+from temper.generated.models.reach import Reach
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
@@ -36,10 +37,11 @@ class ContextRow(BaseModel):
     kb_owner_table: StrictStr
     name: StrictStr
     owner_ref: StrictStr = Field(description="The already-sigil'd owner addressable: `@<handle>` for profiles, `+<team-slug>` for teams. Together with `slug`, forms the full decorated context ref `{owner_ref}/{slug}`.")
+    reach: Optional[Reach] = Field(default=None, description="How the reader reaches this context: `public_within` when it reads the context only because its owning team opened it to the reader's part of the team tree, `membership` for every other route (owner, member of a team that reaches it, share, grant).  Present on `GET /api/contexts/{id}` only; absent on create, on the list, and on the admin-axis read of a retired context. Settled in the same statement as the read's own gate, so it is never answered for a context the reader cannot read, and it names no team or person.")
     retired: StrictBool = Field(description="Whether this context is retired — invisible to every read path and unwriteable, with every row it homes preserved.  **Polarity is inverted from the column on purpose.** The database stores `is_active`, mirroring `kb_teams`; the wire says `retired`, which is the word the product uses. The inversion is written as the identical SQL literal `NOT c.is_active AS \"retired!\"` in every query that selects this column — the two read-axis queries (`list_visible`, `get_visible`, always `false` there by construction) and the two admin-axis queries (`list_retired_administered`, `get_retired_administered`) — and is never re-derived any other way, e.g. never inverted in Rust after the fact.")
     slug: StrictStr = Field(description="The context's per-owner-unique slug (the natural-key half of `@owner/slug`).")
     updated: datetime
-    __properties: ClassVar[List[str]] = ["can_write", "created", "id", "kb_owner_id", "kb_owner_table", "name", "owner_ref", "retired", "slug", "updated"]
+    __properties: ClassVar[List[str]] = ["can_write", "created", "id", "kb_owner_id", "kb_owner_table", "name", "owner_ref", "reach", "retired", "slug", "updated"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -80,6 +82,14 @@ class ContextRow(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # override the default output from pydantic by calling `to_dict()` of reach
+        if self.reach:
+            _dict['reach'] = self.reach.to_dict()
+        # set to None if reach (nullable) is None
+        # and model_fields_set contains the field
+        if self.reach is None and "reach" in self.model_fields_set:
+            _dict['reach'] = None
+
         return _dict
 
     @classmethod
@@ -99,6 +109,7 @@ class ContextRow(BaseModel):
             "kb_owner_table": obj.get("kb_owner_table"),
             "name": obj.get("name"),
             "owner_ref": obj.get("owner_ref"),
+            "reach": Reach.from_dict(obj["reach"]) if obj.get("reach") is not None else None,
             "retired": obj.get("retired"),
             "slug": obj.get("slug"),
             "updated": obj.get("updated")

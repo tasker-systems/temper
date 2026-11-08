@@ -27,6 +27,7 @@ use crate::error::{ApiError, ApiResult};
 use crate::services::team_service;
 use temper_core::context_ref::{ContextOwnerRef, ContextRef};
 use temper_core::types::ids::{ContextId, ProfileId};
+use temper_core::types::reach::Reach;
 use temper_core::types::team::TeamRole;
 use temper_workflow::operations::sluggify;
 
@@ -180,7 +181,10 @@ pub async fn get_visible(
                context_authorable_by_profile($1, c.id) AS "can_write!",
                -- Always `false` here: the read axis never admits a retired context (see the same
                -- note on `list_visible`). Kept in the select list for one honest row shape.
-               NOT c.is_active AS "retired!"
+               NOT c.is_active AS "retired!",
+               -- In the SELECT list, so it runs only for the row the WHERE below admitted: the
+               -- reach functions take "the reader reads it" as their precondition.
+               context_reached_via($1, c.id) AS "reach: Reach"
           FROM kb_contexts c
          WHERE c.id = $2
            AND context_visible_to($1, c.id)
@@ -686,7 +690,9 @@ pub async fn create(
                   -- the personal-owned arm would answer `false` for the creator's own context.
                   false AS "can_write!",
                   -- A freshly created context is never retired.
-                  false AS "retired!"
+                  false AS "retired!",
+                  -- Reach is answered on the get only.
+                  NULL::text AS "reach: Reach"
         "#,
         *id,
         owner_table,
@@ -967,7 +973,9 @@ pub async fn get_retired_administered(
                  ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)
                END AS "owner_ref!",
                context_authorable_by_profile($1, c.id) AS "can_write!",
-               NOT c.is_active AS "retired!"
+               NOT c.is_active AS "retired!",
+               -- The admin axis: the caller administers a context nobody reads, so no reach.
+               NULL::text AS "reach: Reach"
           FROM kb_contexts c
          WHERE c.id = $2
            AND NOT c.is_active

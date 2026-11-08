@@ -124,7 +124,7 @@ pub async fn resolve(
     params(("id" = Uuid, Path, description = "Context ID")),
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "Context details", body = ContextRow),
+        (status = 200, description = "Context details, with `reach`: how the caller reaches it (`membership`, or `public_within` when the caller reads it only through public_within). A retired context an administrator reads on the admin axis carries no `reach`", body = ContextRow),
         (status = 404, description = "Not found"),
     )
 )]

@@ -469,6 +469,7 @@ mod tests {
             open_meta: None,
             content: None,
             embedding_status: None,
+            reach: None,
         }
         .with_derived_refs()
     }

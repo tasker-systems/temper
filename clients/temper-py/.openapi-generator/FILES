@@ -356,6 +356,8 @@ temper/generated/models/quantity_scale_one_of1.py
 temper/generated/models/quantity_scale_one_of2.py
 temper/generated/models/query_response.py
 temper/generated/models/queue_count.py
+temper/generated/models/reach.py
+temper/generated/models/reach_via.py
 temper/generated/models/reassign_ack.py
 temper/generated/models/reassign_context_outcome.py
 temper/generated/models/reassign_context_request.py

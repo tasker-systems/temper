@@ -6,6 +6,7 @@ use sqlx::FromRow;
 use uuid::Uuid;
 
 use super::ids::ContextId;
+use super::reach::Reach;
 use crate::context_ref::ContextOwnerRef;
 
 /// Response row for context endpoints.
@@ -52,6 +53,16 @@ pub struct ContextRow {
     /// (`list_retired_administered`, `get_retired_administered`) — and is never re-derived any
     /// other way, e.g. never inverted in Rust after the fact.
     pub retired: bool,
+    /// How the reader reaches this context: `public_within` when it reads the context only
+    /// because its owning team opened it to the reader's part of the team tree, `membership` for
+    /// every other route (owner, member of a team that reaches it, share, grant).
+    ///
+    /// Present on `GET /api/contexts/{id}` only; absent on create, on the list, and on the
+    /// admin-axis read of a retired context. Settled in the same statement as the read's own gate,
+    /// so it is never answered for a context the reader cannot read, and it names no team or
+    /// person.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reach: Option<Reach>,
 }
 
 /// Context with resource count — used by the list endpoint.

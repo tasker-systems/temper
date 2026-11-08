@@ -6199,6 +6199,7 @@ export interface components {
              *     Together with `slug`, forms the full decorated context ref `{owner_ref}/{slug}`.
              */
             owner_ref: string;
+            reach?: components["schemas"]["Reach"] | null;
             /**
              * @description Whether this context is retired — invisible to every read path and unwriteable, with
              *     every row it homes preserved.
@@ -9099,6 +9100,26 @@ export interface components {
              */
             count: number;
         };
+        /**
+         * @description How the reader reaches the object. An object of its own, not a bare field, so a later answer
+         *     can grow beside `via` without moving it.
+         */
+        Reach: {
+            /**
+             * @description `public_within` when the reader reads the object and does not read it by membership;
+             *     `membership` otherwise.
+             */
+            via: components["schemas"]["ReachVia"];
+        };
+        /**
+         * @description The route by which the reader reaches the object.
+         *
+         *     A route, never a source: it names neither the team that opened the object nor anyone who did,
+         *     and it is answered only on a read the reader already passed, so it says nothing about an object
+         *     the reader cannot read.
+         * @enum {string}
+         */
+        ReachVia: "membership" | "public_within";
         /** @description API response acknowledging a single reassignment. */
         ReassignAck: {
             /** Format: uuid */
@@ -10698,6 +10719,7 @@ export interface components {
             originator_profile_id: components["schemas"]["ProfileId"];
             owner_handle: string;
             owner_profile_id: components["schemas"]["ProfileId"];
+            reach?: components["schemas"]["Reach"] | null;
             /**
              * @description The decorated, self-resolving address: `sluggify(title)-<uuid>`.
              *
@@ -16645,7 +16667,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Context details */
+            /** @description Context details, with `reach`: how the caller reaches it (`membership`, or `public_within` when the caller reads it only through public_within). A retired context an administrator reads on the admin axis carries no `reach` */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -19854,7 +19876,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Resource plus both metadata tiers */
+            /** @description Resource plus both metadata tiers, and `reach`: how the caller reaches it (`membership`, or `public_within` when the caller reads it only through public_within) */
             200: {
                 headers: {
                     [name: string]: unknown;

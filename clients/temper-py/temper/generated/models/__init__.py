@@ -333,6 +333,8 @@ from temper.generated.models.quantity_scale_one_of1 import QuantityScaleOneOf1
 from temper.generated.models.quantity_scale_one_of2 import QuantityScaleOneOf2
 from temper.generated.models.query_response import QueryResponse
 from temper.generated.models.queue_count import QueueCount
+from temper.generated.models.reach import Reach
+from temper.generated.models.reach_via import ReachVia
 from temper.generated.models.reassign_ack import ReassignAck
 from temper.generated.models.reassign_context_outcome import ReassignContextOutcome
 from temper.generated.models.reassign_context_request import ReassignContextRequest

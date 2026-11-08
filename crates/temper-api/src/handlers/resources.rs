@@ -78,7 +78,7 @@ pub async fn list(
     ),
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "Resource plus both metadata tiers", body = ResourceView),
+        (status = 200, description = "Resource plus both metadata tiers, and `reach`: how the caller reaches it (`membership`, or `public_within` when the caller reads it only through public_within)", body = ResourceView),
         (status = 400, description = "Unknown section name", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 404, description = "Not found", body = ErrorBody),
@@ -118,7 +118,7 @@ pub async fn get(
     }
     let sections = SectionSet::from_iter(names);
 
-    let view = temper_services::backend::substrate_read::show_view_select(
+    let view = temper_services::backend::substrate_read::show_view_with_reach_select(
         &state.pool,
         ProfileId::from(auth.0.profile().id),
         ResourceId::from(resource_id),

@@ -906,6 +906,7 @@ Never ship code with \"for now\".
             open_meta: Some(open_meta),
             content: None,
             embedding_status: None,
+            reach: None,
         }
         .with_derived_refs()
     }

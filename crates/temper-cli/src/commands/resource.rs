@@ -3971,6 +3971,7 @@ mod action_result_tests {
             open_meta: None,
             content: None,
             embedding_status: None,
+            reach: None,
         }
         .with_derived_refs()
     }
@@ -4362,6 +4363,7 @@ mod resource_list_render_tests {
             managed_meta: ManagedMeta::default(),
             open_meta: None,
             content: None,
+            reach: None,
             embedding_status: None,
         }
         .with_derived_refs()];

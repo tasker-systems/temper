@@ -82,6 +82,9 @@ module Temper::Generated
     # A `kb_profiles.id` value.
     attr_accessor :owner_profile_id
 
+    # How the reader reaches this resource: `public_within` when it reads the resource only because a team opened its owned contexts to the reader's part of the team tree, `membership` for every other route (owner, member, share, grant).  Present on the single-resource read (`GET /api/resources/{id}`) only; absent on every list, search and write response. Settled in the same statement as the read's own gate, so it is never answered for a resource the reader cannot read, and it names no team or person.
+    attr_accessor :reach
+
     # The decorated, self-resolving address: `sluggify(title)-<uuid>`.  Not a column — derived by [`ResourceView::with_derived_refs`] from `title` + `id`. Until this task it was injected render-time by the CLI alone (`temper-cli/src/commands/resource.rs`), so MCP callers never received one even though the shipped skill instructs agents to use it.
     attr_accessor :ref
 
@@ -138,6 +141,7 @@ module Temper::Generated
         :'originator_profile_id' => :'originator_profile_id',
         :'owner_handle' => :'owner_handle',
         :'owner_profile_id' => :'owner_profile_id',
+        :'reach' => :'reach',
         :'ref' => :'ref',
         :'title' => :'title',
         :'updated' => :'updated'
@@ -181,6 +185,7 @@ module Temper::Generated
         :'originator_profile_id' => :'String',
         :'owner_handle' => :'String',
         :'owner_profile_id' => :'String',
+        :'reach' => :'Reach',
         :'ref' => :'String',
         :'title' => :'String',
         :'updated' => :'Time'
@@ -205,6 +210,7 @@ module Temper::Generated
         :'ingest_state',
         :'kb_context_id',
         :'open_meta',
+        :'reach',
       ])
     end
 
@@ -334,6 +340,10 @@ module Temper::Generated
         self.owner_profile_id = attributes[:'owner_profile_id']
       else
         self.owner_profile_id = nil
+      end
+
+      if attributes.key?(:'reach')
+        self.reach = attributes[:'reach']
       end
 
       if attributes.key?(:'ref')
@@ -564,6 +574,7 @@ module Temper::Generated
           originator_profile_id == o.originator_profile_id &&
           owner_handle == o.owner_handle &&
           owner_profile_id == o.owner_profile_id &&
+          reach == o.reach &&
           ref == o.ref &&
           title == o.title &&
           updated == o.updated
@@ -578,7 +589,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [body_hash, body_storage, changed_by_me_at, cogmap_id, cogmap_name, content, context_name, context_owner_ref, context_ref, context_slug, created, doc_type_name, embedding_status, id, ingest_ended, ingest_state, is_active, kb_context_id, managed_meta, open_meta, origin_uri, originator_profile_id, owner_handle, owner_profile_id, ref, title, updated].hash
+      [body_hash, body_storage, changed_by_me_at, cogmap_id, cogmap_name, content, context_name, context_owner_ref, context_ref, context_slug, created, doc_type_name, embedding_status, id, ingest_ended, ingest_state, is_active, kb_context_id, managed_meta, open_meta, origin_uri, originator_profile_id, owner_handle, owner_profile_id, reach, ref, title, updated].hash
     end
 
     # Builds the object from hash
