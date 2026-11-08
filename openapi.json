@@ -27737,7 +27737,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Reach",
-                "description": "How the reader reaches this resource: `public_within` when it reads the resource only\nbecause a team opened its owned contexts to the reader's part of the team tree,\n`membership` for every other route (owner, member, share, grant).\n\nPresent on the single-resource read (`GET /api/resources/{id}`) only; absent on every\nlist, search and write response. Settled in the same statement as the read's own gate, so\nit is never answered for a resource the reader cannot read, and it names no team or\nperson."
+                "description": "How the reader reaches this resource: `public_within` when it reads the resource only\nbecause a team opened its owned contexts to the reader's part of the team tree,\n`membership` for every other route (owner, member, share, grant).\n\nAnswered by the single-resource read (`GET /api/resources/{id}`) only; absent on every\nlist, search and HTTP write response. A client that reads a write back through that GET\n(the MCP resource tools do, for create and update) therefore carries it. Settled in the\nsame statement as the read's own gate, so it is never answered for a resource the reader\ncannot read, and it names no team or person."
               },
               {
                 "type": "null"

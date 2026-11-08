@@ -765,14 +765,84 @@ async fn reach_is_absent_where_it_is_not_answered(pool: PgPool) {
     let w = world(&app.pool).await;
     let r_t = create_in(&app, &w.sec_member.token, w.ctx_t, "r-t").await;
 
+    // A stranger's get is the 404 it always was.
     for path in [
         format!("/api/contexts/{}", w.ctx_t),
         format!("/api/resources/{r_t}"),
     ] {
-        let (status, body) = get_json(&app, &w.stranger.token, &path).await;
+        let (status, _) = get_json(&app, &w.stranger.token, &path).await;
         assert_eq!(status, 404, "{path}");
-        assert!(body.get("reach").is_none(), "{path}: {body}");
     }
+
+    // HTTP create of a resource reads back through the write readback, which never asks for reach.
+    let created = app
+        .client
+        .post(app.url("/api/resources"))
+        .header("Authorization", format!("Bearer {}", w.sec_member.token))
+        .json(&json!({
+            "kb_context_id": w.ctx_t.to_string(),
+            "doc_type": "research",
+            "origin_uri": "test://pw-created",
+            "title": "created",
+        }))
+        .send()
+        .await
+        .expect("create");
+    assert!(created.status().is_success());
+    let created: serde_json::Value = created.json().await.expect("json");
+    assert!(created.get("id").is_some(), "{created}");
+    assert!(
+        created.get("reach").is_none(),
+        "create carries no reach: {created}"
+    );
+
+    // Context create, and the admin-axis read of a retired context.
+    let ctx = app
+        .client
+        .post(app.url("/api/contexts"))
+        .header("Authorization", format!("Bearer {}", w.sec_member.token))
+        .json(&json!({ "name": "ctx-new", "owner": { "Team": "eng-sec" } }))
+        .send()
+        .await
+        .expect("create context");
+    assert!(
+        ctx.status().is_success(),
+        "{}",
+        ctx.text().await.unwrap_or_default()
+    );
+    let ctx: serde_json::Value = ctx.json().await.expect("json");
+    assert!(
+        ctx.get("reach").is_none(),
+        "context create carries no reach: {ctx}"
+    );
+    let ctx_id = ctx["id"].as_str().expect("id").to_string();
+    let retired = app
+        .client
+        .delete(app.url(&format!("/api/contexts/{ctx_id}")))
+        .header("Authorization", format!("Bearer {}", w.sec_member.token))
+        .send()
+        .await
+        .expect("retire");
+    assert!(
+        retired.status().is_success(),
+        "{}",
+        retired.text().await.unwrap_or_default()
+    );
+    let (status, admin_row) = get_json(
+        &app,
+        &w.sec_member.token,
+        &format!("/api/contexts/{ctx_id}"),
+    )
+    .await;
+    assert_eq!(
+        status, 200,
+        "the administrator reads the retired context on the admin axis"
+    );
+    assert_eq!(admin_row["retired"], json!(true), "{admin_row}");
+    assert!(
+        admin_row.get("reach").is_none(),
+        "the admin axis carries no reach: {admin_row}"
+    );
     let (_, list) = get_json(&app, &w.reader.token, "/api/contexts").await;
     let list = list.as_array().expect("context list");
     assert!(
@@ -812,6 +882,73 @@ async fn a_machine_never_reaches_through_public_within(pool: PgPool) {
     let (status, _) = get_json(&app, &token, &format!("/api/contexts/{}", w.ctx_t)).await;
     assert_eq!(status, 404, "a machine does not read T");
     let (status, body) = get_json(&app, &token, &format!("/api/contexts/{}", w.ctx_web)).await;
+    assert_eq!(status, 200);
+    assert_eq!(body["reach"], json!({ "via": "membership" }));
+}
+
+/// A member of a team T shares a context to, and a holder of a read grant on one of T's contexts,
+/// both resolve `+T/slug` with no membership in T. Both reach by membership, even though T has a
+/// public_within row (so the reach function takes its membership-probe path, not its early return).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_share_or_grant_holder_resolves_and_reaches_by_membership(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let w = world(&app.pool).await;
+
+    // A share of ctx-t to an unrelated team.
+    let partner = team(&app.pool, "partner", &[]).await;
+    let partner_member = person(&app.pool, "partner-member").await;
+    join(&app.pool, partner, partner_member.id, "member").await;
+    sqlx::query("INSERT INTO kb_team_contexts (context_id, team_id) VALUES ($1, $2)")
+        .bind(w.ctx_t)
+        .bind(partner)
+        .execute(&app.pool)
+        .await
+        .expect("share ctx-t to partner");
+
+    // A read grant on another of T's contexts, to a person with no team relation to T.
+    let ctx_granted = context(&app.pool, w.eng_sec, "ctx-granted").await;
+    sqlx::query(
+        "INSERT INTO kb_access_grants \
+           (subject_table, subject_id, principal_table, principal_id, can_read, granted_by_profile_id) \
+         VALUES ('kb_contexts', $1, 'kb_profiles', $2, true, $3)",
+    )
+    .bind(ctx_granted)
+    .bind(w.stranger.id)
+    .bind(w.sec_member.id)
+    .execute(&app.pool)
+    .await
+    .expect("grant ctx-granted to the stranger");
+
+    for (who, token, slug, ctx) in [
+        (partner_member.id, &partner_member.token, "ctx-t", w.ctx_t),
+        (w.stranger.id, &w.stranger.token, "ctx-granted", ctx_granted),
+    ] {
+        assert_eq!(
+            resolve(&app.pool, who, &format!("+eng-sec/{slug}"))
+                .await
+                .expect("resolves"),
+            ctx
+        );
+        let (status, body) = get_json(&app, token, &format!("/api/contexts/{ctx}")).await;
+        assert_eq!(status, 200);
+        assert_eq!(
+            body["reach"],
+            json!({ "via": "membership" }),
+            "{slug}: {body}"
+        );
+    }
+}
+
+/// A machine that is a member of T reads T's context, which has a public_within row, and reaches
+/// it by membership: the reach function's membership probe, for a machine.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_machine_member_of_an_opened_team_reaches_by_membership(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let w = world(&app.pool).await;
+    let robot = machine(&app.pool, "sec-robot", w.sec_member.id).await;
+    join(&app.pool, w.eng_sec, robot, "member").await;
+    let token = common::generate_machine_jwt("sec-robot");
+    let (status, body) = get_json(&app, &token, &format!("/api/contexts/{}", w.ctx_t)).await;
     assert_eq!(status, 200);
     assert_eq!(body["reach"], json!({ "via": "membership" }));
 }

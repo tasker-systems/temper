@@ -306,6 +306,34 @@
         }
       ]
     },
+    "Reach": {
+      "description": "How the reader reaches the object. An object of its own, not a bare field, so a later answer\ncan grow beside `via` without moving it.",
+      "properties": {
+        "via": {
+          "$ref": "#/$defs/ReachVia",
+          "description": "`public_within` when the reader reads the object and does not read it by membership;\n`membership` otherwise."
+        }
+      },
+      "required": [
+        "via"
+      ],
+      "type": "object"
+    },
+    "ReachVia": {
+      "description": "The route by which the reader reaches the object.\n\nA route, never a source: it names neither the team that opened the object nor anyone who did,\nand it is answered only on a read the reader already passed, so it says nothing about an object\nthe reader cannot read.",
+      "oneOf": [
+        {
+          "const": "membership",
+          "description": "Any reach that does not come through public_within: the reader owns the object, is a\nmember of a team that reaches it (its own or a descendant's closure), or holds a share or a\ngrant.",
+          "type": "string"
+        },
+        {
+          "const": "public_within",
+          "description": "The reader reads the object only because a team opened its owned contexts to the reader's\npart of the team tree. Read and reference only: no act on the object is admitted this way.",
+          "type": "string"
+        }
+      ]
+    },
     "RefusalReason": {
       "anyOf": [
         {
@@ -864,6 +892,17 @@
           "description": "A `kb_profiles.id` value.",
           "format": "uuid",
           "type": "string"
+        },
+        "reach": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Reach"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the reader reaches this resource: `public_within` when it reads the resource only\nbecause a team opened its owned contexts to the reader's part of the team tree,\n`membership` for every other route (owner, member, share, grant).\n\nAnswered by the single-resource read (`GET /api/resources/{id}`) only; absent on every\nlist, search and HTTP write response. A client that reads a write back through that GET\n(the MCP resource tools do, for create and update) therefore carries it. Settled in the\nsame statement as the read's own gate, so it is never answered for a resource the reader\ncannot read, and it names no team or person."
         },
         "ref": {
           "description": "The decorated, self-resolving address: `sluggify(title)-<uuid>`.\n\nNot a column — derived by [`ResourceView::with_derived_refs`] from `title` + `id`.\nUntil this task it was injected render-time by the CLI alone\n(`temper-cli/src/commands/resource.rs`), so MCP callers never received one even\nthough the shipped skill instructs agents to use it.",

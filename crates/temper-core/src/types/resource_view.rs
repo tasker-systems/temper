@@ -224,10 +224,11 @@ pub struct ResourceView {
     /// because a team opened its owned contexts to the reader's part of the team tree,
     /// `membership` for every other route (owner, member, share, grant).
     ///
-    /// Present on the single-resource read (`GET /api/resources/{id}`) only; absent on every
-    /// list, search and write response. Settled in the same statement as the read's own gate, so
-    /// it is never answered for a resource the reader cannot read, and it names no team or
-    /// person.
+    /// Answered by the single-resource read (`GET /api/resources/{id}`) only; absent on every
+    /// list, search and HTTP write response. A client that reads a write back through that GET
+    /// (the MCP resource tools do, for create and update) therefore carries it. Settled in the
+    /// same statement as the read's own gate, so it is never answered for a resource the reader
+    /// cannot read, and it names no team or person.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reach: Option<Reach>,
 }

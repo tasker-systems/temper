@@ -2329,6 +2329,18 @@ async fn hit_identities_with(
             };
             // Both columns are CHECK-constrained, so the projections are total in practice; an
             // unparseable value is a schema violation, surfaced as None rather than coerced.
+            // `resource_reached_via` returns one of two literals, so an unknown spelling is a
+            // fault, and it fails the read exactly as the context get's `Reach` decode does,
+            // never silently dropped from one door and an error on the other.
+            let reach = row
+                .reach_via
+                .as_deref()
+                .map(|s| {
+                    ReachVia::from_sql(s)
+                        .map(|via| Reach { via })
+                        .ok_or_else(|| anyhow::anyhow!("unknown reach route {s:?} for {}", row.id))
+                })
+                .transpose()?;
             let (ingest_state, ingest_ended) = match IngestState::from_db(&row.ingest_state) {
                 Some((state, ended)) => (Some(state), ended),
                 None => (None, None),
@@ -2363,13 +2375,7 @@ async fn hit_identities_with(
                 open_meta: None,
                 content: None,
                 embedding_status: None,
-                // An unknown spelling is a schema violation, surfaced as absent, like the
-                // CHECK-constrained columns above.
-                reach: row
-                    .reach_via
-                    .as_deref()
-                    .and_then(ReachVia::from_sql)
-                    .map(|via| Reach { via }),
+                reach,
             }
             .with_derived_refs())
         })

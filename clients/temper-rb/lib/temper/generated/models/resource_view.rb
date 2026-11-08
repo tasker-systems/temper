@@ -82,7 +82,7 @@ module Temper::Generated
     # A `kb_profiles.id` value.
     attr_accessor :owner_profile_id
 
-    # How the reader reaches this resource: `public_within` when it reads the resource only because a team opened its owned contexts to the reader's part of the team tree, `membership` for every other route (owner, member, share, grant).  Present on the single-resource read (`GET /api/resources/{id}`) only; absent on every list, search and write response. Settled in the same statement as the read's own gate, so it is never answered for a resource the reader cannot read, and it names no team or person.
+    # How the reader reaches this resource: `public_within` when it reads the resource only because a team opened its owned contexts to the reader's part of the team tree, `membership` for every other route (owner, member, share, grant).  Answered by the single-resource read (`GET /api/resources/{id}`) only; absent on every list, search and HTTP write response. A client that reads a write back through that GET (the MCP resource tools do, for create and update) therefore carries it. Settled in the same statement as the read's own gate, so it is never answered for a resource the reader cannot read, and it names no team or person.
     attr_accessor :reach
 
     # The decorated, self-resolving address: `sluggify(title)-<uuid>`.  Not a column — derived by [`ResourceView::with_derived_refs`] from `title` + `id`. Until this task it was injected render-time by the CLI alone (`temper-cli/src/commands/resource.rs`), so MCP callers never received one even though the shipped skill instructs agents to use it.
