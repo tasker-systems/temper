@@ -7,9 +7,10 @@
 //! federated human door, machines through registration (`provision` under an external IdP,
 //! `issue` under temper's own authorization server), connection agents through connection
 //! provisioning, revocation through the revoke door. Whatever those paths persist is what the
-//! fence reads. The one hand-written row is a stray human link on a machine and on an agent, so
-//! that each of the fence's clauses is seen deciding alone. A dynamically registered client gets no profile at all, and its token is refused
-//! before one could exist: that is pinned beside the machine gate, in
+//! fence reads. The one hand-written principal fact is a stray human link on a machine and on an
+//! agent, so that each of the fence's clauses is seen deciding alone. A dynamically registered
+//! client gets no profile at all, and its token is refused before one could exist: that is pinned
+//! beside the machine gate, in
 //! `profile_service::tests::a_dynamically_registered_client_is_refused_and_creates_no_profile`.
 //!
 //! The world is small: `anchor ─ readers` and `anchor ─ t`, T's row anchored on `anchor`. Every
@@ -159,7 +160,8 @@ async fn world(pool: &PgPool) -> World {
     let admin = person(pool, "admin").await;
     test_support::approved_admin(pool, admin).await;
     sqlx::query(
-        "INSERT INTO kb_team_public_within (team_id, anchor_id, opened_by, instance_wide, admin_act) \
+        "INSERT INTO kb_team_public_within \
+           (team_id, anchor_id, opened_by, instance_wide, admin_act) \
          VALUES ($1, $2, $3, false, false)",
     )
     .bind(t)
