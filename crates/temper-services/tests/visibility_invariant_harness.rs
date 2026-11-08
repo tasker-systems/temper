@@ -1956,6 +1956,11 @@ const ENROLLED: &[&str] = &[
     "public_within_allowed_over",
     "public_within_reading",
     "anchor_subtree_holds_pool",
+    // the single-object reach the context and resource gets answer: driven by the same test, which
+    // asks each of every object every profile reads, with and without the forbid, and holds the
+    // answer to the two sets (public_within exactly outside membership).
+    "context_reached_via",
+    "resource_reached_via",
 ];
 
 /// The substrate the substrate-existence half pins; excluded from the scan because these are the
@@ -2359,6 +2364,45 @@ async fn public_within_reads_for_people_under_the_anchor_and_nobody_else(
                     "{who}: under a forbid above the team, yet reads {extra:?} beyond membership"
                 ));
             }
+
+            // The single-object reach: for everything the profile reads, `public_within` exactly
+            // when it is outside the profile's membership set, `membership` otherwise. Asked of
+            // every read object, so a reach function that disagreed with the two sets for any
+            // profile, resource or context, with or without the forbid, would show here.
+            for r in &reading {
+                let via: Option<String> = sqlx::query_scalar("SELECT resource_reached_via($1, $2)")
+                    .bind(p)
+                    .bind(r)
+                    .fetch_one(&pool)
+                    .await?;
+                let want = if member.contains(r) {
+                    "membership"
+                } else {
+                    "public_within"
+                };
+                if via.as_deref() != Some(want) {
+                    violations.push(format!(
+                        "{who}: resource_reached_via({r}) is {via:?}, the sets say {want}"
+                    ));
+                }
+            }
+            for c in &creading {
+                let via: Option<String> = sqlx::query_scalar("SELECT context_reached_via($1, $2)")
+                    .bind(p)
+                    .bind(c)
+                    .fetch_one(&pool)
+                    .await?;
+                let want = if cmember.contains(c) {
+                    "membership"
+                } else {
+                    "public_within"
+                };
+                if via.as_deref() != Some(want) {
+                    violations.push(format!(
+                        "{who}: context_reached_via({c}) is {via:?}, the sets say {want}"
+                    ));
+                }
+            }
         }
     }
 
@@ -2380,6 +2424,23 @@ async fn public_within_reads_for_people_under_the_anchor_and_nobody_else(
     let (dana, ella, robot) = (w.profiles[P_DANA], w.profiles[P_ELLA], w.profiles[P_ROBOT]);
     let (r_pub, c_pub) = (w.resources[R_PUB], w.contexts[C_PUB]);
     let (t_pub, t_eng) = (w.teams[T_PUB], w.teams[T_ENG]);
+    // The reach invariant above is not vacuous: dana reads r_pub and ctx-pub only through the
+    // arm, so both reach functions answer public_within for her at least once.
+    for (sql, object) in [
+        ("SELECT resource_reached_via($1, $2)", r_pub),
+        ("SELECT context_reached_via($1, $2)", c_pub),
+    ] {
+        let via: Option<String> = sqlx::query_scalar(sql)
+            .bind(dana)
+            .bind(object)
+            .fetch_one(&pool)
+            .await?;
+        if via.as_deref() != Some("public_within") {
+            violations.push(format!(
+                "witness: {sql} for dana is {via:?}, not public_within"
+            ));
+        }
+    }
     for (got, want, what) in [
         (
             ask(
