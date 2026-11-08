@@ -244,6 +244,7 @@ from temper.generated.models.ingest_delta import IngestDelta
 from temper.generated.models.ingest_ended import IngestEnded
 from temper.generated.models.ingest_payload import IngestPayload
 from temper.generated.models.ingest_state import IngestState
+from temper.generated.models.inherited_public_within import InheritedPublicWithin
 from temper.generated.models.inherited_read_grant import InheritedReadGrant
 from temper.generated.models.inherited_share import InheritedShare
 from temper.generated.models.input_source import InputSource
@@ -317,11 +318,13 @@ from temper.generated.models.provision_connection_request import ProvisionConnec
 from temper.generated.models.provision_machine_request import ProvisionMachineRequest
 from temper.generated.models.public_system_settings import PublicSystemSettings
 from temper.generated.models.public_within_audience import PublicWithinAudience
+from temper.generated.models.public_within_effects import PublicWithinEffects
 from temper.generated.models.public_within_in_ref import PublicWithinInRef
 from temper.generated.models.public_within_open_kind import PublicWithinOpenKind
 from temper.generated.models.public_within_outcome import PublicWithinOutcome
 from temper.generated.models.public_within_policy_outcome import PublicWithinPolicyOutcome
 from temper.generated.models.public_within_policy_request import PublicWithinPolicyRequest
+from temper.generated.models.public_within_reach import PublicWithinReach
 from temper.generated.models.public_within_ref import PublicWithinRef
 from temper.generated.models.public_within_row_ref import PublicWithinRowRef
 from temper.generated.models.quantity_scale import QuantityScale

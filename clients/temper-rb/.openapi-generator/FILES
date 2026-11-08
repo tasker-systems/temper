@@ -265,6 +265,7 @@ lib/temper/generated/models/ingest_delta.rb
 lib/temper/generated/models/ingest_ended.rb
 lib/temper/generated/models/ingest_payload.rb
 lib/temper/generated/models/ingest_state.rb
+lib/temper/generated/models/inherited_public_within.rb
 lib/temper/generated/models/inherited_read_grant.rb
 lib/temper/generated/models/inherited_share.rb
 lib/temper/generated/models/input_source.rb
@@ -338,11 +339,13 @@ lib/temper/generated/models/provision_connection_request.rb
 lib/temper/generated/models/provision_machine_request.rb
 lib/temper/generated/models/public_system_settings.rb
 lib/temper/generated/models/public_within_audience.rb
+lib/temper/generated/models/public_within_effects.rb
 lib/temper/generated/models/public_within_in_ref.rb
 lib/temper/generated/models/public_within_open_kind.rb
 lib/temper/generated/models/public_within_outcome.rb
 lib/temper/generated/models/public_within_policy_outcome.rb
 lib/temper/generated/models/public_within_policy_request.rb
+lib/temper/generated/models/public_within_reach.rb
 lib/temper/generated/models/public_within_ref.rb
 lib/temper/generated/models/public_within_row_ref.rb
 lib/temper/generated/models/quantity_scale.rb

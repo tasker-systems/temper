@@ -17,9 +17,11 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict
-from typing import Any, ClassVar, Dict, List
+from pydantic import BaseModel, ConfigDict, Field
+from typing import Any, ClassVar, Dict, List, Optional
 from temper.generated.models.attach_outcome import AttachOutcome
+from temper.generated.models.public_within_effects import PublicWithinEffects
+from temper.generated.models.public_within_reach import PublicWithinReach
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
@@ -29,7 +31,9 @@ class AttachChildOutcome(BaseModel):
     Response body for `PUT /api/teams/{id}/children/{child_id}`.
     """ # noqa: E501
     outcome: AttachOutcome
-    __properties: ClassVar[List[str]] = ["outcome"]
+    public_within: Optional[PublicWithinEffects] = Field(default=None, description="What the link did to `public_within` rows: a pool brought under an anchor, or a forbid brought above a team, makes rows dormant; a new live path can revive one.")
+    public_within_in_reach: Optional[PublicWithinReach] = Field(default=None, description="The effective rows the child's roster now reads through the new parent.")
+    __properties: ClassVar[List[str]] = ["outcome", "public_within", "public_within_in_reach"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -70,6 +74,12 @@ class AttachChildOutcome(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # override the default output from pydantic by calling `to_dict()` of public_within
+        if self.public_within:
+            _dict['public_within'] = self.public_within.to_dict()
+        # override the default output from pydantic by calling `to_dict()` of public_within_in_reach
+        if self.public_within_in_reach:
+            _dict['public_within_in_reach'] = self.public_within_in_reach.to_dict()
         return _dict
 
     @classmethod
@@ -82,7 +92,9 @@ class AttachChildOutcome(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "outcome": obj.get("outcome")
+            "outcome": obj.get("outcome"),
+            "public_within": PublicWithinEffects.from_dict(obj["public_within"]) if obj.get("public_within") is not None else None,
+            "public_within_in_reach": PublicWithinReach.from_dict(obj["public_within_in_reach"]) if obj.get("public_within_in_reach") is not None else None
         })
         return _obj
 

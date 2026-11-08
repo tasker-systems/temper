@@ -1070,6 +1070,40 @@ pub async fn update_system_settings(
         }
     }
 
+    // Repointing the gating team can change whether public_within rows confer (the gating team is
+    // a pool under every anchor above it, and is never a row's team), so that write alone runs in a
+    // transaction with the record of every row it flips (`_admin_gating_team_slug_write`). The
+    // other fields keep their one-statement write, in the same transaction when there is one.
+    if let Some(ref slug) = req.gating_team_slug {
+        let mut tx = pool.begin().await?;
+        let written = sqlx::query_scalar!(
+            r#"SELECT _admin_gating_team_slug_write($1, NULL) AS "w!""#,
+            slug
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        // Re-checked under the exclusive gating lock, which a rename also takes: a rename committed
+        // since the check above may have taken the slug away.
+        if written.get("outcome").and_then(|o| o.as_str()) == Some("no_team") {
+            return Err(ApiError::BadRequest(format!(
+                "gating_team_slug '{slug}' does not exist — create the team first"
+            )));
+        }
+        let row = update_settings_fields(&mut tx, req).await?;
+        tx.commit().await?;
+        return Ok(row);
+    }
+    let mut conn = pool.acquire().await?;
+    update_settings_fields(&mut conn, req).await
+}
+
+/// The settings row's one-statement write. `gating_team_slug` is coalesced like the rest; when it is
+/// set, `update_system_settings` has already written it through `_admin_gating_team_slug_write` in
+/// this transaction, so here it changes nothing.
+async fn update_settings_fields(
+    conn: &mut sqlx::PgConnection,
+    req: &UpdateSettingsRequest,
+) -> ApiResult<SystemSettings> {
     let row = sqlx::query_as!(
         SystemSettings,
         r#"
@@ -1088,7 +1122,7 @@ pub async fn update_system_settings(
         req.terms_version,
         req.terms_resource_uri,
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await?;
 
     Ok(row)

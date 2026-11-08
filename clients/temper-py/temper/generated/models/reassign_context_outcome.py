@@ -20,6 +20,7 @@ import json
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional
 from uuid import UUID
+from temper.generated.models.inherited_public_within import InheritedPublicWithin
 from temper.generated.models.inherited_read_grant import InheritedReadGrant
 from temper.generated.models.inherited_share import InheritedShare
 from typing import Optional, Set
@@ -31,11 +32,12 @@ class ReassignContextOutcome(BaseModel):
     Result of a context ownership transfer. `reassigned` is `false` when the context was already owned by the target team (idempotent no-op).
     """ # noqa: E501
     context_id: UUID
+    inherited_public_within: Optional[List[InheritedPublicWithin]] = Field(default=None, description="Read-reach the context gains from its new owner: each effective `public_within` row the team holds opens the context to the people under that row's anchor.")
     inherited_read_grants: Optional[List[InheritedReadGrant]] = Field(default=None, description="Read-reach the new owner inherits: explicit context read-grants (kb_access_grants).")
     inherited_shares: Optional[List[InheritedShare]] = Field(default=None, description="Read-reach the new owner inherits: teams this context was shared to (kb_team_contexts). Surfaced, not swept — the new owner prunes deliberately.")
     owner_ref: StrictStr = Field(description="The new `+team-slug` decorated owner ref.")
     reassigned: StrictBool = Field(description="`true` when this call transferred ownership; `false` when it was already team-owned.")
-    __properties: ClassVar[List[str]] = ["context_id", "inherited_read_grants", "inherited_shares", "owner_ref", "reassigned"]
+    __properties: ClassVar[List[str]] = ["context_id", "inherited_public_within", "inherited_read_grants", "inherited_shares", "owner_ref", "reassigned"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -76,6 +78,13 @@ class ReassignContextOutcome(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # override the default output from pydantic by calling `to_dict()` of each item in inherited_public_within (list)
+        _items = []
+        if self.inherited_public_within:
+            for _item_inherited_public_within in self.inherited_public_within:
+                if _item_inherited_public_within:
+                    _items.append(_item_inherited_public_within.to_dict())
+            _dict['inherited_public_within'] = _items
         # override the default output from pydantic by calling `to_dict()` of each item in inherited_read_grants (list)
         _items = []
         if self.inherited_read_grants:
@@ -103,6 +112,7 @@ class ReassignContextOutcome(BaseModel):
 
         _obj = cls.model_validate({
             "context_id": obj.get("context_id"),
+            "inherited_public_within": [InheritedPublicWithin.from_dict(_item) for _item in obj["inherited_public_within"]] if obj.get("inherited_public_within") is not None else None,
             "inherited_read_grants": [InheritedReadGrant.from_dict(_item) for _item in obj["inherited_read_grants"]] if obj.get("inherited_read_grants") is not None else None,
             "inherited_shares": [InheritedShare.from_dict(_item) for _item in obj["inherited_shares"]] if obj.get("inherited_shares") is not None else None,
             "owner_ref": obj.get("owner_ref"),

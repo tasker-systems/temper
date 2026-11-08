@@ -18,6 +18,12 @@ module Temper::Generated
   class AttachChildOutcome < ApiModelBase
     attr_accessor :outcome
 
+    # What the link did to `public_within` rows: a pool brought under an anchor, or a forbid brought above a team, makes rows dormant; a new live path can revive one.
+    attr_accessor :public_within
+
+    # The effective rows the child's roster now reads through the new parent.
+    attr_accessor :public_within_in_reach
+
     class EnumAttributeValidator
       attr_reader :datatype
       attr_reader :allowable_values
@@ -43,7 +49,9 @@ module Temper::Generated
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
-        :'outcome' => :'outcome'
+        :'outcome' => :'outcome',
+        :'public_within' => :'public_within',
+        :'public_within_in_reach' => :'public_within_in_reach'
       }
     end
 
@@ -60,7 +68,9 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
-        :'outcome' => :'AttachOutcome'
+        :'outcome' => :'AttachOutcome',
+        :'public_within' => :'PublicWithinEffects',
+        :'public_within_in_reach' => :'PublicWithinReach'
       }
     end
 
@@ -90,6 +100,14 @@ module Temper::Generated
         self.outcome = attributes[:'outcome']
       else
         self.outcome = nil
+      end
+
+      if attributes.key?(:'public_within')
+        self.public_within = attributes[:'public_within']
+      end
+
+      if attributes.key?(:'public_within_in_reach')
+        self.public_within_in_reach = attributes[:'public_within_in_reach']
       end
     end
 
@@ -128,7 +146,9 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
-          outcome == o.outcome
+          outcome == o.outcome &&
+          public_within == o.public_within &&
+          public_within_in_reach == o.public_within_in_reach
     end
 
     # @see the `==` method
@@ -140,7 +160,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [outcome].hash
+      [outcome, public_within, public_within_in_reach].hash
     end
 
     # Builds the object from hash

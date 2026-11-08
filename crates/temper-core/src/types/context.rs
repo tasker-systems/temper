@@ -212,6 +212,24 @@ pub struct InheritedReadGrant {
     pub principal_ref: String,
 }
 
+/// A `public_within` row the context's new owning team holds: while the row confers, the people
+/// under `anchor_ref` read the context. `teams` and `principals` count them (the anchor's live
+/// subtree, and the people on it), as on the team's detail.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "context.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InheritedPublicWithin {
+    pub anchor_id: Uuid,
+    /// Decorated ref: `+slug`.
+    pub anchor_ref: String,
+    #[cfg_attr(feature = "typescript", ts(type = "number"))]
+    pub teams: i64,
+    #[cfg_attr(feature = "typescript", ts(type = "number"))]
+    pub principals: i64,
+}
+
 /// Result of a context ownership transfer. `reassigned` is `false` when the context was
 /// already owned by the target team (idempotent no-op).
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -232,6 +250,10 @@ pub struct ReassignContextOutcome {
     /// Read-reach the new owner inherits: explicit context read-grants (kb_access_grants).
     #[serde(default)]
     pub inherited_read_grants: Vec<InheritedReadGrant>,
+    /// Read-reach the context gains from its new owner: each effective `public_within` row the
+    /// team holds opens the context to the people under that row's anchor.
+    #[serde(default)]
+    pub inherited_public_within: Vec<InheritedPublicWithin>,
 }
 
 /// Request body for `POST /api/contexts/{id}/rename` — change a context's display name.

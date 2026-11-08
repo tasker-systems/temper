@@ -18,12 +18,16 @@ module Temper::Generated
   class SetAutoJoinOutcome < ApiModelBase
     attr_accessor :ancestors
 
+    # An auto-join team under an anchor makes that anchor's rows dormant unless an admin opened them instance-wide; clearing it revives them.
+    attr_accessor :public_within
+
     attr_accessor :team
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
         :'ancestors' => :'ancestors',
+        :'public_within' => :'public_within',
         :'team' => :'team'
       }
     end
@@ -42,6 +46,7 @@ module Temper::Generated
     def self.openapi_types
       {
         :'ancestors' => :'Array<TeamRef>',
+        :'public_within' => :'PublicWithinEffects',
         :'team' => :'TeamRow'
       }
     end
@@ -74,6 +79,10 @@ module Temper::Generated
         end
       else
         self.ancestors = nil
+      end
+
+      if attributes.key?(:'public_within')
+        self.public_within = attributes[:'public_within']
       end
 
       if attributes.key?(:'team')
@@ -134,6 +143,7 @@ module Temper::Generated
       return true if self.equal?(o)
       self.class == o.class &&
           ancestors == o.ancestors &&
+          public_within == o.public_within &&
           team == o.team
     end
 
@@ -146,7 +156,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [ancestors, team].hash
+      [ancestors, public_within, team].hash
     end
 
     # Builds the object from hash

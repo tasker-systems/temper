@@ -267,6 +267,7 @@ temper/generated/models/ingest_delta.py
 temper/generated/models/ingest_ended.py
 temper/generated/models/ingest_payload.py
 temper/generated/models/ingest_state.py
+temper/generated/models/inherited_public_within.py
 temper/generated/models/inherited_read_grant.py
 temper/generated/models/inherited_share.py
 temper/generated/models/input_source.py
@@ -340,11 +341,13 @@ temper/generated/models/provision_connection_request.py
 temper/generated/models/provision_machine_request.py
 temper/generated/models/public_system_settings.py
 temper/generated/models/public_within_audience.py
+temper/generated/models/public_within_effects.py
 temper/generated/models/public_within_in_ref.py
 temper/generated/models/public_within_open_kind.py
 temper/generated/models/public_within_outcome.py
 temper/generated/models/public_within_policy_outcome.py
 temper/generated/models/public_within_policy_request.py
+temper/generated/models/public_within_reach.py
 temper/generated/models/public_within_ref.py
 temper/generated/models/public_within_row_ref.py
 temper/generated/models/quantity_scale.py

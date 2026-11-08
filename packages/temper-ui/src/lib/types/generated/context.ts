@@ -117,6 +117,17 @@ can_write: boolean,
 retired: boolean, };
 
 /**
+ * A `public_within` row the context's new owning team holds: while the row confers, the people
+ * under `anchor_ref` read the context. `teams` and `principals` count them (the anchor's live
+ * subtree, and the people on it), as on the team's detail.
+ */
+export type InheritedPublicWithin = { anchor_id: string, 
+/**
+ * Decorated ref: `+slug`.
+ */
+anchor_ref: string, teams: number, principals: number, };
+
+/**
  * An explicit context read-grant that survives the ownership flip — inherited residual reach.
  */
 export type InheritedReadGrant = { 
@@ -159,7 +170,12 @@ inherited_shares: Array<InheritedShare>,
 /**
  * Read-reach the new owner inherits: explicit context read-grants (kb_access_grants).
  */
-inherited_read_grants: Array<InheritedReadGrant>, };
+inherited_read_grants: Array<InheritedReadGrant>, 
+/**
+ * Read-reach the context gains from its new owner: each effective `public_within` row the
+ * team holds opens the context to the people under that row's anchor.
+ */
+inherited_public_within: Array<InheritedPublicWithin>, };
 
 /**
  * Request body for `POST /api/contexts/{id}/reassign` — transfer a context's ownership to

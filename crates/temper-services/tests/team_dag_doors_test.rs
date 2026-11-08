@@ -698,7 +698,9 @@ async fn every_member_sees_parents_and_only_managers_see_children(pool: PgPool) 
 
 async fn detach(pool: &PgPool, who: Uuid, parent: Uuid, child: Uuid) -> Result<(), ApiError> {
     let p = test_support::human_principal_for(pool, who).await;
-    team_service::detach_child(pool, &p, parent, child).await
+    team_service::detach_child(pool, &p, parent, child)
+        .await
+        .map(|_| ())
 }
 
 async fn reparent(

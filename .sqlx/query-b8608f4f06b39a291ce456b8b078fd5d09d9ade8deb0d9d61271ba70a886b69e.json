@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT pw.team_id, pw.anchor_id\n             FROM kb_team_public_within pw\n            WHERE pw.anchor_id IN (SELECT a.team_id FROM team_ancestors($1) a)\n              AND public_within_row_effective(pw.team_id, pw.anchor_id, pw.instance_wide)\n            ORDER BY pw.team_id, pw.anchor_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "team_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "anchor_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "b8608f4f06b39a291ce456b8b078fd5d09d9ade8deb0d9d61271ba70a886b69e"
+}

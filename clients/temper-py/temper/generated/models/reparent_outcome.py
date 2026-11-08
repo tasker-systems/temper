@@ -18,8 +18,9 @@ import re  # noqa: F401
 import json
 
 from pydantic import BaseModel, ConfigDict, Field
-from typing import Any, ClassVar, Dict, List
+from typing import Any, ClassVar, Dict, List, Optional
 from uuid import UUID
+from temper.generated.models.public_within_effects import PublicWithinEffects
 from temper.generated.models.team_ref import TeamRef
 from typing import Optional, Set
 from typing_extensions import Self
@@ -31,9 +32,10 @@ class ReparentOutcome(BaseModel):
     """ # noqa: E501
     correlation_id: UUID
     var_from: TeamRef = Field(alias="from")
+    public_within: Optional[PublicWithinEffects] = Field(default=None, description="What the move did to `public_within` rows. A row whose anchor is no longer above the team by any path is deleted (`lapsed`) and never revives, even if the team moves back.")
     team: TeamRef
     to: TeamRef
-    __properties: ClassVar[List[str]] = ["correlation_id", "from", "team", "to"]
+    __properties: ClassVar[List[str]] = ["correlation_id", "from", "public_within", "team", "to"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -77,6 +79,9 @@ class ReparentOutcome(BaseModel):
         # override the default output from pydantic by calling `to_dict()` of var_from
         if self.var_from:
             _dict['from'] = self.var_from.to_dict()
+        # override the default output from pydantic by calling `to_dict()` of public_within
+        if self.public_within:
+            _dict['public_within'] = self.public_within.to_dict()
         # override the default output from pydantic by calling `to_dict()` of team
         if self.team:
             _dict['team'] = self.team.to_dict()
@@ -97,6 +102,7 @@ class ReparentOutcome(BaseModel):
         _obj = cls.model_validate({
             "correlation_id": obj.get("correlation_id"),
             "from": TeamRef.from_dict(obj["from"]) if obj.get("from") is not None else None,
+            "public_within": PublicWithinEffects.from_dict(obj["public_within"]) if obj.get("public_within") is not None else None,
             "team": TeamRef.from_dict(obj["team"]) if obj.get("team") is not None else None,
             "to": TeamRef.from_dict(obj["to"]) if obj.get("to") is not None else None
         })

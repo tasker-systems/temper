@@ -18,6 +18,9 @@ module Temper::Generated
   class ReassignContextOutcome < ApiModelBase
     attr_accessor :context_id
 
+    # Read-reach the context gains from its new owner: each effective `public_within` row the team holds opens the context to the people under that row's anchor.
+    attr_accessor :inherited_public_within
+
     # Read-reach the new owner inherits: explicit context read-grants (kb_access_grants).
     attr_accessor :inherited_read_grants
 
@@ -34,6 +37,7 @@ module Temper::Generated
     def self.attribute_map
       {
         :'context_id' => :'context_id',
+        :'inherited_public_within' => :'inherited_public_within',
         :'inherited_read_grants' => :'inherited_read_grants',
         :'inherited_shares' => :'inherited_shares',
         :'owner_ref' => :'owner_ref',
@@ -55,6 +59,7 @@ module Temper::Generated
     def self.openapi_types
       {
         :'context_id' => :'String',
+        :'inherited_public_within' => :'Array<InheritedPublicWithin>',
         :'inherited_read_grants' => :'Array<InheritedReadGrant>',
         :'inherited_shares' => :'Array<InheritedShare>',
         :'owner_ref' => :'String',
@@ -88,6 +93,12 @@ module Temper::Generated
         self.context_id = attributes[:'context_id']
       else
         self.context_id = nil
+      end
+
+      if attributes.key?(:'inherited_public_within')
+        if (value = attributes[:'inherited_public_within']).is_a?(Array)
+          self.inherited_public_within = value
+        end
       end
 
       if attributes.key?(:'inherited_read_grants')
@@ -181,6 +192,7 @@ module Temper::Generated
       return true if self.equal?(o)
       self.class == o.class &&
           context_id == o.context_id &&
+          inherited_public_within == o.inherited_public_within &&
           inherited_read_grants == o.inherited_read_grants &&
           inherited_shares == o.inherited_shares &&
           owner_ref == o.owner_ref &&
@@ -196,7 +208,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [context_id, inherited_read_grants, inherited_shares, owner_ref, reassigned].hash
+      [context_id, inherited_public_within, inherited_read_grants, inherited_shares, owner_ref, reassigned].hash
     end
 
     # Builds the object from hash

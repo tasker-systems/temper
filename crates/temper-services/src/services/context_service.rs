@@ -31,10 +31,10 @@ use temper_core::types::team::TeamRole;
 use temper_workflow::operations::sluggify;
 
 pub use temper_core::types::context::{
-    ContextActivity, ContextCreateRequest, ContextRow, ContextRowWithCounts, InheritedReadGrant,
-    InheritedShare, ReassignContextOutcome, ReassignContextRequest, RenameContextOutcome,
-    RenameContextRequest, RestoreContextOutcome, RetireContextOutcome, ShareContextOutcome,
-    ShareContextRequest, UnshareContextOutcome,
+    ContextActivity, ContextCreateRequest, ContextRow, ContextRowWithCounts, InheritedPublicWithin,
+    InheritedReadGrant, InheritedShare, ReassignContextOutcome, ReassignContextRequest,
+    RenameContextOutcome, RenameContextRequest, RestoreContextOutcome, RetireContextOutcome,
+    ShareContextOutcome, ShareContextRequest, UnshareContextOutcome,
 };
 
 /// When the profile last changed something in each context they can read — one row per context
@@ -1048,6 +1048,8 @@ pub async fn reassign(
     // Read-reach the new owner inherits — surfaced in the outcome, never swept (spec D3).
     let (inherited_shares, inherited_read_grants) = inherited_reach(pool, context_id).await?;
 
+    let inherited_public_within = public_within_reach_of(pool, context_id, to_team_id).await?;
+
     if cur.owner_table == "kb_teams" && cur.owner_id == to_team_id {
         return Ok(ReassignContextOutcome {
             context_id,
@@ -1055,6 +1057,7 @@ pub async fn reassign(
             reassigned: false,
             inherited_shares,
             inherited_read_grants,
+            inherited_public_within,
         });
     }
 
@@ -1095,7 +1098,42 @@ pub async fn reassign(
         reassigned: true,
         inherited_shares,
         inherited_read_grants,
+        inherited_public_within,
     })
+}
+
+/// The `public_within` reach a context owned by `team_id` has: one entry per effective row with
+/// the team as T, naming the anchor and counting its audience. Empty for a connection's home
+/// context, which no row ever opens. The caller of a reassign manages the team (or is a system
+/// admin), and the team's detail shows its rows to its members, so the anchors are named.
+async fn public_within_reach_of(
+    pool: &PgPool,
+    context_id: uuid::Uuid,
+    team_id: uuid::Uuid,
+) -> ApiResult<Vec<InheritedPublicWithin>> {
+    Ok(sqlx::query!(
+        r#"SELECT a.id AS "anchor_id!", a.slug AS "slug!",
+                  au.teams AS "teams!", au.principals AS "principals!"
+             FROM kb_team_public_within pw
+             JOIN kb_teams a ON a.id = pw.anchor_id
+             CROSS JOIN LATERAL public_within_audience(pw.anchor_id) au
+            WHERE pw.team_id = $1
+              AND public_within_row_effective(pw.team_id, pw.anchor_id, pw.instance_wide)
+              AND NOT EXISTS (SELECT 1 FROM kb_connections k WHERE k.home_context_id = $2)
+            ORDER BY a.slug"#,
+        team_id,
+        context_id,
+    )
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|r| InheritedPublicWithin {
+        anchor_id: r.anchor_id,
+        anchor_ref: format!("+{}", r.slug),
+        teams: r.teams,
+        principals: r.principals,
+    })
+    .collect())
 }
 
 /// Gather the read-reach a transfer leaves in place: `kb_team_contexts` shares plus explicit

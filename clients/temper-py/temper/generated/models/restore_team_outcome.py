@@ -17,8 +17,9 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict
-from typing import Any, ClassVar, Dict, List
+from pydantic import BaseModel, ConfigDict, Field
+from typing import Any, ClassVar, Dict, List, Optional
+from temper.generated.models.public_within_effects import PublicWithinEffects
 from temper.generated.models.team_member_detail import TeamMemberDetail
 from temper.generated.models.team_ref import TeamRef
 from temper.generated.models.team_row import TeamRow
@@ -33,8 +34,9 @@ class RestoreTeamOutcome(BaseModel):
     children: List[TeamRef]
     members: List[TeamMemberDetail]
     parents: List[TeamRef]
+    public_within: Optional[PublicWithinEffects] = Field(default=None, description="The `public_within` rows the restore revived (or, for a restored pool team, made dormant).")
     team: TeamRow
-    __properties: ClassVar[List[str]] = ["children", "members", "parents", "team"]
+    __properties: ClassVar[List[str]] = ["children", "members", "parents", "public_within", "team"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -96,6 +98,9 @@ class RestoreTeamOutcome(BaseModel):
                 if _item_parents:
                     _items.append(_item_parents.to_dict())
             _dict['parents'] = _items
+        # override the default output from pydantic by calling `to_dict()` of public_within
+        if self.public_within:
+            _dict['public_within'] = self.public_within.to_dict()
         # override the default output from pydantic by calling `to_dict()` of team
         if self.team:
             _dict['team'] = self.team.to_dict()
@@ -114,6 +119,7 @@ class RestoreTeamOutcome(BaseModel):
             "children": [TeamRef.from_dict(_item) for _item in obj["children"]] if obj.get("children") is not None else None,
             "members": [TeamMemberDetail.from_dict(_item) for _item in obj["members"]] if obj.get("members") is not None else None,
             "parents": [TeamRef.from_dict(_item) for _item in obj["parents"]] if obj.get("parents") is not None else None,
+            "public_within": PublicWithinEffects.from_dict(obj["public_within"]) if obj.get("public_within") is not None else None,
             "team": TeamRow.from_dict(obj["team"]) if obj.get("team") is not None else None
         })
         return _obj

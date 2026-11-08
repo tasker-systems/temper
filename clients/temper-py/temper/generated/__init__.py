@@ -289,6 +289,7 @@ __all__ = [
     "IngestEnded",
     "IngestPayload",
     "IngestState",
+    "InheritedPublicWithin",
     "InheritedReadGrant",
     "InheritedShare",
     "InputSource",
@@ -362,11 +363,13 @@ __all__ = [
     "ProvisionMachineRequest",
     "PublicSystemSettings",
     "PublicWithinAudience",
+    "PublicWithinEffects",
     "PublicWithinInRef",
     "PublicWithinOpenKind",
     "PublicWithinOutcome",
     "PublicWithinPolicyOutcome",
     "PublicWithinPolicyRequest",
+    "PublicWithinReach",
     "PublicWithinRef",
     "PublicWithinRowRef",
     "QuantityScale",
@@ -826,6 +829,7 @@ from temper.generated.models.ingest_delta import IngestDelta as IngestDelta
 from temper.generated.models.ingest_ended import IngestEnded as IngestEnded
 from temper.generated.models.ingest_payload import IngestPayload as IngestPayload
 from temper.generated.models.ingest_state import IngestState as IngestState
+from temper.generated.models.inherited_public_within import InheritedPublicWithin as InheritedPublicWithin
 from temper.generated.models.inherited_read_grant import InheritedReadGrant as InheritedReadGrant
 from temper.generated.models.inherited_share import InheritedShare as InheritedShare
 from temper.generated.models.input_source import InputSource as InputSource
@@ -899,11 +903,13 @@ from temper.generated.models.provision_connection_request import ProvisionConnec
 from temper.generated.models.provision_machine_request import ProvisionMachineRequest as ProvisionMachineRequest
 from temper.generated.models.public_system_settings import PublicSystemSettings as PublicSystemSettings
 from temper.generated.models.public_within_audience import PublicWithinAudience as PublicWithinAudience
+from temper.generated.models.public_within_effects import PublicWithinEffects as PublicWithinEffects
 from temper.generated.models.public_within_in_ref import PublicWithinInRef as PublicWithinInRef
 from temper.generated.models.public_within_open_kind import PublicWithinOpenKind as PublicWithinOpenKind
 from temper.generated.models.public_within_outcome import PublicWithinOutcome as PublicWithinOutcome
 from temper.generated.models.public_within_policy_outcome import PublicWithinPolicyOutcome as PublicWithinPolicyOutcome
 from temper.generated.models.public_within_policy_request import PublicWithinPolicyRequest as PublicWithinPolicyRequest
+from temper.generated.models.public_within_reach import PublicWithinReach as PublicWithinReach
 from temper.generated.models.public_within_ref import PublicWithinRef as PublicWithinRef
 from temper.generated.models.public_within_row_ref import PublicWithinRowRef as PublicWithinRowRef
 from temper.generated.models.quantity_scale import QuantityScale as QuantityScale
