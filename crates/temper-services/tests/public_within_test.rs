@@ -3090,7 +3090,18 @@ async fn a_hard_deleted_mid_path_team_lapses_the_rows_it_cut_off(pool: PgPool) {
     let recs = row_records(&pool, "team_public_within_changed", w.eng_sec, w.org).await;
     let last = recs.last().expect("a record");
     assert_eq!(last["act"], "lapsed", "{recs:?}");
-    assert!(last.get("actor").is_none(), "the system's record");
+    let emitted_by_system: bool = sqlx::query_scalar(
+        "SELECT p.handle = 'system' FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+           JOIN kb_entities en ON en.id = e.emitter_entity_id JOIN kb_profiles p ON p.id = en.profile_id \
+          WHERE et.name = 'team_public_within_changed' AND e.payload ->> 'act' = 'lapsed' \
+            AND (e.payload ->> 'team_id')::uuid = $1 AND (e.payload ->> 'anchor_id')::uuid = $2",
+    )
+    .bind(w.eng_sec)
+    .bind(w.org)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(emitted_by_system, "the system entity's record");
     assert!(!reads(&pool, w.org_only, w.r_t).await);
 }
 
@@ -3203,6 +3214,80 @@ async fn a_hard_delete_records_a_row_opened_while_it_waited(pool: PgPool) {
     assert!(!row_exists(&pool, w.eng_sec, w.org).await);
     let recs = row_records(&pool, "team_public_within_changed", w.eng_sec, w.org).await;
     assert_eq!(recs.last().unwrap()["act"], "lapsed", "{recs:?}");
+}
+
+/// The other order: an act holding the effects lock deletes a row (as a lapse does) that a hard
+/// delete of the row's team would delete too. The hard delete takes the effects lock before it
+/// touches any public_within row, so it waits, and neither side is aborted as a deadlock.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_hard_delete_waits_for_an_act_before_deleting_a_row(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    let t2 = team(&pool, "eng-tmp", &[w.eng]).await;
+    join(&pool, t2, d.both, "owner").await;
+    open_by(&pool, d.both, t2, w.eng).await.unwrap();
+
+    let mut act = pool.begin().await.unwrap();
+    let pid = backend_pid(&mut act).await;
+    sqlx::query("SELECT _public_within_effects_lock()")
+        .execute(&mut *act)
+        .await
+        .unwrap();
+
+    let p2 = pool.clone();
+    let contender = tokio::spawn(async move {
+        sqlx::query("DELETE FROM kb_teams WHERE id = $1")
+            .bind(t2)
+            .execute(&p2)
+            .await
+    });
+    await_blocked_by(&pool, pid).await;
+    sqlx::query("DELETE FROM kb_team_public_within WHERE team_id = $1 AND anchor_id = $2")
+        .bind(t2)
+        .bind(w.eng)
+        .execute(&mut *act)
+        .await
+        .expect("the act's delete is not aborted");
+    act.commit().await.unwrap();
+    contender
+        .await
+        .unwrap()
+        .expect("the hard delete is not aborted");
+    assert!(!row_exists(&pool, t2, w.eng).await);
+}
+
+/// A kb_teams statement nested inside a hard delete (here, a zero-row delete run by a function in
+/// its WHERE clause) works on its own frame: the outer delete's snapshot survives it, and the row the
+/// outer delete cuts off is deleted as lapsed, not left dormant.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_nested_kb_teams_statement_leaves_the_outer_snapshot_whole(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    join(&pool, w.org, d.both, "owner").await;
+    open_by(&pool, d.both, w.eng_sec, w.org).await.unwrap();
+    let x = team(&pool, "unlinked", &[]).await;
+
+    let mut conn = pool.acquire().await.unwrap();
+    sqlx::query(
+        "CREATE FUNCTION pg_temp.nested() RETURNS boolean LANGUAGE plpgsql AS \
+         $f$ BEGIN DELETE FROM kb_teams WHERE false; RETURN true; END $f$",
+    )
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    sqlx::query("DELETE FROM kb_teams WHERE id = ANY($1) AND pg_temp.nested()")
+        .bind(vec![w.eng, x])
+        .execute(&mut *conn)
+        .await
+        .expect("hard delete");
+    drop(conn);
+
+    assert!(
+        !row_exists(&pool, w.eng_sec, w.org).await,
+        "lapsed, not dormant"
+    );
+    let recs = row_records(&pool, "public_within_effect_changed", w.eng_sec, w.org).await;
+    assert!(recs.is_empty(), "no intermediate flip recorded: {recs:?}");
 }
 
 /// The open's lock set is computed before it waits: a link committed while it waited gives T an
