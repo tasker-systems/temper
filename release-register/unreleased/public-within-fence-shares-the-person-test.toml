@@ -1,0 +1,32 @@
+title    = "The public_within machine fence asks the shared person test (profile_is_person) instead of its own copies"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["internal"]
+status   = "signal-only"
+body = '''
+public_within_reading, the predicate that keeps machine principals from reading through
+public_within, now answers "is this profile a person, not a machine client or a connection's
+agent?" by calling profile_is_person, the one shared person test (personal space, private
+cogmaps, the personal-team and machine-minter checks; it reads is_machine_profile, the machine
+test the caller classification uses), instead of its own inline lookups of kb_machine_clients
+and kb_connections (migration 20261123100000). Its search_path is pinned.
+
+Same signature and the same answer for every profile: profile_is_person is exactly the two lookups
+it replaces. The human-link clause is unchanged. No table, column, row, route or response shape
+changes, and no principal gains or loses reach.
+
+The one test suffices because what it excludes is closed: a client_credentials token signs in only
+through an unrevoked machine-client row (a dynamically registered client has none and is refused
+before any profile exists; a revoked one is refused at the gate), a client row is never deleted or
+moved to another profile, and a connection's agent carries no auth link and no client row.
+
+Who observes: nobody, by design; a later change to the person test now moves the fence with it.
+Cost: the read arm still calls the fence only once a public_within row is anchored in the caller's
+closure, so a read with no such row costs what it did. Each fence call costs about 4 microseconds
+more (it now runs the shared functions), paid once per read with a candidate row, once per team
+view or public_within listing, and once per membership row counted for a row's audience.
+Witnesses: crates/temper-services/tests/public_within_fence_test.rs (every machine shape fenced,
+each arm of the person test deciding alone, a person reading, and a guard that fails if the fence
+stops calling the shared test) and profile_service's refusal of a dynamically registered client.
+Release relevance: none beyond the migration; signal-only.
+'''

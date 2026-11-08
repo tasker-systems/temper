@@ -1346,6 +1346,49 @@ mod tests {
         }
     }
 
+    /// A client registered through dynamic client registration can obtain a client_credentials
+    /// token from temper's own authorization server (its row lives in `kb_oauth_dcr_clients`,
+    /// seeded here as production holds it), but it has no `kb_machine_clients` row, so the machine
+    /// gate refuses it, in the minted-namespace wording, before any profile exists.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_dynamically_registered_client_is_refused_and_creates_no_profile(pool: PgPool) {
+        let client_id = "conn_fence0123456789";
+        sqlx::query(
+            "INSERT INTO kb_oauth_dcr_clients \
+               (client_id, client_secret_hash, grant_types, redirect_uris, token_endpoint_auth_method) \
+             VALUES ($1, 'x', ARRAY['client_credentials'], ARRAY['https://connect.vercel.com/callback'], \
+                     'client_secret_basic')",
+        )
+        .bind(client_id)
+        .execute(&pool)
+        .await
+        .expect("seed dcr client");
+        let profiles = || async {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM kb_profiles")
+                .fetch_one(&pool)
+                .await
+                .expect("count")
+        };
+        let before = profiles().await;
+
+        for mode in [AuthMode::TemperAs, AuthMode::ExternalIdp] {
+            let err = resolve_from_claims(&pool, &machine_claims(client_id), mode)
+                .await
+                .expect_err("a DCR client is not a machine principal");
+            match err {
+                ApiError::Unauthorized(msg) => assert!(
+                    msg.contains("not registered")
+                        && msg.contains(client_id)
+                        && msg.contains("namespace temper mints"),
+                    "refused as unregistered in a minted namespace, naming the client: {msg}"
+                ),
+                other => panic!("expected Unauthorized, got {other:?}"),
+            }
+        }
+
+        assert_eq!(before, profiles().await, "no profile is created");
+    }
+
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn registered_machine_resolves_to_its_profile(pool: PgPool) {
         let profile_id = Uuid::now_v7();
