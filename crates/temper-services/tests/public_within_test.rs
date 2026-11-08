@@ -2593,6 +2593,46 @@ async fn a_demotion_in_flight_refuses_every_admin_arm(pool: PgPool) {
     assert!(effective(&pool, w.eng_sec, w.eng).await);
 }
 
+/// The membership doors re-check admin through the same locked read: an admin adding a member to
+/// a team they hold no role on, with their demotion in flight, waits and is refused once it commits.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_demotion_in_flight_refuses_the_admin_arm_of_a_membership_door(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    let newcomer = person(&pool, "newcomer").await;
+    let (holder, pid) = demotion_in_flight(&pool, w.admin).await;
+    let p2 = pool.clone();
+    let (admin, team) = (w.admin, w.sales);
+    let contender = tokio::spawn(async move {
+        team_service::add_member(
+            &p2,
+            &hp(&p2, admin).await,
+            team,
+            &temper_core::types::team::AddMemberRequest {
+                profile_id: newcomer,
+                role: TeamRole::Member,
+            },
+        )
+        .await
+    });
+    await_blocked_by(&pool, pid).await;
+    holder.commit().await.unwrap();
+    let err = contender.await.unwrap().unwrap_err();
+    assert!(
+        matches!(err, ApiError::Forbidden | ApiError::ForbiddenDetail(_)),
+        "{err:?}"
+    );
+    let member: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM kb_team_members WHERE team_id = $1 AND profile_id = $2)",
+    )
+    .bind(w.sales)
+    .bind(newcomer)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!member, "nothing is written");
+}
+
 /// An admin whose demotion is rolled back is admitted once it ends: the door waited on the row, not
 /// on the outcome.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]

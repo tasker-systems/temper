@@ -1,20 +1,22 @@
-title    = "A demotion of a system admin serializes against the admin arm of the team doors that re-check authority under their locks"
+title    = "A demotion of a system admin serializes against the admin arm of the team and membership doors that re-check authority under their locks"
 pr       = "self"
 classes  = ["behavioral"]
 surfaces = ["http", "mcp"]
 status   = "signal-only"
 body = '''
-The team doors that decide system-admin standing again under their row locks (create under an
-instance parent, rename, attach and reparent, and public_within open, close and forbid) now read the
-caller's kb_principal_governance row FOR KEY SHARE, held to the end of the act's transaction, in
-place of a plain is_system_admin read. A demotion deletes that row, so it either commits first and
+The doors that decide system-admin standing again under their row locks (create under an instance
+parent, rename, attach and reparent, public_within open, close and forbid, and the membership doors'
+admin arm: add, remove and change a member's role) first lock the caller's kb_principal_governance
+row FOR KEY SHARE, held to the end of the act's transaction, then decide with is_system_admin as
+before (auth::require_system_admin_on). A demotion deletes that row, so it either commits first and
 the act is refused (403), or waits until the act commits. Before, a demotion committing between the
 re-check and the act's commit was not seen, and the act committed as an admin's.
 
 Who observes: a system admin demoted (directly, or by Revoke or Deactivate) while one of those acts
 is in flight. The act is refused instead of committed, and the demotion can wait for the length of
 an act's transaction. No schema change and no response shape change. Witnesses:
-`a_demotion_in_flight_refuses_every_admin_arm`, `a_demotion_committed_first_is_seen` and
+`a_demotion_in_flight_refuses_every_admin_arm`,
+`a_demotion_in_flight_refuses_the_admin_arm_of_a_membership_door`, `a_demotion_committed_first_is_seen` and
 `every_demotion_waits_for_a_door_that_rechecked` in
 `crates/temper-services/tests/public_within_test.rs`. Release relevance: signal-only.
 '''

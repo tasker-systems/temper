@@ -588,11 +588,26 @@ pub async fn require_system_admin(pool: &PgPool, human: &HumanPrincipal) -> ApiR
 /// inside a write transaction, under its locks (team-role rank plan P1, P3: the membership authority
 /// is re-resolved after the team row is locked). Same predicate, same refusal, same seal: this and
 /// [`require_system_admin`] are the only two places a [`SystemAdmin`] is minted in a production build.
+///
+/// It first takes the caller's `kb_principal_governance` row `FOR KEY SHARE`, held to the end of the
+/// transaction, so a demotion cannot slip in after the decision: a demotion deletes that row
+/// (`principal_governance_set`), which conflicts with `KEY SHARE`, so it either committed first (the
+/// predicate then answers false) or waits until this transaction ends. The decision itself is still
+/// `is_system_admin`. A demotion locks no team row and takes no advisory lock before its delete
+/// (`demote_admin` is one statement; `standing_service::apply` locks the subject's standing row
+/// first), so a caller holding team rows or advisory locks never waits on it in a cycle. A caller on
+/// an autocommit connection takes and drops the lock in one statement.
 pub async fn require_system_admin_on(
     conn: &mut sqlx::PgConnection,
     human: &HumanPrincipal,
 ) -> ApiResult<SystemAdmin> {
     let actor = human.profile_id();
+    sqlx::query_scalar!(
+        "SELECT profile_id FROM kb_principal_governance WHERE profile_id = $1 FOR KEY SHARE",
+        *actor,
+    )
+    .fetch_optional(&mut *conn)
+    .await?;
     let is_admin = sqlx::query_scalar!("SELECT is_system_admin($1)", *actor)
         .fetch_one(&mut *conn)
         .await?

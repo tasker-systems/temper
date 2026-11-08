@@ -238,33 +238,11 @@ async fn require_admin_on(pool: &PgPool, caller: &HumanPrincipal) -> ApiResult<(
 
 /// [`require_admin_on`] on the transaction's own connection, for a re-check under row locks: a
 /// transaction that holds rows never waits on a second pooled connection (which a saturated pool
-/// may never hand back). Locks the caller's governance row, as [`admin_held_on`] says.
+/// may never hand back). A demotion serializes with it (`auth::require_system_admin_on`).
 async fn require_admin_in(conn: &mut sqlx::PgConnection, caller: &HumanPrincipal) -> ApiResult<()> {
-    if admin_held_on(conn, caller).await? {
-        Ok(())
-    } else {
-        Err(ApiError::Forbidden)
-    }
-}
-
-/// Is `caller` a system admin, decided under the transaction's locks so that a demotion cannot
-/// slip in after the decision: the caller's `kb_principal_governance` row (the whole of
-/// `is_system_admin`) is read `FOR KEY SHARE`, held to the end of the transaction. A demotion
-/// deletes that row, which conflicts with `KEY SHARE`, so it either committed first (the row is
-/// gone and the caller is not an admin) or waits until this act commits.
-///
-/// Lock order: every caller takes it after its team rows and the effects lock, and holds nothing
-/// a demotion waits on except this row; a demotion (`principal_governance_set`, alone or after the
-/// standing row in `standing_service::apply`) locks no team row and takes no advisory lock before
-/// its delete, so the two never wait on each other in a cycle.
-async fn admin_held_on(conn: &mut sqlx::PgConnection, caller: &HumanPrincipal) -> ApiResult<bool> {
-    let held = sqlx::query_scalar!(
-        "SELECT profile_id FROM kb_principal_governance WHERE profile_id = $1 FOR KEY SHARE",
-        *caller.profile_id(),
-    )
-    .fetch_optional(&mut *conn)
-    .await?;
-    Ok(held.is_some())
+    crate::auth::require_system_admin_on(conn, caller)
+        .await
+        .map(|_| ())
 }
 
 /// One `public_within` row named by its two team ids, as a transitions answer carries it.
@@ -2338,12 +2316,16 @@ async fn caller_is_admin(pool: &PgPool, caller: &HumanPrincipal) -> ApiResult<bo
 
 /// [`caller_is_admin`] on the transaction's own connection, under its locks: a re-check never takes
 /// a second pooled connection while the transaction holds rows, and a demotion serializes with it
-/// ([`admin_held_on`]).
+/// (`auth::require_system_admin_on`).
 async fn caller_is_admin_on(
     conn: &mut sqlx::PgConnection,
     caller: &HumanPrincipal,
 ) -> ApiResult<bool> {
-    admin_held_on(conn, caller).await
+    match crate::auth::require_system_admin_on(conn, caller).await {
+        Ok(_) => Ok(true),
+        Err(ApiError::Forbidden) => Ok(false),
+        Err(other) => Err(other),
+    }
 }
 
 /// A direct, live `owner` or `maintainer` row on the team.
