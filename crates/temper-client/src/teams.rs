@@ -13,11 +13,11 @@ use temper_core::types::reassign::{
     BulkReassignAck, BulkReassignRequest, RemoveMemberOutcome, ResidualOwnedReach,
 };
 use temper_core::types::team::{
-    AddMemberRequest, AttachChildOutcome, ChangeRoleRequest, PublicWithinOutcome,
-    PublicWithinPolicyOutcome, PublicWithinPolicyRequest, PublicWithinRowRef,
+    AddMemberRequest, AttachChildOutcome, ChangeRoleRequest, PublicWithinEffects,
+    PublicWithinOutcome, PublicWithinPolicyOutcome, PublicWithinPolicyRequest, PublicWithinRowRef,
     RenameTeamSlugOutcome, RenameTeamSlugRequest, ReparentOutcome, ReparentRequest,
-    RestoreTeamOutcome, SetAutoJoinOutcome, SetAutoJoinRequest, TeamCreateRequest, TeamDetail,
-    TeamMemberRow, TeamRow, TeamUpdateRequest,
+    RestoreTeamOutcome, SetAutoJoinOutcome, SetAutoJoinRequest, TeamActAnswerQuery,
+    TeamCreateRequest, TeamDetail, TeamMemberRow, TeamRow, TeamUpdateRequest,
 };
 
 /// Sub-client for team lifecycle operations (create / add-member / list /
@@ -48,12 +48,18 @@ impl<'a> TeamsClient<'a> {
             .await
     }
 
-    /// Create a team (the caller becomes its `owner`).
+    /// Create a team (the caller becomes its `owner`). Asks for the act's `public_within` effects
+    /// (`?answer=effects`): a server that knows the parameter fills `TeamRow.public_within` and
+    /// `public_within_in_reach`; an older one ignores it and answers the row alone, both `None`.
     pub async fn create(&self, body: &TeamCreateRequest) -> Result<TeamRow> {
         let token = self.http.resolve_token()?;
         let op = &ops::CREATE_TEAM;
         let path = op.path(&[])?;
-        let req = self.http.request(op, &path).json(body);
+        let req = self
+            .http
+            .request(op, &path)
+            .query(&TeamActAnswerQuery::effects())
+            .json(body);
         self.http
             .send_json(&op.method(), &path, req, token.as_deref())
             .await
@@ -97,33 +103,49 @@ impl<'a> TeamsClient<'a> {
             .await
     }
 
-    /// DELETE /api/teams/{id} — soft-delete a team (owner or system admin).
+    /// DELETE /api/teams/{id} — soft-delete a team (owner or system admin), asking for what the
+    /// delete did to `public_within` rows (`?answer=effects`).
     ///
-    /// Returns `()` on a 204; `send` errors on any non-2xx (403/404/409), so
-    /// callers surface the guard failures without decoding a body.
-    pub async fn delete(&self, team_id: Uuid) -> Result<()> {
+    /// `Some` on a `200` with the effects, filtered for the caller; `None` on a `204`, which an
+    /// older server that ignores the parameter answers: no effects reported, not none happened.
+    /// `send` errors on any non-2xx (403/404/409).
+    pub async fn delete(&self, team_id: Uuid) -> Result<Option<PublicWithinEffects>> {
         let token = self.http.resolve_token()?;
         let op = &ops::DELETE_TEAM;
         let path = op.path(&[&team_id])?;
-        let req = self.http.request(op, &path);
-        self.http
+        let req = self
+            .http
+            .request(op, &path)
+            .query(&TeamActAnswerQuery::effects());
+        let resp = self
+            .http
             .send(&op.method(), &path, req, token.as_deref())
             .await?;
-        Ok(())
+        effects_or_none(resp).await
     }
 
-    /// DELETE /api/teams/{id}/children/{child_id} — detach a child team from this team.
+    /// DELETE /api/teams/{id}/children/{child_id} — detach a child team from this team, asking
+    /// for what the detach did to `public_within` rows (`?answer=effects`).
     ///
-    /// Returns `()` on a 204; `send` errors on any non-2xx (403/404).
-    pub async fn detach_child(&self, team_id: Uuid, child_id: Uuid) -> Result<()> {
+    /// `Some` on a `200`, `None` on a `204` (an older server): see [`Self::delete`]. `send` errors on
+    /// any non-2xx (403/404).
+    pub async fn detach_child(
+        &self,
+        team_id: Uuid,
+        child_id: Uuid,
+    ) -> Result<Option<PublicWithinEffects>> {
         let token = self.http.resolve_token()?;
         let op = &ops::DETACH_CHILD_TEAM;
         let path = op.path(&[&team_id, &child_id])?;
-        let req = self.http.request(op, &path);
-        self.http
+        let req = self
+            .http
+            .request(op, &path)
+            .query(&TeamActAnswerQuery::effects());
+        let resp = self
+            .http
             .send(&op.method(), &path, req, token.as_deref())
             .await?;
-        Ok(())
+        effects_or_none(resp).await
     }
 
     /// PUT /api/teams/{id}/children/{child_id} — attach a child team under this team (a manager
@@ -424,4 +446,17 @@ impl<'a> TeamsClient<'a> {
             .await?;
         Ok(())
     }
+}
+
+/// A `?answer=effects` act's answer: the effects on a body, `None` on a `204` (a server that
+/// predates the parameter answers as it always did).
+async fn effects_or_none(resp: reqwest::Response) -> Result<Option<PublicWithinEffects>> {
+    if resp.status() == reqwest::StatusCode::NO_CONTENT {
+        return Ok(None);
+    }
+    let bytes = resp.bytes().await?;
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(serde_json::from_slice(&bytes)?))
 }

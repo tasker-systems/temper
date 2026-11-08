@@ -1800,6 +1800,60 @@ pub enum TeamAction {
     },
     /// List the teams you are a member of
     List,
+    /// Open a team's owned contexts to the people under one of its ancestors, close that opening,
+    /// forbid it over a subtree, or list the openings you read through
+    ///
+    /// For people reading, never for automation: a machine principal is refused every act here and
+    /// never reads through an opening. Readers may reference the opened material from homes they
+    /// author; acting on it (writing, granting, sharing, subscribing, auditing) still needs
+    /// membership.
+    PublicWithin {
+        #[command(subcommand)]
+        action: PublicWithinAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum PublicWithinAction {
+    /// Open a team's owned contexts to an ancestor's subtree (a direct owner or maintainer of the
+    /// team, and of the anchor or a system admin)
+    ///
+    /// The people on the anchor and on every live team beneath it then read every context the team
+    /// owns. That audience grows as the anchor's subtree grows: every manager of a team under the
+    /// anchor, identity-provider group sync and a system admin can add to it. Either side can close
+    /// it at any time. An anchor whose subtree reaches everyone (temper-system, the gating team, or
+    /// one holding an auto-join team) is a system admin's open.
+    Open {
+        /// The team whose owned contexts are opened: slug (optionally `+`-prefixed), decorated ref,
+        /// or UUID
+        team: String,
+        /// The ancestor whose subtree reads them: slug, decorated ref, or UUID
+        anchor: String,
+    },
+    /// Close an opening (a manager of either side, or a system admin)
+    ///
+    /// What readers already read is not recalled.
+    Close {
+        /// The opened team: slug, decorated ref, or UUID
+        team: String,
+        /// The anchor: slug, decorated ref, or UUID
+        anchor: String,
+    },
+    /// Forbid or allow openings over a team and everything beneath it (its direct owner or a
+    /// system admin; on temper-system, the instance-wide off, a system admin only)
+    ///
+    /// A forbid covers every team beneath by every path, and nothing beneath it lifts it. Rows are
+    /// kept and confer again when the forbid is cleared.
+    Policy {
+        /// Team slug (optionally `+`-prefixed), decorated ref, or UUID
+        team: String,
+        /// forbid | allow
+        #[arg(value_parser = ["forbid", "allow"])]
+        setting: String,
+    },
+    /// List the openings that confer on you right now: each names the team you read and the anchor
+    /// you read it through
+    List,
 }
 
 #[derive(Subcommand)]

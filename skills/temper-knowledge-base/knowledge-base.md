@@ -58,8 +58,8 @@ body: the chunker splits it and embeds the fragments as noise. Read `data-artifa
 **Teams and invitations**
 - Tool: `invitation_read` — count (the cheap check, no tokens), mine (yours, with tokens), team (a team's pending, for its managers).
 - Tool: `invitation_manage` — accept, decline, create, revoke.
-- Tool: `team_read` — your teams, or one team's roster, parents and children.
-- Tool: `team_manage` — create, update, delete, restore, members and roles, leave, attach, detach, reparent, rename_slug.
+- Tool: `team_read` — your teams, one team's roster, parents and children (and its public_within openings, to its members), or `public_within`: the openings you read through.
+- Tool: `team_manage` — create, update, delete, restore, members and roles, leave, attach, detach, reparent, rename_slug, and public_within_open / public_within_close / public_within_policy (opening a team's own contexts to an ancestor's subtree, for people reading; never a machine's act).
 
 **Blobs** — Tools: `blob_read`, `blob_manage`, advertised only while the blob door is open.
 

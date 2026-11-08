@@ -245,6 +245,32 @@ async fn require_admin_in(conn: &mut sqlx::PgConnection, caller: &HumanPrincipal
         .map(|_| ())
 }
 
+/// A `kb_teams` row as the SQL selects it. [`TeamRow`] is the wire answer, which also carries the
+/// opt-in `public_within` fields a create fills; a row read from the table carries neither.
+pub(crate) struct TeamRowDb {
+    id: Uuid,
+    slug: String,
+    name: String,
+    description: Option<String>,
+    created: chrono::DateTime<chrono::Utc>,
+    auto_join_role: Option<TeamRole>,
+}
+
+impl From<TeamRowDb> for TeamRow {
+    fn from(r: TeamRowDb) -> Self {
+        TeamRow {
+            id: r.id,
+            slug: r.slug,
+            name: r.name,
+            description: r.description,
+            created: r.created,
+            auto_join_role: r.auto_join_role,
+            public_within: None,
+            public_within_in_reach: None,
+        }
+    }
+}
+
 /// One `public_within` row named by its two team ids, as a transitions answer carries it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 pub(crate) struct RowKey {
@@ -541,8 +567,9 @@ pub async fn create_team(
 /// What [`create_team_with_effects`] did: the new team's row, what its parent links did to
 /// `public_within` rows (an auto-join team created under an anchor makes its rows dormant), and the
 /// effective rows the new team's roster reads through its parents. Both filtered for the caller.
-/// `POST /api/teams` answers the row alone: its response schema is `TeamRow`, and the transitions are
-/// on the admin ledger.
+/// `POST /api/teams` answers the row alone unless asked with `?answer=effects`, which fills
+/// `TeamRow.public_within` and `public_within_in_reach` from this; the transitions are on the admin
+/// ledger either way.
 #[derive(Debug, Clone)]
 pub struct CreatedTeam {
     pub team: TeamRow,
@@ -650,7 +677,7 @@ pub async fn create_team_with_effects(
     }
 
     let row = sqlx::query_as!(
-        TeamRow,
+        TeamRowDb,
         r#"
         INSERT INTO kb_teams (id, slug, name, auto_join_role)
         VALUES ($1, $2, $3, $4)
@@ -741,7 +768,7 @@ pub async fn create_team_with_effects(
     }
 
     Ok(CreatedTeam {
-        team: row,
+        team: row.into(),
         public_within,
         public_within_in_reach: in_reach,
     })
@@ -905,7 +932,7 @@ async fn member_row(
 /// List the teams the caller is a member of.
 pub async fn list_teams(pool: &PgPool, caller: ProfileId) -> ApiResult<Vec<TeamRow>> {
     let rows = sqlx::query_as!(
-        TeamRow,
+        TeamRowDb,
         r#"
         SELECT t.id, t.slug, t.name, t.description, t.created,
                t.auto_join_role AS "auto_join_role: TeamRole"
@@ -919,7 +946,7 @@ pub async fn list_teams(pool: &PgPool, caller: ProfileId) -> ApiResult<Vec<TeamR
     .fetch_all(pool)
     .await?;
 
-    Ok(rows)
+    Ok(rows.into_iter().map(TeamRow::from).collect())
 }
 
 /// Full team detail (row + member roster with handles + provenance).
@@ -939,7 +966,7 @@ pub async fn team_detail(pool: &PgPool, caller: &Caller, team_id: Uuid) -> ApiRe
     .await?;
 
     let team = sqlx::query_as!(
-        TeamRow,
+        TeamRowDb,
         r#"SELECT id, slug, name, description, created,
                   auto_join_role AS "auto_join_role: TeamRole"
              FROM kb_teams WHERE id = $1 AND is_active"#,
@@ -1070,7 +1097,7 @@ pub async fn update_team(
     }
 
     let row = sqlx::query_as!(
-        TeamRow,
+        TeamRowDb,
         r#"
         UPDATE kb_teams
            SET name = COALESCE($2, name),
@@ -1087,7 +1114,7 @@ pub async fn update_team(
     .await?
     .ok_or_else(|| ApiError::NotFound("team not found or not readable".to_string()))?;
 
-    Ok(row)
+    Ok(row.into())
 }
 
 /// Soft-delete a team (`is_active = false`). Owner, or a system admin; on the root or the gating
@@ -1319,7 +1346,7 @@ pub async fn restore_team(
     tx.commit().await?;
 
     let team = sqlx::query_as!(
-        TeamRow,
+        TeamRowDb,
         r#"SELECT id, slug, name, description, created,
                   auto_join_role AS "auto_join_role: TeamRole"
              FROM kb_teams WHERE id = $1"#,
@@ -1337,7 +1364,7 @@ pub async fn restore_team(
         parents: live_parents(&mut conn, team_id).await?,
         children: live_children(&mut conn, team_id).await?,
         members: roster(&mut conn, team_id).await?,
-        team,
+        team: team.into(),
         public_within,
     })
 }
@@ -1497,7 +1524,7 @@ pub async fn set_auto_join(
             .await?;
     }
     let team = sqlx::query_as!(
-        TeamRow,
+        TeamRowDb,
         r#"SELECT id, slug, name, description, created,
                   auto_join_role AS "auto_join_role: TeamRole"
              FROM kb_teams WHERE id = $1"#,
@@ -1517,7 +1544,7 @@ pub async fn set_auto_join(
     .fetch_all(pool)
     .await?;
     Ok(SetAutoJoinOutcome {
-        team,
+        team: team.into(),
         ancestors,
         public_within,
     })

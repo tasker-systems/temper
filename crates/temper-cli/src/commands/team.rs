@@ -206,15 +206,32 @@ pub async fn update_remote(
 pub async fn delete_remote(
     client: &temper_client::TemperClient,
     team: &str,
-    _fmt: crate::format::OutputFormat,
+    fmt: crate::format::OutputFormat,
 ) -> Result<()> {
     let team_id = resolve_team_id(client, team).await?;
-    client
+    let effects = client
         .teams()
         .delete(team_id)
         .await
         .map_err(crate::actions::runtime::client_err_to_temper)?;
     output::success("Team deleted.");
+    print_public_within_effects(effects.as_ref(), fmt)
+}
+
+/// Print what an act did to `public_within` rows, whenever the server reported it (empty lists
+/// included, so the output's shape does not depend on what happened). `None` is a server that
+/// predates the report: nothing is printed and nothing is claimed either way.
+fn print_public_within_effects(
+    effects: Option<&temper_core::types::team::PublicWithinEffects>,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let Some(e) = effects else {
+        return Ok(());
+    };
+    println!(
+        "{}",
+        crate::format::render(&serde_json::json!({ "public_within": e }), fmt)?
+    );
     Ok(())
 }
 
@@ -229,7 +246,7 @@ pub async fn detach_remote(
     client: &temper_client::TemperClient,
     parent: &str,
     child: &str,
-    _fmt: crate::format::OutputFormat,
+    fmt: crate::format::OutputFormat,
 ) -> Result<()> {
     let parent_id = resolve_team_id(client, parent).await?;
     let token = child.trim().strip_prefix('+').unwrap_or(child.trim());
@@ -254,13 +271,13 @@ pub async fn detach_remote(
                 })?
         }
     };
-    client
+    let effects = client
         .teams()
         .detach_child(parent_id, child_id)
         .await
         .map_err(crate::actions::runtime::client_err_to_temper)?;
     output::success("Child team detached.");
-    Ok(())
+    print_public_within_effects(effects.as_ref(), fmt)
 }
 
 /// Attach a child team under a parent team (a manager of both; a temper-system or gating-team
@@ -528,5 +545,132 @@ pub async fn set_role_remote(
         .await
         .map_err(crate::actions::runtime::client_err_to_temper)?;
     println!("{}", crate::format::render(&member, fmt)?);
+    Ok(())
+}
+
+/// Resolve a `public_within` row's two teams. A slug resolves among the caller's own teams first.
+/// One side's manager need not be on the other side, so a slug that matches none of them is looked
+/// up on the side that did resolve, through what that team's detail already shows the caller: the
+/// team's own anchors and parents (to its members), or the teams opened to the anchor (to its
+/// managers). Nothing is resolved that the caller could not already read.
+pub async fn resolve_public_within_pair(
+    client: &temper_client::TemperClient,
+    team: &str,
+    anchor: &str,
+) -> Result<(uuid::Uuid, uuid::Uuid)> {
+    let slug = |s: &str| s.trim().strip_prefix('+').unwrap_or(s.trim()).to_owned();
+    let unresolved = |what: &str, s: &str| {
+        TemperError::Api(format!(
+            "not a team: {:?} (the {what}; expected a team slug, a decorated `slug-<uuid>` ref, \
+             or a team UUID — name a team you are not a member of by its UUID)",
+            slug(s)
+        ))
+    };
+    let by_id = |s: &str| {
+        temper_workflow::operations::parse_ref(&slug(s))
+            .ok()
+            .map(uuid::Uuid::from)
+    };
+    let (mut team_id, mut anchor_id) = (by_id(team), by_id(anchor));
+    if team_id.is_none() || anchor_id.is_none() {
+        let mine = client
+            .teams()
+            .list()
+            .await
+            .map_err(crate::actions::runtime::client_err_to_temper)?;
+        let find = |s: &str| mine.iter().find(|t| t.slug == slug(s)).map(|t| t.id);
+        team_id = team_id.or_else(|| find(team));
+        anchor_id = anchor_id.or_else(|| find(anchor));
+    }
+    match (team_id, anchor_id) {
+        (Some(t), Some(a)) => Ok((t, a)),
+        (Some(t), None) => {
+            let want = slug(anchor);
+            let detail = client
+                .teams()
+                .get(t)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            detail
+                .public_within
+                .iter()
+                .map(|r| &r.anchor)
+                .chain(detail.parents.iter())
+                .find(|r| r.slug == want)
+                .map(|r| (t, r.id))
+                .ok_or_else(|| unresolved("anchor", anchor))
+        }
+        (None, Some(a)) => {
+            let want = slug(team);
+            let detail = client
+                .teams()
+                .get(a)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            detail
+                .public_within_in
+                .iter()
+                .find(|r| r.team.slug == want)
+                .map(|r| (r.team.id, a))
+                .ok_or_else(|| unresolved("team", team))
+        }
+        (None, None) => Err(unresolved("team", team)),
+    }
+}
+
+/// `temper team public-within ...`: open, close, forbid/allow, list.
+pub async fn public_within(
+    client: &temper_client::TemperClient,
+    action: crate::cli::PublicWithinAction,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    use crate::cli::PublicWithinAction;
+    let err = crate::actions::runtime::client_err_to_temper;
+    match action {
+        PublicWithinAction::Open { team, anchor } => {
+            let (team_id, anchor_id) = resolve_public_within_pair(client, &team, &anchor).await?;
+            let outcome = client
+                .teams()
+                .open_public_within(team_id, anchor_id)
+                .await
+                .map_err(err)?;
+            println!("{}", crate::format::render(&outcome, fmt)?);
+            output::warning(format!(
+                "team {team_id}'s owned contexts are readable by {} people on {} teams under \
+                 anchor {anchor_id} while this opening confers. That audience grows with the \
+                 anchor's subtree: every manager of a team under it, identity-provider group sync \
+                 and a system admin can add to it. Close it with `temper team public-within close \
+                 {team_id} {anchor_id}`.",
+                outcome.audience.principals, outcome.audience.teams
+            ));
+        }
+        PublicWithinAction::Close { team, anchor } => {
+            let (team_id, anchor_id) = resolve_public_within_pair(client, &team, &anchor).await?;
+            client
+                .teams()
+                .close_public_within(team_id, anchor_id)
+                .await
+                .map_err(err)?;
+            output::success("Opening closed.");
+        }
+        PublicWithinAction::Policy { team, setting } => {
+            // clap's value_parser admits only `forbid` and `allow`.
+            let forbidden = setting == "forbid";
+            let team_id = resolve_team_id(client, &team).await?;
+            let outcome = client
+                .teams()
+                .set_public_within_policy(
+                    team_id,
+                    &temper_core::types::team::PublicWithinPolicyRequest { forbidden },
+                )
+                .await
+                .map_err(err)?;
+            println!("{}", crate::format::render(&outcome, fmt)?);
+        }
+        PublicWithinAction::List => {
+            let rows = client.teams().list_public_within().await.map_err(err)?;
+            println!("{}", crate::format::render(&rows, fmt)?);
+        }
+    }
     Ok(())
 }
