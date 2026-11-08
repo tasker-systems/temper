@@ -1,7 +1,7 @@
 #![cfg(feature = "test-db")]
 
-//! The public_within machine fence (`public_within_reading`) asks the one shared machine test,
-//! `is_machine_profile`, and holds at a read door for every machine shape production can build.
+//! The public_within machine fence (`public_within_reading`) asks the one shared person test,
+//! `profile_is_person`, and holds at a read door for every machine shape production can build.
 //!
 //! Each principal is built through the path production builds it with: people through the
 //! federated human door, machines through registration (`provision` under an external IdP,
@@ -257,9 +257,9 @@ async fn every_machine_shape_is_fenced(pool: PgPool) {
 }
 
 /// No door gives a machine or a connection agent a human auth link, but a hand-written row could.
-/// With one, the human-link clause passes, so the machine test (for a machine, revoked or not) and
-/// the connection exclusion (for an agent) are each the clause that decides. Fails if either is
-/// dropped from the fence.
+/// With one, the human-link clause passes, so the person test decides: its machine arm for a
+/// machine, revoked or not, and its connection arm for an agent. Fails if either arm is dropped
+/// from `profile_is_person`, or if the fence stops asking it.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn each_clause_fences_on_its_own(pool: PgPool) {
     let w = world(&pool).await;
@@ -285,7 +285,7 @@ async fn each_clause_fences_on_its_own(pool: PgPool) {
     assert_eq!(
         reads_t(&pool, &w, machine).await,
         (false, false),
-        "a machine with a human link: the machine test decides"
+        "a machine with a human link: the person test's machine arm decides"
     );
     machine_client_service::revoke(
         &pool,
@@ -305,7 +305,7 @@ async fn each_clause_fences_on_its_own(pool: PgPool) {
     assert_eq!(
         reads_t(&pool, &w, agent).await,
         (false, false),
-        "a connection agent with a human link: the connection row decides"
+        "a connection agent with a human link: the person test's connection arm decides"
     );
 }
 
@@ -336,26 +336,40 @@ async fn a_person_reads_and_a_slack_link_changes_nothing(pool: PgPool) {
     );
 }
 
-/// Drift guard: the fence's machine test is the shared one, not a copy. Fails if
-/// `public_within_reading` stops calling `is_machine_profile` or reads `kb_machine_clients` itself.
+/// Drift guard: the fence's person test is the shared one, not a copy. Fails if
+/// `public_within_reading` stops calling `profile_is_person` or reads `kb_machine_clients` or
+/// `kb_connections` itself, or if `profile_is_person` stops excluding both.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn the_fence_asks_the_shared_machine_test(pool: PgPool) {
-    let def: String = sqlx::query_scalar(
-        "SELECT pg_get_functiondef('public_within_reading(uuid)'::regprocedure)",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("definition");
+async fn the_fence_asks_the_shared_person_test(pool: PgPool) {
+    let def = |sig: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>(&format!(
+                "SELECT pg_get_functiondef('{sig}'::regprocedure)"
+            ))
+            .fetch_one(&pool)
+            .await
+            .expect("definition")
+        }
+    };
+    let fence = def("public_within_reading(uuid)").await;
     assert!(
-        def.contains("is_machine_profile(p_profile)"),
-        "public_within_reading must call is_machine_profile:\n{def}"
+        fence.contains("profile_is_person(p_profile)"),
+        "public_within_reading must call profile_is_person:\n{fence}"
     );
+    for copy in ["kb_machine_clients", "kb_connections", "is_machine_profile"] {
+        assert!(
+            !fence.contains(copy),
+            "public_within_reading must not test `{copy}` itself:\n{fence}"
+        );
+    }
     assert!(
-        !def.contains("kb_machine_clients"),
-        "public_within_reading must not read kb_machine_clients itself:\n{def}"
+        fence.contains("search_path"),
+        "public_within_reading pins its search_path:\n{fence}"
     );
+    let person = def("profile_is_person(uuid)").await;
     assert!(
-        def.contains("search_path"),
-        "public_within_reading pins its search_path:\n{def}"
+        person.contains("is_machine_profile(p_profile)") && person.contains("kb_connections"),
+        "profile_is_person excludes machines and connection agents:\n{person}"
     );
 }
