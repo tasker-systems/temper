@@ -17974,6 +17974,14 @@
         "properties": {
           "outcome": {
             "$ref": "#/components/schemas/AttachOutcome"
+          },
+          "public_within": {
+            "$ref": "#/components/schemas/PublicWithinEffects",
+            "description": "What the link did to `public_within` rows: a pool brought under an anchor, or a forbid\nbrought above a team, makes rows dormant; a new live path can revive one."
+          },
+          "public_within_in_reach": {
+            "$ref": "#/components/schemas/PublicWithinReach",
+            "description": "The effective rows the child's roster now reads through the new parent."
           }
         }
       },
@@ -22585,6 +22593,34 @@
           "complete"
         ]
       },
+      "InheritedPublicWithin": {
+        "type": "object",
+        "description": "A `public_within` row the context's new owning team holds: while the row confers, the people\nunder `anchor_ref` read the context. `teams` and `principals` count them (the anchor's live\nsubtree, and the people on it), as on the team's detail.",
+        "required": [
+          "anchor_id",
+          "anchor_ref",
+          "teams",
+          "principals"
+        ],
+        "properties": {
+          "anchor_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "anchor_ref": {
+            "type": "string",
+            "description": "Decorated ref: `+slug`."
+          },
+          "principals": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "teams": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "InheritedReadGrant": {
         "type": "object",
         "description": "An explicit context read-grant that survives the ownership flip — inherited residual reach.",
@@ -24528,6 +24564,45 @@
           }
         }
       },
+      "PublicWithinEffects": {
+        "type": "object",
+        "description": "What a structural or admin act did to the `public_within` rows it reached: rows deleted because\nthe anchor is no longer above the team by any path (`lapsed`; such a row never revives, and a\nreopen needs both sides again), rows that stopped conferring (`dormant`) and rows that confer\nagain (`revived`). A row is named only to a caller who manages its team or its anchor, or is a\nsystem admin; the others are counted in the `*_unnamed` fields. Each change is also recorded on\nthe admin ledger, readable by the managers of both teams.",
+        "properties": {
+          "dormant": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicWithinRowRef"
+            }
+          },
+          "dormant_unnamed": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "lapsed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicWithinRowRef"
+            }
+          },
+          "lapsed_unnamed": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "revived": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicWithinRowRef"
+            }
+          },
+          "revived_unnamed": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "PublicWithinInRef": {
         "type": "object",
         "description": "One team opened to this team's subtree, on the anchor's [`TeamDetail`].",
@@ -24632,6 +24707,23 @@
         "properties": {
           "forbidden": {
             "type": "boolean"
+          }
+        }
+      },
+      "PublicWithinReach": {
+        "type": "object",
+        "description": "The effective `public_within` rows a team's roster newly reads through a new parent link: each\nrow whose anchor became one of the team's ancestors. A row is named only to a caller who manages\nits team or its anchor, or is a system admin; the others are counted in `unnamed`.",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicWithinRowRef"
+            }
+          },
+          "unnamed": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
           }
         }
       },
@@ -24806,6 +24898,13 @@
           "context_id": {
             "type": "string",
             "format": "uuid"
+          },
+          "inherited_public_within": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InheritedPublicWithin"
+            },
+            "description": "Read-reach the context gains from its new owner: each effective `public_within` row the\nteam holds opens the context to the people under that row's anchor."
           },
           "inherited_read_grants": {
             "type": "array",
@@ -26421,6 +26520,10 @@
           "from": {
             "$ref": "#/components/schemas/TeamRef"
           },
+          "public_within": {
+            "$ref": "#/components/schemas/PublicWithinEffects",
+            "description": "What the move did to `public_within` rows. A row whose anchor is no longer above the team by\nany path is deleted (`lapsed`) and never revives, even if the team moves back."
+          },
           "team": {
             "$ref": "#/components/schemas/TeamRef"
           },
@@ -27671,6 +27774,10 @@
               "$ref": "#/components/schemas/TeamRef"
             }
           },
+          "public_within": {
+            "$ref": "#/components/schemas/PublicWithinEffects",
+            "description": "The `public_within` rows the restore revived (or, for a restored pool team, made dormant)."
+          },
           "team": {
             "$ref": "#/components/schemas/TeamRow"
           }
@@ -28349,6 +28456,10 @@
             "items": {
               "$ref": "#/components/schemas/TeamRef"
             }
+          },
+          "public_within": {
+            "$ref": "#/components/schemas/PublicWithinEffects",
+            "description": "An auto-join team under an anchor makes that anchor's rows dormant unless an admin opened\nthem instance-wide; clearing it revives them."
           },
           "team": {
             "$ref": "#/components/schemas/TeamRow"

@@ -1,12 +1,12 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT _admin_team_parent_link_write($1, $2, 'link', $3, $4, $5) AS \"outcome!\"",
+  "query": "SELECT _admin_team_parent_link_act($1, $2, 'link', $3, $4, $5) AS \"w!\"",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "outcome!",
-        "type_info": "Text"
+        "name": "w!",
+        "type_info": "Jsonb"
       }
     ],
     "parameters": {
@@ -22,5 +22,5 @@
       null
     ]
   },
-  "hash": "093bad2fee270a246f5caac46d954dd3344c168e40f295b8c597540347dc67ee"
+  "hash": "941bbccce19ad10870107d70cf96de3a5c7bf87c01d85a6eac5957368d3ba537"
 }

@@ -22,6 +22,9 @@ module Temper::Generated
 
     attr_accessor :parents
 
+    # The `public_within` rows the restore revived (or, for a restored pool team, made dormant).
+    attr_accessor :public_within
+
     attr_accessor :team
 
     # Attribute mapping from ruby-style variable name to JSON key.
@@ -30,6 +33,7 @@ module Temper::Generated
         :'children' => :'children',
         :'members' => :'members',
         :'parents' => :'parents',
+        :'public_within' => :'public_within',
         :'team' => :'team'
       }
     end
@@ -50,6 +54,7 @@ module Temper::Generated
         :'children' => :'Array<TeamRef>',
         :'members' => :'Array<TeamMemberDetail>',
         :'parents' => :'Array<TeamRef>',
+        :'public_within' => :'PublicWithinEffects',
         :'team' => :'TeamRow'
       }
     end
@@ -98,6 +103,10 @@ module Temper::Generated
         end
       else
         self.parents = nil
+      end
+
+      if attributes.key?(:'public_within')
+        self.public_within = attributes[:'public_within']
       end
 
       if attributes.key?(:'team')
@@ -190,6 +199,7 @@ module Temper::Generated
           children == o.children &&
           members == o.members &&
           parents == o.parents &&
+          public_within == o.public_within &&
           team == o.team
     end
 
@@ -202,7 +212,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [children, members, parents, team].hash
+      [children, members, parents, public_within, team].hash
     end
 
     # Builds the object from hash

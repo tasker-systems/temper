@@ -20,6 +20,9 @@ module Temper::Generated
 
     attr_accessor :from
 
+    # What the move did to `public_within` rows. A row whose anchor is no longer above the team by any path is deleted (`lapsed`) and never revives, even if the team moves back.
+    attr_accessor :public_within
+
     attr_accessor :team
 
     attr_accessor :to
@@ -29,6 +32,7 @@ module Temper::Generated
       {
         :'correlation_id' => :'correlation_id',
         :'from' => :'from',
+        :'public_within' => :'public_within',
         :'team' => :'team',
         :'to' => :'to'
       }
@@ -49,6 +53,7 @@ module Temper::Generated
       {
         :'correlation_id' => :'String',
         :'from' => :'TeamRef',
+        :'public_within' => :'PublicWithinEffects',
         :'team' => :'TeamRef',
         :'to' => :'TeamRef'
       }
@@ -86,6 +91,10 @@ module Temper::Generated
         self.from = attributes[:'from']
       else
         self.from = nil
+      end
+
+      if attributes.key?(:'public_within')
+        self.public_within = attributes[:'public_within']
       end
 
       if attributes.key?(:'team')
@@ -183,6 +192,7 @@ module Temper::Generated
       self.class == o.class &&
           correlation_id == o.correlation_id &&
           from == o.from &&
+          public_within == o.public_within &&
           team == o.team &&
           to == o.to
     end
@@ -196,7 +206,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [correlation_id, from, team, to].hash
+      [correlation_id, from, public_within, team, to].hash
     end
 
     # Builds the object from hash

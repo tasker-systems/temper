@@ -2816,10 +2816,32 @@ async fn only_leaving_the_subtree_lifts_a_forbid(pool: PgPool) {
     set_team_live(&pool, w.org, true).await;
     policy_by(&pool, d.org_owner, w.org, false).await.unwrap();
 
-    // A forbid on T's other parent; detaching T from it lifts it, since T is no longer beneath.
+    // A forbid on T's other parent; detaching T from it lifts it, since T is no longer beneath, and
+    // the detach records the row's change of effect and answers it to T's manager.
     policy_by(&pool, d.ops_owner, w.ops, true).await.unwrap();
     assert!(!reads(&pool, w.web_member, w.r_t).await);
-    unlink(&pool, w.ops, w.eng_sec).await;
+    let before = records(
+        &pool,
+        "public_within_effect_changed",
+        w.eng_sec,
+        Some(w.eng),
+    )
+    .await;
+    let out = team_service::detach_child(&pool, &hp(&pool, w.sec_owner).await, w.ops, w.eng_sec)
+        .await
+        .expect("T's owner detaches T from its other parent");
+    assert_eq!(out.revived.len(), 1, "{out:?}");
+    assert_eq!(out.revived[0].anchor.id, w.eng);
+    assert_eq!(
+        records(
+            &pool,
+            "public_within_effect_changed",
+            w.eng_sec,
+            Some(w.eng)
+        )
+        .await,
+        before + 1
+    );
     assert!(reads(&pool, w.web_member, w.r_t).await);
 }
 
@@ -3115,5 +3137,704 @@ async fn the_forbidders_ledger_history_does_not_name_withheld_rows(pool: PgPool)
         .await,
         1,
         "the record exists, on the subject axis of both sides"
+    );
+}
+
+// =================================================================================================
+// Structural and admin acts carry their effect
+// =================================================================================================
+//
+// Every act that can change whether a row confers records the change (system-emitted, both teams as
+// subject), answers it filtered, and deletes a row whose anchor is no longer above its team.
+
+use temper_core::types::team::{PublicWithinEffects, ReparentRequest, TeamCreateRequest, TeamRole};
+
+/// The payload of every admin record of `event_type` naming row `(t, a)`, oldest first.
+async fn row_records(pool: &PgPool, event_type: &str, t: Uuid, a: Uuid) -> Vec<serde_json::Value> {
+    sqlx::query_scalar(
+        "SELECT e.payload FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE et.name = $1 AND (e.payload ->> 'team_id')::uuid = $2 \
+            AND (e.payload ->> 'anchor_id')::uuid = $3 ORDER BY e.id",
+    )
+    .bind(event_type)
+    .bind(t)
+    .bind(a)
+    .fetch_all(pool)
+    .await
+    .expect("row records")
+}
+
+/// Does `(t, a)` confer right now?
+async fn effective(pool: &PgPool, t: Uuid, a: Uuid) -> bool {
+    sqlx::query_scalar(
+        "SELECT public_within_row_effective(team_id, anchor_id, instance_wide) \
+           FROM kb_team_public_within WHERE team_id = $1 AND anchor_id = $2",
+    )
+    .bind(t)
+    .bind(a)
+    .fetch_optional(pool)
+    .await
+    .expect("effective")
+    .unwrap_or(false)
+}
+
+fn names(effects: &PublicWithinEffects, list: &str) -> Vec<(Uuid, Uuid)> {
+    let rows = match list {
+        "lapsed" => &effects.lapsed,
+        "dormant" => &effects.dormant,
+        _ => &effects.revived,
+    };
+    rows.iter().map(|r| (r.team.id, r.anchor.id)).collect()
+}
+
+async fn reparent_by(
+    pool: &PgPool,
+    who: Uuid,
+    child: Uuid,
+    from: Uuid,
+    to: Uuid,
+) -> temper_core::types::team::ReparentOutcome {
+    team_service::reparent(
+        pool,
+        &hp(pool, who).await,
+        child,
+        &ReparentRequest {
+            from: from.to_string(),
+            to: to.to_string(),
+        },
+    )
+    .await
+    .expect("reparent")
+}
+
+/// Moving T out from under A deletes the row (`lapsed`), recorded on both sides' subject axis and
+/// answered by name to an admin; moving T back does not revive it, and nobody reads T again until
+/// both sides reopen.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn moving_t_out_from_under_a_deletes_the_row_and_moving_it_back_does_not_revive_it(
+    pool: PgPool,
+) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    assert!(reads(&pool, w.web_member, w.r_t).await);
+
+    let out = reparent_by(&pool, w.admin, w.eng_sec, w.eng, w.sales).await;
+    assert_eq!(names(&out.public_within, "lapsed"), [(w.eng_sec, w.eng)]);
+    assert!(!row_exists(&pool, w.eng_sec, w.eng).await);
+    let lapsed = row_records(&pool, "team_public_within_changed", w.eng_sec, w.eng).await;
+    assert_eq!(lapsed.last().unwrap()["act"], "lapsed", "{lapsed:?}");
+    assert!(
+        lapsed.last().unwrap().get("actor").is_none(),
+        "a lapse is the system's record, naming no actor"
+    );
+    assert!(!reads(&pool, w.web_member, w.r_t).await);
+
+    // Both sides read the lapse on their subject axis.
+    for (who, team) in [(w.sec_owner, w.eng_sec), (d.eng_owner, w.eng)] {
+        let seen = admin_ledger_service::list_by_subject(
+            &pool,
+            &hp(&pool, who).await,
+            RefTarget {
+                kind: AnchorTable::Teams,
+                id: team,
+            },
+            100,
+            0,
+        )
+        .await
+        .expect("subject axis");
+        assert!(
+            seen.iter()
+                .any(|e| e.event_type == "team_public_within_changed"
+                    && e.payload["act"] == "lapsed"),
+            "{who} reads the lapse"
+        );
+    }
+
+    // A third party moving T back revives nothing: the row is gone, and so is the reading.
+    let back = reparent_by(&pool, w.admin, w.eng_sec, w.sales, w.eng).await;
+    assert_eq!(back.public_within, PublicWithinEffects::default());
+    assert!(!row_exists(&pool, w.eng_sec, w.eng).await);
+    assert!(!reads(&pool, w.web_member, w.r_t).await);
+}
+
+/// Deleting a team between A and T makes the row dormant; restoring it revives it. Both are
+/// recorded with cause liveness and answered.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn deleting_a_mid_tier_team_makes_rows_dormant_and_restoring_revives_them(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    join(&pool, w.org, d.both, "owner").await;
+    open_by(&pool, d.both, w.eng_sec, w.org).await.unwrap();
+    assert!(reads(&pool, w.org_only, w.r_t).await);
+
+    let deleted = team_service::delete_team(&pool, &hp(&pool, w.admin).await, w.eng)
+        .await
+        .expect("delete eng");
+    assert_eq!(names(&deleted, "dormant"), [(w.eng_sec, w.org)]);
+    assert!(
+        row_exists(&pool, w.eng_sec, w.org).await,
+        "liveness never deletes"
+    );
+    assert!(!reads(&pool, w.org_only, w.r_t).await);
+
+    let restored = team_service::restore_team(&pool, &hp(&pool, w.admin).await, w.eng)
+        .await
+        .expect("restore eng");
+    assert_eq!(
+        names(&restored.public_within, "revived"),
+        [(w.eng_sec, w.org)]
+    );
+    assert!(reads(&pool, w.org_only, w.r_t).await);
+
+    let recs = row_records(&pool, "public_within_effect_changed", w.eng_sec, w.org).await;
+    let shape: Vec<(String, String, String)> = recs
+        .iter()
+        .map(|r| {
+            (
+                r["from"].as_str().unwrap().to_string(),
+                r["to"].as_str().unwrap().to_string(),
+                r["cause"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        shape,
+        [
+            ("effective".into(), "dormant".into(), "liveness".into()),
+            ("dormant".into(), "effective".into(), "liveness".into()),
+        ]
+    );
+    assert!(recs
+        .iter()
+        .all(|r| r["act"] == "team_lifecycle_changed" && r.get("act_ref").is_some()));
+}
+
+/// An admin's auto-join on a team under A makes a non-instance-wide row dormant (cause policy),
+/// answered and recorded; clearing it revives the row. An admin's instance-wide row is untouched.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_admins_auto_join_under_a_makes_non_instance_wide_rows_dormant(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    let admin = test_support::system_admin_proof_for(&pool, w.admin).await;
+
+    let set = team_service::set_auto_join(&pool, &admin, w.eng_web, Some(TeamRole::Member))
+        .await
+        .expect("auto-join");
+    assert_eq!(names(&set.public_within, "dormant"), [(w.eng_sec, w.eng)]);
+    assert!(!effective(&pool, w.eng_sec, w.eng).await);
+    let recs = row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng).await;
+    assert_eq!(recs.len(), 1);
+    assert_eq!(recs[0]["cause"], "policy");
+
+    let cleared = team_service::set_auto_join(&pool, &admin, w.eng_web, None)
+        .await
+        .expect("clear");
+    assert_eq!(
+        names(&cleared.public_within, "revived"),
+        [(w.eng_sec, w.eng)]
+    );
+    assert!(effective(&pool, w.eng_sec, w.eng).await);
+}
+
+/// Pointing the gating slug into A's subtree makes the row dormant, in the settings write's own
+/// transaction, recorded; pointing it away revives it.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn pointing_the_gating_slug_into_as_subtree_makes_rows_dormant(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    let admin = test_support::system_admin_proof_for(&pool, w.admin).await;
+    let previous: Option<String> =
+        sqlx::query_scalar("SELECT gating_team_slug FROM kb_system_settings WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let to = |slug: &str| temper_core::types::admin::UpdateSettingsRequest {
+        gating_team_slug: Some(slug.to_string()),
+        instance_name: None,
+        terms_version: None,
+        terms_resource_uri: None,
+    };
+
+    access_service::update_system_settings(&pool, &admin, &to("eng-web"))
+        .await
+        .expect("repoint");
+    assert!(!effective(&pool, w.eng_sec, w.eng).await);
+    let recs = row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng).await;
+    assert_eq!(recs.len(), 1, "{recs:?}");
+    assert_eq!(recs[0]["to"], "dormant");
+    assert_eq!(recs[0]["cause"], "policy");
+
+    access_service::update_system_settings(
+        &pool,
+        &admin,
+        &to(previous.as_deref().unwrap_or("sales")),
+    )
+    .await
+    .expect("repoint away");
+    assert!(effective(&pool, w.eng_sec, w.eng).await);
+    assert_eq!(
+        row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng)
+            .await
+            .len(),
+        2
+    );
+}
+
+/// A caller who manages only the child of a cut gets counts, never refs: a lapse caused by a
+/// middle team's owner detaching it is counted in their answer, and their own history in the ledger
+/// names no row either.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_caller_who_manages_only_the_child_gets_counts_never_refs(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    // eng → mid → t2, the row (t2, eng); mid's owner manages mid alone.
+    let mid = team(&pool, "mid", &[w.eng]).await;
+    let t2 = team(&pool, "t2", &[mid]).await;
+    join(&pool, t2, d.both, "owner").await;
+    let mid_owner = person(&pool, "mid-owner").await;
+    join(&pool, mid, mid_owner, "owner").await;
+    open_by(&pool, d.both, t2, w.eng).await.unwrap();
+
+    let out = team_service::detach_child(&pool, &hp(&pool, mid_owner).await, w.eng, mid)
+        .await
+        .expect("the child's owner detaches it");
+    assert!(out.lapsed.is_empty(), "{out:?}");
+    assert_eq!(out.lapsed_unnamed, 1);
+    assert!(!row_exists(&pool, t2, w.eng).await);
+
+    let mine = admin_ledger_service::list_by_actor(
+        &pool,
+        &hp(&pool, mid_owner).await,
+        ProfileId::from(mid_owner),
+        100,
+        0,
+    )
+    .await
+    .expect("own history");
+    assert!(mine
+        .iter()
+        .any(|e| e.event_type == "team_parent_link_changed"));
+    assert!(
+        !mine
+            .iter()
+            .any(|e| e.event_type == "team_public_within_changed"
+                || e.event_type == "public_within_effect_changed"),
+        "{mine:?}"
+    );
+
+    // Attach: the new child's roster reads the row through its parent, counted to a caller who
+    // manages the child and the parent but neither side of the row.
+    let u = team(&pool, "u", &[]).await;
+    let u_owner = person(&pool, "u-owner").await;
+    join(&pool, u, u_owner, "owner").await;
+    join(&pool, w.eng_web, u_owner, "maintainer").await;
+    let out = team_service::attach_child(&pool, &hp(&pool, u_owner).await, w.eng_web, u)
+        .await
+        .expect("attach");
+    assert!(out.public_within_in_reach.rows.is_empty(), "{out:?}");
+    assert_eq!(
+        out.public_within_in_reach.unnamed, 0,
+        "t2's row lapsed; (eng-sec, eng) is closed"
+    );
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    let v = team(&pool, "v", &[]).await;
+    join(&pool, v, u_owner, "owner").await;
+    let out = team_service::attach_child(&pool, &hp(&pool, u_owner).await, w.eng_web, v)
+        .await
+        .expect("attach");
+    assert!(out.public_within_in_reach.rows.is_empty(), "{out:?}");
+    assert_eq!(out.public_within_in_reach.unnamed, 1);
+    // T's manager attaching the same way is told which row.
+    let x = team(&pool, "x", &[]).await;
+    join(&pool, x, w.sec_owner, "owner").await;
+    join(&pool, w.eng_web, w.sec_owner, "maintainer").await;
+    let out = team_service::attach_child(&pool, &hp(&pool, w.sec_owner).await, w.eng_web, x)
+        .await
+        .expect("attach");
+    assert_eq!(out.public_within_in_reach.rows.len(), 1, "{out:?}");
+    assert_eq!(out.public_within_in_reach.rows[0].team.id, w.eng_sec);
+}
+
+/// A maintainer who attaches their team under a root team they own and forbid on makes the team's
+/// rows inert: the answer and the ledger name them, so the forbid's reach is never silent.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn attaching_under_ones_own_forbidding_team_makes_rows_inert_and_names_them(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    let top = team(&pool, "top", &[]).await;
+    let maint = person(&pool, "maint").await;
+    join(&pool, top, maint, "owner").await;
+    join(&pool, w.eng_sec, maint, "maintainer").await;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    policy_by(&pool, maint, top, true).await.unwrap();
+    assert!(effective(&pool, w.eng_sec, w.eng).await);
+
+    let out = team_service::attach_child(&pool, &hp(&pool, maint).await, top, w.eng_sec)
+        .await
+        .expect("attach under the forbidding team");
+    assert_eq!(names(&out.public_within, "dormant"), [(w.eng_sec, w.eng)]);
+    assert!(!effective(&pool, w.eng_sec, w.eng).await);
+    let recs = row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng).await;
+    assert_eq!(recs.len(), 1);
+    assert_eq!(recs[0]["cause"], "policy");
+    assert_eq!(recs[0]["act"], "team_parent_link_changed");
+}
+
+/// Creating an auto-join team under A (an admin's act) makes the row dormant, answered and recorded;
+/// the new team's roster's reach is answered too.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn creating_an_auto_join_team_under_a_makes_rows_dormant(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    // A child of eng needs a manager of eng; auto-join needs a system admin.
+    join(&pool, w.eng, w.admin, "owner").await;
+    let out = team_service::create_team_with_effects(
+        &pool,
+        &hp(&pool, w.admin).await,
+        &TeamCreateRequest {
+            slug: "eng-pool".to_string(),
+            parent: Some(w.eng.to_string()),
+            auto_join_role: Some(TeamRole::Member),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("create");
+    assert_eq!(names(&out.public_within, "dormant"), [(w.eng_sec, w.eng)]);
+    assert!(
+        out.public_within_in_reach.rows.is_empty(),
+        "the row no longer confers"
+    );
+    assert_eq!(
+        row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng)
+            .await
+            .len(),
+        1
+    );
+
+    // A plain child of eng, by eng's owner: no effect change.
+    let out = team_service::create_team_with_effects(
+        &pool,
+        &hp(&pool, d.eng_owner).await,
+        &TeamCreateRequest {
+            slug: "eng-new".to_string(),
+            parent: Some(w.eng.to_string()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("create plain");
+    assert_eq!(out.public_within, PublicWithinEffects::default());
+}
+
+/// The riskiest pairing: an auto-join set below the anchor changes a row's effect through a team the
+/// open does not lock. An open committed while the auto-join waits is in the auto-join's snapshot, so
+/// its change of effect is recorded rather than lost.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_open_committed_first_is_recorded_by_a_concurrent_auto_join_below_the_anchor(
+    pool: PgPool,
+) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    let emitter = emitter_of(&pool, d.both).await;
+
+    let mut holder = pool.begin().await.unwrap();
+    let pid = backend_pid(&mut holder).await;
+    let stable: bool = sqlx::query_scalar("SELECT _public_within_open_locks($1, $2)")
+        .bind(w.eng_sec)
+        .bind(w.eng)
+        .fetch_one(&mut *holder)
+        .await
+        .unwrap();
+    assert!(stable);
+    let _: String = sqlx::query_scalar(
+        "SELECT _admin_public_within_write($1, $2, $3, $4, 'opened', false, false, NULL)",
+    )
+    .bind(emitter)
+    .bind(d.both)
+    .bind(w.eng_sec)
+    .bind(w.eng)
+    .fetch_one(&mut *holder)
+    .await
+    .unwrap();
+
+    let p2 = pool.clone();
+    let (admin_id, eng_web) = (w.admin, w.eng_web);
+    let contender = tokio::spawn(async move {
+        let admin = test_support::system_admin_proof_for(&p2, admin_id).await;
+        team_service::set_auto_join(&p2, &admin, eng_web, Some(TeamRole::Member)).await
+    });
+    await_blocked_by(&pool, pid).await;
+    holder.commit().await.unwrap();
+
+    let out = contender.await.unwrap().expect("auto-join");
+    assert_eq!(names(&out.public_within, "dormant"), [(w.eng_sec, w.eng)]);
+    assert_eq!(
+        row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng)
+            .await
+            .len(),
+        1
+    );
+}
+
+/// The other order: an auto-join committed while an open waits is seen by the open's re-check, which
+/// then needs an admin (the anchor's subtree holds a pool) and refuses a non-admin.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_auto_join_committed_first_is_seen_by_the_opens_recheck(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    let emitter = emitter_of(&pool, w.admin).await;
+
+    let mut holder = pool.begin().await.unwrap();
+    let pid = backend_pid(&mut holder).await;
+    let raw: serde_json::Value = sqlx::query_scalar(
+        "SELECT _admin_team_lifecycle_act($1, $2, $3, 'auto_join_changed', 'member', NULL)",
+    )
+    .bind(emitter)
+    .bind(w.admin)
+    .bind(w.eng_web)
+    .fetch_one(&mut *holder)
+    .await
+    .unwrap();
+    assert_eq!(raw["outcome"], "changed");
+
+    let p2 = pool.clone();
+    let (both, t, a) = (d.both, w.eng_sec, w.eng);
+    let contender = tokio::spawn(async move { open_by(&p2, both, t, a).await });
+    await_blocked_by(&pool, pid).await;
+    holder.commit().await.unwrap();
+
+    let err = contender.await.unwrap().unwrap_err();
+    assert!(admin_anchor(&err), "{err:?}");
+    assert!(!row_exists(&pool, w.eng_sec, w.eng).await);
+}
+
+/// The invariant over the world: after every structural act, each row's recorded effect (its
+/// effect when opened, folded through every public_within_effect_changed since) equals
+/// public_within_row_effective, and every row gone without a close has a lapsed record.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn after_every_structural_act_the_recorded_effect_equals_the_effect(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    join(&pool, w.org, d.both, "owner").await;
+    join(&pool, w.sales, d.both, "owner").await;
+    let rows = [(w.eng_sec, w.eng), (w.eng_sec, w.org), (w.eng_web, w.org)];
+    join(&pool, w.eng_web, d.both, "owner").await;
+    let mut recorded: std::collections::HashMap<(Uuid, Uuid), bool> = Default::default();
+    for (t, a) in rows {
+        open_by(&pool, d.both, t, a).await.expect("open");
+        recorded.insert((t, a), effective(&pool, t, a).await);
+    }
+    let admin = test_support::system_admin_proof_for(&pool, w.admin).await;
+    let ap = hp(&pool, w.admin).await;
+
+    let mut seen = 0i64;
+    macro_rules! after {
+        ($label:literal) => {
+            check_recorded_effects(&pool, $label, &mut recorded, &mut seen).await
+        };
+    }
+    after!("opened");
+
+    team_service::delete_team(&pool, &ap, w.eng).await.unwrap();
+    after!("delete eng");
+    team_service::restore_team(&pool, &ap, w.eng).await.unwrap();
+    after!("restore eng");
+    team_service::set_auto_join(&pool, &admin, w.sales, Some(TeamRole::Watcher))
+        .await
+        .unwrap();
+    after!("auto-join sales under org");
+    team_service::set_auto_join(&pool, &admin, w.sales, None)
+        .await
+        .unwrap();
+    after!("clear auto-join");
+    policy_by(&pool, d.ops_owner, w.ops, true).await.unwrap();
+    after!("forbid ops");
+    team_service::detach_child(&pool, &ap, w.ops, w.eng_sec)
+        .await
+        .unwrap();
+    after!("detach T from ops");
+    reparent_by(&pool, w.admin, w.eng, w.org, w.sales).await;
+    after!("reparent eng under sales");
+    team_service::attach_child(&pool, &ap, w.org, w.eng)
+        .await
+        .unwrap();
+    after!("attach eng back under org");
+    team_service::detach_child(&pool, &ap, w.sales, w.eng)
+        .await
+        .unwrap();
+    after!("detach eng from sales");
+    team_service::detach_child(&pool, &ap, w.eng, w.eng_sec)
+        .await
+        .unwrap();
+    after!("detach T from eng");
+    let to = temper_core::types::admin::UpdateSettingsRequest {
+        gating_team_slug: Some("eng-web".to_string()),
+        instance_name: None,
+        terms_version: None,
+        terms_resource_uri: None,
+    };
+    access_service::update_system_settings(&pool, &admin, &to)
+        .await
+        .unwrap();
+    after!("gating into org");
+}
+
+/// Fold every public_within record since `seen` into `recorded`, then check it against the rows.
+async fn check_recorded_effects(
+    pool: &PgPool,
+    label: &str,
+    recorded: &mut std::collections::HashMap<(Uuid, Uuid), bool>,
+    seen: &mut i64,
+) {
+    let new: Vec<serde_json::Value> = sqlx::query_scalar(
+        "SELECT e.payload || jsonb_build_object('type', et.name) FROM kb_events e \
+           JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE et.name IN ('public_within_effect_changed', 'team_public_within_changed') \
+          ORDER BY e.id OFFSET $1",
+    )
+    .bind(*seen)
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    *seen += new.len() as i64;
+    for rec in &new {
+        let key = (
+            rec["team_id"].as_str().unwrap().parse::<Uuid>().unwrap(),
+            rec["anchor_id"].as_str().unwrap().parse::<Uuid>().unwrap(),
+        );
+        match (rec["type"].as_str().unwrap(), rec["act"].as_str()) {
+            ("team_public_within_changed", Some("lapsed")) => {
+                recorded.remove(&key);
+            }
+            ("team_public_within_changed", _) => {}
+            _ => {
+                recorded.insert(key, rec["to"] == "effective");
+            }
+        }
+    }
+    for (&(t, a), &was) in recorded.iter() {
+        assert!(
+            row_exists(pool, t, a).await,
+            "{label}: ({t}, {a}) vanished unrecorded"
+        );
+        assert_eq!(effective(pool, t, a).await, was, "{label}: ({t}, {a})");
+    }
+    let live: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_team_public_within")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        live as usize,
+        recorded.len(),
+        "{label}: a row appeared unrecorded"
+    );
+}
+
+/// The re-checks under the act's locks run on the transaction's own connection: with a pool of one
+/// connection, an admin's create under the root and rename of the gating team complete instead of
+/// waiting forever for a second connection.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn admin_rechecks_under_lock_need_no_second_connection(pool: PgPool) {
+    let w = world(&pool).await;
+    let one = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .connect_with(pool.connect_options().as_ref().clone())
+        .await
+        .expect("one-connection pool");
+    let admin = hp(&one, w.admin).await;
+    team_service::create_team(
+        &one,
+        &admin,
+        &TeamCreateRequest {
+            slug: "under-root".to_string(),
+            parent: Some(w.root.to_string()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("create under the root on one connection");
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'org' WHERE id = 1")
+        .execute(&one)
+        .await
+        .unwrap();
+    team_service::rename_slug(
+        &one,
+        &admin,
+        w.org,
+        &temper_core::types::team::RenameTeamSlugRequest {
+            slug: "org-renamed".to_string(),
+        },
+    )
+    .await
+    .expect("rename the gating team on one connection");
+    let attached = team(&one, "attached", &[]).await;
+    team_service::attach_child(&one, &admin, w.root, attached)
+        .await
+        .expect("attach under the root on one connection");
+}
+
+/// An owner deleting their own team is told which of its rows went dormant: the delete makes the
+/// team dead, but the owner is still the manager of that side for this answer.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_owner_deleting_their_own_team_is_told_its_rows_by_name(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    let out = team_service::delete_team(&pool, &hp(&pool, w.sec_owner).await, w.eng_sec)
+        .await
+        .expect("T's owner deletes T");
+    assert_eq!(names(&out, "dormant"), [(w.eng_sec, w.eng)], "{out:?}");
+    assert_eq!(out.dormant_unnamed, 0);
+}
+
+/// A close and an act that flips the same row serialize on the effects lock: with the close
+/// committed first, the act records nothing for the row it no longer finds.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_close_committed_first_leaves_no_record_from_a_concurrent_act(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+
+    // Hold the close's locks and its delete, uncommitted.
+    let mut holder = pool.begin().await.unwrap();
+    let pid = backend_pid(&mut holder).await;
+    sqlx::query("SELECT id FROM kb_teams WHERE id = ANY($1) ORDER BY id FOR NO KEY UPDATE")
+        .bind(vec![w.eng_sec, w.eng])
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    sqlx::query("SELECT _public_within_effects_lock()")
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM kb_team_public_within WHERE team_id = $1 AND anchor_id = $2")
+        .bind(w.eng_sec)
+        .bind(w.eng)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+
+    let p2 = pool.clone();
+    let (admin_id, eng_web) = (w.admin, w.eng_web);
+    let contender = tokio::spawn(async move {
+        let admin = test_support::system_admin_proof_for(&p2, admin_id).await;
+        team_service::set_auto_join(&p2, &admin, eng_web, Some(TeamRole::Member)).await
+    });
+    await_blocked_by(&pool, pid).await;
+    holder.commit().await.unwrap();
+
+    let out = contender.await.unwrap().expect("auto-join");
+    assert_eq!(out.public_within, PublicWithinEffects::default());
+    assert!(
+        row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng)
+            .await
+            .is_empty()
     );
 }

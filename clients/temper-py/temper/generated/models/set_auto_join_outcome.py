@@ -17,8 +17,9 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict
-from typing import Any, ClassVar, Dict, List
+from pydantic import BaseModel, ConfigDict, Field
+from typing import Any, ClassVar, Dict, List, Optional
+from temper.generated.models.public_within_effects import PublicWithinEffects
 from temper.generated.models.team_ref import TeamRef
 from temper.generated.models.team_row import TeamRow
 from typing import Optional, Set
@@ -30,8 +31,9 @@ class SetAutoJoinOutcome(BaseModel):
     Response body for `PUT /api/teams/{id}/auto-join`. `ancestors` are the team's live ancestors: with auto-join set, every approved profile reads everything attached to each of them, so the admin sees exactly what the change opened.
     """ # noqa: E501
     ancestors: List[TeamRef]
+    public_within: Optional[PublicWithinEffects] = Field(default=None, description="An auto-join team under an anchor makes that anchor's rows dormant unless an admin opened them instance-wide; clearing it revives them.")
     team: TeamRow
-    __properties: ClassVar[List[str]] = ["ancestors", "team"]
+    __properties: ClassVar[List[str]] = ["ancestors", "public_within", "team"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -79,6 +81,9 @@ class SetAutoJoinOutcome(BaseModel):
                 if _item_ancestors:
                     _items.append(_item_ancestors.to_dict())
             _dict['ancestors'] = _items
+        # override the default output from pydantic by calling `to_dict()` of public_within
+        if self.public_within:
+            _dict['public_within'] = self.public_within.to_dict()
         # override the default output from pydantic by calling `to_dict()` of team
         if self.team:
             _dict['team'] = self.team.to_dict()
@@ -95,6 +100,7 @@ class SetAutoJoinOutcome(BaseModel):
 
         _obj = cls.model_validate({
             "ancestors": [TeamRef.from_dict(_item) for _item in obj["ancestors"]] if obj.get("ancestors") is not None else None,
+            "public_within": PublicWithinEffects.from_dict(obj["public_within"]) if obj.get("public_within") is not None else None,
             "team": TeamRow.from_dict(obj["team"]) if obj.get("team") is not None else None
         })
         return _obj

@@ -8,7 +8,16 @@ export type AddMemberRequest = { profile_id: string, role: TeamRole, };
 /**
  * Response body for `PUT /api/teams/{id}/children/{child_id}`.
  */
-export type AttachChildOutcome = { outcome: AttachOutcome, };
+export type AttachChildOutcome = { outcome: AttachOutcome, 
+/**
+ * What the link did to `public_within` rows: a pool brought under an anchor, or a forbid
+ * brought above a team, makes rows dormant; a new live path can revive one.
+ */
+public_within: PublicWithinEffects, 
+/**
+ * The effective rows the child's roster now reads through the new parent.
+ */
+public_within_in_reach: PublicWithinReach, };
 
 /**
  * What `PUT /api/teams/{id}/children/{child_id}` did (team DAG doors D1).
@@ -26,6 +35,16 @@ export type ChangeRoleRequest = { role: TeamRole, };
  * row, so they are not counted. A count, never a list.
  */
 export type PublicWithinAudience = { teams: number, principals: number, };
+
+/**
+ * What a structural or admin act did to the `public_within` rows it reached: rows deleted because
+ * the anchor is no longer above the team by any path (`lapsed`; such a row never revives, and a
+ * reopen needs both sides again), rows that stopped conferring (`dormant`) and rows that confer
+ * again (`revived`). A row is named only to a caller who manages its team or its anchor, or is a
+ * system admin; the others are counted in the `*_unnamed` fields. Each change is also recorded on
+ * the admin ledger, readable by the managers of both teams.
+ */
+export type PublicWithinEffects = { lapsed: Array<PublicWithinRowRef>, dormant: Array<PublicWithinRowRef>, revived: Array<PublicWithinRowRef>, lapsed_unnamed: number, dormant_unnamed: number, revived_unnamed: number, };
 
 /**
  * One team opened to this team's subtree, on the anchor's [`TeamDetail`].
@@ -79,6 +98,13 @@ changed: boolean, dormant: Array<PublicWithinRowRef>, revived: Array<PublicWithi
 export type PublicWithinPolicyRequest = { forbidden: boolean, };
 
 /**
+ * The effective `public_within` rows a team's roster newly reads through a new parent link: each
+ * row whose anchor became one of the team's ancestors. A row is named only to a caller who manages
+ * its team or its anchor, or is a system admin; the others are counted in `unnamed`.
+ */
+export type PublicWithinReach = { rows: Array<PublicWithinRowRef>, unnamed: number, };
+
+/**
  * One anchor this team is opened to, on the team's own [`TeamDetail`].
  */
 export type PublicWithinRef = { anchor: TeamRef, 
@@ -114,7 +140,12 @@ export type RenameTeamSlugRequest = { slug: string, };
  * Response body for `POST /api/teams/{id}/reparent`. Both `team_parent_link_changed` records of the
  * move carry `correlation_id`, so the ledger shows one move rather than two unrelated acts.
  */
-export type ReparentOutcome = { team: TeamRef, from: TeamRef, to: TeamRef, correlation_id: string, };
+export type ReparentOutcome = { team: TeamRef, from: TeamRef, to: TeamRef, correlation_id: string, 
+/**
+ * What the move did to `public_within` rows. A row whose anchor is no longer above the team by
+ * any path is deleted (`lapsed`) and never revives, even if the team moves back.
+ */
+public_within: PublicWithinEffects, };
 
 /**
  * Request body for `POST /api/teams/{id}/reparent` (team DAG doors D3): move the team from one
@@ -136,14 +167,23 @@ to: string, };
  * preserved row's reach: the roster (`members`, exactly as it was at deletion), the links to the
  * live `parents`, and the live `children` that reach through the team again.
  */
-export type RestoreTeamOutcome = { team: TeamRow, parents: Array<TeamRef>, children: Array<TeamRef>, members: Array<TeamMemberDetail>, };
+export type RestoreTeamOutcome = { team: TeamRow, parents: Array<TeamRef>, children: Array<TeamRef>, members: Array<TeamMemberDetail>, 
+/**
+ * The `public_within` rows the restore revived (or, for a restored pool team, made dormant).
+ */
+public_within: PublicWithinEffects, };
 
 /**
  * Response body for `PUT /api/teams/{id}/auto-join`. `ancestors` are the team's live ancestors:
  * with auto-join set, every approved profile reads everything attached to each of them, so the
  * admin sees exactly what the change opened.
  */
-export type SetAutoJoinOutcome = { team: TeamRow, ancestors: Array<TeamRef>, };
+export type SetAutoJoinOutcome = { team: TeamRow, ancestors: Array<TeamRef>, 
+/**
+ * An auto-join team under an anchor makes that anchor's rows dormant unless an admin opened
+ * them instance-wide; clearing it revives them.
+ */
+public_within: PublicWithinEffects, };
 
 /**
  * Request body for `PUT /api/teams/{id}/auto-join` (team DAG doors D5, system admin only):

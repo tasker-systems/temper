@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT _admin_gating_team_slug_write($1, NULL) AS \"w!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "w!",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "6d563e20b03544d4f3ee982b261fc487c87f8426c60bc2efa4535cda6413fe25"
+}

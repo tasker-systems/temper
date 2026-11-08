@@ -368,6 +368,47 @@ pub struct PublicWithinPolicyOutcome {
     pub revived_unnamed: u32,
 }
 
+/// What a structural or admin act did to the `public_within` rows it reached: rows deleted because
+/// the anchor is no longer above the team by any path (`lapsed`; such a row never revives, and a
+/// reopen needs both sides again), rows that stopped conferring (`dormant`) and rows that confer
+/// again (`revived`). A row is named only to a caller who manages its team or its anchor, or is a
+/// system admin; the others are counted in the `*_unnamed` fields. Each change is also recorded on
+/// the admin ledger, readable by the managers of both teams.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublicWithinEffects {
+    #[serde(default)]
+    pub lapsed: Vec<PublicWithinRowRef>,
+    #[serde(default)]
+    pub dormant: Vec<PublicWithinRowRef>,
+    #[serde(default)]
+    pub revived: Vec<PublicWithinRowRef>,
+    #[serde(default)]
+    pub lapsed_unnamed: u32,
+    #[serde(default)]
+    pub dormant_unnamed: u32,
+    #[serde(default)]
+    pub revived_unnamed: u32,
+}
+
+/// The effective `public_within` rows a team's roster newly reads through a new parent link: each
+/// row whose anchor became one of the team's ancestors. A row is named only to a caller who manages
+/// its team or its anchor, or is a system admin; the others are counted in `unnamed`.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublicWithinReach {
+    #[serde(default)]
+    pub rows: Vec<PublicWithinRowRef>,
+    #[serde(default)]
+    pub unnamed: u32,
+}
+
 /// A team named by id, slug and display name — a parent or child on [`TeamDetail`], an ancestor on
 /// an auto-join outcome, a link on a restore outcome.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -424,9 +465,16 @@ pub enum AttachOutcome {
 #[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AttachChildOutcome {
     pub outcome: AttachOutcome,
+    /// What the link did to `public_within` rows: a pool brought under an anchor, or a forbid
+    /// brought above a team, makes rows dormant; a new live path can revive one.
+    #[serde(default)]
+    pub public_within: PublicWithinEffects,
+    /// The effective rows the child's roster now reads through the new parent.
+    #[serde(default)]
+    pub public_within_in_reach: PublicWithinReach,
 }
 
 /// Request body for `POST /api/teams/{id}/reparent` (team DAG doors D3): move the team from one
@@ -456,6 +504,10 @@ pub struct ReparentOutcome {
     pub from: TeamRef,
     pub to: TeamRef,
     pub correlation_id: Uuid,
+    /// What the move did to `public_within` rows. A row whose anchor is no longer above the team by
+    /// any path is deleted (`lapsed`) and never revives, even if the team moves back.
+    #[serde(default)]
+    pub public_within: PublicWithinEffects,
 }
 
 /// Request body for `PUT /api/teams/{id}/auto-join` (team DAG doors D5, system admin only):
@@ -480,6 +532,10 @@ pub struct SetAutoJoinRequest {
 pub struct SetAutoJoinOutcome {
     pub team: TeamRow,
     pub ancestors: Vec<TeamRef>,
+    /// An auto-join team under an anchor makes that anchor's rows dormant unless an admin opened
+    /// them instance-wide; clearing it revives them.
+    #[serde(default)]
+    pub public_within: PublicWithinEffects,
 }
 
 /// Response body for `POST /api/teams/{id}/restore` (team DAG doors D6). Restoring revives every
@@ -495,6 +551,9 @@ pub struct RestoreTeamOutcome {
     pub parents: Vec<TeamRef>,
     pub children: Vec<TeamRef>,
     pub members: Vec<TeamMemberDetail>,
+    /// The `public_within` rows the restore revived (or, for a restored pool team, made dormant).
+    #[serde(default)]
+    pub public_within: PublicWithinEffects,
 }
 
 /// Request body for `POST /api/teams/{id}/rename-slug` (team DAG doors D7). The new slug is

@@ -3207,3 +3207,182 @@ async fn the_harness_bites_a_list_visible_gate_on_the_membership_twin(
     );
     Ok(())
 }
+
+// =================================================================================================
+// public_within effects follow every structural act
+// =================================================================================================
+
+/// Over the generated world, with a public_within row opened for every eligible (team, live
+/// ancestor) pair, a seeded run of structural and admin acts through their SQL chokepoints (delete,
+/// restore, link, unlink, auto-join, forbid, rename, gating-slug repoint). After EVERY act, each row's recorded effect (its effect
+/// when the run began, folded through every `public_within_effect_changed` since) equals
+/// `public_within_row_effective`, and a row is gone exactly when a `lapsed` record says so: no act
+/// changes a row's effect, or deletes it, without a record.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn public_within_records_every_effect_change_of_every_structural_act(
+    pool: PgPool,
+) -> sqlx::Result<()> {
+    use std::collections::HashMap;
+
+    let plan = Plan::generate(harness_seed());
+    let w = insert_world(&pool, &plan).await?;
+    let system: Uuid = sqlx::query_scalar(
+        "SELECT e.id FROM kb_entities e JOIN kb_profiles p ON p.id = e.profile_id \
+          WHERE p.handle = 'system' AND e.name = 'system'",
+    )
+    .fetch_one(&pool)
+    .await?;
+
+    // Every eligible pair the shape guard admits, opened directly.
+    sqlx::query(
+        "INSERT INTO kb_team_public_within (team_id, anchor_id, opened_by) \
+         SELECT t.id, a.team_id, $2 \
+           FROM kb_teams t CROSS JOIN LATERAL team_ancestors(t.id) a \
+           JOIN kb_teams at ON at.id = a.team_id \
+          WHERE t.id = ANY($1) AND a.team_id <> t.id AND t.personal_of IS NULL \
+            AND at.personal_of IS NULL AND NOT team_is_root_or_gating(t.id) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(&w.teams)
+    .bind(w.profiles[0])
+    .execute(&pool)
+    .await?;
+    let mut recorded: HashMap<(Uuid, Uuid), bool> = sqlx::query_as::<_, (Uuid, Uuid, bool)>(
+        "SELECT team_id, anchor_id, public_within_row_effective(team_id, anchor_id, instance_wide) \
+           FROM kb_team_public_within",
+    )
+    .fetch_all(&pool)
+    .await?
+    .into_iter()
+    .map(|(t, a, e)| ((t, a), e))
+    .collect();
+    assert!(recorded.len() >= 3, "the world opens rows: {}", w.render());
+    let mut seen: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE et.name IN ('public_within_effect_changed', 'team_public_within_changed')",
+    )
+    .fetch_one(&pool)
+    .await?;
+    let seen_at_start = seen;
+
+    let mut rng = Rng::new(plan.seed ^ 0x9E37_79B9);
+    let n = w.teams.len() as u64;
+    let mut acts = 0;
+    for step in 0..60 {
+        let a = w.teams[(rng.next_u64() % n) as usize];
+        let b = w.teams[(rng.next_u64() % n) as usize];
+        let (label, sql): (&str, String) = match rng.next_u64() % 8 {
+            6 => ("rename", format!("SELECT _admin_team_lifecycle_act('{system}', NULL, '{a}', 'renamed', 'h-{step}')")),
+            7 => ("gating", format!("SELECT _admin_gating_team_slug_write(t.slug) FROM kb_teams t WHERE t.id = '{b}'")),
+            0 => (
+                "delete",
+                format!("SELECT _admin_team_lifecycle_act('{system}', NULL, '{a}', 'deleted')"),
+            ),
+            1 => (
+                "restore",
+                format!("SELECT _admin_team_lifecycle_act('{system}', NULL, '{a}', 'restored')"),
+            ),
+            2 => (
+                "link",
+                format!(
+                    "SELECT _admin_team_parent_link_act('{system}', NULL, 'link', '{a}', '{b}')"
+                ),
+            ),
+            3 => {
+                let edge: Option<(Uuid, Uuid)> = sqlx::query_as(
+                    "SELECT parent_id, child_id FROM kb_teams_parents \
+                      WHERE child_id = ANY($1) ORDER BY parent_id, child_id \
+                      OFFSET $2 LIMIT 1",
+                )
+                .bind(&w.teams)
+                .bind((rng.next_u64() % n) as i64)
+                .fetch_optional(&pool)
+                .await?;
+                let Some((p, c)) = edge else { continue };
+                ("unlink", format!("SELECT _admin_team_parent_link_act('{system}', NULL, 'unlink', '{p}', '{c}')"))
+            }
+            4 => {
+                let role = if rng.chance(50) { "'member'" } else { "NULL" };
+                ("auto-join", format!("SELECT _admin_team_lifecycle_act('{system}', NULL, '{a}', 'auto_join_changed', {role})"))
+            }
+            _ => {
+                let f = rng.chance(50);
+                (
+                    "forbid",
+                    format!(
+                        "SELECT _admin_public_within_policy_write('{system}', NULL, '{a}', {f})"
+                    ),
+                )
+            }
+        };
+        // An act a trigger refuses (a cycle, a personal or root link) writes nothing; skip it.
+        let mut tx = pool.begin().await?;
+        if sqlx::query(&sql).execute(&mut *tx).await.is_err() {
+            continue;
+        }
+        tx.commit().await?;
+        acts += 1;
+
+        let new: Vec<serde_json::Value> = sqlx::query_scalar(
+            "SELECT e.payload || jsonb_build_object('type', et.name) FROM kb_events e \
+               JOIN kb_event_types et ON et.id = e.event_type_id \
+              WHERE et.name IN ('public_within_effect_changed', 'team_public_within_changed') \
+              ORDER BY e.id OFFSET $1",
+        )
+        .bind(seen)
+        .fetch_all(&pool)
+        .await?;
+        seen += new.len() as i64;
+        for rec in &new {
+            let key: (Uuid, Uuid) = (
+                rec["team_id"].as_str().unwrap().parse().unwrap(),
+                rec["anchor_id"].as_str().unwrap().parse().unwrap(),
+            );
+            if rec["type"] == "team_public_within_changed" {
+                assert_eq!(rec["act"], "lapsed", "step {step} {label}: {rec}");
+                assert!(
+                    recorded.remove(&key).is_some(),
+                    "step {step} {label}: lapsed twice"
+                );
+            } else {
+                assert_eq!(
+                    recorded.insert(key, rec["to"] == "effective"),
+                    Some(rec["from"] == "effective"),
+                    "step {step} {label}: the record's `from` is not the recorded state"
+                );
+            }
+        }
+        let now: HashMap<(Uuid, Uuid), bool> = sqlx::query_as::<_, (Uuid, Uuid, bool)>(
+            "SELECT team_id, anchor_id, \
+                    public_within_row_effective(team_id, anchor_id, instance_wide) \
+               FROM kb_team_public_within",
+        )
+        .fetch_all(&pool)
+        .await?
+        .into_iter()
+        .map(|(t, a, e)| ((t, a), e))
+        .collect();
+        assert_eq!(
+            now,
+            recorded,
+            "step {step} {label}: the recorded effects drifted from the rows\n{}",
+            w.render()
+        );
+        // A row left in place has its anchor above its team by some path.
+        let orphaned: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM kb_team_public_within pw \
+              WHERE NOT EXISTS (SELECT 1 FROM team_ancestors_any(pw.team_id) a \
+                                 WHERE a.team_id = pw.anchor_id)",
+        )
+        .fetch_one(&pool)
+        .await?;
+        assert_eq!(orphaned, 0, "step {step} {label}: a lapsed row survived");
+    }
+    assert!(acts >= 20, "the run acted: {acts}");
+    assert!(
+        seen > seen_at_start,
+        "the run recorded no transition at all, so it proved nothing (seed {})",
+        plan.seed
+    );
+    Ok(())
+}

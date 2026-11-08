@@ -1,0 +1,51 @@
+title    = "public_within: every structural and admin act records each row whose effect it changes, and a row whose anchor is no longer above its team is deleted"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["http", "clients", "schema"]
+status   = "signal-only"
+body = '''
+Migration 20261122000000. One shared definition of a public_within transition
+(_public_within_effects_before, then _public_within_transitions) runs inside every writer that can
+change whether a row confers: the parent-link writer (create with parents, attach, detach,
+reparent), the lifecycle writer (delete, restore, rename, auto-join), the gating-slug write, and
+the forbid writer, which now uses the same helpers.
+
+- A row whose anchor is no longer an ancestor of its team by any path, live or dead, is deleted in
+  the act's transaction and recorded as team_public_within_changed lapsed. It never revives; moving
+  the team back does not bring it back, and a reopen needs both sides again.
+- Every other row whose effect flips (a team on the path deleted or restored, an auto-join or the
+  gating team brought under or out from under the anchor, a forbid brought above the team by a
+  link) is recorded as public_within_effect_changed with cause liveness or policy and the causing
+  act's correlation id.
+- Every such record is emitted by the system entity and names both teams as subject, so the
+  managers of either side read it and the actor's own ledger history never names a row the act's
+  answer withheld.
+- An effects lock orders these computations with each other and with an open, so a row opened
+  concurrently with an act that changes its effect through a team the open does not lock is either
+  seen by the open's re-check or recorded by the act.
+
+HTTP answers gain fields (all default to empty): AttachChildOutcome, ReparentOutcome,
+RestoreTeamOutcome and SetAutoJoinOutcome gain public_within {lapsed, dormant, revived, and
+*_unnamed counts}; attach also gains public_within_in_reach {rows, unnamed}, the effective rows the
+child's roster now reads. ReassignContextOutcome gains
+inherited_public_within (each effective row of the new owner, with its anchor and audience
+counts). A row is named only to a caller who manages its team or anchor, or is a system admin, and
+counted otherwise. POST /api/teams (TeamRow), DELETE /api/teams/{id} and
+DELETE /api/teams/{id}/children/{child_id} (204) keep their answers; their transitions are recorded
+on the ledger.
+
+PATCH /api/access/admin/settings with gating_team_slug now writes the slug in a transaction with the
+transitions, re-checking under the gating lock that a team holds the slug (400 otherwise); the
+response is unchanged. Closing a row now takes the effects lock too.
+
+The admin re-checks under row locks in create_team, rename_slug, attach and reparent now run on the
+transaction's own connection instead of taking a second pooled one.
+
+Class: additive. Every response only gains optional fields. Deleting a lapsed row is not a
+released behaviour change: rows exist only since the public_within doors, in this same unreleased
+window; a one-time step in the migration deletes and records, as lapsed, any row whose anchor is
+already no ancestor of its team. The parent-link and lifecycle records now always carry a
+correlation id (shared with the transitions they caused), whether or not a row was in reach.
+Witnesses: crates/temper-services/tests/public_within_test.rs (the Phase 4 section),
+visibility_invariant_harness.rs (public_within_records_every_effect_change_of_every_structural_act).
+'''

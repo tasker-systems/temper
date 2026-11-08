@@ -23,12 +23,13 @@ use crate::error::{ApiError, ApiResult};
 use temper_core::types::ids::ProfileId;
 use temper_core::types::reassign::{RemoveMemberOutcome, ResidualContext, ResidualOwnedReach};
 use temper_core::types::team::{
-    AddMemberRequest, AttachChildOutcome, AttachOutcome, PublicWithinAudience, PublicWithinInRef,
-    PublicWithinOpenKind, PublicWithinOutcome, PublicWithinPolicyOutcome, PublicWithinRef,
-    PublicWithinRowRef, RenameTeamSlugOutcome, RenameTeamSlugRequest, ReparentOutcome,
-    ReparentRequest, RestoreTeamOutcome, SetAutoJoinOutcome, TeamChildRef, TeamCreateRequest,
-    TeamDetail, TeamMemberDetail, TeamMemberRow, TeamMemberSource, TeamRef, TeamRole, TeamRow,
-    TeamUpdateRequest, MAX_CREATE_PARENTS,
+    AddMemberRequest, AttachChildOutcome, AttachOutcome, PublicWithinAudience, PublicWithinEffects,
+    PublicWithinInRef, PublicWithinOpenKind, PublicWithinOutcome, PublicWithinPolicyOutcome,
+    PublicWithinReach, PublicWithinRef, PublicWithinRowRef, RenameTeamSlugOutcome,
+    RenameTeamSlugRequest, ReparentOutcome, ReparentRequest, RestoreTeamOutcome,
+    SetAutoJoinOutcome, TeamChildRef, TeamCreateRequest, TeamDetail, TeamMemberDetail,
+    TeamMemberRow, TeamMemberSource, TeamRef, TeamRole, TeamRow, TeamUpdateRequest,
+    MAX_CREATE_PARENTS,
 };
 
 /// The slug prefix of every personal team (`personal-<handle>`), which `sync_personal_team`
@@ -235,6 +236,223 @@ async fn require_admin_on(pool: &PgPool, caller: &HumanPrincipal) -> ApiResult<(
     }
 }
 
+/// [`require_admin_on`] on the transaction's own connection, for a re-check under row locks: a
+/// transaction that holds rows never waits on a second pooled connection (which a saturated pool
+/// may never hand back).
+async fn require_admin_in(conn: &mut sqlx::PgConnection, caller: &HumanPrincipal) -> ApiResult<()> {
+    crate::auth::require_system_admin_on(conn, caller)
+        .await
+        .map(|_| ())
+}
+
+/// One `public_within` row named by its two team ids, as a transitions answer carries it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+pub(crate) struct RowKey {
+    team_id: Uuid,
+    anchor_id: Uuid,
+}
+
+/// What `_public_within_transitions` (migration `20261122000000`) answered for one act, unfiltered:
+/// the rows deleted because the anchor is no longer above the team by any path, and the rows whose
+/// effect flipped. [`name_effects`] filters it for the caller.
+#[derive(Debug, Default, serde::Deserialize)]
+pub(crate) struct ActEffects {
+    #[serde(default)]
+    lapsed: Vec<RowKey>,
+    #[serde(default)]
+    changes: Vec<EffectChange>,
+}
+
+impl ActEffects {
+    /// Fold a later write's effects of the same act into this one. A row that flipped twice in one
+    /// act (once per link of a several-parent create) keeps only its last state, and a row that
+    /// flipped back is dropped; a lapsed row stays lapsed.
+    fn absorb(&mut self, later: ActEffects) {
+        self.lapsed.extend(later.lapsed);
+        for change in later.changes {
+            let key = (change.team_id, change.anchor_id);
+            match self
+                .changes
+                .iter()
+                .position(|c| (c.team_id, c.anchor_id) == key)
+            {
+                Some(i) if self.changes[i].effective != change.effective => {
+                    self.changes.remove(i);
+                }
+                Some(_) => {}
+                None => self.changes.push(change),
+            }
+        }
+        let lapsed: Vec<(Uuid, Uuid)> = self
+            .lapsed
+            .iter()
+            .map(|l| (l.team_id, l.anchor_id))
+            .collect();
+        self.changes
+            .retain(|c| !lapsed.contains(&(c.team_id, c.anchor_id)));
+    }
+}
+
+/// The answer of `_admin_team_parent_link_act` and `_admin_team_lifecycle_act`.
+#[derive(Debug, serde::Deserialize)]
+struct ActWrite {
+    outcome: String,
+    #[serde(flatten)]
+    effects: ActEffects,
+}
+
+/// Does `me` see a `public_within` row named on an act's answer? A system admin, a direct, live
+/// manager of the row's team, or a direct, live manager of its anchor when the anchor is not the root
+/// or the gating team (a leftover managing row there confers nothing). Everyone else gets a count.
+async fn names_row(
+    conn: &mut sqlx::PgConnection,
+    admin: bool,
+    me: ProfileId,
+    team_id: Uuid,
+    anchor_id: Uuid,
+) -> ApiResult<bool> {
+    names_row_owning(conn, admin, me, None, team_id, anchor_id).await
+}
+
+/// [`names_row`], where `owned` is a team the act's own authority already found the caller managing
+/// before the act wrote: a delete makes its team dead, and a dead team's rows confer no live
+/// standing, but its owner is still a manager of the row's side for the answer to that delete.
+async fn names_row_owning(
+    conn: &mut sqlx::PgConnection,
+    admin: bool,
+    me: ProfileId,
+    owned: Option<Uuid>,
+    team_id: Uuid,
+    anchor_id: Uuid,
+) -> ApiResult<bool> {
+    let owns = |t: Uuid| owned == Some(t);
+    Ok(admin
+        || owns(team_id)
+        || (owns(anchor_id)
+            && !crate::services::access_service::is_root_or_gating_team_on(conn, anchor_id)
+                .await?)
+        || manages_on(conn, team_id, me).await?
+        || (manages_on(conn, anchor_id, me).await?
+            && !crate::services::access_service::is_root_or_gating_team_on(conn, anchor_id)
+                .await?))
+}
+
+async fn row_ref(
+    conn: &mut sqlx::PgConnection,
+    team_id: Uuid,
+    anchor_id: Uuid,
+) -> ApiResult<PublicWithinRowRef> {
+    Ok(PublicWithinRowRef {
+        team: team_ref_of(conn, team_id).await?,
+        anchor: team_ref_of(conn, anchor_id).await?,
+    })
+}
+
+/// Filter an act's `public_within` effects for its caller: each row named to a caller [`names_row`]
+/// admits, and counted otherwise. Run in the act's transaction, after its write: the caller's
+/// standing is read there (the act locks the teams it touched, not every row's team and anchor).
+async fn name_effects(
+    conn: &mut sqlx::PgConnection,
+    caller: &HumanPrincipal,
+    effects: ActEffects,
+) -> ApiResult<PublicWithinEffects> {
+    name_effects_owning(conn, caller, None, effects).await
+}
+
+/// [`name_effects`], with `owned` as in [`names_row_owning`].
+async fn name_effects_owning(
+    conn: &mut sqlx::PgConnection,
+    caller: &HumanPrincipal,
+    owned: Option<Uuid>,
+    effects: ActEffects,
+) -> ApiResult<PublicWithinEffects> {
+    let mut out = PublicWithinEffects::default();
+    if effects.lapsed.is_empty() && effects.changes.is_empty() {
+        return Ok(out);
+    }
+    let admin = caller_is_admin_on(conn, caller).await?;
+    let me = caller.profile_id();
+    for row in effects.lapsed {
+        if names_row_owning(conn, admin, me, owned, row.team_id, row.anchor_id).await? {
+            out.lapsed
+                .push(row_ref(conn, row.team_id, row.anchor_id).await?);
+        } else {
+            out.lapsed_unnamed += 1;
+        }
+    }
+    for change in effects.changes {
+        let named =
+            names_row_owning(conn, admin, me, owned, change.team_id, change.anchor_id).await?;
+        match (named, change.effective) {
+            (true, true) => out
+                .revived
+                .push(row_ref(conn, change.team_id, change.anchor_id).await?),
+            (true, false) => out
+                .dormant
+                .push(row_ref(conn, change.team_id, change.anchor_id).await?),
+            (false, true) => out.revived_unnamed += 1,
+            (false, false) => out.dormant_unnamed += 1,
+        }
+    }
+    Ok(out)
+}
+
+/// The effective `public_within` rows anchored on `team_id` or one of its live ancestors: the rows
+/// the team's roster reads through. Read under the effects lock, so a before/after pair around a
+/// link is not moved by a concurrent open.
+async fn rows_in_reach(conn: &mut sqlx::PgConnection, team_id: Uuid) -> ApiResult<Vec<RowKey>> {
+    Ok(sqlx::query!(
+        r#"SELECT pw.team_id, pw.anchor_id
+             FROM kb_team_public_within pw
+            WHERE pw.anchor_id IN (SELECT a.team_id FROM team_ancestors($1) a)
+              AND public_within_row_effective(pw.team_id, pw.anchor_id, pw.instance_wide)
+            ORDER BY pw.team_id, pw.anchor_id"#,
+        team_id,
+    )
+    .fetch_all(&mut *conn)
+    .await?
+    .into_iter()
+    .map(|r| RowKey {
+        team_id: r.team_id,
+        anchor_id: r.anchor_id,
+    })
+    .collect())
+}
+
+/// Take `_public_within_effects_lock` now, so that a read made before an act's write and the act's
+/// own transitions see the same rows. Callers hold every team row they will lock first.
+async fn effects_lock(conn: &mut sqlx::PgConnection) -> ApiResult<()> {
+    sqlx::query_scalar!(r#"SELECT 1 AS "one!" FROM (SELECT _public_within_effects_lock()) l"#)
+        .fetch_one(&mut *conn)
+        .await?;
+    Ok(())
+}
+
+/// The rows in `after` and not in `before`, filtered for the caller as [`name_effects`] does.
+async fn name_reach(
+    conn: &mut sqlx::PgConnection,
+    caller: &HumanPrincipal,
+    before: &[RowKey],
+    after: Vec<RowKey>,
+) -> ApiResult<PublicWithinReach> {
+    let mut out = PublicWithinReach::default();
+    let new: Vec<RowKey> = after.into_iter().filter(|r| !before.contains(r)).collect();
+    if new.is_empty() {
+        return Ok(out);
+    }
+    let admin = caller_is_admin_on(conn, caller).await?;
+    let me = caller.profile_id();
+    for row in new {
+        if names_row(conn, admin, me, row.team_id, row.anchor_id).await? {
+            out.rows
+                .push(row_ref(conn, row.team_id, row.anchor_id).await?);
+        } else {
+            out.unnamed += 1;
+        }
+    }
+    Ok(out)
+}
+
 /// What [`lifecycle_write`] did: the act was written and recorded, it asked for the value already
 /// held (nothing written), or there was no team in the state the act needs (nothing written).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -244,10 +462,12 @@ pub(crate) enum LifecycleOutcome {
     Absent,
 }
 
-/// Perform one team lifecycle act through `_admin_team_lifecycle_write` (migration
-/// `20261118000010`): the `kb_teams` change and its `team_lifecycle_changed` record in one
-/// statement. `act` is one of `created`, `deleted`, `restored`, `renamed`, `auto_join_changed`;
-/// `to` is the new slug or role for the last two. It NEVER AUTHORIZES — every caller decides first.
+/// Perform one team lifecycle act through `_admin_team_lifecycle_act` (migration
+/// `20261122000000`): the `kb_teams` change, its `team_lifecycle_changed` record, and the record of
+/// every `public_within` row whose effect it flipped, in one statement. `act` is one of `created`,
+/// `deleted`, `restored`, `renamed`, `auto_join_changed`; `to` is the new slug or role for the last
+/// two. Answers the outcome and the unfiltered effects. It NEVER AUTHORIZES — every caller decides
+/// first.
 pub(crate) async fn lifecycle_write(
     tx: &mut sqlx::PgConnection,
     emitter: Uuid,
@@ -256,9 +476,9 @@ pub(crate) async fn lifecycle_write(
     act: &str,
     to: Option<&str>,
     correlation: Option<Uuid>,
-) -> ApiResult<LifecycleOutcome> {
-    let outcome = sqlx::query_scalar!(
-        r#"SELECT _admin_team_lifecycle_write($1, $2, $3, $4, $5, $6) AS "outcome!""#,
+) -> ApiResult<(LifecycleOutcome, ActEffects)> {
+    let raw = sqlx::query_scalar!(
+        r#"SELECT _admin_team_lifecycle_act($1, $2, $3, $4, $5, $6) AS "w!""#,
         emitter,
         *actor,
         team_id,
@@ -268,14 +488,19 @@ pub(crate) async fn lifecycle_write(
     )
     .fetch_one(&mut *tx)
     .await?;
-    match outcome.as_str() {
-        "changed" => Ok(LifecycleOutcome::Changed),
-        "noop" => Ok(LifecycleOutcome::Noop),
-        "absent" => Ok(LifecycleOutcome::Absent),
-        other => Err(ApiError::Internal(format!(
-            "_admin_team_lifecycle_write answered {other}"
-        ))),
-    }
+    let write: ActWrite = serde_json::from_value(raw)
+        .map_err(|e| ApiError::Internal(format!("_admin_team_lifecycle_act: {e}")))?;
+    let outcome = match write.outcome.as_str() {
+        "changed" => LifecycleOutcome::Changed,
+        "noop" => LifecycleOutcome::Noop,
+        "absent" => LifecycleOutcome::Absent,
+        other => {
+            return Err(ApiError::Internal(format!(
+                "_admin_team_lifecycle_act answered {other}"
+            )))
+        }
+    };
+    Ok((outcome, write.effects))
 }
 
 /// Proof that `create_team` has just inserted the team row it is about to write the creator's
@@ -310,6 +535,27 @@ pub async fn create_team(
     authed: &HumanPrincipal,
     req: &TeamCreateRequest,
 ) -> ApiResult<TeamRow> {
+    Ok(create_team_with_effects(pool, authed, req).await?.team)
+}
+
+/// What [`create_team_with_effects`] did: the new team's row, what its parent links did to
+/// `public_within` rows (an auto-join team created under an anchor makes its rows dormant), and the
+/// effective rows the new team's roster reads through its parents. Both filtered for the caller.
+/// `POST /api/teams` answers the row alone: its response schema is `TeamRow`, and the transitions are
+/// on the admin ledger.
+#[derive(Debug, Clone)]
+pub struct CreatedTeam {
+    pub team: TeamRow,
+    pub public_within: PublicWithinEffects,
+    pub public_within_in_reach: PublicWithinReach,
+}
+
+/// [`create_team`], answering what the create did to `public_within` rows as well.
+pub async fn create_team_with_effects(
+    pool: &PgPool,
+    authed: &HumanPrincipal,
+    req: &TeamCreateRequest,
+) -> ApiResult<CreatedTeam> {
     let creator = ProfileId::from(authed.profile().id);
     // One validator for new slugs and renames (ruling R4); it refuses the personal prefix too.
     let slug = validate_team_slug(&req.slug)?;
@@ -394,7 +640,7 @@ pub async fn create_team(
             ));
         }
         if crate::services::access_service::is_root_or_gating_team_on(&mut tx, parent_id).await? {
-            require_admin_on(pool, authed).await?;
+            require_admin_in(&mut tx, authed).await?;
         } else if !matches!(
             role_on_team_on(&mut tx, parent_id, creator).await?,
             Some(role) if can_manage(role)
@@ -422,14 +668,17 @@ pub async fn create_team(
 
     // Each parent link is read reach into everything attached to the parent, so it is a recorded
     // act (team-authority fixes D3): the row and its `team_parent_link_changed` record are one
-    // write. The links of one create share a correlation id (D4).
+    // write. The links of one create share a correlation id (D4), and each records the
+    // `public_within` rows it flips (an auto-join team created under an anchor makes its rows
+    // dormant).
+    let mut effects = ActEffects::default();
     if !parent_ids.is_empty() {
         let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, creator, "web")
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
         let correlation = Uuid::now_v7();
         for &parent_id in &parent_ids {
-            link(
+            let (_, linked) = link(
                 &mut tx,
                 emitter.uuid(),
                 creator,
@@ -438,8 +687,16 @@ pub async fn create_team(
                 Some(correlation),
             )
             .await?;
+            effects.absorb(linked);
         }
     }
+    let public_within = name_effects(&mut tx, authed, effects).await?;
+    let in_reach = if parent_ids.is_empty() {
+        PublicWithinReach::default()
+    } else {
+        let after = rows_in_reach(&mut tx, team_id).await?;
+        name_reach(&mut tx, authed, &[], after).await?
+    };
 
     // The creator's `owner` row is a recorded act (plan P7): it goes through the one membership
     // writer with `via = team_genesis`, in the same transaction as the team insert. `locked` is not
@@ -483,7 +740,11 @@ pub async fn create_team(
             .await?;
     }
 
-    Ok(row)
+    Ok(CreatedTeam {
+        team: row,
+        public_within,
+        public_within_in_reach: in_reach,
+    })
 }
 
 /// The one team-slug validator (team DAG doors ruling R4), for every new slug — a create and a
@@ -836,7 +1097,11 @@ pub async fn update_team(
 /// it). Idempotency: a team that is absent OR already soft-deleted yields
 /// `NotFound`. Rows are preserved — [`restore_team`] is the inverse.
 /// Children are NOT recursively deleted (see the migration's cascade note).
-pub async fn delete_team(pool: &PgPool, caller: &HumanPrincipal, team_id: Uuid) -> ApiResult<()> {
+pub async fn delete_team(
+    pool: &PgPool,
+    caller: &HumanPrincipal,
+    team_id: Uuid,
+) -> ApiResult<PublicWithinEffects> {
     // Auth before writes: owner only (stricter than manage — a maintainer cannot dissolve the
     // team), or a system admin. On the root or the gating team, a system admin only
     // (team-authority fixes D4). The admin arm stops at a personal team, which only its owner and
@@ -862,7 +1127,7 @@ pub async fn delete_team(pool: &PgPool, caller: &HumanPrincipal, team_id: Uuid) 
     let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let outcome = lifecycle_write(
+    let (outcome, effects) = lifecycle_write(
         &mut tx,
         emitter.uuid(),
         caller.profile_id(),
@@ -872,6 +1137,9 @@ pub async fn delete_team(pool: &PgPool, caller: &HumanPrincipal, team_id: Uuid) 
         None,
     )
     .await?;
+    // The owner arm passed above, so the caller owned the team the delete just made dead.
+    let owned = (!admin).then_some(team_id);
+    let public_within = name_effects_owning(&mut tx, caller, owned, effects).await?;
     tx.commit().await?;
 
     if outcome == LifecycleOutcome::Absent {
@@ -891,7 +1159,7 @@ pub async fn delete_team(pool: &PgPool, caller: &HumanPrincipal, team_id: Uuid) 
             ApiError::NotFound("team not found or not readable".to_string())
         });
     }
-    Ok(())
+    Ok(public_within)
 }
 
 /// Change a team's slug (team DAG doors D7) — its own door, not a `PATCH` field (review L3).
@@ -944,7 +1212,7 @@ pub async fn rename_slug(
     // actually stopped resolving.
     lock_teams_ascending(&mut tx, &[team_id]).await?;
     if crate::services::access_service::is_root_or_gating_team_on(&mut tx, team_id).await? {
-        require_admin_on(pool, caller).await?;
+        require_admin_in(&mut tx, caller).await?;
     } else if !role_on_team_on(&mut tx, team_id, caller.profile_id())
         .await?
         .is_some_and(can_manage)
@@ -957,7 +1225,7 @@ pub async fn rename_slug(
     let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let outcome = lifecycle_write(
+    let (outcome, _rename_flips_no_row) = lifecycle_write(
         &mut tx,
         emitter.uuid(),
         caller.profile_id(),
@@ -1021,7 +1289,7 @@ pub async fn restore_team(
     let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let outcome = lifecycle_write(
+    let (outcome, effects) = lifecycle_write(
         &mut tx,
         emitter.uuid(),
         caller.profile_id(),
@@ -1036,6 +1304,7 @@ pub async fn restore_team(
             "team not found or not deleted".to_string(),
         ));
     }
+    let public_within = name_effects(&mut tx, caller, effects).await?;
     tx.commit().await?;
 
     let team = sqlx::query_as!(
@@ -1058,6 +1327,7 @@ pub async fn restore_team(
         children: live_children(&mut conn, team_id).await?,
         members: roster(&mut conn, team_id).await?,
         team,
+        public_within,
     })
 }
 
@@ -1178,7 +1448,7 @@ pub async fn set_auto_join(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let wire = role.map(|r| r.as_str());
-    let outcome = lifecycle_write(
+    let (outcome, effects) = lifecycle_write(
         &mut tx,
         emitter.uuid(),
         admin.actor(),
@@ -1192,6 +1462,21 @@ pub async fn set_auto_join(
         return Err(ApiError::NotFound(
             "team not found or not readable".to_string(),
         ));
+    }
+    // The caller is a system admin, so every row is named.
+    let mut public_within = PublicWithinEffects::default();
+    for row in effects.lapsed {
+        public_within
+            .lapsed
+            .push(row_ref(&mut tx, row.team_id, row.anchor_id).await?);
+    }
+    for change in effects.changes {
+        let row = row_ref(&mut tx, change.team_id, change.anchor_id).await?;
+        if change.effective {
+            public_within.revived.push(row);
+        } else {
+            public_within.dormant.push(row);
+        }
     }
     tx.commit().await?;
 
@@ -1220,7 +1505,11 @@ pub async fn set_auto_join(
     )
     .fetch_all(pool)
     .await?;
-    Ok(SetAutoJoinOutcome { team, ancestors })
+    Ok(SetAutoJoinOutcome {
+        team,
+        ancestors,
+        public_within,
+    })
 }
 
 /// Detach `child_id` from its parent `parent_id` (team-authority fixes D3; team DAG doors D2).
@@ -1248,7 +1537,7 @@ pub async fn detach_child(
     caller: &HumanPrincipal,
     parent_id: Uuid,
     child_id: Uuid,
-) -> ApiResult<()> {
+) -> ApiResult<PublicWithinEffects> {
     if personal_of(pool, child_id).await?.is_some() {
         return Err(ApiError::Forbidden);
     }
@@ -1271,7 +1560,7 @@ pub async fn detach_child(
     let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let outcome = unlink(
+    let (outcome, effects) = unlink(
         &mut tx,
         emitter.uuid(),
         caller.profile_id(),
@@ -1285,8 +1574,9 @@ pub async fn detach_child(
             "that team is not a child of this team".to_string(),
         ));
     }
+    let public_within = name_effects(&mut tx, caller, effects).await?;
     tx.commit().await?;
-    Ok(())
+    Ok(public_within)
 }
 
 /// The non-admin detach arms (D2): manages the live parent (not the root or the gating team), or
@@ -1313,7 +1603,8 @@ async fn detach_authority(
     Err(ApiError::Forbidden)
 }
 
-/// `_admin_team_parent_link_write(…, 'unlink', …)`: `unlinked` or `absent`.
+/// `_admin_team_parent_link_act(…, 'unlink', …)`: `unlinked` or `absent`, and the unfiltered
+/// `public_within` effects of the cut (a row whose anchor is no longer above its team is deleted).
 async fn unlink(
     tx: &mut sqlx::PgConnection,
     emitter: Uuid,
@@ -1321,9 +1612,9 @@ async fn unlink(
     parent_id: Uuid,
     child_id: Uuid,
     correlation: Option<Uuid>,
-) -> ApiResult<String> {
-    Ok(sqlx::query_scalar!(
-        r#"SELECT _admin_team_parent_link_write($1, $2, 'unlink', $3, $4, $5) AS "outcome!""#,
+) -> ApiResult<(String, ActEffects)> {
+    let raw = sqlx::query_scalar!(
+        r#"SELECT _admin_team_parent_link_act($1, $2, 'unlink', $3, $4, $5) AS "w!""#,
         emitter,
         *actor,
         parent_id,
@@ -1331,11 +1622,12 @@ async fn unlink(
         correlation,
     )
     .fetch_one(&mut *tx)
-    .await?)
+    .await?;
+    link_answer(raw)
 }
 
-/// `_admin_team_parent_link_write(…, 'link', …)`: `linked` or `exists`, with the triggers'
-/// refusals mapped by [`map_link_trigger`].
+/// `_admin_team_parent_link_act(…, 'link', …)`: `linked` or `exists`, and the unfiltered
+/// `public_within` effects, with the triggers' refusals mapped by [`map_link_trigger`].
 async fn link(
     tx: &mut sqlx::PgConnection,
     emitter: Uuid,
@@ -1343,9 +1635,9 @@ async fn link(
     parent_id: Uuid,
     child_id: Uuid,
     correlation: Option<Uuid>,
-) -> ApiResult<String> {
-    sqlx::query_scalar!(
-        r#"SELECT _admin_team_parent_link_write($1, $2, 'link', $3, $4, $5) AS "outcome!""#,
+) -> ApiResult<(String, ActEffects)> {
+    let raw = sqlx::query_scalar!(
+        r#"SELECT _admin_team_parent_link_act($1, $2, 'link', $3, $4, $5) AS "w!""#,
         emitter,
         *actor,
         parent_id,
@@ -1354,7 +1646,14 @@ async fn link(
     )
     .fetch_one(&mut *tx)
     .await
-    .map_err(map_link_trigger)
+    .map_err(map_link_trigger)?;
+    link_answer(raw)
+}
+
+fn link_answer(raw: serde_json::Value) -> ApiResult<(String, ActEffects)> {
+    let write: ActWrite = serde_json::from_value(raw)
+        .map_err(|e| ApiError::Internal(format!("_admin_team_parent_link_act: {e}")))?;
+    Ok((write.outcome, write.effects))
 }
 
 /// Resolve a team ref — `+slug`, a bare slug, a team UUID, or a decorated `slug-<uuid>` ref — to a
@@ -1453,7 +1752,7 @@ pub async fn reparent(
             ));
         }
     }
-    attach_authority(pool, &mut tx, caller, admin, to, child_id).await?;
+    attach_authority(&mut tx, caller, admin, to, child_id).await?;
     if !stable {
         return Err(subtree_changed());
     }
@@ -1462,7 +1761,7 @@ pub async fn reparent(
     let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    link(
+    let (_, mut effects) = link(
         &mut tx,
         emitter.uuid(),
         caller.profile_id(),
@@ -1471,7 +1770,7 @@ pub async fn reparent(
         Some(correlation),
     )
     .await?;
-    let cut = unlink(
+    let (cut, cut_effects) = unlink(
         &mut tx,
         emitter.uuid(),
         caller.profile_id(),
@@ -1486,11 +1785,14 @@ pub async fn reparent(
             "`from` is not a parent of this team".to_string(),
         ));
     }
+    effects.absorb(cut_effects);
+    let public_within = name_effects(&mut tx, caller, effects).await?;
     let outcome = ReparentOutcome {
         team: team_ref_of(&mut tx, child_id).await?,
         from: team_ref_of(&mut tx, from).await?,
         to: team_ref_of(&mut tx, to).await?,
         correlation_id: correlation,
+        public_within,
     };
     tx.commit().await?;
     Ok(outcome)
@@ -1588,7 +1890,6 @@ fn map_link_trigger(err: sqlx::Error) -> ApiError {
 /// child whose live subtree holds an auto-join or gating team, is a system admin's act alone. Run
 /// as the pool pre-check and again under the row locks.
 async fn attach_authority(
-    pool: &PgPool,
     conn: &mut sqlx::PgConnection,
     caller: &HumanPrincipal,
     admin: bool,
@@ -1612,8 +1913,9 @@ async fn attach_authority(
     // nothing.
     let pool_child = subtree_holds_pool_on(conn, child_id).await?;
     if instance_parent || pool_child {
-        // Re-asked, not reused: under the locks a demotion since the pre-check must refuse.
-        require_admin_on(pool, caller).await?;
+        // Re-asked, not reused: under the locks a demotion since the pre-check must refuse. On the
+        // transaction's own connection: it holds rows, so it never waits on a second one.
+        require_admin_in(conn, caller).await?;
     }
     Ok(())
 }
@@ -1732,15 +2034,19 @@ pub async fn attach_child(
             ));
         }
     }
-    attach_authority(pool, &mut tx, caller, admin, parent_id, child_id).await?;
+    attach_authority(&mut tx, caller, admin, parent_id, child_id).await?;
     if !stable {
         return Err(subtree_changed());
     }
 
+    // The rows the child's roster reads before the link, under the effects lock the link's own
+    // transitions take, so a concurrent open cannot move the difference.
+    effects_lock(&mut tx).await?;
+    let before = rows_in_reach(&mut tx, child_id).await?;
     let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let outcome = link(
+    let (outcome, effects) = link(
         &mut tx,
         emitter.uuid(),
         caller.profile_id(),
@@ -1749,6 +2055,9 @@ pub async fn attach_child(
         None,
     )
     .await?;
+    let public_within = name_effects(&mut tx, caller, effects).await?;
+    let after = rows_in_reach(&mut tx, child_id).await?;
+    let public_within_in_reach = name_reach(&mut tx, caller, &before, after).await?;
     tx.commit().await?;
     Ok(AttachChildOutcome {
         outcome: if outcome == "linked" {
@@ -1756,6 +2065,8 @@ pub async fn attach_child(
         } else {
             AttachOutcome::Exists
         },
+        public_within,
+        public_within_in_reach,
     })
 }
 
@@ -2242,6 +2553,9 @@ pub async fn close_public_within(
     }
     let mut tx = pool.begin().await?;
     lock_teams_ascending(&mut tx, &[team_id, anchor_id]).await?;
+    // After the rows, as every holder takes it: an act computing transitions either sees this close
+    // committed (and skips the row) or finishes before it, so no record names a row being closed.
+    effects_lock(&mut tx).await?;
     let admin = caller_is_admin_on(&mut tx, caller).await?;
     let admin_act = close_authority(&mut tx, caller, admin, team_id, anchor_id).await?;
     let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
@@ -2295,8 +2609,8 @@ async fn policy_authority(
     Ok(())
 }
 
-/// One effect transition the forbid writer reported.
-#[derive(Debug, serde::Deserialize)]
+/// One effect transition `_public_within_transitions` reported.
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
 struct EffectChange {
     team_id: Uuid,
     anchor_id: Uuid,
@@ -2306,8 +2620,8 @@ struct EffectChange {
 #[derive(Debug, serde::Deserialize)]
 struct PolicyWrite {
     outcome: String,
-    #[serde(default)]
-    changes: Vec<EffectChange>,
+    #[serde(flatten)]
+    effects: ActEffects,
 }
 
 /// Set or clear `team_id`'s `public_within` forbid (`kb_teams.public_within_forbidden`).
@@ -2361,41 +2675,17 @@ pub async fn set_public_within_policy(
         ));
     }
 
-    let mut outcome = PublicWithinPolicyOutcome {
+    // A forbid never moves a link, so nothing lapses; the policy answer carries the flips only.
+    let named = name_effects(&mut tx, caller, write.effects).await?;
+    let outcome = PublicWithinPolicyOutcome {
         team_id,
         forbidden,
         changed: write.outcome == "changed",
-        dormant: Vec::new(),
-        revived: Vec::new(),
-        dormant_unnamed: 0,
-        revived_unnamed: 0,
+        dormant: named.dormant,
+        revived: named.revived,
+        dormant_unnamed: named.dormant_unnamed,
+        revived_unnamed: named.revived_unnamed,
     };
-    let me = caller.profile_id();
-    for change in write.changes {
-        let named = admin
-            || manages_on(&mut tx, change.team_id, me).await?
-            || (manages_on(&mut tx, change.anchor_id, me).await?
-                && !crate::services::access_service::is_root_or_gating_team_on(
-                    &mut tx,
-                    change.anchor_id,
-                )
-                .await?);
-        match (named, change.effective) {
-            (true, effective) => {
-                let row = PublicWithinRowRef {
-                    team: team_ref_of(&mut tx, change.team_id).await?,
-                    anchor: team_ref_of(&mut tx, change.anchor_id).await?,
-                };
-                if effective {
-                    outcome.revived.push(row);
-                } else {
-                    outcome.dormant.push(row);
-                }
-            }
-            (false, true) => outcome.revived_unnamed += 1,
-            (false, false) => outcome.dormant_unnamed += 1,
-        }
-    }
     tx.commit().await?;
     Ok(outcome)
 }

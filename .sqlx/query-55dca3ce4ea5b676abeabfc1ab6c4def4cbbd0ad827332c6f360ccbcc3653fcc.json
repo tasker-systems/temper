@@ -1,12 +1,12 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT _admin_team_lifecycle_write($1, $2, $3, $4, $5, $6) AS \"outcome!\"",
+  "query": "SELECT _admin_team_parent_link_act($1, $2, 'unlink', $3, $4, $5) AS \"w!\"",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "outcome!",
-        "type_info": "Text"
+        "name": "w!",
+        "type_info": "Jsonb"
       }
     ],
     "parameters": {
@@ -14,8 +14,7 @@
         "Uuid",
         "Uuid",
         "Uuid",
-        "Text",
-        "Text",
+        "Uuid",
         "Uuid"
       ]
     },
@@ -23,5 +22,5 @@
       null
     ]
   },
-  "hash": "81c502d30dc99d32504c40723af61633b3dc40071630bce471d0474b3c0b93ca"
+  "hash": "55dca3ce4ea5b676abeabfc1ab6c4def4cbbd0ad827332c6f360ccbcc3653fcc"
 }
