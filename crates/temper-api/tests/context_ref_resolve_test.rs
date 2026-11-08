@@ -500,3 +500,136 @@ async fn one_slug_refuses_alike_whether_retired_or_absent(pool: PgPool) {
          retired {team_retired:?}, absent {team_absent:?}"
     );
 }
+
+// ─── Test 7: the `+team/slug` refusals, pinned as the wire renders them ──────
+//
+// The tests above compare `ApiError` variants, or the message inside one. What a caller sees is
+// the rendered response: status, then body bytes. These pin that, for every refusal the team arm
+// gives, so that a change to the arm's membership gate cannot alter a refusal without failing
+// here.
+
+/// Render a resolver refusal exactly as the HTTP layer would: status and body bytes.
+async fn rendered(err: ApiError) -> (axum::http::StatusCode, bytes::Bytes) {
+    use axum::response::IntoResponse as _;
+    let response = err.into_response();
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read refusal body");
+    (status, body)
+}
+
+/// Resolve a ref that must fail, and return its rendered refusal.
+async fn rendered_refusal(
+    pool: &PgPool,
+    principal: ProfileId,
+    ref_str: &str,
+) -> (axum::http::StatusCode, bytes::Bytes) {
+    let r = parse_context_ref(ref_str).expect("valid ref");
+    match context_service::resolve_context_ref(pool, principal, &r).await {
+        Ok(id) => panic!("{ref_str} must refuse; it resolved to {id:?}"),
+        Err(e) => rendered(e).await,
+    }
+}
+
+/// A non-member of an active team learns nothing about which slugs exist under it: a real slug
+/// and a missing one refuse with the same status and the same body bytes.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_non_member_gets_one_forbidden_for_a_real_slug_and_a_missing_one(pool: PgPool) {
+    let email = format!("nm-parity-{}@example.com", Uuid::new_v4());
+    let (profile_id, _) = common::fixtures::create_test_profile_with_context(&pool, &email).await;
+    let principal = ProfileId::from(profile_id);
+
+    let team_slug = format!("nm-parity-{}", &Uuid::new_v4().simple().to_string()[..8]);
+    let _ = insert_team_with_context(&pool, &team_slug, "notes").await;
+
+    let real = rendered_refusal(&pool, principal, &format!("+{team_slug}/notes")).await;
+    let missing = rendered_refusal(&pool, principal, &format!("+{team_slug}/no-such")).await;
+
+    assert_eq!(
+        real.0,
+        axum::http::StatusCode::FORBIDDEN,
+        "real slug: {real:?}"
+    );
+    assert_eq!(
+        real, missing,
+        "a non-member must not tell a real slug from a missing one"
+    );
+}
+
+/// A soft-deleted team refuses exactly as a team that never existed: `404`, same body bytes for
+/// the same ref. The slug is held constant (the refusal echoes it): the dead team is asked for
+/// first, then its slug is moved away so the same ref names nothing at all.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_soft_deleted_team_refuses_like_a_team_that_never_existed(pool: PgPool) {
+    let email = format!("dead-team-{}@example.com", Uuid::new_v4());
+    let (profile_id, _) = common::fixtures::create_test_profile_with_context(&pool, &email).await;
+    let principal = ProfileId::from(profile_id);
+
+    let team_slug = format!("dead-team-{}", &Uuid::new_v4().simple().to_string()[..8]);
+    let (team_id, _) = insert_team_with_context(&pool, &team_slug, "notes").await;
+    add_team_member(&pool, team_id, profile_id).await;
+    let ref_str = format!("+{team_slug}/notes");
+
+    sqlx::query("UPDATE kb_teams SET is_active = false WHERE id = $1")
+        .bind(team_id)
+        .execute(&pool)
+        .await
+        .expect("soft-delete the team");
+    let dead = rendered_refusal(&pool, principal, &ref_str).await;
+
+    sqlx::query("UPDATE kb_teams SET slug = $2 WHERE id = $1")
+        .bind(team_id)
+        .bind(format!("{team_slug}-gone"))
+        .execute(&pool)
+        .await
+        .expect("move the dead team's slug away");
+    let never = rendered_refusal(&pool, principal, &ref_str).await;
+
+    assert_eq!(
+        dead.0,
+        axum::http::StatusCode::NOT_FOUND,
+        "dead team: {dead:?}"
+    );
+    assert_eq!(
+        dead, never,
+        "a soft-deleted team must refuse byte-identically to one that never existed"
+    );
+}
+
+/// A member's slug refusal is the member-only answer that names the slug they supplied, and it
+/// reads alike for a missing slug and a retired one.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_members_slug_refusal_names_the_slug_and_is_one_answer(pool: PgPool) {
+    let email = format!("member-refusal-{}@example.com", Uuid::new_v4());
+    let (profile_id, _) = common::fixtures::create_test_profile_with_context(&pool, &email).await;
+    let principal = ProfileId::from(profile_id);
+
+    let team_slug = format!(
+        "member-refusal-{}",
+        &Uuid::new_v4().simple().to_string()[..8]
+    );
+    let (team_id, ctx) = insert_team_with_context(&pool, &team_slug, "notes").await;
+    add_team_member(&pool, team_id, profile_id).await;
+    retire(&pool, ctx, "notes-retired").await;
+
+    let retired = rendered_refusal(&pool, principal, &format!("+{team_slug}/notes-retired")).await;
+    let other_team = format!(
+        "member-refusal-b-{}",
+        &Uuid::new_v4().simple().to_string()[..8]
+    );
+    let other = insert_team(&pool, &other_team).await;
+    add_team_member(&pool, other, profile_id).await;
+    let missing = rendered_refusal(&pool, principal, &format!("+{other_team}/notes-retired")).await;
+
+    assert_eq!(retired.0, axum::http::StatusCode::NOT_FOUND);
+    let body = std::str::from_utf8(&retired.1).expect("utf-8 body");
+    assert!(
+        body.contains("context notes-retired not found or not readable"),
+        "the member's refusal names the slug they supplied: {body}"
+    );
+    assert_eq!(
+        retired, missing,
+        "retired and missing read alike to a member"
+    );
+}
