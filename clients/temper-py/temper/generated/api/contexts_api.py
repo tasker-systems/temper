@@ -3290,7 +3290,7 @@ class ContextsApi:
     ) -> ContextResolution:
         """Resolve a context ref to its id
 
-        The caller's own visibility bounds the answer: a context the caller cannot read answers exactly as one that does not exist (uniform 404, no existence oracle). The resolution is [`context_service::resolve_context_ref`] — the same one every ref-accepting route uses — so each ref form keeps the refusal it has everywhere else.
+        The caller's own visibility bounds the answer: a context the caller cannot read answers exactly as one that does not exist (uniform 404, no existence oracle; for a `+team` ref from a caller who is not a member of the team, one uniform 403). A `+team/slug` ref resolves for any caller who reads that context, member or not. The resolution is [`context_service::resolve_context_ref`] — the same one every ref-accepting route uses — so each ref form keeps the refusal it has everywhere else.
 
         :param context_ref: The context ref to resolve: `@me/<slug>`, `@<handle>/<slug>`, `+<team>/<slug>`, or a bare UUID. One grammar — `temper_core::context_ref::parse_context_ref`, the parser the CLI and the MCP tools use. (required)
         :type context_ref: str
@@ -3365,7 +3365,7 @@ class ContextsApi:
     ) -> ApiResponse[ContextResolution]:
         """Resolve a context ref to its id
 
-        The caller's own visibility bounds the answer: a context the caller cannot read answers exactly as one that does not exist (uniform 404, no existence oracle). The resolution is [`context_service::resolve_context_ref`] — the same one every ref-accepting route uses — so each ref form keeps the refusal it has everywhere else.
+        The caller's own visibility bounds the answer: a context the caller cannot read answers exactly as one that does not exist (uniform 404, no existence oracle; for a `+team` ref from a caller who is not a member of the team, one uniform 403). A `+team/slug` ref resolves for any caller who reads that context, member or not. The resolution is [`context_service::resolve_context_ref`] — the same one every ref-accepting route uses — so each ref form keeps the refusal it has everywhere else.
 
         :param context_ref: The context ref to resolve: `@me/<slug>`, `@<handle>/<slug>`, `+<team>/<slug>`, or a bare UUID. One grammar — `temper_core::context_ref::parse_context_ref`, the parser the CLI and the MCP tools use. (required)
         :type context_ref: str
@@ -3440,7 +3440,7 @@ class ContextsApi:
     ) -> RESTResponseType:
         """Resolve a context ref to its id
 
-        The caller's own visibility bounds the answer: a context the caller cannot read answers exactly as one that does not exist (uniform 404, no existence oracle). The resolution is [`context_service::resolve_context_ref`] — the same one every ref-accepting route uses — so each ref form keeps the refusal it has everywhere else.
+        The caller's own visibility bounds the answer: a context the caller cannot read answers exactly as one that does not exist (uniform 404, no existence oracle; for a `+team` ref from a caller who is not a member of the team, one uniform 403). A `+team/slug` ref resolves for any caller who reads that context, member or not. The resolution is [`context_service::resolve_context_ref`] — the same one every ref-accepting route uses — so each ref form keeps the refusal it has everywhere else.
 
         :param context_ref: The context ref to resolve: `@me/<slug>`, `@<handle>/<slug>`, `+<team>/<slug>`, or a bare UUID. One grammar — `temper_core::context_ref::parse_context_ref`, the parser the CLI and the MCP tools use. (required)
         :type context_ref: str

@@ -245,9 +245,16 @@ fn context_slug_refusal(slug: &str) -> ApiError {
 /// including `@me` for its own owner and `+team` for a member. Retired contexts are addressed on
 /// the ADMIN axis (`get_retired_administered`, `resolve_context_id_for_restore`), never here.
 ///
+/// **`+team/slug` answers by reading, not by membership.** A direct member resolves as always. A
+/// caller with no membership row on the team resolves a context the team owns only when it is in
+/// the caller's reading set: a member of a descendant team, a person who reads the team through
+/// public_within, or a holder of a share or a read grant on that context. Resolving is a read: no
+/// write behind a resolved id is admitted without the backend's own authorship check.
+///
 /// Error taxonomy:
 /// - `Id`/`Handle`/profile-context miss → `NotFound`
-/// - Team non-membership → `Forbidden` (existence of team/context not leaked)
+/// - Team non-member, for any context the caller does not read → `Forbidden`, one answer whether
+///   the slug is real, missing, retired or unreadable (existence of team contexts not leaked)
 /// - Soft-deleted team → `NotFound`, byte-identical to a team that never existed (a soft-deleted
 ///   team is not a team you are being refused; it is not a team)
 /// - Retired context → `NotFound`, byte-identical to a slug that never existed **within the same
@@ -347,7 +354,7 @@ pub async fn resolve_context_ref(
                 .ok_or_else(|| {
                     ApiError::NotFound(format!("team {team_slug} not found or not readable"))
                 })?;
-                // Membership gate — non-member gets Forbidden, not NotFound.
+                // Membership decides which branch answers, not whether there is an answer.
                 //
                 // No `is_active` filter here, and that is not an omission: an inactive team never
                 // reaches this line, so the only rows this can match already belong to an active
@@ -364,7 +371,8 @@ pub async fn resolve_context_ref(
                 .fetch_one(pool)
                 .await?;
                 if !is_member {
-                    return Err(ApiError::Forbidden);
+                    return resolve_team_context_for_non_member(pool, principal, team_id, slug)
+                        .await;
                 }
                 let id = sqlx::query_scalar!(
                     "SELECT id FROM kb_contexts \
@@ -393,6 +401,57 @@ pub async fn resolve_context_ref(
             }
         },
     }
+}
+
+/// The `+team/slug` arm for a caller with no direct membership row on the team: `Ok` only for a
+/// context the team owns, by that slug, that the caller reads. Every other case is the one bare
+/// [`ApiError::Forbidden`] a non-member has always received.
+///
+/// **Who gets here and resolves.** Anyone whose reading set (`contexts_readable_by`) holds a
+/// context the team owns: a member of a descendant team (the team closure runs self-or-ancestor,
+/// so a child's member reads its parent's owned contexts by membership), a person who reads the
+/// team through an effective public_within row, and a holder of a share or a read grant on that
+/// context. A machine principal's reading set never includes the public_within arm (the fence
+/// inside `contexts_public_within`), so it resolves here only through membership-shaped reach.
+///
+/// **No existence oracle.** A non-member who does not read the context must learn nothing about
+/// the slug: missing, retired and unreadable are one `Forbidden`, the answer a non-member received
+/// before this branch existed. The slug never reaches SQL: the query reads the caller's readable
+/// contexts of this team as one set, joined once against the caller's reading set, and the slug is
+/// matched in Rust. So the database work depends only on the caller and the team, which the caller
+/// named and which the arm's 404/403 split already discloses, never on whether a context by that
+/// slug exists. Retired contexts are absent from the reading set, so a retired slug is a miss here.
+///
+/// **No slug refusal.** [`context_slug_refusal`] echoes the slug and says "not found"; it is the
+/// member-only answer, because only a member is entitled to learn that the team has no live
+/// context by that name. A reader who is not a member learns it only by reading the team's
+/// contexts, through the reads that already show them.
+///
+/// **Resolving grants no act.** Every caller that writes behind a resolved id (create, ingest,
+/// move) re-checks authorship in the backend, so a reader who resolves here and then targets the
+/// context with a write gets the backend's "can read but cannot author" `403` and nothing is
+/// written.
+async fn resolve_team_context_for_non_member(
+    pool: &PgPool,
+    principal: ProfileId,
+    team_id: uuid::Uuid,
+    slug: &str,
+) -> ApiResult<ContextId> {
+    let readable = sqlx::query!(
+        r#"SELECT c.id, c.slug
+             FROM contexts_readable_by($1) r
+             JOIN kb_contexts c ON c.id = r.context_id
+            WHERE c.owner_table = 'kb_teams' AND c.owner_id = $2"#,
+        *principal,
+        team_id
+    )
+    .fetch_all(pool)
+    .await?;
+    readable
+        .into_iter()
+        .find(|row| row.slug == slug)
+        .map(|row| ContextId::from(row.id))
+        .ok_or(ApiError::Forbidden)
 }
 
 /// Look up a profile-owned context by `(owner_id, slug)`.

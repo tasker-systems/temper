@@ -83,7 +83,9 @@ pub async fn create(
 /// Resolve a context ref to its id
 ///
 /// The caller's own visibility bounds the answer: a context the caller cannot read answers
-/// exactly as one that does not exist (uniform 404, no existence oracle). The resolution is
+/// exactly as one that does not exist (uniform 404, no existence oracle; for a `+team` ref from a
+/// caller who is not a member of the team, one uniform 403). A `+team/slug` ref resolves for any
+/// caller who reads that context, member or not. The resolution is
 /// [`context_service::resolve_context_ref`] — the same one every ref-accepting route uses — so
 /// each ref form keeps the refusal it has everywhere else.
 #[utoipa::path(
@@ -97,7 +99,7 @@ pub async fn create(
         (status = 200, description = "The ref resolved to a context the caller can read", body = ContextResolution),
         (status = 400, description = "Malformed context ref (the parser's sentence)", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
-        (status = 403, description = "A `+<team>` ref whose team exists but does not count the caller as a member (the shared resolver's membership gate)", body = ErrorBody),
+        (status = 403, description = "A `+<team>/<slug>` ref whose team exists, from a caller who is not a member of it and does not read a context of that team by that slug. One answer whether the slug is real, missing, retired or unreadable. A non-member who does read the context (a member of a descendant team, a person reading the team through public_within, a share or read grant) resolves it", body = ErrorBody),
         (status = 404, description = "Context not found or not readable (uniform — no existence oracle)", body = ErrorBody),
     )
 )]
