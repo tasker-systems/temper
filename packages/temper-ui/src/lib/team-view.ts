@@ -58,7 +58,8 @@ export function toTeamView(d: TeamDetail): TeamView {
 	};
 }
 
-/** `/teams/<slug>` — the one place the team page's address is spelled. */
-export function teamHref(slug: string): string {
-	return `/teams/${encodeURIComponent(slug)}`;
+/** `/teams/<slug-or-id>` — the one place the team page's address is spelled. The page resolves a
+ *  slug among the reader's own teams, and any other team by its id. */
+export function teamHref(slugOrId: string): string {
+	return `/teams/${encodeURIComponent(slugOrId)}`;
 }

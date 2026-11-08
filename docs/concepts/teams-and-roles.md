@@ -150,14 +150,15 @@ A, at any role, read every context T owns. It needs a direct owner or maintainer
 a direct owner or maintainer of A or a system admin. A system admin stands in for the anchor's side
 only, never for the team's. When the anchor's subtree reaches the whole instance (temper-system, the
 gating team, or a subtree holding an auto-join team), only a system admin opens it. Either side
-closes it alone, at any time. What readers already read is not recalled. The opening is not
+closes it alone, at any time (when the anchor is temper-system or the gating team, a system admin
+closes from the anchor's side). What readers already read is not recalled. The opening is not
 inherited by T's child teams, and every open, close and change of effect is recorded on the admin
 ledger, readable by the managers of both teams.
 
 | Act | Command | Who |
 |---|---|---|
 | Open | `temper team public-within open <team> <anchor>` | a manager of the team, and a manager of the anchor or a system admin |
-| Close | `temper team public-within close <team> <anchor>` | a manager of either side, or a system admin |
+| Close | `temper team public-within close <team> <anchor>` | a manager of either side (a system admin for a temper-system or gating-team anchor), or a system admin |
 | Forbid or allow | `temper team public-within policy <team> forbid\|allow` | the team's direct owner, or a system admin |
 | See what you read through | `temper team public-within list` | anyone, for themselves |
 | See a team's openings | `temper team show <team>` | `public_within`: the team's members; `public_within_in`: the anchor's managers |
