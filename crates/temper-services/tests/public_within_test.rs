@@ -3062,6 +3062,149 @@ async fn a_hard_deleted_team_records_each_row_before_the_cascade(pool: PgPool) {
     );
 }
 
+async fn hard_delete(pool: &PgPool, teams: &[Uuid]) {
+    sqlx::query("DELETE FROM kb_teams WHERE id = ANY($1)")
+        .bind(teams)
+        .execute(pool)
+        .await
+        .expect("hard delete");
+}
+
+/// Hard-deleting a team between the anchor and the team (naming neither) cuts the anchor off: the
+/// row is deleted and recorded as lapsed by the system, as an unlink's would be. T's other parent
+/// keeps it a team; only the path from the anchor is gone.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_hard_deleted_mid_path_team_lapses_the_rows_it_cut_off(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    join(&pool, w.org, d.both, "owner").await;
+    open_by(&pool, d.both, w.eng_sec, w.org).await.unwrap();
+    assert!(reads(&pool, w.org_only, w.r_t).await);
+
+    hard_delete(&pool, &[w.eng]).await;
+
+    assert!(
+        !row_exists(&pool, w.eng_sec, w.org).await,
+        "the anchor is no longer above the team by any path"
+    );
+    let recs = row_records(&pool, "team_public_within_changed", w.eng_sec, w.org).await;
+    let last = recs.last().expect("a record");
+    assert_eq!(last["act"], "lapsed", "{recs:?}");
+    assert!(last.get("actor").is_none(), "the system's record");
+    assert!(!reads(&pool, w.org_only, w.r_t).await);
+}
+
+/// Hard-deleting a forbidding team lifts its forbid (spec: a forbid holds until cleared or its team
+/// is hard-deleted), and the row's revival is on the record with cause policy. Hard-deleting a pool
+/// below the anchor revives the rows it made dormant, on the record too.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_hard_delete_that_flips_a_rows_effect_records_it(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    policy_by(&pool, d.ops_owner, w.ops, true).await.unwrap();
+    assert!(!effective(&pool, w.eng_sec, w.eng).await);
+
+    hard_delete(&pool, &[w.ops]).await;
+    assert!(effective(&pool, w.eng_sec, w.eng).await);
+    let recs = row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng).await;
+    let last = recs.last().expect("a record");
+    assert_eq!(
+        (&last["from"], &last["to"], &last["cause"]),
+        (
+            &serde_json::json!("dormant"),
+            &serde_json::json!("effective"),
+            &serde_json::json!("policy")
+        ),
+        "{recs:?}"
+    );
+    assert!(last.get("act").is_none(), "no hard-delete event type");
+    assert!(last.get("act_ref").is_some());
+
+    let admin = test_support::system_admin_proof_for(&pool, w.admin).await;
+    team_service::set_auto_join(&pool, &admin, w.eng_web, Some(TeamRole::Member))
+        .await
+        .unwrap();
+    assert!(!effective(&pool, w.eng_sec, w.eng).await);
+    hard_delete(&pool, &[w.eng_web]).await;
+    assert!(effective(&pool, w.eng_sec, w.eng).await);
+    let recs = row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng).await;
+    assert_eq!(recs.last().unwrap()["to"], "effective", "{recs:?}");
+}
+
+/// The recorded-effect invariant holds across hard deletes, including one statement that deletes a
+/// team on a row's path and a team the row names.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn after_every_hard_delete_the_recorded_effect_equals_the_effect(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    join(&pool, w.org, d.both, "owner").await;
+    join(&pool, w.eng_web, d.both, "owner").await;
+    join(&pool, w.eng_sec_red, d.both, "owner").await;
+    let mut recorded: std::collections::HashMap<(Uuid, Uuid), bool> = Default::default();
+    for (t, a) in [
+        (w.eng_sec, w.eng),
+        (w.eng_sec, w.org),
+        (w.eng_web, w.org),
+        (w.eng_sec_red, w.org),
+        (w.eng_sec_red, w.eng),
+    ] {
+        open_by(&pool, d.both, t, a).await.expect("open");
+        recorded.insert((t, a), effective(&pool, t, a).await);
+    }
+    let mut seen = 0i64;
+    check_recorded_effects(&pool, "opened", &mut recorded, &mut seen).await;
+
+    policy_by(&pool, d.ops_owner, w.ops, true).await.unwrap();
+    check_recorded_effects(&pool, "forbid ops", &mut recorded, &mut seen).await;
+    hard_delete(&pool, &[w.ops]).await;
+    check_recorded_effects(&pool, "hard delete ops", &mut recorded, &mut seen).await;
+    hard_delete(&pool, &[w.eng, w.eng_web]).await;
+    check_recorded_effects(
+        &pool,
+        "hard delete eng and eng-web",
+        &mut recorded,
+        &mut seen,
+    )
+    .await;
+    assert!(recorded.is_empty(), "{recorded:?}");
+}
+
+/// A hard delete waits on the effects lock an open holds: the open committed first is in the
+/// delete's snapshot, so the lapse it causes is recorded, and neither side deadlocks.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_hard_delete_records_a_row_opened_while_it_waited(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+
+    let mut holder = pool.begin().await.unwrap();
+    let pid = backend_pid(&mut holder).await;
+    sqlx::query("SELECT _public_within_effects_lock()")
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO kb_team_public_within (team_id, anchor_id, opened_by) VALUES ($1, $2, $3)",
+    )
+    .bind(w.eng_sec)
+    .bind(w.org)
+    .bind(d.both)
+    .execute(&mut *holder)
+    .await
+    .unwrap();
+
+    let p2 = pool.clone();
+    let eng = w.eng;
+    let contender = tokio::spawn(async move { hard_delete(&p2, &[eng]).await });
+    await_blocked_by(&pool, pid).await;
+    holder.commit().await.unwrap();
+    contender.await.unwrap();
+
+    assert!(!row_exists(&pool, w.eng_sec, w.org).await);
+    let recs = row_records(&pool, "team_public_within_changed", w.eng_sec, w.org).await;
+    assert_eq!(recs.last().unwrap()["act"], "lapsed", "{recs:?}");
+}
+
 /// The open's lock set is computed before it waits: a link committed while it waited gives T an
 /// ancestor whose forbid would not serialize with it. The open sees the grown set and refuses with a
 /// retryable conflict, writing nothing.
@@ -3709,7 +3852,7 @@ async fn check_recorded_effects(
             rec["anchor_id"].as_str().unwrap().parse::<Uuid>().unwrap(),
         );
         match (rec["type"].as_str().unwrap(), rec["act"].as_str()) {
-            ("team_public_within_changed", Some("lapsed")) => {
+            ("team_public_within_changed", Some("lapsed" | "cascade_deleted" | "closed")) => {
                 recorded.remove(&key);
             }
             ("team_public_within_changed", _) => {}
