@@ -275,14 +275,22 @@ CONTEXT_REACH = ", context_reached_via($1, c.id)"
 RESOURCE_REACH = ", CASE WHEN true THEN resource_reached_via($1, r.id) END"
 
 DOORS = {
-    "context get (own)": (OWN_TARGET + CONTEXT_GET.format(reach=""),
-                          OWN_TARGET + CONTEXT_GET.format(reach=CONTEXT_REACH)),
-    "resource get (own)": (OWN_TARGET + RESOURCE_GET.format(reach=""),
-                           OWN_TARGET + RESOURCE_GET.format(reach=RESOURCE_REACH)),
-    "context get (public)": (PUBLIC_TARGET + CONTEXT_GET.format(reach=""),
-                             PUBLIC_TARGET + CONTEXT_GET.format(reach=CONTEXT_REACH)),
-    "resource get (public)": (PUBLIC_TARGET + RESOURCE_GET.format(reach=""),
-                              PUBLIC_TARGET + RESOURCE_GET.format(reach=RESOURCE_REACH)),
+    "context get (own)": (
+        OWN_TARGET + CONTEXT_GET.format(reach=""),
+        OWN_TARGET + CONTEXT_GET.format(reach=CONTEXT_REACH),
+    ),
+    "resource get (own)": (
+        OWN_TARGET + RESOURCE_GET.format(reach=""),
+        OWN_TARGET + RESOURCE_GET.format(reach=RESOURCE_REACH),
+    ),
+    "context get (public)": (
+        PUBLIC_TARGET + CONTEXT_GET.format(reach=""),
+        PUBLIC_TARGET + CONTEXT_GET.format(reach=CONTEXT_REACH),
+    ),
+    "resource get (public)": (
+        PUBLIC_TARGET + RESOURCE_GET.format(reach=""),
+        PUBLIC_TARGET + RESOURCE_GET.format(reach=RESOURCE_REACH),
+    ),
     "list_visible": LIST_VISIBLE,
     "list_visible (set)": (LIST_VISIBLE, LIST_VISIBLE_SET),
     "resources_visible_to": "SELECT count(*) FROM resources_visible_to($1)",
@@ -350,7 +358,11 @@ def measure(driver, handles, samples):
     for name, sql in DOORS.items():
         base_sql, head_sql = sql if isinstance(sql, tuple) else (sql, sql)
         qa, qb = (
-            f"SELECT count(*)::text FROM ({s}) door".replace("'", "''")
+            # count(door.*), not count(*): a whole-row reference uses every output column. With
+            # count(*) the planner drops each unused, non-volatile column of the door subquery, so
+            # a STABLE function in a door's SELECT list (reach, a per-context count) never runs
+            # and the door is timed as its WHERE clause alone.
+            f"SELECT count(door.*)::text FROM ({s}) door".replace("'", "''")
             for s in (base_sql, head_sql)
         )
         rows = psql(
