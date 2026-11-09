@@ -49,7 +49,8 @@ ignore = [
     # --target all` reports nothing. It survives in Cargo.lock the way `rsa` does: Cargo records
     # sqlx's full resolution graph and `cargo audit` scans the lock. A sqlx bump does not evict or
     # fix it: the newest sqlx (0.9.0) has `sqlx-sqlite` require libsqlite3-sys >=0.30.1, <0.38.0,
-    # so no released sqlx reaches 0.39.0. No real exposure and no available fix: a standing ignore.
+    # so no released sqlx reaches 0.39.0. No real exposure, and the fix is unreachable from any
+    # released sqlx: a standing ignore, until a sqlx release admits libsqlite3-sys >=0.39.0.
     "RUSTSEC-2026-0459",
 
     # ── FIX-PENDING — a patched version exists; adopting it is a tracked bump ─
