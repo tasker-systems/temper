@@ -72,7 +72,7 @@ async fn ids_resolve_without_the_network() {
     assert!(server
         .received_requests()
         .await
-        .unwrap_or_default()
+        .expect("the mock server records requests")
         .is_empty());
 }
 
@@ -195,5 +195,60 @@ async fn a_listing_failure_is_the_callers_error() {
     assert!(
         matches!(err, PublicWithinPairError::Client(_)),
         "expected Client, got {err:?}"
+    );
+}
+
+/// A failed read of the resolved side's detail is the caller's own error, never "not a team".
+///
+/// FAILS IF a refused detail read is reported as an unresolved ref.
+#[tokio::test]
+async fn a_detail_failure_is_the_callers_error() {
+    let server = MockServer::start().await;
+    let a = Uuid::now_v7();
+    mount_list(&server, serde_json::json!([])).await;
+    Mock::given(method("GET"))
+        .and(path(format!("/api/teams/{a}")))
+        .respond_with(ResponseTemplate::new(403))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let err = test_client(&server.uri())
+        .teams()
+        .resolve_public_within_pair("eng", &a.to_string())
+        .await
+        .expect_err("the anchor's detail was refused");
+    assert!(
+        matches!(err, PublicWithinPairError::Client(_)),
+        "expected Client, got {err:?}"
+    );
+}
+
+/// The `NotATeam` refusal text, which the CLI prints and the MCP prefixes with its act.
+///
+/// FAILS IF the refusal both surfaces speak changes.
+#[tokio::test]
+async fn not_a_team_renders_the_surfaces_refusal() {
+    let server = MockServer::start().await;
+    let t = Uuid::now_v7();
+    mount_list(&server, serde_json::json!([])).await;
+    Mock::given(method("GET"))
+        .and(path(format!("/api/teams/{t}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(detail(
+            t,
+            "eng",
+            serde_json::json!([]),
+            serde_json::json!([]),
+        )))
+        .mount(&server)
+        .await;
+    let err = test_client(&server.uri())
+        .teams()
+        .resolve_public_within_pair(&t.to_string(), "+ghost")
+        .await
+        .expect_err("no readable team is called ghost");
+    assert_eq!(
+        err.to_string(),
+        "not a team: \"ghost\" (the anchor; expected a team slug, a decorated `slug-<uuid>` ref, \
+         or a team UUID — name a team you are not a member of by its UUID)"
     );
 }

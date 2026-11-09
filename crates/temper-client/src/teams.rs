@@ -518,8 +518,10 @@ fn bare_slug(s: &str) -> String {
     s.strip_prefix('+').unwrap_or(s).to_owned()
 }
 
-/// Which side of a `public_within` pair a ref named.
+/// Which side of a `public_within` pair a ref named. `#[non_exhaustive]`, as published surface, like
+/// [`ClientError`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PublicWithinSide {
     /// The team whose owned contexts the row opens.
     Team,
@@ -537,14 +539,20 @@ impl PublicWithinSide {
     }
 }
 
-/// Why [`TeamsClient::resolve_public_within_pair`] resolved no pair.
+/// Why [`TeamsClient::resolve_public_within_pair`] resolved no pair. `#[non_exhaustive]`, as
+/// published surface, like [`ClientError`]. Its `Display` is the refusal both surfaces speak.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum PublicWithinPairError {
     /// Listing the caller's teams, or reading the resolved side's detail, failed.
     #[error(transparent)]
     Client(#[from] ClientError),
     /// The ref matched no team the caller can read. `slug` is the ref without its `+` prefix.
-    #[error("not a team: {slug:?} (the {})", side.as_str())]
+    #[error(
+        "not a team: {slug:?} (the {}; expected a team slug, a decorated `slug-<uuid>` ref, or a \
+         team UUID — name a team you are not a member of by its UUID)",
+        side.as_str()
+    )]
     NotATeam {
         side: PublicWithinSide,
         slug: String,

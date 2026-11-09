@@ -487,17 +487,10 @@ async fn resolve_public_within_pair(
     {
         Ok(pair) => Ok(pair),
         Err(PublicWithinPairError::Client(e)) => Err(e).across_auth(|e| map_team_err(act, e)),
-        Err(PublicWithinPairError::NotATeam { side, slug }) => {
-            Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "{act}: not a team: {slug:?} (the {}; expected a team slug, a decorated \
-                     `slug-<uuid>` ref, or a team UUID — name a team you are not a member of by \
-                     its UUID)",
-                    side.as_str()
-                ),
-                None,
-            ))
-        }
+        Err(other) => Err(rmcp::ErrorData::invalid_params(
+            format!("{act}: {other}"),
+            None,
+        )),
     }
 }
 

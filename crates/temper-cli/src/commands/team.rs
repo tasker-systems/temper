@@ -563,11 +563,7 @@ pub async fn resolve_public_within_pair(
         .await
         .map_err(|e| match e {
             PublicWithinPairError::Client(e) => crate::actions::runtime::client_err_to_temper(e),
-            PublicWithinPairError::NotATeam { side, slug } => TemperError::Api(format!(
-                "not a team: {slug:?} (the {}; expected a team slug, a decorated `slug-<uuid>` \
-                 ref, or a team UUID — name a team you are not a member of by its UUID)",
-                side.as_str()
-            )),
+            other => TemperError::Api(other.to_string()),
         })
 }
 
