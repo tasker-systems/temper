@@ -41,6 +41,15 @@ ignore = [
     # it", and the ignore is exactly what keeps the gate from blocking on it.
     "RUSTSEC-2023-0071",
 
+    # libsqlite3-sys 0.30.1 (RUSTSEC-2026-0459, the C SQLite CVE it bundles; fixed in >=0.39.0).
+    # Not compiled into temper: it is a dependency of `sqlx-sqlite` only, and we enable sqlx's
+    # `postgres` backend and no other, so `cargo tree -i libsqlite3-sys --workspace --all-features
+    # --target all` reports nothing. It survives in Cargo.lock the way `rsa` does: Cargo records
+    # sqlx's full resolution graph and `cargo audit` scans the lock. A sqlx bump does not evict or
+    # fix it: the newest sqlx (0.9.0) has `sqlx-sqlite` require libsqlite3-sys >=0.30.1, <0.38.0,
+    # so no released sqlx reaches 0.39.0. No real exposure and no available fix: a standing ignore.
+    "RUSTSEC-2026-0459",
+
     # ── FIX-PENDING — a patched version exists; adopting it is a tracked bump ─
     # crossbeam-epoch 0.9.18 → >=0.9.20 (invalid-pointer deref in Debug impl).
     "RUSTSEC-2026-0204",
