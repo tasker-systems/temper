@@ -13,7 +13,8 @@
  * upstream (`API_BASE_URL`, read at runtime from `$env/dynamic/private`). The
  * UI's own server-side data loaders already use `API_BASE_URL` (api+mcp are
  * co-deployed on one host), so a single env var configures both. This keeps the
- * UI single-origin (cookies/headers pass straight through) and fully env-driven.
+ * UI single-origin (request headers pass through, minus the browser's cookies)
+ * and fully env-driven.
  *
  * `isProxiedPath` / `buildUpstreamUrl` are pure and unit-tested; `proxyRequest`
  * owns the env read and the fetch.
@@ -208,6 +209,10 @@ async function forwardOnce(
 	if (marker) {
 		outbound.headers.set(EDGE_PROXY_HEADER, marker);
 	}
+	// The browser's cookies for this origin include the UI's own encrypted session and PKCE
+	// cookies, which are the UI's alone. The upstream authenticates by bearer and reads no cookie,
+	// so the header is dropped whole rather than filtered by name.
+	outbound.headers.delete('cookie');
 	// Armed only once the outbound request is fully built, so nothing above can leave it running.
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -232,7 +237,8 @@ async function forwardOnce(
 
 /**
  * Forward a request to `upstreamBase`, preserving method, headers (incl.
- * cookies/authorization), body, and query, and relaying the upstream response.
+ * authorization, but never `cookie`), body, and query, and relaying the upstream
+ * response.
  *
  * When the upstream cannot be reached, this returns a **502** (connection
  * failure) or **504** (connect timeout) rather than letting the `fetch`

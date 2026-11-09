@@ -27,6 +27,20 @@ function pastDate(secondsAgo = 300): Date {
   return new Date(Date.now() - secondsAgo * 1000);
 }
 
+/** Consumes a code that the test expects to be live, failing loudly on a refusal. */
+async function consumeLive(
+  db: NeonClient,
+  code: string,
+  verifier: string,
+  clientId: string,
+): Promise<NonNullable<Awaited<ReturnType<typeof consumeCode>>>> {
+  const consumed = await consumeCode(db, code, verifier, clientId);
+  if (consumed === null) {
+    throw new Error(`expected ${code} to be redeemable`);
+  }
+  return consumed;
+}
+
 describe("oauth flow store", () => {
   let sql: postgres.Sql;
   let db: NeonClient;
@@ -138,7 +152,7 @@ describe("oauth flow store", () => {
         profileId: null,
       });
 
-      const { claims } = await consumeCode(db, "auth-code-3", CODE_VERIFIER, "client-1");
+      const { claims } = await consumeLive(db, "auth-code-3", CODE_VERIFIER, "client-1");
 
       expect(claims.sub).toBe(CLAIMS.sub);
       expect(claims.email).toBe(CLAIMS.email);
@@ -157,12 +171,12 @@ describe("oauth flow store", () => {
         profileId: null,
       });
 
-      const { audience } = await consumeCode(db, "auth-code-3b", CODE_VERIFIER, "client-1");
+      const { audience } = await consumeLive(db, "auth-code-3b", CODE_VERIFIER, "client-1");
 
       expect(audience).toBe("https://api.example.com");
     });
 
-    it("throws on a second consumption of the same code (single-use)", async () => {
+    it("refuses a second consumption of the same code (single-use) as null", async () => {
       await seedPendingFlow("relay-4");
       await bindCodeToFlow(db, "relay-4", {
         code: "auth-code-4",
@@ -171,12 +185,14 @@ describe("oauth flow store", () => {
         profileId: null,
       });
 
-      await consumeCode(db, "auth-code-4", CODE_VERIFIER, "client-1");
+      await consumeLive(db, "auth-code-4", CODE_VERIFIER, "client-1");
 
-      await expect(consumeCode(db, "auth-code-4", CODE_VERIFIER, "client-1")).rejects.toThrow();
+      // `null`, not a throw: a throw is reserved for the store failing to answer, which the token
+      // endpoint reports as `temporarily_unavailable` rather than as a dead grant.
+      expect(await consumeCode(db, "auth-code-4", CODE_VERIFIER, "client-1")).toBeNull();
     });
 
-    it("throws on a wrong verifier without burning the code", async () => {
+    it("refuses a wrong verifier without burning the code", async () => {
       await seedPendingFlow("relay-5");
       await bindCodeToFlow(db, "relay-5", {
         code: "auth-code-5",
@@ -185,14 +201,14 @@ describe("oauth flow store", () => {
         profileId: null,
       });
 
-      await expect(consumeCode(db, "auth-code-5", "wrong-verifier", "client-1")).rejects.toThrow();
+      expect(await consumeCode(db, "auth-code-5", "wrong-verifier", "client-1")).toBeNull();
 
       // Still consumable afterward with the right verifier.
-      const { claims } = await consumeCode(db, "auth-code-5", CODE_VERIFIER, "client-1");
+      const { claims } = await consumeLive(db, "auth-code-5", CODE_VERIFIER, "client-1");
       expect(claims.sub).toBe(CLAIMS.sub);
     });
 
-    it("throws on an expired code", async () => {
+    it("refuses an expired code", async () => {
       await seedPendingFlow("relay-6");
       await bindCodeToFlow(db, "relay-6", {
         code: "auth-code-6",
@@ -201,10 +217,10 @@ describe("oauth flow store", () => {
         profileId: null,
       });
 
-      await expect(consumeCode(db, "auth-code-6", CODE_VERIFIER, "client-1")).rejects.toThrow();
+      expect(await consumeCode(db, "auth-code-6", CODE_VERIFIER, "client-1")).toBeNull();
     });
 
-    it("throws when the code is redeemed with the wrong client_id (M5)", async () => {
+    it("refuses a code redeemed with the wrong client_id (M5)", async () => {
       await seedPendingFlow("relay-7");
       await bindCodeToFlow(db, "relay-7", {
         code: "auth-code-7",
@@ -213,12 +229,10 @@ describe("oauth flow store", () => {
         profileId: null,
       });
 
-      await expect(
-        consumeCode(db, "auth-code-7", CODE_VERIFIER, "some-other-client"),
-      ).rejects.toThrow();
+      expect(await consumeCode(db, "auth-code-7", CODE_VERIFIER, "some-other-client")).toBeNull();
 
       // Still consumable afterward by the client it was actually issued to.
-      const { claims } = await consumeCode(db, "auth-code-7", CODE_VERIFIER, "client-1");
+      const { claims } = await consumeLive(db, "auth-code-7", CODE_VERIFIER, "client-1");
       expect(claims.sub).toBe(CLAIMS.sub);
     });
   });

@@ -16,6 +16,9 @@
 	let loading = $state(false);
 	let failed = $state(false);
 	let debounceTimer: ReturnType<typeof setTimeout>;
+	// The read whose answer the palette is waiting for. A newer query aborts it, so a slow earlier
+	// answer can never land over a later one.
+	let inFlight: AbortController | null = null;
 
 	// D7 — the palette poses single questions. A reader who typed several gets a decline that
 	// says so, never a narrower answer to whichever part the door happened to match. The rule
@@ -54,6 +57,9 @@
 	export function toggle() {
 		open = !open;
 		if (open) {
+			inFlight?.abort();
+			inFlight = null;
+			loading = false;
 			query = '';
 			answer = null;
 			exactMode = false;
@@ -63,30 +69,36 @@
 	}
 
 	async function search(q: string) {
+		inFlight?.abort();
+		inFlight = null;
 		if (!q.trim() || namesSeveralQuestions(q)) {
 			answer = null;
 			failed = false;
 			focused = 0;
+			loading = false;
 			return;
 		}
+		const request = new AbortController();
+		inFlight = request;
 		loading = true;
 		try {
 			const resp = await fetch('/_internal/search', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ q }),
+				signal: request.signal,
 			});
-			if (!resp.ok) {
-				failed = true;
-				answer = null;
-			} else {
-				failed = false;
-				answer = await resp.json();
-			}
+			const body: SearchResponse | null = resp.ok ? await resp.json() : null;
+			// Superseded while waiting: the newer query owns the palette's state.
+			if (request.signal.aborted) return;
+			failed = !resp.ok;
+			answer = body;
 		} catch {
+			if (request.signal.aborted) return;
 			failed = true;
 			answer = null;
 		}
+		inFlight = null;
 		focused = 0;
 		loading = false;
 	}

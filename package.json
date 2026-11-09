@@ -3,7 +3,6 @@
   "workspaces": ["packages/temper-cloud", "packages/temper-ui"],
   "devDependencies": {
     "@types/node": "^22",
-    "@vercel/blob": "^2",
     "typescript": "^5.8"
   },
   "overrides": {

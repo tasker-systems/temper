@@ -75,7 +75,6 @@
 	<div class="label">Data artifacts · {rows.length}{paged ? ' on this page' : ''}</div>
 	<p class="bound" data-testid="omission">{omission}</p>
 	{#each rows as artifact (artifact.artifact_id)}
-		{@const content = contentHtml(artifact.content)}
 		<div class="artifact" class:folded={artifact.is_folded}>
 			<button
 				class="head"
@@ -94,6 +93,7 @@
 			</div>
 			<div class="meta">{relativeTime(artifact.created)}</div>
 			{#if openArtifact === artifact.artifact_id}
+				{@const content = contentHtml(artifact.content)}
 				<dl class="meta-table">
 					{#each metadataRows(artifact) as row (row.key)}
 						<div><dt>{row.key}</dt><dd>{row.value}</dd></div>

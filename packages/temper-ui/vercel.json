@@ -1,5 +1,5 @@
 {
-	"installCommand": "bun install",
+	"installCommand": "bun install --frozen-lockfile",
 	"ignoreCommand": "sh \"$(git rev-parse --show-toplevel)/scripts/vercel-ignore-build.sh\" temper-ui",
 	"redirects": [
 		{ "source": "/docs", "destination": "/using-temper", "permanent": true },
