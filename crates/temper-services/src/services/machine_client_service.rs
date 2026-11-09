@@ -216,7 +216,36 @@ pub async fn revoke(pool: &PgPool, id: Uuid, authed: &HumanPrincipal) -> ApiResu
     let existing = get(pool, id).await?;
     // `Some` only for a system admin. Holding the proof is what lets the standing arm below run.
     let admin = Principal::Human(authed).system_admin(pool).await?;
+    let subject = ProfileId::from(existing.profile_id);
 
+    // One transaction for the credential and, for an admin, the standing arm, so a refusal of the
+    // standing arm never leaves the credential half of the act committed. The authority is decided
+    // again on it, before any write:
+    // - for an admin, the subject's standing row is locked first (the order every standing act
+    //   takes), then the admin's standing is asked again under the governance lock. An admin
+    //   demoted since the pool check is refused the whole act, an owner of the team included; a
+    //   retry decides on the owner arm.
+    // - otherwise, the owner arm is asked again under the owning team's row lock (the lock every
+    //   membership writer takes): a caller who passed the pool check as an admin and was demoted
+    //   before `admin` was read, or an owner removed since, is refused as a missing row is.
+    let mut tx = pool.begin().await?;
+    if let Some(admin) = &admin {
+        standing_service::lock_conn(&mut tx, subject).await?;
+        access_service::still_admin(&mut tx, admin, Some(subject)).await?;
+    } else {
+        let owns = match existing.team_id {
+            Some(team_id) => {
+                crate::authz::team_membership::lock_team(&mut tx, team_id).await?
+                    && crate::services::team_service::role_on_team_on(&mut tx, team_id, revoker)
+                        .await?
+                        == Some(temper_core::types::team::TeamRole::Owner)
+            }
+            None => false,
+        };
+        if !owns {
+            return Err(ApiError::NotFound(MACHINE_CLIENT_REFUSAL.to_string()));
+        }
+    }
     sqlx::query!(
         r#"UPDATE kb_machine_clients
               SET revoked_at = now(), revoked_by_profile_id = $2
@@ -224,7 +253,7 @@ pub async fn revoke(pool: &PgPool, id: Uuid, authed: &HumanPrincipal) -> ApiResu
         id,
         *revoker,
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     // D17 — for an admin, one revocation fact, not two that can drift. `revoked_at` is an
@@ -234,19 +263,20 @@ pub async fn revoke(pool: &PgPool, id: Uuid, authed: &HumanPrincipal) -> ApiResu
     //
     // Load-first, not fire-and-swallow: Revoke is legal ONLY from `Approved` (transition.rs), and a
     // machine is born `Denied` (D11) and may never have been approved. Firing unconditionally would
-    // fail the credential revocation on that illegal cell — but the credential is what the operator
-    // asked to kill, and it must succeed regardless. Routing through `access_service::admin_revoke`
+    // fail the credential revocation on that illegal cell, and the credential is what the operator
+    // asked to kill. A standing arm that does run and is refused (the admin's re-check under its
+    // locks) rolls the credential back with it: the act is one, and its answer is the refusal.
+    // Routing through `access_service::admin_revoke`
     // means the act carries the admin's own proof, and `standing_service::apply` brings the demotion
     // hook and the typed refusal with it. Grants and memberships are deliberately left intact (D11):
     // Revoke denies ADMISSION, which sits above them, so a later rebind still cannot silently
     // resurrect them.
     if let Some(admin) = admin {
-        let subject = ProfileId::from(existing.profile_id);
-        if !has_live_credential(pool, subject).await?
-            && standing_service::load(pool, subject).await? == Some(Standing::Approved)
+        if !has_live_credential(&mut tx, subject).await?
+            && standing_service::load_conn(&mut tx, subject).await? == Some(Standing::Approved)
         {
-            access_service::admin_revoke(
-                pool,
+            access_service::admin_revoke_on(
+                &mut tx,
                 &admin,
                 subject,
                 format!("machine client {} revoked", existing.client_id),
@@ -254,19 +284,20 @@ pub async fn revoke(pool: &PgPool, id: Uuid, authed: &HumanPrincipal) -> ApiResu
             .await?;
         }
     }
+    tx.commit().await?;
 
     get(pool, id).await
 }
 
 /// Whether any credential on this agent profile is still live.
-async fn has_live_credential(pool: &PgPool, profile: ProfileId) -> ApiResult<bool> {
+async fn has_live_credential(conn: &mut sqlx::PgConnection, profile: ProfileId) -> ApiResult<bool> {
     Ok(sqlx::query_scalar!(
         r#"SELECT EXISTS (
                SELECT 1 FROM kb_machine_clients WHERE profile_id = $1 AND revoked_at IS NULL
            ) AS "live!""#,
         *profile,
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await?)
 }
 

@@ -28,8 +28,8 @@ is in flight. No schema change and no response shape change. Witnesses: the door
 `crates/temper-services/tests/admin_recheck_doors_test.rs`, whose in-flight race fails on each door
 without the re-check (the committed-first race fails without it only where the admin proof is minted
 before the demotion: set_auto_join and the join-request decision), and
-`a_revoke_of_the_reviewer_and_the_decision_never_deadlock` there for the lock order. Out of scope,
-still deciding on the pool proof alone: the standing and governance acts in access_service (approve,
-revoke, deactivate, reactivate, promote, demote), reconcile_auto_join and close_review_request. Release
+`a_revoke_of_the_reviewer_and_the_decision_never_deadlock` there for the lock order. The standing and
+governance acts in access_service get the same re-check in
+admin-standing-acts-recheck-the-actor. Release
 relevance: signal-only.
 '''
