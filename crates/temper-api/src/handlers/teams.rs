@@ -2,8 +2,9 @@
 //! may take), dispatch one `team_service` call, return the typed row. Service-direct (no Backend-trait
 //! command, no event emission) per org-provisioning spec §2.6.
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use axum::Json;
 use uuid::Uuid;
 
@@ -11,11 +12,11 @@ use crate::middleware::auth::{AnyPrincipal, AuthUser};
 use temper_core::types::ids::ProfileId;
 use temper_core::types::reassign::RemoveMemberOutcome;
 use temper_core::types::team::{
-    AddMemberRequest, AttachChildOutcome, ChangeRoleRequest, PublicWithinOutcome,
-    PublicWithinPolicyOutcome, PublicWithinPolicyRequest, PublicWithinRowRef,
+    AddMemberRequest, AttachChildOutcome, ChangeRoleRequest, PublicWithinEffects,
+    PublicWithinOutcome, PublicWithinPolicyOutcome, PublicWithinPolicyRequest, PublicWithinRowRef,
     RenameTeamSlugOutcome, RenameTeamSlugRequest, ReparentOutcome, ReparentRequest,
-    RestoreTeamOutcome, SetAutoJoinOutcome, SetAutoJoinRequest, TeamCreateRequest, TeamDetail,
-    TeamMemberRow, TeamRow, TeamUpdateRequest,
+    RestoreTeamOutcome, SetAutoJoinOutcome, SetAutoJoinRequest, TeamActAnswerQuery,
+    TeamCreateRequest, TeamDetail, TeamMemberRow, TeamRow, TeamUpdateRequest,
 };
 use temper_services::error::ApiResult;
 use temper_services::services::team_service;
@@ -42,15 +43,21 @@ pub async fn list(
 }
 
 /// Create a team
+///
+/// With `?answer=effects` the row also carries `public_within` (what the new team's parent links did
+/// to `public_within` rows) and `public_within_in_reach` (the effective rows the new team's roster
+/// reads through its parents), each row named only to a caller who manages its team or anchor, or is
+/// a system admin, and counted otherwise. Without it the answer is the row alone.
 #[utoipa::path(
     post,
     operation_id = "create_team",
     path = "/api/teams",
     tag = "Teams",
+    params(TeamActAnswerQuery),
     security(("bearer_auth" = [])),
     request_body = TeamCreateRequest,
     responses(
-        (status = 201, description = "Team created", body = TeamRow),
+        (status = 201, description = "Team created (with `?answer=effects`, carrying `public_within` and `public_within_in_reach`)", body = TeamRow),
         (status = 400, description = "The `personal-` slug prefix is reserved for personal teams; the parent is a personal team, which takes no children; `auto_join_role` is above `member` (it may be `member` or `watcher`: a role that governs a team is granted by a person); or the caller is a machine principal (a team's creator becomes its owner, and a machine never governs)"),
         (status = 403, description = "Forbidden (a child requires owner/maintainer on the parent, and a system admin when the parent is temper-system or the gating team; auto_join_role requires admin); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 409, description = "Team slug already exists"),
@@ -59,9 +66,17 @@ pub async fn list(
 pub async fn create(
     State(state): State<AppState>,
     auth: AuthUser,
+    Query(answer): Query<TeamActAnswerQuery>,
     Json(body): Json<TeamCreateRequest>,
 ) -> ApiResult<(StatusCode, Json<TeamRow>)> {
-    let row = team_service::create_team(&state.pool, &auth.0, &body).await?;
+    if !answer.wants_effects() {
+        let row = team_service::create_team(&state.pool, &auth.0, &body).await?;
+        return Ok((StatusCode::CREATED, Json(row)));
+    }
+    let created = team_service::create_team_with_effects(&state.pool, &auth.0, &body).await?;
+    let mut row = created.team;
+    row.public_within = Some(created.public_within);
+    row.public_within_in_reach = Some(created.public_within_in_reach);
     Ok((StatusCode::CREATED, Json(row)))
 }
 
@@ -140,14 +155,19 @@ pub async fn update(
 }
 
 /// Delete a team
+///
+/// With `?answer=effects` the answer is `200` with what the delete did to `public_within` rows (rows
+/// over or under the team stop conferring), each named only to a caller who manages its team or
+/// anchor, or is a system admin, and counted otherwise. Without it the answer is `204`.
 #[utoipa::path(
     delete,
     operation_id = "delete_team",
     path = "/api/teams/{id}",
     tag = "Teams",
-    params(("id" = Uuid, Path, description = "Team ID")),
+    params(("id" = Uuid, Path, description = "Team ID"), TeamActAnswerQuery),
     security(("bearer_auth" = [])),
     responses(
+        (status = 200, description = "Team soft-deleted; asked with `?answer=effects`", body = PublicWithinEffects),
         (status = 204, description = "Team soft-deleted"),
         (status = 403, description = "Forbidden (caller is neither the owner nor a system admin; on temper-system or the gating team, not a system admin; on a personal team, not its owner, a system admin included); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 404, description = "Team not found or already soft-deleted"),
@@ -158,9 +178,20 @@ pub async fn delete(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(team_id): Path<Uuid>,
-) -> ApiResult<StatusCode> {
-    team_service::delete_team(&state.pool, &auth.0, team_id).await?;
-    Ok(StatusCode::NO_CONTENT)
+    Query(answer): Query<TeamActAnswerQuery>,
+) -> ApiResult<Response> {
+    let effects = team_service::delete_team(&state.pool, &auth.0, team_id).await?;
+    Ok(effects_or_no_content(answer, effects))
+}
+
+/// The answer of an act whose default is `204`: `200` with its `public_within` effects when the
+/// caller asked for them, `204` otherwise.
+fn effects_or_no_content(answer: TeamActAnswerQuery, effects: PublicWithinEffects) -> Response {
+    if answer.wants_effects() {
+        (StatusCode::OK, Json(effects)).into_response()
+    } else {
+        StatusCode::NO_CONTENT.into_response()
+    }
 }
 
 /// Remove a member from a team
@@ -224,7 +255,10 @@ pub async fn change_role(
 /// Removes the parent link, so the child's members stop reaching what is attached to this team and
 /// its ancestors. The child and its roster survive; only this link is cut. A manager of the parent
 /// or of the child may detach (a child's managers may leave any parent). Recorded on the admin
-/// ledger as `team_parent_link_changed`.
+/// ledger as `team_parent_link_changed`. With `?answer=effects` the answer is `200` with what the
+/// detach did to `public_within` rows (a row whose anchor is no longer above its team by any path is
+/// deleted, `lapsed`), each named only to a caller who manages its team or anchor, or is a system
+/// admin, and counted otherwise. Without it the answer is `204`.
 #[utoipa::path(
     delete,
     operation_id = "detach_child_team",
@@ -233,9 +267,11 @@ pub async fn change_role(
     params(
         ("id" = Uuid, Path, description = "Parent team ID"),
         ("child_id" = Uuid, Path, description = "Child team ID"),
+        TeamActAnswerQuery,
     ),
     security(("bearer_auth" = [])),
     responses(
+        (status = 200, description = "Child detached; asked with `?answer=effects`", body = PublicWithinEffects),
         (status = 204, description = "Child detached"),
         (status = 403, description = "Forbidden: the caller manages neither the child team nor the parent team (neither arm acts on temper-system or the gating team) and is not a system admin, or the child is a personal team (nobody detaches one); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 404, description = "That team is not a child of this team; told only to a caller who may detach it"),
@@ -245,9 +281,10 @@ pub async fn detach_child(
     State(state): State<AppState>,
     auth: AuthUser,
     Path((team_id, child_id)): Path<(Uuid, Uuid)>,
-) -> ApiResult<StatusCode> {
-    team_service::detach_child(&state.pool, &auth.0, team_id, child_id).await?;
-    Ok(StatusCode::NO_CONTENT)
+    Query(answer): Query<TeamActAnswerQuery>,
+) -> ApiResult<Response> {
+    let effects = team_service::detach_child(&state.pool, &auth.0, team_id, child_id).await?;
+    Ok(effects_or_no_content(answer, effects))
 }
 
 /// Attach a child team under this team
@@ -270,7 +307,7 @@ pub async fn detach_child(
     responses(
         (status = 200, description = "Linked, or the link already existed", body = AttachChildOutcome),
         (status = 400, description = "A personal team on either side, temper-system as the child, or the team as its own parent"),
-        (status = 403, description = "Forbidden: the caller does not manage both teams, or the parent or the child is temper-system or the gating team, or the child is an auto-join team, and the caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 403, description = "Forbidden: the caller does not manage both teams, or the parent or the child is temper-system or the gating team, or the child or any team below it (live or soft-deleted) is an auto-join team or the gating team, and the caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 404, description = "Either team does not exist or is soft-deleted; told only to a caller who may manage both"),
         (status = 409, description = "The link would make a team its own ancestor"),
     )
@@ -302,7 +339,7 @@ pub async fn attach_child(
     responses(
         (status = 200, description = "Moved", body = ReparentOutcome),
         (status = 400, description = "`from` and `to` are the same team, or a structural refusal (a personal team, temper-system as the child)"),
-        (status = 403, description = "Forbidden: the caller does not manage this team, or does not manage `to` (an unknown `to` included), or `to` or this team is temper-system or the gating team, or this team is an auto-join team, and the caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 403, description = "Forbidden: the caller does not manage this team, or does not manage `to` (an unknown `to` included), or `to` or this team is temper-system or the gating team, or this team or any team below it (live or soft-deleted) is an auto-join team or the gating team, and the caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 404, description = "`from` does not resolve (`to` only to a system admin), a team is soft-deleted, or `from` is not a parent of this team; told only to a caller who manages this team"),
         (status = 409, description = "The move would make a team its own ancestor; nothing changed"),
     )
@@ -333,7 +370,7 @@ pub async fn reparent(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Restored", body = RestoreTeamOutcome),
-        (status = 403, description = "Forbidden: the caller is not the team's owner or a system admin (temper-system, the gating team or an auto-join team: not a system admin; a personal team: not its owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 403, description = "Forbidden: the caller is not the team's owner or a system admin (not a system admin: temper-system or the gating team, a team that is or has below it, live or soft-deleted, an auto-join team or the gating team, or a team that keeps a link to temper-system or the gating team, live or soft-deleted, unless it is a personal team; a personal team: not its owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 404, description = "The team does not exist or is not deleted"),
     )
 )]

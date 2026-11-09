@@ -787,6 +787,93 @@ async fn anchor_subtree_holds_pool_counts_live_pools_only(pool: PgPool) {
     );
 }
 
+/// anchor_subtree_holds_pool walks up from each pool team; it answers exactly what the downward
+/// definition it replaced answers (the anchor itself, whatever its liveness, or any team in
+/// team_live_descendants(anchor) is the root, the gating team or an auto-join team), for every
+/// team as the anchor, through layouts that move pools, kill teams on and off the path, and kill
+/// the anchor and the pool themselves.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_upward_pool_check_answers_as_the_downward_one(pool: PgPool) {
+    let w = world(&pool).await;
+    let mid = team(&pool, "eng-mid", &[w.eng]).await;
+    let leaf = team(&pool, "eng-leaf", &[mid, w.ops]).await;
+    let mut checked = 0;
+    let check = |label: &'static str| {
+        let pool = pool.clone();
+        async move {
+            let wrong: Vec<String> = sqlx::query_scalar(
+                "SELECT t.slug FROM kb_teams t \
+                  WHERE anchor_subtree_holds_pool(t.id) IS DISTINCT FROM EXISTS ( \
+                        SELECT 1 FROM kb_teams p \
+                         WHERE (p.id = t.id \
+                                OR p.id IN (SELECT d.team_id FROM team_live_descendants(t.id) d)) \
+                           AND ( p.auto_join_role IS NOT NULL \
+                              OR p.slug = 'temper-system' \
+                              OR p.slug = (SELECT s.gating_team_slug FROM kb_system_settings s \
+                                            WHERE s.id = 1)))",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+            assert!(wrong.is_empty(), "{label}: {wrong:?}");
+            let teams: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_teams")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            teams
+        }
+    };
+    let auto_join = |team: Uuid, on: bool| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(
+                "UPDATE kb_teams SET auto_join_role = CASE WHEN $2 THEN 'member'::team_role END \
+                  WHERE id = $1",
+            )
+            .bind(team)
+            .bind(on)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+    };
+    let gating = |slug: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query("UPDATE kb_system_settings SET gating_team_slug = $1 WHERE id = 1")
+                .bind(slug)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+    };
+
+    checked += check("no pool").await;
+    auto_join(leaf, true).await;
+    checked += check("an auto-join leaf under two parents").await;
+    set_team_live(&pool, mid, false).await;
+    checked += check("a dead team on one path").await;
+    set_team_live(&pool, leaf, false).await;
+    checked += check("the pool dead").await;
+    set_team_live(&pool, leaf, true).await;
+    set_team_live(&pool, w.eng, false).await;
+    checked += check("a dead anchor above the pool").await;
+    set_team_live(&pool, w.eng, true).await;
+    set_team_live(&pool, mid, true).await;
+    auto_join(leaf, false).await;
+    gating("eng-sec-red").await;
+    checked += check("the gating team, three levels down").await;
+    set_team_live(&pool, w.eng_sec, false).await;
+    checked += check("a dead team above the gating team").await;
+    set_team_live(&pool, w.eng_sec, true).await;
+    gating("org").await;
+    auto_join(w.eng, true).await;
+    checked += check("the gating team as an anchor, an auto-join mid-tier").await;
+    set_team_live(&pool, w.org, false).await;
+    checked += check("a dead gating team as the anchor").await;
+    assert!(checked > 0);
+}
+
 /// The machine fence, and the token pin: a person reads with ANY token, a Slack-minted one
 /// included, because the fence is the principal, not the token.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
@@ -2513,6 +2600,267 @@ async fn a_caller_demoted_while_the_open_waits_opens_nothing(pool: PgPool) {
     );
 }
 
+// ── Admin demotion serializes with the admin arm ──────────────────────────────────────────────────
+
+/// Start a demotion of `who` in a transaction left open: the governance row is deleted and locked
+/// until the holder commits. `principal_governance_set` is what `access_service::demote_admin` and
+/// `standing_service::apply` (on Revoke and Deactivate) both run.
+async fn demotion_in_flight(
+    pool: &PgPool,
+    who: Uuid,
+) -> (sqlx::Transaction<'static, sqlx::Postgres>, i32) {
+    let mut holder = pool.begin().await.unwrap();
+    let pid = backend_pid(&mut holder).await;
+    let _: bool = sqlx::query_scalar("SELECT principal_governance_set($1, false, NULL, 'test')")
+        .bind(who)
+        .fetch_one(&mut *holder)
+        .await
+        .unwrap();
+    (holder, pid)
+}
+
+/// Each admin arm (open as the anchor side, close from neither side, the root forbid), with a
+/// demotion of the caller in flight when the door re-checks under its locks: the door waits on the
+/// governance row, and once the demotion commits it is refused and writes nothing. A re-check that
+/// only read the row saw the not-yet-deleted grant, admitted the caller, and committed an admin act
+/// beside a demotion already decided.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_demotion_in_flight_refuses_every_admin_arm(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    // The admin manages T, not the anchor `org`: the admin arm stands in for the anchor side.
+    join(&pool, w.eng_sec, w.admin, "maintainer").await;
+    // A row the admin closes from neither side.
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    let admin = w.admin;
+
+    // Open.
+    let (holder, pid) = demotion_in_flight(&pool, admin).await;
+    let p2 = pool.clone();
+    let (t, a) = (w.eng_sec, w.org);
+    let contender = tokio::spawn(async move { open_by(&p2, admin, t, a).await });
+    await_blocked_by(&pool, pid).await;
+    holder.commit().await.unwrap();
+    let err = contender.await.unwrap().unwrap_err();
+    assert!(matches!(err, ApiError::Forbidden), "open: {err:?}");
+    assert!(!row_exists(&pool, w.eng_sec, w.org).await);
+    test_support::approved_admin(&pool, admin).await;
+
+    // Close, from neither side: the admin leaves T first.
+    sqlx::query("DELETE FROM kb_team_members WHERE team_id = $1 AND profile_id = $2")
+        .bind(w.eng_sec)
+        .bind(admin)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (holder, pid) = demotion_in_flight(&pool, admin).await;
+    let p2 = pool.clone();
+    let (t, a) = (w.eng_sec, w.eng);
+    let contender = tokio::spawn(async move { close_by(&p2, admin, t, a).await });
+    await_blocked_by(&pool, pid).await;
+    holder.commit().await.unwrap();
+    let err = contender.await.unwrap().unwrap_err();
+    assert!(matches!(err, ApiError::Forbidden), "close: {err:?}");
+    assert!(row_exists(&pool, w.eng_sec, w.eng).await);
+    test_support::approved_admin(&pool, admin).await;
+
+    // The forbid on the root, an admin's alone.
+    let (holder, pid) = demotion_in_flight(&pool, admin).await;
+    let p2 = pool.clone();
+    let root = w.root;
+    let contender = tokio::spawn(async move { policy_by(&p2, admin, root, true).await });
+    await_blocked_by(&pool, pid).await;
+    holder.commit().await.unwrap();
+    let err = contender.await.unwrap().unwrap_err();
+    assert!(matches!(err, ApiError::Forbidden), "forbid: {err:?}");
+    assert_eq!(
+        records(&pool, "public_within_policy_changed", w.root, None).await,
+        0
+    );
+    assert!(effective(&pool, w.eng_sec, w.eng).await);
+}
+
+/// The membership doors re-check admin through the same locked read: an admin adding a member to
+/// a team they hold no role on, with their demotion in flight, passes the pool pre-check (a plain
+/// read, which still sees the uncommitted grant), takes the team lock, then waits at the locked
+/// re-check (`MembershipAuthority::resolve` on the transaction), and is refused once the demotion
+/// commits. A re-check that only read the row would admit the admin and write the member.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_demotion_in_flight_refuses_the_admin_arm_of_a_membership_door(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    let newcomer = person(&pool, "newcomer").await;
+    let (holder, pid) = demotion_in_flight(&pool, w.admin).await;
+    let p2 = pool.clone();
+    let (admin, team) = (w.admin, w.sales);
+    let contender = tokio::spawn(async move {
+        team_service::add_member(
+            &p2,
+            &hp(&p2, admin).await,
+            team,
+            &temper_core::types::team::AddMemberRequest {
+                profile_id: newcomer,
+                role: TeamRole::Member,
+            },
+        )
+        .await
+    });
+    await_blocked_by(&pool, pid).await;
+    holder.commit().await.unwrap();
+    let err = contender.await.unwrap().unwrap_err();
+    assert!(
+        matches!(err, ApiError::Forbidden | ApiError::ForbiddenDetail(_)),
+        "{err:?}"
+    );
+    let member: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM kb_team_members WHERE team_id = $1 AND profile_id = $2)",
+    )
+    .bind(w.sales)
+    .bind(newcomer)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!member, "nothing is written");
+}
+
+/// An admin whose demotion is rolled back is admitted once it ends: the door waited on the row, not
+/// on the outcome.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_demotion_rolled_back_admits_the_admin(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    join(&pool, w.eng_sec, w.admin, "maintainer").await;
+    let (holder, pid) = demotion_in_flight(&pool, w.admin).await;
+    let p2 = pool.clone();
+    let (admin, t, a) = (w.admin, w.eng_sec, w.org);
+    let contender = tokio::spawn(async move { open_by(&p2, admin, t, a).await });
+    await_blocked_by(&pool, pid).await;
+    holder.rollback().await.unwrap();
+    contender.await.unwrap().expect("still an admin");
+    assert!(row_exists(&pool, w.eng_sec, w.org).await);
+}
+
+/// A regression pin, true before the locked re-check as well: a demotion committed before the act
+/// is seen by it, and each admin arm refuses. It does not witness the lock; the in-flight tests do.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_demotion_committed_first_is_seen(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    join(&pool, w.eng_sec, w.admin, "maintainer").await;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    let (holder, _) = demotion_in_flight(&pool, w.admin).await;
+    holder.commit().await.unwrap();
+    let err = open_by(&pool, w.admin, w.eng_sec, w.org).await.unwrap_err();
+    assert!(matches!(err, ApiError::Forbidden), "{err:?}");
+    sqlx::query("DELETE FROM kb_team_members WHERE team_id = $1 AND profile_id = $2")
+        .bind(w.eng_sec)
+        .bind(w.admin)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let err = close_by(&pool, w.admin, w.eng_sec, w.eng)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ApiError::Forbidden), "{err:?}");
+    let err = policy_by(&pool, w.admin, w.root, true).await.unwrap_err();
+    assert!(matches!(err, ApiError::Forbidden), "{err:?}");
+}
+
+/// A lock-order check on the demotion writers. The holder stands in for a door that has re-checked:
+/// it takes an open's locks in the open's order (the team rows, the effects lock, then the
+/// governance row `FOR KEY SHARE`, by hand rather than through the door's code) and writes under
+/// them. Every kind of demotion then waits for it rather than deadlocking with it:
+/// `standing_service::apply` on Revoke (its standing row, then the governance delete), the same on
+/// Deactivate, and an operator's plain DELETE of the row. It pins the writers' side of the order; it
+/// does not exercise the door's re-check.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn every_demotion_waits_for_a_door_that_rechecked(pool: PgPool) {
+    use temper_principal::{Act, ActorAuthority};
+    use temper_services::services::standing_service::{self, ApplyStandingParams};
+
+    let d = doors(&pool).await;
+    let w = &d.w;
+    let subjects = [
+        w.admin,
+        person(&pool, "admin-two").await,
+        person(&pool, "admin-three").await,
+    ];
+    for who in subjects {
+        test_support::approved_admin(&pool, who).await;
+    }
+
+    for (i, who) in subjects.into_iter().enumerate() {
+        let mut door = pool.begin().await.unwrap();
+        let pid = backend_pid(&mut door).await;
+        sqlx::query("SELECT _public_within_open_locks($1, $2)")
+            .bind(w.eng_sec)
+            .bind(w.org)
+            .execute(&mut *door)
+            .await
+            .unwrap();
+        let held: Option<Uuid> = sqlx::query_scalar(
+            "SELECT profile_id FROM kb_principal_governance WHERE profile_id = $1 FOR KEY SHARE",
+        )
+        .bind(who)
+        .fetch_optional(&mut *door)
+        .await
+        .unwrap();
+        assert!(held.is_some());
+
+        let p2 = pool.clone();
+        let demotion = tokio::spawn(async move {
+            let act = match i {
+                0 => Some(Act::Revoke {
+                    reason: "test".into(),
+                }),
+                1 => Some(Act::Deactivate),
+                _ => None,
+            };
+            match act {
+                Some(act) => standing_service::apply(
+                    &p2,
+                    ApplyStandingParams {
+                        subject: ProfileId::from(who),
+                        act,
+                        actor: None,
+                        authority: ActorAuthority::Admin,
+                    },
+                )
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+                None => sqlx::query("DELETE FROM kb_principal_governance WHERE profile_id = $1")
+                    .bind(who)
+                    .execute(&p2)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| e.to_string()),
+            }
+        });
+        await_blocked_by(&pool, pid).await;
+        sqlx::query(
+            "INSERT INTO kb_team_public_within (team_id, anchor_id, opened_by, admin_act) \
+             VALUES ($1, $2, $3, true) ON CONFLICT DO NOTHING",
+        )
+        .bind(w.eng_sec)
+        .bind(w.org)
+        .bind(who)
+        .execute(&mut *door)
+        .await
+        .unwrap();
+        door.commit().await.unwrap();
+        demotion
+            .await
+            .unwrap()
+            .expect("the demotion completes after the door");
+        assert!(
+            !access_service::is_system_admin(&pool, ProfileId::from(who))
+                .await
+                .unwrap()
+        );
+    }
+}
+
 /// The race with the instance-wide off, forbid first: a root forbid committed while the open waits
 /// is seen by the open's re-check, and nothing is opened.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
@@ -3062,6 +3410,234 @@ async fn a_hard_deleted_team_records_each_row_before_the_cascade(pool: PgPool) {
     );
 }
 
+async fn hard_delete(pool: &PgPool, teams: &[Uuid]) {
+    sqlx::query("DELETE FROM kb_teams WHERE id = ANY($1)")
+        .bind(teams)
+        .execute(pool)
+        .await
+        .expect("hard delete");
+}
+
+/// Hard-deleting a team between the anchor and the team (naming neither) cuts the anchor off: the
+/// row is deleted and recorded as lapsed by the system, as an unlink's would be. T's other parent
+/// keeps it a team; only the path from the anchor is gone.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_hard_deleted_mid_path_team_lapses_the_rows_it_cut_off(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    join(&pool, w.org, d.both, "owner").await;
+    open_by(&pool, d.both, w.eng_sec, w.org).await.unwrap();
+    assert!(reads(&pool, w.org_only, w.r_t).await);
+
+    hard_delete(&pool, &[w.eng]).await;
+
+    assert!(
+        !row_exists(&pool, w.eng_sec, w.org).await,
+        "the anchor is no longer above the team by any path"
+    );
+    let recs = row_records(&pool, "team_public_within_changed", w.eng_sec, w.org).await;
+    let last = recs.last().expect("a record");
+    assert_eq!(last["act"], "lapsed", "{recs:?}");
+    let emitted_by_system: bool = sqlx::query_scalar(
+        "SELECT p.handle = 'system' FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+           JOIN kb_entities en ON en.id = e.emitter_entity_id JOIN kb_profiles p ON p.id = en.profile_id \
+          WHERE et.name = 'team_public_within_changed' AND e.payload ->> 'act' = 'lapsed' \
+            AND (e.payload ->> 'team_id')::uuid = $1 AND (e.payload ->> 'anchor_id')::uuid = $2",
+    )
+    .bind(w.eng_sec)
+    .bind(w.org)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(emitted_by_system, "the system entity's record");
+    assert!(!reads(&pool, w.org_only, w.r_t).await);
+}
+
+/// Hard-deleting a forbidding team lifts its forbid (spec: a forbid holds until cleared or its team
+/// is hard-deleted), and the row's revival is on the record with cause policy. Hard-deleting a pool
+/// below the anchor revives the rows it made dormant, on the record too.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_hard_delete_that_flips_a_rows_effect_records_it(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    policy_by(&pool, d.ops_owner, w.ops, true).await.unwrap();
+    assert!(!effective(&pool, w.eng_sec, w.eng).await);
+
+    hard_delete(&pool, &[w.ops]).await;
+    assert!(effective(&pool, w.eng_sec, w.eng).await);
+    let recs = row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng).await;
+    let last = recs.last().expect("a record");
+    assert_eq!(
+        (&last["from"], &last["to"], &last["cause"]),
+        (
+            &serde_json::json!("dormant"),
+            &serde_json::json!("effective"),
+            &serde_json::json!("policy")
+        ),
+        "{recs:?}"
+    );
+    assert!(last.get("act").is_none(), "no hard-delete event type");
+    assert!(last.get("act_ref").is_some());
+
+    let admin = test_support::system_admin_proof_for(&pool, w.admin).await;
+    team_service::set_auto_join(&pool, &admin, w.eng_web, Some(TeamRole::Member))
+        .await
+        .unwrap();
+    assert!(!effective(&pool, w.eng_sec, w.eng).await);
+    hard_delete(&pool, &[w.eng_web]).await;
+    assert!(effective(&pool, w.eng_sec, w.eng).await);
+    let recs = row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng).await;
+    assert_eq!(recs.last().unwrap()["to"], "effective", "{recs:?}");
+}
+
+/// The recorded-effect invariant holds across hard deletes, including one statement that deletes a
+/// team on a row's path and a team the row names.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn after_every_hard_delete_the_recorded_effect_equals_the_effect(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    join(&pool, w.org, d.both, "owner").await;
+    join(&pool, w.eng_web, d.both, "owner").await;
+    join(&pool, w.eng_sec_red, d.both, "owner").await;
+    let mut recorded: std::collections::HashMap<(Uuid, Uuid), bool> = Default::default();
+    for (t, a) in [
+        (w.eng_sec, w.eng),
+        (w.eng_sec, w.org),
+        (w.eng_web, w.org),
+        (w.eng_sec_red, w.org),
+        (w.eng_sec_red, w.eng),
+    ] {
+        open_by(&pool, d.both, t, a).await.expect("open");
+        recorded.insert((t, a), effective(&pool, t, a).await);
+    }
+    let mut seen = 0i64;
+    check_recorded_effects(&pool, "opened", &mut recorded, &mut seen).await;
+
+    policy_by(&pool, d.ops_owner, w.ops, true).await.unwrap();
+    check_recorded_effects(&pool, "forbid ops", &mut recorded, &mut seen).await;
+    hard_delete(&pool, &[w.ops]).await;
+    check_recorded_effects(&pool, "hard delete ops", &mut recorded, &mut seen).await;
+    hard_delete(&pool, &[w.eng, w.eng_web]).await;
+    check_recorded_effects(
+        &pool,
+        "hard delete eng and eng-web",
+        &mut recorded,
+        &mut seen,
+    )
+    .await;
+    assert!(recorded.is_empty(), "{recorded:?}");
+}
+
+/// A hard delete waits on the effects lock an open holds: the open committed first is in the
+/// delete's snapshot, so the lapse it causes is recorded, and neither side deadlocks.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_hard_delete_records_a_row_opened_while_it_waited(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+
+    let mut holder = pool.begin().await.unwrap();
+    let pid = backend_pid(&mut holder).await;
+    sqlx::query("SELECT _public_within_effects_lock()")
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO kb_team_public_within (team_id, anchor_id, opened_by) VALUES ($1, $2, $3)",
+    )
+    .bind(w.eng_sec)
+    .bind(w.org)
+    .bind(d.both)
+    .execute(&mut *holder)
+    .await
+    .unwrap();
+
+    let p2 = pool.clone();
+    let eng = w.eng;
+    let contender = tokio::spawn(async move { hard_delete(&p2, &[eng]).await });
+    await_blocked_by(&pool, pid).await;
+    holder.commit().await.unwrap();
+    contender.await.unwrap();
+
+    assert!(!row_exists(&pool, w.eng_sec, w.org).await);
+    let recs = row_records(&pool, "team_public_within_changed", w.eng_sec, w.org).await;
+    assert_eq!(recs.last().unwrap()["act"], "lapsed", "{recs:?}");
+}
+
+/// The other order: an act holding the effects lock deletes a row (as a lapse does) that a hard
+/// delete of the row's team would delete too. The hard delete takes the effects lock before it
+/// touches any public_within row, so it waits, and neither side is aborted as a deadlock.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_hard_delete_waits_for_an_act_before_deleting_a_row(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    let t2 = team(&pool, "eng-tmp", &[w.eng]).await;
+    join(&pool, t2, d.both, "owner").await;
+    open_by(&pool, d.both, t2, w.eng).await.unwrap();
+
+    let mut act = pool.begin().await.unwrap();
+    let pid = backend_pid(&mut act).await;
+    sqlx::query("SELECT _public_within_effects_lock()")
+        .execute(&mut *act)
+        .await
+        .unwrap();
+
+    let p2 = pool.clone();
+    let contender = tokio::spawn(async move {
+        sqlx::query("DELETE FROM kb_teams WHERE id = $1")
+            .bind(t2)
+            .execute(&p2)
+            .await
+    });
+    await_blocked_by(&pool, pid).await;
+    sqlx::query("DELETE FROM kb_team_public_within WHERE team_id = $1 AND anchor_id = $2")
+        .bind(t2)
+        .bind(w.eng)
+        .execute(&mut *act)
+        .await
+        .expect("the act's delete is not aborted");
+    act.commit().await.unwrap();
+    contender
+        .await
+        .unwrap()
+        .expect("the hard delete is not aborted");
+    assert!(!row_exists(&pool, t2, w.eng).await);
+}
+
+/// A kb_teams statement nested inside a hard delete (here, a zero-row delete run by a function in
+/// its WHERE clause) works on its own frame: the outer delete's snapshot survives it, and the row the
+/// outer delete cuts off is deleted as lapsed, not left dormant.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_nested_kb_teams_statement_leaves_the_outer_snapshot_whole(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    join(&pool, w.org, d.both, "owner").await;
+    open_by(&pool, d.both, w.eng_sec, w.org).await.unwrap();
+    let x = team(&pool, "unlinked", &[]).await;
+
+    let mut conn = pool.acquire().await.unwrap();
+    sqlx::query(
+        "CREATE FUNCTION pg_temp.nested() RETURNS boolean LANGUAGE plpgsql AS \
+         $f$ BEGIN DELETE FROM kb_teams WHERE false; RETURN true; END $f$",
+    )
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    sqlx::query("DELETE FROM kb_teams WHERE id = ANY($1) AND pg_temp.nested()")
+        .bind(vec![w.eng, x])
+        .execute(&mut *conn)
+        .await
+        .expect("hard delete");
+    drop(conn);
+
+    assert!(
+        !row_exists(&pool, w.eng_sec, w.org).await,
+        "lapsed, not dormant"
+    );
+    let recs = row_records(&pool, "public_within_effect_changed", w.eng_sec, w.org).await;
+    assert!(recs.is_empty(), "no intermediate flip recorded: {recs:?}");
+}
+
 /// The open's lock set is computed before it waits: a link committed while it waited gives T an
 /// ancestor whose forbid would not serialize with it. The open sees the grown set and refuses with a
 /// retryable conflict, writing nothing.
@@ -3384,6 +3960,171 @@ async fn pointing_the_gating_slug_into_as_subtree_makes_rows_dormant(pool: PgPoo
     );
 }
 
+/// A plain UPDATE of the gating slug, the shape an older binary's settings write or an operator's
+/// SQL takes, records the flips it causes exactly as the settings door does: the row goes dormant
+/// with cause policy and no act, and pointing the slug away revives it, on the record too.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_plain_gating_slug_write_records_what_it_flips(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    let set = |slug: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query("UPDATE kb_system_settings SET gating_team_slug = $1 WHERE id = 1")
+                .bind(slug)
+                .execute(&pool)
+                .await
+                .expect("plain write");
+        }
+    };
+
+    set("eng-web").await;
+    assert!(!effective(&pool, w.eng_sec, w.eng).await);
+    let recs = row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng).await;
+    assert_eq!(recs.len(), 1, "{recs:?}");
+    assert_eq!(recs[0]["to"], "dormant");
+    assert_eq!(recs[0]["cause"], "policy");
+    assert!(recs[0].get("act").is_none());
+    assert!(recs[0].get("act_ref").is_some());
+
+    set("sales").await;
+    assert!(effective(&pool, w.eng_sec, w.eng).await);
+    let recs = row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng).await;
+    assert_eq!(recs.len(), 2, "{recs:?}");
+    assert_eq!(recs[1]["to"], "effective");
+}
+
+/// The writers' mark is the transaction id, so a mark set for a whole session (or a role) is inert:
+/// a plain write on that session is still recorded.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_session_wide_mark_does_not_switch_recording_off(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    for sql in [
+        "SET temper.gating_slug_recorded = 'on'",
+        "UPDATE kb_system_settings SET gating_team_slug = 'eng-web' WHERE id = 1",
+        "RESET temper.gating_slug_recorded",
+    ] {
+        sqlx::query(sql).execute(&mut *conn).await.unwrap();
+    }
+    drop(conn);
+    assert!(!effective(&pool, w.eng_sec, w.eng).await);
+    let recs = row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng).await;
+    assert_eq!(recs.len(), 1, "{recs:?}");
+}
+
+/// Renaming the gating team moves the slug with it and flips nothing, so it records nothing: the
+/// settings row's own record is skipped for a write the rename already recorded, which would
+/// otherwise be judged against the half-renamed state where no team holds the gating slug.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn renaming_the_gating_team_records_no_flip(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    let admin = test_support::system_admin_proof_for(&pool, w.admin).await;
+    access_service::update_system_settings(
+        &pool,
+        &admin,
+        &temper_core::types::admin::UpdateSettingsRequest {
+            gating_team_slug: Some("eng-web".to_string()),
+            instance_name: None,
+            terms_version: None,
+            terms_resource_uri: None,
+        },
+    )
+    .await
+    .expect("repoint");
+    assert_eq!(
+        row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng)
+            .await
+            .len(),
+        1
+    );
+
+    team_service::rename_slug(
+        &pool,
+        &hp(&pool, w.admin).await,
+        w.eng_web,
+        &temper_core::types::team::RenameTeamSlugRequest {
+            slug: "eng-web-2".to_string(),
+        },
+    )
+    .await
+    .expect("rename the gating team");
+    let slug: String =
+        sqlx::query_scalar("SELECT gating_team_slug FROM kb_system_settings WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(slug, "eng-web-2", "the slug moved with the team");
+    assert!(!effective(&pool, w.eng_sec, w.eng).await);
+    let recs = row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng).await;
+    assert_eq!(recs.len(), 1, "no flip recorded: {recs:?}");
+}
+
+/// A plain gating slug write racing a rename of the gating team: the write takes the exclusive
+/// gating lock before it locks the settings row, so it waits for the rename instead of holding the
+/// row the rename needs. Both complete; neither is aborted as a deadlock.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_plain_gating_slug_write_and_a_rename_do_not_deadlock(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'eng-web' WHERE id = 1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let admin_emitter = emitter_of(&pool, w.admin).await;
+
+    // The exclusive gating lock held, as a rename holds it before its settings write, while the
+    // plain write starts.
+    let mut rename = pool.begin().await.unwrap();
+    let pid = backend_pid(&mut rename).await;
+    sqlx::query("SELECT _gating_team_lock(true)")
+        .execute(&mut *rename)
+        .await
+        .unwrap();
+
+    let p2 = pool.clone();
+    let write = tokio::spawn(async move {
+        sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'sales' WHERE id = 1")
+            .execute(&p2)
+            .await
+    });
+    await_blocked_by(&pool, pid).await;
+
+    // The rest of the rename: the team row, the snapshot, then the settings row.
+    let out: String = sqlx::query_scalar(
+        "SELECT _admin_team_lifecycle_write($1, $2, $3, 'renamed', 'eng-web-2', NULL)",
+    )
+    .bind(admin_emitter)
+    .bind(w.admin)
+    .bind(w.eng_web)
+    .fetch_one(&mut *rename)
+    .await
+    .expect("the rename is not aborted");
+    assert_eq!(out, "changed");
+    rename.commit().await.unwrap();
+    write
+        .await
+        .unwrap()
+        .expect("the plain write is not aborted");
+
+    let slug: String =
+        sqlx::query_scalar("SELECT gating_team_slug FROM kb_system_settings WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(slug, "sales");
+    assert!(effective(&pool, w.eng_sec, w.eng).await);
+    let recs = row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng).await;
+    let to: Vec<&str> = recs.iter().map(|r| r["to"].as_str().unwrap()).collect();
+    assert_eq!(to, ["dormant", "effective"], "{recs:?}");
+}
+
 /// A caller who manages only the child of a cut gets counts, never refs: a lapse caused by a
 /// middle team's owner detaching it is counted in their answer, and their own history in the ledger
 /// names no row either.
@@ -3683,6 +4424,22 @@ async fn after_every_structural_act_the_recorded_effect_equals_the_effect(pool: 
         .await
         .unwrap();
     after!("gating into org");
+    team_service::rename_slug(
+        &pool,
+        &ap,
+        w.eng_web,
+        &temper_core::types::team::RenameTeamSlugRequest {
+            slug: "eng-web-2".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    after!("rename the gating team");
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'sales' WHERE id = 1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    after!("plain gating slug write");
 }
 
 /// Fold every public_within record since `seen` into `recorded`, then check it against the rows.
@@ -3709,7 +4466,7 @@ async fn check_recorded_effects(
             rec["anchor_id"].as_str().unwrap().parse::<Uuid>().unwrap(),
         );
         match (rec["type"].as_str().unwrap(), rec["act"].as_str()) {
-            ("team_public_within_changed", Some("lapsed")) => {
+            ("team_public_within_changed", Some("lapsed" | "cascade_deleted" | "closed")) => {
                 recorded.remove(&key);
             }
             ("team_public_within_changed", _) => {}
@@ -3836,5 +4593,191 @@ async fn a_close_committed_first_leaves_no_record_from_a_concurrent_act(pool: Pg
         row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng)
             .await
             .is_empty()
+    );
+}
+
+// ── An opening adds no membership, and a lapsed row stays gone ───────────────────────────────────
+
+/// An authorization refusal (a bare 403 or a detailed one), never some other failure that would
+/// pass for one.
+fn refused<T>(r: &Result<T, ApiError>) -> bool {
+    matches!(r, Err(ApiError::Forbidden | ApiError::ForbiddenDetail(_)))
+}
+
+/// Every `kb_team_members` row, as a sorted set: what an opening, or a read through one, must never
+/// change.
+async fn membership_snapshot(pool: &PgPool) -> Vec<(Uuid, Uuid, String)> {
+    sqlx::query_as(
+        "SELECT team_id, profile_id, role::text FROM kb_team_members \
+          ORDER BY team_id, profile_id, role",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("membership snapshot")
+}
+
+/// An opening confers reading only. Opening `(eng-sec, eng)` and reading T through it leaves
+/// `kb_team_members` exactly as it was, so the reader holds no role on T, and every act that
+/// membership on T authorizes (inviting, adding a member, changing a role, attaching under T) is
+/// refused to them as to any stranger.
+///
+/// FAILS IF an open, or a read through it, writes a membership row, or any act gated on a role on T
+/// admits a reader who reaches T only through the row.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_opening_adds_no_membership_and_admits_no_membership_act(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    let before = membership_snapshot(&pool).await;
+
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    assert_eq!(
+        membership_snapshot(&pool).await,
+        before,
+        "the open writes no membership"
+    );
+
+    // The reader reaches T only through the row.
+    assert!(reads(&pool, w.web_member, w.r_t).await);
+    assert!(!reads_by_membership(&pool, w.web_member, w.r_t).await);
+    assert!(ctx_reads(&pool, w.web_member, w.ctx_t).await);
+    assert_eq!(
+        membership_snapshot(&pool).await,
+        before,
+        "reading through the row writes no membership"
+    );
+
+    // Membership acts on T are refused to the reader, a manager of a team under the anchor included.
+    for who in [w.web_member, w.web_owner] {
+        let p = hp(&pool, who).await;
+        let invite = temper_services::services::invitation_service::create_invitation(
+            &pool,
+            &p,
+            w.eng_sec,
+            temper_services::services::invitation_service::CreateInvitationParams {
+                invited_email: format!("pw-invitee-{who}@example.com"),
+                role: TeamRole::Watcher,
+            },
+        )
+        .await;
+        assert!(refused(&invite), "{who} invites onto T: {invite:?}");
+        let add = team_service::add_member(
+            &pool,
+            &p,
+            w.eng_sec,
+            &temper_core::types::team::AddMemberRequest {
+                profile_id: w.sales_member,
+                role: TeamRole::Watcher,
+            },
+        )
+        .await;
+        assert!(refused(&add), "{who} adds a member to T: {add:?}");
+        let role =
+            team_service::change_role(&pool, &p, w.eng_sec, w.sec_member, TeamRole::Watcher).await;
+        assert!(refused(&role), "{who} changes a role on T: {role:?}");
+        let attach = team_service::attach_child(&pool, &p, w.eng_sec, w.eng_web).await;
+        assert!(refused(&attach), "{who} attaches under T: {attach:?}");
+    }
+    assert_eq!(
+        membership_snapshot(&pool).await,
+        before,
+        "no refused act wrote membership"
+    );
+}
+
+/// The snapshot above catches an open that writes membership: with a trigger standing in for an
+/// open path that enrolls the anchor's readers on T, the same open changes the snapshot. A control
+/// for the witness, so a check that compares nothing cannot pass for one.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_membership_snapshot_catches_an_open_that_enrolls(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    sqlx::query(&format!(
+        "CREATE FUNCTION pw_test_enroll() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN \
+           INSERT INTO kb_team_members (team_id, profile_id, role) \
+           VALUES (NEW.team_id, '{}', 'watcher') ON CONFLICT DO NOTHING; RETURN NEW; END $$",
+        w.web_member
+    ))
+    .execute(&pool)
+    .await
+    .expect("enrolling function");
+    sqlx::query(
+        "CREATE TRIGGER pw_test_enroll AFTER INSERT ON kb_team_public_within \
+         FOR EACH ROW EXECUTE FUNCTION pw_test_enroll()",
+    )
+    .execute(&pool)
+    .await
+    .expect("enrolling trigger");
+
+    let before = membership_snapshot(&pool).await;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    let after = membership_snapshot(&pool).await;
+    assert_ne!(after, before, "the snapshot sees the enrolled row");
+    assert!(after.contains(&(w.eng_sec, w.web_member, "watcher".to_string())));
+    assert!(reads_by_membership(&pool, w.web_member, w.r_t).await);
+}
+
+/// A row that lapsed is never revived by a third party. Detaching T from its only path to the
+/// anchor deletes `(eng-sec, eng)`. A manager of neither side cannot put T back: attaching or moving
+/// T needs a manager of T, so a manager of a team under the anchor (eng-web) and of the anchor's
+/// parent (org) are both refused. A system admin, who manages neither, can attach T back, and that
+/// revives nothing: no row, no reading, no effect record.
+///
+/// FAILS IF a non-manager of T can re-link it, or a re-link by anyone brings the row, the reading or
+/// a `public_within_effect_changed` record back.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_third_party_never_revives_a_lapsed_row(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    assert!(reads(&pool, w.web_member, w.r_t).await);
+
+    // T keeps its second parent (ops), so it lives on; eng is no longer above it by any path.
+    let lapsed = team_service::detach_child(&pool, &hp(&pool, w.sec_owner).await, w.eng, w.eng_sec)
+        .await
+        .expect("T's manager detaches it from eng");
+    assert_eq!(names(&lapsed, "lapsed"), [(w.eng_sec, w.eng)]);
+    assert!(!row_exists(&pool, w.eng_sec, w.eng).await);
+    assert!(!reads(&pool, w.web_member, w.r_t).await);
+    let effect_records = row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng).await;
+
+    // Nobody who does not manage T can re-link it, under the anchor or a team beneath it: a manager
+    // of a team under the anchor, of the anchor's parent, of T's other parent, or of the anchor alone.
+    for (who, parent) in [
+        (w.web_owner, w.eng_web),
+        (w.web_owner, w.eng),
+        (d.org_owner, w.eng),
+        (d.ops_owner, w.eng),
+        (d.eng_owner, w.eng),
+    ] {
+        let p = hp(&pool, who).await;
+        let attach = team_service::attach_child(&pool, &p, parent, w.eng_sec).await;
+        assert!(
+            matches!(attach, Err(ApiError::Forbidden)),
+            "{who} attaches T under {parent}: {attach:?}"
+        );
+        let moved = team_service::reparent(
+            &pool,
+            &p,
+            w.eng_sec,
+            &ReparentRequest {
+                from: w.ops.to_string(),
+                to: parent.to_string(),
+            },
+        )
+        .await;
+        assert!(refused(&moved), "{who} moves T under {parent}: {moved:?}");
+    }
+
+    // A system admin, who manages neither side, re-links T under the anchor: nothing revives.
+    let back = team_service::attach_child(&pool, &hp(&pool, w.admin).await, w.eng, w.eng_sec)
+        .await
+        .expect("an admin attaches T back");
+    assert_eq!(back.public_within, PublicWithinEffects::default());
+    assert!(!row_exists(&pool, w.eng_sec, w.eng).await);
+    assert!(!reads(&pool, w.web_member, w.r_t).await);
+    assert_eq!(
+        row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng).await,
+        effect_records,
+        "no effect change is recorded for a row that no longer exists"
     );
 }

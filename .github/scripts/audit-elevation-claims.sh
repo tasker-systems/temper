@@ -145,7 +145,7 @@ reconcile_regime|block:fn:authorize_reconcile:crates/temper-services/src/backend
 is_system_admin|block:fn:is_system_admin:crates/temper-services/src/services/access_service.rs
 require_manage_on_team|block:fn:require_manage_on_team:crates/temper-services/src/services/team_service.rs
 can_manage|block:fn:can_manage:crates/temper-services/src/services/team_service.rs
-team_membership|file:crates/temper-services/src/authz/team_membership.rs;block:fn:is_gating_team_on:crates/temper-services/src/services/access_service.rs;block:fn:role_on_team_on:crates/temper-services/src/services/team_service.rs;block:fn:require_system_admin_on:crates/temper-services/src/auth/mod.rs;block:fn:authorize_member_act:crates/temper-services/src/services/team_service.rs;block:fn:rank:crates/temper-core/src/types/team.rs;block:fn:exceeds_machine_ceiling:crates/temper-services/src/services/machine_authz.rs;block:const:MAX_MACHINE_TEAM_ROLE:crates/temper-services/src/services/machine_authz.rs
+team_membership|file:crates/temper-services/src/authz/team_membership.rs;block:fn:is_gating_team_on:crates/temper-services/src/services/access_service.rs;block:fn:role_on_team_on:crates/temper-services/src/services/team_service.rs;block:fn:require_system_admin_on:crates/temper-services/src/auth/mod.rs;block:fn:require_system_admin_locked:crates/temper-services/src/auth/mod.rs;block:fn:is_system_admin_locked:crates/temper-services/src/auth/mod.rs;block:fn:authorize_member_act:crates/temper-services/src/services/team_service.rs;block:fn:rank:crates/temper-core/src/types/team.rs;block:fn:exceeds_machine_ceiling:crates/temper-services/src/services/machine_authz.rs;block:const:MAX_MACHINE_TEAM_ROLE:crates/temper-services/src/services/machine_authz.rs
 EOF
 
 # Extract one `fn`/`enum` block by brace counting from its declaration. Anchored on the declaring
@@ -526,6 +526,26 @@ current_gates() {
 # or gating team as the CHILD, and an auto-join team on restore, are a system admin's; the gates
 # (`attach_precheck`/`attach_authority`, `detach_authority`, `restore_authority`) now enforce
 # exactly that, pinned in `team_dag_doors_test`'s review-fix tests.
+# REVIEWED 2026-11-09 (admin demotion serializes with the re-check) — `team_membership`
+# 9e329c322371 -> 645a3a8d9323: the gate WIDENED to fingerprint `require_system_admin_locked` and
+# `is_system_admin_locked`, the locked admin read that `MembershipAuthority::resolve` and
+# `inviter_ceiling` now use on a write's transaction. It takes the caller's (or inviter's)
+# kb_principal_governance row FOR KEY SHARE before it asks `is_system_admin`. A pool pre-check
+# (`MembershipAuthority::resolve_precheck`, `require_system_admin_on`) stays a plain read. The
+# predicate, the refusal and who is admitted are unchanged; a demotion now waits for, or is seen
+# by, a write that re-checked. Every bound claim still describes the gate (who may: a system admin,
+# decided under the write's locks).
+# REVIEWED 2026-11-09 (same change) — `ledger_subject` ca2677683e96 -> b13d3929eb94 and `machine`
+# eb4042c5c963 -> 6d1058f9fa9a: the admin ledger's team-subject arm and the registrar's pool
+# pre-check (`machine_authz`) call `MembershipAuthority::resolve_precheck`, the same arms as
+# `resolve` with the admin arm read plainly. A ledger read decides nothing a demotion could race,
+# and the registrar's write re-checks with `resolve` under each team lock (`from_reach`). The arms,
+# their order and who is admitted are unchanged, so every bound claim still describes its gate.
+# REVIEWED 2026-11-09 (restore and attach refusal texts) — `temper-cli/src/cli.rs` 32 -> 33: the
+# `team restore` help now says restore is a system admin's act alone when the team keeps a link to
+# temper-system or the gating team, or when it or a team below it is an auto-join or the gating
+# team. Read against `team_service::restore_authority`, which refuses a non-admin in exactly those
+# cases (a personal team's root link excepted); the claim describes the gate.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -544,9 +564,9 @@ claim crates/temper-api/src/handlers/resource_erasure.rs 5 is_system_admin
 claim crates/temper-api/src/handlers/resources.rs 2 grant
 claim crates/temper-api/src/handlers/slack_disconnect.rs 1 -
 claim crates/temper-api/src/handlers/subscriptions.rs 7 subscription
-claim crates/temper-api/src/handlers/teams.rs 30 team_membership,is_system_admin
+claim crates/temper-api/src/handlers/teams.rs 32 team_membership,is_system_admin
 claim crates/temper-api/src/openapi.rs 5 is_system_admin,machine,connection,subscription,read_gates,grant,ledger_subject
-claim crates/temper-cli/src/cli.rs 27 team_membership
+claim crates/temper-cli/src/cli.rs 33 team_membership
 claim crates/temper-cli/src/commands/admin.rs 4 -
 claim crates/temper-cli/src/commands/admin_connection.rs 2 connection
 claim crates/temper-cli/src/commands/admin_erasure.rs 1 -
@@ -564,12 +584,12 @@ claim crates/temper-core/src/types/erasure.rs 3 is_system_admin
 claim crates/temper-core/src/types/invitation.rs 3 team_membership
 claim crates/temper-core/src/types/machine.rs 1 machine
 claim crates/temper-core/src/types/subscription.rs 1 subscription
-claim crates/temper-core/src/types/team.rs 14 team_membership,is_system_admin
+claim crates/temper-core/src/types/team.rs 16 team_membership,is_system_admin
 claim crates/temper-mcp/src/service.rs 6 -
 claim crates/temper-mcp/src/tools/cognitive_maps.rs 1 is_system_admin
 claim crates/temper-mcp/src/tools/contexts.rs 2 context_admin,two_sided
 claim crates/temper-mcp/src/tools/reblock.rs 3 -
-claim crates/temper-mcp/src/tools/teams.rs 4 -
+claim crates/temper-mcp/src/tools/teams.rs 5 -
 claim crates/temper-services/src/services/access_service.rs 11 is_system_admin
 claim crates/temper-services/src/services/admin_directory_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/cogmap_service.rs 4 two_sided
@@ -593,16 +613,16 @@ gate audit_gate d25214a0b269
 gate connection 66c36643c716
 gate context_admin b07eeb1d5289
 gate grant bccea040b6cf
-gate machine eb4042c5c963
+gate machine 6d1058f9fa9a
 gate read_gates 6a6ce4847fbc
-gate ledger_subject ca2677683e96
+gate ledger_subject b13d3929eb94
 gate subscription f45d76e9be69
 gate two_sided 92995b75cab8
 gate reconcile_regime 5339d74ce2eb
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e
-gate team_membership 9e329c322371
+gate team_membership 645a3a8d9323
 EOF
 
 CURRENT="$(current_claims; current_gates)"
