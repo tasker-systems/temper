@@ -3612,6 +3612,171 @@ async fn pointing_the_gating_slug_into_as_subtree_makes_rows_dormant(pool: PgPoo
     );
 }
 
+/// A plain UPDATE of the gating slug, the shape an older binary's settings write or an operator's
+/// SQL takes, records the flips it causes exactly as the settings door does: the row goes dormant
+/// with cause policy and no act, and pointing the slug away revives it, on the record too.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_plain_gating_slug_write_records_what_it_flips(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    let set = |slug: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query("UPDATE kb_system_settings SET gating_team_slug = $1 WHERE id = 1")
+                .bind(slug)
+                .execute(&pool)
+                .await
+                .expect("plain write");
+        }
+    };
+
+    set("eng-web").await;
+    assert!(!effective(&pool, w.eng_sec, w.eng).await);
+    let recs = row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng).await;
+    assert_eq!(recs.len(), 1, "{recs:?}");
+    assert_eq!(recs[0]["to"], "dormant");
+    assert_eq!(recs[0]["cause"], "policy");
+    assert!(recs[0].get("act").is_none());
+    assert!(recs[0].get("act_ref").is_some());
+
+    set("sales").await;
+    assert!(effective(&pool, w.eng_sec, w.eng).await);
+    let recs = row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng).await;
+    assert_eq!(recs.len(), 2, "{recs:?}");
+    assert_eq!(recs[1]["to"], "effective");
+}
+
+/// The writers' mark is the transaction id, so a mark set for a whole session (or a role) is inert:
+/// a plain write on that session is still recorded.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_session_wide_mark_does_not_switch_recording_off(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    for sql in [
+        "SET temper.gating_slug_recorded = 'on'",
+        "UPDATE kb_system_settings SET gating_team_slug = 'eng-web' WHERE id = 1",
+        "RESET temper.gating_slug_recorded",
+    ] {
+        sqlx::query(sql).execute(&mut *conn).await.unwrap();
+    }
+    drop(conn);
+    assert!(!effective(&pool, w.eng_sec, w.eng).await);
+    let recs = row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng).await;
+    assert_eq!(recs.len(), 1, "{recs:?}");
+}
+
+/// Renaming the gating team moves the slug with it and flips nothing, so it records nothing: the
+/// settings row's own record is skipped for a write the rename already recorded, which would
+/// otherwise be judged against the half-renamed state where no team holds the gating slug.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn renaming_the_gating_team_records_no_flip(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    let admin = test_support::system_admin_proof_for(&pool, w.admin).await;
+    access_service::update_system_settings(
+        &pool,
+        &admin,
+        &temper_core::types::admin::UpdateSettingsRequest {
+            gating_team_slug: Some("eng-web".to_string()),
+            instance_name: None,
+            terms_version: None,
+            terms_resource_uri: None,
+        },
+    )
+    .await
+    .expect("repoint");
+    assert_eq!(
+        row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng)
+            .await
+            .len(),
+        1
+    );
+
+    team_service::rename_slug(
+        &pool,
+        &hp(&pool, w.admin).await,
+        w.eng_web,
+        &temper_core::types::team::RenameTeamSlugRequest {
+            slug: "eng-web-2".to_string(),
+        },
+    )
+    .await
+    .expect("rename the gating team");
+    let slug: String =
+        sqlx::query_scalar("SELECT gating_team_slug FROM kb_system_settings WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(slug, "eng-web-2", "the slug moved with the team");
+    assert!(!effective(&pool, w.eng_sec, w.eng).await);
+    let recs = row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng).await;
+    assert_eq!(recs.len(), 1, "no flip recorded: {recs:?}");
+}
+
+/// A plain gating slug write racing a rename of the gating team: the write takes the exclusive
+/// gating lock before it locks the settings row, so it waits for the rename instead of holding the
+/// row the rename needs. Both complete; neither is aborted as a deadlock.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_plain_gating_slug_write_and_a_rename_do_not_deadlock(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'eng-web' WHERE id = 1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let admin_emitter = emitter_of(&pool, w.admin).await;
+
+    // The exclusive gating lock held, as a rename holds it before its settings write, while the
+    // plain write starts.
+    let mut rename = pool.begin().await.unwrap();
+    let pid = backend_pid(&mut rename).await;
+    sqlx::query("SELECT _gating_team_lock(true)")
+        .execute(&mut *rename)
+        .await
+        .unwrap();
+
+    let p2 = pool.clone();
+    let write = tokio::spawn(async move {
+        sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'sales' WHERE id = 1")
+            .execute(&p2)
+            .await
+    });
+    await_blocked_by(&pool, pid).await;
+
+    // The rest of the rename: the team row, the snapshot, then the settings row.
+    let out: String = sqlx::query_scalar(
+        "SELECT _admin_team_lifecycle_write($1, $2, $3, 'renamed', 'eng-web-2', NULL)",
+    )
+    .bind(admin_emitter)
+    .bind(w.admin)
+    .bind(w.eng_web)
+    .fetch_one(&mut *rename)
+    .await
+    .expect("the rename is not aborted");
+    assert_eq!(out, "changed");
+    rename.commit().await.unwrap();
+    write
+        .await
+        .unwrap()
+        .expect("the plain write is not aborted");
+
+    let slug: String =
+        sqlx::query_scalar("SELECT gating_team_slug FROM kb_system_settings WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(slug, "sales");
+    assert!(effective(&pool, w.eng_sec, w.eng).await);
+    let recs = row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng).await;
+    let to: Vec<&str> = recs.iter().map(|r| r["to"].as_str().unwrap()).collect();
+    assert_eq!(to, ["dormant", "effective"], "{recs:?}");
+}
+
 /// A caller who manages only the child of a cut gets counts, never refs: a lapse caused by a
 /// middle team's owner detaching it is counted in their answer, and their own history in the ledger
 /// names no row either.
@@ -3911,6 +4076,22 @@ async fn after_every_structural_act_the_recorded_effect_equals_the_effect(pool: 
         .await
         .unwrap();
     after!("gating into org");
+    team_service::rename_slug(
+        &pool,
+        &ap,
+        w.eng_web,
+        &temper_core::types::team::RenameTeamSlugRequest {
+            slug: "eng-web-2".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    after!("rename the gating team");
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'sales' WHERE id = 1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    after!("plain gating slug write");
 }
 
 /// Fold every public_within record since `seen` into `recorded`, then check it against the rows.

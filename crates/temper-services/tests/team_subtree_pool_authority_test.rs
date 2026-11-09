@@ -581,8 +581,9 @@ async fn a_restored_subtree_that_grows_while_the_act_waits_is_retryable(pool: Pg
 }
 
 /// The gating slug is held for the re-check. An admin's settings update repoints
-/// `gating_team_slug` at G, a team in D's subtree, and is held open (the settings row, then the
-/// exclusive gating lock, as its trigger takes them) while a non-admin attaches D under the hub.
+/// `gating_team_slug` at G, a team in D's subtree, and is held open (the exclusive gating lock, then
+/// the settings row, as its statement trigger takes them) while a non-admin attaches D under the
+/// hub.
 /// The act takes its team rows, then waits on the shared gating hold; once the admin commits, the
 /// re-check sees the gating team below D and refuses.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
