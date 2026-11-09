@@ -436,6 +436,47 @@ describe('CommandPalette — the request it makes', () => {
 		expect(container.textContent).not.toContain('No results');
 	});
 
+	it('a slow earlier answer never lands over a later one', async () => {
+		vi.useFakeTimers();
+		const slow = Promise.withResolvers<Response>();
+		const signals: AbortSignal[] = [];
+		const fetchMock = vi.fn((_url: unknown, init: RequestInit) => {
+			signals.push(init.signal as AbortSignal);
+			if (fetchMock.mock.calls.length === 1) return slow.promise;
+			return Promise.resolve(
+				new Response(
+					JSON.stringify(
+						arms({ wide: { hits: [wideHit('Later find')], reason: 'ok', hint: null } }),
+					),
+					{ status: 200 },
+				),
+			);
+		});
+		vi.stubGlobal('fetch', fetchMock);
+		const { getByPlaceholderText, container } = await mountOpen();
+		const input = getByPlaceholderText('Search the vault...');
+
+		await type(input, 'led');
+		await type(input, 'ledger');
+		expect(container.textContent).toContain('Later find');
+
+		// The first read answers last. It was aborted when the second began, and its answer is
+		// discarded rather than painted over the one the reader is looking at.
+		expect(signals[0]?.aborted).toBe(true);
+		slow.resolve(
+			new Response(
+				JSON.stringify(
+					arms({ wide: { hits: [wideHit('Earlier find')], reason: 'ok', hint: null } }),
+				),
+				{ status: 200 },
+			),
+		);
+		await vi.advanceTimersByTimeAsync(0);
+		await tick();
+		expect(container.textContent).toContain('Later find');
+		expect(container.textContent).not.toContain('Earlier find');
+	});
+
 	it('recovers to a neutral state when a later query is cleared', async () => {
 		vi.useFakeTimers();
 		answer(503, { error: 'search unavailable' });
