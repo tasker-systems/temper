@@ -2594,7 +2594,10 @@ async fn a_demotion_in_flight_refuses_every_admin_arm(pool: PgPool) {
 }
 
 /// The membership doors re-check admin through the same locked read: an admin adding a member to
-/// a team they hold no role on, with their demotion in flight, waits and is refused once it commits.
+/// a team they hold no role on, with their demotion in flight, passes the pool pre-check (a plain
+/// read, which still sees the uncommitted grant), takes the team lock, then waits at the locked
+/// re-check (`MembershipAuthority::resolve` on the transaction), and is refused once the demotion
+/// commits. A re-check that only read the row would admit the admin and write the member.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_demotion_in_flight_refuses_the_admin_arm_of_a_membership_door(pool: PgPool) {
     let d = doors(&pool).await;
@@ -2650,7 +2653,8 @@ async fn a_demotion_rolled_back_admits_the_admin(pool: PgPool) {
     assert!(row_exists(&pool, w.eng_sec, w.org).await);
 }
 
-/// A demotion committed before the act is seen by it: each admin arm refuses.
+/// A regression pin, true before the locked re-check as well: a demotion committed before the act
+/// is seen by it, and each admin arm refuses. It does not witness the lock; the in-flight tests do.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_demotion_committed_first_is_seen(pool: PgPool) {
     let d = doors(&pool).await;
@@ -2675,11 +2679,13 @@ async fn a_demotion_committed_first_is_seen(pool: PgPool) {
     assert!(matches!(err, ApiError::Forbidden), "{err:?}");
 }
 
-/// The other order: a door that has re-checked holds the caller's governance row, and every kind of
-/// demotion waits for it rather than deadlocking with it. The holder takes an open's locks in the
-/// open's order (the team rows, the effects lock, then the governance row) and writes under them;
-/// the demotions are `standing_service::apply` on Revoke (its standing row, then the governance
-/// delete), the same on Deactivate, and an operator's plain DELETE of the row.
+/// A lock-order check on the demotion writers. The holder stands in for a door that has re-checked:
+/// it takes an open's locks in the open's order (the team rows, the effects lock, then the
+/// governance row `FOR KEY SHARE`, by hand rather than through the door's code) and writes under
+/// them. Every kind of demotion then waits for it rather than deadlocking with it:
+/// `standing_service::apply` on Revoke (its standing row, then the governance delete), the same on
+/// Deactivate, and an operator's plain DELETE of the row. It pins the writers' side of the order; it
+/// does not exercise the door's re-check.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn every_demotion_waits_for_a_door_that_rechecked(pool: PgPool) {
     use temper_principal::{Act, ActorAuthority};

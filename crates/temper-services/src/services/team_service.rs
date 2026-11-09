@@ -238,9 +238,9 @@ async fn require_admin_on(pool: &PgPool, caller: &HumanPrincipal) -> ApiResult<(
 
 /// [`require_admin_on`] on the transaction's own connection, for a re-check under row locks: a
 /// transaction that holds rows never waits on a second pooled connection (which a saturated pool
-/// may never hand back). A demotion serializes with it (`auth::require_system_admin_on`).
+/// may never hand back). A demotion serializes with it (`auth::require_system_admin_locked`).
 async fn require_admin_in(conn: &mut sqlx::PgConnection, caller: &HumanPrincipal) -> ApiResult<()> {
-    crate::auth::require_system_admin_on(conn, caller)
+    crate::auth::require_system_admin_locked(conn, caller)
         .await
         .map(|_| ())
 }
@@ -870,7 +870,7 @@ async fn authorize_member_act(
 )> {
     {
         let mut conn = pool.acquire().await?;
-        MembershipAuthority::resolve(&mut conn, caller, team_id)
+        MembershipAuthority::resolve_precheck(&mut conn, caller, team_id)
             .await?
             .precheck(act, target)?;
     }
@@ -2316,12 +2316,12 @@ async fn caller_is_admin(pool: &PgPool, caller: &HumanPrincipal) -> ApiResult<bo
 
 /// [`caller_is_admin`] on the transaction's own connection, under its locks: a re-check never takes
 /// a second pooled connection while the transaction holds rows, and a demotion serializes with it
-/// (`auth::require_system_admin_on`).
+/// (`auth::require_system_admin_locked`).
 async fn caller_is_admin_on(
     conn: &mut sqlx::PgConnection,
     caller: &HumanPrincipal,
 ) -> ApiResult<bool> {
-    match crate::auth::require_system_admin_on(conn, caller).await {
+    match crate::auth::require_system_admin_locked(conn, caller).await {
         Ok(_) => Ok(true),
         Err(ApiError::Forbidden) => Ok(false),
         Err(other) => Err(other),
