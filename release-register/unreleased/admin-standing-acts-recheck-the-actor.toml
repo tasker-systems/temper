@@ -26,12 +26,13 @@ Who observes: a system admin demoted (directly, or by Revoke or Deactivate) whil
 is in flight, and two admins demoting each other at once. No schema change and no response shape
 change. Witnesses: `crates/temper-services/tests/admin_standing_verbs_recheck_test.rs`, one test
 per act (each fails without the re-check), `a_demoted_admin_cannot_promote_themselves_back`, and
-`mutual_demotions_never_deadlock` / `mutual_revokes_never_deadlock`, which race many rounds from one
-start line: without the ordered pair lock they deadlock whenever the two acts interleave, which
-these rounds have hit on every run so far, though a run is not guaranteed to. Out of scope, still
+`mutual_demotions_serialize` / `mutual_revokes_serialize`, which force the interleaving (a
+holder takes both governance rows FOR KEY SHARE, so each act can take its own row and none can
+delete) and fail on a deadlock every run without the ordered pair lock. Out of scope, still
 decided on the pool proof alone: the non-standing admin surfaces (admin directory, embed, erasure,
-Slack disconnect, contexts, connections, subscriptions, grants), and a machine credential's
-revocation itself (`authorize_control`), which only its standing arm now re-checks. Creating an
-invitation also still decides on a plain read; accepting one is bounded by inviter_ceiling.
+Slack disconnect, contexts, connections, subscriptions, grants), and machine registration's
+provision, issue and rebind. Creating an invitation also still decides on a plain read; accepting
+one is bounded by inviter_ceiling. A machine credential's revocation decides both its arms again on
+its transaction: the admin arm as above, the owner arm under the owning team's row lock.
 Release relevance: signal-only.
 '''

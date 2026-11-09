@@ -17,8 +17,8 @@
 //! actor's governance rows together in ascending profile id order: two admins demoting each other
 //! at once otherwise each hold their own row `FOR KEY SHARE` and wait on the other's. The team and
 //! invitation doors take governance after their own rows and take no standing row, and a demotion
-//! takes no row of theirs, so no pairing waits in a cycle. The last tests race mutual demotions and
-//! mutual revokes.
+//! takes no row of theirs, so no pairing waits in a cycle. The lock-order tests force mutual
+//! demotions and mutual revokes into the interleaving that deadlocks without the ordered pair.
 
 use std::future::Future;
 
@@ -468,76 +468,92 @@ async fn a_demoted_admin_cannot_promote_themselves_back(pool: PgPool) {
 }
 
 // ── Lock order ────────────────────────────────────────────────────────────────────────────────────
+//
+// These pin the ordered governance pair. On the base, which takes no lock on the actor's row,
+// both acts land, so they fail there too; with the re-check but without the ordered pair, they fail
+// on a deadlock (one act aborted with a 500) on every run. The deadlock is the half they witness.
 
-/// Two admins demote each other from one start line, many times. Each act locks both governance
-/// rows in ascending id order, so neither fails on a deadlock: exactly one lands and the other is
-/// refused, because its actor is no longer an admin when it reaches the lock.
-#[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn mutual_demotions_never_deadlock(pool: PgPool) {
-    for round in 0..12 {
-        let a = an_admin(&pool, &format!("sv-a-{round}")).await;
-        let b = an_admin(&pool, &format!("sv-b-{round}")).await;
-        let (pa, pb) = (proof(&pool, a).await, proof(&pool, b).await);
-        let start = std::sync::Arc::new(tokio::sync::Barrier::new(2));
-        let (p1, s1) = (pool.clone(), start.clone());
-        let one = tokio::spawn(async move {
-            s1.wait().await;
-            access_service::demote_admin(&p1, &pa, ProfileId::from(b)).await
-        });
-        let (p2, s2) = (pool.clone(), start.clone());
-        let two = tokio::spawn(async move {
-            s2.wait().await;
-            access_service::demote_admin(&p2, &pb, ProfileId::from(a)).await
-        });
-        let outcomes = [one.await.unwrap(), two.await.unwrap()];
-        for o in &outcomes {
-            assert!(
-                matches!(o, Ok(()) | Err(ApiError::Forbidden)),
-                "round {round}: {o:?}"
-            );
+/// Wait until `n` backends in this database are blocked on a lock.
+async fn await_waiters(pool: &PgPool, n: i64) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity \
+              WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("lock waiters");
+        if waiting >= n {
+            return;
         }
-        let landed = outcomes.iter().filter(|o| o.is_ok()).count();
-        assert_eq!(landed, 1, "round {round}: exactly one demotion lands");
-        assert_eq!(
-            governs(&pool, a).await as u8 + governs(&pool, b).await as u8,
-            1,
-            "round {round}: the winner keeps governance"
+        assert!(
+            std::time::Instant::now() < deadline,
+            "only {waiting} of {n} acts blocked"
         );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
 }
 
-/// The same with Revoke, which takes each subject's standing row first and then the governance
-/// pair.
+/// Two admins demote (or revoke) each other, forced into the one interleaving that deadlocks
+/// without the ordered pair. A holder takes both governance rows `FOR KEY SHARE`: that admits each
+/// act's lock on its own actor's row and blocks every delete. So, unordered, each act holds its
+/// own row and waits to delete the other's, and the release is a cycle Postgres breaks by
+/// aborting one (a 500). Ordered, both acts reach for the lower row first: the act whose actor is
+/// the lower id holds it and waits on the holder for the higher row, and the other waits behind
+/// it. The holder releases, the first act lands, and the second, reaching the higher row, finds
+/// its actor no longer an admin and is refused.
+async fn mutual_acts_serialize<F, Fut>(pool: &PgPool, act: F)
+where
+    F: Fn(PgPool, SystemAdmin, Uuid) -> Fut,
+    Fut: Future<Output = Result<(), ApiError>> + Send + 'static,
+{
+    let a = an_admin(pool, "sv-a").await;
+    let b = an_admin(pool, "sv-b").await;
+    let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+    let (p_lo, p_hi) = (proof(pool, lo).await, proof(pool, hi).await);
+
+    let mut holder = pool.begin().await.unwrap();
+    let pid = backend_pid(&mut holder).await;
+    sqlx::query(
+        "SELECT profile_id FROM kb_principal_governance WHERE profile_id = ANY ($1) \
+         FOR KEY SHARE",
+    )
+    .bind(vec![lo, hi])
+    .execute(&mut *holder)
+    .await
+    .unwrap();
+
+    let first = tokio::spawn(act(pool.clone(), p_lo, hi));
+    await_blocked_by(pool, pid).await;
+    let second = tokio::spawn(act(pool.clone(), p_hi, lo));
+    await_waiters(pool, 2).await;
+    holder.commit().await.unwrap();
+
+    first
+        .await
+        .unwrap()
+        .expect("the lower-id actor's act lands");
+    let err = second.await.unwrap().unwrap_err();
+    assert!(matches!(err, ApiError::Forbidden), "{err:?}");
+    assert!(governs(pool, lo).await && !governs(pool, hi).await);
+}
+
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn mutual_revokes_never_deadlock(pool: PgPool) {
-    for round in 0..12 {
-        let a = an_admin(&pool, &format!("sv-a-{round}")).await;
-        let b = an_admin(&pool, &format!("sv-b-{round}")).await;
-        let (pa, pb) = (proof(&pool, a).await, proof(&pool, b).await);
-        let start = std::sync::Arc::new(tokio::sync::Barrier::new(2));
-        let (p1, s1) = (pool.clone(), start.clone());
-        let one = tokio::spawn(async move {
-            s1.wait().await;
-            access_service::admin_revoke(&p1, &pa, ProfileId::from(b), "race".into()).await
-        });
-        let (p2, s2) = (pool.clone(), start.clone());
-        let two = tokio::spawn(async move {
-            s2.wait().await;
-            access_service::admin_revoke(&p2, &pb, ProfileId::from(a), "race".into()).await
-        });
-        let outcomes = [one.await.unwrap(), two.await.unwrap()];
-        for o in &outcomes {
-            assert!(
-                matches!(o, Ok(()) | Err(ApiError::Forbidden)),
-                "round {round}: {o:?}"
-            );
-        }
-        assert_eq!(
-            outcomes.iter().filter(|o| o.is_ok()).count(),
-            1,
-            "round {round}: exactly one revoke lands"
-        );
-    }
+async fn mutual_demotions_serialize(pool: PgPool) {
+    mutual_acts_serialize(&pool, |pool, proof, subject| async move {
+        access_service::demote_admin(&pool, &proof, ProfileId::from(subject)).await
+    })
+    .await;
+}
+
+/// The same with Revoke, which takes each subject's standing row first.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn mutual_revokes_serialize(pool: PgPool) {
+    mutual_acts_serialize(&pool, |pool, proof, subject| async move {
+        access_service::admin_revoke(&pool, &proof, ProfileId::from(subject), "race".into()).await
+    })
+    .await;
 }
 
 /// The settings write, the gating-team repoint included, asks the actor again before the exclusive
@@ -578,4 +594,69 @@ async fn update_system_settings(pool: PgPool) {
         .await
         .expect("the admin repoints it");
     assert_eq!(gate(pool.clone()).await.as_deref(), Some("sv-new-gate"));
+}
+
+/// The non-admin arm of a machine credential's revocation is decided again under the owning team's
+/// row lock: an owner removed from the team after the pool check (or a caller who passed it as an
+/// admin and lost the standing before the arm was chosen) is refused as a missing row is, and the
+/// credential stays live.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn revoke_a_machine_credential_by_an_owner_removed_mid_act(pool: PgPool) {
+    let owner = profile(&pool, "sv-owner").await;
+    test_support::approve(&pool, owner).await;
+    let t = team(&pool, "sv-machines").await;
+    sqlx::query("INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'owner')")
+        .bind(t)
+        .bind(owner)
+        .execute(&pool)
+        .await
+        .unwrap();
+    // Externally issued client ids are a system admin's to register; the owner then controls it.
+    let registrar = an_admin(&pool, "sv-registrar").await;
+    let client = machine_registration_service::provision(
+        &pool,
+        &test_support::human_principal_for(&pool, registrar).await,
+        &ProvisionMachineRequest {
+            client_id: "sv-owned-machine".to_owned(),
+            label: "sv-owned-machine".to_owned(),
+            owner_team_id: Some(t),
+            teams: vec![],
+            grants: vec![],
+        },
+        AuthMode::ExternalIdp,
+    )
+    .await
+    .expect("provision machine");
+
+    // The removal, under the team's row lock, left open.
+    let mut holder = pool.begin().await.unwrap();
+    let pid = backend_pid(&mut holder).await;
+    sqlx::query("SELECT id FROM kb_teams WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(t)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM kb_team_members WHERE team_id = $1 AND profile_id = $2")
+        .bind(t)
+        .bind(owner)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+
+    let p2 = pool.clone();
+    let contender = tokio::spawn(async move {
+        let by = test_support::human_principal_for(&p2, owner).await;
+        machine_client_service::revoke(&p2, client.id, &by).await
+    });
+    await_blocked_by(&pool, pid).await;
+    holder.commit().await.unwrap();
+    let err = contender.await.unwrap().unwrap_err();
+    assert!(matches!(err, ApiError::NotFound(_)), "{err:?}");
+    let live: bool =
+        sqlx::query_scalar("SELECT revoked_at IS NULL FROM kb_machine_clients WHERE id = $1")
+            .bind(client.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(live, "a refused revoke revoked the credential");
 }
