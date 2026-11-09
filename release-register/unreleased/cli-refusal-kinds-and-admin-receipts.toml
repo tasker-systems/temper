@@ -1,0 +1,28 @@
+title    = "A CLI refusal carries its own error code, and the admin profile acts and reconcile-auto-join answer in the requested format"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["cli-stdout"]
+status   = "signal-only"
+body = '''
+Behavioral: `client_err_to_temper` (temper-cli `actions::runtime`), the lifter every remote
+command's error passes through, now lifts each typed API refusal to its TemperError twin. The
+stdout error payload's `code` is the refusal's own: `not-found`, `forbidden`, the forbidden-detail
+code, `conflict`, the ingest-ended code, `content-integrity`, the resource-busy code, the
+data-artifact refusal code, `project` (a refused plan, with `details.refusals`), `bad-request` (a
+400 or an unreadable plan), and `unauthorized` (every 401 shape, keeping the client's sentence and
+its remedy). It was `api` for all of them. A rate limit, a 5xx and local failures stay `api`. The
+exit code is unchanged (1). Message text changes with the variant ("Conflict: …" where it read
+"API error: conflict: …").
+
+Additive: `temper admin access approve|revoke|deactivate|reactivate` and `temper admin demote`
+print `{profile_id, outcome}` (outcome snake_case) through the output format layer, and
+`temper admin access reconcile-auto-join` prints the server's outcome object, where each used to
+print a prose line. A non-TTY caller now gets JSON. The SAML-mapping warning stays on stderr.
+
+Who observes: a script that branched on `code == "api"` for one of these refusals, and anyone
+reading those admin acts' stdout. Witnesses: `each_typed_refusal_lifts_to_its_twin_and_keeps_its_code`,
+`every_unauthorized_shape_lifts_to_unauthorized_with_its_remedy`,
+`a_rate_limit_and_a_server_fault_stay_api` (actions::runtime), and
+`a_profile_act_renders_its_receipt_in_either_format` (commands::admin). Release relevance:
+signal-only.
+'''
