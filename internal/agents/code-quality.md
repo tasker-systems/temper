@@ -18,8 +18,12 @@ What follows is temper's own.
   *Why:* copies drift. *(convention)*
 - **Cross-runtime wire types live in `temper-core` with `ts-rs` derives**, never a hand-written zod
   mirror. *(gated: `ts-rs-drift`)*
-- **Typed structs over `serde_json::json!()` for known shapes; a params struct past five domain
-  parameters.** *Why:* the compiler catches what serialization accepts. *(convention)*
+- **Typed structs over `serde_json::json!()` for known shapes.** *Why:* the compiler catches what
+  serialization accepts. *(convention)*
+- **A params struct past seven parameters**, the line clippy's `too_many_arguments` holds. Below
+  it, two same-typed arguments that could transpose take id newtypes (`ProfileId`, `ResourceId`),
+  not a params struct. *(gated: `code-quality.yml#rust-quality`, clippy under `-D warnings`; an
+  `#[expect]` opts a function out)*
 - **TypeScript logs through pino** (`packages/temper-cloud/src/logger.ts`) with field objects, never
   `console.log`. *(convention)*
 - **A write command carries `#[act_span]`; never record act ids onto the root span.** Act ids arrive

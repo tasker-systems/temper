@@ -83,8 +83,10 @@ Push invariants into the type system so illegal states are unrepresentable.
 
 ### 1.5 Params structs over long signatures
 
-Functions with **more than 5 domain-related parameters** take a params struct (the repo
-already uses `KernelCreateParams`, `UpdateParams`, `KernelEdgeParams`). A params struct also
+Functions with **more than 7 parameters** take a params struct — the threshold clippy's
+`too_many_arguments` enforces under `-D warnings` (the repo already uses `KernelCreateParams`,
+`UpdateParams`, `KernelEdgeParams`). Below it, the transposition hazard of two same-typed
+arguments is met by id newtypes (§1.3), not by a params struct. A params struct also
 makes call sites self-documenting (`field: value`) and resists positional-argument mistakes.
 `#[expect(clippy::too_many_arguments)]` is a smell to fix, not a suppression to keep.
 
@@ -311,7 +313,7 @@ violation is "what it looks like in the wild" — the trigger an auditor greps/r
 | **CQ-2** | Keys unique-by-construction, not loose markers (§1.2) | Diffing/dedup/joining on a non-unique marker (e.g. `origin_uri`); identity keys taken from the payload instead of injected from one typed source. |
 | **CQ-3** | Parse, don't validate (§1.3) | Bare `Uuid`/`String` where a newtype belongs; revalidation scattered downstream instead of parse-at-boundary; `&String`/`&Vec<T>` params. |
 | **CQ-4** | Names carry responsibility (§1.4) | A *type* named `Manager`/`Helper`/`Service`/`Factory`/`Util`; a stringly-typed `match "literal"` over a bounded set the code owns. |
-| **CQ-5** | Params structs (§1.5) | >5 domain params on a fn; `#[expect(clippy::too_many_arguments)]`. |
+| **CQ-5** | Params structs (§1.5) | >7 params on a fn; `#[expect(clippy::too_many_arguments)]`; two same-typed ids side by side where a newtype belongs. |
 | **CQ-6** | Error handling & escalation (§1.6) | `.unwrap()`/`.expect()` on a fallible runtime value in a library path; write-then-check (auth after mutation); panic for a recoverable condition; a softened contract/assertion. |
 | **CQ-7** | Lint & suppression discipline (§1.7) | A bare `#[allow]` on an unconditionally-firing lint (vs `#[expect(reason=…)]`); a suppression with no stated reason anywhere near it; a public type without `Debug`; a magic constant with no explaining comment. |
 | **CQ-8** | No "for now" / no premature compat/abstraction (§1.8) | Dead code kept "for compat"; a placeholder/"for now" workaround; a one-use abstraction. |
