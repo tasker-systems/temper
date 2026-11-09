@@ -1,0 +1,24 @@
+title    = "A hard delete of a team records what it did to every public_within row, including rows it cuts off or flips without naming them"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["schema"]
+status   = "signal-only"
+body = '''
+Migration 20261124000000. Before a kb_teams row is hard-deleted, the BEFORE DELETE trigger still
+records cascade_deleted for each public_within row naming the team, and now also snapshots every
+other row the delete can flip (rows whose team is at or below it, or whose anchor is at or above
+it). An AFTER DELETE statement trigger computes the transitions once the foreign-key cascade has
+removed the team's links: a row whose anchor is no longer above its team is deleted and recorded
+lapsed, and every other flipped row is recorded as public_within_effect_changed (cause liveness or
+policy, act absent, one fresh correlation id per statement). So hard-deleting a forbidding team
+lifts its forbid on the record, and hard-deleting a team between an anchor and its team no longer
+leaves an orphaned row.
+
+No door hard-deletes a team, so only a manual or script delete observes it: the ledger gains the
+records, and the delete takes the public_within effects lock. Response shapes are unchanged.
+Witnesses: `a_hard_deleted_mid_path_team_lapses_the_rows_it_cut_off`,
+`a_hard_delete_that_flips_a_rows_effect_records_it`,
+`after_every_hard_delete_the_recorded_effect_equals_the_effect` and
+`a_hard_delete_records_a_row_opened_while_it_waited` in
+`crates/temper-services/tests/public_within_test.rs`. Release relevance: signal-only.
+'''

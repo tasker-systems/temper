@@ -19,11 +19,13 @@
 #     ignored here — cargo audit does not fail the build on them by default, so
 #     they stay visible as advisories without gating.
 #
-# Last reconciled 2026-10-31 (cargo audit 0.22.2, advisory DB of that date): with
-# no ignores, cargo audit reports exactly the four ids below. Removed then, as
-# matching nothing: zip (0367/0368/0369, lock now zip 9.0.5), lopdf (0187, now
-# 0.45.0), quinn-proto (0185, now 0.11.19), and webpki-roots (0381 — the advisory
-# now lists the 0.26.11 shim as unaffected).
+# Last reconciled 2026-11-09 (cargo audit 0.22.2, advisory DB 899077d9 of
+# 2026-11-09): with no ignores, cargo audit reports exactly the five ids below.
+# RUSTSEC-2026-0462 (rmcp) is not among them: rmcp is now 3.9.0, the fixed
+# version. Reconciled before that on 2026-10-31, when zip (0367/0368/0369, lock
+# now zip 9.0.5), lopdf (0187, now 0.45.0), quinn-proto (0185, now 0.11.19) and
+# webpki-roots (0381 — the advisory lists the 0.26.11 shim as unaffected) were
+# removed as matching nothing.
 
 [advisories]
 ignore = [
@@ -40,6 +42,16 @@ ignore = [
     # for a permanent, documented ignore. This is the standing "we can't control
     # it", and the ignore is exactly what keeps the gate from blocking on it.
     "RUSTSEC-2023-0071",
+
+    # libsqlite3-sys 0.30.1 (RUSTSEC-2026-0459, the C SQLite CVE it bundles; fixed in >=0.39.0).
+    # Not compiled into temper: it is a dependency of `sqlx-sqlite` only, and we enable sqlx's
+    # `postgres` backend and no other, so `cargo tree -i libsqlite3-sys --workspace --all-features
+    # --target all` reports nothing. It survives in Cargo.lock the way `rsa` does: Cargo records
+    # sqlx's full resolution graph and `cargo audit` scans the lock. A sqlx bump does not evict or
+    # fix it: the newest sqlx (0.9.0) has `sqlx-sqlite` require libsqlite3-sys >=0.30.1, <0.38.0,
+    # so no released sqlx reaches 0.39.0. No real exposure, and the fix is unreachable from any
+    # released sqlx: a standing ignore, until a sqlx release admits libsqlite3-sys >=0.39.0.
+    "RUSTSEC-2026-0459",
 
     # ── FIX-PENDING — a patched version exists; adopting it is a tracked bump ─
     # Reachability below is read from Cargo.lock and each crate's declared

@@ -71,6 +71,9 @@ pub async fn reset_schema(pool: &sqlx::PgPool) {
                 // Adds the auto-join arm to anchor_subtree_holds_pool: same post-auto-join world,
                 // same missing column.
                 && !n.contains("public_within_pool_reads_auto_join")
+                // Rewrites anchor_subtree_holds_pool (walking up from each pool team) and indexes
+                // auto_join_role: same post-auto-join world, same missing column.
+                && !n.contains("public_within_pool_walks_up")
         })
         .collect();
     migrations.sort();

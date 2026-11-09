@@ -3460,7 +3460,13 @@ export interface paths {
         /** List teams you belong to */
         get: operations["list_teams"];
         put?: never;
-        /** Create a team */
+        /**
+         * Create a team
+         * @description With `?answer=effects` the row also carries `public_within` (what the new team's parent links did
+         *     to `public_within` rows) and `public_within_in_reach` (the effective rows the new team's roster
+         *     reads through its parents), each row named only to a caller who manages its team or anchor, or is
+         *     a system admin, and counted otherwise. Without it the answer is the row alone.
+         */
         post: operations["create_team"];
         delete?: never;
         options?: never;
@@ -3506,7 +3512,12 @@ export interface paths {
         get: operations["detail"];
         put?: never;
         post?: never;
-        /** Delete a team */
+        /**
+         * Delete a team
+         * @description With `?answer=effects` the answer is `200` with what the delete did to `public_within` rows (rows
+         *     over or under the team stop conferring), each named only to a caller who manages its team or
+         *     anchor, or is a system admin, and counted otherwise. Without it the answer is `204`.
+         */
         delete: operations["delete_team"];
         options?: never;
         head?: never;
@@ -3567,7 +3578,10 @@ export interface paths {
          * @description Removes the parent link, so the child's members stop reaching what is attached to this team and
          *     its ancestors. The child and its roster survive; only this link is cut. A manager of the parent
          *     or of the child may detach (a child's managers may leave any parent). Recorded on the admin
-         *     ledger as `team_parent_link_changed`.
+         *     ledger as `team_parent_link_changed`. With `?answer=effects` the answer is `200` with what the
+         *     detach did to `public_within` rows (a row whose anchor is no longer above its team by any path is
+         *     deleted, `lapsed`), each named only to a caller who manages its team or anchor, or is a system
+         *     admin, and counted otherwise. Without it the answer is `204`.
          */
         delete: operations["detach_child_team"];
         options?: never;
@@ -12177,6 +12191,8 @@ export interface components {
             /** Format: uuid */
             id: string;
             name: string;
+            public_within?: components["schemas"]["PublicWithinEffects"] | null;
+            public_within_in_reach?: components["schemas"]["PublicWithinReach"] | null;
             slug: string;
         };
         /** @description One team the machine should be enrolled in, with its role. */
@@ -21932,7 +21948,15 @@ export interface operations {
     };
     create_team: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description `effects`: also answer what the act did to `public_within` rows (`POST` fills
+                 *     `TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with
+                 *     `PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team
+                 *     or its anchor, or is a system admin, and counted otherwise.
+                 */
+                answer?: "effects";
+            };
             header?: {
                 /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
                 "X-Temper-Surface"?: "cli" | "sdk";
@@ -21946,7 +21970,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Team created */
+            /** @description Team created (with `?answer=effects`, carrying `public_within` and `public_within_in_reach`) */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -22047,7 +22071,15 @@ export interface operations {
     };
     delete_team: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description `effects`: also answer what the act did to `public_within` rows (`POST` fills
+                 *     `TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with
+                 *     `PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team
+                 *     or its anchor, or is a system admin, and counted otherwise.
+                 */
+                answer?: "effects";
+            };
             header?: {
                 /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
                 "X-Temper-Surface"?: "cli" | "sdk";
@@ -22060,6 +22092,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description Team soft-deleted; asked with `?answer=effects` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicWithinEffects"];
+                };
+            };
             /** @description Team soft-deleted */
             204: {
                 headers: {
@@ -22224,7 +22265,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Forbidden: the caller does not manage both teams, or the parent or the child is temper-system or the gating team, or the child is an auto-join team, and the caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden: the caller does not manage both teams, or the parent or the child is temper-system or the gating team, or the child or any team below it (live or soft-deleted) is an auto-join team or the gating team, and the caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -22251,7 +22292,15 @@ export interface operations {
     };
     detach_child_team: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description `effects`: also answer what the act did to `public_within` rows (`POST` fills
+                 *     `TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with
+                 *     `PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team
+                 *     or its anchor, or is a system admin, and counted otherwise.
+                 */
+                answer?: "effects";
+            };
             header?: {
                 /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
                 "X-Temper-Surface"?: "cli" | "sdk";
@@ -22266,6 +22315,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description Child detached; asked with `?answer=effects` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicWithinEffects"];
+                };
+            };
             /** @description Child detached */
             204: {
                 headers: {
@@ -22881,7 +22939,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Forbidden: the caller does not manage this team, or does not manage `to` (an unknown `to` included), or `to` or this team is temper-system or the gating team, or this team is an auto-join team, and the caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden: the caller does not manage this team, or does not manage `to` (an unknown `to` included), or `to` or this team is temper-system or the gating team, or this team or any team below it (live or soft-deleted) is an auto-join team or the gating team, and the caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -22930,7 +22988,7 @@ export interface operations {
                     "application/json": components["schemas"]["RestoreTeamOutcome"];
                 };
             };
-            /** @description Forbidden: the caller is not the team's owner or a system admin (temper-system, the gating team or an auto-join team: not a system admin; a personal team: not its owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden: the caller is not the team's owner or a system admin (not a system admin: temper-system or the gating team, a team that is or has below it, live or soft-deleted, an auto-join team or the gating team, or a team that keeps a link to temper-system or the gating team, live or soft-deleted, unless it is a personal team; a personal team: not its owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;

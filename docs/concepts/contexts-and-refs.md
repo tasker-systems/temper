@@ -29,6 +29,11 @@ first thing that goes wrong.
 | `+<team-slug>` (no slug) | a **team**, not a context | team-typed arguments only | any context-ref position |
 | `<name>` bare | nothing addressable | `context subscribe` / `unsubscribe` (local config only) | everywhere else |
 
+A `+<team-slug>/<slug>` ref resolves for every reader of that context, not only the team's members:
+members of teams beneath it, people reading it through a public-within opening, and holders of a
+share or read grant. Resolving a ref confers nothing on its own. A write aimed at it is checked as a
+write. See [Teams and Roles](./teams-and-roles.md#public-within).
+
 ### Resource refs — the second grammar
 
 A **resource ref** is `slug-<uuid>` — the sluggified title with the UUID appended. It is

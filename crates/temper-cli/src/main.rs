@@ -1051,6 +1051,14 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     temper_cli::commands::team::list_remote(client, output_format).await
                 })
             }),
+            TeamAction::PublicWithin { action } => {
+                temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::team::public_within(client, action, output_format)
+                            .await
+                    })
+                })
+            }
         },
         Commands::Admin { action } => match action {
             AdminAction::Settings {

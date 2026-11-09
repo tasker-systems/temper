@@ -85,6 +85,105 @@ async fn a_person_builds_a_tree_over_mcp(pool: sqlx::PgPool) {
         .any(|t| t["slug"] == "mcp-tree-child"));
 }
 
+/// A person opens a child team's owned contexts to its parent, finds the opening in their discovery
+/// list and on the child's detail, and closes it, all over MCP. The anchor is named by slug.
+///
+/// FAILS IF a public_within action or the `public_within` view stops relaying, or the detail drops
+/// the row for the team's own member.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_person_opens_and_closes_public_within_over_mcp(pool: sqlx::PgPool) {
+    let app = common::setup_relay(pool).await;
+    let svc = app.mcp_relay_service().await;
+    let parts = app.relay_parts_for(&app.token);
+
+    let mut ids = Vec::new();
+    for (slug, parents) in [
+        ("mcp-pw-anchor", json!([])),
+        ("mcp-pw-team", json!(["+mcp-pw-anchor"])),
+    ] {
+        let made = one_json(
+            &team_manage(
+                &svc,
+                &parts,
+                input(json!({ "action": "create", "slug": slug, "parents": parents })),
+            )
+            .await
+            .expect("a person creates a team"),
+        );
+        ids.push(made["id"].as_str().expect("id").parse::<Uuid>().unwrap());
+    }
+    let (anchor, team) = (ids[0], ids[1]);
+
+    let opened = one_json(
+        &team_manage(
+            &svc,
+            &parts,
+            input(json!({
+                "action": "public_within_open", "team": "+mcp-pw-team", "anchor": "mcp-pw-anchor",
+            })),
+        )
+        .await
+        .expect("a manager of both sides opens"),
+    );
+    assert_eq!(opened["outcome"], "opened", "{opened}");
+    assert_eq!(opened["instance_wide"], false, "{opened}");
+    assert!(
+        opened["audience"]["principals"].as_i64().unwrap() >= 1,
+        "{opened}"
+    );
+
+    let mine = one_json(
+        &team_read(&svc, &parts, input(json!({ "view": "public_within" })))
+            .await
+            .expect("the discovery view"),
+    );
+    assert!(
+        mine.as_array().unwrap().iter().any(|r| r["team"]["id"]
+            == team.to_string()
+            && r["anchor"]["id"] == anchor.to_string()),
+        "the opening confers on a person under the anchor: {mine}"
+    );
+
+    let detail = one_json(
+        &team_read(
+            &svc,
+            &parts,
+            input(json!({ "view": "detail", "team": team })),
+        )
+        .await
+        .expect("detail"),
+    );
+    let rows = detail["public_within"].as_array().expect("public_within");
+    assert_eq!(rows.len(), 1, "{detail}");
+    assert_eq!(rows[0]["anchor"]["id"], anchor.to_string());
+    assert_eq!(rows[0]["effective"], true);
+
+    let closed = one_json(
+        &team_manage(
+            &svc,
+            &parts,
+            input(json!({ "action": "public_within_close", "team": team, "anchor": anchor })),
+        )
+        .await
+        .expect("either side closes"),
+    );
+    assert_eq!(closed["closed"], true);
+
+    let mine = one_json(
+        &team_read(&svc, &parts, input(json!({ "view": "public_within" })))
+            .await
+            .expect("the discovery view"),
+    );
+    assert!(
+        !mine
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["team"]["id"] == team.to_string()),
+        "a closed row confers on no one: {mine}"
+    );
+}
+
 /// A machine principal's team acts are refused by the API, and its sentence reaches the agent as the
 /// caller's own refusal (`INVALID_REQUEST`), never as an internal fault. Nothing is written.
 ///
@@ -105,6 +204,10 @@ async fn a_machine_is_refused_every_team_act(pool: sqlx::PgPool) {
         json!({ "action": "restore", "team": m.team }),
         json!({ "action": "set_auto_join", "team": m.team, "auto_join_role": "watcher" }),
         json!({ "action": "reparent", "team": m.team, "from": "+a", "to": "+b" }),
+        json!({ "action": "public_within_open", "team": m.team, "anchor": m.team }),
+        json!({ "action": "public_within_close", "team": m.team, "anchor": m.team }),
+        json!({ "action": "public_within_policy", "team": m.team, "forbidden": true }),
+        json!({ "action": "public_within_policy", "team": m.team, "forbidden": false }),
     ];
     for args in acts {
         let err = team_manage(&svc, &parts, input(args.clone()))
@@ -114,10 +217,29 @@ async fn a_machine_is_refused_every_team_act(pool: sqlx::PgPool) {
         assert!(err.message.ends_with(refusal), "{args}: {err:?}");
     }
 
+    // A machine never reads through public_within, so its discovery read is refused too.
+    let err = team_read(&svc, &parts, input(json!({ "view": "public_within" })))
+        .await
+        .expect_err("a machine's discovery read is refused");
+    assert_eq!(err.code, ErrorCode::INVALID_REQUEST, "{err:?}");
+    assert!(err.message.ends_with(refusal), "{err:?}");
+
     let made: i64 =
         sqlx::query_scalar("SELECT count(*) FROM kb_teams WHERE slug LIKE 'mcp-machine-%'")
             .fetch_one(&app.pool)
             .await
             .unwrap();
     assert_eq!(made, 0, "nothing was written");
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_team_public_within")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0, "no opening was written");
+    let forbidden: bool =
+        sqlx::query_scalar("SELECT public_within_forbidden FROM kb_teams WHERE id = $1")
+            .bind(m.team)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert!(!forbidden, "no forbid was written");
 }

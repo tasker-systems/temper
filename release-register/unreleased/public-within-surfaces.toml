@@ -1,0 +1,26 @@
+title    = "public_within reaches the CLI, MCP and web UI: temper team public-within, team_manage and team_read actions, a team page, and a reach marker"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["mcp", "cli-stdout"]
+status   = "signal-only"
+body = '''
+New surfaces over the existing public_within doors; no HTTP route, response or service changed.
+
+- CLI: `temper team public-within open <team> <anchor>`, `close <team> <anchor>`,
+  `policy <team> forbid|allow` and `list`. A slug that is not one of the caller's teams resolves
+  through what the other side's team detail already shows the caller (the team's anchors and
+  parents to its members; the teams opened to an anchor to its managers). `open` prints the
+  outcome and a notice that the audience grows with the anchor's subtree.
+- MCP: `team_manage` gains `public_within_open`, `public_within_close` and `public_within_policy`
+  (fields `anchor`, `forbidden`); `team_read` gains the `public_within` view. Each relays one route
+  on the caller's own bearer, so a machine principal is refused by the API as before
+  (declarations/tools_list.json regenerated).
+- Web UI: a team page (`/teams/<slug>`) renders the team detail the API answers, including the
+  public_within rows (anchor, confers yes/no, opened date, audience counts) to whom the API shows
+  them; a context or resource read only through public_within shows a read-only marker.
+
+Who observes: people and their agents using the CLI and MCP, and readers of the web UI.
+Witnesses: tests/e2e/tests/mcp_team_manage_e2e.rs
+(a_person_opens_and_closes_public_within_over_mcp, a_machine_is_refused_every_team_act),
+tests/e2e/tests/cli_public_within_e2e.rs, packages/temper-ui/src/lib/team-view.test.ts.
+'''

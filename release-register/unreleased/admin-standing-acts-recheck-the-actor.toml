@@ -1,0 +1,38 @@
+title    = "A demoted admin's in-flight standing and governance acts are refused"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http"]
+status   = "signal-only"
+body = '''
+The admin standing and governance acts took a SystemAdmin proof minted on the pool and never asked
+again: approve, revoke, deactivate and reactivate a principal, promote and demote an admin,
+reconcile the auto-join pools, close a review request, update the system settings (the
+gating-team repoint included), and the standing arm of a machine credential's revocation. An admin demoted after the proof was
+minted, or while the act was in flight, still completed it. That included promoting themselves:
+the governance insert waited for the demotion's delete, then inserted, undoing the demotion.
+
+Each act now runs in one transaction (approve with the review it closes, a machine credential's
+revocation with its standing arm) that asks again with auth::is_system_admin_locked (the actor's
+kb_principal_governance row FOR KEY SHARE, held to commit) before any write. A standing act asks
+after locking the subject's standing row. A demotion that commits first refuses the act with 403,
+the answer a non-admin gets at the mint. One still in flight makes the act wait, then refuses it.
+
+Lock order: the acts that delete the subject's governance row (Revoke, Deactivate, demote) lock
+the subject's row and the actor's row together, in ascending profile id order. Without that, two
+admins demoting or revoking each other at once deadlocked: each held its own row and waited on the
+other's, and Postgres aborted one with a 500. Now one lands and the other is refused.
+
+Who observes: a system admin demoted (directly, or by Revoke or Deactivate) while one of those acts
+is in flight, and two admins demoting each other at once. No schema change and no response shape
+change. Witnesses: `crates/temper-services/tests/admin_standing_verbs_recheck_test.rs`, one test
+per act (each fails without the re-check), `a_demoted_admin_cannot_promote_themselves_back`, and
+`mutual_demotions_serialize` / `mutual_revokes_serialize`, which force the interleaving (a
+holder takes both governance rows FOR KEY SHARE, so each act can take its own row and none can
+delete) and fail on a deadlock every run without the ordered pair lock. Out of scope, still
+decided on the pool proof alone: the non-standing admin surfaces (admin directory, embed, erasure,
+Slack disconnect, contexts, connections, subscriptions, grants), and machine registration's
+provision, issue and rebind. Creating an invitation also still decides on a plain read; accepting
+one is bounded by inviter_ceiling. A machine credential's revocation decides both its arms again on
+its transaction: the admin arm as above, the owner arm under the owning team's row lock.
+Release relevance: signal-only.
+'''

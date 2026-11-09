@@ -168,6 +168,14 @@ impl ResolvedMembership {
     }
 }
 
+/// How [`MembershipAuthority`] reads the admin arm: locked on a write's transaction, plain on a
+/// pre-check or a read.
+#[derive(Clone, Copy)]
+enum AdminRead {
+    Locked,
+    Plain,
+}
+
 impl MembershipAuthority {
     /// Resolve the caller's authority over `team_id`'s membership, in this order:
     ///
@@ -182,12 +190,47 @@ impl MembershipAuthority {
     ///    [`Self::None`].
     ///
     /// The caller is a [`HumanPrincipal`] by type, so a machine cannot act on membership (C4).
+    ///
+    /// This is the re-check a write makes on its transaction, under the team lock (plan P1 step 2),
+    /// and the one that decides: the admin arm is read with
+    /// [`require_system_admin_locked`](crate::auth::require_system_admin_locked), so a demotion
+    /// either committed first or waits for this transaction. Call it only on an open transaction.
+    /// A pool pre-check, or a surface that only answers a question, uses
+    /// [`Self::resolve_precheck`].
     pub(crate) async fn resolve(
+        tx: &mut PgConnection,
+        caller: &HumanPrincipal,
+        team_id: Uuid,
+    ) -> ApiResult<ResolvedMembership> {
+        Self::resolve_with(tx, caller, team_id, AdminRead::Locked).await
+    }
+
+    /// [`Self::resolve`]'s arms on any connection, with the admin arm read plainly
+    /// ([`require_system_admin_on`](crate::auth::require_system_admin_on)), taking no lock. For a
+    /// door's pool pre-check, which a membership write then repeats with [`Self::resolve`] under its
+    /// locks, and for a surface that only answers a question (an invitation list, the admin ledger).
+    /// Creating an invitation decides on this read alone, so it does not serialize with a demotion;
+    /// an invitation created that way still redeems only while its inviter could issue it
+    /// ([`inviter_ceiling`], which locks). Revoking one repeats the decision with [`Self::resolve`].
+    pub(crate) async fn resolve_precheck(
         conn: &mut PgConnection,
         caller: &HumanPrincipal,
         team_id: Uuid,
     ) -> ApiResult<ResolvedMembership> {
-        let admin = match crate::auth::require_system_admin_on(conn, caller).await {
+        Self::resolve_with(conn, caller, team_id, AdminRead::Plain).await
+    }
+
+    async fn resolve_with(
+        conn: &mut PgConnection,
+        caller: &HumanPrincipal,
+        team_id: Uuid,
+        admin_read: AdminRead,
+    ) -> ApiResult<ResolvedMembership> {
+        let admin = match admin_read {
+            AdminRead::Locked => crate::auth::require_system_admin_locked(conn, caller).await,
+            AdminRead::Plain => crate::auth::require_system_admin_on(conn, caller).await,
+        };
+        let admin = match admin {
             Ok(admin) => Some(admin),
             Err(ApiError::Forbidden) => None,
             Err(other) => return Err(other),
@@ -416,29 +459,29 @@ pub(crate) fn may_offer(ceiling: Option<TeamRole>, role: TeamRole) -> bool {
 /// [`AuthorityKind`] only.
 ///
 /// Read on the caller's transaction. Under the team lock the inviter's role cannot move through
-/// a routed write (every one takes that lock). The derived writers (the machine-cap trigger,
-/// auto-join) and the inviter's standing and governance are not team-locked, and are read as of
-/// this statement.
+/// a routed write (every one takes that lock). The inviter's governance is read with
+/// [`is_system_admin_locked`](crate::auth::is_system_admin_locked), so an admin arm counted here
+/// holds against a demotion until the transaction ends, as a caller's does. The derived writers
+/// (the machine-cap trigger, auto-join) and the inviter's standing are not locked, and are read as
+/// of this statement.
 pub(crate) async fn inviter_ceiling(
-    conn: &mut PgConnection,
+    tx: &mut PgConnection,
     team_id: Uuid,
     inviter: ProfileId,
 ) -> ApiResult<Option<TeamRole>> {
-    let standing = sqlx::query!(
-        r#"SELECT has_system_access($1) AS "access!", is_system_admin($1) AS "admin!""#,
-        *inviter
-    )
-    .fetch_one(&mut *conn)
-    .await?;
-    if !standing.access {
+    let access = sqlx::query_scalar!(r#"SELECT has_system_access($1) AS "access!""#, *inviter)
+        .fetch_one(&mut *tx)
+        .await?;
+    if !access {
         return Ok(None);
     }
+    let is_admin = crate::auth::is_system_admin_locked(tx, inviter).await?;
     let is_instance_team =
-        crate::services::access_service::is_root_or_gating_team_on(conn, team_id).await?;
-    let kind = if standing.admin {
+        crate::services::access_service::is_root_or_gating_team_on(tx, team_id).await?;
+    let kind = if is_admin {
         AuthorityKind::Admin
     } else {
-        let role = crate::services::team_service::role_on_team_on(conn, team_id, inviter).await?;
+        let role = crate::services::team_service::role_on_team_on(tx, team_id, inviter).await?;
         MembershipAuthority::non_admin(is_instance_team, role).kind()
     };
     Ok(invitation_ceiling(kind, is_instance_team))

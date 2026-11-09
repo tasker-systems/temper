@@ -17,7 +17,7 @@ Commands:
   uninvite       Revoke (withdraw) a pending invitation (a team manager or a system admin; on a personal team, its owner only)
   show           Show a team's detail and member roster
   leave          Leave a team you are a member of (removes your membership)
-  attach         Attach a child team under a parent team (a manager of both; a temper-system or gating-team parent, or an auto-join child, a system admin)
+  attach         Attach a child team under a parent team (a manager of both; a temper-system or gating-team parent, or a child with an auto-join or the gating team in or below it, a system admin)
   reparent       Move a team from one parent to another, in one act (a manager of the team and of `--to`)
   restore        Restore a soft-deleted team (its owner, or a system admin)
   rename-slug    Change a team's slug (an owner or maintainer; temper-system and the gating team, a system admin)
@@ -30,6 +30,7 @@ Commands:
   create         Create a team (you become its owner)
   add-member     Add a member to a team (owner/maintainer only)
   list           List the teams you are a member of
+  public-within  Open a team's owned contexts to the people under one of its ancestors, close that opening, forbid it over a subtree, or list the openings you read through
   help           Print this message or the help of the given subcommand(s)
 
 Options:
@@ -172,7 +173,7 @@ Options:
 ### `temper team attach`
 
 ```text
-Attach a child team under a parent team (a manager of both; a temper-system or gating-team parent, or an auto-join child, a system admin)
+Attach a child team under a parent team (a manager of both; a temper-system or gating-team parent, or a child with an auto-join or the gating team in or below it, a system admin)
 
 Every member of the child, at any role, then reads everything attached to the parent and its ancestors. Also the way to give a team a second parent.
 
@@ -243,7 +244,7 @@ Options:
 ```text
 Restore a soft-deleted team (its owner, or a system admin)
 
-Every preserved membership, parent link and child's reach revives; the output lists them. A deleted team is no longer in `team list`, so name it by UUID.
+Every preserved membership, parent link and child's reach revives; the output lists them. A system admin's act alone when the team keeps a link to temper-system or the gating team, or when it or any team below it, live or deleted, is an auto-join or the gating team. A deleted team is no longer in `team list`, so name it by UUID.
 
 Usage: temper team restore [OPTIONS] <TEAM>
 
@@ -518,6 +519,155 @@ Options:
 List the teams you are a member of
 
 Usage: temper team list [OPTIONS]
+
+Options:
+      --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
+      --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+      --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+      --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+  -h, --help               Print help
+```
+
+### `temper team public-within`
+
+```text
+Open a team's owned contexts to the people under one of its ancestors, close that opening, forbid it over a subtree, or list the openings you read through
+
+For people reading, never for automation: a machine principal is refused every act here and never reads through an opening. Readers may reference the opened material from homes they author; acting on it (writing, granting, sharing, subscribing, auditing) still needs membership.
+
+Usage: temper team public-within [OPTIONS] <COMMAND>
+
+Commands:
+  open    Open a team's owned contexts to an ancestor's subtree (a direct owner or maintainer of the team, and of the anchor or a system admin)
+  close   Close an opening (a manager of either side, or a system admin)
+  policy  Forbid or allow openings over a team and everything beneath it (its direct owner or a system admin; on temper-system, the instance-wide off, a system admin only)
+  list    List the openings that confer on you right now: each names the team you read and the anchor you read it through
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+#### `temper team public-within open`
+
+```text
+Open a team's owned contexts to an ancestor's subtree (a direct owner or maintainer of the team, and of the anchor or a system admin)
+
+The people on the anchor and on every live team beneath it then read every context the team owns. That audience grows as the anchor's subtree grows: every manager of a team under the anchor, identity-provider group sync and a system admin can add to it. Either side can close it at any time. An anchor whose subtree reaches everyone (temper-system, the gating team, or one holding an auto-join team) is a system admin's open.
+
+Usage: temper team public-within open [OPTIONS] <TEAM> <ANCHOR>
+
+Arguments:
+  <TEAM>
+          The team whose owned contexts are opened: slug (optionally `+`-prefixed), decorated ref, or UUID
+
+  <ANCHOR>
+          The ancestor whose subtree reads them: slug, decorated ref, or UUID
+
+Options:
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+#### `temper team public-within close`
+
+```text
+Close an opening (a manager of either side, or a system admin)
+
+What readers already read is not recalled.
+
+Usage: temper team public-within close [OPTIONS] <TEAM> <ANCHOR>
+
+Arguments:
+  <TEAM>
+          The opened team: slug, decorated ref, or UUID
+
+  <ANCHOR>
+          The anchor: slug, decorated ref, or UUID
+
+Options:
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+#### `temper team public-within policy`
+
+```text
+Forbid or allow openings over a team and everything beneath it (its direct owner or a system admin; on temper-system, the instance-wide off, a system admin only)
+
+A forbid covers every team beneath by every path, and nothing beneath it lifts it. Rows are kept and confer again when the forbid is cleared.
+
+Usage: temper team public-within policy [OPTIONS] <TEAM> <SETTING>
+
+Arguments:
+  <TEAM>
+          Team slug (optionally `+`-prefixed), decorated ref, or UUID
+
+  <SETTING>
+          forbid | allow
+          
+          [possible values: forbid, allow]
+
+Options:
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+#### `temper team public-within list`
+
+```text
+List the openings that confer on you right now: each names the team you read and the anchor you read it through
+
+Usage: temper team public-within list [OPTIONS]
 
 Options:
       --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)

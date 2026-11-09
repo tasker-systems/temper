@@ -1,0 +1,35 @@
+title    = "A demotion of a system admin serializes against the admin arm of the team and membership doors that re-check authority under their locks"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "mcp"]
+status   = "signal-only"
+body = '''
+Demotion now serializes against the admin arm of team doors. A door that decides system-admin
+standing again on its write transaction, under its row locks, now reads it with
+auth::require_system_admin_locked: it locks the caller's kb_principal_governance row FOR KEY SHARE,
+held to the end of the transaction, then decides with is_system_admin as before. That covers the
+team_service re-checks (create under an instance parent, rename, attach and reparent, public_within
+open, close and forbid), the membership re-check (MembershipAuthority::resolve on the transaction:
+add, remove and change a member's role, and machine registration's team grants), and the inviter
+re-check when an invitation is accepted. A demotion deletes that row, so it either commits first
+and the act is refused, or waits until the act commits. Before, a demotion committing between the
+re-check and the act's commit was not seen, and the act committed as an admin's (or, on accept, the
+invitee joined at a role the demoted inviter could no longer offer).
+
+A door's pool pre-check, and a surface that only reads (an invitation list, the admin ledger), stays
+a plain read (auth::require_system_admin_on, MembershipAuthority::resolve_precheck): it takes no
+lock, since on a pooled connection the lock would end with the statement. Creating an invitation
+decides on that plain read alone and does not serialize with a demotion; an invitation so created
+still redeems only while its inviter could issue it. The team, membership-request and invitation
+doors that decided the admin arm on the pool alone are covered by admin-recheck-on-pool-only-doors.
+
+Who observes: a system admin demoted (directly, or by Revoke or Deactivate) while one of those acts
+is in flight. The act is refused instead of committed (403, or a revoked invitation on accept), and
+the demotion can wait for the length of the act's transaction. No schema change and no response
+shape change. Witnesses, each failing without the lock: `a_demotion_in_flight_refuses_every_admin_arm`
+(open, close and the root forbid) and
+`a_demotion_in_flight_refuses_the_admin_arm_of_a_membership_door` (add a member) in
+`crates/temper-services/tests/public_within_test.rs`, and
+`accept_waits_for_the_inviters_demotion_and_is_refused` in `invitation_service.rs`. Release
+relevance: signal-only.
+'''
