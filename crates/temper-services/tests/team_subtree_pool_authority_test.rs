@@ -380,8 +380,8 @@ async fn dead_child_of(pool: &PgPool, f: &Fixture, slug: &str, parent: &str) -> 
     t
 }
 
-/// Restoring a team that keeps a link to a live root or gating parent re-links it under an instance
-/// team, which is attach's admin-only rule: the owner is refused, a system admin restores it and
+/// Restoring a team that keeps a link to the root or the gating team, live or dead, re-links it
+/// under an instance team, which is attach's admin-only rule: the owner is refused, a system admin restores it and
 /// the outcome names that parent. Under an ordinary parent the owner still restores, and so does
 /// a personal team's owner, whose team's only parent is the root.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
@@ -406,6 +406,25 @@ async fn restoring_under_the_root_or_the_gating_team_is_an_admins_act(pool: PgPo
             done.parents
         );
     }
+
+    // A dead gating parent counts too: an admin's later restore of it would complete the link.
+    let gate2 = create(&pool, &f.admin, "spi-gate2", None, None).await;
+    let t = dead_child_of(&pool, &f, "spi-under-dead-gate", "spi-gate2").await;
+    team_service::delete_team(&pool, &f.admin, gate2)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'spi-gate2'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let refusal = team_service::restore_team(&pool, &f.mgr, t)
+        .await
+        .expect_err("the owner restores under a dead gating parent");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'sp3-gate'")
+        .execute(&pool)
+        .await
+        .unwrap();
 
     let t = dead_child_of(&pool, &f, "spi-plain", "sp-hub").await;
     team_service::restore_team(&pool, &f.mgr, t)
@@ -457,7 +476,7 @@ async fn a_parent_made_the_gating_team_while_the_restore_waits_is_seen(pool: PgP
 
 /// The re-check under the locks sees a pool linked into the subtree concurrently. An admin's
 /// transaction links pool P under grandchild G (and holds G's row) while a non-admin attaches G's
-/// grandparent D under the hub. The non-admin's act locks D's live subtree, so it waits for the
+/// grandparent D under the hub. The non-admin's act locks D's subtree, so it waits for the
 /// admin's commit, re-checks, finds P below D, and is refused. Without the subtree locks it would
 /// read the subtree before P arrived and land P under the hub.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]

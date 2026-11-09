@@ -1346,7 +1346,7 @@ pub async fn restore_team(
 /// dead, so the blind lookup), never the root or the gating team, and never an auto-join team —
 /// restoring one re-enrols every approved profile, which is a system admin's act. The
 /// same holds when such a team sits anywhere in the restored team's subtree, live or dead, and when
-/// the team keeps a link to a live root or gating parent (a personal team excepted).
+/// the team keeps a link to the root or the gating team, live or dead (a personal team excepted).
 async fn restore_authority(
     conn: &mut sqlx::PgConnection,
     caller: &HumanPrincipal,
@@ -1357,14 +1357,15 @@ async fn restore_authority(
     if subtree_holds_pool_on(conn, team_id).await? {
         return Err(ApiError::Forbidden);
     }
-    // A preserved link to a live root or gating parent: restoring it re-links the team under an
-    // instance team, which only a system admin does (attach's rule for an instance parent). A
-    // personal team's only parent is the root, and its owner restores it.
+    // A preserved link to the root or the gating team, live or dead: restoring it re-links the team
+    // under an instance team (at once, or when an admin restores that parent), which only a system
+    // admin does (attach's rule for an instance parent). A personal team's only parent is the root,
+    // and its owner restores it.
     let instance_parent = sqlx::query_scalar!(
         r#"SELECT EXISTS (
              SELECT 1
                FROM kb_teams_parents tp
-               JOIN kb_teams p ON p.id = tp.parent_id AND p.is_active
+               JOIN kb_teams p ON p.id = tp.parent_id
                JOIN kb_teams c ON c.id = tp.child_id AND c.personal_of IS NULL
               WHERE tp.child_id = $1
                 AND (p.slug = $2

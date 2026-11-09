@@ -5,7 +5,7 @@ surfaces = ["http", "mcp"]
 status   = "signal-only"
 body = '''
 Two refusals for a non-admin, in team_service. Restore refuses (403) when the team keeps a link to
-a live root (temper-system) or gating parent, as attach already refuses a root or gating parent; a
+the root (temper-system) or the gating team, live or dead, as attach already refuses a root or gating parent; a
 personal team, whose only parent is the root, is still restored by its owner. Attach, reparent and
 restore count an auto-join or gating team anywhere below the child, live or dead, as a pool (403
 unless a system admin): a pool below a dead team confers nothing yet, but an admin's later restore
