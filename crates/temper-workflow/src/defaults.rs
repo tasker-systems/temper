@@ -20,7 +20,7 @@ pub fn apply_managed_defaults(doc_type: &str, meta: &mut serde_json::Value) {
     // Unknown doctypes are a silent no-op (as before); known doctypes dispatch
     // through the typed enum so the wildcard-free match forces this code to be
     // revisited whenever a new `DocType` variant is added.
-    let Ok(doc_type) = DocType::from_str(doc_type) else {
+    let Ok(doc_type) = doc_type.parse::<DocType>() else {
         return;
     };
 
@@ -60,7 +60,7 @@ pub fn apply_open_defaults(doc_type: &str, meta: &mut serde_json::Value) {
     };
 
     // Unknown doctypes are a silent no-op (as before).
-    let Ok(doc_type) = DocType::from_str(doc_type) else {
+    let Ok(doc_type) = doc_type.parse::<DocType>() else {
         return;
     };
 

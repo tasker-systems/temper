@@ -106,7 +106,7 @@ Statuses for **temper**:
 | RUST-API-5 | partial: wrong_self_convention fails under default clippy -D warnings; constructor and getter naming is review |
 | RUST-API-6 | convention: where ignoring a value is a bug is judged in review |
 | RUST-DOC-1 | uncovered: the published library crates do not warn on missing docs |
-| RUST-ERR-1 | practiced |
+| RUST-ERR-1 | uncovered: temper-substrate returns anyhow::Result and temper-services recovers meaning by downcast; nothing checks |
 | RUST-ERR-2 | convention: whether a default stands in for a required value is judged in review |
 | RUST-ERR-3 | convention: panic-or-Result and # Panics docs are judged in review |
 | RUST-ERR-4 | uncovered: about 10 non-test unwrap() sites; unwrap_used is not enabled |
@@ -114,7 +114,7 @@ Statuses for **temper**:
 | RUST-INIT-1 | practiced |
 | RUST-LINT-1 | uncovered: no workspace lint table yet; adopting the canonical one is the next step |
 | RUST-LINT-2 | gated: .github/workflows/code-quality.yml#rust-quality |
-| RUST-LINT-3 | uncovered: 43 #[allow] without a reason; the lints that refuse them arrive with the lint table |
+| RUST-LINT-3 | uncovered: 44 #[allow] without a reason; the lints that refuse them arrive with the lint table |
 | RUST-LINT-4 | convention: a review practice; the lint table's adoption is measured first (266 findings) and lands as its own change |
 | RUST-LINT-5 | n/a: no lint table yet; clippy runs its default groups |
 | RUST-MACRO-1 | convention: macro or function is judged in review |
@@ -132,7 +132,7 @@ Statuses for **temper**:
 | RUST-UNSAFE-2 | uncovered: unsafe in temper-ingest and temper-cli is not a registered exception |
 | RUST-UNSAFE-3 | n/a: no FFI bindings; the SDKs are generated HTTP clients |
 | SC-ADV-1 | gated: .github/workflows/quality-gate.yml#rust-gate |
-| SC-ADV-2 | convention: each ignore is reviewed by hand; five FIX-PENDING entries state no reachability |
+| SC-ADV-2 | convention: each ignore and its reachability statement is reviewed by hand |
 | SC-DENY-1 | gated: .github/workflows/quality-gate.yml#rust-gate |
 | SC-DENY-2 | gated: .github/workflows/quality-gate.yml#rust-gate |
 | SC-DENY-3 | gated: .github/workflows/quality-gate.yml#rust-gate |
@@ -181,11 +181,11 @@ Statuses for **temper**:
 | TS-TOOL-3 | uncovered: four TypeScript version ranges, one a release candidate; Biome is a range |
 | TS-TYPE-1 | uncovered: noExplicitAny is warn-only |
 | TS-TYPE-2 | uncovered: noNonNullAssertion is warn-only |
-| TW-1 | uncovered: about 7 of 19 tripwires state no NOT CHECKED section |
-| TW-2 | uncovered: 5 of 19 tripwires lack --list or UPDATE_BASELINE |
-| TW-3 | practiced |
-| TW-4 | uncovered: audit-handler-authz-drift.sh cannot be pointed at a fixture |
-| TW-5 | partial: 18 of 19 tripwires' bite tests run in quality-gate.yml#guard-tests; audit-handler-authz-drift has none, and nothing requires one |
+| TW-1 | uncovered: 19 of 20 tripwires carry no NOT CHECKED heading; most name a limit elsewhere in header prose |
+| TW-2 | uncovered: 6 of 20 tripwires lack --list or UPDATE_BASELINE; audit-context-write-grants omits UPDATE_BASELINE deliberately, its expected set being empty |
+| TW-3 | partial: 19 of 20 tripwires fail on an empty scan, by an explicit check or a non-empty baseline; audit-passport-identity-header passes on an empty file list |
+| TW-4 | partial: every tripwire takes an override its harness drives; audit-grant-sinks' covers only its SQL half (MIGRATIONS_DIR) |
+| TW-5 | partial: 20 of 20 tripwires' bite tests run in quality-gate.yml#guard-tests; nothing requires a new tripwire to have one |
 | TW-6 | partial: the glob-and-coverage check is local (cargo make tripwires); CI runs a hand-kept list |
 | TW-7 | convention: what a tripwire keys on is judged when it is written |
 
