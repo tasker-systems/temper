@@ -582,3 +582,223 @@ async fn a_revoke_of_the_reviewer_and_the_decision_never_deadlock(pool: PgPool) 
         }
     }
 }
+
+// ── The fallbacks and the manager re-checks ───────────────────────────────────────────────────────
+
+async fn join(pool: &PgPool, team: Uuid, who: Uuid, role: &str) {
+    sqlx::query(
+        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, $3::team_role) \
+         ON CONFLICT (team_id, profile_id) DO UPDATE SET role = EXCLUDED.role",
+    )
+    .bind(team)
+    .bind(who)
+    .bind(role)
+    .execute(pool)
+    .await
+    .expect("seed member");
+}
+
+/// A membership change in a transaction left open, under the team's row lock (the lock every
+/// membership writer takes): `who`'s row on `team` is set to `role`, or removed when `None`.
+async fn membership_change_in_flight(
+    pool: &PgPool,
+    team: Uuid,
+    who: Uuid,
+    role: Option<&str>,
+) -> (sqlx::Transaction<'static, sqlx::Postgres>, i32) {
+    let mut holder = pool.begin().await.unwrap();
+    let pid = backend_pid(&mut holder).await;
+    sqlx::query("SELECT id FROM kb_teams WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(team)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    match role {
+        Some(role) => {
+            sqlx::query(
+                "UPDATE kb_team_members SET role = $3::team_role \
+                 WHERE team_id = $1 AND profile_id = $2",
+            )
+            .bind(team)
+            .bind(who)
+            .bind(role)
+            .execute(&mut *holder)
+            .await
+            .unwrap();
+        }
+        None => {
+            sqlx::query("DELETE FROM kb_team_members WHERE team_id = $1 AND profile_id = $2")
+                .bind(team)
+                .bind(who)
+                .execute(&mut *holder)
+                .await
+                .unwrap();
+        }
+    }
+    (holder, pid)
+}
+
+/// An admin demoted mid-detach who also manages the child is re-decided on the child arm under the
+/// same locks, and detaches.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn detach_by_a_demoted_admin_who_manages_the_child(pool: PgPool) {
+    let admin = admin(&pool).await;
+    let (p, c) = (
+        team(&pool, "ra-parent").await,
+        team(&pool, "ra-child").await,
+    );
+    link(&pool, p, c).await;
+    join(&pool, c, admin, "maintainer").await;
+    let (holder, pid) = demotion_in_flight(&pool, admin).await;
+    let p2 = pool.clone();
+    let contender = tokio::spawn(async move {
+        let by = test_support::human_principal_for(&p2, admin).await;
+        team_service::detach_child(&p2, &by, p, c).await
+    });
+    await_blocked_by(&pool, pid).await;
+    holder.commit().await.unwrap();
+    contender
+        .await
+        .unwrap()
+        .expect("the child's maintainer detaches it");
+    assert!(!linked(&pool, p, c).await);
+}
+
+/// The manager arm of `update_team` on an ordinary team, decided again under the team lock: a
+/// manager demoted to member after the pool check is refused, and the name is unchanged.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn update_by_a_manager_demoted_after_the_pool_check(pool: PgPool) {
+    let manager = profile(&pool, "ra-manager").await;
+    test_support::approve(&pool, manager).await;
+    let t = team(&pool, "ra-team").await;
+    join(&pool, t, manager, "maintainer").await;
+    let (holder, pid) = membership_change_in_flight(&pool, t, manager, Some("member")).await;
+    let p2 = pool.clone();
+    let contender = tokio::spawn(async move {
+        let by = test_support::human_principal_for(&p2, manager).await;
+        team_service::update_team(
+            &p2,
+            &by,
+            t,
+            &TeamUpdateRequest {
+                name: Some("renamed".into()),
+                description: None,
+            },
+        )
+        .await
+    });
+    await_blocked_by(&pool, pid).await;
+    holder.commit().await.unwrap();
+    let err = contender.await.unwrap().unwrap_err();
+    assert!(matches!(err, ApiError::Forbidden), "{err:?}");
+    assert_eq!(team_name(&pool, t).await, "ra-team");
+}
+
+async fn invitation(pool: &PgPool, team: Uuid, by: Uuid, email: &str, token: &str) -> Uuid {
+    sqlx::query_scalar(
+        "INSERT INTO kb_team_invitations (id, team_id, invited_email, invited_by_profile_id, role, token) \
+         VALUES (uuid_generate_v7(), $1, $2, $3, 'member', $4) RETURNING id",
+    )
+    .bind(team)
+    .bind(email)
+    .bind(by)
+    .bind(token)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+async fn invitation_revoked(pool: &PgPool, inv: Uuid) -> bool {
+    sqlx::query_scalar("SELECT revoked_at IS NOT NULL FROM kb_team_invitations WHERE id = $1")
+        .bind(inv)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// `revoke_invitation` re-runs the whole membership authority under the team lock: a manager
+/// removed from the team after the pool check is refused, and the invitation stays live.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn revoke_invitation_by_a_manager_removed_after_the_pool_check(pool: PgPool) {
+    let manager = profile(&pool, "ra-manager").await;
+    test_support::approve(&pool, manager).await;
+    let t = team(&pool, "ra-team").await;
+    join(&pool, t, manager, "owner").await;
+    let inv = invitation(&pool, t, manager, "x@example.com", "ra-token").await;
+    let (holder, pid) = membership_change_in_flight(&pool, t, manager, None).await;
+    let p2 = pool.clone();
+    let contender = tokio::spawn(async move {
+        let by = test_support::human_principal_for(&p2, manager).await;
+        invitation_service::revoke_invitation(&p2, &by, t, inv).await
+    });
+    await_blocked_by(&pool, pid).await;
+    holder.commit().await.unwrap();
+    let err = contender.await.unwrap().unwrap_err();
+    assert!(matches!(err, ApiError::Forbidden), "{err:?}");
+    assert!(!invitation_revoked(&pool, inv).await);
+}
+
+/// Revoke and accept both take the team row before the invitation row, so they serialize: from one
+/// start line, exactly one of them wins, and the roster agrees with which.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn revoke_and_accept_of_one_invitation_serialize(pool: PgPool) {
+    let owner = profile(&pool, "ra-owner").await;
+    test_support::approve(&pool, owner).await;
+    for round in 0..12 {
+        let t = team(&pool, &format!("ra-team-{round}")).await;
+        join(&pool, t, owner, "owner").await;
+        let invitee = profile(&pool, &format!("ra-invitee-{round}")).await;
+        test_support::approve(&pool, invitee).await;
+        let email = format!("invitee-{round}@example.com");
+        sqlx::query(
+            "INSERT INTO kb_profile_auth_links \
+               (id, profile_id, auth_provider, auth_provider_user_id, email, email_verified, is_default) \
+             VALUES (gen_random_uuid(), $1, 'test', $2, $3, true, true)",
+        )
+        .bind(invitee)
+        .bind(format!("uid-{round}"))
+        .bind(&email)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let token = format!("ra-token-{round}");
+        let inv = invitation(&pool, t, owner, &email, &token).await;
+
+        let start = std::sync::Arc::new(tokio::sync::Barrier::new(2));
+        let (p1, s1) = (pool.clone(), start.clone());
+        let revoke = tokio::spawn(async move {
+            let by = test_support::human_principal_for(&p1, owner).await;
+            s1.wait().await;
+            invitation_service::revoke_invitation(&p1, &by, t, inv).await
+        });
+        let (p2, s2, tok) = (pool.clone(), start.clone(), token.clone());
+        let accept = tokio::spawn(async move {
+            let by = test_support::human_principal_for(&p2, invitee).await;
+            s2.wait().await;
+            invitation_service::accept_invitation(&p2, &by, &tok).await
+        });
+        let (revoked, accepted) = (revoke.await.unwrap(), accept.await.unwrap());
+        let member: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM kb_team_members WHERE team_id = $1 AND profile_id = $2)",
+        )
+        .bind(t)
+        .bind(invitee)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        match (&revoked, &accepted) {
+            (Ok(()), Err(ApiError::BadRequest(_) | ApiError::NotFound(_))) => {
+                assert!(!member, "round {round}: revoked, yet the invitee joined");
+                assert!(invitation_revoked(&pool, inv).await);
+            }
+            (Err(ApiError::BadRequest(_)), Ok(_)) => {
+                assert!(
+                    member,
+                    "round {round}: accepted, yet the invitee is not on the team"
+                );
+                assert!(!invitation_revoked(&pool, inv).await);
+            }
+            other => panic!("round {round}: not one serial order: {other:?}"),
+        }
+    }
+}

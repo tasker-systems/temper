@@ -1668,7 +1668,7 @@ pub enum TeamAction {
         team: String,
     },
     /// Attach a child team under a parent team (a manager of both; a temper-system or gating-team
-    /// parent, or an auto-join child, a system admin)
+    /// parent, or a child with an auto-join or the gating team in or below it, a system admin)
     ///
     /// Every member of the child, at any role, then reads everything attached to the parent and
     /// its ancestors. Also the way to give a team a second parent.
@@ -1694,6 +1694,8 @@ pub enum TeamAction {
     /// Restore a soft-deleted team (its owner, or a system admin)
     ///
     /// Every preserved membership, parent link and child's reach revives; the output lists them.
+    /// A system admin's act alone when the team keeps a link to temper-system or the gating team,
+    /// or when it or any team below it, live or deleted, is an auto-join or the gating team.
     /// A deleted team is no longer in `team list`, so name it by UUID.
     Restore {
         /// Team UUID (or decorated ref)

@@ -149,7 +149,8 @@ impl<'a> TeamsClient<'a> {
     }
 
     /// PUT /api/teams/{id}/children/{child_id} — attach a child team under this team (a manager
-    /// of both; a temper-system or gating parent, or an auto-join child, a system admin).
+    /// of both; a temper-system or gating parent, or a child with an auto-join or the gating team
+    /// in or below it, live or deleted, a system admin).
     pub async fn attach_child(&self, team_id: Uuid, child_id: Uuid) -> Result<AttachChildOutcome> {
         let token = self.http.resolve_token()?;
         let op = &ops::ATTACH_CHILD_TEAM;
