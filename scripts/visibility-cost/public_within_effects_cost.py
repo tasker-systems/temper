@@ -110,8 +110,10 @@ END
 $t$;
 """
 
-SYS = "(SELECT e.id FROM kb_entities e JOIN kb_profiles p ON p.id = e.profile_id " \
-      "WHERE p.handle = 'system' AND e.name = 'system')"
+SYS = (
+    "(SELECT e.id FROM kb_entities e JOIN kb_profiles p ON p.id = e.profile_id "
+    "WHERE p.handle = 'system' AND e.name = 'system')"
+)
 ACTOR = "(SELECT id FROM kb_profiles WHERE handle = 'system')"
 
 
@@ -121,23 +123,21 @@ def team(slug):
 
 ACTS = {
     "link": f"SELECT _admin_team_parent_link_act({SYS}, {ACTOR}, 'link', {team('d1')}, "
-            f"{team('newcomer')})",
+    f"{team('newcomer')})",
     "delete": f"SELECT _admin_team_lifecycle_act({SYS}, {ACTOR}, {team('d1')}, 'deleted')",
     "root forbid": f"SELECT _admin_public_within_policy_write({SYS}, {ACTOR}, "
-                   f"{team('temper-system')}, true)",
+    f"{team('temper-system')}, true)",
     "open": f"SELECT _public_within_open_locks({team('extra')}, {team('org')}), "
-            f"_admin_public_within_write({SYS}, {ACTOR}, {team('extra')}, {team('org')}, "
-            f"'opened', false)",
+    f"_admin_public_within_write({SYS}, {ACTOR}, {team('extra')}, {team('org')}, "
+    f"'opened', false)",
 }
 
 # Per row, over every row: the whole predicate and each of its parts.
 PER_ROW = {
-    "public_within_row_effective":
-        "public_within_row_effective(pw.team_id, pw.anchor_id, pw.instance_wide)",
+    "public_within_row_effective": "public_within_row_effective(pw.team_id, pw.anchor_id, pw.instance_wide)",
     "  public_within_allowed_over": "public_within_allowed_over(pw.team_id)",
     "  team_is_root_or_gating": "team_is_root_or_gating(pw.team_id)",
-    "  live chain (team_ancestors)":
-        "EXISTS (SELECT 1 FROM team_ancestors(pw.team_id) a WHERE a.team_id = pw.anchor_id)",
+    "  live chain (team_ancestors)": "EXISTS (SELECT 1 FROM team_ancestors(pw.team_id) a WHERE a.team_id = pw.anchor_id)",
     "  anchor_subtree_holds_pool": "anchor_subtree_holds_pool(pw.anchor_id)",
 }
 
@@ -160,22 +160,36 @@ def main():
         dsn = f"{args.server}/{DB}"
         psql(f"{args.server}/postgres", f"DROP DATABASE IF EXISTS {DB} WITH (FORCE)")
         psql(f"{args.server}/postgres", f"CREATE DATABASE {DB} TEMPLATE template0")
-        run(["sqlx", "migrate", "run", "--source", os.path.join(REPO, "migrations"),
-             "--database-url", dsn])
+        run(
+            [
+                "sqlx",
+                "migrate",
+                "run",
+                "--source",
+                os.path.join(REPO, "migrations"),
+                "--database-url",
+                dsn,
+            ]
+        )
         psql(dsn, WORLD % {"divisions": max(1, n // 100)})
         rows = int(psql(dsn, "SELECT count(*) FROM kb_team_public_within").strip())
         col = {}
         for name, sql in ACTS.items():
             col[name] = timed(dsn, sql, args.samples)
         for name, expr in PER_ROW.items():
-            ms = timed(dsn, f"SELECT count(*) FILTER (WHERE {expr}) FROM kb_team_public_within pw",
-                       args.samples)
+            ms = timed(
+                dsn,
+                f"SELECT count(*) FILTER (WHERE {expr}) FROM kb_team_public_within pw",
+                args.samples,
+            )
             col[name + " (per row)"] = ms / rows
         results[rows] = col
 
     sizes = sorted(results)
-    print(f"median ms, {args.samples} samples after two warm-ups; per-row lines are one evaluation "
-          f"over every row, divided by the row count\n")
+    print(
+        f"median ms, {args.samples} samples after two warm-ups; per-row lines are one evaluation "
+        f"over every row, divided by the row count\n"
+    )
     print("| act | " + " | ".join(f"{n} rows" for n in sizes) + " |")
     print("|---|" + "---|" * len(sizes))
     for name in results[sizes[0]]:
