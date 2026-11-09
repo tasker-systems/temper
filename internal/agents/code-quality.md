@@ -23,9 +23,12 @@ What follows is temper's own.
   in the body, after the root span exists, and recording onto "the current span" silently lands on
   the root until the first nested span appears. *(gated: `act_span_declares_every_act_field`,
   e2e `logging_test.rs`)* See `internal/development/span-field-conventions.md`.
-- **Schema-required frontmatter is populated at write time**, on every create and update path
-  (`apply_doc_type_defaults`); `ensure_managed_identity_keys` runs on both send and receive sides.
-  *(convention)*
+- **Schema-required frontmatter is populated at write time.** Create and update share one
+  managed-tier pipeline, `DbBackend`'s `validate_managed_meta_pipeline`: strip echoed system keys,
+  apply doc-type defaults (`apply_defaults_value`), validate against the doc-type schema. Identity
+  keys come from typed columns (`assemble_frontmatter_document`), never from the payload.
+  *(convention: a write that misses a required field is refused at runtime by
+  `validate_managed_meta`; nothing checks that a new write path uses the pipeline)*
 
 ## SQL
 

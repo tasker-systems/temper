@@ -373,13 +373,6 @@ pub fn validate_open_meta_keys(open_meta: &serde_json::Value) -> Result<(), Stri
     Ok(())
 }
 
-/// Remove identity and tier-1 audit fields from input `managed_meta`.
-///
-/// Agents may echo these back from a `get_resource` call; they should not cause validation errors.
-/// Uses `IDENTITY_FIELDS` and a subset of `TIER1_SYSTEM_FIELDS`. Intentionally does NOT strip
-/// `temper-context` or `temper-type` — those remain so the update path can detect structural-move
-/// attempts. (Moved here from `temper-api`'s `ingest_service` at the WS6 collapse — a pure helper over
-/// temper-core's own field registry, used by the substrate create path.)
 /// Fill the managed-tier provenance trio from the act envelope, never overwriting a
 /// value the caller supplied.
 ///
@@ -388,8 +381,8 @@ pub fn validate_open_meta_keys(open_meta: &serde_json::Value) -> Result<(), Stri
 /// `managed_meta` — so a node's provenance stamp read back empty while three separate
 /// stewardship docs insisted every authored node carry it. Deriving it here, on the
 /// shared write path, means every surface (CLI, MCP, API) is stamped uniformly and the
-/// contract cannot drift. This is the receive-side symmetric-defense pattern that
-/// `ensure_managed_identity_keys` uses.
+/// contract cannot drift. The receiver derives the value from a typed source rather than trusting
+/// the payload, as [`assemble_frontmatter_document`] does for identity keys.
 ///
 /// Fill-missing, never overwrite: an MCP agent that already passes an explicit
 /// `managed_meta` keeps its values.
@@ -419,6 +412,13 @@ pub fn stamp_provenance(meta: &mut ManagedMeta, act: &ActContext) {
     }
 }
 
+/// Remove identity and tier-1 audit fields from input `managed_meta`.
+///
+/// Agents may echo these back from a `get_resource` call; they should not cause validation errors.
+/// Uses `IDENTITY_FIELDS` and a subset of `TIER1_SYSTEM_FIELDS`. Intentionally does NOT strip
+/// `temper-context` or `temper-type` — those remain so the update path can detect structural-move
+/// attempts. The first step of the managed-tier pipeline that create and update share in
+/// `DbBackend`.
 pub fn strip_system_managed_fields(mut meta: Value) -> Value {
     // temper-context and temper-type are kept for structural-move detection.
     const KEEP_FOR_MOVE_DETECTION: &[&str] = &["temper-context", "temper-type"];

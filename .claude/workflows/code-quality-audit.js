@@ -25,7 +25,7 @@ const RULE_IDS = [
 
 const RUBRIC = `
 CQ-1  Single responsibility / fn length: a fn past ~60 lines, or one that reads "phase 1 … phase 2 …", or whose summary needs an "and". (A flat match over many variants is NOT a violation.)
-CQ-2  Keys unique-by-construction, not loose markers: diff/dedup/join on a non-unique marker (e.g. origin_uri); identity keys not injected from one typed source on both sides of a boundary.
+CQ-2  Keys unique-by-construction, not loose markers: diff/dedup/join on a non-unique marker (e.g. origin_uri); identity keys taken from the payload instead of injected from one typed source.
 CQ-3  Parse don't validate: bare Uuid/String where a newtype belongs; revalidation scattered downstream; &String/&Vec<T> params instead of &str/&[T].
 CQ-4  Names carry responsibility: a TYPE named Manager/Helper/Service/Factory/Util; a stringly-typed match "literal" over a bounded set the code owns. (Established MODULE names like services/backend are fine.)
 CQ-5  Params structs: >5 domain params on a fn; #[expect(clippy::too_many_arguments)].

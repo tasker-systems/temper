@@ -36,12 +36,11 @@ single most common structural smell in this repo.
   construction and operations that genuinely need `self` (`M-REGULAR-FN`).
 
 **Worked example — the motivating case for this doc.** `DbBackend::reconcile_apply`
-(`crates/temper-api/src/backend/db_backend.rs`) was ~200 lines bundling: read-the-live-slice,
-the resource create/update/no-op loop, the edge-assert loop, and the tombstone fold loop. The
-fix is to extract `read_kernel_index` / `apply_resource_phase` / `apply_edge_phase` /
-`apply_tombstone_phase`, each taking `&mut PgConnection`, leaving `reconcile_apply` a short
-orchestrator. The diff stays behavior-identical; the *shape* tells the reader the four phases
-at a glance.
+(`crates/temper-services/src/backend/db_backend.rs`) is a short orchestrator over named phases:
+`read_kernel_index` reads the live slice, then `apply_resource_phase` (create/update/no-op),
+`apply_edge_phase`, `apply_tombstone_phase` and `apply_telos_phase` run in order, each taking
+`&mut PgConnection`. Bundled into one ~200-line body, the same behavior hid its phase order;
+the *shape* tells the reader the phases at a glance.
 
 ### 1.2 Identity and keys: unique-by-construction, not loose markers
 
@@ -52,9 +51,11 @@ drift into a load-bearing key.
 - Diff, dedup, and join on a value that is **unique by construction** — a UUIDv7 primary key,
   a stable landmark id. Reconcile keys on the entry's pre-generated `id`, *never* on
   `origin_uri`, precisely because `origin_uri` is loose, non-unique attribution.
-- When two sides of a boundary must agree on an identity, both sides inject the canonical keys
-  from a **single typed source** (the `ensure_managed_identity_keys` symmetric-defense pattern)
-  — so the wire payload cannot drift between sender and receiver.
+- When two sides of a boundary must agree on an identity, the canonical keys come from a
+  **single typed source**, never from the payload: `assemble_frontmatter_document` strips any
+  identity or system key a caller sent and injects `temper-id` / `temper-title` / `temper-slug`
+  and the rest from the typed `FrontmatterIdentity` — so the wire payload cannot drift the
+  identity.
 - Encode the key's uniqueness where it is created, not by convention downstream. A "we always
   set this so it's effectively unique" marker is a latent bug; make it unique-by-construction
   or treat it as the marker it is.
@@ -186,9 +187,9 @@ one is a blocking review finding regardless of correctness.
   lives in `temper-core` with `ts-rs` derives; both sides share the generated type. Never
   hand-mirror a Rust struct as a zod schema.
 - **Persistence is its own layer; surfaces dispatch through `DbBackend`.** SQL and persistence
-  CRUD live in a dedicated persistence layer — historically `temper-api/src/services/`, now
-  consolidating into **`temper-substrate`** (`writes` / `readback`) — *never* inline in a
-  surface, and never mixed in with the behavior abstraction that calls it. Surfaces (HTTP
+  CRUD live in a dedicated persistence layer — **`temper-substrate`** (`writes` / `readback`)
+  and the `temper-services` service modules (`crates/temper-services/src/services/`) — *never*
+  inline in a surface, and never mixed in with the behavior abstraction that calls it. Surfaces (HTTP
   handlers, MCP tools, CLI actions) build a backend per request and dispatch one operations
   command per inbound call for **writes** — they never call persistence directly and never inline
   `sqlx::query!()`. Read paths (list, show, get_meta, search) stay service-direct by design. (The
@@ -200,11 +201,14 @@ one is a blocking review finding regardless of correctness.
 - **Pino structured logging (TypeScript).** Use pino (`packages/temper-cloud/src/logger.ts`)
   with contextual field objects; structured fields, hierarchical names, redact sensitive data
   (`M-LOG-STRUCTURED`). No `console.log`.
-- **Schema-required defaults at write time.** Doc-type schemas in `temper-core/types/schemas/`
-  declare required frontmatter; creation and update paths populate every required field at
-  write time via `apply_doc_type_defaults` / `Frontmatter::set_managed_meta` — never rely on a
-  downstream backfill. Inject canonical identity keys (`temper-title`, `temper-slug`) via
-  `ensure_managed_identity_keys` on **both** sides of the wire (§1.2).
+- **Schema-required defaults at write time.** Doc-type schemas
+  (`crates/temper-workflow/schemas/`) declare required frontmatter; create and update share one
+  managed-tier pipeline in `DbBackend` (`validate_managed_meta_pipeline`): strip caller-echoed
+  system keys (`strip_system_managed_fields`), apply doc-type defaults (`apply_defaults_value`),
+  then validate against the doc-type schema (`validate_managed_meta`), which refuses the write on
+  a miss — never rely on a downstream backfill. Canonical identity keys (`temper-title`,
+  `temper-slug`) are injected from typed columns by `assemble_frontmatter_document`, never taken
+  from the payload (§1.2).
 - **Bounded channels.** `tokio::sync::mpsc::unbounded_channel()` is forbidden in production
   code (zero exist today — keep it that way); a channel's capacity is configured, not a magic
   number at the construction site. *(borrowed from tasker-core tenet #10)*
@@ -213,8 +217,8 @@ one is a blocking review finding regardless of correctness.
 
 ## 3. SQL discipline
 
-- Production queries live in the persistence layer (`temper-api/src/services/`, consolidating
-  into `temper-substrate`) and use the compile-time-checked macros `sqlx::query!()` /
+- Production queries live in the persistence layer (`temper-substrate`, and the
+  `temper-services` service modules) and use the compile-time-checked macros `sqlx::query!()` /
   `query_as!()` / `query_scalar!()`. **This rule is enforced** —
   `.github/scripts/audit-sqlx-macro-exceptions.sh` pins the set of non-macro production queries
   against an allow-list where every entry carries one of four written reasons (`dynamic-table`,
@@ -302,7 +306,7 @@ violation is "what it looks like in the wild" — the trigger an auditor greps/r
 | ID | Rule (§) | A violation looks like |
 |----|----------|------------------------|
 | **CQ-1** | Single responsibility / length (§1.1) | A function past ~60 lines, or one that reads "phase 1 … phase 2 …", or whose summary needs an "and". |
-| **CQ-2** | Keys unique-by-construction, not loose markers (§1.2) | Diffing/dedup/joining on a non-unique marker (e.g. `origin_uri`); identity keys not injected from one typed source on both sides of a boundary. |
+| **CQ-2** | Keys unique-by-construction, not loose markers (§1.2) | Diffing/dedup/joining on a non-unique marker (e.g. `origin_uri`); identity keys taken from the payload instead of injected from one typed source. |
 | **CQ-3** | Parse, don't validate (§1.3) | Bare `Uuid`/`String` where a newtype belongs; revalidation scattered downstream instead of parse-at-boundary; `&String`/`&Vec<T>` params. |
 | **CQ-4** | Names carry responsibility (§1.4) | A *type* named `Manager`/`Helper`/`Service`/`Factory`/`Util`; a stringly-typed `match "literal"` over a bounded set the code owns. |
 | **CQ-5** | Params structs (§1.5) | >5 domain params on a fn; `#[expect(clippy::too_many_arguments)]`. |
