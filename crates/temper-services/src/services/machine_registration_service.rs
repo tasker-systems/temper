@@ -197,14 +197,27 @@ pub async fn provision(
     // Auth before writes: a rejected registration must leave the DB completely unchanged —
     // no orphaned agent profile, no partial enrollment. Resolving before the transaction is
     // what makes that assertable.
-    let reach = machine_authz::authorize_registration(
+    let reach = match machine_authz::authorize_registration(
         pool,
         authed,
         req.owner_team_id,
         &req.teams,
         &req.grants,
     )
-    .await?;
+    .await
+    {
+        Ok(reach) => reach,
+        // A demotion that commits between the door's read and this one resolves no authority.
+        // Under the admin-only door that caller is told what a non-admin is told at the door; an
+        // admin refused for the request itself (the role ceiling) keeps its own refusal.
+        Err(ApiError::Forbidden)
+            if admin_only
+                && !crate::services::access_service::is_system_admin(pool, caller).await? =>
+        {
+            return Err(provision_needs_an_admin());
+        }
+        Err(other) => return Err(other),
+    };
     refuse_minted_namespace(&req.client_id)?;
 
     // Resolve the caller's emitter BEFORE the transaction — matching the auth-before-tx pattern above,
@@ -241,9 +254,12 @@ pub async fn provision(
     // The friendly-conflict check. It is NOT the race guard — two concurrent provisions both
     // pass it. The unique constraints are the guard, and `map_duplicate` turns either one into
     // a 409 naming the client id.
-    if machine_client_service::lookup_by_client_id(pool, &req.client_id)
-        .await?
-        .is_some()
+    if sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM kb_machine_clients WHERE client_id = $1) AS "taken!""#,
+        req.client_id,
+    )
+    .fetch_one(&mut *tx)
+    .await?
     {
         return Err(ApiError::Conflict(format!(
             "machine client '{}' is already registered",
@@ -403,6 +419,31 @@ pub async fn issue(
     })
 }
 
+/// The source rows `rebind` refuses, whoever asks.
+///
+/// A revoked credential is dead; it must be re-created by a fresh `provision`, never resurrected
+/// under a new `client_id`. Rebinding one would revive its surviving grants and memberships (revoke
+/// leaves them, D11), silently undoing a deliberate revocation. Mirrors `rotate_secret`'s
+/// revoked-source guard.
+///
+/// A temper-issued machine has a secret to rotate. Rebinding it would move its profile onto an
+/// external client id, and on an instance running its own AS that machine stops authenticating.
+/// After the revoked check, so a revoked source is told to issue anew rather than to rotate.
+fn refuse_unrebindable(client_id: &str, issuer: &str, revoked: bool) -> ApiResult<()> {
+    if revoked {
+        return Err(ApiError::BadRequest(format!(
+            "machine client '{client_id}' is revoked; issue a new credential instead"
+        )));
+    }
+    if issuer == machine_door::TEMPER_ISSUER {
+        return Err(ApiError::BadRequest(format!(
+            "machine client '{client_id}' was issued by temper; rotate its secret with \
+             `temper admin machine rotate-secret` instead"
+        )));
+    }
+    Ok(())
+}
+
 /// Point a fresh `client_id` at an EXISTING agent profile, revoking the old row in the
 /// same transaction unless an overlap window was requested (D8).
 ///
@@ -453,10 +494,13 @@ pub async fn rebind(
     // The new client id is the caller's choice, so it may not sit in a namespace temper mints.
     refuse_minted_namespace(&req.client_id)?;
 
-    // The source's profile, read without a lock: a credential row never changes profile, and the
-    // row's state is read again under its lock below, after the severance takes its team locks.
-    let profile = sqlx::query_scalar!(
-        "SELECT profile_id FROM kb_machine_clients WHERE id = $1",
+    // The source, read without a lock: a credential row never changes profile (it is permanent),
+    // so the profile read here is the one the writes use. Its revoked and issuer state are checked
+    // now, so a request doomed by them is answered before the severance takes anyone's team locks,
+    // and again under the row's lock below, which is the check that holds.
+    let source = sqlx::query!(
+        r#"SELECT profile_id, client_id, issuer, revoked_at
+             FROM kb_machine_clients WHERE id = $1"#,
         req.from_machine_client_id,
     )
     .fetch_optional(&mut *tx)
@@ -464,6 +508,12 @@ pub async fn rebind(
     .ok_or_else(|| {
         ApiError::NotFound(machine_client_service::MACHINE_CLIENT_REFUSAL.to_string())
     })?;
+    refuse_unrebindable(
+        &source.client_id,
+        &source.issuer,
+        source.revoked_at.is_some(),
+    )?;
+    let profile = source.profile_id;
 
     // A rebound client id is a new credential for the same principal. One minted by anyone but the
     // person whose personal team admits the machine costs the machine that team: the admin manages
@@ -478,30 +528,12 @@ pub async fn rebind(
              FROM kb_machine_clients WHERE id = $1 FOR UPDATE"#,
         req.from_machine_client_id,
     )
-    .fetch_one(&mut *tx)
-    .await?;
-
-    // A revoked credential is dead; it must be re-created by a fresh `provision`, never
-    // resurrected under a new `client_id`. Rebinding one would revive its surviving grants and
-    // memberships (revoke leaves them, D11), silently undoing a deliberate revocation. Mirrors
-    // `rotate_secret`'s revoked-source guard.
-    if old.revoked_at.is_some() {
-        return Err(ApiError::BadRequest(format!(
-            "machine client '{}' is revoked; issue a new credential instead",
-            old.client_id
-        )));
-    }
-
-    // A temper-issued machine has a secret to rotate. Rebinding it would move its profile onto an
-    // external client id, and on an instance running its own AS that machine stops authenticating.
-    // After the revoked check, so a revoked source is told to issue anew rather than to rotate.
-    if old.issuer == machine_door::TEMPER_ISSUER {
-        return Err(ApiError::BadRequest(format!(
-            "machine client '{}' was issued by temper; rotate its secret with \
-             `temper admin machine rotate-secret` instead",
-            old.client_id
-        )));
-    }
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| {
+        ApiError::NotFound(machine_client_service::MACHINE_CLIENT_REFUSAL.to_string())
+    })?;
+    refuse_unrebindable(&old.client_id, &old.issuer, old.revoked_at.is_some())?;
 
     // A second auth link for the same profile, under the new client id.
     sqlx::query!(

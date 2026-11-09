@@ -24,8 +24,9 @@ revoke of the source committing during a rebind used to leave the machine with a
 id; now the rebind waits for it and is refused (400, revoked).
 
 Lock order: governance, then the personal teams the machine is severed from, then the source
-credential row. A demotion takes none of those rows; a machine revoke and a secret rotation take
-team rows before the credential row too.
+credential row. A demotion takes none of those rows. A secret rotation and an owner's machine
+revoke take their team rows before the credential row too; an admin's machine revoke takes no team
+row (the machine's standing row, then governance, then the credential row).
 
 Who observes: a system admin demoted while one of these acts is in flight, and an admin rebinding a
 machine whose credential is being revoked. No schema change and no response shape change.

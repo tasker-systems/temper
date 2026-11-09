@@ -543,11 +543,15 @@ async fn issue_by_a_demoted_admin_who_owns_the_team(pool: PgPool) {
 
 // ── Lock order ────────────────────────────────────────────────────────────────────────────────────
 
-/// A rebind and an admin's revoke of the same source, from one start line, many times. The machine
-/// sits on a person's personal team, so the rebind takes governance, then that team and its member
-/// row (the severance), then the credential row; the revoke takes the machine's standing row, the
-/// revoking admin's governance row, then the credential row, then the standing act. Every round
-/// ends in one serial order and none deadlocks:
+/// A rebind and an admin's revoke of the same source, from one start line, many times: a lock-order
+/// witness, not a proof. The machine sits on a person's personal team, so the rebind takes
+/// governance, then that team and its member row (the severance), then the credential row; the
+/// revoke takes the machine's standing row, the revoking admin's governance row, then the
+/// credential row, then the standing act. No round in the run may deadlock (a deadlock aborts one
+/// side, which fails the round), and each round's state must match the order that landed. The
+/// revoke runs pool reads before its transaction, so the rebind-first order is the usual one; the
+/// revoke-first order is pinned by construction in `rebind_waits_for_a_revoke_of_its_source`. The
+/// two orders:
 ///
 /// - the rebind first: it revoked the source itself, its new credential is live, and the revoke,
 ///   finding the source revoked and another credential live, leaves standing alone;
