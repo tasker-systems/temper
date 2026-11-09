@@ -1,8 +1,9 @@
 import { error } from '@sveltejs/kit';
 import { ApiError, apiGet } from '$lib/server/api';
 import { bounded } from '$lib/server/bounded';
-import type { ResourceListResponse } from '$lib/types';
+import type { ContextRow, ResourceListResponse } from '$lib/types';
 import type { ShapeView } from '$lib/types/generated/data_artifact_shape';
+import type { ReachVia } from '$lib/types/generated/reach';
 import { doorParams } from '$lib/vault-filters';
 import { PLACE_NOT_AVAILABLE, toVaultList } from '$lib/vault-list';
 import type { PageServerLoad } from './$types';
@@ -44,10 +45,21 @@ export const load: PageServerLoad = async ({ locals, url, params: routeParams, p
 			)
 		: null;
 
+	// How the reader reaches this context, from its single-object read (the list carries no reach).
+	// Only the route, never a team: the read names neither. A read that fails or is not asked
+	// answers `null`, and `null` renders no marker — the marker claims nothing it was not told.
+	const reach: Promise<ReachVia | null> | null = context
+		? apiGet<ContextRow>(`/api/contexts/${context.id}`, locals.accessToken!).then(
+				(c) => c.reach?.via ?? null,
+				() => null,
+			)
+		: null;
+
 	return {
 		owner: routeParams.owner,
 		context: routeParams.context,
 		list: toVaultList(resources),
 		shapes,
+		reach,
 	};
 };

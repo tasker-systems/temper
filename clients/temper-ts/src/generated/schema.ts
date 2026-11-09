@@ -3460,7 +3460,13 @@ export interface paths {
         /** List teams you belong to */
         get: operations["list_teams"];
         put?: never;
-        /** Create a team */
+        /**
+         * Create a team
+         * @description With `?answer=effects` the row also carries `public_within` (what the new team's parent links did
+         *     to `public_within` rows) and `public_within_in_reach` (the effective rows the new team's roster
+         *     reads through its parents), each row named only to a caller who manages its team or anchor, or is
+         *     a system admin, and counted otherwise. Without it the answer is the row alone.
+         */
         post: operations["create_team"];
         delete?: never;
         options?: never;
@@ -3506,7 +3512,12 @@ export interface paths {
         get: operations["detail"];
         put?: never;
         post?: never;
-        /** Delete a team */
+        /**
+         * Delete a team
+         * @description With `?answer=effects` the answer is `200` with what the delete did to `public_within` rows (rows
+         *     over or under the team stop conferring), each named only to a caller who manages its team or
+         *     anchor, or is a system admin, and counted otherwise. Without it the answer is `204`.
+         */
         delete: operations["delete_team"];
         options?: never;
         head?: never;
@@ -3567,7 +3578,10 @@ export interface paths {
          * @description Removes the parent link, so the child's members stop reaching what is attached to this team and
          *     its ancestors. The child and its roster survive; only this link is cut. A manager of the parent
          *     or of the child may detach (a child's managers may leave any parent). Recorded on the admin
-         *     ledger as `team_parent_link_changed`.
+         *     ledger as `team_parent_link_changed`. With `?answer=effects` the answer is `200` with what the
+         *     detach did to `public_within` rows (a row whose anchor is no longer above its team by any path is
+         *     deleted, `lapsed`), each named only to a caller who manages its team or anchor, or is a system
+         *     admin, and counted otherwise. Without it the answer is `204`.
          */
         delete: operations["detach_child_team"];
         options?: never;
@@ -12177,6 +12191,8 @@ export interface components {
             /** Format: uuid */
             id: string;
             name: string;
+            public_within?: components["schemas"]["PublicWithinEffects"] | null;
+            public_within_in_reach?: components["schemas"]["PublicWithinReach"] | null;
             slug: string;
         };
         /** @description One team the machine should be enrolled in, with its role. */
@@ -21932,7 +21948,15 @@ export interface operations {
     };
     create_team: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description `effects`: also answer what the act did to `public_within` rows (`POST` fills
+                 *     `TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with
+                 *     `PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team
+                 *     or its anchor, or is a system admin, and counted otherwise.
+                 */
+                answer?: "effects";
+            };
             header?: {
                 /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
                 "X-Temper-Surface"?: "cli" | "sdk";
@@ -21946,7 +21970,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Team created */
+            /** @description Team created (with `?answer=effects`, carrying `public_within` and `public_within_in_reach`) */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -22047,7 +22071,15 @@ export interface operations {
     };
     delete_team: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description `effects`: also answer what the act did to `public_within` rows (`POST` fills
+                 *     `TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with
+                 *     `PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team
+                 *     or its anchor, or is a system admin, and counted otherwise.
+                 */
+                answer?: "effects";
+            };
             header?: {
                 /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
                 "X-Temper-Surface"?: "cli" | "sdk";
@@ -22060,6 +22092,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description Team soft-deleted; asked with `?answer=effects` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicWithinEffects"];
+                };
+            };
             /** @description Team soft-deleted */
             204: {
                 headers: {
@@ -22251,7 +22292,15 @@ export interface operations {
     };
     detach_child_team: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description `effects`: also answer what the act did to `public_within` rows (`POST` fills
+                 *     `TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with
+                 *     `PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team
+                 *     or its anchor, or is a system admin, and counted otherwise.
+                 */
+                answer?: "effects";
+            };
             header?: {
                 /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
                 "X-Temper-Surface"?: "cli" | "sdk";
@@ -22266,6 +22315,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description Child detached; asked with `?answer=effects` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicWithinEffects"];
+                };
+            };
             /** @description Child detached */
             204: {
                 headers: {

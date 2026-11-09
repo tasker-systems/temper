@@ -2,6 +2,7 @@
 	import type { ActionData, PageData } from './$types';
 	import MarkdownRenderer from '$lib/components/MarkdownRenderer.svelte';
 	import HomeChip from '$lib/components/vault/HomeChip.svelte';
+	import ReachMarker from '$lib/components/vault/ReachMarker.svelte';
 	import PropertySet from '$lib/components/vault/PropertySet.svelte';
 	import EventHistory from '$lib/components/vault/EventHistory.svelte';
 	import EdgeList from '$lib/components/vault/EdgeList.svelte';
@@ -88,6 +89,7 @@
 			<div class="eyebrow">{data.resource.doc_type_name}</div>
 			<h1 class="title">{data.resource.title}</h1>
 			<HomeChip row={data.resource} />
+			<ReachMarker via={data.resource.reach?.via} />
 		</div>
 
 		<PropertySet {rows} {vocabularyUnread} {refusal} mayDescribe={data.mayChange} />

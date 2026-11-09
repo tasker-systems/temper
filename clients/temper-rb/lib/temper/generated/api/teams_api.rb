@@ -336,8 +336,10 @@ module Temper::Generated
     end
 
     # Create a team
+    # With `?answer=effects` the row also carries `public_within` (what the new team's parent links did to `public_within` rows) and `public_within_in_reach` (the effective rows the new team's roster reads through its parents), each row named only to a caller who manages its team or anchor, or is a system admin, and counted otherwise. Without it the answer is the row alone.
     # @param team_create_request [TeamCreateRequest] 
     # @param [Hash] opts the optional parameters
+    # @option opts [String] :answer &#x60;effects&#x60;: also answer what the act did to &#x60;public_within&#x60; rows (&#x60;POST&#x60; fills &#x60;TeamRow.public_within&#x60; and &#x60;public_within_in_reach&#x60;; the &#x60;DELETE&#x60;s answer &#x60;200&#x60; with &#x60;PublicWithinEffects&#x60; instead of &#x60;204&#x60;). A row is named only to a caller who manages its team or its anchor, or is a system admin, and counted otherwise.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [TeamRow]
     def create_team(team_create_request, opts = {})
@@ -346,8 +348,10 @@ module Temper::Generated
     end
 
     # Create a team
+    # With &#x60;?answer&#x3D;effects&#x60; the row also carries &#x60;public_within&#x60; (what the new team&#39;s parent links did to &#x60;public_within&#x60; rows) and &#x60;public_within_in_reach&#x60; (the effective rows the new team&#39;s roster reads through its parents), each row named only to a caller who manages its team or anchor, or is a system admin, and counted otherwise. Without it the answer is the row alone.
     # @param team_create_request [TeamCreateRequest] 
     # @param [Hash] opts the optional parameters
+    # @option opts [String] :answer &#x60;effects&#x60;: also answer what the act did to &#x60;public_within&#x60; rows (&#x60;POST&#x60; fills &#x60;TeamRow.public_within&#x60; and &#x60;public_within_in_reach&#x60;; the &#x60;DELETE&#x60;s answer &#x60;200&#x60; with &#x60;PublicWithinEffects&#x60; instead of &#x60;204&#x60;). A row is named only to a caller who manages its team or its anchor, or is a system admin, and counted otherwise.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(TeamRow, Integer, Hash)>] TeamRow data, response status code and response headers
     def create_team_with_http_info(team_create_request, opts = {})
@@ -358,6 +362,10 @@ module Temper::Generated
       if @api_client.config.client_side_validation && team_create_request.nil?
         fail ArgumentError, "Missing the required parameter 'team_create_request' when calling TeamsApi.create_team"
       end
+      allowable_values = ["effects"]
+      if @api_client.config.client_side_validation && opts[:'answer'] && !allowable_values.include?(opts[:'answer'])
+        fail ArgumentError, "invalid value for \"answer\", must be one of #{allowable_values}"
+      end
       allowable_values = ["cli", "sdk"]
       if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
@@ -367,6 +375,7 @@ module Temper::Generated
 
       # query parameters
       query_params = opts[:query_params] || {}
+      query_params[:'answer'] = opts[:'answer'] if !opts[:'answer'].nil?
 
       # header parameters
       header_params = opts[:header_params] || {}
@@ -409,20 +418,24 @@ module Temper::Generated
     end
 
     # Delete a team
+    # With `?answer=effects` the answer is `200` with what the delete did to `public_within` rows (rows over or under the team stop conferring), each named only to a caller who manages its team or anchor, or is a system admin, and counted otherwise. Without it the answer is `204`.
     # @param id [String] Team ID
     # @param [Hash] opts the optional parameters
+    # @option opts [String] :answer &#x60;effects&#x60;: also answer what the act did to &#x60;public_within&#x60; rows (&#x60;POST&#x60; fills &#x60;TeamRow.public_within&#x60; and &#x60;public_within_in_reach&#x60;; the &#x60;DELETE&#x60;s answer &#x60;200&#x60; with &#x60;PublicWithinEffects&#x60; instead of &#x60;204&#x60;). A row is named only to a caller who manages its team or its anchor, or is a system admin, and counted otherwise.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [nil]
+    # @return [PublicWithinEffects]
     def delete_team(id, opts = {})
-      delete_team_with_http_info(id, opts)
-      nil
+      data, _status_code, _headers = delete_team_with_http_info(id, opts)
+      data
     end
 
     # Delete a team
+    # With &#x60;?answer&#x3D;effects&#x60; the answer is &#x60;200&#x60; with what the delete did to &#x60;public_within&#x60; rows (rows over or under the team stop conferring), each named only to a caller who manages its team or anchor, or is a system admin, and counted otherwise. Without it the answer is &#x60;204&#x60;.
     # @param id [String] Team ID
     # @param [Hash] opts the optional parameters
+    # @option opts [String] :answer &#x60;effects&#x60;: also answer what the act did to &#x60;public_within&#x60; rows (&#x60;POST&#x60; fills &#x60;TeamRow.public_within&#x60; and &#x60;public_within_in_reach&#x60;; the &#x60;DELETE&#x60;s answer &#x60;200&#x60; with &#x60;PublicWithinEffects&#x60; instead of &#x60;204&#x60;). A row is named only to a caller who manages its team or its anchor, or is a system admin, and counted otherwise.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Array<(nil, Integer, Hash)>] nil, response status code and response headers
+    # @return [Array<(PublicWithinEffects, Integer, Hash)>] PublicWithinEffects data, response status code and response headers
     def delete_team_with_http_info(id, opts = {})
       if @api_client.config.debugging
         @api_client.config.logger.debug 'Calling API: TeamsApi.delete_team ...'
@@ -430,6 +443,10 @@ module Temper::Generated
       # verify the required parameter 'id' is set
       if @api_client.config.client_side_validation && id.nil?
         fail ArgumentError, "Missing the required parameter 'id' when calling TeamsApi.delete_team"
+      end
+      allowable_values = ["effects"]
+      if @api_client.config.client_side_validation && opts[:'answer'] && !allowable_values.include?(opts[:'answer'])
+        fail ArgumentError, "invalid value for \"answer\", must be one of #{allowable_values}"
       end
       allowable_values = ["cli", "sdk"]
       if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
@@ -440,6 +457,7 @@ module Temper::Generated
 
       # query parameters
       query_params = opts[:query_params] || {}
+      query_params[:'answer'] = opts[:'answer'] if !opts[:'answer'].nil?
 
       # header parameters
       header_params = opts[:header_params] || {}
@@ -454,7 +472,7 @@ module Temper::Generated
       post_body = opts[:debug_body]
 
       # return_type
-      return_type = opts[:debug_return_type]
+      return_type = opts[:debug_return_type] || 'PublicWithinEffects'
 
       # auth_names
       auth_names = opts[:debug_auth_names] || ['bearer_auth']
@@ -477,24 +495,26 @@ module Temper::Generated
     end
 
     # Detach a child team from this team
-    # Removes the parent link, so the child's members stop reaching what is attached to this team and its ancestors. The child and its roster survive; only this link is cut. A manager of the parent or of the child may detach (a child's managers may leave any parent). Recorded on the admin ledger as `team_parent_link_changed`.
+    # Removes the parent link, so the child's members stop reaching what is attached to this team and its ancestors. The child and its roster survive; only this link is cut. A manager of the parent or of the child may detach (a child's managers may leave any parent). Recorded on the admin ledger as `team_parent_link_changed`. With `?answer=effects` the answer is `200` with what the detach did to `public_within` rows (a row whose anchor is no longer above its team by any path is deleted, `lapsed`), each named only to a caller who manages its team or anchor, or is a system admin, and counted otherwise. Without it the answer is `204`.
     # @param id [String] Parent team ID
     # @param child_id [String] Child team ID
     # @param [Hash] opts the optional parameters
+    # @option opts [String] :answer &#x60;effects&#x60;: also answer what the act did to &#x60;public_within&#x60; rows (&#x60;POST&#x60; fills &#x60;TeamRow.public_within&#x60; and &#x60;public_within_in_reach&#x60;; the &#x60;DELETE&#x60;s answer &#x60;200&#x60; with &#x60;PublicWithinEffects&#x60; instead of &#x60;204&#x60;). A row is named only to a caller who manages its team or its anchor, or is a system admin, and counted otherwise.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [nil]
+    # @return [PublicWithinEffects]
     def detach_child_team(id, child_id, opts = {})
-      detach_child_team_with_http_info(id, child_id, opts)
-      nil
+      data, _status_code, _headers = detach_child_team_with_http_info(id, child_id, opts)
+      data
     end
 
     # Detach a child team from this team
-    # Removes the parent link, so the child&#39;s members stop reaching what is attached to this team and its ancestors. The child and its roster survive; only this link is cut. A manager of the parent or of the child may detach (a child&#39;s managers may leave any parent). Recorded on the admin ledger as &#x60;team_parent_link_changed&#x60;.
+    # Removes the parent link, so the child&#39;s members stop reaching what is attached to this team and its ancestors. The child and its roster survive; only this link is cut. A manager of the parent or of the child may detach (a child&#39;s managers may leave any parent). Recorded on the admin ledger as &#x60;team_parent_link_changed&#x60;. With &#x60;?answer&#x3D;effects&#x60; the answer is &#x60;200&#x60; with what the detach did to &#x60;public_within&#x60; rows (a row whose anchor is no longer above its team by any path is deleted, &#x60;lapsed&#x60;), each named only to a caller who manages its team or anchor, or is a system admin, and counted otherwise. Without it the answer is &#x60;204&#x60;.
     # @param id [String] Parent team ID
     # @param child_id [String] Child team ID
     # @param [Hash] opts the optional parameters
+    # @option opts [String] :answer &#x60;effects&#x60;: also answer what the act did to &#x60;public_within&#x60; rows (&#x60;POST&#x60; fills &#x60;TeamRow.public_within&#x60; and &#x60;public_within_in_reach&#x60;; the &#x60;DELETE&#x60;s answer &#x60;200&#x60; with &#x60;PublicWithinEffects&#x60; instead of &#x60;204&#x60;). A row is named only to a caller who manages its team or its anchor, or is a system admin, and counted otherwise.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Array<(nil, Integer, Hash)>] nil, response status code and response headers
+    # @return [Array<(PublicWithinEffects, Integer, Hash)>] PublicWithinEffects data, response status code and response headers
     def detach_child_team_with_http_info(id, child_id, opts = {})
       if @api_client.config.debugging
         @api_client.config.logger.debug 'Calling API: TeamsApi.detach_child_team ...'
@@ -507,6 +527,10 @@ module Temper::Generated
       if @api_client.config.client_side_validation && child_id.nil?
         fail ArgumentError, "Missing the required parameter 'child_id' when calling TeamsApi.detach_child_team"
       end
+      allowable_values = ["effects"]
+      if @api_client.config.client_side_validation && opts[:'answer'] && !allowable_values.include?(opts[:'answer'])
+        fail ArgumentError, "invalid value for \"answer\", must be one of #{allowable_values}"
+      end
       allowable_values = ["cli", "sdk"]
       if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
         fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
@@ -516,6 +540,7 @@ module Temper::Generated
 
       # query parameters
       query_params = opts[:query_params] || {}
+      query_params[:'answer'] = opts[:'answer'] if !opts[:'answer'].nil?
 
       # header parameters
       header_params = opts[:header_params] || {}
@@ -530,7 +555,7 @@ module Temper::Generated
       post_body = opts[:debug_body]
 
       # return_type
-      return_type = opts[:debug_return_type]
+      return_type = opts[:debug_return_type] || 'PublicWithinEffects'
 
       # auth_names
       auth_names = opts[:debug_auth_names] || ['bearer_auth']

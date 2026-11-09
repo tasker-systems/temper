@@ -63,7 +63,7 @@ impl TeamRole {
 #[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeamRow {
     pub id: Uuid,
     pub slug: String,
@@ -74,6 +74,63 @@ pub struct TeamRow {
     /// NULL = not an auto-join ("everyone") team; otherwise the role new
     /// members are enrolled at. Admin-gated to set.
     pub auto_join_role: Option<TeamRole>,
+    /// What creating the team did to `public_within` rows (an auto-join team created under an
+    /// anchor makes that anchor's rows stop conferring). Present only on `POST /api/teams` asked
+    /// with `?answer=effects`; absent from every other answer. A row is named only to a caller who
+    /// manages its team or its anchor, or is a system admin, and counted otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional))]
+    #[cfg_attr(feature = "web-api", schema(required = false))]
+    pub public_within: Option<PublicWithinEffects>,
+    /// The effective `public_within` rows the new team's roster reads through its parents, filtered
+    /// as `public_within` is. Present only on `POST /api/teams` asked with `?answer=effects`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional))]
+    #[cfg_attr(feature = "web-api", schema(required = false))]
+    pub public_within_in_reach: Option<PublicWithinReach>,
+}
+
+/// What a team act's answer carries beyond its default, as `?answer=` on `POST /api/teams`,
+/// `DELETE /api/teams/{id}` and `DELETE /api/teams/{id}/children/{child_id}`.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TeamActAnswer {
+    /// Also answer what the act did to `public_within` rows, filtered for the caller.
+    Effects,
+}
+
+/// The query string of the three team acts whose default answer predates their `public_within`
+/// effects. With no `answer`, each answers exactly as it always has: `201 TeamRow`, or `204`.
+#[cfg_attr(feature = "web-api", derive(utoipa::IntoParams))]
+#[cfg_attr(feature = "web-api", into_params(parameter_in = Query))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamActAnswerQuery {
+    /// `effects`: also answer what the act did to `public_within` rows (`POST` fills
+    /// `TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with
+    /// `PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team
+    /// or its anchor, or is a system admin, and counted otherwise.
+    #[serde(default)]
+    #[cfg_attr(feature = "web-api", param(inline))]
+    pub answer: Option<TeamActAnswer>,
+}
+
+impl TeamActAnswerQuery {
+    /// The query that asks for the effects, as a client sends it.
+    #[must_use]
+    pub fn effects() -> Self {
+        Self {
+            answer: Some(TeamActAnswer::Effects),
+        }
+    }
+
+    #[must_use]
+    pub fn wants_effects(self) -> bool {
+        self.answer == Some(TeamActAnswer::Effects)
+    }
 }
 
 /// Request body for `POST /api/teams`.

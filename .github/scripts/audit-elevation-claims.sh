@@ -559,9 +559,9 @@ claim crates/temper-api/src/handlers/resource_erasure.rs 5 is_system_admin
 claim crates/temper-api/src/handlers/resources.rs 2 grant
 claim crates/temper-api/src/handlers/slack_disconnect.rs 1 -
 claim crates/temper-api/src/handlers/subscriptions.rs 7 subscription
-claim crates/temper-api/src/handlers/teams.rs 30 team_membership,is_system_admin
+claim crates/temper-api/src/handlers/teams.rs 32 team_membership,is_system_admin
 claim crates/temper-api/src/openapi.rs 5 is_system_admin,machine,connection,subscription,read_gates,grant,ledger_subject
-claim crates/temper-cli/src/cli.rs 27 team_membership
+claim crates/temper-cli/src/cli.rs 32 team_membership
 claim crates/temper-cli/src/commands/admin.rs 4 -
 claim crates/temper-cli/src/commands/admin_connection.rs 2 connection
 claim crates/temper-cli/src/commands/admin_erasure.rs 1 -
@@ -579,12 +579,12 @@ claim crates/temper-core/src/types/erasure.rs 3 is_system_admin
 claim crates/temper-core/src/types/invitation.rs 3 team_membership
 claim crates/temper-core/src/types/machine.rs 1 machine
 claim crates/temper-core/src/types/subscription.rs 1 subscription
-claim crates/temper-core/src/types/team.rs 14 team_membership,is_system_admin
+claim crates/temper-core/src/types/team.rs 16 team_membership,is_system_admin
 claim crates/temper-mcp/src/service.rs 6 -
 claim crates/temper-mcp/src/tools/cognitive_maps.rs 1 is_system_admin
 claim crates/temper-mcp/src/tools/contexts.rs 2 context_admin,two_sided
 claim crates/temper-mcp/src/tools/reblock.rs 3 -
-claim crates/temper-mcp/src/tools/teams.rs 4 -
+claim crates/temper-mcp/src/tools/teams.rs 5 -
 claim crates/temper-services/src/services/access_service.rs 11 is_system_admin
 claim crates/temper-services/src/services/admin_directory_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/cogmap_service.rs 4 two_sided

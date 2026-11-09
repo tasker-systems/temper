@@ -3,8 +3,11 @@
 //! `team_manage` carries every team act a person takes (ruling R7, reversed, of temper-artifacts
 //! `specs/2026-11-06-team-dag-and-lifecycle-doors-design.md`): `create`, `update`, `delete`,
 //! `restore`, `add_member`, `change_role`, `remove_member`, `leave`, `attach`, `detach`,
-//! `reparent`, `rename_slug` and `set_auto_join`. `team_read` carries the reads: `list` (your teams)
-//! and `detail` (one team: its roster, its parents, and its children when you manage it).
+//! `reparent`, `rename_slug`, `set_auto_join`, and the public_within acts `public_within_open`,
+//! `public_within_close` and `public_within_policy`. `team_read` carries the reads: `list` (your
+//! teams), `detail` (one team: its roster, its parents, its children when you manage it, and its
+//! public_within rows to whom the API shows them) and `public_within` (the openings that confer on
+//! you).
 //!
 //! # Authorization is the API's, and so is the machine refusal
 //!
@@ -35,8 +38,8 @@ use uuid::Uuid;
 use temper_client::error::ClientError;
 use temper_core::types::reassign::ResidualOwnedReach;
 use temper_core::types::team::{
-    AddMemberRequest, ChangeRoleRequest, RenameTeamSlugRequest, ReparentRequest,
-    SetAutoJoinRequest, TeamCreateRequest, TeamRole, TeamUpdateRequest,
+    AddMemberRequest, ChangeRoleRequest, PublicWithinPolicyRequest, RenameTeamSlugRequest,
+    ReparentRequest, SetAutoJoinRequest, TeamCreateRequest, TeamRole, TeamUpdateRequest,
 };
 
 use crate::service::{api_error_cause, AcrossAuth, TemperMcpService};
@@ -62,6 +65,17 @@ struct LeaveAck {
     left: bool,
     team_id: Uuid,
     residual_owned: ResidualOwnedReach,
+}
+
+/// What `delete` and `detach` answer: the act's acknowledgement, and what it did to
+/// `public_within` rows (each named only to a caller who manages its team or anchor, or is a system
+/// admin, and counted otherwise). `public_within` is absent when the server did not report it.
+#[derive(Debug, serde::Serialize)]
+struct EffectsAck {
+    #[serde(flatten)]
+    ack: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    public_within: Option<temper_core::types::team::PublicWithinEffects>,
 }
 
 /// Map a team act's error onto an MCP error.
@@ -173,6 +187,12 @@ pub enum TeamManageAction {
     RenameSlug,
     /// Set, change or clear a team's auto-join role (a system admin's act).
     SetAutoJoin,
+    /// Open a team's owned contexts to the people under one of its ancestors (`anchor`).
+    PublicWithinOpen,
+    /// Close an opening (a manager of either side, or a system admin).
+    PublicWithinClose,
+    /// Forbid or allow openings over a team and everything beneath it.
+    PublicWithinPolicy,
 }
 
 impl TeamManageAction {
@@ -191,6 +211,9 @@ impl TeamManageAction {
             Self::Reparent => "team_manage reparent",
             Self::RenameSlug => "team_manage rename_slug",
             Self::SetAutoJoin => "team_manage set_auto_join",
+            Self::PublicWithinOpen => "team_manage public_within_open",
+            Self::PublicWithinClose => "team_manage public_within_close",
+            Self::PublicWithinPolicy => "team_manage public_within_policy",
         }
     }
 }
@@ -237,6 +260,14 @@ pub struct TeamManageInput {
     /// `create` / `set_auto_join`: member or watcher; for `set_auto_join`, omit or null to clear.
     #[serde(default)]
     pub auto_join_role: Option<PoolRole>,
+    /// `public_within_open` / `public_within_close`: the ancestor whose subtree reads the team's
+    /// owned contexts (same forms as `team`). Required for both.
+    #[serde(default)]
+    pub anchor: Option<String>,
+    /// `public_within_policy`: `true` forbids openings over the team and everything beneath it;
+    /// `false` clears this team's forbid (a forbid set higher up still holds). Required.
+    #[serde(default)]
+    pub forbidden: Option<bool>,
 }
 
 /// Dispatch the consolidated team-manage tool.
@@ -251,7 +282,9 @@ pub async fn team_manage(
     let err = |e| map_team_err(act, e);
     // The acted-on team, resolved the way every team tool resolves one.
     let team_id = match input.action {
-        TeamManageAction::Create => None,
+        TeamManageAction::Create
+        | TeamManageAction::PublicWithinOpen
+        | TeamManageAction::PublicWithinClose => None,
         _ => {
             let team = required(input.team.clone(), act, "team")?;
             Some(resolve_team(&client, act, &team).await?)
@@ -284,8 +317,11 @@ pub async fn team_manage(
                 .across_auth(err)?,
         ),
         TeamManageAction::Delete => {
-            teams.delete(team_id()?).await.across_auth(err)?;
-            to_text(&serde_json::json!({ "deleted": true, "team_id": team_id()? }))
+            let effects = teams.delete(team_id()?).await.across_auth(err)?;
+            to_text(&EffectsAck {
+                ack: serde_json::json!({ "deleted": true, "team_id": team_id()? }),
+                public_within: effects,
+            })
         }
         TeamManageAction::Restore => to_text(&teams.restore(team_id()?).await.across_auth(err)?),
         TeamManageAction::AddMember => to_text(
@@ -350,13 +386,16 @@ pub async fn team_manage(
                         .across_auth(err)?,
                 )
             } else {
-                teams
+                let effects = teams
                     .detach_child(team_id()?, child_id)
                     .await
                     .across_auth(err)?;
-                to_text(&serde_json::json!({
-                    "detached": true, "parent_team_id": team_id()?, "child_team_id": child_id,
-                }))
+                to_text(&EffectsAck {
+                    ack: serde_json::json!({
+                        "detached": true, "parent_team_id": team_id()?, "child_team_id": child_id,
+                    }),
+                    public_within: effects,
+                })
             }
         }
         TeamManageAction::Reparent => to_text(
@@ -393,8 +432,118 @@ pub async fn team_manage(
                 .await
                 .across_auth(err)?,
         ),
+        TeamManageAction::PublicWithinOpen | TeamManageAction::PublicWithinClose => {
+            let team = required(input.team, act, "team")?;
+            let anchor = required(input.anchor, act, "anchor")?;
+            let (team_id, anchor_id) =
+                resolve_public_within_pair(&client, act, &team, &anchor).await?;
+            if input.action == TeamManageAction::PublicWithinOpen {
+                to_text(
+                    &teams
+                        .open_public_within(team_id, anchor_id)
+                        .await
+                        .across_auth(err)?,
+                )
+            } else {
+                teams
+                    .close_public_within(team_id, anchor_id)
+                    .await
+                    .across_auth(err)?;
+                to_text(&serde_json::json!({
+                    "closed": true, "team_id": team_id, "anchor_id": anchor_id,
+                }))
+            }
+        }
+        TeamManageAction::PublicWithinPolicy => to_text(
+            &teams
+                .set_public_within_policy(
+                    team_id()?,
+                    &PublicWithinPolicyRequest {
+                        forbidden: required(input.forbidden, act, "forbidden")?,
+                    },
+                )
+                .await
+                .across_auth(err)?,
+        ),
     };
     Ok(text_result(text))
+}
+
+/// Resolve a `public_within` row's two teams, as `temper team public-within` does. A slug resolves
+/// among the caller's own teams first; one side's manager need not be on the other side, so a slug
+/// that matches none of them is looked up through the detail of the side that did resolve: the
+/// team's own anchors and parents (shown to its members), or the teams opened to the anchor (shown
+/// to its managers). Nothing resolves that the caller could not already read.
+async fn resolve_public_within_pair(
+    client: &temper_client::TemperClient,
+    act: &str,
+    team: &str,
+    anchor: &str,
+) -> Result<(Uuid, Uuid), rmcp::ErrorData> {
+    let slug = |s: &str| s.trim().strip_prefix('+').unwrap_or(s.trim()).to_owned();
+    // An id-bearing ref resolves without the network; slugs are matched against one listing of
+    // the caller's teams, whose failure is the caller's own refusal, never "not a team".
+    let by_id = |s: &str| {
+        temper_workflow::operations::parse_ref(&slug(s))
+            .ok()
+            .map(|id| id.uuid())
+    };
+    let (mut team_id, mut anchor_id) = (by_id(team), by_id(anchor));
+    if team_id.is_none() || anchor_id.is_none() {
+        let mine = client
+            .teams()
+            .list()
+            .await
+            .across_auth(|e| map_team_err(act, e))?;
+        let find = |s: &str| mine.iter().find(|t| t.slug == slug(s)).map(|t| t.id);
+        team_id = team_id.or_else(|| find(team));
+        anchor_id = anchor_id.or_else(|| find(anchor));
+    }
+    let unresolved = |what: &str, s: &str| {
+        rmcp::ErrorData::invalid_params(
+            format!(
+                "{act}: not a team: {:?} (the {what}; expected a team slug, a decorated \
+                 `slug-<uuid>` ref, or a team UUID — name a team you are not a member of by its \
+                 UUID)",
+                slug(s)
+            ),
+            None,
+        )
+    };
+    match (team_id, anchor_id) {
+        (Some(t), Some(a)) => Ok((t, a)),
+        (Some(t), None) => {
+            let want = slug(anchor);
+            let detail = client
+                .teams()
+                .get(t)
+                .await
+                .across_auth(|e| map_team_err(act, e))?;
+            detail
+                .public_within
+                .iter()
+                .map(|r| &r.anchor)
+                .chain(detail.parents.iter())
+                .find(|r| r.slug == want)
+                .map(|r| (t, r.id))
+                .ok_or_else(|| unresolved("anchor", anchor))
+        }
+        (None, Some(a)) => {
+            let want = slug(team);
+            let detail = client
+                .teams()
+                .get(a)
+                .await
+                .across_auth(|e| map_team_err(act, e))?;
+            detail
+                .public_within_in
+                .iter()
+                .find(|r| r.team.slug == want)
+                .map(|r| (r.team.id, a))
+                .ok_or_else(|| unresolved("team", team))
+        }
+        (None, None) => Err(unresolved("team", team)),
+    }
 }
 
 /// Resolve `detach`'s child ref. A parent's manager need not be a member of the child, so a bare
@@ -426,6 +575,8 @@ pub enum TeamReadView {
     List,
     /// One team: roster, parents, and children when you manage it.
     Detail,
+    /// The public_within openings that confer on you right now.
+    PublicWithin,
 }
 
 /// Consolidated team-read tool — one read tool with a `view` discriminator.
@@ -465,6 +616,16 @@ pub async fn team_read(
                 &client
                     .teams()
                     .get(team_id)
+                    .await
+                    .across_auth(|e| map_team_err(ACT, e))?,
+            )
+        }
+        TeamReadView::PublicWithin => {
+            const ACT: &str = "team_read public_within";
+            to_text(
+                &client
+                    .teams()
+                    .list_public_within()
                     .await
                     .across_auth(|e| map_team_err(ACT, e))?,
             )
@@ -545,6 +706,18 @@ mod tests {
             (
                 json!({"action": "set_auto_join", "team": "acme", "auto_join_role": null}),
                 TeamManageAction::SetAutoJoin,
+            ),
+            (
+                json!({"action": "public_within_open", "team": "acme", "anchor": "+org"}),
+                TeamManageAction::PublicWithinOpen,
+            ),
+            (
+                json!({"action": "public_within_close", "team": "acme", "anchor": "+org"}),
+                TeamManageAction::PublicWithinClose,
+            ),
+            (
+                json!({"action": "public_within_policy", "team": "acme", "forbidden": true}),
+                TeamManageAction::PublicWithinPolicy,
             ),
         ] {
             let input = serde_json::from_value::<TeamManageInput>(value.clone())
