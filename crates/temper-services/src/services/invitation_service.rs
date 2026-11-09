@@ -510,6 +510,17 @@ pub async fn revoke_invitation(
         }
     }
 
+    // Under the team lock (taken before any invitation row, the order `membership_write` holds),
+    // the authority is decided again: a demotion or role change committed since the pool check
+    // refuses the revoke, and a demotion in flight waits for it.
+    let mut tx = pool.begin().await?;
+    team_membership::lock_team(&mut tx, team_id).await?;
+    if !MembershipAuthority::resolve(&mut tx, caller, team_id)
+        .await?
+        .manages()
+    {
+        return Err(ApiError::Forbidden);
+    }
     let revoked = sqlx::query_scalar!(
         r#"
         UPDATE kb_team_invitations
@@ -523,8 +534,9 @@ pub async fn revoke_invitation(
         invitation_id,
         team_id,
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     if revoked.is_some() {
         return Ok(());

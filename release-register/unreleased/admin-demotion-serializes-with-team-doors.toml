@@ -18,9 +18,10 @@ invitee joined at a role the demoted inviter could no longer offer).
 
 A door's pool pre-check, and a surface that only reads (an invitation list, the admin ledger), stays
 a plain read (auth::require_system_admin_on, MembershipAuthority::resolve_precheck): it takes no
-lock, since on a pooled connection the lock would end with the statement. Creating and revoking an
-invitation decide on that plain read alone and are unchanged: neither serializes with a demotion.
-An invitation so created still redeems only while its inviter could issue it.
+lock, since on a pooled connection the lock would end with the statement. Creating an invitation
+decides on that plain read alone and does not serialize with a demotion; an invitation so created
+still redeems only while its inviter could issue it. The team, membership-request and invitation
+doors that decided the admin arm on the pool alone are covered by admin-recheck-on-pool-only-doors.
 
 Who observes: a system admin demoted (directly, or by Revoke or Deactivate) while one of those acts
 is in flight. The act is refused instead of committed (403, or a revoked invitation on accept), and

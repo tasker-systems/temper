@@ -209,9 +209,9 @@ impl MembershipAuthority {
     /// ([`require_system_admin_on`](crate::auth::require_system_admin_on)), taking no lock. For a
     /// door's pool pre-check, which a membership write then repeats with [`Self::resolve`] under its
     /// locks, and for a surface that only answers a question (an invitation list, the admin ledger).
-    /// Creating and revoking an invitation decide on this read alone, so neither serializes with a
-    /// demotion; an invitation created that way still redeems only while its inviter could issue it
-    /// ([`inviter_ceiling`], which locks).
+    /// Creating an invitation decides on this read alone, so it does not serialize with a demotion;
+    /// an invitation created that way still redeems only while its inviter could issue it
+    /// ([`inviter_ceiling`], which locks). Revoking one repeats the decision with [`Self::resolve`].
     pub(crate) async fn resolve_precheck(
         conn: &mut PgConnection,
         caller: &HumanPrincipal,
