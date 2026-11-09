@@ -192,6 +192,12 @@ public_within: PublicWithinEffects, };
 export type SetAutoJoinRequest = { role: TeamRole | null, };
 
 /**
+ * What a team act's answer carries beyond its default, as `?answer=` on `POST /api/teams`,
+ * `DELETE /api/teams/{id}` and `DELETE /api/teams/{id}/children/{child_id}`.
+ */
+export type TeamActAnswer = "effects";
+
+/**
  * A direct child team, as listed on its parent's [`TeamDetail`]. The same shape as [`TeamRef`],
  * which generalises it (team DAG doors D9); it stays its own type, and so its own schema, for one
  * release so the SDK class of that name keeps serving `children`. New fields use [`TeamRef`].
@@ -294,7 +300,19 @@ description: string | null, created: string,
  * NULL = not an auto-join ("everyone") team; otherwise the role new
  * members are enrolled at. Admin-gated to set.
  */
-auto_join_role: TeamRole | null, };
+auto_join_role: TeamRole | null, 
+/**
+ * What creating the team did to `public_within` rows (an auto-join team created under an
+ * anchor makes that anchor's rows stop conferring). Present only on `POST /api/teams` asked
+ * with `?answer=effects`; absent from every other answer. A row is named only to a caller who
+ * manages its team or its anchor, or is a system admin, and counted otherwise.
+ */
+public_within?: PublicWithinEffects, 
+/**
+ * The effective `public_within` rows the new team's roster reads through its parents, filtered
+ * as `public_within` is. Present only on `POST /api/teams` asked with `?answer=effects`.
+ */
+public_within_in_reach?: PublicWithinReach, };
 
 /**
  * Request body for `PATCH /api/teams/{id}` — update team metadata.

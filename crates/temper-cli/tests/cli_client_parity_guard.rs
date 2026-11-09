@@ -104,16 +104,6 @@ const CLIENT_ONLY: &[(&str, &str)] = &[
         // The exact-arm convenience over the same operation.
         "text_query",
     ),
-    (
-        "teams.rs",
-        // The public_within doors reach clients first; `temper team public-within` (open, close,
-        // policy, list) lands with the feature's CLI and MCP surfaces, which come after its HTTP
-        // doors. Remove these four entries when that command exists.
-        "close_public_within",
-    ),
-    ("teams.rs", "list_public_within"),
-    ("teams.rs", "open_public_within"),
-    ("teams.rs", "set_public_within_policy"),
 ];
 
 fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {

@@ -28,6 +28,12 @@ module Temper::Generated
 
     attr_accessor :name
 
+    # What creating the team did to `public_within` rows (an auto-join team created under an anchor makes that anchor's rows stop conferring). Present only on `POST /api/teams` asked with `?answer=effects`; absent from every other answer. A row is named only to a caller who manages its team or its anchor, or is a system admin, and counted otherwise.
+    attr_accessor :public_within
+
+    # The effective `public_within` rows the new team's roster reads through its parents, filtered as `public_within` is. Present only on `POST /api/teams` asked with `?answer=effects`.
+    attr_accessor :public_within_in_reach
+
     attr_accessor :slug
 
     class EnumAttributeValidator
@@ -60,6 +66,8 @@ module Temper::Generated
         :'description' => :'description',
         :'id' => :'id',
         :'name' => :'name',
+        :'public_within' => :'public_within',
+        :'public_within_in_reach' => :'public_within_in_reach',
         :'slug' => :'slug'
       }
     end
@@ -82,6 +90,8 @@ module Temper::Generated
         :'description' => :'String',
         :'id' => :'String',
         :'name' => :'String',
+        :'public_within' => :'PublicWithinEffects',
+        :'public_within_in_reach' => :'PublicWithinReach',
         :'slug' => :'String'
       }
     end
@@ -91,6 +101,8 @@ module Temper::Generated
       Set.new([
         :'auto_join_role',
         :'description',
+        :'public_within',
+        :'public_within_in_reach',
       ])
     end
 
@@ -134,6 +146,14 @@ module Temper::Generated
         self.name = attributes[:'name']
       else
         self.name = nil
+      end
+
+      if attributes.key?(:'public_within')
+        self.public_within = attributes[:'public_within']
+      end
+
+      if attributes.key?(:'public_within_in_reach')
+        self.public_within_in_reach = attributes[:'public_within_in_reach']
       end
 
       if attributes.key?(:'slug')
@@ -228,6 +248,8 @@ module Temper::Generated
           description == o.description &&
           id == o.id &&
           name == o.name &&
+          public_within == o.public_within &&
+          public_within_in_reach == o.public_within_in_reach &&
           slug == o.slug
     end
 
@@ -240,7 +262,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [auto_join_role, created, description, id, name, slug].hash
+      [auto_join_role, created, description, id, name, public_within, public_within_in_reach, slug].hash
     end
 
     # Builds the object from hash

@@ -135,6 +135,80 @@ Every link and unlink is recorded on the admin ledger, readable by the parent's 
 Each of these acts is recorded on the admin ledger as `team_lifecycle_changed`, as is a team's
 creation.
 
+## Public within
+
+Reads flow down the tree and never up or across: by default a team's contexts are readable only by
+its own roster and the teams beneath it. **Public within** is the one way to open a team's material
+to a wider part of the tree, for reading.
+
+**Every team is born closed.** Nothing is opened until someone opens it, and nothing opens by
+itself: no team, setting or default does it on a team's behalf.
+
+**Both sides consent, or an admin stands in for the anchor.** An opening names a team (T) and one of
+its live ancestors (the anchor, A). While it confers, the people on A and on every live team beneath
+A, at any role, read every context T owns. It needs a direct owner or maintainer of T, together with
+a direct owner or maintainer of A or a system admin. A system admin stands in for the anchor's side
+only, never for the team's. When the anchor's subtree reaches the whole instance (temper-system, the
+gating team, or a subtree holding an auto-join team), only a system admin opens it. Either side
+closes it alone, at any time (when the anchor is temper-system or the gating team, a system admin
+closes from the anchor's side). What readers already read is not recalled. The opening is not
+inherited by T's child teams, and every open, close and change of effect is recorded on the admin
+ledger, readable by the managers of both teams.
+
+| Act | Command | Who |
+|---|---|---|
+| Open | `temper team public-within open <team> <anchor>` | a manager of the team, and a manager of the anchor or a system admin |
+| Close | `temper team public-within close <team> <anchor>` | a manager of either side (a system admin for a temper-system or gating-team anchor), or a system admin |
+| Forbid or allow | `temper team public-within policy <team> forbid\|allow` | the team's direct owner, or a system admin |
+| See what you read through | `temper team public-within list` | anyone, for themselves |
+| See a team's openings | `temper team show <team>` | `public_within`: the team's members; `public_within_in`: the anchor's managers |
+
+**It is for people reading, not for automation.** A machine client, a connection agent, a steward
+and an auditor never read through an opening, and a machine principal is refused every act above. A
+person reads through it with any token issued to them, such as an MCP session acting as them, and
+may reference the opened material from places they author: an edge, a goal link or a blob relation
+homed in their own context. Acting on the material still needs membership. That covers writing into
+the team's contexts, granting, attenuating a grant, re-sharing, subscribing, and auditing the team's
+findings.
+
+**Who grows the audience.** Consent is to the anchor's subtree *as it changes*, not to the roster on
+the day it was opened. Among the ways the audience grows:
+
+- any manager of any team under the anchor creates a child team, invites or adds someone,
+  attaches or moves in a team they manage, or restores a deleted team beneath it;
+- an identity provider's group sync adds people to one of those teams;
+- a system admin attaches a team or sets auto-join;
+- for a system admin's instance-wide opening, every newly approved person;
+- an opening that had stopped conferring confers again when a forbid above it is cleared, or a pool
+  team is moved out from under the anchor.
+
+That is a wider set of people than the anchor's own managers. Three things keep it honest:
+
+- `temper team show <team>` reports each opening's current audience as counts of teams and people;
+- bringing an auto-join or the gating team under the anchor makes every opening that is not a
+  system admin's instance-wide one stop conferring;
+- either side can close it at any time.
+
+**What it never exposes.** An opening confers reading of the contexts T itself owns, and nothing
+else. It never exposes a context shared *to* T, a grant held by T, a cognitive map bound to T, or
+an edge homed in any of those. It never authorizes a write into T's contexts, a grant, a re-share or
+a subscription on T's material, or an audit of T's own findings. It never adds anyone to T's roster.
+A team's detail says whether each opening confers right now, as yes or no only. It never says which
+forbid, deleted team or pool team stops one.
+
+**A forbid covers every path.** A forbid on a team stops every opening over that team and every team
+beneath it, by any path, live or deleted. Nothing beneath it can lift the forbid, except by leaving
+that subtree. The openings are kept, and they confer again when the forbid is cleared. An opening
+also stops conferring while T or the anchor is deleted. If the anchor stops being above T by any
+path, the opening is deleted for good, and reopening it needs both sides again. A system admin's
+forbid on temper-system turns the feature off for the whole instance.
+
+**`+team/slug` resolves for anyone who reads the context.** A team-owned context is addressable as
+`+<team-slug>/<slug>` by every reader of it: its team's members, members of the teams beneath it,
+people reading it through an opening, and holders of a share or read grant. Resolving an address
+confers nothing: a write aimed at it is checked as a write, and refused to a reader who is not a
+member.
+
 ## What membership grants — and what it does not
 
 Membership confers **read reach** automatically; write comes with direct membership in the

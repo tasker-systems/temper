@@ -1,0 +1,25 @@
+title    = "Every write of the gating slug takes the gating lock before the settings row and records the public_within flips it causes, whatever wrote it"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["schema"]
+status   = "signal-only"
+body = '''
+Migration 20261124000010. A BEFORE UPDATE OF gating_team_slug statement trigger on
+kb_system_settings takes the exclusive gating lock before any row is locked, so a plain settings
+write and a rename of the gating team take the lock and the settings row in the same order; before,
+the two could deadlock (40P01, a 500). BEFORE and AFTER row triggers record the public_within
+transitions of a slug change its writer did not record itself, as public_within_effect_changed with
+act absent, so an older binary's settings write during a rolling deploy, or an operator's SQL, no
+longer flips a row's effect unrecorded. _admin_gating_team_slug_write and a rename in
+_admin_team_lifecycle_act mark their own settings write so it is recorded once (body-only CREATE OR
+REPLACE, signatures and answers unchanged).
+
+Who observes: a system admin repointing the gating slug while another renames the gating team
+(both now complete), and ledger readers, who see a record for a slug change made outside the
+settings door. Every statement naming gating_team_slug in its SET list, including the settings
+door's write of other fields, holds the exclusive gating lock until it commits. Response shapes are
+unchanged. Witnesses: `a_plain_gating_slug_write_records_what_it_flips`,
+`renaming_the_gating_team_records_no_flip` and
+`a_plain_gating_slug_write_and_a_rename_do_not_deadlock` in
+`crates/temper-services/tests/public_within_test.rs`. Release relevance: signal-only.
+'''

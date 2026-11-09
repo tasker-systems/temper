@@ -21,6 +21,8 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional
 from uuid import UUID
+from temper.generated.models.public_within_effects import PublicWithinEffects
+from temper.generated.models.public_within_reach import PublicWithinReach
 from temper.generated.models.team_role import TeamRole
 from typing import Optional, Set
 from typing_extensions import Self
@@ -35,8 +37,10 @@ class TeamRow(BaseModel):
     description: Optional[StrictStr] = Field(default=None, description="Optional human description; NULL until set via `PATCH /api/teams/{id}`.")
     id: UUID
     name: StrictStr
+    public_within: Optional[PublicWithinEffects] = Field(default=None, description="What creating the team did to `public_within` rows (an auto-join team created under an anchor makes that anchor's rows stop conferring). Present only on `POST /api/teams` asked with `?answer=effects`; absent from every other answer. A row is named only to a caller who manages its team or its anchor, or is a system admin, and counted otherwise.")
+    public_within_in_reach: Optional[PublicWithinReach] = Field(default=None, description="The effective `public_within` rows the new team's roster reads through its parents, filtered as `public_within` is. Present only on `POST /api/teams` asked with `?answer=effects`.")
     slug: StrictStr
-    __properties: ClassVar[List[str]] = ["auto_join_role", "created", "description", "id", "name", "slug"]
+    __properties: ClassVar[List[str]] = ["auto_join_role", "created", "description", "id", "name", "public_within", "public_within_in_reach", "slug"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -77,6 +81,12 @@ class TeamRow(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # override the default output from pydantic by calling `to_dict()` of public_within
+        if self.public_within:
+            _dict['public_within'] = self.public_within.to_dict()
+        # override the default output from pydantic by calling `to_dict()` of public_within_in_reach
+        if self.public_within_in_reach:
+            _dict['public_within_in_reach'] = self.public_within_in_reach.to_dict()
         # set to None if auto_join_role (nullable) is None
         # and model_fields_set contains the field
         if self.auto_join_role is None and "auto_join_role" in self.model_fields_set:
@@ -86,6 +96,16 @@ class TeamRow(BaseModel):
         # and model_fields_set contains the field
         if self.description is None and "description" in self.model_fields_set:
             _dict['description'] = None
+
+        # set to None if public_within (nullable) is None
+        # and model_fields_set contains the field
+        if self.public_within is None and "public_within" in self.model_fields_set:
+            _dict['public_within'] = None
+
+        # set to None if public_within_in_reach (nullable) is None
+        # and model_fields_set contains the field
+        if self.public_within_in_reach is None and "public_within_in_reach" in self.model_fields_set:
+            _dict['public_within_in_reach'] = None
 
         return _dict
 
@@ -104,6 +124,8 @@ class TeamRow(BaseModel):
             "description": obj.get("description"),
             "id": obj.get("id"),
             "name": obj.get("name"),
+            "public_within": PublicWithinEffects.from_dict(obj["public_within"]) if obj.get("public_within") is not None else None,
+            "public_within_in_reach": PublicWithinReach.from_dict(obj["public_within_in_reach"]) if obj.get("public_within_in_reach") is not None else None,
             "slug": obj.get("slug")
         })
         return _obj
