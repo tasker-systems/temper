@@ -4,7 +4,7 @@ classes  = ["behavioral"]
 surfaces = ["http", "mcp"]
 status   = "signal-only"
 body = '''
-Nine doors decided the system-admin arm on a pool read and never asked again on their write
+Ten team, join-request and invitation doors decided the system-admin arm on a pool read and never asked again on their write
 transaction: delete a team, restore a team, update a team's name or description (on the root or
 the gating team), detach a child, attach a child and re-parent (the plain admin arm; the
 instance-parent and auto-join cases already re-checked), set a team's auto_join_role, create a team
@@ -24,8 +24,12 @@ Lock order: the governance row is taken after the rows the door locks for its de
 takes none of a door's rows before or after its delete, so no order of the two waits in a cycle.
 
 Who observes: a system admin demoted (directly, or by Revoke or Deactivate) while one of those acts
-is in flight. No schema change and no response shape change. Witnesses, each failing without the
-re-check: the door tests in `crates/temper-services/tests/admin_recheck_doors_test.rs`, and
-`a_revoke_of_the_reviewer_and_the_decision_never_deadlock` there for the lock order. Release
+is in flight. No schema change and no response shape change. Witnesses: the door tests in
+`crates/temper-services/tests/admin_recheck_doors_test.rs`, whose in-flight race fails on each door
+without the re-check (the committed-first race fails without it only where the admin proof is minted
+before the demotion: set_auto_join and the join-request decision), and
+`a_revoke_of_the_reviewer_and_the_decision_never_deadlock` there for the lock order. Out of scope,
+still deciding on the pool proof alone: the standing and governance acts in access_service (approve,
+revoke, deactivate, reactivate, promote, demote), reconcile_auto_join and close_review_request. Release
 relevance: signal-only.
 '''
