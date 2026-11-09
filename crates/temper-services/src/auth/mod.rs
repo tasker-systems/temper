@@ -638,14 +638,15 @@ pub async fn require_system_admin_locked(
 /// [`require_system_admin_locked`].
 ///
 /// Lock order: a demotion locks nothing, around its delete, that a door holds. Before the delete it
-/// takes no team row, invitation row or advisory lock (`demote_admin` is one statement;
-/// `standing_service::apply` locks only the subject's standing row first). After it, it only appends
-/// its events and revokes the subject's refresh tokens, which no door locks. So a caller may take
-/// this lock before or after its own team, member or invitation rows (the invitation re-check takes
-/// it before the invitation rows it then revokes) and never waits on a demotion in a cycle. A later
-/// change that makes a demotion lock a door's rows after its delete would break this. An admin's
-/// demotion of another admin also locks its own actor's row, so the admin standing acts lock the
-/// two governance rows together in ascending profile id order (`access_service::still_admin`).
+/// takes no team row, invitation row or advisory lock: a Revoke or Deactivate locks the subject's
+/// standing row (and, for a machine, its credential row), and an admin's act then locks the two
+/// governance rows, the subject's and its own, in ascending profile id order
+/// (`access_service::still_admin`), so two admins demoting each other never wait in a cycle. After
+/// the delete it only appends its events and revokes the subject's refresh tokens, which no door
+/// locks. So a caller may take this lock before or after its own team, member or invitation rows
+/// (the invitation re-check takes it before the invitation rows it then revokes) and never waits on
+/// a demotion in a cycle. A later change that makes a demotion lock a door's rows after its delete
+/// would break this.
 ///
 /// The `is_system_admin` read after the lock is defence in depth: today it is an `EXISTS` on the
 /// row just locked, so it cannot disagree. It must stay a pure read of governance. A predicate that

@@ -24,10 +24,14 @@ use std::future::Future;
 
 use sqlx::PgPool;
 use temper_core::types::ids::ProfileId;
+use temper_core::types::machine::ProvisionMachineRequest;
 use temper_principal::Provisioner;
 use temper_services::auth::SystemAdmin;
+use temper_services::auth_config::AuthMode;
 use temper_services::error::ApiError;
-use temper_services::services::{access_service, standing_service};
+use temper_services::services::{
+    access_service, machine_client_service, machine_registration_service, standing_service,
+};
 use temper_services::test_support;
 use temper_workflow::operations::Surface;
 use uuid::Uuid;
@@ -366,6 +370,64 @@ async fn close_review_request(pool: PgPool) {
     verb(pool.clone(), proof(&pool, admin).await)
         .await
         .expect("the admin closes it");
+}
+
+/// A machine credential's revocation by an admin also revokes the machine's standing (its last live
+/// credential). Both halves are one act: an admin demoted mid-act is refused the whole of it, so the
+/// credential is not left revoked behind a 403.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn revoke_a_machine_credential(pool: PgPool) {
+    let admin = an_admin(&pool, "sv-admin").await;
+    let client = machine_registration_service::provision(
+        &pool,
+        &test_support::human_principal_for(&pool, admin).await,
+        &ProvisionMachineRequest {
+            client_id: "sv-machine".to_owned(),
+            label: "sv-machine".to_owned(),
+            owner_team_id: None,
+            teams: vec![],
+            grants: vec![],
+        },
+        AuthMode::ExternalIdp,
+    )
+    .await
+    .expect("provision machine");
+    let machine = client.profile_id;
+    // Approved, so the standing arm runs: revoking its last credential revokes its standing too.
+    test_support::approve(&pool, machine).await;
+    let live = |pool: PgPool| async move {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT revoked_at IS NULL FROM kb_machine_clients WHERE id = $1",
+        )
+        .bind(client.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+
+    let (holder, pid) = demotion_in_flight(&pool, admin).await;
+    let p2 = pool.clone();
+    let contender = tokio::spawn(async move {
+        let by = test_support::human_principal_for(&p2, admin).await;
+        machine_client_service::revoke(&p2, client.id, &by).await
+    });
+    await_blocked_by(&pool, pid).await;
+    holder.commit().await.unwrap();
+    let err = contender.await.unwrap().unwrap_err();
+    assert!(matches!(err, ApiError::Forbidden), "in flight: {err:?}");
+    assert!(
+        live(pool.clone()).await,
+        "a refused revoke left the credential revoked"
+    );
+    assert_eq!(standing(&pool, machine).await.as_deref(), Some("approved"));
+    test_support::grant_governance(&pool, admin).await;
+
+    let by = test_support::human_principal_for(&pool, admin).await;
+    machine_client_service::revoke(&pool, client.id, &by)
+        .await
+        .expect("the admin revokes it");
+    assert!(!live(pool.clone()).await);
+    assert_eq!(standing(&pool, machine).await.as_deref(), Some("revoked"));
 }
 
 /// A demoted admin cannot undo their own demotion with a proof minted before it: the promote is

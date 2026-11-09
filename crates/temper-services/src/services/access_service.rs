@@ -1306,7 +1306,7 @@ fn promotion_refused(
 // The admin standing acts (Task 13)
 //
 // The five admin-authority acts of the machine, one thin service wrapper each. Every one routes
-// through `standing_service::apply`, so it inherits the transition table (a refused act — Revoke on
+// through `apply_as_admin_on` and so `standing_service::apply_conn`, so it inherits the transition table (a refused act — Revoke on
 // a never-approved principal, Reactivate on a live one — is rejected there with a reason, never here)
 // and, once they land, Task 15's demotion hook and Task 17's typed refusal. Reject is not among them:
 // it is a join-request decision, handled atomically inside `review_request` (D14).
@@ -1318,7 +1318,9 @@ fn promotion_refused(
 // now a compile error, not a forgotten `.await?`. Both surfaces (temper-api today, temper-mcp when
 // parity lands) inherit the gate by construction, and a service caller can never reach
 // `ActorAuthority::Admin` without holding the proof. That is the F-3 posture the
-// `audit-handler-authz-drift` tripwire pins: authorization the service itself enforces.
+// `audit-handler-authz-drift` tripwire pins: authorization the service itself enforces. The proof
+// is minted on the pool, so each act asks again on its own transaction before any write
+// ([`still_admin`]): holding a proof does not outlast a demotion.
 // ---------------------------------------------------------------------------
 
 /// The admin re-check of a standing act, on its transaction, before any write. Each act's
@@ -1331,7 +1333,7 @@ fn promotion_refused(
 /// demoting each other at once would otherwise each hold their own row and wait on the other's.
 /// Every standing act takes the subject's standing row before any governance row, and every door
 /// takes governance after its own rows, so this order closes the only cycle.
-async fn still_admin(
+pub(crate) async fn still_admin(
     tx: &mut sqlx::PgConnection,
     admin: &SystemAdmin,
     demotes: Option<ProfileId>,
@@ -1368,20 +1370,20 @@ async fn still_admin(
     }
 }
 
-/// One admin standing act in its own transaction: the subject's standing row first (the lock every
-/// standing act takes first), then [`still_admin`], then the act.
-async fn apply_as_admin(
-    pool: &PgPool,
+/// One admin standing act on the caller's transaction: the subject's standing row first (the lock
+/// every standing act takes first), then [`still_admin`], then the act, all before the caller's
+/// commit. A caller that already took those locks simply holds them already.
+async fn apply_as_admin_on(
+    tx: &mut sqlx::PgConnection,
     admin: &SystemAdmin,
     subject: ProfileId,
     act: Act,
 ) -> ApiResult<()> {
     let demotes = matches!(act, Act::Revoke { .. } | Act::Deactivate).then_some(subject);
-    let mut tx = pool.begin().await?;
-    standing_service::lock_conn(&mut tx, subject).await?;
-    still_admin(&mut tx, admin, demotes).await?;
+    standing_service::lock_conn(&mut *tx, subject).await?;
+    still_admin(&mut *tx, admin, demotes).await?;
     standing_service::apply_conn(
-        &mut tx,
+        &mut *tx,
         ApplyStandingParams {
             subject,
             act,
@@ -1390,8 +1392,31 @@ async fn apply_as_admin(
         },
     )
     .await?;
+    Ok(())
+}
+
+/// [`apply_as_admin_on`] in its own transaction.
+async fn apply_as_admin(
+    pool: &PgPool,
+    admin: &SystemAdmin,
+    subject: ProfileId,
+    act: Act,
+) -> ApiResult<()> {
+    let mut tx = pool.begin().await?;
+    apply_as_admin_on(&mut tx, admin, subject, act).await?;
     tx.commit().await?;
     Ok(())
+}
+
+/// [`admin_revoke`] on the caller's transaction, for a door whose own write must commit with the
+/// revoke (a machine credential's revocation).
+pub(crate) async fn admin_revoke_on(
+    tx: &mut sqlx::PgConnection,
+    admin: &SystemAdmin,
+    subject: ProfileId,
+    reason: String,
+) -> ApiResult<()> {
+    apply_as_admin_on(tx, admin, subject, Act::Revoke { reason }).await
 }
 
 /// Approve a principal directly — the machine/direct-grant door, legal from `Denied` (D14) and
@@ -1406,7 +1431,8 @@ pub async fn admin_approve(
     admin: &SystemAdmin,
     subject: ProfileId,
 ) -> ApiResult<()> {
-    apply_as_admin(pool, admin, subject, Act::Approve).await?;
+    let mut tx = pool.begin().await?;
+    apply_as_admin_on(&mut tx, admin, subject, Act::Approve).await?;
 
     // Readmission ANSWERS an open reconsideration, so the marker stops claiming otherwise.
     //
@@ -1419,9 +1445,10 @@ pub async fn admin_approve(
     // the path actually taken is `temper admin access approve`, after which the row stayed open
     // forever, permanently barring a second appeal and inflating every admin's queue.
     //
-    // Sequential rather than transactional: `apply_as_admin` owns its own transaction. A failure here leaves the pre-existing stale-marker state, never a worse one,
-    // and never a principal whose standing moved without the caller learning.
-    close_open_reviews_for(pool, admin, subject).await?;
+    // In the approval's transaction, after its re-check of the acting admin: the readmission and
+    // the marker it answers commit together, or neither does.
+    close_open_reviews_for(&mut tx, admin, subject).await?;
+    tx.commit().await?;
 
     Ok(())
 }
@@ -1430,7 +1457,7 @@ pub async fn admin_approve(
 /// of a principal who never filed one — zero rows affected is success, not a `NotFound`, because the
 /// caller asked to readmit someone, not to close a review.
 async fn close_open_reviews_for(
-    pool: &PgPool,
+    tx: &mut sqlx::PgConnection,
     admin: &SystemAdmin,
     subject: ProfileId,
 ) -> ApiResult<()> {
@@ -1445,7 +1472,7 @@ async fn close_open_reviews_for(
         *admin.actor(),
         REVIEW_CLOSED_BY_READMISSION,
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     Ok(())
