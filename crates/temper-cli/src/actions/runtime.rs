@@ -41,11 +41,11 @@ use crate::error::{Result, TemperError};
 /// 3. **The kind of refusal.** Every `ClientError` the server raises as a typed
 ///    refusal lifts to its [`TemperError`] twin, so the JSON error payload's
 ///    `code` names it (`not-found`, `forbidden`, `conflict`, …) rather than
-///    `api`. Every 401 shape lifts to [`TemperError::Unauthorized`] with the
-///    client's own sentence, so the remedy each names survives; a `400` the
-///    client could not classify further lifts to [`TemperError::BadRequest`].
-///    What has no twin — a rate limit, a 5xx, a local IO or config failure —
-///    stays [`TemperError::Api`].
+///    `api`. Every 401 shape lifts to [`TemperError::Unauthorized`] keeping the
+///    client's own sentence. What has no twin — a rate limit, a status the
+///    client did not classify (an untyped `400` included: the client uses one
+///    to report a refusal body it could not parse, which is not the caller's
+///    fault), a 5xx, a local IO or config failure — stays [`TemperError::Api`].
 ///
 /// There was briefly a second lifter that preserved (1) but not (2), while this
 /// one preserved (2) but not (1) — so which guidance the user got depended on
@@ -74,16 +74,12 @@ pub fn client_err_to_temper(e: ClientError) -> TemperError {
         ClientError::PlanRefused { refusals } => crate::actions::query::refused(refusals),
         // The same lift `temper data-artifact ask` makes: the server could not read the body.
         e @ ClientError::UnreadablePlan { .. } => TemperError::BadRequest(e.to_string()),
-        // The client's sentence is kept: each names its own remedy (`temper auth login`, or the
-        // secret an ambient environment attaches).
+        // The client's sentence is kept, so a remedy it names (`temper auth login`, or the secret
+        // an ambient environment attaches) reaches the caller.
         e @ (ClientError::NotAuthenticated
         | ClientError::UnauthorizedDetails { .. }
         | ClientError::TokenExpired
         | ClientError::AmbientRefused { .. }) => TemperError::Unauthorized(e.to_string()),
-        ClientError::Server {
-            status: 400,
-            message,
-        } => TemperError::BadRequest(message),
         e => TemperError::Api(e.to_string()),
     }
 }
@@ -291,11 +287,7 @@ pub fn build_runtime_and_client() -> Result<(tokio::runtime::Runtime, temper_cli
 pub async fn ensure_profile(
     client: &temper_client::TemperClient,
 ) -> Result<temper_core::types::Profile> {
-    let profile = client
-        .profile()
-        .get()
-        .await
-        .map_err(|e| TemperError::Api(format!("profile pre-flight: {e}")))?;
+    let profile = client.profile().get().await.map_err(client_err_to_temper)?;
     Ok(profile)
 }
 
@@ -465,7 +457,6 @@ mod tests {
         assert!(is_twin(&lifted), "{shown} lifted to {lifted:?}");
         assert_eq!(lifted.code(), code, "{shown}");
         assert_eq!(payload_code(&lifted), code, "{shown}");
-        assert_ne!(code, "api", "{shown} must not flatten to `api`");
     }
 
     /// Each typed refusal reaches the JSON caller under its own code. FAILS IF any arm is removed:
@@ -545,14 +536,6 @@ mod tests {
             |e| matches!(e, TemperError::BadRequest(m) if m.contains("expected a map")),
             "bad-request",
         );
-        assert_lifts(
-            ClientError::Server {
-                status: 400,
-                message: "limit must be positive".into(),
-            },
-            |e| matches!(e, TemperError::BadRequest(m) if m == "limit must be positive"),
-            "bad-request",
-        );
     }
 
     /// Every 401 shape lifts to `Unauthorized` and keeps the client's sentence, so the remedy it
@@ -578,13 +561,19 @@ mod tests {
         }
     }
 
-    /// What has no twin stays `Api`: a rate limit and a server fault. FAILS IF either is lifted to a
-    /// refusal kind it is not — a 5xx reported as a caller error.
+    /// What has no twin stays `Api`: a rate limit, an untyped 400 (which the client also uses for a
+    /// refusal body it could not parse) and a server fault. FAILS IF any is lifted to a refusal kind
+    /// it is not — a contract mismatch or a 5xx reported as the caller's error.
     #[test]
-    fn a_rate_limit_and_a_server_fault_stay_api() {
+    fn a_rate_limit_an_untyped_400_and_a_server_fault_stay_api() {
         for client in [
             ClientError::RateLimited {
                 retry_after: std::time::Duration::from_secs(5),
+            },
+            ClientError::Server {
+                status: 400,
+                message: "server sent PLAN_REFUSED with a payload this client could not parse"
+                    .into(),
             },
             ClientError::Server {
                 status: 500,

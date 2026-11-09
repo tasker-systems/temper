@@ -178,7 +178,7 @@ pub async fn resolve_team_id(
 /// `admin`/`owner` role.
 fn map_bind_err(action: &str, e: temper_client::error::ClientError) -> TemperError {
     match e {
-        temper_client::error::ClientError::Forbidden => TemperError::Api(format!(
+        temper_client::error::ClientError::Forbidden => TemperError::ForbiddenDetail(format!(
             "not authorized: `cogmap {action}` requires that you administer the map \
              (hold a grant on it) AND manage the target team (owner/maintainer) — or that \
              you are an instance administrator."
