@@ -89,7 +89,7 @@ current() {
     fi
   } \
   | sort | uniq -c \
-  | awk '{printf "%s %s\n", $1, $2}' \
+  | awk '{c = $1; $1 = ""; sub(/^ /, ""); printf "%s %s\n", c, $0}' \
   | sort -k2 \
   || true
 }

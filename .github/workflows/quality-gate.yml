@@ -437,6 +437,19 @@ jobs:
       - name: Guard test — audit-ungated-fragments
         run: bash .github/scripts/test-audit-ungated-fragments.sh
 
+      # Seven probes. The guard's baseline is empty, so green is evidence only if it can see:
+      # a direct predicate call reds in each scan root, a missing scan root reds, and a listed
+      # predicate that no longer resolves to a `pub fn` (renamed, removed, or narrowed to
+      # pub(crate)) reds rather than becoming a needle that never matches.
+      - name: Guard test — audit-handler-authz-drift (both roots, both fail-closed conditions)
+        run: bash .github/scripts/test-audit-handler-authz-drift.sh
+
+      # Ten probes: four writer shapes red (new file, extra call in a baselined file, SQL template,
+      # writer after an item-level test gate), the empty scan and an unreadable file red as a broken
+      # scan, and four field-of-view pins stay green (test module, the seam, a comment, tests/).
+      - name: Guard test — audit-raw-standing-writers
+        run: bash .github/scripts/test-audit-raw-standing-writers.sh
+
       # Five probes, and two of them exist because the guard's own first run was green for the wrong
       # reason: `awk -v` had eaten a backslash out of the attribution pattern, and a `grep -v` on an
       # empty baseline was exiting 1 under `pipefail` before any comparison ran — so the red probe
