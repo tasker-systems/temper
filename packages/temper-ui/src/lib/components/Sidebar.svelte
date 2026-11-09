@@ -4,6 +4,7 @@
 	import ChromeMenu from './ChromeMenu.svelte';
 	import { ARRIVAL } from '$lib/first-view';
 	import { navContextsState } from '$lib/nav-groups';
+	import { teamHref } from '$lib/team-view';
 	import { parseGraphAddress } from '$lib/vault-url';
 	import { sidebarGroups } from '$lib/stores/sidebar.svelte';
 	import type { ContextRowWithCounts, TeamRow } from '$lib/types';
@@ -194,6 +195,9 @@
 						{group}
 						collapsed={sidebarGroups.isCollapsed(group.key)}
 						onToggle={() => sidebarGroups.toggle(group.key)}
+						teamPage={group.kind === 'team' && teams?.some((t) => `+${t.slug}` === group.key)
+							? teamHref(group.key.slice(1))
+							: null}
 					/>
 				{/each}
 			{/if}

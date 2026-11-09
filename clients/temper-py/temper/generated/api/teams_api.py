@@ -24,6 +24,7 @@ from temper.generated.models.attach_child_outcome import AttachChildOutcome
 from temper.generated.models.bulk_reassign_ack import BulkReassignAck
 from temper.generated.models.bulk_reassign_request import BulkReassignRequest
 from temper.generated.models.change_role_request import ChangeRoleRequest
+from temper.generated.models.public_within_effects import PublicWithinEffects
 from temper.generated.models.public_within_outcome import PublicWithinOutcome
 from temper.generated.models.public_within_policy_outcome import PublicWithinPolicyOutcome
 from temper.generated.models.public_within_policy_request import PublicWithinPolicyRequest
@@ -1305,6 +1306,7 @@ class TeamsApi:
     def create_team(
         self,
         team_create_request: TeamCreateRequest,
+        answer: Annotated[Optional[StrictStr], Field(description="`effects`: also answer what the act did to `public_within` rows (`POST` fills `TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with `PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team or its anchor, or is a system admin, and counted otherwise.")] = None,
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -1321,9 +1323,12 @@ class TeamsApi:
     ) -> TeamRow:
         """Create a team
 
+        With `?answer=effects` the row also carries `public_within` (what the new team's parent links did to `public_within` rows) and `public_within_in_reach` (the effective rows the new team's roster reads through its parents), each row named only to a caller who manages its team or anchor, or is a system admin, and counted otherwise. Without it the answer is the row alone.
 
         :param team_create_request: (required)
         :type team_create_request: TeamCreateRequest
+        :param answer: `effects`: also answer what the act did to `public_within` rows (`POST` fills `TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with `PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team or its anchor, or is a system admin, and counted otherwise.
+        :type answer: str
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
         :param _request_timeout: timeout setting for this request. If one
@@ -1350,6 +1355,7 @@ class TeamsApi:
 
         _param = self._create_team_serialize(
             team_create_request=team_create_request,
+            answer=answer,
             x_temper_surface=x_temper_surface,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -1378,6 +1384,7 @@ class TeamsApi:
     def create_team_with_http_info(
         self,
         team_create_request: TeamCreateRequest,
+        answer: Annotated[Optional[StrictStr], Field(description="`effects`: also answer what the act did to `public_within` rows (`POST` fills `TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with `PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team or its anchor, or is a system admin, and counted otherwise.")] = None,
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -1394,9 +1401,12 @@ class TeamsApi:
     ) -> ApiResponse[TeamRow]:
         """Create a team
 
+        With `?answer=effects` the row also carries `public_within` (what the new team's parent links did to `public_within` rows) and `public_within_in_reach` (the effective rows the new team's roster reads through its parents), each row named only to a caller who manages its team or anchor, or is a system admin, and counted otherwise. Without it the answer is the row alone.
 
         :param team_create_request: (required)
         :type team_create_request: TeamCreateRequest
+        :param answer: `effects`: also answer what the act did to `public_within` rows (`POST` fills `TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with `PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team or its anchor, or is a system admin, and counted otherwise.
+        :type answer: str
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
         :param _request_timeout: timeout setting for this request. If one
@@ -1423,6 +1433,7 @@ class TeamsApi:
 
         _param = self._create_team_serialize(
             team_create_request=team_create_request,
+            answer=answer,
             x_temper_surface=x_temper_surface,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -1451,6 +1462,7 @@ class TeamsApi:
     def create_team_without_preload_content(
         self,
         team_create_request: TeamCreateRequest,
+        answer: Annotated[Optional[StrictStr], Field(description="`effects`: also answer what the act did to `public_within` rows (`POST` fills `TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with `PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team or its anchor, or is a system admin, and counted otherwise.")] = None,
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -1467,9 +1479,12 @@ class TeamsApi:
     ) -> RESTResponseType:
         """Create a team
 
+        With `?answer=effects` the row also carries `public_within` (what the new team's parent links did to `public_within` rows) and `public_within_in_reach` (the effective rows the new team's roster reads through its parents), each row named only to a caller who manages its team or anchor, or is a system admin, and counted otherwise. Without it the answer is the row alone.
 
         :param team_create_request: (required)
         :type team_create_request: TeamCreateRequest
+        :param answer: `effects`: also answer what the act did to `public_within` rows (`POST` fills `TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with `PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team or its anchor, or is a system admin, and counted otherwise.
+        :type answer: str
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
         :param _request_timeout: timeout setting for this request. If one
@@ -1496,6 +1511,7 @@ class TeamsApi:
 
         _param = self._create_team_serialize(
             team_create_request=team_create_request,
+            answer=answer,
             x_temper_surface=x_temper_surface,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -1519,6 +1535,7 @@ class TeamsApi:
     def _create_team_serialize(
         self,
         team_create_request,
+        answer,
         x_temper_surface,
         _request_auth,
         _content_type,
@@ -1542,6 +1559,10 @@ class TeamsApi:
 
         # process the path parameters
         # process the query parameters
+        if answer is not None:
+            
+            _query_params.append(('answer', answer))
+            
         # process the header parameters
         if x_temper_surface is not None:
             _header_params['X-Temper-Surface'] = x_temper_surface
@@ -1600,6 +1621,7 @@ class TeamsApi:
     def delete_team(
         self,
         id: Annotated[UUID, Field(description="Team ID")],
+        answer: Annotated[Optional[StrictStr], Field(description="`effects`: also answer what the act did to `public_within` rows (`POST` fills `TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with `PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team or its anchor, or is a system admin, and counted otherwise.")] = None,
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -1613,12 +1635,15 @@ class TeamsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> None:
+    ) -> PublicWithinEffects:
         """Delete a team
 
+        With `?answer=effects` the answer is `200` with what the delete did to `public_within` rows (rows over or under the team stop conferring), each named only to a caller who manages its team or anchor, or is a system admin, and counted otherwise. Without it the answer is `204`.
 
         :param id: Team ID (required)
         :type id: UUID
+        :param answer: `effects`: also answer what the act did to `public_within` rows (`POST` fills `TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with `PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team or its anchor, or is a system admin, and counted otherwise.
+        :type answer: str
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
         :param _request_timeout: timeout setting for this request. If one
@@ -1645,6 +1670,7 @@ class TeamsApi:
 
         _param = self._delete_team_serialize(
             id=id,
+            answer=answer,
             x_temper_surface=x_temper_surface,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -1653,6 +1679,7 @@ class TeamsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
+            '200': "PublicWithinEffects",
             '204': None,
             '403': "ErrorBody",
             '404': None,
@@ -1673,6 +1700,7 @@ class TeamsApi:
     def delete_team_with_http_info(
         self,
         id: Annotated[UUID, Field(description="Team ID")],
+        answer: Annotated[Optional[StrictStr], Field(description="`effects`: also answer what the act did to `public_within` rows (`POST` fills `TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with `PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team or its anchor, or is a system admin, and counted otherwise.")] = None,
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -1686,12 +1714,15 @@ class TeamsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> ApiResponse[None]:
+    ) -> ApiResponse[PublicWithinEffects]:
         """Delete a team
 
+        With `?answer=effects` the answer is `200` with what the delete did to `public_within` rows (rows over or under the team stop conferring), each named only to a caller who manages its team or anchor, or is a system admin, and counted otherwise. Without it the answer is `204`.
 
         :param id: Team ID (required)
         :type id: UUID
+        :param answer: `effects`: also answer what the act did to `public_within` rows (`POST` fills `TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with `PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team or its anchor, or is a system admin, and counted otherwise.
+        :type answer: str
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
         :param _request_timeout: timeout setting for this request. If one
@@ -1718,6 +1749,7 @@ class TeamsApi:
 
         _param = self._delete_team_serialize(
             id=id,
+            answer=answer,
             x_temper_surface=x_temper_surface,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -1726,6 +1758,7 @@ class TeamsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
+            '200': "PublicWithinEffects",
             '204': None,
             '403': "ErrorBody",
             '404': None,
@@ -1746,6 +1779,7 @@ class TeamsApi:
     def delete_team_without_preload_content(
         self,
         id: Annotated[UUID, Field(description="Team ID")],
+        answer: Annotated[Optional[StrictStr], Field(description="`effects`: also answer what the act did to `public_within` rows (`POST` fills `TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with `PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team or its anchor, or is a system admin, and counted otherwise.")] = None,
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -1762,9 +1796,12 @@ class TeamsApi:
     ) -> RESTResponseType:
         """Delete a team
 
+        With `?answer=effects` the answer is `200` with what the delete did to `public_within` rows (rows over or under the team stop conferring), each named only to a caller who manages its team or anchor, or is a system admin, and counted otherwise. Without it the answer is `204`.
 
         :param id: Team ID (required)
         :type id: UUID
+        :param answer: `effects`: also answer what the act did to `public_within` rows (`POST` fills `TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with `PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team or its anchor, or is a system admin, and counted otherwise.
+        :type answer: str
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
         :param _request_timeout: timeout setting for this request. If one
@@ -1791,6 +1828,7 @@ class TeamsApi:
 
         _param = self._delete_team_serialize(
             id=id,
+            answer=answer,
             x_temper_surface=x_temper_surface,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -1799,6 +1837,7 @@ class TeamsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
+            '200': "PublicWithinEffects",
             '204': None,
             '403': "ErrorBody",
             '404': None,
@@ -1814,6 +1853,7 @@ class TeamsApi:
     def _delete_team_serialize(
         self,
         id,
+        answer,
         x_temper_surface,
         _request_auth,
         _content_type,
@@ -1839,6 +1879,10 @@ class TeamsApi:
         if id is not None:
             _path_params['id'] = id
         # process the query parameters
+        if answer is not None:
+            
+            _query_params.append(('answer', answer))
+            
         # process the header parameters
         if x_temper_surface is not None:
             _header_params['X-Temper-Surface'] = x_temper_surface
@@ -1883,6 +1927,7 @@ class TeamsApi:
         self,
         id: Annotated[UUID, Field(description="Parent team ID")],
         child_id: Annotated[UUID, Field(description="Child team ID")],
+        answer: Annotated[Optional[StrictStr], Field(description="`effects`: also answer what the act did to `public_within` rows (`POST` fills `TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with `PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team or its anchor, or is a system admin, and counted otherwise.")] = None,
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -1896,15 +1941,17 @@ class TeamsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> None:
+    ) -> PublicWithinEffects:
         """Detach a child team from this team
 
-        Removes the parent link, so the child's members stop reaching what is attached to this team and its ancestors. The child and its roster survive; only this link is cut. A manager of the parent or of the child may detach (a child's managers may leave any parent). Recorded on the admin ledger as `team_parent_link_changed`.
+        Removes the parent link, so the child's members stop reaching what is attached to this team and its ancestors. The child and its roster survive; only this link is cut. A manager of the parent or of the child may detach (a child's managers may leave any parent). Recorded on the admin ledger as `team_parent_link_changed`. With `?answer=effects` the answer is `200` with what the detach did to `public_within` rows (a row whose anchor is no longer above its team by any path is deleted, `lapsed`), each named only to a caller who manages its team or anchor, or is a system admin, and counted otherwise. Without it the answer is `204`.
 
         :param id: Parent team ID (required)
         :type id: UUID
         :param child_id: Child team ID (required)
         :type child_id: UUID
+        :param answer: `effects`: also answer what the act did to `public_within` rows (`POST` fills `TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with `PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team or its anchor, or is a system admin, and counted otherwise.
+        :type answer: str
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
         :param _request_timeout: timeout setting for this request. If one
@@ -1932,6 +1979,7 @@ class TeamsApi:
         _param = self._detach_child_team_serialize(
             id=id,
             child_id=child_id,
+            answer=answer,
             x_temper_surface=x_temper_surface,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -1940,6 +1988,7 @@ class TeamsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
+            '200': "PublicWithinEffects",
             '204': None,
             '403': "ErrorBody",
             '404': None,
@@ -1960,6 +2009,7 @@ class TeamsApi:
         self,
         id: Annotated[UUID, Field(description="Parent team ID")],
         child_id: Annotated[UUID, Field(description="Child team ID")],
+        answer: Annotated[Optional[StrictStr], Field(description="`effects`: also answer what the act did to `public_within` rows (`POST` fills `TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with `PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team or its anchor, or is a system admin, and counted otherwise.")] = None,
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -1973,15 +2023,17 @@ class TeamsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> ApiResponse[None]:
+    ) -> ApiResponse[PublicWithinEffects]:
         """Detach a child team from this team
 
-        Removes the parent link, so the child's members stop reaching what is attached to this team and its ancestors. The child and its roster survive; only this link is cut. A manager of the parent or of the child may detach (a child's managers may leave any parent). Recorded on the admin ledger as `team_parent_link_changed`.
+        Removes the parent link, so the child's members stop reaching what is attached to this team and its ancestors. The child and its roster survive; only this link is cut. A manager of the parent or of the child may detach (a child's managers may leave any parent). Recorded on the admin ledger as `team_parent_link_changed`. With `?answer=effects` the answer is `200` with what the detach did to `public_within` rows (a row whose anchor is no longer above its team by any path is deleted, `lapsed`), each named only to a caller who manages its team or anchor, or is a system admin, and counted otherwise. Without it the answer is `204`.
 
         :param id: Parent team ID (required)
         :type id: UUID
         :param child_id: Child team ID (required)
         :type child_id: UUID
+        :param answer: `effects`: also answer what the act did to `public_within` rows (`POST` fills `TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with `PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team or its anchor, or is a system admin, and counted otherwise.
+        :type answer: str
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
         :param _request_timeout: timeout setting for this request. If one
@@ -2009,6 +2061,7 @@ class TeamsApi:
         _param = self._detach_child_team_serialize(
             id=id,
             child_id=child_id,
+            answer=answer,
             x_temper_surface=x_temper_surface,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -2017,6 +2070,7 @@ class TeamsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
+            '200': "PublicWithinEffects",
             '204': None,
             '403': "ErrorBody",
             '404': None,
@@ -2037,6 +2091,7 @@ class TeamsApi:
         self,
         id: Annotated[UUID, Field(description="Parent team ID")],
         child_id: Annotated[UUID, Field(description="Child team ID")],
+        answer: Annotated[Optional[StrictStr], Field(description="`effects`: also answer what the act did to `public_within` rows (`POST` fills `TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with `PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team or its anchor, or is a system admin, and counted otherwise.")] = None,
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -2053,12 +2108,14 @@ class TeamsApi:
     ) -> RESTResponseType:
         """Detach a child team from this team
 
-        Removes the parent link, so the child's members stop reaching what is attached to this team and its ancestors. The child and its roster survive; only this link is cut. A manager of the parent or of the child may detach (a child's managers may leave any parent). Recorded on the admin ledger as `team_parent_link_changed`.
+        Removes the parent link, so the child's members stop reaching what is attached to this team and its ancestors. The child and its roster survive; only this link is cut. A manager of the parent or of the child may detach (a child's managers may leave any parent). Recorded on the admin ledger as `team_parent_link_changed`. With `?answer=effects` the answer is `200` with what the detach did to `public_within` rows (a row whose anchor is no longer above its team by any path is deleted, `lapsed`), each named only to a caller who manages its team or anchor, or is a system admin, and counted otherwise. Without it the answer is `204`.
 
         :param id: Parent team ID (required)
         :type id: UUID
         :param child_id: Child team ID (required)
         :type child_id: UUID
+        :param answer: `effects`: also answer what the act did to `public_within` rows (`POST` fills `TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with `PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team or its anchor, or is a system admin, and counted otherwise.
+        :type answer: str
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
         :param _request_timeout: timeout setting for this request. If one
@@ -2086,6 +2143,7 @@ class TeamsApi:
         _param = self._detach_child_team_serialize(
             id=id,
             child_id=child_id,
+            answer=answer,
             x_temper_surface=x_temper_surface,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -2094,6 +2152,7 @@ class TeamsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
+            '200': "PublicWithinEffects",
             '204': None,
             '403': "ErrorBody",
             '404': None,
@@ -2109,6 +2168,7 @@ class TeamsApi:
         self,
         id,
         child_id,
+        answer,
         x_temper_surface,
         _request_auth,
         _content_type,
@@ -2136,6 +2196,10 @@ class TeamsApi:
         if child_id is not None:
             _path_params['child_id'] = child_id
         # process the query parameters
+        if answer is not None:
+            
+            _query_params.append(('answer', answer))
+            
         # process the header parameters
         if x_temper_surface is not None:
             _header_params['X-Temper-Surface'] = x_temper_surface

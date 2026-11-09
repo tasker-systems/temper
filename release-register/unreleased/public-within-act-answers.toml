@@ -1,0 +1,33 @@
+title    = "Team create, delete and detach answer their public_within effects when asked with ?answer=effects"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["http", "clients", "schema", "cli-stdout", "mcp"]
+status   = "signal-only"
+body = '''
+POST /api/teams, DELETE /api/teams/{id} and DELETE /api/teams/{id}/children/{child_id} take an
+optional `answer` query parameter. With no parameter every answer is exactly what it was: 201 with
+the six TeamRow keys, or an empty 204.
+
+- With `?answer=effects`, POST still answers 201 TeamRow, now carrying two optional fields filled
+  only on that answer: `public_within` (PublicWithinEffects: rows the new team's parent links made
+  lapse, dormant or revived) and `public_within_in_reach` (PublicWithinReach: the effective rows the
+  new team's roster reads through its parents). Both are absent from every other TeamRow answer.
+- With `?answer=effects`, the two DELETEs answer 200 with PublicWithinEffects instead of 204.
+- Each row is named only to a caller who manages its team or its anchor, or is a system admin, and
+  counted in the *_unnamed fields otherwise: the same rule as every other act answer. The ledger
+  records every transition either way.
+
+The Rust client always sends the parameter: `teams().delete` and `teams().detach_child` now return
+`Option<PublicWithinEffects>`, `None` on a 204 (an older server, which ignores the parameter), and
+`create` returns the row with the two fields `None` from such a server. `temper team delete` and
+`temper team detach` print the effects when any row changed; MCP `team_manage` delete and detach
+answer `public_within` beside their acknowledgement, and create's row carries the two fields.
+
+Class: additive. The openapi diff only grows (an optional query parameter, two optional properties on
+TeamRow, a 200 beside the existing 204), and an older client never sends the parameter. Planned
+deprecation path: at the next era release the default flips, so the DELETEs answer 200 with their
+effects and POST answers its effects without the parameter, and `answer` is retired. That movement is
+shape-breaking and will be declared on the retirement train then; it is not declared here.
+Witnesses: crates/temper-api/tests/public_within_answer_test.rs,
+crates/temper-client/tests/team_effects_answer_test.rs.
+'''

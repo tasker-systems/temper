@@ -245,6 +245,32 @@ async fn require_admin_in(conn: &mut sqlx::PgConnection, caller: &HumanPrincipal
         .map(|_| ())
 }
 
+/// A `kb_teams` row as the SQL selects it. [`TeamRow`] is the wire answer, which also carries the
+/// opt-in `public_within` fields a create fills; a row read from the table carries neither.
+pub(crate) struct TeamRowDb {
+    id: Uuid,
+    slug: String,
+    name: String,
+    description: Option<String>,
+    created: chrono::DateTime<chrono::Utc>,
+    auto_join_role: Option<TeamRole>,
+}
+
+impl From<TeamRowDb> for TeamRow {
+    fn from(r: TeamRowDb) -> Self {
+        TeamRow {
+            id: r.id,
+            slug: r.slug,
+            name: r.name,
+            description: r.description,
+            created: r.created,
+            auto_join_role: r.auto_join_role,
+            public_within: None,
+            public_within_in_reach: None,
+        }
+    }
+}
+
 /// One `public_within` row named by its two team ids, as a transitions answer carries it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 pub(crate) struct RowKey {
@@ -541,8 +567,9 @@ pub async fn create_team(
 /// What [`create_team_with_effects`] did: the new team's row, what its parent links did to
 /// `public_within` rows (an auto-join team created under an anchor makes its rows dormant), and the
 /// effective rows the new team's roster reads through its parents. Both filtered for the caller.
-/// `POST /api/teams` answers the row alone: its response schema is `TeamRow`, and the transitions are
-/// on the admin ledger.
+/// `POST /api/teams` answers the row alone unless asked with `?answer=effects`, which fills
+/// `TeamRow.public_within` and `public_within_in_reach` from this; the transitions are on the admin
+/// ledger either way.
 #[derive(Debug, Clone)]
 pub struct CreatedTeam {
     pub team: TeamRow,
@@ -655,7 +682,7 @@ pub async fn create_team_with_effects(
     }
 
     let row = sqlx::query_as!(
-        TeamRow,
+        TeamRowDb,
         r#"
         INSERT INTO kb_teams (id, slug, name, auto_join_role)
         VALUES ($1, $2, $3, $4)
@@ -746,7 +773,7 @@ pub async fn create_team_with_effects(
     }
 
     Ok(CreatedTeam {
-        team: row,
+        team: row.into(),
         public_within,
         public_within_in_reach: in_reach,
     })
@@ -910,7 +937,7 @@ async fn member_row(
 /// List the teams the caller is a member of.
 pub async fn list_teams(pool: &PgPool, caller: ProfileId) -> ApiResult<Vec<TeamRow>> {
     let rows = sqlx::query_as!(
-        TeamRow,
+        TeamRowDb,
         r#"
         SELECT t.id, t.slug, t.name, t.description, t.created,
                t.auto_join_role AS "auto_join_role: TeamRole"
@@ -924,7 +951,7 @@ pub async fn list_teams(pool: &PgPool, caller: ProfileId) -> ApiResult<Vec<TeamR
     .fetch_all(pool)
     .await?;
 
-    Ok(rows)
+    Ok(rows.into_iter().map(TeamRow::from).collect())
 }
 
 /// Full team detail (row + member roster with handles + provenance).
@@ -944,7 +971,7 @@ pub async fn team_detail(pool: &PgPool, caller: &Caller, team_id: Uuid) -> ApiRe
     .await?;
 
     let team = sqlx::query_as!(
-        TeamRow,
+        TeamRowDb,
         r#"SELECT id, slug, name, description, created,
                   auto_join_role AS "auto_join_role: TeamRole"
              FROM kb_teams WHERE id = $1 AND is_active"#,
@@ -1087,7 +1114,7 @@ pub async fn update_team(
         return Err(ApiError::Forbidden);
     }
     let row = sqlx::query_as!(
-        TeamRow,
+        TeamRowDb,
         r#"
         UPDATE kb_teams
            SET name = COALESCE($2, name),
@@ -1105,7 +1132,7 @@ pub async fn update_team(
     .ok_or_else(|| ApiError::NotFound("team not found or not readable".to_string()))?;
     tx.commit().await?;
 
-    Ok(row)
+    Ok(row.into())
 }
 
 /// Soft-delete a team (`is_active = false`). Owner, or a system admin; on the root or the gating
@@ -1342,7 +1369,7 @@ pub async fn restore_team(
     tx.commit().await?;
 
     let team = sqlx::query_as!(
-        TeamRow,
+        TeamRowDb,
         r#"SELECT id, slug, name, description, created,
                   auto_join_role AS "auto_join_role: TeamRole"
              FROM kb_teams WHERE id = $1"#,
@@ -1360,7 +1387,7 @@ pub async fn restore_team(
         parents: live_parents(&mut conn, team_id).await?,
         children: live_children(&mut conn, team_id).await?,
         members: roster(&mut conn, team_id).await?,
-        team,
+        team: team.into(),
         public_within,
     })
 }
@@ -1368,15 +1395,38 @@ pub async fn restore_team(
 /// The non-admin arm of [`restore_team`]: the team's `owner` on its membership row (the team is
 /// dead, so the blind lookup), never the root or the gating team, and never an auto-join team —
 /// restoring one re-enrols every approved profile, which is a system admin's act. The
-/// same holds when such a team sits anywhere in the restored team's live subtree.
+/// same holds when such a team sits anywhere in the restored team's subtree, live or dead, and when
+/// the team keeps a link to the root or the gating team, live or dead (a personal team excepted).
 async fn restore_authority(
     conn: &mut sqlx::PgConnection,
     caller: &HumanPrincipal,
     team_id: Uuid,
 ) -> ApiResult<()> {
-    // The team itself (root, gating or auto-join) or any live team below it: restoring
-    // re-links that subtree's reach to everything above the team.
+    // The team itself (root, gating or auto-join) or any team below it: restoring re-links that
+    // subtree's reach to everything above the team.
     if subtree_holds_pool_on(conn, team_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    // A preserved link to the root or the gating team, live or dead: restoring it re-links the team
+    // under an instance team (at once, or when an admin restores that parent), which only a system
+    // admin does (attach's rule for an instance parent). A personal team's only parent is the root,
+    // and its owner restores it.
+    let instance_parent = sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+             SELECT 1
+               FROM kb_teams_parents tp
+               JOIN kb_teams p ON p.id = tp.parent_id
+               JOIN kb_teams c ON c.id = tp.child_id AND c.personal_of IS NULL
+              WHERE tp.child_id = $1
+                AND (p.slug = $2
+                     OR p.slug = (SELECT ss.gating_team_slug FROM kb_system_settings ss
+                                   WHERE ss.id = 1))) AS "e!: bool""#,
+        team_id,
+        crate::services::access_service::ROOT_TEAM_SLUG,
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    if instance_parent {
         return Err(ApiError::Forbidden);
     }
     let row = sqlx::query!(
@@ -1526,7 +1576,7 @@ pub async fn set_auto_join(
             .await?;
     }
     let team = sqlx::query_as!(
-        TeamRow,
+        TeamRowDb,
         r#"SELECT id, slug, name, description, created,
                   auto_join_role AS "auto_join_role: TeamRole"
              FROM kb_teams WHERE id = $1"#,
@@ -1546,7 +1596,7 @@ pub async fn set_auto_join(
     .fetch_all(pool)
     .await?;
     Ok(SetAutoJoinOutcome {
-        team,
+        team: team.into(),
         ancestors,
         public_within,
     })
@@ -1732,12 +1782,12 @@ async fn team_ref_of(conn: &mut sqlx::PgConnection, team_id: Uuid) -> ApiResult<
 ///
 /// Authority: detach from `from` per D2 and attach to `to` per D1. Attach already requires managing
 /// the child, which is a D2 arm, so a caller who may attach may also leave: the caller manages the
-/// child and `to` (or is a system admin), and a root or gating `to`, or a child whose live subtree
-/// holds an auto-join or gating team, is a system admin's act. A caller who does not manage the
+/// child and `to` (or is a system admin), and a root or gating `to`, or a child whose subtree (live
+/// or dead) holds an auto-join or gating team, is a system admin's act. A caller who does not manage the
 /// child learns nothing (`403`, before refs are resolved). `from == to` is `400`; `from` that is
 /// not a current parent is `404`.
 ///
-/// One transaction: `from`, `to` and the child (and, for a non-admin, the child's live subtree) are
+/// One transaction: `from`, `to` and the child (and, for a non-admin, the child's subtree) are
 /// locked in ascending id order and the checks run again; then `link` and only then `unlink`, so a
 /// cycle refusal (`409`) aborts before anything is cut. Between two separate calls the child would
 /// hold both reaches, and a failure would leave it there; here it never does. Both `team_parent_link_changed` records share one correlation id.
@@ -1864,29 +1914,30 @@ async fn link_side(conn: &mut sqlx::PgConnection, team_id: Uuid) -> ApiResult<Op
     }))
 }
 
-/// The instance-pool rule over the whole subtree: is `team_id` itself, or any live team below it,
-/// an auto-join team, the root or the gating team? Any one of them makes every approved profile a
-/// member of the subtree, so linking the subtree under a team (or restoring its top) hands that
-/// team's material to the whole instance.
+/// The instance-pool rule over the whole subtree: is `team_id` itself, or any team below it, live
+/// or dead, an auto-join team, the root or the gating team? Any one of them makes every approved
+/// profile a member of the subtree, so linking the subtree under a team (or restoring its top)
+/// hands that team's material to the whole instance.
 ///
-/// `team_id` is asked whatever its own liveness, because it is the subject of the act: a restore
-/// asks it while it is still dead. Below it, the walk is `team_live_descendants` from each child,
-/// so a dead team is neither counted nor walked through, matching `team_ancestors` (reach does not
-/// pass through a dead team either).
+/// The walk goes through dead teams and counts them. A pool below a dead team reaches nothing
+/// today, but it is latent reach: an admin restoring the dead team (or the pool) hands the parent,
+/// and everything above it, to the instance, and a non-admin must not be able to set that up. This
+/// is an authority walk, not reach, so it differs from `team_live_descendants` on purpose; the
+/// subtree it reads is the one `lock_teams_and_subtree` locks, dead teams included.
 ///
 /// The root and gating test is `access_service::is_root_or_gating_team_on`'s, applied to every team
 /// in the set: the same root-slug constant and the same `kb_system_settings` read. Change the two
 /// together.
 async fn subtree_holds_pool_on(conn: &mut sqlx::PgConnection, team_id: Uuid) -> ApiResult<bool> {
     let holds = sqlx::query_scalar!(
-        r#"SELECT EXISTS(
+        r#"WITH RECURSIVE s AS (
+             SELECT $1::uuid AS id
+             UNION
+             SELECT tp.child_id FROM kb_teams_parents tp JOIN s ON tp.parent_id = s.id
+           )
+           SELECT EXISTS(
              SELECT 1
-               FROM (SELECT $1::uuid AS id
-                     UNION
-                     SELECT d.team_id
-                       FROM kb_teams_parents tp
-                       CROSS JOIN LATERAL team_live_descendants(tp.child_id) d
-                      WHERE tp.parent_id = $1) s
+               FROM s
                JOIN kb_teams t ON t.id = s.id
               WHERE t.auto_join_role IS NOT NULL
                  OR t.slug = $2
@@ -1928,8 +1979,8 @@ fn map_link_trigger(err: sqlx::Error) -> ApiError {
 
 /// The non-structural attach rules (team DAG doors D1, rules 1–4), on `conn`: the caller manages
 /// the parent and the child (direct, live), unless a system admin; a root or gating parent, or a
-/// child whose live subtree holds an auto-join or gating team, is a system admin's act alone. Run
-/// under the row locks, after [`attach_precheck`] decided the same on the pool.
+/// child whose subtree (live or dead) holds an auto-join or gating team, is a system admin's act
+/// alone. Run under the row locks, after [`attach_precheck`] decided the same on the pool.
 async fn attach_authority(
     conn: &mut sqlx::PgConnection,
     caller: &HumanPrincipal,
@@ -1952,7 +2003,8 @@ async fn attach_authority(
     let instance_parent =
         crate::services::access_service::is_root_or_gating_team_on(conn, parent_id).await?;
     // An auto-join team or an instance team (the gating team's roster is the access pool,
-    // every approved profile) anywhere in the child's live subtree hands the parent's material to
+    // every approved profile) anywhere in the child's subtree, live or dead, hands (or, once
+    // restored, would hand) the parent's material to
     // the whole instance: the same act as attaching to the root. The child itself is only the
     // first such team, not the only one. A leftover managing row on the gating team confers
     // nothing.
@@ -1995,7 +2047,7 @@ async fn attach_precheck(
     // 3–4, still before any structural answer.
     let instance_parent =
         crate::services::access_service::is_root_or_gating_team_on(&mut conn, parent_id).await?;
-    // The child itself, or any live team below it: see `attach_authority`.
+    // The child itself, or any team below it, live or dead: see `attach_authority`.
     let pool_child = subtree_holds_pool_on(&mut conn, child_id).await?;
     if (instance_parent || pool_child) && !admin {
         return Err(ApiError::Forbidden);
@@ -2038,8 +2090,8 @@ async fn attach_precheck(
 /// 2. the caller manages the child: otherwise a parent's manager could adopt any team, list it
 ///    under `children`, and learn it exists;
 /// 3. a parent that is the root or the gating team → a system admin only;
-/// 4. a child whose live subtree holds an auto-join or gating team (the child itself, or any live
-///    team below it) → a system admin only: that team's roster is every approved
+/// 4. a child whose subtree holds an auto-join or gating team (the child itself, or any team below
+///    it, live or dead) → a system admin only: that team's roster is every approved
 ///    profile, so this is the same act as attaching to the root;
 /// 5. structural: a personal team on either side, the root as the child, or the team as its own
 ///    parent is `400`; a link that closes a cycle is `409`; a soft-deleted side is `404`.

@@ -26,6 +26,23 @@ or offboard someone, change a role, or manage who can see a context.
   the child's whole roster, so both sides consent: `team attach` needs a manager of both,
   `team reparent` moves a team in one act (it never holds both reaches), `team detach` needs a
   manager of either side. `team show` lists `parents`, and `children` only if you manage the team.
+- **Public within opens a team's own contexts to an ancestor's subtree, for people reading.** Every
+  team is closed until opened. `team public-within open <team> <anchor>` needs a manager of the team
+  and a manager of the anchor (or a system admin; only a system admin when the anchor's subtree
+  reaches everyone). The people on the anchor and every team beneath it then read every context the
+  team owns, and may reference it from their own places; writing, granting, re-sharing, subscribing
+  and auditing still need membership. It never opens a context shared to the team, its grants, its
+  bound maps or edges homed there, and it adds no one to the roster. A machine principal is refused
+  every act and never reads through it. The audience grows with the anchor's subtree: every manager
+  of a team under it, identity-provider group sync and a system admin can add to it, so tell the user
+  the audience `open` reports and that either side can `close` at any time. `team public-within
+  policy <team> forbid|allow` (the team's direct owner or a system admin) stops every opening over
+  that team and everything beneath it, by every path; on temper-system it is the instance-wide off.
+  `team public-within list` shows what you read through; `team show` lists a team's openings to its
+  members (`effective` is yes or no only) and `public_within_in` to the anchor's managers. A context
+  you read this way reports `reach.via: public_within`.
+- **`+team/slug` resolves for anyone who reads the context**, through membership, a team beneath it,
+  an opening, a share or a read grant. Resolving it confers no write.
 - **An auto-join team enrolls every approved person (never a machine).** Setting auto-join is a
   system admin's act, as is a temper-system or gating-team parent or an auto-join team as a child.
   A watcher pool for a team is an auto-join watcher team attached under it.
@@ -56,7 +73,8 @@ or offboard someone, change a role, or manage who can see a context.
 `invitation_read` (views `mine`, `count`, `team`), `invitation_manage` (`accept`, `decline`,
 `create`, `revoke`), `team_manage` (`leave` and every other team act: `create`, `update`, `delete`,
 `restore`, `add_member`, `change_role`, `remove_member`, `attach`, `detach`, `reparent`,
-`rename_slug`, `set_auto_join`) and `team_read` (`list`, `detail`) carry the same acts through the
+`rename_slug`, `set_auto_join`, `public_within_open`, `public_within_close`, `public_within_policy`)
+and `team_read` (`list`, `detail`, `public_within`) carry the same acts through the
 same API routes and checks. They are a person's acts: the API refuses a machine principal.
 Instance administration (grants, the admin ledger, access review) stays off MCP. Accept and leave
 carry no extra confirmation on either surface, so act on them only when the user asks.
@@ -65,7 +83,8 @@ carry no extra confirmation on either surface, so act on them only when the user
 
 `temper team` covers `create` (`--parent` repeatable, up to 16), `list`, `show`, `add-member`,
 `invite`, `invitations`, `uninvite`, `set-role`, `remove-member`, `leave`, `update`, `attach`,
-`reparent`, `detach`, `restore`, `rename-slug`, `reassign` and `delete`; `temper invitations`,
+`reparent`, `detach`, `restore`, `rename-slug`, `reassign`, `delete` and `public-within` (`open`,
+`close`, `policy`, `list`); `temper invitations`,
 `team join` and `team decline` are the invitee's side. `temper team <cmd> --help` has the flags.
 
 - **`team reassign <team> --from <uuid> --to <uuid>`** is offboarding: it moves every resource

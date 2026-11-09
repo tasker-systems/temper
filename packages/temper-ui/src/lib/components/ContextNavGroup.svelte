@@ -14,9 +14,15 @@
 		/** Persisted per-group preference — see `stores/sidebar.svelte.ts`. */
 		collapsed: boolean;
 		onToggle: () => void;
+		/**
+		 * The team page's address, when this group is a team the reader belongs to. A team group
+		 * can also be one whose places the reader reads without membership, and that team's page
+		 * would only answer "not found", so it is offered only on a membership.
+		 */
+		teamPage?: string | null;
 	}
 
-	let { group, collapsed, onToggle }: Props = $props();
+	let { group, collapsed, onToggle, teamPage = null }: Props = $props();
 
 	function isActive(ctx: ContextRowWithCounts): boolean {
 		return isContextLocation($page.params, $page.url, ctx.owner_ref, ctx.slug);
@@ -57,6 +63,13 @@
 </button>
 
 <div id={listId} hidden={collapsed}>
+	{#if teamPage}
+		<a
+			href={teamPage}
+			class="flex items-center gap-2 py-1 pl-6 pr-3 text-xs text-tp-text-subtle hover:text-tp-text"
+			>About this team</a
+		>
+	{/if}
 	{#each group.contexts as ctx (ctx.id)}
 		<a
 			href={contextHref(ctx.owner_ref, ctx.slug)}
