@@ -548,74 +548,23 @@ pub async fn set_role_remote(
     Ok(())
 }
 
-/// Resolve a `public_within` row's two teams. A slug resolves among the caller's own teams first.
-/// One side's manager need not be on the other side, so a slug that matches none of them is looked
-/// up on the side that did resolve, through what that team's detail already shows the caller: the
-/// team's own anchors and parents (to its members), or the teams opened to the anchor (to its
-/// managers). Nothing is resolved that the caller could not already read.
+/// Resolve a `public_within` row's two teams through
+/// [`temper_client::teams::TeamsClient::resolve_public_within_pair`]. A failed listing or detail
+/// read is the caller's own error; only a ref that matches no readable team is "not a team".
 pub async fn resolve_public_within_pair(
     client: &temper_client::TemperClient,
     team: &str,
     anchor: &str,
 ) -> Result<(uuid::Uuid, uuid::Uuid)> {
-    let slug = |s: &str| s.trim().strip_prefix('+').unwrap_or(s.trim()).to_owned();
-    let unresolved = |what: &str, s: &str| {
-        TemperError::Api(format!(
-            "not a team: {:?} (the {what}; expected a team slug, a decorated `slug-<uuid>` ref, \
-             or a team UUID — name a team you are not a member of by its UUID)",
-            slug(s)
-        ))
-    };
-    let by_id = |s: &str| {
-        temper_workflow::operations::parse_ref(&slug(s))
-            .ok()
-            .map(uuid::Uuid::from)
-    };
-    let (mut team_id, mut anchor_id) = (by_id(team), by_id(anchor));
-    if team_id.is_none() || anchor_id.is_none() {
-        let mine = client
-            .teams()
-            .list()
-            .await
-            .map_err(crate::actions::runtime::client_err_to_temper)?;
-        let find = |s: &str| mine.iter().find(|t| t.slug == slug(s)).map(|t| t.id);
-        team_id = team_id.or_else(|| find(team));
-        anchor_id = anchor_id.or_else(|| find(anchor));
-    }
-    match (team_id, anchor_id) {
-        (Some(t), Some(a)) => Ok((t, a)),
-        (Some(t), None) => {
-            let want = slug(anchor);
-            let detail = client
-                .teams()
-                .get(t)
-                .await
-                .map_err(crate::actions::runtime::client_err_to_temper)?;
-            detail
-                .public_within
-                .iter()
-                .map(|r| &r.anchor)
-                .chain(detail.parents.iter())
-                .find(|r| r.slug == want)
-                .map(|r| (t, r.id))
-                .ok_or_else(|| unresolved("anchor", anchor))
-        }
-        (None, Some(a)) => {
-            let want = slug(team);
-            let detail = client
-                .teams()
-                .get(a)
-                .await
-                .map_err(crate::actions::runtime::client_err_to_temper)?;
-            detail
-                .public_within_in
-                .iter()
-                .find(|r| r.team.slug == want)
-                .map(|r| (r.team.id, a))
-                .ok_or_else(|| unresolved("team", team))
-        }
-        (None, None) => Err(unresolved("team", team)),
-    }
+    use temper_client::teams::PublicWithinPairError;
+    client
+        .teams()
+        .resolve_public_within_pair(team, anchor)
+        .await
+        .map_err(|e| match e {
+            PublicWithinPairError::Client(e) => crate::actions::runtime::client_err_to_temper(e),
+            other => TemperError::Api(other.to_string()),
+        })
 }
 
 /// `temper team public-within ...`: open, close, forbid/allow, list.

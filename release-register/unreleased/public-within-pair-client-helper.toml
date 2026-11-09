@@ -1,0 +1,19 @@
+title    = "temperkb-client resolves a public_within (team, anchor) pair for its callers"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["clients"]
+status   = "signal-only"
+body = '''
+temperkb-client gains TeamsClient::resolve_public_within_pair(team, anchor) and two public types,
+PublicWithinPairError (Client, NotATeam) and PublicWithinSide (Team, Anchor). Both are
+#[non_exhaustive], as ClientError is. The resolution `temper team public-within open|close` and
+the MCP public_within_open / public_within_close acts each carried a copy of now lives here, and
+both surfaces call it. It sends the same requests as before (one GET /api/teams listing, then one
+GET /api/teams/{id} detail on the resolved side), on the caller's own bearer.
+
+Who observes: a Rust consumer of temperkb-client, who can call the new method. HTTP, MCP, CLI
+stdout and both refusal texts are unchanged, and there is no wire or schema change. Witnesses:
+crates/temper-client/tests/public_within_pair_test.rs, plus tests/e2e/tests/cli_public_within_e2e.rs
+and tests/e2e/tests/mcp_team_manage_e2e.rs for the two surfaces. Release relevance: new client
+API only; signal-only.
+'''
