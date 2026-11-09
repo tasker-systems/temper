@@ -34,7 +34,6 @@ paths = [
   '''(^|/)tests/e2e/tests/fixtures/test_rsa\.key$''',
   '''(^|/)tests/e2e/tests/fixtures/test_ed25519\.pkcs8$''',
   '''(^|/)crates/temper-api/tests/common/test_rsa\.key$''',
-  '''(^|/)crates/temper-api/tests/common/test_ed25519\.key$''',
   '''(^|/)packages/temper-cloud/test-fixtures/certs/idp-key\.pem$''',
   '''(^|/)packages/temper-cloud/test-fixtures/certs/idp-key-secondary\.pem$''',
   # --- build output / vendored deps ---

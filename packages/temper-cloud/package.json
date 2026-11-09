@@ -16,14 +16,10 @@
     "check:fix": "biome check --fix"
   },
   "dependencies": {
-    "@kreuzberg/node": "latest",
     "@neondatabase/serverless": "^1",
     "@node-saml/node-saml": "^5",
-    "@vercel/blob": "^2",
     "jose": "^6",
-    "pino": "^10.4.0",
-    "uuidv7": "^1.2.1",
-    "zod": "^4.6.7"
+    "pino": "^10.4.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",
