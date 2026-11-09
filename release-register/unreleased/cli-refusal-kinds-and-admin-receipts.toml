@@ -19,8 +19,8 @@ unchanged (1). Message text changes with the variant ("Conflict: …" where it r
 conflict: …").
 
 Behavioral, erasure acts: an erasure, field scrub or block-history scrub run with `--execute` that
-the server answers 409 or 400 no longer prints the "reconcile before retrying" hint (the payload's
-`hint` is null), because those answers now arrive as refusals that mean the act did not run.
+the server answers 409 no longer prints the "reconcile before retrying" hint (the payload's `hint`
+is null), because a 409 now arrives as a conflict, which means the act did not run.
 
 Additive: `temper admin access approve|revoke|deactivate|reactivate` and `temper admin demote`
 print `{profile_id, outcome}` (outcome snake_case) through the output format layer, and
