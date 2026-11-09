@@ -378,7 +378,7 @@ async fn contain_reach(
     if !teams.is_empty() {
         let mut conn = pool.acquire().await?;
         for spec in teams {
-            let resolved = crate::authz::team_membership::MembershipAuthority::resolve(
+            let resolved = crate::authz::team_membership::MembershipAuthority::resolve_precheck(
                 &mut conn,
                 authed,
                 spec.team_id,
