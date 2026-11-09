@@ -1,0 +1,21 @@
+title    = "The restore, attach and reparent refusal texts name the latent-reach cases"
+pr       = "self"
+classes  = ["additive", "spec-correction"]
+surfaces = ["http", "mcp", "clients", "cli-stdout"]
+status   = "signal-only"
+body = '''
+The 403 descriptions of restore, attach and reparent are now accurate, in the route docs
+(openapi.json and the generated SDKs), the team_manage tool description, and the CLI and client
+help. Since team-restore-and-attach-count-latent-reach, the server refuses a non-admin in these
+cases:
+- attach, reparent and restore, when an auto-join team or the gating team sits anywhere in the
+  child's (or the restored team's) subtree, live or soft-deleted;
+- restore, when the restored team keeps a parent link to temper-system or the gating team, live
+  or soft-deleted (a personal team excepted).
+
+The texts named only an auto-join child, and did not name restore's instance-parent rule.
+
+What the server does is unchanged, and so is every request and answer shape. Only description
+text moved, so a client on either side of the change sees the same behaviour. Release relevance:
+signal-only.
+'''
