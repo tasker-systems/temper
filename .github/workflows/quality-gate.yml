@@ -437,11 +437,12 @@ jobs:
       - name: Guard test — audit-ungated-fragments
         run: bash .github/scripts/test-audit-ungated-fragments.sh
 
-      # Seven probes. The guard's baseline is empty, so green is evidence only if it can see:
-      # a direct predicate call reds in each scan root, a missing scan root reds, and a listed
+      # Eight probes. The guard's baseline is empty, so green is evidence only if it can see:
+      # a direct predicate call reds in each scan root, a missing scan root reds, a listed
       # predicate that no longer resolves to a `pub fn` (renamed, removed, or narrowed to
-      # pub(crate)) reds rather than becoming a needle that never matches.
-      - name: Guard test — audit-handler-authz-drift (both roots, both fail-closed conditions)
+      # pub(crate)) reds rather than becoming a needle that never matches, and an unreadable file
+      # reds rather than shrinking the scan.
+      - name: Guard test — audit-handler-authz-drift (both roots, every fail-closed condition)
         run: bash .github/scripts/test-audit-handler-authz-drift.sh
 
       # Eleven probes: four writer shapes red (new file, extra call in a baselined file, SQL

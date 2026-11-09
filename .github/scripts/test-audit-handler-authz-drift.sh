@@ -14,6 +14,7 @@
 #   (e) a listed predicate whose definition is gone reds, naming it
 #   (f) a listed predicate narrowed to pub(crate) reds — no surface can call it any more
 #   (g) GREEN: a `//` comment naming a predicate is not a call
+#   (h) a file the scan cannot read reds (a grep error is a broken scan, never an empty one)
 #
 # Fixtures are COPIES of the trees the auditor reads, with exactly one edit.
 #
@@ -28,7 +29,7 @@ PASS=0
 FAIL=0
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+trap 'chmod -R u+rwX "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 
 ACCESS_SERVICE='crates/temper-services/src/services/access_service.rs'
 
@@ -142,6 +143,20 @@ printf '\n// The service checks `is_system_admin` itself; this handler does not.
     >> "$FG/crates/temper-api/src/handlers/access.rs"
 run_case "(g) a // comment naming a predicate stays green" \
     "$FG" 0 "audit-handler-authz-drift: OK"
+
+# ── (h) a file the scan cannot read fails the scan rather than shrinking it ───────────────────
+FH="$WORK/fh"; make_fixture "$FH"
+SEALED="$FH/crates/temper-api/src/handlers/sealed.rs"
+echo 'pub fn sealed() {}' > "$SEALED"
+chmod 000 "$SEALED"
+if [[ -r "$SEALED" ]]; then
+    # Running as root: permission bits do not bind, so this fixture cannot be built here.
+    echo "  skip  (h) an unreadable file fails the scan — permission bits do not bind for this user"
+else
+    run_case "(h) an unreadable file fails the scan" \
+        "$FH" 1 "grep errored"
+fi
+chmod 644 "$SEALED"
 
 echo
 echo "  $PASS passed, $FAIL failed"
