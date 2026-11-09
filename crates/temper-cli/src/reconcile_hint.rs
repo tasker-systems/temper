@@ -117,8 +117,9 @@ pub fn lost_ack_prone(command: &Commands) -> Option<LostAckProne> {
 /// nonetheless have committed; a `4xx`/`5xx` the server returned is unambiguous.
 /// For an erasure act it fires on every error but a refusal (`Conflict`: a recorded
 /// answer already printed, or the server's `409`) and a request refused before it
-/// ran (`BadRequest`: a ref refused locally, or the server's `400`), since a
-/// gateway's `5xx` can front an act that completed.
+/// ran (`BadRequest`: a ref the CLI refused locally), since a gateway's `5xx` can
+/// front an act that completed. A server `400` arrives untyped, as `Api`, so it
+/// gets the hint too.
 pub fn reconcile_hint(prone: Option<LostAckProne>, err: &TemperError) -> Option<&'static str> {
     match prone? {
         LostAckProne::ResourceWrite => {
@@ -260,7 +261,7 @@ mod tests {
         }
         for err in [
             TemperError::Conflict("field scrub refused (sentinel_collision)".into()),
-            TemperError::BadRequest("field title is already cleared".into()),
+            TemperError::BadRequest("invalid resource ref".into()),
         ] {
             assert_eq!(reconcile_hint(prone, &err), None, "{err}");
         }

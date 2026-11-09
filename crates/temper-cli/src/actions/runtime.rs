@@ -29,7 +29,7 @@ use crate::error::{Result, TemperError};
 /// Lift a [`ClientError`] into a [`TemperError`] — **the** lifter; every CLI
 /// call site routes here.
 ///
-/// Preserves two things the `to_string()` shortcut destroys:
+/// Preserves three things the `to_string()` shortcut destroys:
 ///
 /// 1. **The enriched access-gate 403.** `SystemAccessRequired` carries the
 ///    caller's email, join-request status and the server-advertised remedy
@@ -43,16 +43,15 @@ use crate::error::{Result, TemperError};
 ///    `code` names it (`not-found`, `forbidden`, `conflict`, …) rather than
 ///    `api`. Every 401 shape lifts to [`TemperError::Unauthorized`] keeping the
 ///    client's own sentence. What has no twin — a rate limit, a status the
-///    client did not classify (an untyped `400` included: the client uses one
-///    to report a refusal body it could not parse, which is not the caller's
-///    fault), a 5xx, a local IO or config failure — stays [`TemperError::Api`].
+///    client did not classify, a 5xx, a local IO or config failure — stays
+///    [`TemperError::Api`]. That includes an untyped `400`: the client sends
+///    every ordinary caller error there, but also a refusal body it could not
+///    parse, which is a contract mismatch and not the caller's fault, so the
+///    lifter cannot call it a bad request.
 ///
-/// There was briefly a second lifter that preserved (1) but not (2), while this
-/// one preserved (2) but not (1) — so which guidance the user got depended on
-/// which of two identical-looking helpers the call site happened to import, and
-/// on the primary read paths (`resource list`, `show`, `task`) the access-gate
-/// block never rendered at all. Two lifters is how that divergence hid. There
-/// is one.
+/// There is exactly one lifter. With two, the guidance a user got would depend
+/// on which helper a call site imported, and a lifter that dropped (1) would
+/// leave the access-gate block unrendered on whichever paths used it.
 pub fn client_err_to_temper(e: ClientError) -> TemperError {
     match e {
         ClientError::SystemAccessRequired(details) => TemperError::SystemAccessRequired(details),

@@ -6,21 +6,22 @@ status   = "signal-only"
 body = '''
 Behavioral: `client_err_to_temper` (temper-cli `actions::runtime`), the lifter every remote
 command's error passes through, now lifts each typed API refusal to its TemperError twin. The
-stdout error payload's `code` is the refusal's own: `not-found`, `forbidden`, the forbidden-detail
-code, `conflict`, the ingest-ended code, `content-integrity`, the resource-busy code, the
-data-artifact refusal code, `project` (a refused plan, with `details.refusals`), `bad-request` (an
+stdout error payload's `code` is the refusal's own: `not-found`, `forbidden`, `FORBIDDEN_DETAIL`,
+`conflict`, `INGEST_ENDED`, `content-integrity`, `RESOURCE_BUSY`, `DATA_ARTIFACT_REFUSAL`, `project` (a refused plan, with `details.refusals`), `bad-request` (an
 unreadable plan), and `unauthorized` (every 401 shape, keeping the client's sentence). It was `api`
 for all of them. The command-level mappers that enrich a 403 or 404 before the lifter sees it
 (context share, transfer, unshare, rename, delete, restore and context-ref resolution; cogmap bind
-and unbind) now raise `forbidden-detail` and `not-found` with their sentences, and the profile
-pre-flight lifts through the same function. A rate limit, an untyped 400 (the client also uses one
+and unbind) now raise `FORBIDDEN_DETAIL` and `not-found` with their sentences. A context the CLI
+looks up in its own listing before it calls the server (share, unshare, restore) and a team ref
+cogmap bind or unbind cannot resolve still read `api` when they miss. A rate limit, an untyped 400 (the client also uses one
 for a refusal body it could not parse), a 5xx and local failures stay `api`. The exit code is
 unchanged (1). Message text changes with the variant ("Conflict: …" where it read "API error:
 conflict: …").
 
 Behavioral, erasure acts: an erasure, field scrub or block-history scrub run with `--execute` that
 the server answers 409 no longer prints the "reconcile before retrying" hint (the payload's `hint`
-is null), because a 409 now arrives as a conflict, which means the act did not run.
+is null), because a 409 now arrives as a conflict, which means the act did not run. None of the hinted acts
+documents a 409 today, so only an undocumented one shows this; a 400 still gets the hint, as before.
 
 Additive: `temper admin access approve|revoke|deactivate|reactivate` and `temper admin demote`
 print `{profile_id, outcome}` (outcome snake_case) through the output format layer, and
