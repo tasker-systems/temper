@@ -5,31 +5,36 @@ surfaces = ["cli-stdout"]
 status   = "signal-only"
 body = '''
 Behavioral: `client_err_to_temper` (temper-cli `actions::runtime`), the lifter every remote
-command's error passes through, now lifts each typed API refusal to its TemperError twin. The
-stdout error payload's `code` is the refusal's own: `not-found`, `forbidden`, `FORBIDDEN_DETAIL`,
-`conflict`, `INGEST_ENDED`, `content-integrity`, `RESOURCE_BUSY`, `DATA_ARTIFACT_REFUSAL`, `project` (a refused plan, with `details.refusals`), `bad-request` (an
-unreadable plan), and `unauthorized` (every 401 shape, keeping the client's sentence). It was `api`
-for all of them. The command-level mappers that enrich a 403 or 404 before the lifter sees it
-(context share, transfer, unshare, rename, delete, restore and context-ref resolution; cogmap bind
-and unbind) now raise `FORBIDDEN_DETAIL` and `not-found` with their sentences. A context the CLI
-looks up in its own listing before it calls the server (share, unshare, restore) and a team ref
-cogmap bind or unbind cannot resolve still read `api` when they miss. A rate limit, an untyped 400 (the client also uses one
-for a refusal body it could not parse), a 5xx and local failures stay `api`. The exit code is
-unchanged (1). Message text changes with the variant ("Conflict: …" where it read "API error:
-conflict: …").
+command's error passes through, now lifts each typed API refusal to its TemperError twin. The stdout
+error payload's `code` is the refusal's own: `not-found`, `forbidden`, `FORBIDDEN_DETAIL`,
+`conflict`, `INGEST_ENDED`, `content-integrity`, `RESOURCE_BUSY`, `DATA_ARTIFACT_REFUSAL`, `project`
+(a refused plan, with `details.refusals`), `bad-request` (an unreadable plan), and `unauthorized`
+(every 401 shape, keeping the client's sentence). It was `api` for all of them. The command-level
+mappers that enrich a 403 or 404 before the lifter sees it (context share, transfer, unshare,
+rename, delete, restore and context-ref resolution; cogmap bind and unbind) now raise
+`FORBIDDEN_DETAIL` and `not-found` with their sentences. Two lookups the CLI does itself before it
+calls the server still read `api` when they miss: a context ref that share, unshare or restore
+cannot find in the caller's listing, and a team ref that any command taking a team cannot resolve to
+a team the caller belongs to (context share, transfer and unshare's target team, every `team`
+subcommand, cogmap list, grant, revoke, bind and unbind, and the admin and resource commands that
+take one). A rate limit, an untyped 400 (the client also uses one for a refusal body it could not
+parse), a 5xx and local failures stay `api`. The exit code is unchanged (1). Message text changes
+with the variant ("Conflict: …" where it read "API error: conflict: …").
 
 Behavioral, erasure acts: an erasure, field scrub or block-history scrub run with `--execute` that
 the server answers 409 no longer prints the "reconcile before retrying" hint (the payload's `hint`
-is null), because a 409 now arrives as a conflict, which means the act did not run. None of the hinted acts
-documents a 409 today, so only an undocumented one shows this; a 400 still gets the hint, as before.
+is null), because a 409 now arrives as a conflict, which means the act did not run. None of the
+hinted acts documents a 409 today, so only an undocumented one shows this; a 400 still gets the
+hint, as before.
 
-Additive: `temper admin access approve|revoke|deactivate|reactivate` and `temper admin demote`
-print `{profile_id, outcome}` (outcome snake_case) through the output format layer, and
-`temper admin access reconcile-auto-join` prints the server's outcome object, where each used to
-print a prose line. A non-TTY caller now gets JSON. The SAML-mapping warning stays on stderr.
+Additive: `temper admin access approve|revoke|deactivate|reactivate` and `temper admin demote` print
+`{profile_id, outcome}` (outcome snake_case) through the output format layer, and `temper admin
+access reconcile-auto-join` prints the server's outcome object, where each used to print a prose
+line. A non-TTY caller now gets JSON. The SAML-mapping warning stays on stderr.
 
 Who observes: a script that branched on `code == "api"` for one of these refusals, and anyone
-reading those admin acts' stdout. Witnesses for the lifter: `each_typed_refusal_lifts_to_its_twin_and_keeps_its_code`,
+reading those admin acts' stdout. Witnesses for the lifter:
+`each_typed_refusal_lifts_to_its_twin_and_keeps_its_code`,
 `every_unauthorized_shape_lifts_to_unauthorized_with_its_remedy` and
 `a_rate_limit_an_untyped_400_and_a_server_fault_stay_api` (actions::runtime). The receipt's own
 rendering is pinned by `a_profile_act_renders_its_receipt_in_either_format` (commands::admin); no
