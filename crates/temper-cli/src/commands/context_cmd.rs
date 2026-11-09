@@ -258,7 +258,7 @@ pub async fn resolve_context_id(
 /// never confused with the per-team `admin`/`owner` roles.
 fn map_share_err(action: &str, e: temper_client::error::ClientError) -> TemperError {
     match e {
-        temper_client::error::ClientError::Forbidden => TemperError::Api(format!(
+        temper_client::error::ClientError::Forbidden => TemperError::ForbiddenDetail(format!(
             "not authorized: `context {action}` requires that you administer the context \
              (own it, or manage its owning team) AND manage the target team \
              (owner/maintainer) — or that you are an instance administrator, which does not \
@@ -321,7 +321,7 @@ pub async fn transfer_remote(
 /// parametrized on the action name the way [`map_share_err`] already is on `action`.
 fn map_admin_required_err(action: &str, e: temper_client::error::ClientError) -> TemperError {
     match e {
-        temper_client::error::ClientError::Forbidden => TemperError::Api(format!(
+        temper_client::error::ClientError::Forbidden => TemperError::ForbiddenDetail(format!(
             "not authorized: `context {action}` requires that you administer the context \
              (own it, or manage its owning team as owner/maintainer) — or that you are an \
              instance administrator and it is not someone else's personal context."
@@ -520,11 +520,11 @@ fn map_resolve_err(context: &str, e: temper_client::error::ClientError) -> Tempe
     use temper_client::error::ClientError;
     match e {
         ClientError::NotFound { message } => {
-            TemperError::Api(format!("{message} (ref {context:?})"))
+            TemperError::NotFound(format!("{message} (ref {context:?})"))
         }
         // A bare 403 here comes from the `+<team>` arm's membership gate; "forbidden" alone would
         // not say why.
-        ClientError::Forbidden => TemperError::Api(format!(
+        ClientError::Forbidden => TemperError::ForbiddenDetail(format!(
             "context ref {context:?}: you are not a member of that team"
         )),
         e => crate::actions::runtime::client_err_to_temper(e),
