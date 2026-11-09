@@ -584,10 +584,15 @@ pub async fn require_system_admin(pool: &PgPool, human: &HumanPrincipal) -> ApiR
     }
 }
 
-/// [`require_system_admin`] on a connection rather than the pool — for a decision that must be made
-/// inside a write transaction, under its locks (team-role rank plan P1, P3: the membership authority
-/// is re-resolved after the team row is locked). Same predicate, same refusal, same seal: this and
-/// [`require_system_admin`] are the only two places a [`SystemAdmin`] is minted in a production build.
+/// [`require_system_admin`] on a connection rather than the pool: the same plain read of
+/// `is_system_admin`, taking no lock. This is the pre-check a door runs on a pooled connection
+/// before it opens its transaction (team-role rank plan P1 step 1), and the read for a surface
+/// that only answers a question (an invitation list, the admin ledger). A decision that must
+/// hold against a demotion until its transaction commits goes through
+/// [`require_system_admin_locked`] instead, on the transaction, under the door's locks.
+///
+/// This, [`require_system_admin_locked`] and [`require_system_admin`] are the only places a
+/// [`SystemAdmin`] is minted in a production build.
 pub async fn require_system_admin_on(
     conn: &mut sqlx::PgConnection,
     human: &HumanPrincipal,
@@ -602,6 +607,63 @@ pub async fn require_system_admin_on(
     } else {
         Err(ApiError::Forbidden)
     }
+}
+
+/// The admin re-check of a write transaction, under its locks (team-role rank plan P1, P3). Call it
+/// only on an open transaction: the lock it takes is what makes the answer hold, and on an
+/// autocommit connection that lock is dropped when the statement ends, protecting nothing. A
+/// door's pool pre-check is [`require_system_admin_on`], a plain read.
+///
+/// The caller is an admin only when `is_system_admin_locked` says so: their
+/// `kb_principal_governance` row was there to lock `FOR KEY SHARE`, and the lock is held to the end
+/// of the transaction, so a demotion either committed first or waits for this transaction.
+pub async fn require_system_admin_locked(
+    tx: &mut sqlx::PgConnection,
+    human: &HumanPrincipal,
+) -> ApiResult<SystemAdmin> {
+    let actor = human.profile_id();
+    if is_system_admin_locked(tx, actor).await? {
+        Ok(SystemAdmin(actor))
+    } else {
+        Err(ApiError::Forbidden)
+    }
+}
+
+/// Whether `profile` is a system admin, read so the answer holds to the end of the caller's
+/// transaction. It takes `profile`'s `kb_principal_governance` row `FOR KEY SHARE`. A demotion
+/// deletes that row (`principal_governance_set`, and the `kb_profiles` cascade), which conflicts
+/// with `KEY SHARE`, so the demotion either committed first (no row, so the answer is false) or
+/// waits until this transaction ends. A grant committed after the lock found no row does not
+/// count, because nothing would hold it against a demotion. Transaction only, as for
+/// [`require_system_admin_locked`].
+///
+/// Lock order: a demotion locks nothing, around its delete, that a door holds. Before the delete it
+/// takes no team row, invitation row or advisory lock (`demote_admin` is one statement;
+/// `standing_service::apply` locks only the subject's standing row first). After it, it only appends
+/// its events and revokes the subject's refresh tokens, which no door locks. So a caller may take
+/// this lock before or after its own team, member or invitation rows (the invitation re-check takes
+/// it before the invitation rows it then revokes) and never waits on a demotion in a cycle. A later
+/// change that makes a demotion lock a door's rows after its delete would break this.
+///
+/// The `is_system_admin` read after the lock is defence in depth: today it is an `EXISTS` on the
+/// row just locked, so it cannot disagree. It must stay a pure read of governance. A predicate that
+/// read standing or a team row here would make this a second lock-order site.
+pub(crate) async fn is_system_admin_locked(
+    tx: &mut sqlx::PgConnection,
+    profile: ProfileId,
+) -> ApiResult<bool> {
+    let locked = sqlx::query_scalar!(
+        "SELECT profile_id FROM kb_principal_governance WHERE profile_id = $1 FOR KEY SHARE",
+        *profile,
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .is_some();
+    Ok(locked
+        && sqlx::query_scalar!("SELECT is_system_admin($1)", *profile)
+            .fetch_one(&mut *tx)
+            .await?
+            .unwrap_or(false))
 }
 
 /// The bare-id spelling of [`require_system_admin`], **test-only**. It mints from a `ProfileId` with

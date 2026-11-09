@@ -1,0 +1,35 @@
+title    = "The team doors that decided a system admin's authority on the pool alone re-check it under their locks"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "mcp"]
+status   = "signal-only"
+body = '''
+Ten team, join-request and invitation doors decided the system-admin arm on a pool read and never asked again on their write
+transaction: delete a team, restore a team, update a team's name or description (on the root or
+the gating team), detach a child, attach a child and re-parent (the plain admin arm; the
+instance-parent and auto-join cases already re-checked), set a team's auto_join_role, create a team
+with an auto_join_role, decide a join request, and revoke an invitation. Each now decides it again
+on its transaction, after its own team, member, request or invitation locks, with
+auth::require_system_admin_locked (the caller's kb_principal_governance row FOR KEY SHARE, held to
+commit). Update and revoke-invitation now run in a transaction under the team's row lock; revoke
+re-runs the whole membership authority there, so a manager demoted or removed since the pool check
+is refused too.
+
+A demotion that commits first refuses the act (403). One still in flight makes the act wait, then
+refuses it. Delete and detach re-decide a demoted admin on their other arms (the owner, the
+managers of either side) under the same locks. Restore, attach and re-parent refuse instead, since
+those arms need the subtree locked in one ascending pass; a retry decides on them.
+
+Lock order: the governance row is taken after the rows the door locks for its decision. A demotion
+takes none of a door's rows before or after its delete, so no order of the two waits in a cycle.
+
+Who observes: a system admin demoted (directly, or by Revoke or Deactivate) while one of those acts
+is in flight. No schema change and no response shape change. Witnesses: the door tests in
+`crates/temper-services/tests/admin_recheck_doors_test.rs`, whose in-flight race fails on each door
+without the re-check (the committed-first race fails without it only where the admin proof is minted
+before the demotion: set_auto_join and the join-request decision), and
+`a_revoke_of_the_reviewer_and_the_decision_never_deadlock` there for the lock order. Out of scope,
+still deciding on the pool proof alone: the standing and governance acts in access_service (approve,
+revoke, deactivate, reactivate, promote, demote), reconcile_auto_join and close_review_request. Release
+relevance: signal-only.
+'''
