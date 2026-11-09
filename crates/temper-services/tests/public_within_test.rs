@@ -3838,3 +3838,189 @@ async fn a_close_committed_first_leaves_no_record_from_a_concurrent_act(pool: Pg
             .is_empty()
     );
 }
+
+// ── An opening adds no membership, and a lapsed row stays gone ───────────────────────────────────
+
+/// An authorization refusal (a bare 403 or a detailed one), never some other failure that would
+/// pass for one.
+fn refused<T>(r: &Result<T, ApiError>) -> bool {
+    matches!(r, Err(ApiError::Forbidden | ApiError::ForbiddenDetail(_)))
+}
+
+/// Every `kb_team_members` row, as a sorted set: what an opening, or a read through one, must never
+/// change.
+async fn membership_snapshot(pool: &PgPool) -> Vec<(Uuid, Uuid, String)> {
+    sqlx::query_as(
+        "SELECT team_id, profile_id, role::text FROM kb_team_members \
+          ORDER BY team_id, profile_id, role",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("membership snapshot")
+}
+
+/// An opening confers reading only. Opening `(eng-sec, eng)` and reading T through it leaves
+/// `kb_team_members` exactly as it was, so the reader holds no role on T, and every act that
+/// membership on T authorizes (inviting, adding a member, changing a role, attaching under T) is
+/// refused to them as to any stranger.
+///
+/// FAILS IF an open, or a read through it, writes a membership row, or any act gated on a role on T
+/// admits a reader who reaches T only through the row.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_opening_adds_no_membership_and_admits_no_membership_act(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    let before = membership_snapshot(&pool).await;
+
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    assert_eq!(
+        membership_snapshot(&pool).await,
+        before,
+        "the open writes no membership"
+    );
+
+    // The reader reaches T only through the row.
+    assert!(reads(&pool, w.web_member, w.r_t).await);
+    assert!(!reads_by_membership(&pool, w.web_member, w.r_t).await);
+    assert!(ctx_reads(&pool, w.web_member, w.ctx_t).await);
+    assert_eq!(
+        membership_snapshot(&pool).await,
+        before,
+        "reading through the row writes no membership"
+    );
+
+    // Membership acts on T are refused to the reader, a manager of a team under the anchor included.
+    for who in [w.web_member, w.web_owner] {
+        let p = hp(&pool, who).await;
+        let invite = temper_services::services::invitation_service::create_invitation(
+            &pool,
+            &p,
+            w.eng_sec,
+            temper_services::services::invitation_service::CreateInvitationParams {
+                invited_email: format!("pw-invitee-{who}@example.com"),
+                role: TeamRole::Watcher,
+            },
+        )
+        .await;
+        assert!(refused(&invite), "{who} invites onto T: {invite:?}");
+        let add = team_service::add_member(
+            &pool,
+            &p,
+            w.eng_sec,
+            &temper_core::types::team::AddMemberRequest {
+                profile_id: w.sales_member,
+                role: TeamRole::Watcher,
+            },
+        )
+        .await;
+        assert!(refused(&add), "{who} adds a member to T: {add:?}");
+        let role =
+            team_service::change_role(&pool, &p, w.eng_sec, w.sec_member, TeamRole::Watcher).await;
+        assert!(refused(&role), "{who} changes a role on T: {role:?}");
+        let attach = team_service::attach_child(&pool, &p, w.eng_sec, w.eng_web).await;
+        assert!(refused(&attach), "{who} attaches under T: {attach:?}");
+    }
+    assert_eq!(
+        membership_snapshot(&pool).await,
+        before,
+        "no refused act wrote membership"
+    );
+}
+
+/// The snapshot above catches an open that writes membership: with a trigger standing in for an
+/// open path that enrolls the anchor's readers on T, the same open changes the snapshot. A control
+/// for the witness, so a check that compares nothing cannot pass for one.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_membership_snapshot_catches_an_open_that_enrolls(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    sqlx::query(&format!(
+        "CREATE FUNCTION pw_test_enroll() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN \
+           INSERT INTO kb_team_members (team_id, profile_id, role) \
+           VALUES (NEW.team_id, '{}', 'watcher') ON CONFLICT DO NOTHING; RETURN NEW; END $$",
+        w.web_member
+    ))
+    .execute(&pool)
+    .await
+    .expect("enrolling function");
+    sqlx::query(
+        "CREATE TRIGGER pw_test_enroll AFTER INSERT ON kb_team_public_within \
+         FOR EACH ROW EXECUTE FUNCTION pw_test_enroll()",
+    )
+    .execute(&pool)
+    .await
+    .expect("enrolling trigger");
+
+    let before = membership_snapshot(&pool).await;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    let after = membership_snapshot(&pool).await;
+    assert_ne!(after, before, "the snapshot sees the enrolled row");
+    assert!(after.contains(&(w.eng_sec, w.web_member, "watcher".to_string())));
+    assert!(reads_by_membership(&pool, w.web_member, w.r_t).await);
+}
+
+/// A row that lapsed is never revived by a third party. Detaching T from its only path to the
+/// anchor deletes `(eng-sec, eng)`. A manager of neither side cannot put T back: attaching or moving
+/// T needs a manager of T, so a manager of a team under the anchor (eng-web) and of the anchor's
+/// parent (org) are both refused. A system admin, who manages neither, can attach T back, and that
+/// revives nothing: no row, no reading, no effect record.
+///
+/// FAILS IF a non-manager of T can re-link it, or a re-link by anyone brings the row, the reading or
+/// a `public_within_effect_changed` record back.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_third_party_never_revives_a_lapsed_row(pool: PgPool) {
+    let d = doors(&pool).await;
+    let w = &d.w;
+    open_by(&pool, d.both, w.eng_sec, w.eng).await.unwrap();
+    assert!(reads(&pool, w.web_member, w.r_t).await);
+
+    // T keeps its second parent (ops), so it lives on; eng is no longer above it by any path.
+    let lapsed = team_service::detach_child(&pool, &hp(&pool, w.sec_owner).await, w.eng, w.eng_sec)
+        .await
+        .expect("T's manager detaches it from eng");
+    assert_eq!(names(&lapsed, "lapsed"), [(w.eng_sec, w.eng)]);
+    assert!(!row_exists(&pool, w.eng_sec, w.eng).await);
+    assert!(!reads(&pool, w.web_member, w.r_t).await);
+    let effect_records = row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng).await;
+
+    // Nobody who does not manage T can re-link it, under the anchor or a team beneath it: a manager
+    // of a team under the anchor, of the anchor's parent, of T's other parent, or of the anchor alone.
+    for (who, parent) in [
+        (w.web_owner, w.eng_web),
+        (w.web_owner, w.eng),
+        (d.org_owner, w.eng),
+        (d.ops_owner, w.eng),
+        (d.eng_owner, w.eng),
+    ] {
+        let p = hp(&pool, who).await;
+        let attach = team_service::attach_child(&pool, &p, parent, w.eng_sec).await;
+        assert!(
+            matches!(attach, Err(ApiError::Forbidden)),
+            "{who} attaches T under {parent}: {attach:?}"
+        );
+        let moved = team_service::reparent(
+            &pool,
+            &p,
+            w.eng_sec,
+            &ReparentRequest {
+                from: w.ops.to_string(),
+                to: parent.to_string(),
+            },
+        )
+        .await;
+        assert!(refused(&moved), "{who} moves T under {parent}: {moved:?}");
+    }
+
+    // A system admin, who manages neither side, re-links T under the anchor: nothing revives.
+    let back = team_service::attach_child(&pool, &hp(&pool, w.admin).await, w.eng, w.eng_sec)
+        .await
+        .expect("an admin attaches T back");
+    assert_eq!(back.public_within, PublicWithinEffects::default());
+    assert!(!row_exists(&pool, w.eng_sec, w.eng).await);
+    assert!(!reads(&pool, w.web_member, w.r_t).await);
+    assert_eq!(
+        row_records(&pool, "public_within_effect_changed", w.eng_sec, w.eng).await,
+        effect_records,
+        "no effect change is recorded for a row that no longer exists"
+    );
+}
