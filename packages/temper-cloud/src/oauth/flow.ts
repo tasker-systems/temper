@@ -95,6 +95,18 @@ export async function bindCodeToFlow(
   return { redirectUri: row.redirect_uri, oauthState: row.oauth_state };
 }
 
+/** What a successful code redemption hands the token endpoint. */
+export interface ConsumedCode {
+  claims: MintedClaims;
+  /** The profile the ACS resolved for this login; `null` when it could not be resolved. */
+  profileId: string | null;
+  /**
+   * The RFC 8707 resource indicator this flow was authorized for — validated against the
+   * instance's served audiences at `/oauth/authorize` and minted into the access token's `aud`.
+   */
+  audience: string;
+}
+
 /**
  * Consumes a one-time authorization code, validating its PKCE verifier and binding it to the
  * client that is redeeming it. Order matters: PKCE is checked BEFORE the code is atomically
@@ -108,17 +120,6 @@ export async function bindCodeToFlow(
  * it first. That is the only outcome the caller may report as `invalid_grant`. Anything that
  * THROWS is the store failing to answer, and says nothing about the code.
  */
-export interface ConsumedCode {
-  claims: MintedClaims;
-  /** The profile the ACS resolved for this login; `null` when it could not be resolved. */
-  profileId: string | null;
-  /**
-   * The RFC 8707 resource indicator this flow was authorized for — validated against the
-   * instance's served audiences at `/oauth/authorize` and minted into the access token's `aud`.
-   */
-  audience: string;
-}
-
 export async function consumeCode(
   db: NeonClient,
   code: string,
