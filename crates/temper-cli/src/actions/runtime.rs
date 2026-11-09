@@ -593,7 +593,10 @@ mod tests {
         ] {
             let shown = format!("{client:?}");
             let lifted = client_err_to_temper(client);
-            assert!(matches!(lifted, TemperError::Api(_)), "{shown} → {lifted:?}");
+            assert!(
+                matches!(lifted, TemperError::Api(_)),
+                "{shown} → {lifted:?}"
+            );
             assert_eq!(payload_code(&lifted), "api", "{shown}");
         }
     }
