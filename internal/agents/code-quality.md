@@ -6,10 +6,13 @@ skill; it states each rule's status here. The review lens for this repository is
 [internal/development/code-quality-best-practices.md](../development/code-quality-best-practices.md).
 What follows is temper's own.
 
-- **Surfaces dispatch writes through `DbBackend`; reads stay service-direct.** HTTP handlers, MCP
-  tools and CLI actions build a backend per request and run one operations command per call; they
-  never call write persistence or inline `sqlx::query!()`. *Why:* one write path is what keeps the
-  doors admitting the same things. *(convention)*
+- **Writes come in two families; reads stay service-direct.** Resource writes go through
+  `DbBackend`, the server's command layer: a handler builds a backend per request and runs one
+  operations command per call. Governance and estate acts (team, context, grant, connection,
+  machine, reassign, blob, subscription, erasure) are service-direct writes through
+  `temper-services`. In neither family does a handler call `temper-substrate` write persistence
+  or inline `sqlx::query!()`; MCP tools and the CLI reach the handlers over HTTP. *Why:* each act
+  has one write path, which is what keeps the doors admitting the same things. *(convention)*
 - **Repeated multi-table joins become a SQL view**, queried with plain `WHERE`/`ORDER BY`/`LIMIT`
   (incumbents: `kb_resource_workflow_props`, `kb_resource_properties`, `kb_owner_properties`).
   *Why:* copies drift. *(convention)*

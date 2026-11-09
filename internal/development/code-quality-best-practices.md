@@ -186,14 +186,16 @@ one is a blocking review finding regardless of correctness.
 - **Shared types at boundaries.** When Rust calls TypeScript (or vice versa), the wire type
   lives in `temper-core` with `ts-rs` derives; both sides share the generated type. Never
   hand-mirror a Rust struct as a zod schema.
-- **Persistence is its own layer; surfaces dispatch through `DbBackend`.** SQL and persistence
-  CRUD live in a dedicated persistence layer — **`temper-substrate`** (`writes` / `readback`)
-  and the `temper-services` service modules (`crates/temper-services/src/services/`) — *never*
-  inline in a surface, and never mixed in with the behavior abstraction that calls it. Surfaces (HTTP
-  handlers, MCP tools, CLI actions) build a backend per request and dispatch one operations
-  command per inbound call for **writes** — they never call persistence directly and never inline
-  `sqlx::query!()`. Read paths (list, show, get_meta, search) stay service-direct by design. (The
-  layer is moving; the rule is invariant — keep CRUD out of endpoints and out of behavior code.)
+- **Persistence is its own layer; writes come in two families.** SQL and persistence CRUD live
+  in a dedicated persistence layer — **`temper-substrate`** (`writes` / `readback`) and the
+  `temper-services` service modules (`crates/temper-services/src/services/`) — *never* inline in
+  a surface, and never mixed in with the behavior abstraction that calls it. **Resource writes**
+  go through `DbBackend`, the server's command layer: a handler builds a backend per request and
+  dispatches one operations command per inbound call. **Governance and estate acts** (team,
+  context, grant, connection, machine, reassign, blob, subscription, erasure) are service-direct
+  writes through `temper-services`. In neither family does a handler call `temper-substrate`
+  write persistence directly or inline `sqlx::query!()`; the MCP tool layer and the CLI reach the
+  handlers over HTTP. Read paths (list, show, get_meta, search) stay service-direct by design.
 - **Auth before writes.** Authorization precedes any mutation (also §1.6).
 - **Profile scoping.** Every data query scopes through `resources_visible_to`,
   `can_modify_resource`, or equivalent — including async workflows, which verify access before
