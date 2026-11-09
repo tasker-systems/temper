@@ -22265,7 +22265,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Forbidden: the caller does not manage both teams, or the parent or the child is temper-system or the gating team, or the child is an auto-join team, and the caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden: the caller does not manage both teams, or the parent or the child is temper-system or the gating team, or the child or any team below it (live or soft-deleted) is an auto-join team or the gating team, and the caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -22939,7 +22939,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Forbidden: the caller does not manage this team, or does not manage `to` (an unknown `to` included), or `to` or this team is temper-system or the gating team, or this team is an auto-join team, and the caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden: the caller does not manage this team, or does not manage `to` (an unknown `to` included), or `to` or this team is temper-system or the gating team, or this team or any team below it (live or soft-deleted) is an auto-join team or the gating team, and the caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -22988,7 +22988,7 @@ export interface operations {
                     "application/json": components["schemas"]["RestoreTeamOutcome"];
                 };
             };
-            /** @description Forbidden: the caller is not the team's owner or a system admin (temper-system, the gating team or an auto-join team: not a system admin; a personal team: not its owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            /** @description Forbidden: the caller is not the team's owner or a system admin (not a system admin: temper-system or the gating team, a team that is or has below it, live or soft-deleted, an auto-join team or the gating team, or a team that keeps a link to temper-system or the gating team, live or soft-deleted, unless it is a personal team; a personal team: not its owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
             403: {
                 headers: {
                     [name: string]: unknown;

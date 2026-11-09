@@ -541,6 +541,11 @@ current_gates() {
 # `resolve` with the admin arm read plainly. A ledger read decides nothing a demotion could race,
 # and the registrar's write re-checks with `resolve` under each team lock (`from_reach`). The arms,
 # their order and who is admitted are unchanged, so every bound claim still describes its gate.
+# REVIEWED 2026-11-09 (restore and attach refusal texts) — `temper-cli/src/cli.rs` 32 -> 33: the
+# `team restore` help now says restore is a system admin's act alone when the team keeps a link to
+# temper-system or the gating team, or when it or a team below it is an auto-join or the gating
+# team. Read against `team_service::restore_authority`, which refuses a non-admin in exactly those
+# cases (a personal team's root link excepted); the claim describes the gate.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -561,7 +566,7 @@ claim crates/temper-api/src/handlers/slack_disconnect.rs 1 -
 claim crates/temper-api/src/handlers/subscriptions.rs 7 subscription
 claim crates/temper-api/src/handlers/teams.rs 32 team_membership,is_system_admin
 claim crates/temper-api/src/openapi.rs 5 is_system_admin,machine,connection,subscription,read_gates,grant,ledger_subject
-claim crates/temper-cli/src/cli.rs 32 team_membership
+claim crates/temper-cli/src/cli.rs 33 team_membership
 claim crates/temper-cli/src/commands/admin.rs 4 -
 claim crates/temper-cli/src/commands/admin_connection.rs 2 connection
 claim crates/temper-cli/src/commands/admin_erasure.rs 1 -

@@ -281,7 +281,7 @@ pub async fn detach_remote(
 }
 
 /// Attach a child team under a parent team (a manager of both; a temper-system or gating-team
-/// parent, or an auto-join child, a system admin).
+/// parent, or a child with an auto-join or the gating team in or below it, a system admin).
 pub async fn attach_remote(
     client: &temper_client::TemperClient,
     parent: &str,

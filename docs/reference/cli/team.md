@@ -17,7 +17,7 @@ Commands:
   uninvite       Revoke (withdraw) a pending invitation (a team manager or a system admin; on a personal team, its owner only)
   show           Show a team's detail and member roster
   leave          Leave a team you are a member of (removes your membership)
-  attach         Attach a child team under a parent team (a manager of both; a temper-system or gating-team parent, or an auto-join child, a system admin)
+  attach         Attach a child team under a parent team (a manager of both; a temper-system or gating-team parent, or a child with an auto-join or the gating team in or below it, a system admin)
   reparent       Move a team from one parent to another, in one act (a manager of the team and of `--to`)
   restore        Restore a soft-deleted team (its owner, or a system admin)
   rename-slug    Change a team's slug (an owner or maintainer; temper-system and the gating team, a system admin)
@@ -173,7 +173,7 @@ Options:
 ### `temper team attach`
 
 ```text
-Attach a child team under a parent team (a manager of both; a temper-system or gating-team parent, or an auto-join child, a system admin)
+Attach a child team under a parent team (a manager of both; a temper-system or gating-team parent, or a child with an auto-join or the gating team in or below it, a system admin)
 
 Every member of the child, at any role, then reads everything attached to the parent and its ancestors. Also the way to give a team a second parent.
 
@@ -244,7 +244,7 @@ Options:
 ```text
 Restore a soft-deleted team (its owner, or a system admin)
 
-Every preserved membership, parent link and child's reach revives; the output lists them. A deleted team is no longer in `team list`, so name it by UUID.
+Every preserved membership, parent link and child's reach revives; the output lists them. A system admin's act alone when the team keeps a link to temper-system or the gating team, or when it or any team below it, live or deleted, is an auto-join or the gating team. A deleted team is no longer in `team list`, so name it by UUID.
 
 Usage: temper team restore [OPTIONS] <TEAM>
 

@@ -307,7 +307,7 @@ pub async fn detach_child(
     responses(
         (status = 200, description = "Linked, or the link already existed", body = AttachChildOutcome),
         (status = 400, description = "A personal team on either side, temper-system as the child, or the team as its own parent"),
-        (status = 403, description = "Forbidden: the caller does not manage both teams, or the parent or the child is temper-system or the gating team, or the child is an auto-join team, and the caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 403, description = "Forbidden: the caller does not manage both teams, or the parent or the child is temper-system or the gating team, or the child or any team below it (live or soft-deleted) is an auto-join team or the gating team, and the caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 404, description = "Either team does not exist or is soft-deleted; told only to a caller who may manage both"),
         (status = 409, description = "The link would make a team its own ancestor"),
     )
@@ -339,7 +339,7 @@ pub async fn attach_child(
     responses(
         (status = 200, description = "Moved", body = ReparentOutcome),
         (status = 400, description = "`from` and `to` are the same team, or a structural refusal (a personal team, temper-system as the child)"),
-        (status = 403, description = "Forbidden: the caller does not manage this team, or does not manage `to` (an unknown `to` included), or `to` or this team is temper-system or the gating team, or this team is an auto-join team, and the caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 403, description = "Forbidden: the caller does not manage this team, or does not manage `to` (an unknown `to` included), or `to` or this team is temper-system or the gating team, or this team or any team below it (live or soft-deleted) is an auto-join team or the gating team, and the caller is not a system admin; or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 404, description = "`from` does not resolve (`to` only to a system admin), a team is soft-deleted, or `from` is not a parent of this team; told only to a caller who manages this team"),
         (status = 409, description = "The move would make a team its own ancestor; nothing changed"),
     )
@@ -370,7 +370,7 @@ pub async fn reparent(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Restored", body = RestoreTeamOutcome),
-        (status = 403, description = "Forbidden: the caller is not the team's owner or a system admin (temper-system, the gating team or an auto-join team: not a system admin; a personal team: not its owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
+        (status = 403, description = "Forbidden: the caller is not the team's owner or a system admin (not a system admin: temper-system or the gating team, a team that is or has below it, live or soft-deleted, an auto-join team or the gating team, or a team that keeps a link to temper-system or the gating team, live or soft-deleted, unless it is a personal team; a personal team: not its owner); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)", body = temper_services::error::ErrorBody),
         (status = 404, description = "The team does not exist or is not deleted"),
     )
 )]
