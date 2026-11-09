@@ -876,7 +876,7 @@ pub fn build_frontmatter_from_resource(
     // used as an inert scaffold and immediately overwritten below with the
     // real label. This local-vault projection is a non-authoritative cache
     // (see CLAUDE.md); the written `temper-type` value is what round-trips.
-    let dt = DocType::from_str(doc_type);
+    let dt = doc_type.parse::<DocType>();
     let is_open_tail = dt.is_err();
     let mut fm = Frontmatter::new(dt.unwrap_or(DocType::Task), body);
     if is_open_tail {

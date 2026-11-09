@@ -73,7 +73,7 @@ Sources: [Self-hosting Temper](./self-host-temper.md),
 | Variable | temper-cloud (api+mcp) | temper-ui | eve (deferred) | Notes |
 | --- | --- | --- | --- | --- |
 | **Database** | | | | |
-| `DATABASE_URL` | Yes (pooled, runtime) | Yes (same pooled string; read-only nav chrome) | — | One Neon connection string shared by api/mcp/ui |
+| `DATABASE_URL` | Yes (pooled, runtime) | — | — | One Neon connection string shared by api/mcp |
 | `DATABASE_URL_UNPOOLED` | Yes (deploy step only) | — | — | Direct Neon connection string; migrations only |
 | **Auth (issuer / audience / provider)** | | | | |
 | `AUTH_ISSUER` | Yes | — | — | Auth0 tenant, or `AS_ISSUER` value in the SAML path |
@@ -166,7 +166,7 @@ scheme is a different URL.
 | Issuer | `AS_ISSUER` = `AUTH_ISSUER`; UI `OIDC_ISSUER` resolves the same issuer |
 | Provider label | `AUTH_PROVIDER_NAME` = `saml:<idp-key>` |
 | Reconcile secret | `INTERNAL_RECONCILE_SECRET` identical on the AS and API env (same Vercel project) |
-| Database | `DATABASE_URL` (pooled) shared api/mcp/ui; `DATABASE_URL_UNPOOLED` migrations only |
+| Database | `DATABASE_URL` (pooled) shared api/mcp; `DATABASE_URL_UNPOOLED` migrations only |
 
 `temper admin saml provision` renders the `AS_*` + reconcile block so these are consistent by
 construction — it is the reason the SAML env is emitted, not hand-written.

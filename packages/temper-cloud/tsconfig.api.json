@@ -7,7 +7,6 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": {
-      "@vercel/blob": ["./node_modules/@vercel/blob"],
       "jose": ["./node_modules/jose"],
       "@neondatabase/serverless": ["./node_modules/@neondatabase/serverless"]
     }

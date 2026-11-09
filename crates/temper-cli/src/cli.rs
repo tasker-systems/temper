@@ -2569,9 +2569,9 @@ pub enum AdminAccessAction {
     /// Converge every auto-join team's roster to the standing-approved humans (never machines)
     ///
     /// Repairs an instance that drifted while enrollment lived only on the request-review
-    /// door: profiles approved out-of-band were absent from the `everyone` pool. Prints one
-    /// line per (team, profile) pair added; a converged instance adds nothing and still
-    /// prints a line. Approved machine principals enroll like any other profile, so on a
+    /// door: profiles approved out-of-band were absent from the `everyone` pool. Prints the
+    /// outcome in the output format: the (team, profile) pairs it added, empty on a converged
+    /// instance. Approved machine principals enroll like any other profile, so on a
     /// drifted instance a reconcile widens machine read reach — the report is the review
     /// artifact. On a team that also carries a SAML group mapping, the native rows this
     /// writes pre-empt later IdP role assertions for that pair (native-wins-skip); the verb

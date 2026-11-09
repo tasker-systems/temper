@@ -469,80 +469,28 @@ pub async fn team_manage(
     Ok(text_result(text))
 }
 
-/// Resolve a `public_within` row's two teams, as `temper team public-within` does. A slug resolves
-/// among the caller's own teams first; one side's manager need not be on the other side, so a slug
-/// that matches none of them is looked up through the detail of the side that did resolve: the
-/// team's own anchors and parents (shown to its members), or the teams opened to the anchor (shown
-/// to its managers). Nothing resolves that the caller could not already read.
+/// Resolve a `public_within` row's two teams through
+/// [`temper_client::teams::TeamsClient::resolve_public_within_pair`], as `temper team
+/// public-within` does. A failed listing or detail read is the caller's own refusal, never "not a
+/// team".
 async fn resolve_public_within_pair(
     client: &temper_client::TemperClient,
     act: &str,
     team: &str,
     anchor: &str,
 ) -> Result<(Uuid, Uuid), rmcp::ErrorData> {
-    let slug = |s: &str| s.trim().strip_prefix('+').unwrap_or(s.trim()).to_owned();
-    // An id-bearing ref resolves without the network; slugs are matched against one listing of
-    // the caller's teams, whose failure is the caller's own refusal, never "not a team".
-    let by_id = |s: &str| {
-        temper_workflow::operations::parse_ref(&slug(s))
-            .ok()
-            .map(|id| id.uuid())
-    };
-    let (mut team_id, mut anchor_id) = (by_id(team), by_id(anchor));
-    if team_id.is_none() || anchor_id.is_none() {
-        let mine = client
-            .teams()
-            .list()
-            .await
-            .across_auth(|e| map_team_err(act, e))?;
-        let find = |s: &str| mine.iter().find(|t| t.slug == slug(s)).map(|t| t.id);
-        team_id = team_id.or_else(|| find(team));
-        anchor_id = anchor_id.or_else(|| find(anchor));
-    }
-    let unresolved = |what: &str, s: &str| {
-        rmcp::ErrorData::invalid_params(
-            format!(
-                "{act}: not a team: {:?} (the {what}; expected a team slug, a decorated \
-                 `slug-<uuid>` ref, or a team UUID — name a team you are not a member of by its \
-                 UUID)",
-                slug(s)
-            ),
+    use temper_client::teams::PublicWithinPairError;
+    match client
+        .teams()
+        .resolve_public_within_pair(team, anchor)
+        .await
+    {
+        Ok(pair) => Ok(pair),
+        Err(PublicWithinPairError::Client(e)) => Err(e).across_auth(|e| map_team_err(act, e)),
+        Err(other) => Err(rmcp::ErrorData::invalid_params(
+            format!("{act}: {other}"),
             None,
-        )
-    };
-    match (team_id, anchor_id) {
-        (Some(t), Some(a)) => Ok((t, a)),
-        (Some(t), None) => {
-            let want = slug(anchor);
-            let detail = client
-                .teams()
-                .get(t)
-                .await
-                .across_auth(|e| map_team_err(act, e))?;
-            detail
-                .public_within
-                .iter()
-                .map(|r| &r.anchor)
-                .chain(detail.parents.iter())
-                .find(|r| r.slug == want)
-                .map(|r| (t, r.id))
-                .ok_or_else(|| unresolved("anchor", anchor))
-        }
-        (None, Some(a)) => {
-            let want = slug(team);
-            let detail = client
-                .teams()
-                .get(a)
-                .await
-                .across_auth(|e| map_team_err(act, e))?;
-            detail
-                .public_within_in
-                .iter()
-                .find(|r| r.team.slug == want)
-                .map(|r| (r.team.id, a))
-                .ok_or_else(|| unresolved("team", team))
-        }
-        (None, None) => Err(unresolved("team", team)),
+        )),
     }
 }
 

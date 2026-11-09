@@ -86,6 +86,7 @@ describe('forwardRequest (passthrough)', () => {
 		auth: string | undefined;
 		traceparent: string | undefined;
 		edgeProxy: string | undefined;
+		cookie: string | undefined;
 	};
 
 	beforeAll(async () => {
@@ -100,6 +101,7 @@ describe('forwardRequest (passthrough)', () => {
 					auth: req.headers.authorization,
 					traceparent: req.headers.traceparent as string | undefined,
 					edgeProxy: req.headers[EDGE_PROXY_HEADER] as string | undefined,
+					cookie: req.headers.cookie,
 				};
 
 				if (req.url?.startsWith('/redirect')) {
@@ -222,6 +224,42 @@ describe('forwardRequest (passthrough)', () => {
 			new Request('http://ui.local/api/x', { headers: { [EDGE_PROXY_HEADER]: 'forged' } }),
 		);
 		expect(lastRequest.edgeProxy).toBeUndefined();
+	});
+
+	// The UI's session and PKCE cookies are its own; the upstream authenticates by bearer.
+	it("does not forward the browser's cookies, and still forwards authorization", async () => {
+		await forwardRequest(
+			base,
+			'/api/x',
+			'',
+			new Request('http://ui.local/api/x', {
+				headers: {
+					authorization: 'Bearer tok',
+					cookie: 'temper_session=sealed; temper_pkce=sealed; temper.theme=dark',
+				},
+			}),
+		);
+		expect(lastRequest.cookie).toBeUndefined();
+		expect(lastRequest.auth).toBe('Bearer tok');
+	});
+
+	it("does not forward the browser's cookies on a buffered (keyed) write", async () => {
+		await forwardRequest(
+			base,
+			'/api/x',
+			'',
+			new Request('http://ui.local/api/x', {
+				method: 'POST',
+				headers: {
+					'idempotency-key': 'k-1',
+					'content-type': 'application/json',
+					cookie: 'temper_session=sealed',
+				},
+				body: JSON.stringify({ a: 1 }),
+			}),
+		);
+		expect(lastRequest.cookie).toBeUndefined();
+		expect(JSON.parse(lastRequest.body)).toEqual({ a: 1 });
 	});
 });
 

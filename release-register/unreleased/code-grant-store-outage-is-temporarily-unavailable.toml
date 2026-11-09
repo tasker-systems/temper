@@ -1,0 +1,19 @@
+title    = "The authorization-code grant answers a token-store outage as temporarily_unavailable, not invalid_grant"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http"]
+status   = "signal-only"
+body = '''
+temper-cloud's token endpoint (`handleToken`, `authorization_code` arm): `consumeCode` now answers
+null for each refusal (unknown, expired or spent code, wrong client, PKCE mismatch, a lost
+concurrent claim), and only a refusal is answered `400 invalid_grant`. A throw from the store is
+logged and answered `503 temporarily_unavailable`, as the refresh grant already does. Before, a
+store outage was reported to the client as `invalid_grant`, unlogged, which told the client its code
+was bad when the store had not answered. A retry succeeds when the store failed before the code was
+claimed; if the claim committed and its reply was lost, the code is spent and the retry gets
+`invalid_grant`. No `Retry-After` is sent.
+
+Who observes: an OAuth client exchanging a code while the database is unreachable. Response shapes
+are unchanged. Witness: `packages/temper-cloud/tests/oauth/token-code-grant.test.ts`. Release
+relevance: signal-only.
+'''

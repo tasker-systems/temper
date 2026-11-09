@@ -50,7 +50,7 @@ async fn cli_json(app: &common::E2eTestApp, args: &[&str]) -> Value {
 /// Run the CLI expecting failure; return (exit success, both streams) for the refusal face.
 ///
 /// The face rides EITHER stream: the agent-first default emits the JSON error envelope
-/// on stdout (`{"code":"api","message":...}`), while client-side refusals print to
+/// on stdout (`{"code":...,"message":...}`), while client-side refusals print to
 /// stderr. The guard asserts over both so a door that moves its face between streams
 /// stays pinned.
 async fn cli_refusal(app: &common::E2eTestApp, args: &[&str]) -> (bool, String) {

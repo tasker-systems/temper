@@ -128,7 +128,7 @@ verdict on the grant surface against `audit-grant-sinks.sh` and the two-axis rul
 |---|---|---|
 | `.github/scripts/audit-grant-sinks.sh` | shipped | every `kb_access_grants` write-site vs a reviewed baseline — a new sink fails CI until acknowledged (attenuation review) |
 | `.github/scripts/audit-route-auth.sh` | shipped | every route in an unauthenticated / self-gated / signature sub-router vs a reviewed baseline, plus a presence check on the `require_auth` / `require_system_access` / signature layer wiring — a new ungated route or a deleted auth layer fails CI (auth-covered routes grow freely) |
-| `.github/scripts/audit-handler-authz-drift.sh` | shipped | authz predicates (`is_system_admin`, `grant_authority`, …) invoked from `handlers/` or mcp tools rather than a shared service — the F-3 `promote_admin` drift shape |
+| `.github/scripts/audit-handler-authz-drift.sh` | shipped | the public authz predicates (`is_system_admin`, `has_system_access`) invoked from `handlers/` or mcp tools rather than a shared service — the F-3 `promote_admin` drift shape; fails on a missing scan root or a predicate that no longer resolves to a `pub fn` (harness: `test-audit-handler-authz-drift.sh`) |
 
 All three run as steps in the **Rust Gate** CI job (`.github/workflows/quality-gate.yml`). They
 are deliberately *enumerators and tripwires*, not provers: they make the reviewable set explicit

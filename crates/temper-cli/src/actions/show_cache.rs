@@ -189,7 +189,7 @@ pub(super) fn reconstruct_full_file_content(
     use temper_workflow::frontmatter::{DocType, Frontmatter};
 
     let body = crate::actions::ingest::normalize_body_for_vault(&content.markdown);
-    let dt = DocType::from_str(&meta.doc_type_name)?;
+    let dt = meta.doc_type_name.parse::<DocType>()?;
     let mut fm = Frontmatter::new(dt, body);
 
     // Resource-row identity fields. The resource row is the canonical

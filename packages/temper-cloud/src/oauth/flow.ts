@@ -95,14 +95,7 @@ export async function bindCodeToFlow(
   return { redirectUri: row.redirect_uri, oauthState: row.oauth_state };
 }
 
-/**
- * Consumes a one-time authorization code, validating its PKCE verifier and binding it to the
- * client that is redeeming it. Order matters: PKCE is checked BEFORE the code is atomically
- * claimed, so a wrong verifier never burns the code (the caller can retry with the right one). The
- * claim itself is a single, atomic, status-guarded UPDATE so a race between two concurrent
- * redemptions can only succeed once. Both the lookup and the claim are additionally scoped to
- * `clientId` so a code issued for one client can never be redeemed by another.
- */
+/** What a successful code redemption hands the token endpoint. */
 export interface ConsumedCode {
   claims: MintedClaims;
   /** The profile the ACS resolved for this login; `null` when it could not be resolved. */
@@ -114,12 +107,25 @@ export interface ConsumedCode {
   audience: string;
 }
 
+/**
+ * Consumes a one-time authorization code, validating its PKCE verifier and binding it to the
+ * client that is redeeming it. Order matters: PKCE is checked BEFORE the code is atomically
+ * claimed, so a wrong verifier never burns the code (the caller can retry with the right one). The
+ * claim itself is a single, atomic, status-guarded UPDATE so a race between two concurrent
+ * redemptions can only succeed once. Both the lookup and the claim are additionally scoped to
+ * `clientId` so a code issued for one client can never be redeemed by another.
+ *
+ * **Answers `null` when the grant is refused** — the code is unknown, expired, already consumed,
+ * issued to another client, its PKCE verifier does not match, or a concurrent redemption claimed
+ * it first. That is the only outcome the caller may report as `invalid_grant`. Anything that
+ * THROWS is the store failing to answer, and says nothing about the code.
+ */
 export async function consumeCode(
   db: NeonClient,
   code: string,
   codeVerifier: string,
   clientId: string,
-): Promise<ConsumedCode> {
+): Promise<ConsumedCode | null> {
   const codeHash = hashToken(code);
 
   const rows = await db`
@@ -130,11 +136,11 @@ export async function consumeCode(
   `;
   const row = rows[0] as { code_challenge: string; expires_at: string } | undefined;
   if (!row) {
-    throw new Error("unknown, expired, already-consumed, or wrong-client authorization code");
+    return null;
   }
 
   if (!verifyPkceS256(codeVerifier, row.code_challenge)) {
-    throw new Error("PKCE verification failed");
+    return null;
   }
 
   const claimed = await db`
@@ -151,7 +157,7 @@ export async function consumeCode(
       }
     | undefined;
   if (!claimedRow) {
-    throw new Error("authorization code was consumed concurrently");
+    return null;
   }
 
   return {

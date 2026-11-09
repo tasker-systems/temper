@@ -2,7 +2,7 @@
 
 use uuid::Uuid;
 
-use crate::error::Result;
+use crate::error::{ClientError, Result};
 use crate::http::HttpClient;
 use crate::ops;
 use temper_core::types::invitation::{
@@ -243,6 +243,70 @@ impl<'a> TeamsClient<'a> {
         Ok(())
     }
 
+    /// Resolve a `public_within` row's two teams, `(team, anchor)`, for `temper team public-within`
+    /// and the MCP `public_within_open`/`public_within_close` acts.
+    ///
+    /// An id-bearing ref (a team UUID or a decorated `slug-<uuid>` ref, `+`-prefix optional)
+    /// resolves without the network. A slug is matched against one listing of the caller's teams.
+    /// One side's manager need not be on the other side, so a slug that matches none of them is
+    /// looked up through the detail of the side that did resolve: the team's own anchors and
+    /// parents (shown to its members), or the teams opened to the anchor (shown to its managers).
+    /// Nothing resolves that the caller could not already read.
+    ///
+    /// A failed listing or detail read is [`PublicWithinPairError::Client`], the caller's own
+    /// error, never [`PublicWithinPairError::NotATeam`]. Each surface maps both arms itself.
+    pub async fn resolve_public_within_pair(
+        &self,
+        team: &str,
+        anchor: &str,
+    ) -> std::result::Result<(Uuid, Uuid), PublicWithinPairError> {
+        let not_a_team = |side, s: &str| PublicWithinPairError::NotATeam {
+            side,
+            slug: bare_slug(s),
+        };
+        let by_id = |s: &str| {
+            temper_workflow::operations::parse_ref(&bare_slug(s))
+                .ok()
+                .map(Uuid::from)
+        };
+        let (mut team_id, mut anchor_id) = (by_id(team), by_id(anchor));
+        if team_id.is_none() || anchor_id.is_none() {
+            let mine = self.list().await?;
+            let find = |s: &str| {
+                let want = bare_slug(s);
+                mine.iter().find(|t| t.slug == want).map(|t| t.id)
+            };
+            team_id = team_id.or_else(|| find(team));
+            anchor_id = anchor_id.or_else(|| find(anchor));
+        }
+        match (team_id, anchor_id) {
+            (Some(t), Some(a)) => Ok((t, a)),
+            (Some(t), None) => {
+                let want = bare_slug(anchor);
+                let detail = self.get(t).await?;
+                detail
+                    .public_within
+                    .iter()
+                    .map(|r| &r.anchor)
+                    .chain(detail.parents.iter())
+                    .find(|r| r.slug == want)
+                    .map(|r| (t, r.id))
+                    .ok_or_else(|| not_a_team(PublicWithinSide::Anchor, anchor))
+            }
+            (None, Some(a)) => {
+                let want = bare_slug(team);
+                let detail = self.get(a).await?;
+                detail
+                    .public_within_in
+                    .iter()
+                    .find(|r| r.team.slug == want)
+                    .map(|r| (r.team.id, a))
+                    .ok_or_else(|| not_a_team(PublicWithinSide::Team, team))
+            }
+            (None, None) => Err(not_a_team(PublicWithinSide::Team, team)),
+        }
+    }
+
     /// PUT /api/teams/{id}/public-within-policy — set or clear the team's forbid (its owner or a
     /// system admin; on temper-system, the instance-wide off, a system admin only).
     pub async fn set_public_within_policy(
@@ -447,6 +511,53 @@ impl<'a> TeamsClient<'a> {
             .await?;
         Ok(())
     }
+}
+
+/// A team ref with surrounding whitespace and an optional leading `+` removed.
+fn bare_slug(s: &str) -> String {
+    let s = s.trim();
+    s.strip_prefix('+').unwrap_or(s).to_owned()
+}
+
+/// Which side of a `public_within` pair a ref named. `#[non_exhaustive]`, as published surface, like
+/// [`ClientError`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PublicWithinSide {
+    /// The team whose owned contexts the row opens.
+    Team,
+    /// The anchor whose subtree the row opens them to.
+    Anchor,
+}
+
+impl PublicWithinSide {
+    /// `"team"` or `"anchor"`, as the surfaces' refusals name the side.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Team => "team",
+            Self::Anchor => "anchor",
+        }
+    }
+}
+
+/// Why [`TeamsClient::resolve_public_within_pair`] resolved no pair. `#[non_exhaustive]`, as
+/// published surface, like [`ClientError`]. Its `Display` is the refusal both surfaces speak.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum PublicWithinPairError {
+    /// Listing the caller's teams, or reading the resolved side's detail, failed.
+    #[error(transparent)]
+    Client(#[from] ClientError),
+    /// The ref matched no team the caller can read. `slug` is the ref without its `+` prefix.
+    #[error(
+        "not a team: {slug:?} (the {}; expected a team slug, a decorated `slug-<uuid>` ref, or a \
+         team UUID — name a team you are not a member of by its UUID)",
+        side.as_str()
+    )]
+    NotATeam {
+        side: PublicWithinSide,
+        slug: String,
+    },
 }
 
 /// A `?answer=effects` act's answer: the effects on a body, `None` on a `204` (a server that

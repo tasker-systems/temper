@@ -187,7 +187,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     act,
                 } => {
                     if show_template {
-                        let doc_type = temper_workflow::frontmatter::DocType::from_str(&r#type)?;
+                        let doc_type = r#type.parse::<temper_workflow::frontmatter::DocType>()?;
                         let content = temper_cli::vault::get_template(doc_type)?;
                         print!("{content}");
                         return Ok(());
@@ -1093,13 +1093,14 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             AdminAction::Demote { profile } => {
                 temper_cli::actions::runtime::with_client(|client| {
                     Box::pin(async move {
-                        temper_cli::commands::admin::demote_remote(client, &profile).await
+                        temper_cli::commands::admin::demote_remote(client, &profile, output_format)
+                            .await
                     })
                 })
             }
             AdminAction::Access { action } => temper_cli::actions::runtime::with_client(|client| {
                 Box::pin(async move {
-                    temper_cli::commands::admin::access_remote(client, &action).await
+                    temper_cli::commands::admin::access_remote(client, &action, output_format).await
                 })
             }),
             AdminAction::Ledger {

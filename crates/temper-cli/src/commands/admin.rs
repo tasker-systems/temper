@@ -35,10 +35,48 @@ pub async fn settings_remote(
     Ok(())
 }
 
+/// What an admin act did to the one profile it names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ProfileActOutcome {
+    Approved,
+    Revoked,
+    Deactivated,
+    Reactivated,
+    Demoted,
+}
+
+/// The answer an admin act on one profile prints. Its door answers `200` with no body, so the
+/// CLI reports the act it sent: which profile, and what was done to it.
+#[derive(Debug, Clone, serde::Serialize)]
+struct ProfileActReceipt {
+    profile_id: uuid::Uuid,
+    outcome: ProfileActOutcome,
+}
+
+/// Render a `ProfileActReceipt` in the resolved format.
+fn render_profile_act(
+    profile_id: uuid::Uuid,
+    outcome: ProfileActOutcome,
+    fmt: crate::format::OutputFormat,
+) -> Result<String> {
+    crate::format::render(
+        &ProfileActReceipt {
+            profile_id,
+            outcome,
+        },
+        fmt,
+    )
+}
+
 /// Demote a system admin — revoke its governance grant. The manual twin of `promote`; not
-/// team-scoped (governance is keyed on the profile alone). Prints `{profile_id} demoted` on success,
-/// mirroring the standing acts.
-pub async fn demote_remote(client: &temper_client::TemperClient, profile: &str) -> Result<()> {
+/// team-scoped (governance is keyed on the profile alone). Prints a `ProfileActReceipt` on
+/// success, as the standing acts do.
+pub async fn demote_remote(
+    client: &temper_client::TemperClient,
+    profile: &str,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
     let profile_id = uuid::Uuid::parse_str(profile)
         .map_err(|e| TemperError::Api(format!("invalid profile id '{profile}': {e}")))?;
 
@@ -48,7 +86,10 @@ pub async fn demote_remote(client: &temper_client::TemperClient, profile: &str) 
         .await
         .map_err(crate::actions::runtime::client_err_to_temper)?;
 
-    println!("{profile_id} demoted");
+    println!(
+        "{}",
+        render_profile_act(profile_id, ProfileActOutcome::Demoted, fmt)?
+    );
     Ok(())
 }
 
@@ -85,11 +126,12 @@ pub async fn promote_remote(
 }
 
 /// The admin standing acts (Task 13): approve / revoke / deactivate / reactivate a principal.
-/// Each is a POST that returns `200 OK` with no body, so success is reported as a line rather than
-/// a rendered payload.
+/// Each is a POST that returns `200 OK` with no body, so success is reported as a
+/// `ProfileActReceipt`; `reconcile-auto-join` renders the outcome its door answers with.
 pub async fn access_remote(
     client: &temper_client::TemperClient,
     action: &crate::cli::AdminAccessAction,
+    fmt: crate::format::OutputFormat,
 ) -> Result<()> {
     use crate::cli::AdminAccessAction;
 
@@ -99,14 +141,14 @@ pub async fn access_remote(
     };
     let admin = client.admin();
 
-    let (profile_id, verb) = match action {
+    let (profile_id, outcome) = match action {
         AdminAccessAction::Approve { profile } => {
             let id = parse(profile)?;
             admin
                 .approve_principal(id)
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)?;
-            (id, "approved")
+            (id, ProfileActOutcome::Approved)
         }
         AdminAccessAction::Revoke { profile, reason } => {
             let id = parse(profile)?;
@@ -114,7 +156,7 @@ pub async fn access_remote(
                 .revoke_principal(id, reason)
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)?;
-            (id, "revoked")
+            (id, ProfileActOutcome::Revoked)
         }
         AdminAccessAction::Deactivate { profile } => {
             let id = parse(profile)?;
@@ -122,7 +164,7 @@ pub async fn access_remote(
                 .deactivate_principal(id)
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)?;
-            (id, "deactivated")
+            (id, ProfileActOutcome::Deactivated)
         }
         AdminAccessAction::Reactivate { profile } => {
             let id = parse(profile)?;
@@ -130,23 +172,16 @@ pub async fn access_remote(
                 .reactivate_principal(id)
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)?;
-            (id, "reactivated")
+            (id, ProfileActOutcome::Reactivated)
         }
-        // The reconcile verb takes no profile and answers with an outcome, so it reports for
-        // itself rather than flowing into the shared one-line tail below.
+        // The reconcile verb takes no profile and answers with an outcome, so it renders that
+        // rather than flowing into the shared receipt below.
         AdminAccessAction::ReconcileAutoJoin => {
             let outcome = admin
                 .reconcile_auto_join()
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)?;
-            if outcome.added.is_empty() {
-                println!("auto-join rosters converged — nothing to add");
-            } else {
-                for row in &outcome.added {
-                    println!("{} {}", row.team_slug, row.profile_handle);
-                }
-                println!("{} pair(s) added", outcome.added.len());
-            }
+            println!("{}", crate::format::render(&outcome, fmt)?);
             if !outcome.saml_mapped_teams.is_empty() {
                 eprintln!(
                     "warning: these teams also carry SAML group mappings: {} — the native \
@@ -159,7 +194,7 @@ pub async fn access_remote(
         }
     };
 
-    println!("{profile_id} {verb}");
+    println!("{}", render_profile_act(profile_id, outcome, fmt)?);
     Ok(())
 }
 
@@ -710,5 +745,34 @@ mod tests {
             matches!(err, TemperError::Network(_)),
             "one target must pass validation and fail at transport (Network), got: {err}"
         );
+    }
+
+    /// A profile act renders as the receipt in the resolved format: JSON carries the profile id
+    /// and the outcome a caller branches on, and TOON decodes to the same fields. FAILS IF an act
+    /// prints prose, or the outcome is not its snake_case name.
+    #[test]
+    fn a_profile_act_renders_its_receipt_in_either_format() {
+        let id = uuid::Uuid::parse_str("019e84ab-26ba-7560-9d34-c60d74a9fbe2").expect("uuid");
+        for (outcome, word) in [
+            (ProfileActOutcome::Approved, "approved"),
+            (ProfileActOutcome::Revoked, "revoked"),
+            (ProfileActOutcome::Deactivated, "deactivated"),
+            (ProfileActOutcome::Reactivated, "reactivated"),
+            (ProfileActOutcome::Demoted, "demoted"),
+        ] {
+            let json: serde_json::Value = serde_json::from_str(
+                &render_profile_act(id, outcome, crate::format::OutputFormat::Json)
+                    .expect("renders"),
+            )
+            .expect("JSON");
+            assert_eq!(
+                json,
+                serde_json::json!({ "profile_id": id.to_string(), "outcome": word })
+            );
+
+            let toon = render_profile_act(id, outcome, crate::format::OutputFormat::Toon)
+                .expect("renders");
+            assert_eq!(crate::format::decode_toon(&toon), json, "{toon}");
+        }
     }
 }

@@ -1,8 +1,19 @@
+import { highlightCode } from '@tasker-systems/temper-design/highlight';
 import { uncountedSentence } from '@tasker-systems/temper-design/omission';
 import { fireEvent, render, screen } from '@testing-library/svelte';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ArtifactView } from '$lib/types/generated/data_artifact';
 import ArtifactList from './ArtifactList.svelte';
+
+// The real highlighter, observed: which payloads the list asks it to highlight, and when.
+vi.mock('@tasker-systems/temper-design/highlight', async (importOriginal) => {
+	const actual = await importOriginal<typeof import('@tasker-systems/temper-design/highlight')>();
+	return { ...actual, highlightCode: vi.fn(actual.highlightCode) };
+});
+
+beforeEach(() => {
+	vi.mocked(highlightCode).mockClear();
+});
 
 /**
  * What this component owes, per clause: every artifact viewable whole (metadata plus the
@@ -141,6 +152,23 @@ describe('ArtifactList', () => {
 
 		expect(container.querySelector('.content')).toBeNull();
 		expect(container.textContent).toContain('no content');
+	});
+
+	it('highlights only the open row’s payload, never every row’s', async () => {
+		const { container } = render(ArtifactList, {
+			artifacts: [
+				artifact({ artifact_id: 'a1', content: { run: 1 } }),
+				artifact({ artifact_id: 'a2', content: { run: 2 }, created: '2026-08-21T10:00:00Z' }),
+				artifact({ artifact_id: 'a3', content: { run: 3 }, created: '2026-08-22T10:00:00Z' }),
+			],
+		});
+		expect(highlightCode).not.toHaveBeenCalled();
+
+		// Rows sort newest first, so the first head is a3's.
+		await fireEvent.click(getHead(container));
+
+		expect(highlightCode).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(highlightCode).mock.calls[0]?.[0]).toBe(JSON.stringify({ run: 3 }, null, 2));
 	});
 
 	it('exposes expand state to assistive tech via aria-expanded', async () => {

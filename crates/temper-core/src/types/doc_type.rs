@@ -2,9 +2,11 @@
 //! kind with. A wire type, so temper-core's; the per-type JSON Schema text the type carries in
 //! temper-workflow (`DocTypeSchema`) stays there, beside the schema files it embeds.
 
+use std::str::FromStr;
+
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Result, TemperError};
+use crate::error::TemperError;
 
 /// Typed vault doctype. All valid values are enumerated exhaustively —
 /// unknown doctypes fail at parse, not at validation.
@@ -38,10 +40,6 @@ pub enum DocType {
     Domain,
 }
 
-#[expect(
-    clippy::should_implement_trait,
-    reason = "inherent from_str returns anyhow::Result, not the std FromStr contract"
-)]
 impl DocType {
     /// Every doc-type variant, in canonical order. Single source of truth for
     /// callers that enumerate the known doc types (e.g. the MCP `list_doc_types`
@@ -83,9 +81,14 @@ impl DocType {
             DocType::Domain => "domain",
         }
     }
+}
 
-    /// Parse from canonical string form. Case-sensitive.
-    pub fn from_str(s: &str) -> Result<Self> {
+impl FromStr for DocType {
+    type Err = TemperError;
+
+    /// Parse from canonical string form. Case-sensitive. An unknown name is refused with
+    /// [`TemperError::Config`], naming every valid doctype.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "task" => Ok(DocType::Task),
             "goal" => Ok(DocType::Goal),
