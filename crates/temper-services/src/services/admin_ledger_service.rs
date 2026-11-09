@@ -173,7 +173,7 @@ async fn readable_event_types(
     // standing decisions below.
     if subject.kind == temper_substrate::payloads::AnchorTable::Teams {
         let mut conn = pool.acquire().await?;
-        let resolved = crate::authz::team_membership::MembershipAuthority::resolve(
+        let resolved = crate::authz::team_membership::MembershipAuthority::resolve_precheck(
             &mut conn, authed, subject.id,
         )
         .await?;

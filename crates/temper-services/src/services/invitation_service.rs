@@ -91,7 +91,7 @@ pub async fn create_invitation(
     // C16: the rank rule, reusing checks 1, 2 and 6 of `decide` (`authorize_invitation`).
     {
         let mut conn = pool.acquire().await?;
-        MembershipAuthority::resolve(&mut conn, caller, team_id)
+        MembershipAuthority::resolve_precheck(&mut conn, caller, team_id)
             .await?
             .authorize_invitation(params.role)?;
         // The team must exist and be live. Asked only AFTER the caller is known to manage it (S6),
@@ -502,7 +502,7 @@ pub async fn revoke_invitation(
     // confers none (R11), and a system admin who is not a member may revoke.
     {
         let mut conn = pool.acquire().await?;
-        if !MembershipAuthority::resolve(&mut conn, caller, team_id)
+        if !MembershipAuthority::resolve_precheck(&mut conn, caller, team_id)
             .await?
             .manages()
         {
@@ -560,7 +560,7 @@ pub async fn list_invitations(
 ) -> ApiResult<Vec<TeamInvitation>> {
     {
         let mut conn = pool.acquire().await?;
-        if !MembershipAuthority::resolve(&mut conn, caller, team_id)
+        if !MembershipAuthority::resolve_precheck(&mut conn, caller, team_id)
             .await?
             .manages()
         {
@@ -2591,6 +2591,84 @@ mod tests {
         .expect_err("a deleted team admits nobody");
         assert!(
             matches!(&err, ApiError::BadRequest(m) if m.contains("no longer exists")),
+            "got {err:?}"
+        );
+        assert_eq!(role_on_team(&pool, team_id, invitee).await.unwrap(), None);
+    }
+
+    // --- The inviter's admin arm holds against a demotion ---
+
+    /// An admin with no role on the team invites an owner, and their demotion is in flight when
+    /// the invitee accepts. The accept's inviter re-check takes the inviter's governance row, so it
+    /// waits for the demotion; once that commits, the inviter could no longer issue the
+    /// invitation, so it is revoked and nobody joins. A re-check that only read the row saw the
+    /// not-yet-deleted grant and made the invitee an owner beside a demotion already decided.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn accept_waits_for_the_inviters_demotion_and_is_refused(pool: PgPool) {
+        let (team_id, _owner) = seed_team_with_owner(&pool).await;
+        let admin = mk_profile(&pool, "admin").await;
+        crate::test_support::approved_admin(&pool, *admin).await;
+        let invitee = mk_profile(&pool, "invitee").await;
+        add_auth_email(&pool, invitee, "invitee-uid", Some("i@e.com")).await;
+        let inv = create_invitation(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, *admin).await,
+            team_id,
+            CreateInvitationParams {
+                invited_email: "i@e.com".into(),
+                role: TeamRole::Owner,
+            },
+        )
+        .await
+        .expect("an admin may invite an owner");
+
+        let mut holder = pool.begin().await.unwrap();
+        let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *holder)
+            .await
+            .unwrap();
+        let _: bool =
+            sqlx::query_scalar("SELECT principal_governance_set($1, false, NULL, 'test')")
+                .bind(*admin)
+                .fetch_one(&mut *holder)
+                .await
+                .unwrap();
+
+        let p2 = pool.clone();
+        let token = inv.token.clone();
+        let contender = tokio::spawn(async move {
+            accept_invitation(
+                &p2,
+                &crate::test_support::human_principal_for(&p2, *invitee).await,
+                &token,
+            )
+            .await
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let waiting: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM pg_stat_activity \
+                                 WHERE datname = current_database() \
+                                   AND $1 = ANY (pg_blocking_pids(pid)))",
+            )
+            .bind(pid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            if waiting {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the accept never waited on the inviter's demotion"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        holder.commit().await.unwrap();
+
+        let err = contender.await.unwrap().unwrap_err();
+        assert!(
+            matches!(&err, ApiError::BadRequest(m) if m == INVITATION_REVOKED),
             "got {err:?}"
         );
         assert_eq!(role_on_team(&pool, team_id, invitee).await.unwrap(), None);
