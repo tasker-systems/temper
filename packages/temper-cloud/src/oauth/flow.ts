@@ -102,6 +102,11 @@ export async function bindCodeToFlow(
  * claim itself is a single, atomic, status-guarded UPDATE so a race between two concurrent
  * redemptions can only succeed once. Both the lookup and the claim are additionally scoped to
  * `clientId` so a code issued for one client can never be redeemed by another.
+ *
+ * **Answers `null` when the grant is refused** — the code is unknown, expired, already consumed,
+ * issued to another client, its PKCE verifier does not match, or a concurrent redemption claimed
+ * it first. That is the only outcome the caller may report as `invalid_grant`. Anything that
+ * THROWS is the store failing to answer, and says nothing about the code.
  */
 export interface ConsumedCode {
   claims: MintedClaims;
@@ -119,7 +124,7 @@ export async function consumeCode(
   code: string,
   codeVerifier: string,
   clientId: string,
-): Promise<ConsumedCode> {
+): Promise<ConsumedCode | null> {
   const codeHash = hashToken(code);
 
   const rows = await db`
@@ -130,11 +135,11 @@ export async function consumeCode(
   `;
   const row = rows[0] as { code_challenge: string; expires_at: string } | undefined;
   if (!row) {
-    throw new Error("unknown, expired, already-consumed, or wrong-client authorization code");
+    return null;
   }
 
   if (!verifyPkceS256(codeVerifier, row.code_challenge)) {
-    throw new Error("PKCE verification failed");
+    return null;
   }
 
   const claimed = await db`
@@ -151,7 +156,7 @@ export async function consumeCode(
       }
     | undefined;
   if (!claimedRow) {
-    throw new Error("authorization code was consumed concurrently");
+    return null;
   }
 
   return {

@@ -628,10 +628,19 @@ export async function handleToken(req: Request, db: NeonClient): Promise<Respons
       return oauthError("invalid_request");
     }
 
+    // As in the refresh grant below: `null` is a refusal and the only thing answered
+    // `invalid_grant`; a THROW is the store failing to answer, which says nothing about the code.
     let consumed: Awaited<ReturnType<typeof consumeCode>>;
     try {
       consumed = await consumeCode(db, String(code), String(codeVerifier), clientId);
-    } catch {
+    } catch (consumeErr) {
+      logger.error(
+        { err: consumeErr instanceof Error ? consumeErr.message : String(consumeErr) },
+        "token: the token store did not answer the code exchange — answering temporarily_unavailable, not invalid_grant",
+      );
+      return oauthError("temporarily_unavailable", 503);
+    }
+    if (consumed === null) {
       return oauthError("invalid_grant");
     }
 
