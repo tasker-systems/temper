@@ -141,10 +141,20 @@ pub async fn get_for_caller(
 /// The per-row gate every act on an existing machine client passes first: a system admin, or the
 /// owner of the machine's owning team, keyed on the row (B2 D5). A refusal is indistinguishable
 /// from a missing id. Ahead of any write, so a rejected act never touches the row.
-async fn authorize_control(pool: &PgPool, authed: &HumanPrincipal, id: Uuid) -> ApiResult<()> {
-    crate::authz::authorize::<MachineClientControlAuthority>(pool, Principal::Human(authed), id)
-        .await?;
-    Ok(())
+///
+/// Answers whether the decision resolved on the system-admin arm, which a writing act asks again
+/// under the governance lock on its transaction (`auth::admin_arm_holds`).
+async fn authorize_control(pool: &PgPool, authed: &HumanPrincipal, id: Uuid) -> ApiResult<bool> {
+    Ok(
+        crate::authz::authorize::<MachineClientControlAuthority>(
+            pool,
+            Principal::Human(authed),
+            id,
+        )
+        .await?
+        .authority()
+            == MachineClientControlAuthority::SystemAdmin,
+    )
 }
 
 /// List machine clients visible to `caller` (B2 D5), newest first. Revoked rows are hidden
@@ -231,7 +241,14 @@ pub async fn revoke(pool: &PgPool, id: Uuid, authed: &HumanPrincipal) -> ApiResu
     let mut tx = pool.begin().await?;
     if let Some(admin) = &admin {
         standing_service::lock_conn(&mut tx, subject).await?;
-        access_service::still_admin(&mut tx, admin, Some(subject)).await?;
+        // A demoted admin is answered as a caller with no authority over the row is: the same
+        // sentence as a missing id, so the refusal says nothing about whether this one exists.
+        access_service::still_admin(&mut tx, admin, Some(subject))
+            .await
+            .map_err(|e| match e {
+                ApiError::Forbidden => ApiError::NotFound(MACHINE_CLIENT_REFUSAL.to_string()),
+                other => other,
+            })?;
     } else {
         let owns = match existing.team_id {
             Some(team_id) => {
@@ -444,7 +461,7 @@ pub async fn rotate_secret(
 ) -> ApiResult<temper_core::types::machine::IssuedMachineCredential> {
     // Auth before writes, keyed on the existing row's owning team (B2 D5). Ahead of the
     // transaction, so a rejected rotation never touches the row.
-    authorize_control(pool, authed, id).await?;
+    let on_admin_arm = authorize_control(pool, authed, id).await?;
 
     if !(0..=MAX_ROTATION_GRACE_SECONDS).contains(&grace_seconds) {
         return Err(ApiError::BadRequest(format!(
@@ -458,9 +475,21 @@ pub async fn rotate_secret(
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {e}")))?;
 
+    // The admin arm was decided on the pool; a rotation hands back a live secret for the machine,
+    // so it is asked again first, under the governance lock and before the severance's writes. A
+    // demoted admin is refused as a caller with no authority over the row is (`404`, the missing-id
+    // sentence); one who also owns the machine's team is admitted by a retry on the owner arm.
+    // Lock order: governance, then the severed personal teams, then the credential row, the order
+    // `revoke` and `machine_registration_service::rebind` take them in.
+    if !crate::auth::admin_arm_holds(&mut tx, ProfileId::from(authed.profile().id), on_admin_arm)
+        .await?
+    {
+        return Err(ApiError::NotFound(MACHINE_CLIENT_REFUSAL.to_string()));
+    }
+
     // A secret minted by anyone but the person whose personal team admits this machine costs the
-    // machine that team (task `01a191b4`). First in the transaction, so its team locks come before
-    // the row lock below, as every membership writer orders them; a refusal below rolls it back.
+    // machine that team. First after the re-check, so its team locks come before the row lock
+    // below, as every membership writer orders them; a refusal below rolls it back.
     sever_personal_reach(&mut tx, profile, ProfileId::from(authed.profile().id)).await?;
 
     // FOR UPDATE locks the row so a concurrent revoke cannot land between these guards and the

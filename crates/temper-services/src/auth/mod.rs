@@ -670,6 +670,25 @@ pub(crate) async fn is_system_admin_locked(
             .unwrap_or(false))
 }
 
+/// The admin re-check of a door whose authority resolved on its system-admin arm on the pool: on
+/// the door's write transaction, before its first write, it asks again with
+/// [`is_system_admin_locked`]. `false` means a demotion committed since the pool read (one still in
+/// flight makes this wait until it commits); the door then answers with the refusal it gives a
+/// caller with no authority, so a demoted admin learns nothing a non-admin does not. A decision on
+/// any other arm read no governance, so there is nothing to ask again and this answers `true`
+/// without a query. Transaction only, as for [`is_system_admin_locked`], and under the same lock
+/// order.
+pub(crate) async fn admin_arm_holds(
+    tx: &mut sqlx::PgConnection,
+    profile: ProfileId,
+    on_admin_arm: bool,
+) -> ApiResult<bool> {
+    if !on_admin_arm {
+        return Ok(true);
+    }
+    is_system_admin_locked(tx, profile).await
+}
+
 /// The bare-id spelling of [`require_system_admin`], **test-only**. It mints from a `ProfileId` with
 /// no classification behind it, so it exists only where `Principal::Bare` does — the test harness —
 /// and a production build cannot name it.

@@ -531,6 +531,29 @@ async fn grant_subject_floor_in_tx(
         .map_err(ApiError::from)
 }
 
+/// The grant door's admin re-check, first on the grant or revoke transaction. A proof resolved on
+/// [`GrantAuthority::SystemAdmin`] was decided by a pool read of governance; a grant outlives the
+/// demotion of the admin who made it, so the arm is asked again under the governance lock
+/// (`auth::admin_arm_holds`) before the subject floor and any write. A demotion committed since
+/// refuses with `Forbidden`, the denial a caller with no authority gets (and, like it, `410` to a
+/// husk holder); one in flight makes this wait, then refuses. A demoted admin who also holds a
+/// delegated grant right is admitted by a retry on that arm.
+///
+/// Lock order: governance `KEY SHARE`, then the subject floor's `kb_resources` row, then the grant
+/// row a delegate may change. A demotion locks none of those.
+async fn admin_arm_still_grants(
+    tx: &mut sqlx::PgConnection,
+    proof: &crate::authz::Authorized<GrantAuthority>,
+    caller: ProfileId,
+) -> ApiResult<()> {
+    let on_admin_arm = proof.authority() == GrantAuthority::SystemAdmin;
+    if crate::auth::admin_arm_holds(tx, caller, on_admin_arm).await? {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden)
+    }
+}
+
 /// Mint/update one access grant. Auth before write: `can_administer_grant`. The DB coherence CHECK
 /// (`write|delete|grant ⇒ read`) is the integrity backstop. Idempotent upsert — `granted=false` when
 /// the row already existed and was updated in place.
@@ -560,6 +583,10 @@ pub async fn grant_capability(
     // emitter is resolved only after it admits, on the same transaction — never the pool, which a
     // transaction already holding a connection would wait on for a second.
     let mut tx = pool.begin().await?;
+    if let Err(refusal) = admin_arm_still_grants(&mut tx, &proof, caller).await {
+        drop(tx);
+        return Err(erased_or_refused(pool, caller, subject, refusal).await);
+    }
     if let Err(refusal) = grant_subject_floor_in_tx(&mut tx, caller, subject).await {
         return Err(write_floor::rollback_with(tx, refusal).await);
     }
@@ -927,8 +954,13 @@ pub async fn revoke_capability(
             Ok(proof) => proof,
             Err(refusal) => return Err(erased_or_refused(pool, caller, subject, refusal).await),
         };
-    // The subject floor at the head of the revoke's own transaction (see `grant_capability`).
+    // The subject floor at the head of the revoke's own transaction (see `grant_capability`), after
+    // the admin arm's re-check.
     let mut tx = pool.begin().await?;
+    if let Err(refusal) = admin_arm_still_grants(&mut tx, &proof, caller).await {
+        drop(tx);
+        return Err(erased_or_refused(pool, caller, subject, refusal).await);
+    }
     if let Err(refusal) = grant_subject_floor_in_tx(&mut tx, caller, subject).await {
         return Err(write_floor::rollback_with(tx, refusal).await);
     }
