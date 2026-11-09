@@ -1040,7 +1040,7 @@ pub async fn admin_get_settings(pool: &PgPool, _admin: &SystemAdmin) -> ApiResul
 /// a null slug can no longer lock anyone out of the instance.
 pub async fn update_system_settings(
     pool: &PgPool,
-    _admin: &SystemAdmin,
+    admin: &SystemAdmin,
     req: &UpdateSettingsRequest,
 ) -> ApiResult<SystemSettings> {
     // If a gating team is being set, it must name a real team, and never a personal one: person
@@ -1071,11 +1071,14 @@ pub async fn update_system_settings(
     }
 
     // Repointing the gating team can change whether public_within rows confer (the gating team is
-    // a pool under every anchor above it, and is never a row's team), so that write alone runs in a
-    // transaction with the record of every row it flips (`_admin_gating_team_slug_write`). The
-    // other fields keep their one-statement write, in the same transaction when there is one.
+    // a pool under every anchor above it, and is never a row's team), so it is written with the
+    // record of every row it flips (`_admin_gating_team_slug_write`); the other fields keep their
+    // one-statement write. Both run in one transaction, which first asks the acting admin again
+    // ([`still_admin`]), ahead of the exclusive gating lock: a demotion committed since the proof
+    // was minted refuses the change, and one in flight makes it wait, then refuses.
+    let mut tx = pool.begin().await?;
+    still_admin(&mut tx, admin, None).await?;
     if let Some(ref slug) = req.gating_team_slug {
-        let mut tx = pool.begin().await?;
         let written = sqlx::query_scalar!(
             r#"SELECT _admin_gating_team_slug_write($1, NULL) AS "w!""#,
             slug
@@ -1089,12 +1092,10 @@ pub async fn update_system_settings(
                 "gating_team_slug '{slug}' does not exist — create the team first"
             )));
         }
-        let row = update_settings_fields(&mut tx, req).await?;
-        tx.commit().await?;
-        return Ok(row);
     }
-    let mut conn = pool.acquire().await?;
-    update_settings_fields(&mut conn, req).await
+    let row = update_settings_fields(&mut tx, req).await?;
+    tx.commit().await?;
+    Ok(row)
 }
 
 /// The settings row's one-statement write. `gating_team_slug` is coalesced like the rest; when it is
@@ -1306,9 +1307,10 @@ fn promotion_refused(
 // The admin standing acts (Task 13)
 //
 // The five admin-authority acts of the machine, one thin service wrapper each. Every one routes
-// through `apply_as_admin_on` and so `standing_service::apply_conn`, so it inherits the transition table (a refused act — Revoke on
-// a never-approved principal, Reactivate on a live one — is rejected there with a reason, never here)
-// and, once they land, Task 15's demotion hook and Task 17's typed refusal. Reject is not among them:
+// through `apply_as_admin_on` and so `standing_service::apply_conn`, so it inherits the transition
+// table (a refused act — Revoke on a never-approved principal, Reactivate on a live one — is
+// rejected there with a reason, never here) and, once they land, Task 15's demotion hook and Task
+// 17's typed refusal. Reject is not among them:
 // it is a join-request decision, handled atomically inside `review_request` (D14).
 //
 // The gate is the `&SystemAdmin` proof each act requires (admin-authz enclosure, spec §3.2): its

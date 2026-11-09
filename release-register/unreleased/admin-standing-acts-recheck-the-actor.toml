@@ -6,8 +6,8 @@ status   = "signal-only"
 body = '''
 The admin standing and governance acts took a SystemAdmin proof minted on the pool and never asked
 again: approve, revoke, deactivate and reactivate a principal, promote and demote an admin,
-reconcile the auto-join pools, close a review request, and the standing arm of a machine
-credential's revocation. An admin demoted after the proof was
+reconcile the auto-join pools, close a review request, update the system settings (the
+gating-team repoint included), and the standing arm of a machine credential's revocation. An admin demoted after the proof was
 minted, or while the act was in flight, still completed it. That included promoting themselves:
 the governance insert waited for the demotion's delete, then inserted, undoing the demotion.
 
@@ -29,7 +29,9 @@ per act (each fails without the re-check), `a_demoted_admin_cannot_promote_thems
 `mutual_demotions_never_deadlock` / `mutual_revokes_never_deadlock`, which race many rounds from one
 start line: without the ordered pair lock they deadlock whenever the two acts interleave, which
 these rounds have hit on every run so far, though a run is not guaranteed to. Out of scope, still
-decided on the pool proof alone: update_system_settings, and the non-standing admin surfaces (admin
-directory, embed, erasure, Slack disconnect, contexts, connections, subscriptions, grants).
+decided on the pool proof alone: the non-standing admin surfaces (admin directory, embed, erasure,
+Slack disconnect, contexts, connections, subscriptions, grants), and a machine credential's
+revocation itself (`authorize_control`), which only its standing arm now re-checks. Creating an
+invitation also still decides on a plain read; accepting one is bounded by inviter_ceiling.
 Release relevance: signal-only.
 '''

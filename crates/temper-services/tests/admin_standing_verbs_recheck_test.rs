@@ -539,3 +539,43 @@ async fn mutual_revokes_never_deadlock(pool: PgPool) {
         );
     }
 }
+
+/// The settings write, the gating-team repoint included, asks the actor again before the exclusive
+/// gating lock and any write.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn update_system_settings(pool: PgPool) {
+    let admin = an_admin(&pool, "sv-admin").await;
+    team(&pool, "sv-new-gate").await;
+    let gate = |pool: PgPool| async move {
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT gating_team_slug FROM kb_system_settings WHERE id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+    let before = gate(pool.clone()).await;
+    let verb = move |pool: PgPool, proof: SystemAdmin| async move {
+        access_service::update_system_settings(
+            &pool,
+            &proof,
+            &temper_core::types::admin::UpdateSettingsRequest {
+                gating_team_slug: Some("sv-new-gate".into()),
+                instance_name: Some("renamed".into()),
+                terms_version: None,
+                terms_resource_uri: None,
+            },
+        )
+        .await
+    };
+    both_races(&pool, admin, &verb).await;
+    assert_eq!(
+        gate(pool.clone()).await,
+        before,
+        "a refused write repointed the gating team"
+    );
+    verb(pool.clone(), proof(&pool, admin).await)
+        .await
+        .expect("the admin repoints it");
+    assert_eq!(gate(pool.clone()).await.as_deref(), Some("sv-new-gate"));
+}
