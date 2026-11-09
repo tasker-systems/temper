@@ -79,7 +79,9 @@ pub struct ValidationResult {
 /// Returns [`TemperError::Config`] if `doc_type` is not one of the six known
 /// values, or if schema compilation fails.
 pub fn load_schema(doc_type: &str) -> Result<Validator> {
-    let doc_schema_str = doc_type.parse::<crate::frontmatter::DocType>()?.schema_json();
+    let doc_schema_str = doc_type
+        .parse::<crate::frontmatter::DocType>()?
+        .schema_json();
 
     let base_json: serde_json::Value = serde_json::from_str(BASE_SCHEMA)
         .map_err(|e| TemperError::Config(format!("base schema JSON parse error: {e}")))?;
@@ -299,7 +301,9 @@ pub fn check_discouraged_open_meta_keys(open_meta: &serde_json::Value) -> Vec<Va
 /// Get the updatable field names for a doctype by reading the schema properties
 /// and excluding system-managed fields.
 pub fn updatable_fields(doc_type: &str) -> Result<Vec<(String, serde_json::Value)>> {
-    let schema_str = doc_type.parse::<crate::frontmatter::DocType>()?.schema_json();
+    let schema_str = doc_type
+        .parse::<crate::frontmatter::DocType>()?
+        .schema_json();
 
     let schema: serde_json::Value = serde_json::from_str(schema_str)
         .map_err(|e| TemperError::Config(format!("schema parse error: {e}")))?;
@@ -452,7 +456,9 @@ pub static DOC_TYPE_NAMES: &[&str] = &[
 /// `serde_json::Value` for introspection — extracting required fields,
 /// enum values, property descriptions, etc.
 pub fn schema_value(doc_type: &str) -> Result<serde_json::Value> {
-    let raw = doc_type.parse::<crate::frontmatter::DocType>()?.schema_json();
+    let raw = doc_type
+        .parse::<crate::frontmatter::DocType>()?
+        .schema_json();
 
     serde_json::from_str(raw)
         .map_err(|e| TemperError::Config(format!("{doc_type} schema JSON parse error: {e}")))

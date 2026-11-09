@@ -575,7 +575,9 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     // date-prefix for non-Concept/Goal doctypes is a property of THIS slug only — the local
     // projection filename is `projection::projection_stem` (a bounded decorated ref) and has
     // never carried the prefix.
-    let doctype_enum = doc_type.parse::<temper_workflow::frontmatter::DocType>().ok();
+    let doctype_enum = doc_type
+        .parse::<temper_workflow::frontmatter::DocType>()
+        .ok();
     let slug_resolved = derive_create_slug(title, doctype_enum);
 
     // Parse the optional --open-meta JSON object (the free-form open tier) and validate its shape
