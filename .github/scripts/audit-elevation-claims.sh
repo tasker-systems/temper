@@ -526,6 +526,12 @@ current_gates() {
 # or gating team as the CHILD, and an auto-join team on restore, are a system admin's; the gates
 # (`attach_precheck`/`attach_authority`, `detach_authority`, `restore_authority`) now enforce
 # exactly that, pinned in `team_dag_doors_test`'s review-fix tests.
+# REVIEWED 2026-11-09 (admin demotion serializes with the re-check) — `team_membership`
+# 9e329c322371 -> 9e6d1c75eb94: `require_system_admin_on` now locks the caller's
+# kb_principal_governance row FOR KEY SHARE before it asks `is_system_admin`. The predicate, the
+# refusal and every caller are unchanged; a demotion now waits for, or is seen by, an act that
+# re-checked. Every bound claim still describes the gate (who may: a system admin, decided under
+# the act's locks).
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -602,7 +608,7 @@ gate reconcile_regime 5339d74ce2eb
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e
-gate team_membership 9e329c322371
+gate team_membership 9e6d1c75eb94
 EOF
 
 CURRENT="$(current_claims; current_gates)"
