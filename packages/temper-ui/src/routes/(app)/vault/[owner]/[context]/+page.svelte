@@ -1,6 +1,7 @@
 <script lang="ts">
 	import VaultBrowser from '$lib/components/vault/VaultBrowser.svelte';
 	import ShapeList from '$lib/components/vault/ShapeList.svelte';
+	import ReachMarker from '$lib/components/vault/ReachMarker.svelte';
 	import RegionState from '$lib/components/RegionState.svelte';
 	import { regionStateFor } from '$lib/region';
 	import type { PageData } from './$types';
@@ -11,6 +12,14 @@
 <svelte:head>
 	<title>{data.context} — temper</title>
 </svelte:head>
+
+{#if data.reach}
+	{#await data.reach then via}
+		{#if via === 'public_within'}
+			<div class="reach"><ReachMarker {via} /></div>
+		{/if}
+	{/await}
+{/if}
 
 <VaultBrowser
 	title={data.context}
@@ -43,6 +52,9 @@
 {/if}
 
 <style>
+	.reach {
+		padding: 12px 22px 0;
+	}
 	.shapes-failed {
 		padding: 0 22px 18px;
 	}

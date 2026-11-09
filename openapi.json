@@ -14865,7 +14865,23 @@
           "Teams"
         ],
         "summary": "Create a team",
+        "description": "With `?answer=effects` the row also carries `public_within` (what the new team's parent links did\nto `public_within` rows) and `public_within_in_reach` (the effective rows the new team's roster\nreads through its parents), each row named only to a caller who manages its team or anchor, or is\na system admin, and counted otherwise. Without it the answer is the row alone.",
         "operationId": "create_team",
+        "parameters": [
+          {
+            "name": "answer",
+            "in": "query",
+            "description": "`effects`: also answer what the act did to `public_within` rows (`POST` fills\n`TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with\n`PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team\nor its anchor, or is a system admin, and counted otherwise.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "What a team act's answer carries beyond its default, as `?answer=` on `POST /api/teams`,\n`DELETE /api/teams/{id}` and `DELETE /api/teams/{id}/children/{child_id}`.",
+              "enum": [
+                "effects"
+              ]
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -14878,7 +14894,7 @@
         },
         "responses": {
           "201": {
-            "description": "Team created",
+            "description": "Team created (with `?answer=effects`, carrying `public_within` and `public_within_in_reach`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15029,6 +15045,7 @@
           "Teams"
         ],
         "summary": "Delete a team",
+        "description": "With `?answer=effects` the answer is `200` with what the delete did to `public_within` rows (rows\nover or under the team stop conferring), each named only to a caller who manages its team or\nanchor, or is a system admin, and counted otherwise. Without it the answer is `204`.",
         "operationId": "delete_team",
         "parameters": [
           {
@@ -15040,9 +15057,32 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "answer",
+            "in": "query",
+            "description": "`effects`: also answer what the act did to `public_within` rows (`POST` fills\n`TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with\n`PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team\nor its anchor, or is a system admin, and counted otherwise.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "What a team act's answer carries beyond its default, as `?answer=` on `POST /api/teams`,\n`DELETE /api/teams/{id}` and `DELETE /api/teams/{id}/children/{child_id}`.",
+              "enum": [
+                "effects"
+              ]
+            }
           }
         ],
         "responses": {
+          "200": {
+            "description": "Team soft-deleted; asked with `?answer=effects`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicWithinEffects"
+                }
+              }
+            }
+          },
           "204": {
             "description": "Team soft-deleted"
           },
@@ -15300,7 +15340,7 @@
           "Teams"
         ],
         "summary": "Detach a child team from this team",
-        "description": "Removes the parent link, so the child's members stop reaching what is attached to this team and\nits ancestors. The child and its roster survive; only this link is cut. A manager of the parent\nor of the child may detach (a child's managers may leave any parent). Recorded on the admin\nledger as `team_parent_link_changed`.",
+        "description": "Removes the parent link, so the child's members stop reaching what is attached to this team and\nits ancestors. The child and its roster survive; only this link is cut. A manager of the parent\nor of the child may detach (a child's managers may leave any parent). Recorded on the admin\nledger as `team_parent_link_changed`. With `?answer=effects` the answer is `200` with what the\ndetach did to `public_within` rows (a row whose anchor is no longer above its team by any path is\ndeleted, `lapsed`), each named only to a caller who manages its team or anchor, or is a system\nadmin, and counted otherwise. Without it the answer is `204`.",
         "operationId": "detach_child_team",
         "parameters": [
           {
@@ -15322,9 +15362,32 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "answer",
+            "in": "query",
+            "description": "`effects`: also answer what the act did to `public_within` rows (`POST` fills\n`TeamRow.public_within` and `public_within_in_reach`; the `DELETE`s answer `200` with\n`PublicWithinEffects` instead of `204`). A row is named only to a caller who manages its team\nor its anchor, or is a system admin, and counted otherwise.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "What a team act's answer carries beyond its default, as `?answer=` on `POST /api/teams`,\n`DELETE /api/teams/{id}` and `DELETE /api/teams/{id}/children/{child_id}`.",
+              "enum": [
+                "effects"
+              ]
+            }
           }
         ],
         "responses": {
+          "200": {
+            "description": "Child detached; asked with `?answer=effects`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicWithinEffects"
+                }
+              }
+            }
+          },
           "204": {
             "description": "Child detached"
           },
@@ -29913,6 +29976,28 @@
           },
           "name": {
             "type": "string"
+          },
+          "public_within": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PublicWithinEffects",
+                "description": "What creating the team did to `public_within` rows (an auto-join team created under an\nanchor makes that anchor's rows stop conferring). Present only on `POST /api/teams` asked\nwith `?answer=effects`; absent from every other answer. A row is named only to a caller who\nmanages its team or its anchor, or is a system admin, and counted otherwise."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "public_within_in_reach": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PublicWithinReach",
+                "description": "The effective `public_within` rows the new team's roster reads through its parents, filtered\nas `public_within` is. Present only on `POST /api/teams` asked with `?answer=effects`."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "slug": {
             "type": "string"

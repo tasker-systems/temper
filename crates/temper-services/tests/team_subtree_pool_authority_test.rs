@@ -5,8 +5,10 @@
 //! An auto-join team's roster is every approved profile, and the gating team's roster is the access
 //! pool. So putting either one *anywhere* below a team hands that team's material to the whole
 //! instance. These tests pin the subtree form: the act is a system admin's when the
-//! child's live subtree holds one, and a soft-deleted pool team below does not count, because reach
-//! does not walk through a dead team either.
+//! child's subtree holds one, live or dead. A soft-deleted pool below confers nothing today, but it
+//! is latent reach (an admin's later restore hands the parent to the instance), so a non-admin may
+//! not set it up. Restoring a team that keeps a link to a live root or gating parent is a system
+//! admin's act too, as attaching under one is.
 //!
 //! The fixture (every team made by the admin, then `mgr` made owner where a non-admin needs it):
 //!
@@ -265,14 +267,62 @@ async fn attaching_a_subtree_that_holds_a_pool_is_an_admins_act(pool: PgPool) {
     }
 }
 
-/// A soft-deleted pool grandchild confers nothing upward, so it does not make the attach an
-/// admin's act.
+/// A soft-deleted pool grandchild confers nothing upward today, but restoring it would hand the
+/// parent to the instance: it makes the attach an admin's act, and the reparent too. A dead team
+/// with no pool below it does not.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn a_dead_pool_below_does_not_count(pool: PgPool) {
+async fn a_dead_pool_below_counts(pool: PgPool) {
     let f = fixture(&pool).await;
-    let done = team_service::attach_child(&pool, &f.mgr, f.hub, f.top2)
+    let refusal = team_service::attach_child(&pool, &f.mgr, f.hub, f.top2)
         .await
-        .expect("the dead pool is not in the live subtree");
+        .expect_err("a non-admin brings a dead pool under hub");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    assert!(!linked(&pool, f.hub, f.top2).await, "nothing is written");
+
+    // top4 ─▸ dead mid ─▸ the gating team: the gating team below a dead team counts as well.
+    let (top4, mid4, _gate4) = chain(&pool, &f.admin, None, "sp4", "g", None).await;
+    own(&pool, top4, *f.mgr.profile_id()).await;
+    team_service::delete_team(&pool, &f.admin, mid4)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'sp4-g'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let refusal = team_service::attach_child(&pool, &f.mgr, f.hub, top4)
+        .await
+        .expect_err("a non-admin brings a gating team below a dead team under hub");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'sp3-gate'")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let old2 = create(&pool, &f.admin, "sp-old2", None, None).await;
+    own(&pool, old2, *f.mgr.profile_id()).await;
+    team_service::attach_child(&pool, &f.admin, old2, f.top2)
+        .await
+        .unwrap();
+    let refusal = team_service::reparent(&pool, &f.mgr, f.top2, &reparent_req(old2, f.hub))
+        .await
+        .expect_err("a non-admin moves a dead pool under hub");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    assert!(linked(&pool, old2, f.top2).await, "nothing moved");
+
+    let done = team_service::attach_child(&pool, &f.admin, f.hub, f.top2)
+        .await
+        .expect("the admin may");
+    assert_eq!(done.outcome, AttachOutcome::Linked);
+
+    // A dead team with nothing pool-like below it is no admin's act.
+    let (top5, mid5, _) = chain(&pool, &f.admin, None, "sp5", "leaf", None).await;
+    own(&pool, top5, *f.mgr.profile_id()).await;
+    team_service::delete_team(&pool, &f.admin, mid5)
+        .await
+        .unwrap();
+    let done = team_service::attach_child(&pool, &f.mgr, f.hub, top5)
+        .await
+        .expect("a dead subtree with no pool");
     assert_eq!(done.outcome, AttachOutcome::Linked);
 }
 
@@ -295,8 +345,8 @@ async fn reparenting_a_subtree_that_holds_a_pool_is_an_admins_act(pool: PgPool) 
     assert!(!linked(&pool, f.old, f.top).await);
 }
 
-/// Restoring a team whose live subtree holds an auto-join team re-links that pool's reach to
-/// everything above, so it is an admin's act; with only a dead pool below, the owner may restore.
+/// Restoring a team whose subtree holds an auto-join team, live or dead, re-links that pool's reach
+/// (or its latent reach) to everything above, so it is an admin's act.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn restoring_a_subtree_that_holds_a_pool_is_an_admins_act(pool: PgPool) {
     let f = fixture(&pool).await;
@@ -311,15 +361,122 @@ async fn restoring_a_subtree_that_holds_a_pool_is_an_admins_act(pool: PgPool) {
         .expect("the admin may");
     assert!(live(&pool, f.rtop).await);
 
-    team_service::restore_team(&pool, &f.mgr, f.rtop2)
+    let refusal = team_service::restore_team(&pool, &f.mgr, f.rtop2)
         .await
-        .expect("a dead pool below does not count");
+        .expect_err("a dead pool below counts");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    assert!(!live(&pool, f.rtop2).await, "nothing restored");
+    team_service::restore_team(&pool, &f.admin, f.rtop2)
+        .await
+        .expect("the admin may");
     assert!(live(&pool, f.rtop2).await);
+}
+
+/// A team made by an admin under `parent`, owned by the manager, then soft-deleted by the admin.
+async fn dead_child_of(pool: &PgPool, f: &Fixture, slug: &str, parent: &str) -> Uuid {
+    let t = create(pool, &f.admin, slug, Some(parent), None).await;
+    own(pool, t, *f.mgr.profile_id()).await;
+    team_service::delete_team(pool, &f.admin, t).await.unwrap();
+    t
+}
+
+/// Restoring a team that keeps a link to the root or the gating team, live or dead, re-links it
+/// under an instance team, which is attach's admin-only rule: the owner is refused, a system admin restores it and
+/// the outcome names that parent. Under an ordinary parent the owner still restores, and so does
+/// a personal team's owner, whose team's only parent is the root.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn restoring_under_the_root_or_the_gating_team_is_an_admins_act(pool: PgPool) {
+    let f = fixture(&pool).await;
+    for (slug, parent) in [("spi-root", "temper-system"), ("spi-gate", "sp3-gate")] {
+        let t = dead_child_of(&pool, &f, slug, parent).await;
+        let refusal = team_service::restore_team(&pool, &f.mgr, t)
+            .await
+            .expect_err("the owner restores under an instance parent");
+        assert!(
+            matches!(refusal, ApiError::Forbidden),
+            "{slug}: {refusal:?}"
+        );
+        assert!(!live(&pool, t).await, "{slug}: nothing restored");
+        let done = team_service::restore_team(&pool, &f.admin, t)
+            .await
+            .expect("the admin may");
+        assert!(
+            done.parents.iter().any(|p| p.slug == parent),
+            "{slug}: {:?}",
+            done.parents
+        );
+    }
+
+    // A dead gating parent counts too: an admin's later restore of it would complete the link.
+    let gate2 = create(&pool, &f.admin, "spi-gate2", None, None).await;
+    let t = dead_child_of(&pool, &f, "spi-under-dead-gate", "spi-gate2").await;
+    team_service::delete_team(&pool, &f.admin, gate2)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'spi-gate2'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let refusal = team_service::restore_team(&pool, &f.mgr, t)
+        .await
+        .expect_err("the owner restores under a dead gating parent");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'sp3-gate'")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let t = dead_child_of(&pool, &f, "spi-plain", "sp-hub").await;
+    team_service::restore_team(&pool, &f.mgr, t)
+        .await
+        .expect("an ordinary parent");
+    assert!(live(&pool, t).await);
+
+    let personal: Uuid = sqlx::query_scalar("SELECT id FROM kb_teams WHERE personal_of = $1")
+        .bind(*f.mgr.profile_id())
+        .fetch_one(&pool)
+        .await
+        .expect("the manager's personal team");
+    sqlx::query("UPDATE kb_teams SET is_active = false WHERE id = $1")
+        .bind(personal)
+        .execute(&pool)
+        .await
+        .unwrap();
+    team_service::restore_team(&pool, &f.mgr, personal)
+        .await
+        .expect("a personal team's owner restores it");
+    assert!(live(&pool, personal).await);
+}
+
+/// The parent check is decided again under the locks: a gating slug repointed at the dead team's
+/// parent while the owner's restore waits is seen, and the restore is refused.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_parent_made_the_gating_team_while_the_restore_waits_is_seen(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let t = dead_child_of(&pool, &f, "spw-child", "sp-hub").await;
+
+    let mut holder = pool.begin().await.unwrap();
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'sp-hub' WHERE id = 1")
+        .execute(&mut *holder)
+        .await
+        .expect("the admin's repoint, uncommitted");
+    let pool2 = pool.clone();
+    let mgr = f.mgr.clone();
+    let contender = tokio::spawn(async move { team_service::restore_team(&pool2, &mgr, t).await });
+    await_gating_waiter(&pool).await;
+    holder.commit().await.unwrap();
+
+    let refusal = contender
+        .await
+        .unwrap()
+        .expect_err("the parent is the gating team by the time the re-check runs");
+    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
+    assert!(!live(&pool, t).await, "nothing restored");
 }
 
 /// The re-check under the locks sees a pool linked into the subtree concurrently. An admin's
 /// transaction links pool P under grandchild G (and holds G's row) while a non-admin attaches G's
-/// grandparent D under the hub. The non-admin's act locks D's live subtree, so it waits for the
+/// grandparent D under the hub. The non-admin's act locks D's subtree, so it waits for the
 /// admin's commit, re-checks, finds P below D, and is refused. Without the subtree locks it would
 /// read the subtree before P arrived and land P under the hub.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
@@ -358,22 +515,15 @@ async fn a_pool_linked_under_the_subtree_concurrently_is_seen_by_the_recheck(poo
     assert!(!linked(&pool, f.hub, d).await, "nothing is written");
 }
 
-/// The same race through a DEAD team. D is soft-deleted, with a pool P below it, so the live
-/// subtree of R stops at D. An admin restoring D (and holding D's row) while a non-admin attaches R
-/// under the hub must not let P land under the hub: the non-admin's lock set covers dead teams too,
-/// so it waits for the restore, re-checks, finds P live below R, and is refused.
+/// The same race through a DEAD team. D is soft-deleted, below R. An admin links a pool P under D
+/// (holding D's row) while a non-admin attaches R under the hub. A pool below a dead team counts,
+/// and the non-admin's lock set covers dead teams, so it waits for the link, re-checks, finds P
+/// below R through D, and is refused.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn a_concurrent_restore_below_the_subtree_is_seen_by_the_recheck(pool: PgPool) {
+async fn a_pool_linked_below_a_dead_team_concurrently_is_seen_by_the_recheck(pool: PgPool) {
     let f = fixture(&pool).await;
     let (r, _x, dead) = chain(&pool, &f.admin, None, "spd", "d", None).await;
-    create(
-        &pool,
-        &f.admin,
-        "spd-pool",
-        Some("spd-d"),
-        Some(TeamRole::Watcher),
-    )
-    .await;
+    let pool_team = create(&pool, &f.admin, "spd-pool", None, Some(TeamRole::Watcher)).await;
     team_service::delete_team(&pool, &f.admin, dead)
         .await
         .expect("soft-delete D");
@@ -385,11 +535,12 @@ async fn a_concurrent_restore_below_the_subtree_is_seen_by_the_recheck(pool: PgP
         .execute(&mut *holder)
         .await
         .unwrap();
-    sqlx::query("UPDATE kb_teams SET is_active = true WHERE id = $1")
+    sqlx::query("INSERT INTO kb_teams_parents (parent_id, child_id) VALUES ($1, $2)")
         .bind(dead)
+        .bind(pool_team)
         .execute(&mut *holder)
         .await
-        .expect("the admin's restore, uncommitted");
+        .expect("the admin's link under the dead team, uncommitted");
 
     let pool2 = pool.clone();
     let mgr = f.mgr.clone();
@@ -402,7 +553,7 @@ async fn a_concurrent_restore_below_the_subtree_is_seen_by_the_recheck(pool: PgP
     let refusal = contender
         .await
         .unwrap()
-        .expect_err("the restored pool is in the subtree by the time the re-check runs");
+        .expect_err("the pool is below the dead team by the time the re-check runs");
     assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
     assert!(!linked(&pool, f.hub, r).await, "nothing is written");
 }
