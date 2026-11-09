@@ -648,6 +648,11 @@ pub async fn create_team_with_effects(
             return Err(ApiError::Forbidden);
         }
     }
+    // The auto-join gate, asked again on the transaction: a demotion committed since the pool
+    // check refuses, and one still in flight waits for this create.
+    if req.auto_join_role.is_some() {
+        require_admin_in(&mut tx, authed).await?;
+    }
 
     let row = sqlx::query_as!(
         TeamRow,
@@ -1069,6 +1074,18 @@ pub async fn update_team(
         }
     }
 
+    let mut tx = pool.begin().await?;
+    // Under the team's row lock, the authority is decided again, as `rename_slug` does: a demotion
+    // or role change committed since the pool check refuses the update.
+    lock_teams_ascending(&mut tx, &[team_id]).await?;
+    if crate::services::access_service::is_root_or_gating_team_on(&mut tx, team_id).await? {
+        require_admin_in(&mut tx, caller).await?;
+    } else if !matches!(
+        membership_row_role(&mut *tx, team_id, caller.profile_id()).await?,
+        Some(role) if can_manage(role)
+    ) {
+        return Err(ApiError::Forbidden);
+    }
     let row = sqlx::query_as!(
         TeamRow,
         r#"
@@ -1083,9 +1100,10 @@ pub async fn update_team(
         req.name.as_deref(),
         req.description.as_deref(),
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(|| ApiError::NotFound("team not found or not readable".to_string()))?;
+    tx.commit().await?;
 
     Ok(row)
 }
@@ -1124,10 +1142,12 @@ pub async fn delete_team(
     // The write and its `team_lifecycle_changed` record are one statement (lifecycle doors D8). The
     // writer guards the DAG root in its UPDATE's WHERE, so the check and the write stay atomic.
     let mut tx = pool.begin().await?;
-    // Under the team's row lock, the owner arm is decided again on the membership row, as above: a
-    // demotion or removal committed since that check cannot race the delete it would have refused
-    // (nor be told the rows the delete names to the team's owner).
+    // Under the team's row lock, the authority is decided again: the admin arm on the locked
+    // governance read, and otherwise the owner arm on the membership row, as above. A demotion or
+    // removal committed since the pool check cannot race the delete it would have refused (nor be
+    // told the rows the delete names to the team's owner); a demotion still in flight waits for it.
     lock_teams_ascending(&mut tx, &[team_id]).await?;
+    let admin = admin && caller_is_admin_on(&mut tx, caller).await?;
     if !admin
         && (crate::services::access_service::is_root_or_gating_team_on(&mut tx, team_id).await?
             || membership_row_role(&mut *tx, team_id, caller.profile_id()).await?
@@ -1286,10 +1306,13 @@ pub async fn restore_team(
     }
 
     let mut tx = pool.begin().await?;
-    // Under the team's row lock, the owner arm is decided again: a concurrent demotion or removal
-    // cannot race the restore it would have refused.
+    // Under the team's row lock, the authority is decided again: a concurrent demotion or removal
+    // cannot race the restore it would have refused. An admin demoted since the pool check is
+    // refused here rather than re-decided on the owner arm, which needs the subtree's locks taken
+    // in one ascending pass; a retry decides on that arm.
     if admin {
         lock_teams_ascending(&mut tx, &[team_id]).await?;
+        require_admin_in(&mut tx, caller).await?;
     } else {
         let stable = lock_teams_and_subtree(&mut tx, &[], team_id).await?;
         restore_authority(&mut tx, caller, team_id).await?;
@@ -1455,6 +1478,12 @@ pub async fn set_auto_join(
     }
 
     let mut tx = pool.begin().await?;
+    // `admin` was minted on the pool; under the team's row lock the standing is asked again, before
+    // the write, so a demotion committed since refuses and one in flight waits for this act.
+    lock_teams_ascending(&mut tx, &[team_id]).await?;
+    if !crate::auth::is_system_admin_locked(&mut tx, admin.actor()).await? {
+        return Err(ApiError::Forbidden);
+    }
     let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, admin.actor(), "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -1565,6 +1594,7 @@ pub async fn detach_child(
     // Under both rows' locks (the parent's is the one every membership writer takes), re-run the
     // arms, so a concurrent demotion or removal cannot race the detach it would have refused.
     lock_teams_ascending(&mut tx, &[parent_id, child_id]).await?;
+    let admin = admin && caller_is_admin_on(&mut tx, caller).await?;
     if !admin {
         detach_authority(&mut tx, caller, parent_id, child_id).await?;
     }
@@ -1899,7 +1929,7 @@ fn map_link_trigger(err: sqlx::Error) -> ApiError {
 /// The non-structural attach rules (team DAG doors D1, rules 1–4), on `conn`: the caller manages
 /// the parent and the child (direct, live), unless a system admin; a root or gating parent, or a
 /// child whose live subtree holds an auto-join or gating team, is a system admin's act alone. Run
-/// as the pool pre-check and again under the row locks.
+/// under the row locks, after [`attach_precheck`] decided the same on the pool.
 async fn attach_authority(
     conn: &mut sqlx::PgConnection,
     caller: &HumanPrincipal,
@@ -1907,12 +1937,16 @@ async fn attach_authority(
     parent_id: Uuid,
     child_id: Uuid,
 ) -> ApiResult<()> {
-    if !admin {
-        for team in [parent_id, child_id] {
-            match role_on_team_on(conn, team, caller.profile_id()).await? {
-                Some(role) if can_manage(role) => {}
-                _ => return Err(ApiError::Forbidden),
-            }
+    if admin {
+        // The admin arm, asked again under the locks: a demotion since the pre-check refuses. It
+        // is not re-decided on the managing arms, which need the child's subtree locked in the
+        // same ascending pass; a retry decides on those.
+        return require_admin_in(conn, caller).await;
+    }
+    for team in [parent_id, child_id] {
+        match role_on_team_on(conn, team, caller.profile_id()).await? {
+            Some(role) if can_manage(role) => {}
+            _ => return Err(ApiError::Forbidden),
         }
     }
     let instance_parent =

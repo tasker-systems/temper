@@ -2130,6 +2130,12 @@ pub async fn review_request(
     // `locked` also reads the requester's row and machine-ness: the act's target, and the machine
     // skip.
     let target = team_membership::locked(&mut tx, row.team_id, requester).await?;
+    // `admin` was minted on the pool; the reviewer's standing is asked again here, under these
+    // locks and before any standing or member write, so a demotion committed since refuses the
+    // decision and one in flight waits for it.
+    if !crate::auth::is_system_admin_locked(&mut tx, admin.actor()).await? {
+        return Err(ApiError::Forbidden);
+    }
 
     // THE DECISION MOVES STANDING ONLY BY A LEGAL TRANSITION. A join request can outlive the
     // standing it was filed under — the person was revoked, deactivated or approved directly while
