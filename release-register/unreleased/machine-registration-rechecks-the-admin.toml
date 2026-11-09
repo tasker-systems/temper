@@ -1,0 +1,37 @@
+title    = "Machine registration asks the admin question again under the governance lock before it writes"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http"]
+status   = "signal-only"
+body = '''
+Rebind took a SystemAdmin proof minted on the pool, and provision and issue decided their admin
+bar (provision under an external IdP) and the reach's admin arm on a pool read. None asked again on
+its write transaction, so an admin demoted after that read, or while the act was in flight, still
+bound a client id of their choosing to an existing machine's profile and reach (rebind), or
+registered a new machine with admin-arm reach (provision, issue).
+
+Each now asks again first on its transaction, with auth::is_system_admin_locked (the caller's
+kb_principal_governance row FOR KEY SHARE, held to commit), before any write. A demotion that
+commits first refuses the act; one still in flight makes it wait, then refuses it. The refusal is
+the one a non-admin gets: 403 for rebind and issue, provision's FORBIDDEN_DETAIL admin sentence. A
+demoted admin who also owns the machine's team is refused the in-flight issue; a retry decides on
+the owner arm with its containment.
+
+Rebind's re-check now comes before every other refusal, so a demoted admin holding a stale proof
+gets 403 for a missing, revoked or temper-issued source, where before they got 404 or 400. Rebind
+also takes the source credential row FOR UPDATE and checks revoked and issuer under that lock: a
+revoke of the source committing during a rebind used to leave the machine with a new live client
+id; now the rebind waits for it and is refused (400, revoked).
+
+Lock order: governance, then the personal teams the machine is severed from, then the source
+credential row. A demotion takes none of those rows; a machine revoke and a secret rotation take
+team rows before the credential row too.
+
+Who observes: a system admin demoted while one of these acts is in flight, and an admin rebinding a
+machine whose credential is being revoked. No schema change and no response shape change.
+Witnesses: `crates/temper-services/tests/machine_registration_recheck_test.rs` (the in-flight tests
+and the rebind tests fail without the change; provision's and issue's committed-first tests are
+regression pins, since their own pool read already sees a committed demotion) and
+`rebind_and_revoke_of_one_source_serialize` there for the lock order. Release relevance:
+signal-only.
+'''

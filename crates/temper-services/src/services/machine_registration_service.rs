@@ -160,6 +160,15 @@ fn refuse_minted_namespace(client_id: &str) -> ApiResult<()> {
     }
 }
 
+/// The refusal of `provision` to anyone but a system admin under an external IdP: at the door, and
+/// again on its transaction for an admin demoted since the door's pool read.
+fn provision_needs_an_admin() -> ApiError {
+    ApiError::ForbiddenDetail(
+        "registering an externally issued client id requires a system admin on this instance"
+            .to_string(),
+    )
+}
+
 /// Register a new machine principal, creating its agent profile. One transaction.
 ///
 /// What `mode` permits comes first ([`machine_door::machine_door_policy`]). Under an external IdP
@@ -173,22 +182,16 @@ pub async fn provision(
     req: &ProvisionMachineRequest,
     mode: AuthMode,
 ) -> ApiResult<MachineClient> {
-    match machine_door::machine_door_policy(mode, MachineDoor::Provision) {
+    let admin_only = match machine_door::machine_door_policy(mode, MachineDoor::Provision) {
         DoorPolicy::Refused(why) => return Err(ApiError::BadRequest(why.to_string())),
         DoorPolicy::AdminOnly => match crate::auth::require_system_admin(pool, authed).await {
-            Ok(_) => {}
+            Ok(_) => true,
             // Only a genuine non-admin is answered with the reason; a failed read stays a 5xx.
-            Err(ApiError::Forbidden) => {
-                return Err(ApiError::ForbiddenDetail(
-                    "registering an externally issued client id requires a system admin on this \
-                     instance"
-                        .to_string(),
-                ));
-            }
+            Err(ApiError::Forbidden) => return Err(provision_needs_an_admin()),
             Err(other) => return Err(other),
         },
-        DoorPolicy::Allowed | DoorPolicy::Dormant => {}
-    }
+        DoorPolicy::Allowed | DoorPolicy::Dormant => false,
+    };
 
     let caller = ProfileId::from(authed.profile().id);
     // Auth before writes: a rejected registration must leave the DB completely unchanged —
@@ -223,6 +226,17 @@ pub async fn provision(
         .begin()
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {e}")))?;
+
+    // The door's admin bar and the reach's admin arm were read on the pool. Ask again on the
+    // transaction, under the governance lock and before any write or the conflict probe, so an admin
+    // demoted since (or while this runs) registers nothing, and is told what a non-admin is told.
+    if admin_only {
+        if !crate::auth::is_system_admin_locked(&mut tx, caller).await? {
+            return Err(provision_needs_an_admin());
+        }
+    } else {
+        reach.recheck_admin_arm(&mut tx).await?;
+    }
 
     // The friendly-conflict check. It is NOT the race guard — two concurrent provisions both
     // pass it. The unique constraints are the guard, and `map_duplicate` turns either one into
@@ -338,6 +352,10 @@ pub async fn issue(
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {e}")))?;
 
+    // A reach authorized on the admin arm was read on the pool; ask again under the governance
+    // lock, before any write (see `AuthorizedReach::recheck_admin_arm`).
+    reach.recheck_admin_arm(&mut tx).await?;
+
     let (profile_id, handle) = profile_service::create_agent_profile_and_link(&mut tx, &client_id)
         .await
         .map_err(|e| map_duplicate_from_conflict(e, &client_id))?;
@@ -400,23 +418,68 @@ pub async fn issue(
 /// It writes an externally issued client id, so it is refused where `mode` could never
 /// authenticate one ([`machine_door::machine_door_policy`]), and for a temper-issued source row in
 /// any mode: that machine's credential is rotated, not rebound to an external one.
+///
+/// **The admin question is asked again first, on the transaction, under the governance lock.** The
+/// `&SystemAdmin` proof was minted on the pool, and a rebind binds a client id the caller chose to a
+/// machine's whole reach, so an admin demoted since the mint, or while this runs, must not finish
+/// it (`auth::is_system_admin_locked`: a demotion committed first refuses, one in flight
+/// makes this wait and then refuses). It comes before every other refusal, so a demoted admin is
+/// answered as a non-admin is at the mint (`403`), never with a `404` or `400` about the source row.
+///
+/// Lock order: the caller's governance row (`FOR KEY SHARE`), then the personal teams the machine
+/// is severed from (`sever_personal_reach`: team rows ascending, then member and grant rows), then
+/// the source credential row (`FOR UPDATE`). A demotion locks the subject's standing and governance
+/// rows and none of these. A machine revoke takes the credential row after its standing and
+/// governance locks (admin) or after the owning team's row (owner), and `rotate_secret` after the
+/// same severance, so every door that takes a team row and a credential row takes the team first.
 pub async fn rebind(
     pool: &PgPool,
     admin: &SystemAdmin,
     req: &RebindMachineRequest,
     mode: AuthMode,
 ) -> ApiResult<MachineClient> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {e}")))?;
+    if !crate::auth::is_system_admin_locked(&mut tx, admin.actor()).await? {
+        return Err(ApiError::Forbidden);
+    }
+
     if let DoorPolicy::Refused(why) = machine_door::machine_door_policy(mode, MachineDoor::Rebind) {
         return Err(ApiError::BadRequest(why.to_string()));
     }
 
-    // Auth before writes. Admin-only (see the fn doc): team ownership cannot bound the reach a rebind
-    // inherits — which is why this takes a `&SystemAdmin` proof, NOT `machine_authz`. The proof itself
-    // IS the check (admin-authz enclosure, spec §3); do not widen it back to a scoped gate.
-    let old = machine_client_service::get(pool, req.from_machine_client_id).await?;
-
     // The new client id is the caller's choice, so it may not sit in a namespace temper mints.
     refuse_minted_namespace(&req.client_id)?;
+
+    // The source's profile, read without a lock: a credential row never changes profile, and the
+    // row's state is read again under its lock below, after the severance takes its team locks.
+    let profile = sqlx::query_scalar!(
+        "SELECT profile_id FROM kb_machine_clients WHERE id = $1",
+        req.from_machine_client_id,
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| {
+        ApiError::NotFound(machine_client_service::MACHINE_CLIENT_REFUSAL.to_string())
+    })?;
+
+    // A rebound client id is a new credential for the same principal. One minted by anyone but the
+    // person whose personal team admits the machine costs the machine that team: the admin manages
+    // the principal, but its new credential does not open someone's personal space. Ahead of the
+    // source row's lock, so team rows come before the credential row, as in
+    // `rotate_secret`; a refusal below rolls it back.
+    machine_client_service::sever_personal_reach(&mut tx, profile, admin.actor()).await?;
+
+    // The source row, locked, so a revoke cannot land between these guards and the writes below.
+    let old = sqlx::query!(
+        r#"SELECT client_id, issuer, team_id, revoked_at
+             FROM kb_machine_clients WHERE id = $1 FOR UPDATE"#,
+        req.from_machine_client_id,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
 
     // A revoked credential is dead; it must be re-created by a fresh `provision`, never
     // resurrected under a new `client_id`. Rebinding one would revive its surviving grants and
@@ -440,24 +503,13 @@ pub async fn rebind(
         )));
     }
 
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {e}")))?;
-
-    // A rebound client id is a new credential for the same principal. One minted by anyone but the
-    // person whose personal team admits the machine costs the machine that team (task `01a191b4`):
-    // the admin manages the principal, but its new credential does not open someone's personal
-    // space. First in the transaction, ahead of its writes.
-    machine_client_service::sever_personal_reach(&mut tx, old.profile_id, admin.actor()).await?;
-
     // A second auth link for the same profile, under the new client id.
     sqlx::query!(
         r#"INSERT INTO kb_profile_auth_links
                (id, profile_id, auth_provider, auth_provider_user_id, email, email_verified, is_default, linked_at)
            VALUES ($1, $2, $3, $4, NULL, false, false, now())"#,
         Uuid::now_v7(),
-        old.profile_id,
+        profile,
         crate::auth::MACHINE_PROVIDER_TAG,
         req.client_id,
     )
@@ -472,7 +524,7 @@ pub async fn rebind(
            RETURNING id"#,
         req.client_id,
         req.label,
-        old.profile_id,
+        profile,
         old.team_id,
         *admin.actor(),
     )
@@ -485,7 +537,7 @@ pub async fn rebind(
             r#"UPDATE kb_machine_clients
                   SET revoked_at = now(), revoked_by_profile_id = $2
                 WHERE id = $1 AND revoked_at IS NULL"#,
-            old.id,
+            req.from_machine_client_id,
             *admin.actor(),
         )
         .execute(&mut *tx)
