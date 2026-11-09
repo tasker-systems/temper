@@ -38,6 +38,14 @@ use crate::error::{Result, TemperError};
 ///    with no way to find out how to request it.
 /// 2. **The network/server distinction**, so callers can fall back to local
 ///    state on an unreachable server without swallowing a legitimate 4xx/5xx.
+/// 3. **The kind of refusal.** Every `ClientError` the server raises as a typed
+///    refusal lifts to its [`TemperError`] twin, so the JSON error payload's
+///    `code` names it (`not-found`, `forbidden`, `conflict`, …) rather than
+///    `api`. Every 401 shape lifts to [`TemperError::Unauthorized`] with the
+///    client's own sentence, so the remedy each names survives; a `400` the
+///    client could not classify further lifts to [`TemperError::BadRequest`].
+///    What has no twin — a rate limit, a 5xx, a local IO or config failure —
+///    stays [`TemperError::Api`].
 ///
 /// There was briefly a second lifter that preserved (1) but not (2), while this
 /// one preserved (2) but not (1) — so which guidance the user got depended on
@@ -54,6 +62,28 @@ pub fn client_err_to_temper(e: ClientError) -> TemperError {
         // carries the `RESOURCE_ERASED` code a JSON caller branches on. `Gone` would hand that
         // caller `gone` — the folded-block code — and `Api` would hand it `api`.
         ClientError::ResourceErased { id } => TemperError::ResourceErased(id),
+        ClientError::NotFound { message } => TemperError::NotFound(message),
+        ClientError::Forbidden => TemperError::Forbidden,
+        ClientError::ForbiddenDetail { message } => TemperError::ForbiddenDetail(message),
+        ClientError::Conflict { message } => TemperError::Conflict(message),
+        ClientError::IngestEnded { message } => TemperError::IngestEnded(message),
+        ClientError::ContentIntegrity { message } => TemperError::ContentIntegrity(message),
+        // Core's variant carries a fixed sentence that says the same thing: nothing was applied.
+        ClientError::ResourceBusy { .. } => TemperError::ResourceBusy,
+        ClientError::DataArtifactRefusal { message } => TemperError::DataArtifactRefusal(message),
+        ClientError::PlanRefused { refusals } => crate::actions::query::refused(refusals),
+        // The same lift `temper data-artifact ask` makes: the server could not read the body.
+        e @ ClientError::UnreadablePlan { .. } => TemperError::BadRequest(e.to_string()),
+        // The client's sentence is kept: each names its own remedy (`temper auth login`, or the
+        // secret an ambient environment attaches).
+        e @ (ClientError::NotAuthenticated
+        | ClientError::UnauthorizedDetails { .. }
+        | ClientError::TokenExpired
+        | ClientError::AmbientRefused { .. }) => TemperError::Unauthorized(e.to_string()),
+        ClientError::Server {
+            status: 400,
+            message,
+        } => TemperError::BadRequest(message),
         e => TemperError::Api(e.to_string()),
     }
 }
@@ -418,6 +448,154 @@ mod tests {
             "got {lifted:?}"
         );
         assert_eq!(lifted.code(), temper_core::error::RESOURCE_ERASED_CODE);
+    }
+
+    /// The `code` a JSON caller reads off the stdout error payload `main` prints for `e`.
+    fn payload_code(e: &TemperError) -> String {
+        let payload: serde_json::Value =
+            serde_json::from_str(&crate::error::render_error_payload(e, None)).expect("valid JSON");
+        payload["code"].as_str().expect("a string code").to_owned()
+    }
+
+    /// Lift `client`, assert it landed on its twin, and that the payload code is `code` — the
+    /// variant's own code, never `api`.
+    fn assert_lifts(client: ClientError, is_twin: fn(&TemperError) -> bool, code: &str) {
+        let shown = format!("{client:?}");
+        let lifted = client_err_to_temper(client);
+        assert!(is_twin(&lifted), "{shown} lifted to {lifted:?}");
+        assert_eq!(lifted.code(), code, "{shown}");
+        assert_eq!(payload_code(&lifted), code, "{shown}");
+        assert_ne!(code, "api", "{shown} must not flatten to `api`");
+    }
+
+    /// Each typed refusal reaches the JSON caller under its own code. FAILS IF any arm is removed:
+    /// the catch-all would lift that variant to `Api`, and its payload code to `api`.
+    #[test]
+    fn each_typed_refusal_lifts_to_its_twin_and_keeps_its_code() {
+        assert_lifts(
+            ClientError::NotFound {
+                message: "context not found".into(),
+            },
+            |e| matches!(e, TemperError::NotFound(m) if m == "context not found"),
+            "not-found",
+        );
+        assert_lifts(
+            ClientError::Forbidden,
+            |e| matches!(e, TemperError::Forbidden),
+            "forbidden",
+        );
+        assert_lifts(
+            ClientError::ForbiddenDetail {
+                message: "you may not write this map".into(),
+            },
+            |e| matches!(e, TemperError::ForbiddenDetail(m) if m == "you may not write this map"),
+            temper_core::error::FORBIDDEN_DETAIL_CODE,
+        );
+        assert_lifts(
+            ClientError::Conflict {
+                message: "already exists".into(),
+            },
+            |e| matches!(e, TemperError::Conflict(m) if m == "already exists"),
+            "conflict",
+        );
+        assert_lifts(
+            ClientError::IngestEnded {
+                message: "the ingest has ended".into(),
+            },
+            |e| matches!(e, TemperError::IngestEnded(m) if m == "the ingest has ended"),
+            temper_core::error::INGEST_ENDED_CODE,
+        );
+        assert_lifts(
+            ClientError::ContentIntegrity {
+                message: "hash mismatch".into(),
+            },
+            |e| matches!(e, TemperError::ContentIntegrity(m) if m == "hash mismatch"),
+            "content-integrity",
+        );
+        assert_lifts(
+            ClientError::ResourceBusy {
+                message: "busy".into(),
+            },
+            |e| matches!(e, TemperError::ResourceBusy),
+            temper_core::error::RESOURCE_BUSY_CODE,
+        );
+        assert_lifts(
+            ClientError::DataArtifactRefusal {
+                message: "no such namespace".into(),
+            },
+            |e| matches!(e, TemperError::DataArtifactRefusal(m) if m == "no such namespace"),
+            temper_core::error::DATA_ARTIFACT_REFUSAL_CODE,
+        );
+        assert_lifts(
+            ClientError::PlanRefused {
+                refusals: vec![temper_core::types::query::validate::PlanRefusal {
+                    stage: None,
+                    reason: temper_core::types::query::disposition::RefusalReason::NoReturns,
+                    detail: "outcome.returns is empty".to_string(),
+                    teaches: None,
+                }],
+            },
+            |e| matches!(e, TemperError::PlanRefused { refusals, .. } if refusals.len() == 1),
+            "project",
+        );
+        assert_lifts(
+            ClientError::UnreadablePlan {
+                message: "expected a map".into(),
+            },
+            |e| matches!(e, TemperError::BadRequest(m) if m.contains("expected a map")),
+            "bad-request",
+        );
+        assert_lifts(
+            ClientError::Server {
+                status: 400,
+                message: "limit must be positive".into(),
+            },
+            |e| matches!(e, TemperError::BadRequest(m) if m == "limit must be positive"),
+            "bad-request",
+        );
+    }
+
+    /// Every 401 shape lifts to `Unauthorized` and keeps the client's sentence, so the remedy it
+    /// names still reaches the caller. FAILS IF a 401 arm is removed (it would surface as `api`) or
+    /// the lift swaps in a sentence of its own.
+    #[test]
+    fn every_unauthorized_shape_lifts_to_unauthorized_with_its_remedy() {
+        for client in [
+            ClientError::NotAuthenticated,
+            ClientError::UnauthorizedDetails {
+                message: "profile deactivated".into(),
+            },
+            ClientError::TokenExpired,
+            ClientError::AmbientRefused { message: None },
+        ] {
+            let sentence = client.to_string();
+            let lifted = client_err_to_temper(client);
+            assert!(
+                matches!(lifted, TemperError::Unauthorized(ref m) if *m == sentence),
+                "{sentence:?} lifted to {lifted:?}"
+            );
+            assert_eq!(payload_code(&lifted), "unauthorized", "{sentence:?}");
+        }
+    }
+
+    /// What has no twin stays `Api`: a rate limit and a server fault. FAILS IF either is lifted to a
+    /// refusal kind it is not — a 5xx reported as a caller error.
+    #[test]
+    fn a_rate_limit_and_a_server_fault_stay_api() {
+        for client in [
+            ClientError::RateLimited {
+                retry_after: std::time::Duration::from_secs(5),
+            },
+            ClientError::Server {
+                status: 500,
+                message: "boom".into(),
+            },
+        ] {
+            let shown = format!("{client:?}");
+            let lifted = client_err_to_temper(client);
+            assert!(matches!(lifted, TemperError::Api(_)), "{shown} → {lifted:?}");
+            assert_eq!(payload_code(&lifted), "api", "{shown}");
+        }
     }
 }
 

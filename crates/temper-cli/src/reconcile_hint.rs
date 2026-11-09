@@ -115,9 +115,10 @@ pub fn lost_ack_prone(command: &Commands) -> Option<LostAckProne> {
 /// The guidance to print, or `None`. For a resource write it fires only on a
 /// transport-level network error — the one failure shape where the write may
 /// nonetheless have committed; a `4xx`/`5xx` the server returned is unambiguous.
-/// For an erasure act it fires on every error but a refusal (`Conflict`, whose
-/// recorded answer was already printed) and a ref refused locally (`BadRequest`),
-/// since a gateway's `5xx` can front an act that completed.
+/// For an erasure act it fires on every error but a refusal (`Conflict`: a recorded
+/// answer already printed, or the server's `409`) and a request refused before it
+/// ran (`BadRequest`: a ref refused locally, or the server's `400`), since a
+/// gateway's `5xx` can front an act that completed.
 pub fn reconcile_hint(prone: Option<LostAckProne>, err: &TemperError) -> Option<&'static str> {
     match prone? {
         LostAckProne::ResourceWrite => {
