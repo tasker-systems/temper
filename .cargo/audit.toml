@@ -42,11 +42,30 @@ ignore = [
     "RUSTSEC-2023-0071",
 
     # ── FIX-PENDING — a patched version exists; adopting it is a tracked bump ─
-    # crossbeam-epoch 0.9.18 → >=0.9.20 (invalid-pointer deref in Debug impl).
+    # Reachability below is read from Cargo.lock and each crate's declared
+    # features, not from a `cargo tree -i` run.
+    #
+    # crossbeam-epoch 0.9.18 → >=0.9.20 (invalid-pointer deref in the
+    # `fmt::Pointer` / `fmt::Display` impls of `Atomic` and `Shared`; `Debug` is
+    # unaffected). LINKED into the deployed server: temper-substrate and
+    # temper-services enable temper-ingest's `embed`, whose `tokenizers` takes
+    # `rayon` unconditionally → rayon-core → crossbeam-deque → crossbeam-epoch.
+    # Also in the CLI (the same path, plus kreuzberg and toon-format → arboard →
+    # image). The affected impls are NOT CALLED: crossbeam-deque is the only crate
+    # in the lock that depends on crossbeam-epoch, and it never formats an
+    # `Atomic` or `Shared` (its Debug impls print fixed strings); no temper crate
+    # depends on crossbeam-epoch directly.
     "RUSTSEC-2026-0204",
     # quick-xml 0.39.4 → >=0.41.0 (quadratic duplicate-attr check) — crosses a
-    # 0.x-major, may need a direct-dep edit.
+    # 0.x-major, may need a direct-dep edit. CLI ONLY, never in a deployed
+    # binary: its single dependent is plist ← syntect ← toon-format, whose
+    # default `cli` feature temper-cli enables. NOT CALLED: temper-cli uses only
+    # `toon_format::encode_default` / `decode_default`, and toon-format's source
+    # never calls syntect, so syntect's plist theme loading (the only XML parse)
+    # never runs.
     "RUSTSEC-2026-0194",
-    # quick-xml 0.39.4 → >=0.41.0 (unbounded namespace-decl allocation, DoS).
+    # quick-xml 0.39.4 → >=0.41.0 (unbounded namespace-decl allocation in
+    # `NsReader`, DoS). Same crate and path as RUSTSEC-2026-0194: CLI only, not
+    # called.
     "RUSTSEC-2026-0195",
 ]
