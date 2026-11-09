@@ -14,7 +14,8 @@
 #   (d) RED   a writer after an item-level `#[cfg(test)] use` — only a test MODULE ends the scan
 #   (e) RED   an empty scan fails as broken, it does not pass
 #   (f) RED   a file the scan cannot read fails the scan rather than shrinking it
-#   (g) GREEN a raw call inside a `#[cfg(test)] mod` is not a production writer
+#   (g) GREEN a raw call inside a `#[cfg(test)]` or `#[cfg(all(test, …))]` mod is not a
+#             production writer (one witness per spelling)
 #   (h) GREEN the seam itself (`standing_service.rs`) calls the committer
 #   (i) GREEN a `//` comment line naming the call
 #   (j) GREEN an integration test under crates/*/tests
@@ -167,8 +168,21 @@ fi
 chmod 644 "$FF/crates/temper-core/src/sealed.rs"
 
 # ── (g) a test module is not production ────────────────────────────────────────────────────────
+#
+# Two spellings of the gate, one witness each. The target file must have NO earlier test gate:
+# the scan stops at the first one, so a module appended below an existing gate is never read and
+# the case would stay green whether or not the guard honours the spelling under test.
+no_prior_test_gate() {
+    if grep -qE '^[[:space:]]*#\[cfg\((all\()?test' "$1"; then
+        echo "  FAIL  $2 — fixture target already has a test gate; the appended module would be unread"
+        FAIL=$((FAIL + 1)); return 1
+    fi
+}
+
 FG="$WORK/fg"; make_fixture "$FG"
-cat >> "$FG/crates/temper-services/src/services/machine_registration_service.rs" <<'RS'
+TG="$FG/crates/temper-substrate/src/scenario/bootseed.rs"
+if no_prior_test_gate "$TG" "(g1)"; then
+    cat >> "$TG" <<'RS'
 
 #[cfg(test)]
 mod raw_seed_tests {
@@ -181,7 +195,27 @@ mod raw_seed_tests {
     }
 }
 RS
-run_case "(g) a raw call inside a #[cfg(test)] mod stays green" "$FG" 0 "$OK"
+    run_case "(g1) a raw call inside a #[cfg(test)] mod stays green" "$FG" 0 "$OK"
+fi
+
+FG2="$WORK/fg2"; make_fixture "$FG2"
+TG2="$FG2/crates/temper-substrate/src/scenario/loader.rs"
+if no_prior_test_gate "$TG2" "(g2)"; then
+    cat >> "$TG2" <<'RS'
+
+#[cfg(all(test, feature = "test-db"))]
+mod raw_seed_tests {
+    async fn seed(pool: &PgPool, id: Uuid) {
+        sqlx::query("SELECT principal_standing_apply($1,'provision','approved',NULL,NULL)")
+            .bind(id)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+}
+RS
+    run_case "(g2) a raw call inside a #[cfg(all(test, …))] mod stays green" "$FG2" 0 "$OK"
+fi
 
 # ── (h) the seam is the sanctioned caller ──────────────────────────────────────────────────────
 FH="$WORK/fh"; make_fixture "$FH"

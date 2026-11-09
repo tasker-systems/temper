@@ -444,9 +444,10 @@ jobs:
       - name: Guard test — audit-handler-authz-drift (both roots, both fail-closed conditions)
         run: bash .github/scripts/test-audit-handler-authz-drift.sh
 
-      # Ten probes: four writer shapes red (new file, extra call in a baselined file, SQL template,
-      # writer after an item-level test gate), the empty scan and an unreadable file red as a broken
-      # scan, and four field-of-view pins stay green (test module, the seam, a comment, tests/).
+      # Eleven probes: four writer shapes red (new file, extra call in a baselined file, SQL
+      # template, writer after an item-level test gate), the empty scan and an unreadable file red
+      # as a broken scan, and five field-of-view pins stay green (a test module under each gate
+      # spelling, in a file with no earlier gate; the seam; a comment; tests/).
       - name: Guard test — audit-raw-standing-writers
         run: bash .github/scripts/test-audit-raw-standing-writers.sh
 
