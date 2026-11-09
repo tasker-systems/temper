@@ -123,8 +123,8 @@ CONC-DB-2 = "convention: retry idempotency is designed and reviewed per operatio
 CONC-DB-3 = "convention: transaction scope is judged in review"
 
 # --- Tripwires and tests -------------------------------------------------------------------------
-TW-1 = "uncovered: 18 of 20 tripwires carry no NOT CHECKED section; most name a limit elsewhere in their header"
-TW-2 = "uncovered: 5 of 20 tripwires lack --list or UPDATE_BASELINE"
+TW-1 = "uncovered: 19 of 20 tripwires carry no NOT CHECKED heading; most name a limit elsewhere in header prose"
+TW-2 = "uncovered: 6 of 20 tripwires lack --list or UPDATE_BASELINE; audit-context-write-grants omits UPDATE_BASELINE deliberately, its expected set being empty"
 TW-3 = "partial: 19 of 20 tripwires fail on an empty scan, by an explicit check or a non-empty baseline; audit-passport-identity-header passes on an empty file list"
 TW-4 = "partial: every tripwire takes an override its harness drives; audit-grant-sinks' covers only its SQL half (MIGRATIONS_DIR)"
 TW-5 = "partial: 20 of 20 tripwires' bite tests run in quality-gate.yml#guard-tests; nothing requires a new tripwire to have one"
