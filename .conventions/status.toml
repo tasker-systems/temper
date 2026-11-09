@@ -92,9 +92,18 @@ SC-SEC-1 = "gated: .github/workflows/secret-scan.yml#secret-scan, .github/workfl
 
 # --- Security ------------------------------------------------------------------------------------
 SEC-CRED-1 = "uncovered: several credential fields outside temper-client are bare String"
-# audit-credential-debug.sh, with its bite test.
-SEC-CRED-2 = "gated: .github/workflows/quality-gate.yml#rust-gate"
-SEC-CRED-3 = "practiced"
+# audit-credential-debug.sh (rust-gate), with its bite test (guard-tests), pins the Debug-deriving
+# types with a field whose whole name is on its list or ends in `_secret`. A credential under another
+# name escapes it: today InboundRequest (broker, `authorization`), ConsumedIntent (slack link,
+# `code_verifier`), GeneratedKey (saml, `pem`) and the invitation types (`token`). So would one in a
+# tuple struct; none derives Debug today.
+SEC-CRED-2 = "partial: the Debug pin (quality-gate.yml#rust-gate) matches a fixed set of credential field names and a _secret suffix, so a credential under another name (token, code_verifier, authorization, pem, a bare secret) or in a tuple struct escapes it"
+# temper-cloud's verifyDcrClientSecret compares SHA-256 digests with ===, where machine-clients'
+# hexEqual uses timingSafeEqual. Both sides are digests of a high-entropy secret, so the early exit
+# leaks how far a guess's digest matches the stored one, not the secret; the rule asks for a
+# constant-time comparison regardless. temper-api's secret_matches (embed, relay_trust) is an
+# equivalent loop, without subtle's optimisation barrier.
+SEC-CRED-3 = "uncovered: the DCR client-secret check compares SHA-256 digests with ===; nothing checks comparison sites"
 # audit-signature-secrets.sh, with its bite test.
 SEC-CRED-4 = "gated: .github/workflows/quality-gate.yml#rust-gate"
 # fn redact lives in temper-core/src/redact.rs only.
