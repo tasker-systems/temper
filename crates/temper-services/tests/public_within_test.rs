@@ -787,6 +787,93 @@ async fn anchor_subtree_holds_pool_counts_live_pools_only(pool: PgPool) {
     );
 }
 
+/// anchor_subtree_holds_pool walks up from each pool team; it answers exactly what the downward
+/// definition it replaced answers (the anchor itself, whatever its liveness, or any team in
+/// team_live_descendants(anchor) is the root, the gating team or an auto-join team), for every
+/// team as the anchor, through layouts that move pools, kill teams on and off the path, and kill
+/// the anchor and the pool themselves.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_upward_pool_check_answers_as_the_downward_one(pool: PgPool) {
+    let w = world(&pool).await;
+    let mid = team(&pool, "eng-mid", &[w.eng]).await;
+    let leaf = team(&pool, "eng-leaf", &[mid, w.ops]).await;
+    let mut checked = 0;
+    let check = |label: &'static str| {
+        let pool = pool.clone();
+        async move {
+            let wrong: Vec<String> = sqlx::query_scalar(
+                "SELECT t.slug FROM kb_teams t \
+                  WHERE anchor_subtree_holds_pool(t.id) IS DISTINCT FROM EXISTS ( \
+                        SELECT 1 FROM kb_teams p \
+                         WHERE (p.id = t.id \
+                                OR p.id IN (SELECT d.team_id FROM team_live_descendants(t.id) d)) \
+                           AND ( p.auto_join_role IS NOT NULL \
+                              OR p.slug = 'temper-system' \
+                              OR p.slug = (SELECT s.gating_team_slug FROM kb_system_settings s \
+                                            WHERE s.id = 1)))",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+            assert!(wrong.is_empty(), "{label}: {wrong:?}");
+            let teams: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_teams")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            teams
+        }
+    };
+    let auto_join = |team: Uuid, on: bool| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(
+                "UPDATE kb_teams SET auto_join_role = CASE WHEN $2 THEN 'member'::team_role END \
+                  WHERE id = $1",
+            )
+            .bind(team)
+            .bind(on)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+    };
+    let gating = |slug: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query("UPDATE kb_system_settings SET gating_team_slug = $1 WHERE id = 1")
+                .bind(slug)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+    };
+
+    checked += check("no pool").await;
+    auto_join(leaf, true).await;
+    checked += check("an auto-join leaf under two parents").await;
+    set_team_live(&pool, mid, false).await;
+    checked += check("a dead team on one path").await;
+    set_team_live(&pool, leaf, false).await;
+    checked += check("the pool dead").await;
+    set_team_live(&pool, leaf, true).await;
+    set_team_live(&pool, w.eng, false).await;
+    checked += check("a dead anchor above the pool").await;
+    set_team_live(&pool, w.eng, true).await;
+    set_team_live(&pool, mid, true).await;
+    auto_join(leaf, false).await;
+    gating("eng-sec-red").await;
+    checked += check("the gating team, three levels down").await;
+    set_team_live(&pool, w.eng_sec, false).await;
+    checked += check("a dead team above the gating team").await;
+    set_team_live(&pool, w.eng_sec, true).await;
+    gating("org").await;
+    auto_join(w.eng, true).await;
+    checked += check("the gating team as an anchor, an auto-join mid-tier").await;
+    set_team_live(&pool, w.org, false).await;
+    checked += check("a dead gating team as the anchor").await;
+    assert!(checked > 0);
+}
+
 /// The machine fence, and the token pin: a person reads with ANY token, a Slack-minted one
 /// included, because the fence is the principal, not the token.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]

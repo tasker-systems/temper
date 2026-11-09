@@ -384,6 +384,12 @@ def main():
     ap.add_argument("--profiles", type=int, default=5)
     ap.add_argument("--head-first", type=int, default=HEAD_FIRST)
     ap.add_argument("--server", default=SERVER)
+    ap.add_argument(
+        "--rows-on-base",
+        action="store_true",
+        help="open the same rows on base too (base' is then base with rows): for comparing two "
+        "trees that both have the public_within arm, e.g. --head-first at a later migration",
+    )
     args = ap.parse_args()
     server = args.server
 
@@ -400,6 +406,8 @@ def main():
 
     zero = measure(driver, handles, args.samples)
     psql(head, ROWS)
+    if args.rows_on_base:
+        psql(f"{server}/{BASE_DB}", ROWS)
     rows = measure(driver, handles, args.samples)
     results = {
         "base": {d: zero[d][0] for d in DOORS},
