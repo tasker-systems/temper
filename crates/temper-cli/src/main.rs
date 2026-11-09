@@ -187,7 +187,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     act,
                 } => {
                     if show_template {
-                        let doc_type = temper_workflow::frontmatter::DocType::from_str(&r#type)?;
+                        let doc_type = r#type.parse::<temper_workflow::frontmatter::DocType>()?;
                         let content = temper_cli::vault::get_template(doc_type)?;
                         print!("{content}");
                         return Ok(());

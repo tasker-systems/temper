@@ -327,7 +327,7 @@ impl TryFrom<&str> for Frontmatter {
             .ok_or_else(|| {
                 TemperError::Config("frontmatter missing required `temper-type`".to_string())
             })?;
-        let doc_type = DocType::from_str(type_value)?;
+        let doc_type = type_value.parse::<DocType>()?;
 
         Ok(Self {
             doc_type,
@@ -375,7 +375,7 @@ body content here
             "commitment",
             "domain",
         ] {
-            let dt = DocType::from_str(name).expect("known");
+            let dt = name.parse::<DocType>().expect("known");
             assert_eq!(dt.as_str(), name);
             let _ = dt.schema_json(); // include_str! must resolve
         }
@@ -383,9 +383,9 @@ body content here
 
     #[test]
     fn doc_type_rejects_unknown() {
-        assert!(DocType::from_str("bogus").is_err());
-        assert!(DocType::from_str("").is_err());
-        assert!(DocType::from_str("Task").is_err()); // case-sensitive
+        assert!("bogus".parse::<DocType>().is_err());
+        assert!("".parse::<DocType>().is_err());
+        assert!("Task".parse::<DocType>().is_err()); // case-sensitive
     }
 
     #[test]

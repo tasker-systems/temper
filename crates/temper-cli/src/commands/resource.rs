@@ -575,7 +575,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     // date-prefix for non-Concept/Goal doctypes is a property of THIS slug only — the local
     // projection filename is `projection::projection_stem` (a bounded decorated ref) and has
     // never carried the prefix.
-    let doctype_enum = temper_workflow::frontmatter::DocType::from_str(doc_type).ok();
+    let doctype_enum = doc_type.parse::<temper_workflow::frontmatter::DocType>().ok();
     let slug_resolved = derive_create_slug(title, doctype_enum);
 
     // Parse the optional --open-meta JSON object (the free-form open tier) and validate its shape
@@ -2604,7 +2604,7 @@ fn resolve_update_target(
     })
     .map_err(|e| drop_projection_if_erased(&config.vault_root, id, e))?;
     if let Some(tt) = params.type_to {
-        let _ = temper_workflow::frontmatter::DocType::from_str(tt)?;
+        let _ = tt.parse::<temper_workflow::frontmatter::DocType>()?;
     }
     Ok((id, row))
 }

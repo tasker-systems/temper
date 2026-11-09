@@ -297,7 +297,7 @@ pub fn validate_create(cmd: &CreateResource) -> Result<(), ActionError> {
     // Open tail (spec D3 / Task A2): an unrecognized doctype has no
     // per-doctype invariants to enforce — `validate_doctype` above already
     // accepted it as a free string, so no additional rules apply here.
-    if let Ok(doctype) = crate::frontmatter::DocType::from_str(&cmd.doctype) {
+    if let Ok(doctype) = cmd.doctype.parse::<crate::frontmatter::DocType>() {
         match doctype {
             crate::frontmatter::DocType::Task => {
                 if let Some(mode) = cmd.managed_meta.mode.as_deref() {
