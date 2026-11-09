@@ -3,6 +3,7 @@ export const meta = {
   description: 'Fan-out audit of the Rust crates against the code-quality best-practices lens; adversarially verify, then classify findings into a PR-sized work-breakdown.',
   whenToUse: 'When auditing the codebase against an opinionated best-practices rubric (the CQ-* lens, or any rubric-shaped doc) and you want a verified, classified, broken-up backlog rather than one mega-refactor PR.',
   phases: [
+    { title: 'Preflight', detail: 'confirm every unit path exists; stop the run on one that does not' },
     { title: 'Audit', detail: 'one read-only auditor per crate area, emits rule-tagged findings', model: 'sonnet' },
     { title: 'Verify', detail: 'adversarial re-check of each area\'s findings, drops false positives', model: 'sonnet' },
     { title: 'Aggregate', detail: 'classify by rule/pattern, break into PR-sized chunks' },
@@ -41,22 +42,27 @@ CQ-14 Testing: a removed/weakened assertion; a missing test-db/test-embed gate o
 
 // Audit units — "by area", one auditor per unit. Big crates split by module dir so
 // each auditor's scope stays tractable. `topLevel` means the *.rs files directly under
-// the crate's src/ (not in a subdir already covered by another unit).
+// the crate's src/ (not in a subdir already covered by another unit). Every path must
+// exist: the Preflight phase stops the run on one that does not, because a unit whose
+// scope is gone audits nothing and reads as a clean area.
 const DEFAULT_UNITS = [
   { key: 'cli-actions', paths: ['crates/temper-cli/src/actions/'] },
   { key: 'cli-commands', paths: ['crates/temper-cli/src/commands/'] },
-  { key: 'cli-rest', paths: ['crates/temper-cli/src/cloud_backend/', 'crates/temper-cli/src/output/', 'crates/temper-cli/src/templates/'], topLevel: 'crates/temper-cli/src/' },
+  { key: 'cli-rest', paths: ['crates/temper-cli/src/cloud_backend/', 'crates/temper-cli/src/output/', 'crates/temper-cli/src/saml/'], topLevel: 'crates/temper-cli/src/' },
   { key: 'substrate-core', paths: [], topLevel: 'crates/temper-substrate/src/' },
   { key: 'substrate-readback', paths: ['crates/temper-substrate/src/readback/'] },
   { key: 'substrate-scenario', paths: ['crates/temper-substrate/src/scenario/'] },
   { key: 'workflow-frontmatter', paths: ['crates/temper-workflow/src/frontmatter/'] },
   { key: 'workflow-ops', paths: ['crates/temper-workflow/src/operations/', 'crates/temper-workflow/src/types/'], topLevel: 'crates/temper-workflow/src/' },
   { key: 'api-handlers', paths: ['crates/temper-api/src/handlers/'] },
-  { key: 'api-services', paths: ['crates/temper-api/src/services/'] },
-  { key: 'api-backend', paths: ['crates/temper-api/src/backend/', 'crates/temper-api/src/middleware/'], topLevel: 'crates/temper-api/src/' },
+  { key: 'api-rest', paths: ['crates/temper-api/src/middleware/', 'crates/temper-api/src/routes/'], topLevel: 'crates/temper-api/src/' },
+  { key: 'services-services', paths: ['crates/temper-services/src/services/'] },
+  { key: 'services-backend', paths: ['crates/temper-services/src/backend/', 'crates/temper-services/src/authz/', 'crates/temper-services/src/auth/', 'crates/temper-services/src/broker/'], topLevel: 'crates/temper-services/src/' },
   { key: 'client', paths: [], topLevel: 'crates/temper-client/src/' },
-  { key: 'core', paths: [], topLevel: 'crates/temper-core/src/' },
+  { key: 'core', paths: ['crates/temper-core/src/erasure_policy/'], topLevel: 'crates/temper-core/src/' },
+  { key: 'core-types', paths: ['crates/temper-core/src/types/'] },
   { key: 'mcp', paths: [], topLevel: 'crates/temper-mcp/src/' },
+  { key: 'mcp-tools', paths: ['crates/temper-mcp/src/tools/'] },
   { key: 'ingest-agents', paths: [], topLevel: 'crates/temper-ingest/src/' },
   { key: 'agents', paths: [], topLevel: 'crates/temper-agents/src/' },
 ]
@@ -231,6 +237,26 @@ Produce a structured report:
 
 // ── Run ──────────────────────────────────────────────────────────────────────
 log(`Code-quality audit: ${UNITS.length} units against ${RUBRIC_DOC}`)
+
+// Scripts have no filesystem access, so one agent checks every unit path. A missing path
+// throws: skipping it would hand back a clean report for an area nobody read.
+phase('Preflight')
+const ALL_PATHS = [...new Set(UNITS.flatMap((u) => [...(u.paths || []), ...(u.topLevel ? [u.topLevel] : [])]))]
+const PREFLIGHT_SCHEMA = {
+  type: 'object',
+  properties: {
+    missing: { type: 'array', items: { type: 'string' }, description: 'every listed path that is not an existing directory' },
+  },
+  required: ['missing'],
+}
+const preflight = await agent(
+  `For each path below (relative to the repository root), check whether it exists as a directory, e.g. with \`test -d <path>\`. Do not edit anything. Return { missing: [...] } listing EXACTLY the paths that are not existing directories, spelled as given; return an empty list only if every one exists.\n\n${ALL_PATHS.map((p) => `- ${p}`).join('\n')}`,
+  { label: 'preflight:unit-paths', phase: 'Preflight', schema: PREFLIGHT_SCHEMA, effort: 'low' },
+)
+if (!preflight) throw new Error('Preflight did not return; refusing to audit units whose paths were not confirmed.')
+if (preflight.missing.length) {
+  throw new Error(`Audit unit paths do not exist: ${preflight.missing.join(', ')}. Fix the units (DEFAULT_UNITS or args.units) — a missing path would audit nothing and read as clean.`)
+}
 
 phase('Audit')
 const perUnit = await pipeline(
