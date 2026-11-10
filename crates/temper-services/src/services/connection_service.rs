@@ -426,6 +426,12 @@ pub async fn attach_credential(
         return Err(ApiError::BadRequest("connector must not be empty".into()));
     }
 
+    // The admin arm asked again before the broker is called: the mint below reaches the provider,
+    // so an admin demoted since the pool read (or one whose demotion is in flight, which this
+    // waits for) reaches nothing. The lock is released before the round trip; the write's own
+    // transaction asks again below, and that is the check that holds to the write.
+    write_tx(pool, authed, on_admin_arm).await?.commit().await?;
+
     // Mint once to verify. Auth is already checked; this is a read against the
     // broker, before any persistence. Only a proven-bad credential blocks.
     let verification = verify_by_minting(broker, id, credential).await?;

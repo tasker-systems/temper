@@ -479,8 +479,10 @@ pub async fn rotate_secret(
     // so it is asked again first, under the governance lock and before the severance's writes. A
     // demoted admin is refused as a caller with no authority over the row is (`404`, the missing-id
     // sentence); one who also owns the machine's team is admitted by a retry on the owner arm.
-    // Lock order: governance, then the severed personal teams, then the credential row, the order
-    // `revoke` and `machine_registration_service::rebind` take them in.
+    // Lock order: governance, then the severed personal teams, then the credential row. An admin's
+    // `revoke` takes the machine's standing row, then governance, then the credential row, and no
+    // team; an owner's takes the owning team, then the credential row. Every act that takes a team
+    // row and the credential row takes the team first, and a demotion takes none of these rows.
     if !crate::auth::admin_arm_holds(&mut tx, ProfileId::from(authed.profile().id), on_admin_arm)
         .await?
     {

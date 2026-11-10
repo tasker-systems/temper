@@ -1365,8 +1365,10 @@ fn promotion_refused(
 /// Deactivate, demote). Then both governance rows are locked in ascending profile id order (the
 /// subject's `FOR UPDATE`, the acting admin's `FOR KEY SHARE`) before the actor is read: two admins
 /// demoting each other at once would otherwise each hold their own row and wait on the other's.
-/// Every standing act takes the subject's standing row before any governance row, and every door
-/// takes governance after its own rows, so this order closes the only cycle.
+/// Every standing act takes the subject's standing row before any governance row, and no door
+/// takes a governance row in a mode that conflicts with another's except a demotion's delete, so
+/// this order closes the only cycle. A door may take its `KEY SHARE` before or after its own rows:
+/// a demotion locks none of them (`auth::is_system_admin_locked` states the argument).
 pub(crate) async fn still_admin(
     tx: &mut sqlx::PgConnection,
     admin: &SystemAdmin,
