@@ -145,7 +145,7 @@ reconcile_regime|block:fn:authorize_reconcile:crates/temper-services/src/backend
 is_system_admin|block:fn:is_system_admin:crates/temper-services/src/services/access_service.rs
 require_manage_on_team|block:fn:require_manage_on_team:crates/temper-services/src/services/team_service.rs
 can_manage|block:fn:can_manage:crates/temper-services/src/services/team_service.rs
-team_membership|file:crates/temper-services/src/authz/team_membership.rs;block:fn:is_gating_team_on:crates/temper-services/src/services/access_service.rs;block:fn:role_on_team_on:crates/temper-services/src/services/team_service.rs;block:fn:require_system_admin_on:crates/temper-services/src/auth/mod.rs;block:fn:require_system_admin_locked:crates/temper-services/src/auth/mod.rs;block:fn:is_system_admin_locked:crates/temper-services/src/auth/mod.rs;block:fn:authorize_member_act:crates/temper-services/src/services/team_service.rs;block:fn:rank:crates/temper-core/src/types/team.rs;block:fn:exceeds_machine_ceiling:crates/temper-services/src/services/machine_authz.rs;block:const:MAX_MACHINE_TEAM_ROLE:crates/temper-services/src/services/machine_authz.rs
+team_membership|file:crates/temper-services/src/authz/team_membership.rs;block:fn:is_gating_team_on:crates/temper-services/src/services/access_service.rs;block:fn:role_on_team_on:crates/temper-services/src/services/team_service.rs;block:fn:require_system_admin_on:crates/temper-services/src/auth/mod.rs;block:fn:require_system_admin_locked:crates/temper-services/src/auth/mod.rs;block:fn:is_system_admin_locked:crates/temper-services/src/auth/mod.rs;block:fn:is_system_admin_locked_raw:crates/temper-services/src/auth/mod.rs;block:fn:authorize_member_act:crates/temper-services/src/services/team_service.rs;block:fn:rank:crates/temper-core/src/types/team.rs;block:fn:exceeds_machine_ceiling:crates/temper-services/src/services/machine_authz.rs;block:const:MAX_MACHINE_TEAM_ROLE:crates/temper-services/src/services/machine_authz.rs
 EOF
 
 # Extract one `fn`/`enum` block by brace counting from its declaration. Anchored on the declaring
@@ -546,6 +546,11 @@ current_gates() {
 # temper-system or the gating team, or when it or a team below it is an auto-join or the gating
 # team. Read against `team_service::restore_authority`, which refuses a non-admin in exactly those
 # cases (a personal team's root link excepted); the claim describes the gate.
+# REVIEWED 2026-11-10 (erasure doors re-check the operator) — `team_membership` 645a3a8d9323 ->
+# 981f2c3a943d: `auth::is_system_admin_locked`'s two reads moved, unchanged, into
+# `is_system_admin_locked_raw`, which returns the database error as is so the erasure acts' retry
+# loops can classify a deadlock on the re-check. The wrapper maps that error as before, and the raw
+# function is now fingerprinted with the gate. No arm, order or answer changed.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -593,18 +598,18 @@ claim crates/temper-mcp/src/tools/teams.rs 5 -
 claim crates/temper-services/src/services/access_service.rs 11 is_system_admin
 claim crates/temper-services/src/services/admin_directory_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/cogmap_service.rs 4 two_sided
-claim crates/temper-services/src/services/connection_service.rs 11 connection
+claim crates/temper-services/src/services/connection_service.rs 14 connection
 claim crates/temper-services/src/services/context_service.rs 22 context_admin
 claim crates/temper-services/src/services/embed_service.rs 1 -
 claim crates/temper-services/src/services/erasure_retention_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/erasure_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/invitation_service.rs 7 team_membership
 claim crates/temper-services/src/services/machine_authz.rs 11 machine,team_membership
-claim crates/temper-services/src/services/machine_client_service.rs 8 machine
+claim crates/temper-services/src/services/machine_client_service.rs 9 machine
 claim crates/temper-services/src/services/machine_registration_service.rs 10 machine
-claim crates/temper-services/src/services/resource_erasure_service.rs 2 is_system_admin
+claim crates/temper-services/src/services/resource_erasure_service.rs 3 is_system_admin
 claim crates/temper-services/src/services/saml_provisioning_service.rs 1 team_membership
-claim crates/temper-services/src/services/slack_disconnect_service.rs 2 -
+claim crates/temper-services/src/services/slack_disconnect_service.rs 3 -
 claim crates/temper-services/src/services/standing_service.rs 2 -
 claim crates/temper-services/src/services/subscription_service.rs 11 subscription
 claim crates/temper-services/src/services/subscription_test_support.rs 1 subscription
@@ -622,7 +627,7 @@ gate reconcile_regime 5339d74ce2eb
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e
-gate team_membership 645a3a8d9323
+gate team_membership 981f2c3a943d
 EOF
 
 CURRENT="$(current_claims; current_gates)"

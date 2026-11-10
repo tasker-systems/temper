@@ -1,0 +1,38 @@
+title    = "The grant, machine-client and connection doors ask a system admin's standing again under the governance lock before they write"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "mcp"]
+status   = "signal-only"
+body = '''
+These doors decided their system-admin arm on a pool read and never asked again on their write:
+granting and revoking a capability, rotating a machine secret, and provisioning, revoking,
+attaching a credential to, setting the webhook events or tool manifest of, and granting or revoking
+team reach on a connection. An admin demoted after that read, or while the act was in flight, still
+wrote a grant that outlives the demotion, received a live machine secret, or created or changed a
+connection.
+
+Each now asks again first on its transaction, before any write, with auth::is_system_admin_locked
+(the caller's kb_principal_governance row FOR KEY SHARE, held to commit). A demotion that commits
+first refuses the act; one in flight makes it wait, then refuses it. The refusal is what a caller
+with no authority gets at that door: 403 at the grant door (410 to a husk holder, as before) and at
+connection provisioning, and the missing-id 404 sentence at every per-row machine-client and
+connection door. A demoted admin who holds another arm (a delegated grant right, ownership of the
+machine's or connection's team) is refused the in-flight act; a retry decides on that arm.
+
+Machine credential revoke already re-checked its admin arm; a demoted admin there now gets the
+missing-id 404 instead of 403, which said the id existed. The connection mutators that wrote in
+autocommit (revoke, attach credential, webhook events, tool manifest, grant and revoke reach) now
+write on a transaction, so the re-check holds to the write.
+
+Lock order: governance first, then the door's own rows (the subject floor's resource row, a grant
+row, the severed personal teams, the credential or connection row). A demotion locks none of those.
+
+Who observes: a system admin demoted while one of these acts is in flight. No schema change and no
+response shape change. Witnesses: `crates/temper-services/tests/admin_recheck_grant_and_connection_doors_test.rs`,
+whose in-flight halves fail without the change (the committed-first halves are regression pins on
+the refusal, since these doors' own pool read already sees a committed demotion), and two
+lock-order witnesses there: `a_rotation_and_its_rotators_revoke_never_deadlock` (a rotation raced
+against a demotion of the rotating admin) and `a_rotation_and_a_revoke_of_its_credential_never_deadlock`
+(a rotation raced against another admin's revoke of the same credential). Release
+relevance: signal-only.
+'''

@@ -656,6 +656,15 @@ pub(crate) async fn is_system_admin_locked(
     tx: &mut sqlx::PgConnection,
     profile: ProfileId,
 ) -> ApiResult<bool> {
+    Ok(is_system_admin_locked_raw(tx, profile).await?)
+}
+
+/// [`is_system_admin_locked`] with the database error as is, for a caller that classifies it (an
+/// act's retry loop, which retries a deadlock).
+pub(crate) async fn is_system_admin_locked_raw(
+    tx: &mut sqlx::PgConnection,
+    profile: ProfileId,
+) -> Result<bool, sqlx::Error> {
     let locked = sqlx::query_scalar!(
         "SELECT profile_id FROM kb_principal_governance WHERE profile_id = $1 FOR KEY SHARE",
         *profile,
@@ -668,6 +677,25 @@ pub(crate) async fn is_system_admin_locked(
             .fetch_one(&mut *tx)
             .await?
             .unwrap_or(false))
+}
+
+/// The admin re-check of a door whose authority resolved on its system-admin arm on the pool: on
+/// the door's write transaction, before its first write, it asks again with
+/// [`is_system_admin_locked`]. `false` means a demotion committed since the pool read (one still in
+/// flight makes this wait until it commits); the door then answers with the refusal it gives a
+/// caller with no authority, so a demoted admin learns nothing a non-admin does not. A decision on
+/// any other arm read no governance, so there is nothing to ask again and this answers `true`
+/// without a query. Transaction only, as for [`is_system_admin_locked`], and under the same lock
+/// order.
+pub(crate) async fn admin_arm_holds(
+    tx: &mut sqlx::PgConnection,
+    profile: ProfileId,
+    on_admin_arm: bool,
+) -> ApiResult<bool> {
+    if !on_admin_arm {
+        return Ok(true);
+    }
+    is_system_admin_locked(tx, profile).await
 }
 
 /// The bare-id spelling of [`require_system_admin`], **test-only**. It mints from a `ProfileId` with

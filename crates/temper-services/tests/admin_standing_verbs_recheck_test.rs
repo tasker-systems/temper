@@ -414,7 +414,11 @@ async fn revoke_a_machine_credential(pool: PgPool) {
     await_blocked_by(&pool, pid).await;
     holder.commit().await.unwrap();
     let err = contender.await.unwrap().unwrap_err();
-    assert!(matches!(err, ApiError::Forbidden), "in flight: {err:?}");
+    // The refusal a caller with no authority over the row gets, the same as for a missing id.
+    assert!(
+        matches!(&err, ApiError::NotFound(why) if why == "machine client not found or not readable"),
+        "in flight: {err:?}"
+    );
     assert!(
         live(pool.clone()).await,
         "a refused revoke left the credential revoked"

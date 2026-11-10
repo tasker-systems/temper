@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT resource_erasure_execute($1, $2, $3, $4, $5)\n                   AS \"outcome: serde_json::Value\"",
+  "query": "SELECT resource_erasure_execute($1, $2, $3, $4, $5)\n                           AS \"outcome: serde_json::Value\"",
   "describe": {
     "columns": [
       {
@@ -22,5 +22,5 @@
       null
     ]
   },
-  "hash": "cbabb31419b86a6a534c6648fbbcb9895b18a21387ca7633c8a70dafbe89f062"
+  "hash": "48595d44a00f463d7b0eb9853d52ccf364a1a8ad281db1da2e639f1b311ebabf"
 }

@@ -46,8 +46,9 @@ use temper_workflow::operations::Surface;
 use crate::auth::SystemAdmin;
 use crate::error::{ApiError, ApiResult};
 use crate::services::resource_erasure_service::{
-    between, erased_state, listed_refusal, record_refusal, Attempt, ResourceErasureRefusalDetail,
-    DEADLOCK_DETECTED, MAX_ACT_RETRIES, RAISE_EXCEPTION, RESOURCE_NOT_FOUND,
+    between, erased_state, listed_refusal, operator_gate, operator_refusal, operator_still_holds,
+    record_refusal, Attempt, ResourceErasureRefusalDetail, DEADLOCK_DETECTED, MAX_ACT_RETRIES,
+    RAISE_EXCEPTION, RESOURCE_NOT_FOUND,
 };
 
 /// The prefix of every raise in `resource_field_scrub_execute` (migration 20261018100020).
@@ -205,6 +206,7 @@ pub async fn execute_field_scrub(
     request: FieldScrubRequest,
 ) -> ApiResult<FieldScrubOutcome> {
     let operator = admin.actor();
+    operator_gate(pool, operator).await?;
     let emitter = resolve_emitter(pool, operator, request.surface.marker())
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -358,19 +360,31 @@ async fn run_act(
 ) -> ApiResult<FieldScrubVerdict> {
     let mut retries = 0;
     loop {
-        let result = sqlx::query_scalar!(
-            r#"SELECT resource_field_scrub_execute($1, $2, $3, $4, $5, $6, $7)
-                   AS "outcome: serde_json::Value""#,
-            attempt.resource.uuid(),
-            kind_name(request.field),
-            request.family,
-            request.clear,
-            attempt.operator.uuid(),
-            attempt.emitter.uuid(),
-            attempt.request_reference,
-        )
-        .fetch_one(pool)
-        .await;
+        // Each attempt is its own transaction, the operator re-checked first under its lock.
+        let mut tx = pool.begin().await?;
+        let result = match operator_still_holds(&mut tx, attempt.operator).await {
+            Ok(false) => return Err(operator_refusal(attempt.operator)),
+            Ok(true) => {
+                sqlx::query_scalar!(
+                    r#"SELECT resource_field_scrub_execute($1, $2, $3, $4, $5, $6, $7)
+                           AS "outcome: serde_json::Value""#,
+                    attempt.resource.uuid(),
+                    kind_name(request.field),
+                    request.family,
+                    request.clear,
+                    attempt.operator.uuid(),
+                    attempt.emitter.uuid(),
+                    attempt.request_reference,
+                )
+                .fetch_one(&mut *tx)
+                .await
+            }
+            Err(err) => Err(err),
+        };
+        let result = match result {
+            Ok(raw) => tx.commit().await.map(|()| raw),
+            Err(err) => Err(err),
+        };
         let err = match result {
             Ok(raw) => return decode_completion(raw).map(FieldScrubVerdict::Completed),
             Err(err) => err,

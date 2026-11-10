@@ -137,10 +137,36 @@ pub async fn get_for_caller(
 /// The per-row gate every act on an existing connection passes first: a system admin, or the owner
 /// of the connection's owning team, keyed on the row. A refusal is indistinguishable from a missing
 /// id.
-async fn authorize_control(pool: &PgPool, authed: &HumanPrincipal, id: Uuid) -> ApiResult<()> {
-    crate::authz::authorize::<ConnectionControlAuthority>(pool, Principal::Human(authed), id)
-        .await?;
-    Ok(())
+///
+/// Answers whether it resolved on the system-admin arm, which a writing act asks again on its
+/// transaction ([`write_tx`]).
+async fn authorize_control(pool: &PgPool, authed: &HumanPrincipal, id: Uuid) -> ApiResult<bool> {
+    Ok(
+        crate::authz::authorize::<ConnectionControlAuthority>(pool, Principal::Human(authed), id)
+            .await?
+            .authority()
+            == ConnectionControlAuthority::SystemAdmin,
+    )
+}
+
+/// The transaction an act on an existing connection writes on, opened with the admin re-check
+/// first. A decision resolved on the system-admin arm was a pool read of governance; it is asked
+/// again here under the governance lock (`auth::admin_arm_holds`) before the act's first write, so
+/// an admin demoted since (or while this runs) changes nothing. The refusal is
+/// `CONNECTION_REFUSAL`, the sentence a caller with no authority over the row gets, the same as
+/// for a missing id. A demoted admin who owns the connection's team is admitted by a retry on the
+/// owner arm. Lock order: governance first, then the connection and grant rows the act writes; a
+/// demotion locks none of those.
+async fn write_tx(
+    pool: &PgPool,
+    authed: &HumanPrincipal,
+    on_admin_arm: bool,
+) -> ApiResult<sqlx::Transaction<'static, sqlx::Postgres>> {
+    let mut tx = pool.begin().await?;
+    if !crate::auth::admin_arm_holds(&mut tx, authed.profile_id(), on_admin_arm).await? {
+        return Err(ApiError::NotFound(CONNECTION_REFUSAL.to_string()));
+    }
+    Ok(tx)
 }
 
 /// List connections visible to `caller`, newest first. Revoked rows are hidden unless asked for.
@@ -210,7 +236,8 @@ pub async fn provision(
     // Auth before writes: a rejected provisioning must leave the DB completely unchanged — no
     // orphaned profile, no orphaned entity, no orphaned context. Resolving before the
     // transaction opens is what makes that assertable.
-    machine_authz::authorize(pool, Principal::Human(authed), req.owner_team_id).await?;
+    let authority =
+        machine_authz::authorize(pool, Principal::Human(authed), req.owner_team_id).await?;
 
     if req.provider.trim().is_empty() {
         return Err(ApiError::BadRequest("provider must not be empty".into()));
@@ -223,6 +250,13 @@ pub async fn provision(
         .begin()
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {e}")))?;
+    // The admin arm was decided on the pool; ask again under the governance lock before the first
+    // write. A demoted admin is refused as a caller with no authority is (`403`); one who owns the
+    // team is admitted by a retry on the owner arm.
+    let on_admin_arm = authority == machine_authz::MachineRegistrationAuthority::SystemAdmin;
+    if !crate::auth::admin_arm_holds(&mut tx, caller, on_admin_arm).await? {
+        return Err(ApiError::Forbidden);
+    }
 
     let slug = next_unique_connection_slug(&mut tx, &req.name).await?;
 
@@ -314,8 +348,9 @@ pub async fn provision(
 pub async fn revoke(pool: &PgPool, id: Uuid, authed: &HumanPrincipal) -> ApiResult<Connection> {
     let revoker = ProfileId::from(authed.profile().id);
     // Auth before writes, keyed on the existing row's owning team.
-    authorize_control(pool, authed, id).await?;
+    let on_admin_arm = authorize_control(pool, authed, id).await?;
 
+    let mut tx = write_tx(pool, authed, on_admin_arm).await?;
     sqlx::query!(
         r#"UPDATE kb_connections
               SET revoked_at = now(), revoked_by_profile_id = $2
@@ -323,8 +358,9 @@ pub async fn revoke(pool: &PgPool, id: Uuid, authed: &HumanPrincipal) -> ApiResu
         id,
         *revoker,
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     get(pool, id).await
 }
 
@@ -336,8 +372,14 @@ pub async fn revoke(pool: &PgPool, id: Uuid, authed: &HumanPrincipal) -> ApiResu
 ///
 /// The revoked check runs **after** authorization, so only a caller who controls the connection
 /// learns that it is revoked.
-async fn authorize_live(pool: &PgPool, authed: &HumanPrincipal, id: Uuid) -> ApiResult<Connection> {
-    authorize_control(pool, authed, id).await?;
+///
+/// Answers the row and whether the decision resolved on the system-admin arm ([`write_tx`]).
+async fn authorize_live(
+    pool: &PgPool,
+    authed: &HumanPrincipal,
+    id: Uuid,
+) -> ApiResult<(Connection, bool)> {
+    let on_admin_arm = authorize_control(pool, authed, id).await?;
     let existing = get(pool, id).await?;
     if existing.revoked_at.is_some() {
         return Err(ApiError::Conflict(format!(
@@ -345,7 +387,7 @@ async fn authorize_live(pool: &PgPool, authed: &HumanPrincipal, id: Uuid) -> Api
             existing.slug
         )));
     }
-    Ok(existing)
+    Ok((existing, on_admin_arm))
 }
 
 /// Attach the credential, minting once to prove the connector is live. This flips
@@ -375,7 +417,7 @@ pub async fn attach_credential(
     id: Uuid,
     credential: &ConnectionCredential,
 ) -> ApiResult<AttachCredentialResponse> {
-    authorize_live(pool, authed, id).await?;
+    let (_, on_admin_arm) = authorize_live(pool, authed, id).await?;
 
     if credential.broker.trim().is_empty() {
         return Err(ApiError::BadRequest("broker must not be empty".into()));
@@ -384,6 +426,12 @@ pub async fn attach_credential(
         return Err(ApiError::BadRequest("connector must not be empty".into()));
     }
 
+    // The admin arm asked again before the broker is called: the mint below reaches the provider,
+    // so an admin demoted since the pool read (or one whose demotion is in flight, which this
+    // waits for) reaches nothing. The lock is released before the round trip; the write's own
+    // transaction asks again below, and that is the check that holds to the write.
+    write_tx(pool, authed, on_admin_arm).await?.commit().await?;
+
     // Mint once to verify. Auth is already checked; this is a read against the
     // broker, before any persistence. Only a proven-bad credential blocks.
     let verification = verify_by_minting(broker, id, credential).await?;
@@ -391,6 +439,8 @@ pub async fn attach_credential(
     let value = serde_json::to_value(credential)
         .map_err(|e| ApiError::Internal(format!("failed to serialize credential: {e}")))?;
 
+    // After the broker round trip, so no transaction is held open across it.
+    let mut tx = write_tx(pool, authed, on_admin_arm).await?;
     sqlx::query!(
         r#"UPDATE kb_connections
               SET credential = $2,
@@ -400,8 +450,9 @@ pub async fn attach_credential(
         value,
         verification.observed_reach.as_ref(),
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     let connection = get(pool, id).await?;
     Ok(AttachCredentialResponse {
@@ -496,8 +547,9 @@ pub async fn set_webhook_events(
     id: Uuid,
     events: &[String],
 ) -> ApiResult<Connection> {
-    authorize_live(pool, authed, id).await?;
+    let (_, on_admin_arm) = authorize_live(pool, authed, id).await?;
 
+    let mut tx = write_tx(pool, authed, on_admin_arm).await?;
     sqlx::query!(
         r#"UPDATE kb_connections
               SET webhook_events = $2
@@ -505,8 +557,9 @@ pub async fn set_webhook_events(
         id,
         events,
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     get(pool, id).await
 }
@@ -523,11 +576,12 @@ pub async fn set_tool_manifest(
     id: Uuid,
     tools: &[String],
 ) -> ApiResult<Connection> {
-    authorize_live(pool, authed, id).await?;
+    let (_, on_admin_arm) = authorize_live(pool, authed, id).await?;
 
     let value = serde_json::to_value(tools)
         .map_err(|e| ApiError::Internal(format!("failed to serialize tool manifest: {e}")))?;
 
+    let mut tx = write_tx(pool, authed, on_admin_arm).await?;
     sqlx::query!(
         r#"UPDATE kb_connections
               SET tool_manifest = $2
@@ -535,8 +589,9 @@ pub async fn set_tool_manifest(
         id,
         value,
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     get(pool, id).await
 }
@@ -612,6 +667,7 @@ pub async fn grant_reach(
         ConnectionScope::new(connection_id, team_id),
     )
     .await?;
+    let on_admin_arm = proof.authority() == ConnectionAuthority::SystemAdmin;
 
     // The gate: declared reach alone is the declaration; the mint's observed reach is the witness.
     // Affirmation is required when the connection declares reach AND the gate fires (observed is
@@ -636,7 +692,7 @@ pub async fn grant_reach(
             let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
                 .await
                 .map_err(|e| ApiError::Internal(e.to_string()))?;
-            let mut tx = pool.begin().await?;
+            let mut tx = write_tx(pool, authed, on_admin_arm).await?;
             sqlx::query!(
                 r#"UPDATE kb_connections
                       SET reach_affirmed_by = $2, reach_affirmed_at = now(), reach_affirmation = $3
@@ -672,14 +728,15 @@ pub async fn grant_reach(
             let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
                 .await
                 .map_err(|e| ApiError::Internal(e.to_string()))?;
-            let mut conn = pool.acquire().await?;
+            let mut tx = write_tx(pool, authed, on_admin_arm).await?;
             access_service::insert_grant(
-                &mut conn,
+                &mut tx,
                 &crate::authz::GrantWarrant::ConnectionReach(&proof),
                 &reach_grant_params(team_id, caller),
                 emitter,
             )
             .await?;
+            tx.commit().await?;
             Ok(connection)
         }
     }
@@ -795,12 +852,14 @@ pub async fn revoke_reach(
     )
     .await?;
 
+    let on_admin_arm = proof.authority() == crate::authz::ConnectionControlAuthority::SystemAdmin;
+
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let mut conn = pool.acquire().await?;
+    let mut tx = write_tx(pool, authed, on_admin_arm).await?;
     access_service::delete_grant(
-        &mut conn,
+        &mut tx,
         &crate::authz::RevokeWarrant::ConnectionControl(&proof),
         "kb_teams",
         team_id,
@@ -808,6 +867,7 @@ pub async fn revoke_reach(
         emitter,
     )
     .await?;
+    tx.commit().await?;
 
     Ok(connection)
 }
