@@ -602,9 +602,9 @@ claim crates/temper-services/src/services/invitation_service.rs 7 team_membershi
 claim crates/temper-services/src/services/machine_authz.rs 9 machine,team_membership
 claim crates/temper-services/src/services/machine_client_service.rs 8 machine
 claim crates/temper-services/src/services/machine_registration_service.rs 9 machine
-claim crates/temper-services/src/services/resource_erasure_service.rs 2 is_system_admin
+claim crates/temper-services/src/services/resource_erasure_service.rs 3 is_system_admin
 claim crates/temper-services/src/services/saml_provisioning_service.rs 1 team_membership
-claim crates/temper-services/src/services/slack_disconnect_service.rs 2 -
+claim crates/temper-services/src/services/slack_disconnect_service.rs 3 -
 claim crates/temper-services/src/services/standing_service.rs 2 -
 claim crates/temper-services/src/services/subscription_service.rs 9 subscription
 claim crates/temper-services/src/services/subscription_test_support.rs 1 subscription

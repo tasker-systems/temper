@@ -1,0 +1,36 @@
+title    = "The erasure doors and the admin Slack disconnect ask a system admin's standing again under the governance lock before they act"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http"]
+status   = "signal-only"
+body = '''
+Resource erasure, field scrub, block-history scrub, person erasure, setting and removing an erasure
+retention policy, and the admin Slack disconnect took a SystemAdmin proof minted on the pool and
+never asked again. An admin demoted after the mint, or while the act was in flight, still erased or
+scrubbed, changed what every later erasure keeps, or unbound someone's Slack principal.
+
+Each now asks again on the act's own transaction, before any write, with
+auth::is_system_admin_locked (the operator's kb_principal_governance row FOR KEY SHARE, held to
+commit). A demotion that commits first refuses the act; one in flight makes it wait, then refuses
+it. The erasure doors answer a demoted admin 404 "not found", what their HTTP gate answers a
+non-admin, and the Slack disconnect 403. The erasure acts that ran as one autocommit statement
+(resource erasure, field scrub) now run in a transaction so the re-check holds to the act.
+
+The erasure doors also check the operator at entry, before they validate the request or record a
+refusal, so a demoted admin with a stale proof learns nothing about the resource or blocks named
+and has no refusal recorded in their name. Person erasure's entry check takes the lock, so an
+in-flight demotion stops it before the subject's Slack grants are revoked at Slack. A demotion
+that commits while Slack is being called is refused at the act, leaving the grants revoked at Slack
+and nothing else: the state a failed person erasure already leaves.
+
+Lock order: governance first, then the act's own locks (resource act-queue advisory locks, resource
+and edge rows, the vault row for the disconnect). A demotion takes the subject's standing and
+governance rows only, and none of these acts takes a governance or standing row.
+
+Who observes: a system admin demoted while one of these acts is in flight, or holding a proof
+minted before the demotion. No schema change and no response shape change. Witnesses:
+`crates/temper-services/tests/admin_recheck_erasure_doors_test.rs` (each door's in-flight and
+committed-first halves fail without the change) and `a_person_erasure_and_its_operators_revoke_never_deadlock`
+there as a lock-order witness, and `slack_disconnect_service::tests::a_demoted_admin_disconnects_nothing`.
+Release relevance: signal-only.
+'''
