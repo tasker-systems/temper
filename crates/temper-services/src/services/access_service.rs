@@ -1043,6 +1043,13 @@ pub async fn update_system_settings(
     admin: &SystemAdmin,
     req: &UpdateSettingsRequest,
 ) -> ApiResult<SystemSettings> {
+    // The acting admin first, on the transaction and before the request is judged: a demotion
+    // committed since the proof was minted refuses the change with `403`, what a non-admin gets at
+    // the mint, never a `400` about the slug; one in flight makes it wait, then refuses. Ahead of
+    // the exclusive gating lock below, as before.
+    let mut tx = pool.begin().await?;
+    still_admin(&mut tx, admin, None).await?;
+
     // If a gating team is being set, it must name a real team, and never a personal one: person
     // erasure erases everything in the subject's personal team, so a personal gating team would let
     // one erasure take the org's content with it. The database refuses it too
@@ -1052,7 +1059,7 @@ pub async fn update_system_settings(
             r#"SELECT personal_of IS NOT NULL AS "personal!" FROM kb_teams WHERE slug = $1"#,
             slug
         )
-        .fetch_optional(pool)
+        .fetch_optional(&mut *tx)
         .await?;
         match personal {
             None => {
@@ -1073,11 +1080,7 @@ pub async fn update_system_settings(
     // Repointing the gating team can change whether public_within rows confer (the gating team is
     // a pool under every anchor above it, and is never a row's team), so it is written with the
     // record of every row it flips (`_admin_gating_team_slug_write`); the other fields keep their
-    // one-statement write. Both run in one transaction, which first asks the acting admin again
-    // ([`still_admin`]), ahead of the exclusive gating lock: a demotion committed since the proof
-    // was minted refuses the change, and one in flight makes it wait, then refuses.
-    let mut tx = pool.begin().await?;
-    still_admin(&mut tx, admin, None).await?;
+    // one-statement write. Both run in the transaction opened above.
     if let Some(ref slug) = req.gating_team_slug {
         let written = sqlx::query_scalar!(
             r#"SELECT _admin_gating_team_slug_write($1, NULL) AS "w!""#,
@@ -1143,7 +1146,23 @@ pub async fn promote_admin(
     profile_id: Uuid,
     team_id: Option<Uuid>,
 ) -> ApiResult<TeamMemberRow> {
-    // Resolve the target team: explicit, else the configured gating team.
+    // The transaction first, and the promoting admin's own standing asked again under the
+    // subject's standing lock, before the request is judged: a demoted admin holding a proof
+    // minted before the demotion grants nothing (themselves included), and is told what a non-admin
+    // is told at the mint (`403`), never a `400` about the team or the profile. The lock order is
+    // unchanged: the subject's standing row, then governance. A demotion locks the subject's
+    // standing row first too, so taking governance first here would let a self-promotion and the
+    // promoter's own revoke wait on each other.
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {e}")))?;
+    let profile = ProfileId::from(profile_id);
+    let current = standing_service::lock_conn(&mut tx, profile).await?;
+    still_admin(&mut tx, admin, None).await?;
+
+    // Resolve the target team: explicit, else the configured gating team. On the transaction,
+    // after the re-check.
     let target_team = match team_id {
         Some(id) => {
             let exists: bool =
@@ -1152,7 +1171,7 @@ pub async fn promote_admin(
                     "SELECT EXISTS(SELECT 1 FROM kb_teams WHERE id = $1 AND is_active)",
                     id
                 )
-                .fetch_one(pool)
+                .fetch_one(&mut *tx)
                 .await?
                 .unwrap_or(false);
             if !exists {
@@ -1161,8 +1180,11 @@ pub async fn promote_admin(
             id
         }
         None => {
-            let settings = get_system_settings(pool).await?;
-            let Some(slug) = settings.gating_team_slug else {
+            let slug: Option<String> =
+                sqlx::query_scalar!("SELECT gating_team_slug FROM kb_system_settings LIMIT 1")
+                    .fetch_one(&mut *tx)
+                    .await?;
+            let Some(slug) = slug else {
                 return Err(ApiError::BadRequest(
                     "no gating team configured; pass --team to promote on a specific team"
                         .to_string(),
@@ -1178,7 +1200,7 @@ pub async fn promote_admin(
                 "SELECT id FROM kb_teams WHERE slug = $1 AND is_active",
                 slug
             )
-            .fetch_optional(pool)
+            .fetch_optional(&mut *tx)
             .await?
             .ok_or_else(|| ApiError::BadRequest(format!("gating team '{slug}' does not exist")))?
         }
@@ -1189,7 +1211,7 @@ pub async fn promote_admin(
         "SELECT EXISTS(SELECT 1 FROM kb_profiles WHERE id = $1)",
         profile_id
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?
     .unwrap_or(false);
     if !profile_exists {
@@ -1201,21 +1223,17 @@ pub async fn promote_admin(
     // A machine principal never governs (ruled 2026-10-09): promotion writes a team `owner` row
     // and a governance grant, and the database refuses both for a machine
     // (20261019100000_machines_never_govern.sql). Refuse here first, readably.
-    if crate::services::machine_client_service::is_machine_profile(
-        pool,
-        ProfileId::from(profile_id),
+    let machine: bool = sqlx::query_scalar!(
+        r#"SELECT is_machine_profile($1) AS "machine!: bool""#,
+        profile_id,
     )
-    .await?
-    {
+    .fetch_one(&mut *tx)
+    .await?;
+    if machine {
         return Err(ApiError::BadRequest(
             "a machine principal cannot be made a system admin".to_string(),
         ));
     }
-
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {e}")))?;
 
     // D11: admin-ness IS a governance grant, and the invariant "admin implies Approved" is
     // maintained here, at promotion (is_system_admin never ANDs standing in at read time). So a
@@ -1224,17 +1242,11 @@ pub async fn promote_admin(
     // with the team row. Without the standing half a promoted admin would pass the admin predicate
     // yet fail the front door.
     //
-    // The standing half is judged FIRST, before any write, and through the transition table on
-    // the person's locked current standing: a promotion is not a way round it. From Deactivated
-    // it refuses and names `Reactivate`, the only act that lifts a deactivation — promoting a
-    // deactivated person used to approve them silently (task 01a19967 recommends refusing). A
-    // refusal returns before the first write, so the team row and the grant are never written.
-    let profile = ProfileId::from(profile_id);
-    let current = standing_service::lock_conn(&mut tx, profile).await?;
-    // The promoting admin's own standing, asked again under the subject's lock and before any
-    // write: a demoted admin holding a proof minted before the demotion grants nothing, themselves
-    // included.
-    still_admin(&mut tx, admin, None).await?;
+    // The standing half is judged before any write, and through the transition table on the
+    // person's locked current standing: a promotion is not a way round it. From Deactivated it
+    // refuses and names `Reactivate`, the only act that lifts a deactivation — promoting a
+    // deactivated person used to approve them silently. A refusal returns before the first write,
+    // so the team row and the grant are never written.
     if current != Some(temper_principal::Standing::Approved) {
         let judged = standing_service::judge_and_apply_conn(
             &mut tx,

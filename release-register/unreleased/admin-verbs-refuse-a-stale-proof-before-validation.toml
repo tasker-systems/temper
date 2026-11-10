@@ -1,0 +1,19 @@
+title    = "Promoting an admin and updating system settings refuse a demoted admin before they judge the request"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http"]
+status   = "signal-only"
+body = '''
+promote_admin and update_system_settings validated the request on the pool before their locked
+admin re-check, so a demoted admin holding a proof minted before the demotion was told whether a
+team, a profile or a gating-team slug existed (a 400 naming it) before the 403 a non-admin gets.
+Both now open their transaction and ask the admin question first, then validate on that
+transaction. promote_admin keeps its lock order (the subject's standing row, then governance), so a
+self-promotion and the promoter's own revoke still never wait on each other.
+
+Who observes: an admin demoted while holding a proof, whose request names a team, profile or slug
+that does not exist; they get 403 where they got 400. Admins get the same validation answers as
+before. No schema change and no response shape change. Witness:
+`crates/temper-services/tests/admin_recheck_refusal_order_test.rs` (fails without the change;
+`an_admin_still_gets_the_validation_answers` is its control). Release relevance: signal-only.
+'''
