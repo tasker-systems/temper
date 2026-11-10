@@ -18,10 +18,14 @@ non-admin, and the Slack disconnect 403. The erasure acts that ran as one autoco
 
 The erasure doors also check the operator at entry, before they validate the request or record a
 refusal, so a demoted admin with a stale proof learns nothing about the resource or blocks named
-and has no refusal recorded in their name. Person erasure's entry check takes the lock, so an
-in-flight demotion stops it before the subject's Slack grants are revoked at Slack. A demotion
-that commits while Slack is being called is refused at the act, leaving the grants revoked at Slack
-and nothing else: the state a failed person erasure already leaves.
+and has no refusal recorded in their name; a refused stale proof writes the warn line the HTTP gate
+writes for a non-admin. Person erasure's entry check takes the lock and holds it through the Slack
+pass (the revokes at Slack and, in AS mode, the refresh-token writes run on that transaction), so
+an in-flight demotion waits out the Slack calls and then stops the erasure before any grant is
+revoked. Only a demotion committing between that check's commit and the act's own re-check can
+leave the grants revoked at Slack with the act refused: the state a failed person erasure already
+leaves. The re-check's wait is unbounded (lock_timeout = 0, as the acts pin), so a lock-wait bound
+on the pool cannot turn an in-flight demotion into a busy answer.
 
 Lock order: governance first, then the act's own locks (resource act-queue advisory locks, resource
 and edge rows, the vault row for the disconnect). A demotion takes the subject's standing and
