@@ -2378,8 +2378,24 @@ pub async fn reassign_context_with(
     ctx: EventContext,
 ) -> Result<()> {
     let mut tx = begin_scoped(pool).await?;
+    reassign_context_on(&mut tx, context, from_owner, to_owner, emitter, ctx).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// [`reassign_context_with`] on the caller's connection, inside the caller's transaction, so a door can
+/// take its own locks (the acting admin's governance row) before the write and hold them to its
+/// commit. Commits nothing itself.
+pub async fn reassign_context_on(
+    conn: &mut sqlx::PgConnection,
+    context: ContextId,
+    from_owner: (&str, Uuid),
+    to_owner: (&str, Uuid),
+    emitter: EntityId,
+    ctx: EventContext,
+) -> Result<()> {
     fire_with(
-        &mut tx,
+        &mut *conn,
         SeedAction::ContextReassign {
             context,
             from_owner_table: from_owner.0,
@@ -2391,7 +2407,6 @@ pub async fn reassign_context_with(
         ctx,
     )
     .await?;
-    tx.commit().await?;
     Ok(())
 }
 
@@ -2469,8 +2484,24 @@ pub async fn restore_context_with(
     ctx: EventContext,
 ) -> Result<()> {
     let mut tx = begin_scoped(pool).await?;
+    restore_context_on(&mut tx, context, from_slug, to_slug, emitter, ctx).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// [`restore_context_with`] on the caller's connection, inside the caller's transaction, so a door can
+/// take its own locks (the acting admin's governance row) before the write and hold them to its
+/// commit. Commits nothing itself.
+pub async fn restore_context_on(
+    conn: &mut sqlx::PgConnection,
+    context: ContextId,
+    from_slug: &str,
+    to_slug: &str,
+    emitter: EntityId,
+    ctx: EventContext,
+) -> Result<()> {
     fire_with(
-        &mut tx,
+        &mut *conn,
         SeedAction::ContextRestore {
             context,
             from_slug,
@@ -2480,7 +2511,6 @@ pub async fn restore_context_with(
         ctx,
     )
     .await?;
-    tx.commit().await?;
     Ok(())
 }
 

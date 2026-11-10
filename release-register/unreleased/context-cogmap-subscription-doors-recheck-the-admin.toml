@@ -1,0 +1,33 @@
+title    = "The context, cognitive-map binding and subscription doors ask a system admin's standing again under the governance lock before they write"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "mcp"]
+status   = "signal-only"
+body = '''
+Sharing, unsharing, reassigning and restoring a context, binding and unbinding a cognitive map to
+a team, and creating and revoking a subscription decided their system-admin arm on a pool read and
+never asked again on their write. An admin demoted after that read, or while the act was in flight,
+still moved a context into a team's reach or ownership, brought back a retired context's write
+grants, gave a team reach on a map or took a map out of the admin-only regime, or routed a
+connection's deliveries onto an admin-only map.
+
+Each now asks again on the write's own transaction, before it writes, with
+auth::is_system_admin_locked (the caller's kb_principal_governance row FOR KEY SHARE, held to
+commit). The writes that ran in autocommit (share, unshare, bind, unbind, subscription create and
+revoke) now run in that transaction, and reassign and restore run on it through new
+temper_substrate::writes::reassign_context_on and restore_context_on. Subscription create also asks
+its subscriber-authorship leg again on that transaction, under the lock, because for an admin-only
+map that leg is the admin question itself even when the caller passed the team-manager arm.
+Deliveries do not re-check authorship, so the create is the only gate. A demoted admin is refused
+with the gate's answer to them as they now stand: what a non-admin gets (403, or the not-found sentence where they cannot read the subject).
+One the gate now admits on another arm is refused once; a retry decides on that arm.
+
+Lock order: governance, then the share, binding, context or subscription row the act writes; a
+demotion locks none of those.
+
+Who observes: a system admin demoted while one of these acts is in flight. No schema change and no
+response shape change. Witnesses: `crates/temper-services/tests/admin_recheck_context_doors_test.rs`
+and `subscription_service::tests::a_demotion_in_flight_refuses_create_and_revoke` (each in-flight
+half fails without the change; the committed-first halves are regression pins). Release relevance:
+signal-only.
+'''

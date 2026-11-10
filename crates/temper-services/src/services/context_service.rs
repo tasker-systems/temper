@@ -1016,13 +1016,10 @@ pub async fn share(
     context_id: uuid::Uuid,
     req: &ShareContextRequest,
 ) -> ApiResult<ShareContextOutcome> {
-    crate::authz::authorize::<TwoSidedAuthority>(
-        pool,
-        Principal::Human(authed),
-        TwoSidedScope::context(context_id, req.team_id),
-    )
-    .await?;
+    let scope = TwoSidedScope::context(context_id, req.team_id);
+    let on_admin_arm = two_sided_admin_arm(pool, authed, scope).await?;
     ensure_context_and_team_exist(pool, context_id, req.team_id).await?;
+    let mut tx = two_sided_write_tx(pool, authed, scope, on_admin_arm).await?;
     let inserted = sqlx::query_scalar!(
         r#"
         INSERT INTO kb_team_contexts (context_id, team_id)
@@ -1033,8 +1030,9 @@ pub async fn share(
         context_id,
         req.team_id,
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(ShareContextOutcome {
         context_id,
         team_id: req.team_id,
@@ -1052,20 +1050,18 @@ pub async fn unshare(
     context_id: uuid::Uuid,
     team_id: uuid::Uuid,
 ) -> ApiResult<UnshareContextOutcome> {
-    crate::authz::authorize::<TwoSidedAuthority>(
-        pool,
-        Principal::Human(authed),
-        TwoSidedScope::context(context_id, team_id),
-    )
-    .await?;
+    let scope = TwoSidedScope::context(context_id, team_id);
+    let on_admin_arm = two_sided_admin_arm(pool, authed, scope).await?;
     ensure_context_and_team_exist(pool, context_id, team_id).await?;
+    let mut tx = two_sided_write_tx(pool, authed, scope, on_admin_arm).await?;
     let result = sqlx::query!(
         "DELETE FROM kb_team_contexts WHERE context_id = $1 AND team_id = $2",
         context_id,
         team_id,
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(UnshareContextOutcome {
         context_id,
         team_id,
@@ -1095,12 +1091,8 @@ pub async fn reassign(
     to_team_id: uuid::Uuid,
 ) -> ApiResult<ReassignContextOutcome> {
     let caller = ProfileId::from(authed.profile().id);
-    crate::authz::authorize::<TwoSidedAuthority>(
-        pool,
-        Principal::Human(authed),
-        TwoSidedScope::context(context_id, to_team_id),
-    )
-    .await?;
+    let scope = TwoSidedScope::context(context_id, to_team_id);
+    let on_admin_arm = two_sided_admin_arm(pool, authed, scope).await?;
     ensure_context_and_team_exist(pool, context_id, to_team_id).await?;
 
     // Current owner — for the audit fields, idempotency, and the slug-collision check.
@@ -1148,8 +1140,9 @@ pub async fn reassign(
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    temper_substrate::writes::reassign_context_with(
-        pool,
+    let mut tx = two_sided_write_tx(pool, authed, scope, on_admin_arm).await?;
+    temper_substrate::writes::reassign_context_on(
+        &mut tx,
         temper_substrate::ids::ContextId::from(context_id),
         (cur.owner_table.as_str(), cur.owner_id),
         ("kb_teams", to_team_id),
@@ -1158,6 +1151,7 @@ pub async fn reassign(
     )
     .await
     .map_err(map_context_write_err)?;
+    tx.commit().await?;
 
     Ok(ReassignContextOutcome {
         context_id,
@@ -1519,8 +1513,7 @@ pub async fn restore(
     context_id: uuid::Uuid,
 ) -> ApiResult<RestoreContextOutcome> {
     let caller = authed.profile_id();
-    crate::authz::authorize::<ContextAdminAuthority>(pool, Principal::from(authed), context_id)
-        .await?;
+    let on_admin_arm = context_admin_arm(pool, authed, context_id).await?;
 
     let cur = sqlx::query!(
         r#"SELECT owner_table AS "owner_table!", owner_id AS "owner_id!", slug, name,
@@ -1582,8 +1575,9 @@ pub async fn restore(
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    temper_substrate::writes::restore_context_with(
-        pool,
+    let mut tx = context_admin_write_tx(pool, authed, context_id, on_admin_arm).await?;
+    temper_substrate::writes::restore_context_on(
+        &mut tx,
         temper_substrate::ids::ContextId::from(context_id),
         cur.slug.as_str(),
         restored_slug.as_str(),
@@ -1592,6 +1586,7 @@ pub async fn restore(
     )
     .await
     .map_err(map_context_write_err)?;
+    tx.commit().await?;
 
     // The baseline is the retired-under address, NOT `sluggify(&cur.name)`. `create` hands out
     // suffixed slugs for duplicate names, so a context named "Notes" routinely lives at `notes-2`,
@@ -1630,8 +1625,83 @@ pub async fn restore(
 /// one is reconstructed from a SQLSTATE and has nothing but the constraint that fired.
 const CONTEXT_SLUG_TAKEN: &str = "that owner already holds a context with this slug";
 
-/// Map a substrate write error from `reassign_context_with` / `rename_context_with` /
-/// `retire_context_with` / `restore_context_with` to an [`ApiError`]. **One mapper, four call
+/// The two-sided gate's decision on the pool, and whether it rested on the system-admin arm.
+pub(crate) async fn two_sided_admin_arm(
+    pool: &PgPool,
+    authed: &HumanPrincipal,
+    scope: TwoSidedScope,
+) -> ApiResult<bool> {
+    Ok(
+        crate::authz::authorize::<TwoSidedAuthority>(pool, Principal::Human(authed), scope)
+            .await?
+            .authority()
+            == TwoSidedAuthority::SystemAdmin,
+    )
+}
+
+/// The transaction a two-sided act writes on, opened with the admin re-check first. A decision on
+/// the system-admin arm was a pool read of governance; it is asked again under the governance lock
+/// (`auth::is_system_admin_locked`, held to the commit) before the write, so an admin demoted since
+/// (or while this runs) changes nothing. The refusal is the gate's own answer to the caller as
+/// they now stand, decided again on the pool, so a demoted admin is told what a non-admin is told;
+/// one the gate now admits on another arm (a delegate) is refused this once with `403`, and a retry
+/// decides on that arm. Lock order: governance, then the share, binding or context row the act
+/// writes; a demotion locks none of those.
+pub(crate) async fn two_sided_write_tx(
+    pool: &PgPool,
+    authed: &HumanPrincipal,
+    scope: TwoSidedScope,
+    on_admin_arm: bool,
+) -> ApiResult<sqlx::Transaction<'static, sqlx::Postgres>> {
+    let mut tx = pool.begin().await?;
+    if on_admin_arm && !crate::auth::is_system_admin_locked(&mut tx, authed.profile_id()).await? {
+        drop(tx);
+        crate::authz::authorize::<TwoSidedAuthority>(pool, Principal::Human(authed), scope).await?;
+        return Err(ApiError::Forbidden);
+    }
+    Ok(tx)
+}
+
+/// [`ContextAdminAuthority`]'s decision on the pool, and whether it rested on the system-admin arm.
+async fn context_admin_arm(
+    pool: &PgPool,
+    authed: &Caller,
+    context_id: uuid::Uuid,
+) -> ApiResult<bool> {
+    Ok(
+        crate::authz::authorize::<ContextAdminAuthority>(pool, Principal::from(authed), context_id)
+            .await?
+            .authority()
+            == ContextAdminAuthority::SystemAdmin,
+    )
+}
+
+/// [`two_sided_write_tx`] for restore, the one context-administration act with a durable effect: a
+/// restored context's write grants and authoring arms (`context_authorable_by_profile` reads
+/// `is_active`, and every explicit grant `context_is_live`) come back with it. The SQL writer asks
+/// `is_system_admin` again after its context lock; on this transaction that read is taken under the
+/// governance row this has locked, so its answer holds to the commit too. The refusal is
+/// [`ContextAdminAuthority`]'s answer to the caller as they now stand: `403` to a reader, the
+/// not-found sentence to anyone who cannot read the context. Rename and retire grant no reach and
+/// are not re-checked.
+async fn context_admin_write_tx(
+    pool: &PgPool,
+    authed: &Caller,
+    context_id: uuid::Uuid,
+    on_admin_arm: bool,
+) -> ApiResult<sqlx::Transaction<'static, sqlx::Postgres>> {
+    let mut tx = pool.begin().await?;
+    if on_admin_arm && !crate::auth::is_system_admin_locked(&mut tx, authed.profile_id()).await? {
+        drop(tx);
+        crate::authz::authorize::<ContextAdminAuthority>(pool, Principal::from(authed), context_id)
+            .await?;
+        return Err(ApiError::Forbidden);
+    }
+    Ok(tx)
+}
+
+/// Map a substrate write error from `reassign_context_on` / `rename_context_with` /
+/// `retire_context_with` / `restore_context_on` to an [`ApiError`]. **One mapper, four call
 /// sites** — the mapping is identical for all of them and would drift
 /// if written twice.
 ///
