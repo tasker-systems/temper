@@ -15,7 +15,7 @@
 //! demotion and answers `403`.
 //!
 //! **Unchanged:** an admin who is not demoted reconciles L0 and places a map at a requested id as
-//! before.
+//! before, and one whose demotion rolls back proceeds once the wait ends.
 
 mod common;
 
@@ -263,4 +263,28 @@ async fn an_admin_who_is_not_demoted_is_unchanged(pool: PgPool) {
     assert_eq!(placed.cogmap_id, at);
     assert!(placed.created);
     holder.rollback().await.unwrap();
+}
+
+/// A demotion that rolls back changes nothing: the reconcile that waited on it at the re-check
+/// proceeds and writes. Pins that the wait is not itself a refusal.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_demotion_that_rolls_back_lets_the_reconcile_proceed(pool: PgPool) {
+    set_gating_team(&pool).await;
+    let admin = an_admin(&pool, "ra-admin@example.com").await;
+
+    let entry = Uuid::now_v7();
+    let (holder, pid) = demotion_in_flight(&pool, admin).await;
+    let p = pool.clone();
+    let contender = tokio::spawn(async move {
+        as_profile(&p, admin)
+            .reconcile_cognitive_map(reconcile(entry))
+            .await
+    });
+    await_blocked_at_the_recheck(&pool, pid).await;
+    holder.rollback().await.unwrap();
+    contender
+        .await
+        .unwrap()
+        .expect("the admin, still an admin, reconciles the kernel");
+    assert!(resource_exists(&pool, entry).await);
 }

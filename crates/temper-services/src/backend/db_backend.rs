@@ -835,9 +835,10 @@ impl DbBackend {
     /// commit). The admin decision that admitted the caller was a pool read; a demotion committed
     /// since refuses the act, and one in flight makes this wait. When that demotion commits,
     /// SERIALIZABLE answers the lock with a serialization failure (`40001`, "could not serialize
-    /// access due to concurrent update") instead of an empty read. From this statement, and only
-    /// this one, that failure is the demotion, so it is the refusal a non-admin gets (`403`), not
-    /// the retryable `409` a conflicting reconcile gets at commit.
+    /// access due to concurrent update") instead of an empty read. From this re-check (the lock,
+    /// then a plain read of the row it locked), that failure is the demotion: nothing else deletes,
+    /// key-updates or locks `FOR UPDATE` a governance row and commits, so it is the refusal a
+    /// non-admin gets (`403`), not the retryable `409` a conflicting reconcile gets at commit.
     ///
     /// Lock order: governance first, then the act's own writes. A demotion locks standing and
     /// governance rows only, none of which a reconcile or a genesis writes.
@@ -5863,6 +5864,46 @@ mod tests {
 #[cfg(all(test, feature = "test-db"))]
 mod admin_arm_tests {
     use super::*;
+
+    /// The re-check's `Ok(false)` arm: an admin whose demotion committed after the pool decision
+    /// and before the act's transaction began finds no governance row to lock, and is refused.
+    /// The pool gate cannot be paused between its read and the transaction's first statement, so
+    /// the re-check is driven directly on a SERIALIZABLE transaction the demotion precedes. Fails
+    /// if `Ok(false)` is answered `Ok(())`. An admin still in office passes it.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn the_serializable_recheck_refuses_a_demotion_committed_before_it_began(pool: PgPool) {
+        set_gating_team(&pool).await;
+        let caller = admin_person(&pool).await;
+        let backend = DbBackend::with_proof(pool.clone(), &caller);
+
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query!("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        backend
+            .admin_still_holds_serializable(&mut tx)
+            .await
+            .expect("an admin in office passes");
+        tx.rollback().await.unwrap();
+
+        let _: bool =
+            sqlx::query_scalar("SELECT principal_governance_set($1, false, NULL, 'test')")
+                .bind(*caller.profile_id())
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query!("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let refused = backend.admin_still_holds_serializable(&mut tx).await;
+        assert!(
+            matches!(refused, Err(TemperError::Forbidden)),
+            "a demotion committed before the transaction: {refused:?}"
+        );
+    }
     use temper_core::types::reblock::ReblockScope;
 
     const L0_COGMAP: CogmapId = CogmapId(uuid::Uuid::from_u128(
