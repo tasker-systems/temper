@@ -17,8 +17,13 @@
 //! **Committed first:** the proof was minted before the demotion; the door is refused before it
 //! validates anything (the entry gate), so no refusal is recorded in the demoted admin's name.
 //!
-//! Both halves of every test fail on the code before this change: the door never blocked, and the
-//! stale proof erased.
+//! Both halves of every door test fail on the code before this change: the door never blocked,
+//! and the stale proof erased. `a_stale_proof_learns_nothing_about_the_request` pins the entry
+//! gate's place ahead of validation. The last test is a lock-order witness and passes on that code
+//! too, which took no governance lock to contend on.
+//!
+//! Person erasure runs its Slack pass under its entry gate's lock; with no Slack configured here,
+//! no test shows a Slack revoke withheld, only that the act is refused and the estate intact.
 
 use std::future::Future;
 
@@ -399,6 +404,78 @@ async fn retention_policies(pool: PgPool) {
         policies(pool.clone()).await,
         1,
         "a refused remove deleted the policy"
+    );
+}
+
+/// A demoted admin holding a stale proof is refused by the entry gate before the request is judged:
+/// a missing resource and a list naming a blob or block twice each answer the doors' `404 "not
+/// found"`, not the `404` or `400` an admin gets for them. Fails on the code before this change.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_stale_proof_learns_nothing_about_the_request(pool: PgPool) {
+    use temper_core::types::ids::BlobId;
+    let admin = an_admin(&pool).await;
+    let (_, resource) = person_with_a_resource(&pool, "ra-person").await;
+    let stale = proof(&pool, admin).await;
+    let (holder, _) = demotion_in_flight(&pool, admin).await;
+    holder.commit().await.unwrap();
+
+    let missing = ResourceId::from(Uuid::now_v7());
+    let blob = BlobId::from(Uuid::now_v7());
+    let err = execute_resource_erasure(
+        &pool,
+        None,
+        &stale,
+        ResourceErasureRequest {
+            resource: missing,
+            also_strike_blobs: &[],
+            surface: Surface::ApiHttp,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(the_erasure_refusal(&err), "a missing resource: {err:?}");
+    let err = execute_resource_erasure(
+        &pool,
+        None,
+        &stale,
+        ResourceErasureRequest {
+            resource,
+            also_strike_blobs: &[blob, blob],
+            surface: Surface::ApiHttp,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(the_erasure_refusal(&err), "a blob listed twice: {err:?}");
+    let block = Uuid::now_v7();
+    let err = execute_block_history_scrub(
+        &pool,
+        &stale,
+        BlockHistoryScrubRequest {
+            resource,
+            blocks: &[block, block],
+            surface: Surface::ApiHttp,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(the_erasure_refusal(&err), "a block listed twice: {err:?}");
+    let err = execute_field_scrub(
+        &pool,
+        &stale,
+        FieldScrubRequest {
+            resource: missing,
+            field: ScrubFieldKind::Title,
+            family: None,
+            clear: true,
+            surface: Surface::ApiHttp,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        the_erasure_refusal(&err),
+        "a missing resource to scrub: {err:?}"
     );
 }
 

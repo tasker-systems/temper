@@ -455,27 +455,48 @@ pub(crate) const OPERATOR_REFUSAL: &str = "not found";
 /// the resource and edge rows, the home context). A demotion takes the subject's standing and
 /// governance rows only, and an erasure act takes no governance or standing row, so the two never
 /// wait in a cycle.
+///
+/// The wait is unbounded, as the acts' own are (they pin `lock_timeout = 0`, migration
+/// `20261015100000`): a lock-wait bound set later on the pool or role must not turn a demotion in
+/// flight into a busy refusal instead of this door's answer. `SET LOCAL`, so it ends with the
+/// transaction.
 pub(crate) async fn operator_holds(
     tx: &mut sqlx::PgConnection,
     operator: ProfileId,
 ) -> ApiResult<()> {
+    sqlx::query_scalar!("SELECT set_config('lock_timeout', '0', true)")
+        .fetch_one(&mut *tx)
+        .await?;
     if crate::auth::is_system_admin_locked(tx, operator).await? {
         Ok(())
     } else {
-        Err(ApiError::NotFound(OPERATOR_REFUSAL.to_string()))
+        refused_operator(operator)
     }
+}
+
+/// The refusal of a demoted operator, with the `warn` line the HTTP gate writes for a non-admin,
+/// so a stale proof's refusal leaves the same trace at the default filter.
+fn refused_operator(operator: ProfileId) -> ApiResult<()> {
+    tracing::warn!(
+        profile_id = %operator,
+        "erasure door refused an operator who is no longer a system admin; answered 404, nothing \
+         recorded on the ledger"
+    );
+    Err(ApiError::NotFound(OPERATOR_REFUSAL.to_string()))
 }
 
 /// The operator's standing at a door's entry, before it validates anything or records a refusal:
 /// a demoted operator holding a stale proof is told what a non-admin is told, never a `400` or
-/// `404` about the request, and no refusal is recorded in their name. A plain read: it orders the
-/// refusals and holds nothing. The act's own transaction asks again under the lock
+/// `404` about the request, and no refusal is recorded in their name (a demotion that commits
+/// after the act's re-check, while a refused act's refusal is being recorded, can still leave
+/// that one record, a ledger row and nothing more). A plain read: it orders the refusals and holds
+/// nothing. The act's own transaction asks again under the lock
 /// ([`operator_holds`]), which is the check that holds to the commit.
 pub(crate) async fn operator_gate(pool: &PgPool, operator: ProfileId) -> ApiResult<()> {
     if crate::services::access_service::is_system_admin(pool, operator).await? {
         Ok(())
     } else {
-        Err(ApiError::NotFound(OPERATOR_REFUSAL.to_string()))
+        refused_operator(operator)
     }
 }
 

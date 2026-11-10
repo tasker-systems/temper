@@ -182,25 +182,25 @@ pub async fn execute_erasure(
 ) -> ApiResult<ErasureCompletion> {
     let operator = admin.actor();
     // The operator's standing first, under the governance lock, before anything is looked up or
-    // revoked at Slack: a demoted admin holding a stale proof is refused (`404`, what a non-admin
-    // is told), one whose demotion is in flight waits and is then refused, and in either case
-    // nothing reaches Slack. Locked, unlike the other erasure doors' entry gate, because the Slack
-    // revoke below is irreversible and runs outside the act's transaction. The act's transaction
-    // asks again, and that is the check that holds to the commit: a demotion that commits while
-    // Slack is being called is refused there, leaving the grants revoked at Slack and nothing else,
-    // the state a failed act already leaves (see the failure arm).
-    {
-        let mut gate = pool.begin().await?;
-        operator_holds(&mut gate, operator).await?;
-        gate.commit().await?;
-    }
-    // The emitter resolves on the pool, before the transaction opens (a read, not part of the
-    // mutation) — the operator's entity on the door's surface. Hard precondition, the
-    // `slack_disconnect_service` shape: an unattributable authority act is worse than a failed
-    // one. The surface rides from the door (`Surface::ApiHttp` from the HTTP door, the one that
-    // exists today) so the ledger says where the act came from, never a hard-wired guess that
-    // outlives its accuracy — the blob commit's S5 correction.
-    let emitter = resolve_emitter(pool, operator, surface.marker())
+    // revoked at Slack, and held through the Slack pass: a demoted admin holding a stale proof is
+    // refused (`404`, what a non-admin is told), one whose demotion is in flight waits and is then
+    // refused, and in either case nothing reaches Slack. The Slack revoke is irreversible and runs
+    // outside the act's transaction, so it runs on this one, under the lock (a demotion waits out
+    // the Slack calls, as it waits out an admin Slack disconnect). The act's own transaction asks
+    // again, and that is the check that holds to the act's commit; only a demotion committing in
+    // the instant between the two can leave the grants revoked at Slack with the act refused, the
+    // state a failed act already leaves (see the failure arm).
+    let mut gate = pool.begin().await?;
+    operator_holds(&mut gate, operator).await?;
+
+    // The emitter resolves before the act's transaction opens (a read, not part of the mutation),
+    // on the gate's connection, so no second pool connection is taken while it is held. The
+    // operator's entity on the door's surface. Hard precondition, the `slack_disconnect_service`
+    // shape: an unattributable authority act is worse than a failed one. The surface rides from
+    // the door (`Surface::ApiHttp` from the HTTP door, the one that exists today) so the ledger says
+    // where the act came from, never a hard-wired guess that outlives its accuracy — the blob
+    // commit's S5 correction.
+    let emitter = resolve_emitter(&mut *gate, operator, surface.marker())
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
@@ -209,7 +209,7 @@ pub async fn execute_erasure(
         r#"SELECT id FROM kb_profiles WHERE id = $1"#,
         subject.uuid()
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *gate)
     .await?;
     if exists.is_none() {
         return Err(ApiError::NotFound("profile not found".to_string()));
@@ -224,11 +224,12 @@ pub async fn execute_erasure(
     // this read and the act is destroyed unrevoked and uncounted: a narrow race, named here so the
     // tally is not read as complete.
     let (slack_revocation, pending) = erasure_slack_revocation_service::revoke_before_erasure(
-        pool,
+        &mut gate,
         subject.uuid(),
         env.slack.as_ref(),
     )
     .await?;
+    gate.commit().await?;
 
     // The act runs resource erasure once per estate resource (20261021100000), so it fails
     // retryably where that act does: a deadlock, a raced edge fold, a remote source that gained or
