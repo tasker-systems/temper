@@ -656,6 +656,15 @@ pub(crate) async fn is_system_admin_locked(
     tx: &mut sqlx::PgConnection,
     profile: ProfileId,
 ) -> ApiResult<bool> {
+    Ok(is_system_admin_locked_raw(tx, profile).await?)
+}
+
+/// [`is_system_admin_locked`] with the database error as is, for a caller that classifies it (an
+/// act's retry loop, which retries a deadlock).
+pub(crate) async fn is_system_admin_locked_raw(
+    tx: &mut sqlx::PgConnection,
+    profile: ProfileId,
+) -> Result<bool, sqlx::Error> {
     let locked = sqlx::query_scalar!(
         "SELECT profile_id FROM kb_principal_governance WHERE profile_id = $1 FOR KEY SHARE",
         *profile,

@@ -275,6 +275,7 @@ async fn execute_with_release_timeout(
     release_timeout: Duration,
 ) -> ApiResult<ResourceErasureOutcome> {
     let operator = admin.actor();
+    operator_gate(pool, operator).await?;
     let emitter = resolve_emitter(pool, operator, request.surface.marker())
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -440,6 +441,78 @@ where
     }
 }
 
+/// What a demoted operator is told by every erasure door: the sentence the HTTP gate
+/// (`require_erasure_operator`) answers a caller who is not a system admin with, so the doors'
+/// refusal to a demoted admin is the one a non-admin gets.
+pub(crate) const OPERATOR_REFUSAL: &str = "not found";
+
+/// The erasure doors' admin re-check on an act's transaction, before its first write. The door's
+/// `&SystemAdmin` proof was minted on the pool; an erasure is irreversible, so the operator's
+/// governance row is read again `FOR KEY SHARE` (`auth::is_system_admin_locked`), held to the act's
+/// commit: a demotion committed since refuses the act, one in flight makes it wait, then refuses.
+///
+/// Lock order: governance first, then the act's own locks (its resource act-queue advisory locks,
+/// the resource and edge rows, the home context; the person act also writes its subject's
+/// standing). A demotion locks the demoted admin's standing row and the governance pair, and no
+/// erasure act takes a governance row, so the two wait in a cycle only if the person act's
+/// subject were its own operator, whose demotion it would then outlive or refuse: one order
+/// either way.
+///
+/// The wait is unbounded, as the acts' own are (they pin `lock_timeout = 0`, migration
+/// `20261015100000`): a lock-wait bound set later on the pool or role must not turn a demotion in
+/// flight into a busy refusal instead of this door's answer. `SET LOCAL`, so it ends with the
+/// transaction.
+///
+/// The database error of the read itself (a deadlock, say) is returned as is, so an act's retry
+/// loop classifies it as it classifies the act's own.
+pub(crate) async fn operator_still_holds(
+    tx: &mut sqlx::PgConnection,
+    operator: ProfileId,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar!("SELECT set_config('lock_timeout', '0', true)")
+        .fetch_one(&mut *tx)
+        .await?;
+    crate::auth::is_system_admin_locked_raw(tx, operator).await
+}
+
+/// [`operator_still_holds`] for a door with no retry loop: the refusal on `false`.
+pub(crate) async fn operator_holds(
+    tx: &mut sqlx::PgConnection,
+    operator: ProfileId,
+) -> ApiResult<()> {
+    if operator_still_holds(tx, operator).await? {
+        Ok(())
+    } else {
+        Err(operator_refusal(operator))
+    }
+}
+
+/// The refusal of a demoted operator, with the `warn` line the HTTP gate writes for a non-admin,
+/// so a stale proof's refusal leaves the same trace at the default filter.
+pub(crate) fn operator_refusal(operator: ProfileId) -> ApiError {
+    tracing::warn!(
+        profile_id = %operator,
+        "erasure door refused an operator who is no longer a system admin; answered 404, nothing \
+         recorded on the ledger"
+    );
+    ApiError::NotFound(OPERATOR_REFUSAL.to_string())
+}
+
+/// The operator's standing at a door's entry, before it validates anything or records a refusal:
+/// a demoted operator holding a stale proof is told what a non-admin is told, never a `400` or
+/// `404` about the request, and no refusal is recorded in their name (a demotion that commits
+/// after the act's re-check, while a refused act's refusal is being recorded, can still leave
+/// that one record, a ledger row and nothing more). A plain read: it orders the refusals and holds
+/// nothing. The act's own transaction asks again under the lock
+/// ([`operator_holds`]), which is the check that holds to the commit.
+pub(crate) async fn operator_gate(pool: &PgPool, operator: ProfileId) -> ApiResult<()> {
+    if crate::services::access_service::is_system_admin(pool, operator).await? {
+        Ok(())
+    } else {
+        Err(operator_refusal(operator))
+    }
+}
+
 /// `None` when no such resource exists; otherwise whether it is already erased.
 pub(super) async fn erased_state(pool: &PgPool, resource: ResourceId) -> ApiResult<Option<bool>> {
     let erased = sqlx::query_scalar!(
@@ -461,17 +534,29 @@ async fn run_act(
     let blobs: Vec<Uuid> = also_strike_blobs.iter().map(|b| b.uuid()).collect();
     let mut retries = 0;
     loop {
-        let result = sqlx::query_scalar!(
-            r#"SELECT resource_erasure_execute($1, $2, $3, $4, $5)
-                   AS "outcome: serde_json::Value""#,
-            attempt.resource.uuid(),
-            attempt.operator.uuid(),
-            attempt.emitter.uuid(),
-            attempt.request_reference,
-            &blobs[..],
-        )
-        .fetch_one(pool)
-        .await;
+        // Each attempt is its own transaction, the operator re-checked first under its lock.
+        let mut tx = pool.begin().await?;
+        let result = match operator_still_holds(&mut tx, attempt.operator).await {
+            Ok(false) => return Err(operator_refusal(attempt.operator)),
+            Ok(true) => {
+                sqlx::query_scalar!(
+                    r#"SELECT resource_erasure_execute($1, $2, $3, $4, $5)
+                           AS "outcome: serde_json::Value""#,
+                    attempt.resource.uuid(),
+                    attempt.operator.uuid(),
+                    attempt.emitter.uuid(),
+                    attempt.request_reference,
+                    &blobs[..],
+                )
+                .fetch_one(&mut *tx)
+                .await
+            }
+            Err(err) => Err(err),
+        };
+        let result = match result {
+            Ok(raw) => tx.commit().await.map(|()| raw),
+            Err(err) => Err(err),
+        };
         let err = match result {
             Ok(raw) => return decode_completion(raw).map(ActVerdict::Completed),
             Err(err) => err,

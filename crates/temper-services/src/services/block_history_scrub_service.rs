@@ -36,9 +36,9 @@ use temper_workflow::operations::Surface;
 use crate::auth::SystemAdmin;
 use crate::error::{ApiError, ApiResult};
 use crate::services::resource_erasure_service::{
-    between, erased_state, listed_refusal, refuse, reject_duplicates, Attempt,
-    ResourceErasureRefusal, ResourceErasureRefusalDetail, DEADLOCK_DETECTED, MAX_ACT_RETRIES,
-    RAISE_EXCEPTION, RESOURCE_NOT_FOUND,
+    between, erased_state, listed_refusal, operator_gate, operator_refusal, operator_still_holds,
+    refuse, reject_duplicates, Attempt, ResourceErasureRefusal, ResourceErasureRefusalDetail,
+    DEADLOCK_DETECTED, MAX_ACT_RETRIES, RAISE_EXCEPTION, RESOURCE_NOT_FOUND,
 };
 
 /// The prefix of every raise in `block_history_scrub_execute` (migration 20261003000210).
@@ -140,6 +140,7 @@ pub async fn execute_block_history_scrub(
     request: BlockHistoryScrubRequest<'_>,
 ) -> ApiResult<BlockHistoryScrubOutcome> {
     let operator = admin.actor();
+    operator_gate(pool, operator).await?;
     let emitter = resolve_emitter(pool, operator, request.surface.marker())
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -210,8 +211,14 @@ fn empty_list() -> ApiError {
 async fn run_scrub(pool: &PgPool, attempt: &Attempt, blocks: &[Uuid]) -> ApiResult<ScrubVerdict> {
     let mut retries = 0;
     loop {
-        let err = match scrub_once(pool, attempt, blocks).await {
-            Ok(committed) => return Ok(ScrubVerdict::Completed(committed)),
+        // Each attempt is its own transaction, the operator re-checked first under its lock.
+        let mut tx = pool.begin().await?;
+        let err = match operator_still_holds(&mut tx, attempt.operator).await {
+            Ok(false) => return Err(operator_refusal(attempt.operator)),
+            Ok(true) => match scrub_once(tx, attempt, blocks).await {
+                Ok(committed) => return Ok(ScrubVerdict::Completed(committed)),
+                Err(err) => err,
+            },
             Err(err) => err,
         };
         match classify_scrub_error(&err) {
@@ -227,11 +234,10 @@ async fn run_scrub(pool: &PgPool, attempt: &Attempt, blocks: &[Uuid]) -> ApiResu
 /// means any failure here rolls the act back whole, so nothing that committed answers as a
 /// failure. A malformed return is a decode error, which the classifier reads as `Other`.
 async fn scrub_once(
-    pool: &PgPool,
+    mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
     attempt: &Attempt,
     blocks: &[Uuid],
 ) -> Result<ScrubCommitted, sqlx::Error> {
-    let mut tx = pool.begin().await?;
     let raw = sqlx::query_scalar!(
         r#"SELECT block_history_scrub_execute($1, $2, $3, $4, $5)
                AS "outcome: serde_json::Value""#,

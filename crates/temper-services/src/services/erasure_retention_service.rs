@@ -22,6 +22,7 @@ use temper_core::types::ids::ProfileId;
 
 use crate::auth::SystemAdmin;
 use crate::error::{ApiError, ApiResult};
+use crate::services::resource_erasure_service::operator_holds;
 
 fn category_from(s: &str) -> ApiResult<RetentionCategory> {
     serde_json::from_value(serde_json::Value::String(s.to_string()))
@@ -68,6 +69,12 @@ pub async fn set(
     admin: &SystemAdmin,
     policy: &RetentionPolicySet,
 ) -> ApiResult<RetentionPolicies> {
+    // The operator's standing first, on the write's transaction and under the governance lock,
+    // before the request is judged: a policy decides what every later erasure keeps, so an admin
+    // demoted since the proof was minted (or while this runs) sets none, and is told what a
+    // non-admin is told.
+    let mut tx = pool.begin().await?;
+    operator_holds(&mut tx, admin.actor()).await?;
     if !valid_name(&policy.name) {
         return Err(ApiError::BadRequest(
             "a policy name is a slug: lower-case letters, digits and hyphens, at most 63".into(),
@@ -88,10 +95,10 @@ pub async fn set(
         policy.period,
         admin.actor().uuid(),
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await;
     match result {
-        Ok(_) => {}
+        Ok(_) => tx.commit().await?,
         Err(sqlx::Error::Database(e)) => {
             return Err(match e.code().as_deref() {
                 // Not an interval; or a period that is not positive.
@@ -126,12 +133,16 @@ pub async fn remove(
     admin: &SystemAdmin,
     category: RetentionCategory,
 ) -> ApiResult<RetentionPolicies> {
+    // As for `set`: the operator's standing first, under the governance lock.
+    let mut tx = pool.begin().await?;
+    operator_holds(&mut tx, admin.actor()).await?;
     sqlx::query!(
         "DELETE FROM kb_erasure_retention_policies WHERE category = $1",
         category.as_str()
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     tracing::info!(
         actor = %admin.actor(),
         category = category.as_str(),

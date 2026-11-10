@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT resource_field_scrub_execute($1, $2, $3, $4, $5, $6, $7)\n                   AS \"outcome: serde_json::Value\"",
+  "query": "SELECT resource_field_scrub_execute($1, $2, $3, $4, $5, $6, $7)\n                           AS \"outcome: serde_json::Value\"",
   "describe": {
     "columns": [
       {
@@ -24,5 +24,5 @@
       null
     ]
   },
-  "hash": "b46c8eebcf8a4cf264495e35f80b024f410298b585213c39aa1d878f36231a0c"
+  "hash": "9fb71275fdcc9bc964901e9ef08ee76013bd3d31f9e78ae2e7a6f532c9c9789f"
 }

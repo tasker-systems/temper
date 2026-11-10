@@ -86,6 +86,23 @@ pub(crate) async fn disconnect_slack_principal(
     actor: ProfileId,
     req: DisconnectRequest<'_>,
 ) -> ApiResult<DisconnectOutcome> {
+    disconnect_as(pool, actor, false, req).await
+}
+
+/// [`disconnect_slack_principal`], saying whether the actor's authority is a system admin's. The
+/// admin arm was decided on the pool (the proof), so it is asked again first on the transaction,
+/// under the governance lock and before the vault row is locked, the token revoked or anything
+/// deleted: an admin demoted since (or while this runs) disconnects nothing, and is refused `403`,
+/// what a non-admin gets at the admin door. Lock order: governance, then the vault row, then the
+/// refresh-token rows (AS mode) and the link rows. A demotion takes its subject's standing and
+/// governance rows, then that subject's refresh tokens; it waits at the governance row for this
+/// transaction before it reaches any token row.
+async fn disconnect_as(
+    pool: &PgPool,
+    actor: ProfileId,
+    on_admin_arm: bool,
+    req: DisconnectRequest<'_>,
+) -> ApiResult<DisconnectOutcome> {
     // Resolved on the pool, before the transaction opens: the emitter is a read
     // of the actor's entity, not part of the mutation, and the reference sink
     // (`access_service::grant_capability`) resolves it the same way.
@@ -123,6 +140,9 @@ pub(crate) async fn disconnect_slack_principal(
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
     let mut tx = pool.begin().await?;
+    if on_admin_arm && !crate::auth::is_system_admin_locked(&mut tx, actor).await? {
+        return Err(ApiError::Forbidden);
+    }
 
     // 1. Read + decrypt the RT while it still exists (locks the vault row).
     let refresh_token = slack_grant_vault_service::take_refresh_token_locked(
@@ -346,7 +366,7 @@ pub async fn admin_disconnect_slack_principal(
         "admin slack disconnect authorized"
     );
 
-    disconnect_slack_principal(pool, admin.actor(), req).await
+    disconnect_as(pool, admin.actor(), true, req).await
 }
 
 /// Revoke the stored grant a re-link is about to overwrite. Call it in the callback's transaction,
@@ -1531,6 +1551,96 @@ mod tests {
             subject,
             "the subject is the profile that lost its binding, NOT the operator",
         );
+    }
+
+    /// The admin arm is asked again on the disconnect's transaction, under the governance lock and
+    /// before the vault row is locked or anything is revoked or deleted. **In flight:** the admin's
+    /// demotion is left open, the disconnect blocks at the governance re-check (the blocked
+    /// statement is matched, so the wait is not some other lock), and once the demotion commits it
+    /// is refused `403` with the link intact. **Committed first:** the stale proof is refused.
+    /// Both halves fail without the re-check: the proof was minted before the demotion, so the
+    /// disconnect never blocked and unbound the principal.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_demoted_admin_disconnects_nothing(pool: PgPool) {
+        let principal = "slack:TB:UDEMOTED";
+        let subject = insert_profile(&pool).await;
+        let admin = insert_profile(&pool).await;
+        make_system_admin(&pool, admin).await;
+        seed_link(&pool, subject, principal).await;
+        let request = || DisconnectRequest {
+            slack_principal_id: principal,
+            key: Box::leak(Box::new(key())),
+            mode: AuthMode::ExternalIdp,
+            revoke_url: "http://127.0.0.1:1/oauth/revoke".to_string(),
+            client_id: "c",
+        };
+        let demote = |pool: PgPool| async move {
+            let mut holder = pool.begin().await.unwrap();
+            let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+                .fetch_one(&mut *holder)
+                .await
+                .unwrap();
+            let _: bool =
+                sqlx::query_scalar("SELECT principal_governance_set($1, false, NULL, 'test')")
+                    .bind(admin)
+                    .fetch_one(&mut *holder)
+                    .await
+                    .unwrap();
+            (holder, pid)
+        };
+
+        // In flight.
+        let proof = crate::test_support::system_admin_proof_for(&pool, admin).await;
+        let (holder, pid) = demote(pool.clone()).await;
+        let p2 = pool.clone();
+        let contender =
+            tokio::spawn(
+                async move { admin_disconnect_slack_principal(&p2, &proof, request()).await },
+            );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let waiting: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM pg_stat_activity \
+                                 WHERE datname = current_database() AND wait_event_type = 'Lock' \
+                                   AND $1 = ANY (pg_blocking_pids(pid)) \
+                                   AND query ILIKE '%FROM kb_principal_governance%FOR KEY SHARE%')",
+            )
+            .bind(pid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            if waiting {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the disconnect never blocked at the governance re-check"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        holder.commit().await.unwrap();
+        let err = contender.await.unwrap().unwrap_err();
+        assert!(matches!(err, ApiError::Forbidden), "in flight: {err:?}");
+        assert_eq!(
+            link_count(&pool, principal).await,
+            1,
+            "a refused disconnect unbound"
+        );
+
+        // Committed first, with a proof minted before the demotion.
+        crate::test_support::grant_governance(&pool, admin).await;
+        let stale = crate::test_support::system_admin_proof_for(&pool, admin).await;
+        let (holder, _) = demote(pool.clone()).await;
+        holder.commit().await.unwrap();
+        let err = admin_disconnect_slack_principal(&pool, &stale, request())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, ApiError::Forbidden),
+            "committed first: {err:?}"
+        );
+        assert_eq!(link_count(&pool, principal).await, 1);
+        assert!(disconnect_events(&pool).await.is_empty());
     }
 
     #[sqlx::test(migrations = "../../migrations")]
