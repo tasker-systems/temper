@@ -175,6 +175,7 @@ pub async fn create(
         authorize::<SubscriptionAuthority>(pool, Principal::Human(authed), req.authoring_team_id)
             .await?;
     let authoring_team = authorized.subject();
+    let on_admin_arm = authorized.authority() == SubscriptionAuthority::SystemAdmin;
     // A subscription delivering into a personal context writes into personal space, which only its
     // owner acts on (task `01a191b4`): the admin arm above does not carry it. A manager of the
     // authoring team the context was shared into passes this check, but the share alone is not
@@ -233,6 +234,15 @@ pub async fn create(
     let selector_json = serde_json::to_value(&req.selector)
         .map_err(|e| ApiError::BadRequest(format!("selector serialization failed: {e}")))?;
 
+    // The admin arm asked again under the governance lock, on the insert's transaction. A demoted
+    // admin is refused with the gate's answer to them as they now stand.
+    let mut tx = pool.begin().await?;
+    if on_admin_arm && !crate::auth::is_system_admin_locked(&mut tx, caller).await? {
+        drop(tx);
+        authorize::<SubscriptionAuthority>(pool, Principal::Human(authed), req.authoring_team_id)
+            .await?;
+        return Err(ApiError::Forbidden);
+    }
     let id = sqlx::query_scalar!(
         r#"INSERT INTO kb_subscriptions
                (subscriber_table, subscriber_id, authoring_team_id,
@@ -246,9 +256,10 @@ pub async fn create(
         selector_json,
         *caller,
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await
     .map_err(map_duplicate)?;
+    tx.commit().await?;
 
     get(pool, id).await
 }
@@ -315,8 +326,20 @@ pub async fn revoke(pool: &PgPool, authed: &HumanPrincipal, id: Uuid) -> ApiResu
     let caller = ProfileId::from(authed.profile().id);
     // Auth before writes, keyed on the existing row's authoring team. A refusal is
     // indistinguishable from a missing id.
-    authorize::<SubscriptionControlAuthority>(pool, Principal::Human(authed), id).await?;
+    let on_admin_arm =
+        authorize::<SubscriptionControlAuthority>(pool, Principal::Human(authed), id)
+            .await?
+            .authority()
+            == SubscriptionControlAuthority::SystemAdmin;
 
+    // The admin arm asked again under the governance lock, on the update's transaction. A demoted
+    // admin is refused as a caller with no authority over the row is: the missing-id answer.
+    let mut tx = pool.begin().await?;
+    if on_admin_arm && !crate::auth::is_system_admin_locked(&mut tx, caller).await? {
+        drop(tx);
+        authorize::<SubscriptionControlAuthority>(pool, Principal::Human(authed), id).await?;
+        return Err(ApiError::NotFound(SUBSCRIPTION_REFUSAL.to_string()));
+    }
     sqlx::query!(
         r#"UPDATE kb_subscriptions
               SET revoked_at = now(), revoked_by_profile_id = $2
@@ -324,8 +347,9 @@ pub async fn revoke(pool: &PgPool, authed: &HumanPrincipal, id: Uuid) -> ApiResu
         id,
         *caller,
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     get(pool, id).await
 }
 
@@ -789,6 +813,108 @@ mod tests {
         .expect("revoke");
         assert!(revoked.revoked_at.is_some());
         assert_eq!(revoked.revoked_by_profile_id, Some(*admin));
+    }
+
+    /// The admin arm of subscription create and revoke is asked again on the write's transaction,
+    /// under the governance lock. The admin's demotion is left open; each door blocks at the
+    /// governance re-check (the blocked statement is matched), then is refused once it commits,
+    /// having written nothing. Without the re-check neither door blocks, and both wrote. The team is
+    /// someone else's, so the demoted admin holds no other arm.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_demotion_in_flight_refuses_create_and_revoke(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let owner = seed_admin(&pool).await;
+        let team = seed_team(&pool, owner).await;
+        let conn = seed_connection(&pool, Some(team), admin).await;
+        grant_reach(&pool, admin, conn, team).await;
+        let existing = create(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, admin.uuid()).await,
+            &req("kb_teams", team, team, conn),
+        )
+        .await
+        .expect("seed subscription");
+        sqlx::query("UPDATE kb_subscriptions SET selector = jsonb_set(selector, '{repo}', '\"acme/seeded\"') WHERE id = $1")
+            .bind(existing.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        async fn in_flight<T: std::fmt::Debug + Send + 'static>(
+            pool: &PgPool,
+            admin: ProfileId,
+            door: impl std::future::Future<Output = ApiResult<T>> + Send + 'static,
+        ) -> ApiError {
+            let mut holder = pool.begin().await.unwrap();
+            let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+                .fetch_one(&mut *holder)
+                .await
+                .unwrap();
+            let _: bool =
+                sqlx::query_scalar("SELECT principal_governance_set($1, false, NULL, 'test')")
+                    .bind(admin.uuid())
+                    .fetch_one(&mut *holder)
+                    .await
+                    .unwrap();
+            let contender = tokio::spawn(door);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                let waiting: bool = sqlx::query_scalar(
+                    "SELECT EXISTS (SELECT 1 FROM pg_stat_activity \
+                                     WHERE datname = current_database() AND wait_event_type = 'Lock' \
+                                       AND $1 = ANY (pg_blocking_pids(pid)) \
+                                       AND query ILIKE '%FROM kb_principal_governance%FOR KEY SHARE%')",
+                )
+                .bind(pid)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+                if waiting {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the door never blocked at the governance re-check"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            holder.commit().await.unwrap();
+            let err = contender.await.unwrap().unwrap_err();
+            crate::test_support::grant_governance(pool, admin.uuid()).await;
+            err
+        }
+
+        let (p, by) = (
+            pool.clone(),
+            crate::test_support::human_principal_for(&pool, admin.uuid()).await,
+        );
+        let err = in_flight(&pool, admin, async move {
+            create(&p, &by, &req("kb_teams", team, team, conn)).await
+        })
+        .await;
+        assert!(matches!(err, ApiError::Forbidden), "create: {err:?}");
+        let live: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM kb_subscriptions WHERE connection_id = $1")
+                .bind(conn)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(live, 1, "a refused create wrote a subscription");
+
+        let (p, by) = (
+            pool.clone(),
+            crate::test_support::human_principal_for(&pool, admin.uuid()).await,
+        );
+        let id = existing.id;
+        let err = in_flight(&pool, admin, async move { revoke(&p, &by, id).await }).await;
+        assert!(
+            matches!(&err, ApiError::NotFound(why) if why == SUBSCRIPTION_REFUSAL),
+            "revoke: {err:?}"
+        );
+        assert!(
+            get(&pool, id).await.unwrap().revoked_at.is_none(),
+            "a refused revoke revoked"
+        );
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]

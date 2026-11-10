@@ -20,7 +20,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::auth::HumanPrincipal;
-use crate::authz::{Principal, TwoSidedAuthority, TwoSidedScope};
+use crate::authz::TwoSidedScope;
 use crate::error::{ApiError, ApiResult};
 use temper_core::types::cognitive_maps::{
     BindTeamOutcome, BindTeamRequest, CogmapDetail, CogmapFoundationRow, CogmapRow,
@@ -128,12 +128,11 @@ pub async fn bind_team(
     // Auth before writes: system-admin, OR a team manager who administers the map (non-root team).
     // The gate consumes the typed principal (Class F, PR 2 of the single-ingress refactor): the
     // conditional shape is unchanged — the gate itself decides, the proof only identifies.
-    crate::authz::authorize::<TwoSidedAuthority>(
-        pool,
-        Principal::Human(authed),
-        TwoSidedScope::cogmap(cogmap_id, req.team_id),
-    )
-    .await?;
+    // The admin arm is asked again on the binding's transaction, under the governance lock
+    // (`context_service::two_sided_write_tx`), before the row is written.
+    let scope = TwoSidedScope::cogmap(cogmap_id, req.team_id);
+    let on_admin_arm =
+        crate::services::context_service::two_sided_admin_arm(pool, authed, scope).await?;
 
     // One person per map (task `01a1933d`), for every caller: a map is bound to a person's personal
     // team only when that person created it, and a map with no person as creator to one person's at
@@ -151,6 +150,9 @@ pub async fn bind_team(
         return Err(ApiError::ForbiddenDetail(refusal));
     }
 
+    let mut tx =
+        crate::services::context_service::two_sided_write_tx(pool, authed, scope, on_admin_arm)
+            .await?;
     let inserted = sqlx::query_scalar!(
         r#"
         INSERT INTO kb_team_cogmaps (cogmap_id, team_id)
@@ -161,9 +163,10 @@ pub async fn bind_team(
         cogmap_id,
         req.team_id,
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(one_person_refusal)?;
+    tx.commit().await?;
 
     Ok(BindTeamOutcome {
         cogmap_id,
@@ -212,20 +215,20 @@ pub async fn unbind_team(
     // symmetry is exactly why the shared gate excludes the gating team (see `TwoSidedAuthority`):
     // it is unbinding a gating-team-joined map, not binding one, that would be an escalation.
     // The gate consumes the typed principal (Class F, PR 2 of the single-ingress refactor).
-    crate::authz::authorize::<TwoSidedAuthority>(
-        pool,
-        Principal::Human(authed),
-        TwoSidedScope::cogmap(cogmap_id, team_id),
-    )
-    .await?;
-
+    let scope = TwoSidedScope::cogmap(cogmap_id, team_id);
+    let on_admin_arm =
+        crate::services::context_service::two_sided_admin_arm(pool, authed, scope).await?;
+    let mut tx =
+        crate::services::context_service::two_sided_write_tx(pool, authed, scope, on_admin_arm)
+            .await?;
     let result = sqlx::query!(
         "DELETE FROM kb_team_cogmaps WHERE cogmap_id = $1 AND team_id = $2",
         cogmap_id,
         team_id,
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     Ok(UnbindTeamOutcome {
         cogmap_id,
