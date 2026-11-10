@@ -147,8 +147,8 @@ Statuses for **temper**:
 | SEC-AUTH-2 | partial: route auth tiers are pinned (audit-route-auth, audit-mcp-route-auth, quality-gate.yml#rust-gate); authorising before a write inside a handler is review |
 | SEC-AUTH-3 | convention: refusal versus not-found parity is reviewed per handler |
 | SEC-CRED-1 | uncovered: several credential fields outside temper-client are bare String |
-| SEC-CRED-2 | gated: .github/workflows/quality-gate.yml#rust-gate |
-| SEC-CRED-3 | practiced |
+| SEC-CRED-2 | partial: the Debug pin (quality-gate.yml#rust-gate) matches a fixed set of credential field names and a _secret suffix, so a credential under another name (token, code_verifier, authorization, pem, a bare secret) or in a tuple struct escapes it |
+| SEC-CRED-3 | uncovered: the DCR client-secret check compares SHA-256 digests with ===; nothing checks comparison sites |
 | SEC-CRED-4 | gated: .github/workflows/quality-gate.yml#rust-gate |
 | SEC-RED-1 | practiced |
 | SEC-RED-2 | convention: redaction by origin is a design judgement made in review |
