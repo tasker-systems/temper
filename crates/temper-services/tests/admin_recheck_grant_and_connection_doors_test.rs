@@ -11,7 +11,10 @@
 //! (`… kb_principal_governance … FOR KEY SHARE`). The pool reads ahead of it are plain and never wait
 //! on an uncommitted delete, so the match can only be the transaction re-check. The demotion
 //! commits; the door is refused and wrote nothing. Without the re-check the door never blocks and
-//! the wait times out: **every in-flight test fails on the code before this change.**
+//! the wait times out, so these in-flight tests fail on the code before this change. The exception
+//! is machine revoke: it already re-checked under `access_service::still_admin`, so it blocks on the
+//! code before this change too. Its test fails there on the refusal (`403`, not the missing-id
+//! sentence).
 //!
 //! **Committed first:** these doors take a `HumanPrincipal`, not a proof, so their own pool read
 //! already sees a committed demotion. Those halves are **regression pins on the refusal text**:
@@ -19,9 +22,10 @@
 //!
 //! Lock order: governance first, then the door's own rows (the subject floor's resource row, a
 //! grant row, the severed personal teams, the credential or connection row). A demotion locks the
-//! subject's standing and governance rows and none of those. The last test races a secret rotation
-//! by one admin against another admin's revoke of the first, so the two contend on the rotating
-//! admin's governance row.
+//! subject's standing and governance rows and none of those. The last two tests race a secret
+//! rotation by one admin against, first, another admin's revoke of the rotating admin (they
+//! contend on that admin's governance row) and, second, another admin's revoke of the same
+//! credential (they contend on the credential row).
 
 use std::future::Future;
 
@@ -33,7 +37,9 @@ use temper_core::types::connection::{
 use temper_core::types::ids::ProfileId;
 use temper_core::types::machine::{IssueMachineRequest, MachineClient};
 use temper_services::auth_config::AuthMode;
-use temper_services::broker::FakeBroker;
+use temper_services::broker::{
+    BrokerError, CredentialBroker, FakeBroker, InboundRequest, MintRequest, Minted, VerifiedInbound,
+};
 use temper_services::error::ApiError;
 use temper_services::services::{
     access_service, connection_service, machine_client_service, machine_registration_service,
@@ -510,6 +516,152 @@ async fn connection_reach(pool: PgPool) {
     );
 }
 
+/// A broker that opens the rotating admin's demotion, left uncommitted, while it mints. The attach
+/// has already passed its first re-check (the one ahead of the mint) and committed it, so only the
+/// re-check after the broker, on the transaction that writes the credential, can wait on it.
+struct DemotingBroker {
+    inner: FakeBroker,
+    pool: PgPool,
+    who: Uuid,
+    holder: tokio::sync::Mutex<Option<(sqlx::Transaction<'static, sqlx::Postgres>, i32)>>,
+}
+
+impl std::fmt::Debug for DemotingBroker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DemotingBroker")
+    }
+}
+
+#[async_trait::async_trait]
+impl CredentialBroker for DemotingBroker {
+    async fn mint(&self, req: MintRequest<'_>) -> Result<Minted, BrokerError> {
+        let demotion = demotion_in_flight(&self.pool, self.who).await;
+        *self.holder.lock().await = Some(demotion);
+        self.inner.mint(req).await
+    }
+
+    async fn verify_inbound(
+        &self,
+        req: InboundRequest<'_>,
+    ) -> Result<VerifiedInbound, BrokerError> {
+        self.inner.verify_inbound(req).await
+    }
+}
+
+/// The re-check that guards the credential write, after the broker round trip: a demotion in flight
+/// across the mint is waited on there, and once it commits the attach is refused and writes no
+/// credential. Fails if that second re-check is removed: the attach then succeeds.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn attach_credential_rechecks_after_the_broker(pool: PgPool) {
+    let admin = an_admin(&pool, "ra-admin").await;
+    let c = connection(&pool, admin, "ra-conn").await.id;
+    let before = connection_row(&pool, c).await;
+    let broker = std::sync::Arc::new(DemotingBroker {
+        inner: FakeBroker::granting(serde_json::json!({})),
+        pool: pool.clone(),
+        who: admin,
+        holder: tokio::sync::Mutex::new(None),
+    });
+
+    let (p, b) = (pool.clone(), broker.clone());
+    let contender = tokio::spawn(async move {
+        let by = test_support::human_principal_for(&p, admin).await;
+        connection_service::attach_credential(
+            &p,
+            b.as_ref(),
+            &by,
+            c,
+            &ConnectionCredential {
+                broker: "vercel-connect".into(),
+                connector: "conn_abc123".into(),
+                installation: None,
+            },
+        )
+        .await
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let pid = loop {
+        if let Some((_, pid)) = broker.holder.lock().await.as_ref() {
+            break *pid;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the attach never reached the broker"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+    await_blocked_at(&pool, pid, GOVERNANCE_RECHECK).await;
+    let (holder, _) = broker.holder.lock().await.take().unwrap();
+    holder.commit().await.unwrap();
+
+    let err = contender.await.unwrap().unwrap_err();
+    assert!(connection_refusal(&err), "{err:?}");
+    assert_eq!(
+        broker.inner.mint_calls(),
+        1,
+        "the attach reached the broker"
+    );
+    assert_eq!(
+        connection_row(&pool, c).await,
+        before,
+        "a refused attach wrote the credential"
+    );
+}
+
+/// `grant_reach`'s affirmed arm: a connection that declares reach no mint has witnessed must be
+/// affirmed, and the affirmation and the grant are written together. A demoted admin writes
+/// neither.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn connection_reach_affirmed(pool: PgPool) {
+    let admin = an_admin(&pool, "ra-admin").await;
+    let c = connection_service::provision(
+        &pool,
+        &test_support::human_principal_for(&pool, admin).await,
+        &ProvisionConnectionRequest {
+            reach_granularity: Some("repo-set".into()),
+            reach_covers: Some("acme/temper".into()),
+            ..connection_req("ra-declared")
+        },
+    )
+    .await
+    .expect("provision a connection that declares reach")
+    .id;
+    let to = team(&pool, "ra-recipient").await;
+
+    both_races(
+        &pool,
+        admin,
+        connection_refusal,
+        move |pool: PgPool| async move {
+            let by = test_support::human_principal_for(&pool, admin).await;
+            connection_service::grant_reach(&pool, &by, c, to, Some("intended".into())).await
+        },
+    )
+    .await;
+    assert_eq!(
+        grant_rows(&pool, c, to).await,
+        0,
+        "a refused affirmed grant_reach wrote a grant"
+    );
+    let affirmed: bool = sqlx::query_scalar(
+        "SELECT reach_affirmed_by IS NOT NULL FROM kb_connections WHERE id = $1",
+    )
+    .bind(c)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        !affirmed,
+        "a refused affirmed grant_reach stamped the affirmation"
+    );
+
+    let by = test_support::human_principal_for(&pool, admin).await;
+    connection_service::grant_reach(&pool, &by, c, to, Some("intended".into()))
+        .await
+        .expect("the admin affirms and grants reach");
+    assert_eq!(grant_rows(&pool, c, to).await, 1);
+}
+
 // ── Lock order ────────────────────────────────────────────────────────────────────────────────────
 
 /// A lock-order witness, not a proof: admin A rotates a machine's secret while admin B revokes A
@@ -569,6 +721,69 @@ async fn a_rotation_and_its_rotators_revoke_never_deadlock(pool: PgPool) {
             Ok(_) => {}
             Err(err) if machine_client_refusal(&err) => {}
             Err(other) => panic!("round {round}: not one serial order: {other:?}"),
+        }
+    }
+}
+
+/// A lock-order witness, not a proof: admin A rotates a machine's secret while admin B revokes the
+/// same credential, from one start line, several times. The rotation takes A's governance row
+/// `FOR KEY SHARE`, then the severed personal team and its member row, then the credential row; the
+/// revoke takes B's governance rows (`access_service::still_admin`), then the credential row. They
+/// contend on the credential row, and neither takes a lock the other already holds before it, so
+/// every round ends in one serial order: the rotation first (it hands back a secret, then the
+/// credential is revoked) or the revoke first (the rotation is refused). A deadlock aborts one side
+/// and fails the round.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_rotation_and_a_revoke_of_its_credential_never_deadlock(pool: PgPool) {
+    let person = profile(&pool, "ra-person").await;
+    test_support::approve(&pool, person).await;
+    let theirs: Uuid = sqlx::query_scalar("SELECT id FROM kb_teams WHERE personal_of = $1")
+        .bind(person)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let a = an_admin(&pool, "ra-a").await;
+    let b = an_admin(&pool, "ra-b").await;
+
+    for round in 0..8 {
+        let client = issued_machine(&pool, a).await;
+        sqlx::query("UPDATE kb_machine_clients SET registered_by_profile_id = $2 WHERE id = $1")
+            .bind(client.id)
+            .bind(person)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'member')",
+        )
+        .bind(theirs)
+        .bind(client.profile_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let start = std::sync::Arc::new(tokio::sync::Barrier::new(2));
+        let (p1, s1) = (pool.clone(), start.clone());
+        let rotate = tokio::spawn(async move {
+            let by = test_support::human_principal_for(&p1, a).await;
+            s1.wait().await;
+            machine_client_service::rotate_secret(&p1, &by, client.id, 0, AuthMode::TemperAs).await
+        });
+        let (p2, s2) = (pool.clone(), start.clone());
+        let revoke = tokio::spawn(async move {
+            let by = test_support::human_principal_for(&p2, b).await;
+            s2.wait().await;
+            machine_client_service::revoke(&p2, client.id, &by).await
+        });
+        let (rotated, revoked) = (rotate.await.unwrap(), revoke.await.unwrap());
+        revoked.unwrap_or_else(|e| panic!("round {round}: the revoke failed: {e:?}"));
+        match rotated {
+            Ok(_) => {}
+            // A deadlock (`40P01`) surfaces as a 500; any refusal of a revoked credential is fine.
+            Err(ApiError::Internal(_)) => {
+                panic!("round {round}: not one serial order: {rotated:?}")
+            }
+            Err(_) => {}
         }
     }
 }

@@ -30,7 +30,9 @@ row, the severed personal teams, the credential or connection row). A demotion l
 Who observes: a system admin demoted while one of these acts is in flight. No schema change and no
 response shape change. Witnesses: `crates/temper-services/tests/admin_recheck_grant_and_connection_doors_test.rs`,
 whose in-flight halves fail without the change (the committed-first halves are regression pins on
-the refusal, since these doors' own pool read already sees a committed demotion), and
-`rotation_and_revoke_of_one_credential_never_deadlock` there as a lock-order witness. Release
+the refusal, since these doors' own pool read already sees a committed demotion), and two
+lock-order witnesses there: `a_rotation_and_its_rotators_revoke_never_deadlock` (a rotation raced
+against a demotion of the rotating admin) and `a_rotation_and_a_revoke_of_its_credential_never_deadlock`
+(a rotation raced against another admin's revoke of the same credential). Release
 relevance: signal-only.
 '''
