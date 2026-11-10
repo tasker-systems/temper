@@ -234,15 +234,24 @@ pub async fn create(
     let selector_json = serde_json::to_value(&req.selector)
         .map_err(|e| ApiError::BadRequest(format!("selector serialization failed: {e}")))?;
 
-    // The admin arm asked again under the governance lock, on the insert's transaction. A demoted
-    // admin is refused with the gate's answer to them as they now stand.
+    // The caller's admin standing, asked again under the governance lock on the insert's
+    // transaction and held to its commit. Two answers above may have rested on it: leg 1's admin
+    // arm, and leg 3, whose regime for an admin-only map (or an admin-only context) is
+    // `is_system_admin` itself, including for a manager of the authoring team who passed leg 1 on
+    // the team arm. A demoted admin on leg 1's admin arm is refused with the gate's answer to them
+    // as they now stand.
     let mut tx = pool.begin().await?;
-    if on_admin_arm && !crate::auth::is_system_admin_locked(&mut tx, caller).await? {
+    let admin_now = crate::auth::is_system_admin_locked(&mut tx, caller).await?;
+    if on_admin_arm && !admin_now {
         drop(tx);
         authorize::<SubscriptionAuthority>(pool, Principal::Human(authed), req.authoring_team_id)
             .await?;
         return Err(ApiError::Forbidden);
     }
+    // Leg 3 again, on this transaction: its admin-regime answer now reads the governance row the
+    // lock above holds (or found absent), so a demotion cannot commit between it and the insert.
+    refuse_unless_subscriber_authorable(&mut *tx, caller, &req.subscriber_table, req.subscriber_id)
+        .await?;
     let id = sqlx::query_scalar!(
         r#"INSERT INTO kb_subscriptions
                (subscriber_table, subscriber_id, authoring_team_id,
@@ -445,7 +454,7 @@ async fn validate_subscriber_link(
 /// Runs after [`validate_subscriber_link`], so the subscriber is linked to a team the caller
 /// manages, and the caller can therefore read it: a `403` here discloses nothing they cannot see.
 async fn refuse_unless_subscriber_authorable(
-    pool: &PgPool,
+    conn: impl sqlx::PgExecutor<'_>,
     caller: ProfileId,
     subscriber_table: &str,
     subscriber_id: Uuid,
@@ -458,7 +467,7 @@ async fn refuse_unless_subscriber_authorable(
                 *caller,
                 subscriber_id,
             )
-            .fetch_one(pool)
+            .fetch_one(conn)
             .await?
         }
         "kb_cogmaps" => {
@@ -467,7 +476,7 @@ async fn refuse_unless_subscriber_authorable(
                 *caller,
                 subscriber_id,
             )
-            .fetch_one(pool)
+            .fetch_one(conn)
             .await?
         }
         _ => false,
@@ -778,6 +787,80 @@ mod tests {
             connection_id,
             selector: github_repo_selector(),
         }
+    }
+
+    /// Leg 3 rests on the admin regime even when leg 1 did not: an admin who also manages the
+    /// authoring team passes leg 1 on the team arm, and leg 3 for a map bound to the gating team
+    /// (admin-only) is `is_system_admin`. Their demotion in flight blocks the insert's transaction
+    /// at the governance lock; once it commits, leg 3 asked again on that transaction refuses, and
+    /// no subscription is written. Fails if leg 3 is not re-run on the transaction under the lock:
+    /// the insert then delivers onto an admin-only map the caller no longer authors.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_demotion_in_flight_refuses_a_team_managers_subscription_onto_an_admin_only_map(
+        pool: PgPool,
+    ) {
+        let admin = seed_admin(&pool).await;
+        let team = seed_team(&pool, admin).await;
+        let conn = seed_connection(&pool, Some(team), admin).await;
+        grant_reach(&pool, admin, conn, team).await;
+        let map = seed_cogmap_linked_to_team(&pool, team).await;
+        sqlx::query(
+            "INSERT INTO kb_team_cogmaps (cogmap_id, team_id) \
+             SELECT $1, id FROM kb_teams WHERE slug = 'temper-system'",
+        )
+        .bind(map)
+        .execute(&pool)
+        .await
+        .expect("bind the map to the gating team: admin-only");
+
+        let mut holder = pool.begin().await.unwrap();
+        let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *holder)
+            .await
+            .unwrap();
+        let _: bool =
+            sqlx::query_scalar("SELECT principal_governance_set($1, false, NULL, 'test')")
+                .bind(admin.uuid())
+                .fetch_one(&mut *holder)
+                .await
+                .unwrap();
+        let (p, by) = (
+            pool.clone(),
+            crate::test_support::human_principal_for(&pool, admin.uuid()).await,
+        );
+        let contender =
+            tokio::spawn(async move { create(&p, &by, &req("kb_cogmaps", map, team, conn)).await });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let waiting: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM pg_stat_activity \
+                                 WHERE datname = current_database() AND wait_event_type = 'Lock' \
+                                   AND $1 = ANY (pg_blocking_pids(pid)) \
+                                   AND query ILIKE '%FROM kb_principal_governance%FOR KEY SHARE%')",
+            )
+            .bind(pid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            if waiting {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the create never blocked at the governance lock"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        holder.commit().await.unwrap();
+        let err = contender.await.unwrap().unwrap_err();
+        assert!(matches!(err, ApiError::Forbidden), "{err:?}");
+        let written: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM kb_subscriptions WHERE subscriber_id = $1")
+                .bind(map)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(written, 0, "a refused create subscribed the admin-only map");
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]

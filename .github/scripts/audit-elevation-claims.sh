@@ -594,7 +594,7 @@ claim crates/temper-services/src/services/access_service.rs 11 is_system_admin
 claim crates/temper-services/src/services/admin_directory_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/cogmap_service.rs 4 two_sided
 claim crates/temper-services/src/services/connection_service.rs 11 connection
-claim crates/temper-services/src/services/context_service.rs 21 context_admin
+claim crates/temper-services/src/services/context_service.rs 22 context_admin
 claim crates/temper-services/src/services/embed_service.rs 1 -
 claim crates/temper-services/src/services/erasure_retention_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/erasure_service.rs 1 is_system_admin
@@ -606,7 +606,7 @@ claim crates/temper-services/src/services/resource_erasure_service.rs 2 is_syste
 claim crates/temper-services/src/services/saml_provisioning_service.rs 1 team_membership
 claim crates/temper-services/src/services/slack_disconnect_service.rs 2 -
 claim crates/temper-services/src/services/standing_service.rs 2 -
-claim crates/temper-services/src/services/subscription_service.rs 9 subscription
+claim crates/temper-services/src/services/subscription_service.rs 11 subscription
 claim crates/temper-services/src/services/subscription_test_support.rs 1 subscription
 claim crates/temper-services/src/services/team_service.rs 52 require_manage_on_team,can_manage,team_membership,is_system_admin
 gate audit_gate d25214a0b269

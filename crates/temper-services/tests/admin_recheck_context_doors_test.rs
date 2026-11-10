@@ -1,7 +1,8 @@
 #![cfg(feature = "test-db")]
-//! The context doors that place a context with a team (share, unshare, reassign) and the
-//! cognitive-map binding doors (bind, unbind) decided their system-admin arm on a pool read
-//! (`TwoSidedAuthority`) and never asked again on their write. Each now asks again on the write's
+//! The context doors that place a context with a team (share, unshare, reassign), restore (which
+//! brings back every write grant and authoring arm on the context), and the cognitive-map binding
+//! doors (bind, unbind) decided their system-admin arm on a pool read (`TwoSidedAuthority`,
+//! `ContextAdminAuthority`) and never asked again on their write. Each now asks again on the write's
 //! own transaction, under the governance lock (`auth::is_system_admin_locked`), before it writes.
 //! A demoted admin is refused with the gate's answer to them as they now stand: the exact refusal a
 //! non-admin with no role on either team gets.
@@ -310,5 +311,76 @@ async fn bind_and_unbind(pool: PgPool) {
         bindings(&pool, map).await,
         1,
         "a refused unbind deleted the binding"
+    );
+}
+
+/// Restore brings back every write grant and authoring arm on a retired context
+/// (`context_authorable_by_profile` reads `is_active`; every explicit grant `context_is_live`). A
+/// demoted admin's restore is refused with `ContextAdminAuthority`'s answer to them as they now
+/// stand: the not-found sentence, since they cannot read the team's context, which is what the
+/// stranger gets. A door that skipped asking the gate again would answer `403` and fail the
+/// equality.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn restore(pool: PgPool) {
+    let Fixture {
+        admin,
+        stranger,
+        ctx,
+        ..
+    } = fixture(&pool).await;
+    let by = test_support::caller_for(&pool, admin).await;
+    context_service::retire(&pool, &by, ctx)
+        .await
+        .expect("the admin retires it");
+    let retired = context_row(&pool, ctx).await;
+    both_races(
+        &pool,
+        admin,
+        stranger,
+        move |pool: PgPool, who| async move {
+            let by = test_support::caller_for(&pool, who).await;
+            context_service::restore(&pool, &by, ctx).await
+        },
+    )
+    .await;
+    assert_eq!(
+        context_row(&pool, ctx).await,
+        retired,
+        "a refused restore wrote"
+    );
+}
+
+/// Unbinding a map from the gating team takes it out of the admin-only write regime
+/// (`access_service::cogmap_write_requires_admin`): an escalation. A demoted admin's unbind is
+/// refused, and the binding stays.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn unbind_from_the_gating_team(pool: PgPool) {
+    let Fixture {
+        admin, stranger, ..
+    } = fixture(&pool).await;
+    let gating = team(&pool, "ra-gating").await;
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'ra-gating' WHERE id = 1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let map = cogmap(&pool).await;
+    let by = test_support::human_principal_for(&pool, admin).await;
+    cogmap_service::bind_team(&pool, &by, map, &BindTeamRequest { team_id: gating })
+        .await
+        .expect("the admin binds it to the gating team");
+    both_races(
+        &pool,
+        admin,
+        stranger,
+        move |pool: PgPool, who| async move {
+            let by = test_support::human_principal_for(&pool, who).await;
+            cogmap_service::unbind_team(&pool, &by, map, gating).await
+        },
+    )
+    .await;
+    assert_eq!(
+        bindings(&pool, map).await,
+        1,
+        "a refused unbind took the map out of the admin-only regime"
     );
 }
