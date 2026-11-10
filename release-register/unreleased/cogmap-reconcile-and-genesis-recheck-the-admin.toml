@@ -1,0 +1,29 @@
+title    = "Reconcile of an admin-only cognitive map and genesis at a requested id ask a system admin's standing again under the governance lock before they write"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "mcp"]
+status   = "signal-only"
+body = '''
+Reconcile of a map in the admin-only regime (the L0 kernel, or a map bound to temper-system or the
+gating team) and genesis at a caller-requested map or telos id decided their system-admin arm on a
+pool read and never asked again. An admin demoted after that read, or while the act was in flight,
+still rewrote the kernel or placed a map at a reserved id.
+
+Each now asks again as the first statement of its SERIALIZABLE transaction, after SET TRANSACTION,
+with the caller's kb_principal_governance row FOR KEY SHARE, held to commit. A demotion committed
+first refuses the act; one in flight makes it wait. When that demotion commits, SERIALIZABLE answers
+the waiting lock with a serialization failure (40001). From this statement only, that failure is the
+demotion, so it answers 403, what a non-admin gets, rather than the retryable 409 a conflicting
+reconcile gets at commit. A demoted admin's genesis at a requested id is refused rather than given a
+map at fresh ids; a retry, as the non-admin they now are, mints fresh ids.
+
+Lock order: governance first, then the act's own writes. A demotion locks standing and governance
+rows only, none of which a reconcile or genesis writes. Reconcile of an ordinary map (authorship)
+and genesis without requested ids are unchanged.
+
+Who observes: a system admin demoted while one of these acts is in flight. No schema change and no
+response shape change. Witnesses: `crates/temper-api/tests/admin_recheck_cogmap_kernel_test.rs`
+(the in-flight halves fail without the change, and fail with the 40001 mapping removed; the
+committed-first halves are regression pins; an admin who is not demoted is unchanged). Release
+relevance: signal-only.
+'''

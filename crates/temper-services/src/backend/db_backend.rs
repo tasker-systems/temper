@@ -810,14 +810,48 @@ impl DbBackend {
     /// The one definition `audit-elevation-claims.sh` fingerprints as the `reconcile_regime` gate.
     /// `pub` so the regime's own witnesses (`cogmap_authz_test`) reach it without a manifest.
     pub async fn authorize_reconcile(&self, cogmap: CogmapId) -> Result<(), TemperError> {
+        self.authorize_reconcile_arm(cogmap).await.map(|_| ())
+    }
+
+    /// [`Self::authorize_reconcile`], answering whether it admitted the caller on the system-admin
+    /// arm (the admin-only regime). That arm was a pool read of governance, so reconcile asks it
+    /// again on its own transaction ([`Self::admin_still_holds_serializable`]).
+    async fn authorize_reconcile_arm(&self, cogmap: CogmapId) -> Result<bool, TemperError> {
         if crate::services::access_service::cogmap_write_requires_admin(&self.pool, cogmap)
             .await
             .map_err(TemperError::from)?
         {
             self.require_system_admin().await?;
-            Ok(())
+            Ok(true)
         } else {
-            self.check_cogmap_authorable(uuid::Uuid::from(cogmap)).await
+            self.check_cogmap_authorable(uuid::Uuid::from(cogmap))
+                .await
+                .map(|()| false)
+        }
+    }
+
+    /// The system-admin arm asked again on a SERIALIZABLE transaction, as its first statement after
+    /// `SET TRANSACTION`, under the governance lock (`auth::is_system_admin_locked`, held to the
+    /// commit). The admin decision that admitted the caller was a pool read; a demotion committed
+    /// since refuses the act, and one in flight makes this wait. When that demotion commits,
+    /// SERIALIZABLE answers the lock with a serialization failure (`40001`, "could not serialize
+    /// access due to concurrent update") instead of an empty read. From this statement, and only
+    /// this one, that failure is the demotion, so it is the refusal a non-admin gets (`403`), not
+    /// the retryable `409` a conflicting reconcile gets at commit.
+    ///
+    /// Lock order: governance first, then the act's own writes. A demotion locks standing and
+    /// governance rows only, none of which a reconcile or a genesis writes.
+    async fn admin_still_holds_serializable(
+        &self,
+        tx: &mut sqlx::PgConnection,
+    ) -> Result<(), TemperError> {
+        match crate::auth::is_system_admin_locked_raw(tx, self.profile_id).await {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(crate::error::ApiError::Forbidden.into()),
+            Err(sqlx::Error::Database(db)) if db.code().as_deref() == Some("40001") => {
+                Err(crate::error::ApiError::Forbidden.into())
+            }
+            Err(e) => Err(api_err(e)),
         }
     }
 
@@ -3925,7 +3959,7 @@ impl Backend for DbBackend {
         let cogmap_uuid = uuid::Uuid::from(cmd.cogmap_id);
         let cogmap = CogmapId::from(cogmap_uuid);
 
-        self.authorize_reconcile(cogmap).await?;
+        let on_admin_arm = self.authorize_reconcile_arm(cogmap).await?;
 
         // The system actor: every kernel mutation fires under (owner = system profile, emitter = system
         // entity) — the L0 birth migration's actor.
@@ -3944,6 +3978,10 @@ impl Backend for DbBackend {
             .execute(&mut *tx)
             .await
             .map_err(api_err)?;
+        // An admin-only map's admin, asked again before anything is written.
+        if on_admin_arm {
+            self.admin_still_holds_serializable(&mut tx).await?;
+        }
 
         // OPEN the envelope (top-level: `parent: None`, so the delegation gate is not exercised).
         let inv = writes::open_invocation_in_tx(
@@ -4119,6 +4157,13 @@ impl Backend for DbBackend {
             .execute(&mut *tx)
             .await
             .map_err(api_err)?;
+        // The id-honoring arm is the admin's alone, so a genesis at a requested id asks the admin
+        // again before anything is written. A demoted admin is refused (`403`) rather than handed a
+        // map at fresh ids they did not ask for; a retry, as the non-admin they now are, mints fresh
+        // ids.
+        if requested_cogmap_id.is_some() || requested_telos_id.is_some() {
+            self.admin_still_holds_serializable(&mut tx).await?;
+        }
 
         // FIRE GENESIS FIRST — unlike reconcile (which reconciles an EXISTING map), genesis CREATES the
         // cogmap, and `kb_invocations.originating_cogmap_id` FK-references `kb_cogmaps(id)` (the

@@ -141,11 +141,11 @@ read_gates|file:crates/temper-services/src/authz/read_gates.rs
 ledger_subject|block:fn:readable_event_types:crates/temper-services/src/services/admin_ledger_service.rs
 subscription|file:crates/temper-services/src/authz/subscription.rs
 two_sided|file:crates/temper-services/src/authz/two_sided.rs
-reconcile_regime|block:fn:authorize_reconcile:crates/temper-services/src/backend/db_backend.rs;block:fn:check_cogmap_authorable_in_tx:crates/temper-services/src/backend/db_backend.rs;block:fn:cogmap_write_requires_admin:crates/temper-services/src/services/access_service.rs
+reconcile_regime|block:fn:authorize_reconcile:crates/temper-services/src/backend/db_backend.rs;block:fn:authorize_reconcile_arm:crates/temper-services/src/backend/db_backend.rs;block:fn:admin_still_holds_serializable:crates/temper-services/src/backend/db_backend.rs;block:fn:check_cogmap_authorable_in_tx:crates/temper-services/src/backend/db_backend.rs;block:fn:cogmap_write_requires_admin:crates/temper-services/src/services/access_service.rs
 is_system_admin|block:fn:is_system_admin:crates/temper-services/src/services/access_service.rs
 require_manage_on_team|block:fn:require_manage_on_team:crates/temper-services/src/services/team_service.rs
 can_manage|block:fn:can_manage:crates/temper-services/src/services/team_service.rs
-team_membership|file:crates/temper-services/src/authz/team_membership.rs;block:fn:is_gating_team_on:crates/temper-services/src/services/access_service.rs;block:fn:role_on_team_on:crates/temper-services/src/services/team_service.rs;block:fn:require_system_admin_on:crates/temper-services/src/auth/mod.rs;block:fn:require_system_admin_locked:crates/temper-services/src/auth/mod.rs;block:fn:is_system_admin_locked:crates/temper-services/src/auth/mod.rs;block:fn:authorize_member_act:crates/temper-services/src/services/team_service.rs;block:fn:rank:crates/temper-core/src/types/team.rs;block:fn:exceeds_machine_ceiling:crates/temper-services/src/services/machine_authz.rs;block:const:MAX_MACHINE_TEAM_ROLE:crates/temper-services/src/services/machine_authz.rs
+team_membership|file:crates/temper-services/src/authz/team_membership.rs;block:fn:is_gating_team_on:crates/temper-services/src/services/access_service.rs;block:fn:role_on_team_on:crates/temper-services/src/services/team_service.rs;block:fn:require_system_admin_on:crates/temper-services/src/auth/mod.rs;block:fn:require_system_admin_locked:crates/temper-services/src/auth/mod.rs;block:fn:is_system_admin_locked:crates/temper-services/src/auth/mod.rs;block:fn:is_system_admin_locked_raw:crates/temper-services/src/auth/mod.rs;block:fn:authorize_member_act:crates/temper-services/src/services/team_service.rs;block:fn:rank:crates/temper-core/src/types/team.rs;block:fn:exceeds_machine_ceiling:crates/temper-services/src/services/machine_authz.rs;block:const:MAX_MACHINE_TEAM_ROLE:crates/temper-services/src/services/machine_authz.rs
 EOF
 
 # Extract one `fn`/`enum` block by brace counting from its declaration. Anchored on the declaring
@@ -546,6 +546,16 @@ current_gates() {
 # temper-system or the gating team, or when it or a team below it is an auto-join or the gating
 # team. Read against `team_service::restore_authority`, which refuses a non-admin in exactly those
 # cases (a personal team's root link excepted); the claim describes the gate.
+# REVIEWED 2026-11-10 (cogmap reconcile and genesis re-check the admin) — `reconcile_regime`
+# 5339d74ce2eb -> 45a9a015cf34: `authorize_reconcile` now delegates to `authorize_reconcile_arm`,
+# the same two arms in the same order, which also answers whether the admin arm admitted the caller;
+# `admin_still_holds_serializable` asks that arm again under the governance lock on the reconcile's
+# (and an id-honoring genesis's) SERIALIZABLE transaction and refuses `403` on a demotion, the
+# answer the pool arm gives a non-admin. Both are fingerprinted with the gate. The gate NARROWED
+# for a demoted admin only. `team_membership` 645a3a8d9323 -> 981f2c3a943d:
+# `auth::is_system_admin_locked`'s two reads moved, unchanged, into `is_system_admin_locked_raw`,
+# which returns the database error as is so a caller can classify it; it is fingerprinted with the
+# gate. No arm, order or answer changed.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
@@ -618,11 +628,11 @@ gate read_gates 6a6ce4847fbc
 gate ledger_subject b13d3929eb94
 gate subscription f45d76e9be69
 gate two_sided 92995b75cab8
-gate reconcile_regime 5339d74ce2eb
+gate reconcile_regime 45a9a015cf34
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e
-gate team_membership 645a3a8d9323
+gate team_membership 981f2c3a943d
 EOF
 
 CURRENT="$(current_claims; current_gates)"
