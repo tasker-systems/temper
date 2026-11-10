@@ -36,7 +36,8 @@ use crate::auth::SystemAdmin;
 use crate::error::{ApiError, ApiResult};
 use crate::services::erasure_slack_revocation_service::{self, SlackRevokeConfig};
 use crate::services::resource_erasure_service::{
-    is_retryable_act_error, operator_holds, queue_region_settling, MAX_ACT_RETRIES,
+    is_retryable_act_error, operator_holds, operator_refusal, operator_still_holds,
+    queue_region_settling, MAX_ACT_RETRIES,
 };
 
 /// One blob strike's verdict, exactly what the `blob_delete` wrapper returned. The provider
@@ -182,25 +183,24 @@ pub async fn execute_erasure(
 ) -> ApiResult<ErasureCompletion> {
     let operator = admin.actor();
     // The operator's standing first, under the governance lock, before anything is looked up or
-    // revoked at Slack, and held through the Slack pass: a demoted admin holding a stale proof is
-    // refused (`404`, what a non-admin is told), one whose demotion is in flight waits and is then
-    // refused, and in either case nothing reaches Slack. The Slack revoke is irreversible and runs
-    // outside the act's transaction, so it runs on this one, under the lock (a demotion waits out
-    // the Slack calls, as it waits out an admin Slack disconnect). The act's own transaction asks
-    // again, and that is the check that holds to the act's commit; only a demotion committing in
-    // the instant between the two can leave the grants revoked at Slack with the act refused, the
-    // state a failed act already leaves (see the failure arm).
+    // revoked at Slack: a demoted admin holding a stale proof is refused (`404`, what a non-admin
+    // is told), one whose demotion is in flight waits and is then refused, and in either case
+    // nothing reaches Slack. The gate commits at once, so no transaction is held across the Slack
+    // calls. Each act attempt asks again under the lock, and that is the check that holds to the
+    // act's commit; a demotion committing between the gate and the act can leave the grants
+    // revoked at Slack with the act refused, the state a failed act already leaves (see the
+    // failure arm), and nothing else.
     let mut gate = pool.begin().await?;
     operator_holds(&mut gate, operator).await?;
+    gate.commit().await?;
 
-    // The emitter resolves before the act's transaction opens (a read, not part of the mutation),
-    // on the gate's connection, so no second pool connection is taken while it is held. The
-    // operator's entity on the door's surface. Hard precondition, the `slack_disconnect_service`
-    // shape: an unattributable authority act is worse than a failed one. The surface rides from
-    // the door (`Surface::ApiHttp` from the HTTP door, the one that exists today) so the ledger says
-    // where the act came from, never a hard-wired guess that outlives its accuracy — the blob
-    // commit's S5 correction.
-    let emitter = resolve_emitter(&mut *gate, operator, surface.marker())
+    // The emitter resolves on the pool, before the transaction opens (a read, not part of the
+    // mutation) — the operator's entity on the door's surface. Hard precondition, the
+    // `slack_disconnect_service` shape: an unattributable authority act is worse than a failed
+    // one. The surface rides from the door (`Surface::ApiHttp` from the HTTP door, the one that
+    // exists today) so the ledger says where the act came from, never a hard-wired guess that
+    // outlives its accuracy — the blob commit's S5 correction.
+    let emitter = resolve_emitter(pool, operator, surface.marker())
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
@@ -209,7 +209,7 @@ pub async fn execute_erasure(
         r#"SELECT id FROM kb_profiles WHERE id = $1"#,
         subject.uuid()
     )
-    .fetch_optional(&mut *gate)
+    .fetch_optional(pool)
     .await?;
     if exists.is_none() {
         return Err(ApiError::NotFound("profile not found".to_string()));
@@ -224,12 +224,11 @@ pub async fn execute_erasure(
     // this read and the act is destroyed unrevoked and uncounted: a narrow race, named here so the
     // tally is not read as complete.
     let (slack_revocation, pending) = erasure_slack_revocation_service::revoke_before_erasure(
-        &mut gate,
+        pool,
         subject.uuid(),
         env.slack.as_ref(),
     )
     .await?;
-    gate.commit().await?;
 
     // The act runs resource erasure once per estate resource (20261021100000), so it fails
     // retryably where that act does: a deadlock, a raced edge fold, a remote source that gained or
@@ -240,18 +239,11 @@ pub async fn execute_erasure(
     let raw = loop {
         // Each attempt is its own transaction, the operator re-checked first under its lock.
         let mut tx = pool.begin().await?;
-        if let Err(refused) = operator_holds(&mut tx, operator).await {
-            if slack_revocation.revoked > 0 {
-                tracing::warn!(
-                    revoked = slack_revocation.revoked,
-                    "principal erasure refused after revoking the subject's Slack grants at Slack: \
-                     the operator is no longer a system admin; re-run it as an admin to destroy \
-                     temper's copies"
-                );
-            }
-            return Err(refused);
-        }
         let result = async {
+            // `None`: the operator is no longer a system admin; the act is not run.
+            if !operator_still_holds(&mut tx, operator).await? {
+                return Ok(None);
+            }
             set_auth_provider(&mut tx, env.auth_provider).await?;
             erasure_slack_revocation_service::queue_pending(&mut tx, &pending).await?;
             let raw = sqlx::query_scalar!(
@@ -264,11 +256,22 @@ pub async fn execute_erasure(
             .fetch_one(&mut *tx)
             .await?;
             tx.commit().await?;
-            Ok::<_, sqlx::Error>(raw)
+            Ok::<_, sqlx::Error>(Some(raw))
         }
         .await;
         match result {
-            Ok(raw) => break raw,
+            Ok(Some(raw)) => break raw,
+            Ok(None) => {
+                if slack_revocation.revoked > 0 {
+                    tracing::warn!(
+                        revoked = slack_revocation.revoked,
+                        "principal erasure refused after revoking the subject's Slack grants at \
+                         Slack: the operator is no longer a system admin; re-run it as an admin \
+                         to destroy temper's copies"
+                    );
+                }
+                return Err(operator_refusal(operator));
+            }
             Err(err) if is_retryable_act_error(&err) && retries < MAX_ACT_RETRIES => retries += 1,
             // Scrubbed, as the resource door does: an exhausted retry on a redaction-row
             // collision is a unique violation, which the generic mapping would render as a 409

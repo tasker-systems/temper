@@ -36,8 +36,8 @@ use temper_workflow::operations::Surface;
 use crate::auth::SystemAdmin;
 use crate::error::{ApiError, ApiResult};
 use crate::services::resource_erasure_service::{
-    between, erased_state, listed_refusal, operator_gate, operator_holds, refuse,
-    reject_duplicates, Attempt, ResourceErasureRefusal, ResourceErasureRefusalDetail,
+    between, erased_state, listed_refusal, operator_gate, operator_refusal, operator_still_holds,
+    refuse, reject_duplicates, Attempt, ResourceErasureRefusal, ResourceErasureRefusalDetail,
     DEADLOCK_DETECTED, MAX_ACT_RETRIES, RAISE_EXCEPTION, RESOURCE_NOT_FOUND,
 };
 
@@ -213,9 +213,12 @@ async fn run_scrub(pool: &PgPool, attempt: &Attempt, blocks: &[Uuid]) -> ApiResu
     loop {
         // Each attempt is its own transaction, the operator re-checked first under its lock.
         let mut tx = pool.begin().await?;
-        operator_holds(&mut tx, attempt.operator).await?;
-        let err = match scrub_once(tx, attempt, blocks).await {
-            Ok(committed) => return Ok(ScrubVerdict::Completed(committed)),
+        let err = match operator_still_holds(&mut tx, attempt.operator).await {
+            Ok(false) => return Err(operator_refusal(attempt.operator)),
+            Ok(true) => match scrub_once(tx, attempt, blocks).await {
+                Ok(committed) => return Ok(ScrubVerdict::Completed(committed)),
+                Err(err) => err,
+            },
             Err(err) => err,
         };
         match classify_scrub_error(&err) {

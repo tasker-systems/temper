@@ -62,12 +62,8 @@ pub struct PendingRevocations {
 /// Revoke every grant the act will destroy, before it runs. Returns the tally so far (`queued`
 /// counts the failures this hands back) and the failures, which [`queue_pending`] seals into the
 /// act's transaction.
-///
-/// Runs on the caller's connection: person erasure passes its gate's transaction, so the
-/// operator's governance lock covers every revoke (and, in AS mode, the refresh-token writes it
-/// makes) and commits with them.
 pub async fn revoke_before_erasure(
-    conn: &mut sqlx::PgConnection,
+    pool: &PgPool,
     subject: Uuid,
     cfg: Option<&SlackRevokeConfig<'_>>,
 ) -> ApiResult<(SlackRevocationTally, PendingRevocations)> {
@@ -80,7 +76,7 @@ pub async fn revoke_before_erasure(
                 WHERE slack_principal_id IN (SELECT _erasure_subject_slack_principals($1))"#,
             subject
         )
-        .fetch_one(&mut *conn)
+        .fetch_one(pool)
         .await?;
         tally.not_attempted = u32::try_from(n).unwrap_or(u32::MAX);
         return Ok((
@@ -92,8 +88,8 @@ pub async fn revoke_before_erasure(
         ));
     };
 
-    let grants =
-        slack_grant_vault_service::grants_for_erasure(&mut *conn, cfg.key, subject).await?;
+    let mut conn = pool.acquire().await?;
+    let grants = slack_grant_vault_service::grants_for_erasure(&mut conn, cfg.key, subject).await?;
     let mut tokens = Vec::new();
     for (n, grant) in grants.into_iter().enumerate() {
         let Some(rt) = grant.refresh_token else {
@@ -103,7 +99,7 @@ pub async fn revoke_before_erasure(
         // Labelled by position, never by Slack id: the act is removing that id, and a trace line
         // would carry it out of the database it is being erased from.
         let label = format!("erasure grant {}", n + 1);
-        match revoke_at_idp(&mut *conn, &rt, &cfg.target, &label).await? {
+        match revoke_at_idp(&mut conn, &rt, &cfg.target, &label).await? {
             IdpRevocation::Revoked => tally.revoked += 1,
             // In AS mode a failure means no AS row matched the token, which no retry can change:
             // keeping the secret for the window would gain nothing. Destroyed with the vault row.

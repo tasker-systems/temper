@@ -452,37 +452,50 @@ pub(crate) const OPERATOR_REFUSAL: &str = "not found";
 /// commit: a demotion committed since refuses the act, one in flight makes it wait, then refuses.
 ///
 /// Lock order: governance first, then the act's own locks (its resource act-queue advisory locks,
-/// the resource and edge rows, the home context). A demotion takes the subject's standing and
-/// governance rows only, and an erasure act takes no governance or standing row, so the two never
-/// wait in a cycle.
+/// the resource and edge rows, the home context; the person act also writes its subject's
+/// standing). A demotion locks the demoted admin's standing row and the governance pair, and no
+/// erasure act takes a governance row, so the two wait in a cycle only if the person act's
+/// subject were its own operator, whose demotion it would then outlive or refuse: one order
+/// either way.
 ///
 /// The wait is unbounded, as the acts' own are (they pin `lock_timeout = 0`, migration
 /// `20261015100000`): a lock-wait bound set later on the pool or role must not turn a demotion in
 /// flight into a busy refusal instead of this door's answer. `SET LOCAL`, so it ends with the
 /// transaction.
+///
+/// The database error of the read itself (a deadlock, say) is returned as is, so an act's retry
+/// loop classifies it as it classifies the act's own.
+pub(crate) async fn operator_still_holds(
+    tx: &mut sqlx::PgConnection,
+    operator: ProfileId,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar!("SELECT set_config('lock_timeout', '0', true)")
+        .fetch_one(&mut *tx)
+        .await?;
+    crate::auth::is_system_admin_locked_raw(tx, operator).await
+}
+
+/// [`operator_still_holds`] for a door with no retry loop: the refusal on `false`.
 pub(crate) async fn operator_holds(
     tx: &mut sqlx::PgConnection,
     operator: ProfileId,
 ) -> ApiResult<()> {
-    sqlx::query_scalar!("SELECT set_config('lock_timeout', '0', true)")
-        .fetch_one(&mut *tx)
-        .await?;
-    if crate::auth::is_system_admin_locked(tx, operator).await? {
+    if operator_still_holds(tx, operator).await? {
         Ok(())
     } else {
-        refused_operator(operator)
+        Err(operator_refusal(operator))
     }
 }
 
 /// The refusal of a demoted operator, with the `warn` line the HTTP gate writes for a non-admin,
 /// so a stale proof's refusal leaves the same trace at the default filter.
-fn refused_operator(operator: ProfileId) -> ApiResult<()> {
+pub(crate) fn operator_refusal(operator: ProfileId) -> ApiError {
     tracing::warn!(
         profile_id = %operator,
         "erasure door refused an operator who is no longer a system admin; answered 404, nothing \
          recorded on the ledger"
     );
-    Err(ApiError::NotFound(OPERATOR_REFUSAL.to_string()))
+    ApiError::NotFound(OPERATOR_REFUSAL.to_string())
 }
 
 /// The operator's standing at a door's entry, before it validates anything or records a refusal:
@@ -496,7 +509,7 @@ pub(crate) async fn operator_gate(pool: &PgPool, operator: ProfileId) -> ApiResu
     if crate::services::access_service::is_system_admin(pool, operator).await? {
         Ok(())
     } else {
-        refused_operator(operator)
+        Err(operator_refusal(operator))
     }
 }
 
@@ -523,18 +536,23 @@ async fn run_act(
     loop {
         // Each attempt is its own transaction, the operator re-checked first under its lock.
         let mut tx = pool.begin().await?;
-        operator_holds(&mut tx, attempt.operator).await?;
-        let result = sqlx::query_scalar!(
-            r#"SELECT resource_erasure_execute($1, $2, $3, $4, $5)
-                   AS "outcome: serde_json::Value""#,
-            attempt.resource.uuid(),
-            attempt.operator.uuid(),
-            attempt.emitter.uuid(),
-            attempt.request_reference,
-            &blobs[..],
-        )
-        .fetch_one(&mut *tx)
-        .await;
+        let result = match operator_still_holds(&mut tx, attempt.operator).await {
+            Ok(false) => return Err(operator_refusal(attempt.operator)),
+            Ok(true) => {
+                sqlx::query_scalar!(
+                    r#"SELECT resource_erasure_execute($1, $2, $3, $4, $5)
+                           AS "outcome: serde_json::Value""#,
+                    attempt.resource.uuid(),
+                    attempt.operator.uuid(),
+                    attempt.emitter.uuid(),
+                    attempt.request_reference,
+                    &blobs[..],
+                )
+                .fetch_one(&mut *tx)
+                .await
+            }
+            Err(err) => Err(err),
+        };
         let result = match result {
             Ok(raw) => tx.commit().await.map(|()| raw),
             Err(err) => Err(err),

@@ -22,8 +22,10 @@
 //! gate's place ahead of validation. The last test is a lock-order witness and passes on that code
 //! too, which took no governance lock to contend on.
 //!
-//! Person erasure runs its Slack pass under its entry gate's lock; with no Slack configured here,
-//! no test shows a Slack revoke withheld, only that the act is refused and the estate intact.
+//! Person erasure's entry gate takes the lock and commits before its Slack pass, so a demotion in
+//! flight at the gate stops the erasure before any grant is revoked. Each act attempt asks again
+//! under the lock: `person_erasure_rechecks_in_its_act` commits the demotion while a slow Slack
+//! stub is answering, after the gate, and the act is refused.
 
 use std::future::Future;
 
@@ -360,6 +362,105 @@ async fn person_erasure(pool: PgPool) {
         !tombstoned,
         "a refused person erasure tombstoned the person"
     );
+}
+
+/// Person erasure's second re-check, the one each act attempt takes on its own transaction. The
+/// gate passes and commits, the subject's Slack grant is being revoked at Slack (a stub that answers
+/// slowly), and the operator's demotion commits during that call. The act is then refused, and the
+/// estate is intact. Fails if the act loop's re-check is removed: the act then runs as the demoted
+/// operator.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn person_erasure_rechecks_in_its_act(pool: PgPool) {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+    use temper_services::auth_config::AuthMode;
+    use temper_services::services::erasure_slack_revocation_service::SlackRevokeConfig;
+    use temper_services::services::grant_crypto::VaultKey;
+    use temper_services::services::slack_disconnect_service::IdpRevokeTarget;
+    use temper_services::services::slack_grant_vault_service;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let admin = an_admin(&pool).await;
+    let (person, resource) = person_with_a_resource(&pool, "ra-person").await;
+    let key = VaultKey::from_base64(&STANDARD.encode([3u8; 32])).expect("key");
+    {
+        let owner = test_support::human_principal_for(&pool, person).await;
+        let mut conn = pool.acquire().await.unwrap();
+        slack_grant_vault_service::store_grant(
+            &mut conn,
+            &key,
+            slack_grant_vault_service::NewGrant {
+                owner: &owner,
+                slack_principal_id: "slack:T1:URA",
+                refresh_token: "rt",
+                access_token: "at",
+                access_ttl_secs: Some(3600),
+            },
+        )
+        .await
+        .expect("store grant");
+    }
+    let slack = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/revoke"))
+        .respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(2)))
+        .mount(&slack)
+        .await;
+    let revoke_url = format!("{}/oauth/revoke", slack.uri());
+    let before = erasure_events(&pool).await;
+
+    let operator = proof(&pool, admin).await;
+    let (p, url) = (pool.clone(), revoke_url.clone());
+    let contender = tokio::spawn(async move {
+        let key = VaultKey::from_base64(&STANDARD.encode([3u8; 32])).expect("key");
+        execute_erasure(
+            &p,
+            &operator,
+            ProfileId::from(person),
+            Uuid::now_v7(),
+            Surface::ApiHttp,
+            &ErasureEnv {
+                slack: Some(SlackRevokeConfig {
+                    key: &key,
+                    target: IdpRevokeTarget {
+                        mode: AuthMode::ExternalIdp,
+                        revoke_url: &url,
+                        client_id: "slack-client",
+                    },
+                }),
+                auth_provider: None,
+            },
+        )
+        .await
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while slack
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .is_empty()
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the erasure never reached Slack"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    // The gate has committed: the demotion commits at once, while the revoke is in flight.
+    let (holder, _) = demotion_in_flight(&pool, admin).await;
+    holder.commit().await.unwrap();
+
+    let err = contender.await.unwrap().unwrap_err();
+    assert!(
+        matches!(&err, ApiError::NotFound(why) if why == "not found"),
+        "{err:?}"
+    );
+    assert!(
+        !erased(&pool, resource).await,
+        "the act ran as a demoted operator"
+    );
+    assert_eq!(erasure_events(&pool).await, before);
 }
 
 /// A retention policy decides what every later erasure keeps. Set and remove each lock governance
