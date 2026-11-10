@@ -1295,7 +1295,8 @@ pub async fn rename(
     name: &str,
 ) -> ApiResult<RenameContextOutcome> {
     let caller = authed.profile_id();
-    let on_admin_arm = context_admin_arm(pool, authed, context_id).await?;
+    crate::authz::authorize::<ContextAdminAuthority>(pool, Principal::from(authed), context_id)
+        .await?;
 
     // The current identity pair plus the already-sigil'd owner ref, in one read. A rename leaves
     // `(owner_table, owner_id)` untouched, so the ref composed from this row is still correct after
@@ -1386,9 +1387,8 @@ pub async fn rename(
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let mut tx = context_admin_write_tx(pool, authed, context_id, on_admin_arm).await?;
-    temper_substrate::writes::rename_context_on(
-        &mut tx,
+    temper_substrate::writes::rename_context_with(
+        pool,
         temper_substrate::ids::ContextId::from(context_id),
         (cur.name.as_str(), cur.slug.as_str()),
         (to_name.as_str(), to_slug.as_str()),
@@ -1397,7 +1397,6 @@ pub async fn rename(
     )
     .await
     .map_err(map_context_write_err)?;
-    tx.commit().await?;
 
     // Composed once, here, from the already-decorated `owner_ref` — never through
     // `decorated_context_ref`, whose `owner_addressable` parameter is the *bare* handle/team slug
@@ -1433,7 +1432,8 @@ pub async fn retire(
     context_id: uuid::Uuid,
 ) -> ApiResult<RetireContextOutcome> {
     let caller = authed.profile_id();
-    let on_admin_arm = context_admin_arm(pool, authed, context_id).await?;
+    crate::authz::authorize::<ContextAdminAuthority>(pool, Principal::from(authed), context_id)
+        .await?;
 
     // The current identity pair plus the already-sigil'd owner ref, in one read — copied verbatim
     // from `rename` (`:867-880`). `fetch_optional`, not `fetch_one`: the gate's `SystemAdmin` arm
@@ -1469,9 +1469,8 @@ pub async fn retire(
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let mut tx = context_admin_write_tx(pool, authed, context_id, on_admin_arm).await?;
-    temper_substrate::writes::retire_context_on(
-        &mut tx,
+    temper_substrate::writes::retire_context_with(
+        pool,
         temper_substrate::ids::ContextId::from(context_id),
         cur.slug.as_str(),
         retired_slug.as_str(),
@@ -1480,7 +1479,6 @@ pub async fn retire(
     )
     .await
     .map_err(map_context_write_err)?;
-    tx.commit().await?;
 
     // Composed from the already-decorated `cur.owner_ref` — never through `decorated_context_ref`,
     // whose `owner_addressable` parameter is the *bare* handle/team slug and would yield
@@ -1515,7 +1513,8 @@ pub async fn restore(
     context_id: uuid::Uuid,
 ) -> ApiResult<RestoreContextOutcome> {
     let caller = authed.profile_id();
-    let on_admin_arm = context_admin_arm(pool, authed, context_id).await?;
+    crate::authz::authorize::<ContextAdminAuthority>(pool, Principal::from(authed), context_id)
+        .await?;
 
     let cur = sqlx::query!(
         r#"SELECT owner_table AS "owner_table!", owner_id AS "owner_id!", slug, name,
@@ -1577,9 +1576,8 @@ pub async fn restore(
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let mut tx = context_admin_write_tx(pool, authed, context_id, on_admin_arm).await?;
-    temper_substrate::writes::restore_context_on(
-        &mut tx,
+    temper_substrate::writes::restore_context_with(
+        pool,
         temper_substrate::ids::ContextId::from(context_id),
         cur.slug.as_str(),
         restored_slug.as_str(),
@@ -1588,7 +1586,6 @@ pub async fn restore(
     )
     .await
     .map_err(map_context_write_err)?;
-    tx.commit().await?;
 
     // The baseline is the retired-under address, NOT `sluggify(&cur.name)`. `create` hands out
     // suffixed slugs for duplicate names, so a context named "Notes" routinely lives at `notes-2`,
@@ -1664,42 +1661,7 @@ pub(crate) async fn two_sided_write_tx(
     Ok(tx)
 }
 
-/// [`ContextAdminAuthority`]'s decision on the pool, and whether it rested on the system-admin arm.
-async fn context_admin_arm(
-    pool: &PgPool,
-    authed: &Caller,
-    context_id: uuid::Uuid,
-) -> ApiResult<bool> {
-    Ok(
-        crate::authz::authorize::<ContextAdminAuthority>(pool, Principal::from(authed), context_id)
-            .await?
-            .authority()
-            == ContextAdminAuthority::SystemAdmin,
-    )
-}
-
-/// [`two_sided_write_tx`] for the context-administration acts (rename, retire, restore). The SQL
-/// writer asks `is_system_admin` again after its context lock; on this transaction that read is
-/// taken under the governance row this has locked, so its answer holds to the commit too. The
-/// refusal is [`ContextAdminAuthority`]'s answer to the caller as they now stand: `403` to a
-/// reader, the not-found sentence to anyone who cannot read the context.
-async fn context_admin_write_tx(
-    pool: &PgPool,
-    authed: &Caller,
-    context_id: uuid::Uuid,
-    on_admin_arm: bool,
-) -> ApiResult<sqlx::Transaction<'static, sqlx::Postgres>> {
-    let mut tx = pool.begin().await?;
-    if on_admin_arm && !crate::auth::is_system_admin_locked(&mut tx, authed.profile_id()).await? {
-        drop(tx);
-        crate::authz::authorize::<ContextAdminAuthority>(pool, Principal::from(authed), context_id)
-            .await?;
-        return Err(ApiError::Forbidden);
-    }
-    Ok(tx)
-}
-
-/// Map a substrate write error from `reassign_context_with` / `rename_context_with` /
+/// Map a substrate write error from `reassign_context_on` / `rename_context_with` /
 /// `retire_context_with` / `restore_context_with` to an [`ApiError`]. **One mapper, four call
 /// sites** — the mapping is identical for all of them and would drift
 /// if written twice.

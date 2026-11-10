@@ -1,12 +1,10 @@
 #![cfg(feature = "test-db")]
-//! The context doors (share, unshare, reassign, rename, retire, restore) and the cognitive-map
-//! binding doors (bind, unbind) decided their system-admin arm on a pool read
-//! (`TwoSidedAuthority`, `ContextAdminAuthority`) and never asked again on their write. Each now
-//! asks again on the write's own transaction, under the governance lock
-//! (`auth::is_system_admin_locked`), before it writes. The SQL context writers read
-//! `is_system_admin` again after their context lock; on that transaction the read is taken under
-//! the governance row the door holds, so it holds to the commit too. A demoted admin is refused
-//! with the gate's answer to them as they now stand, the answer a non-admin gets.
+//! The context doors that place a context with a team (share, unshare, reassign) and the
+//! cognitive-map binding doors (bind, unbind) decided their system-admin arm on a pool read
+//! (`TwoSidedAuthority`) and never asked again on their write. Each now asks again on the write's
+//! own transaction, under the governance lock (`auth::is_system_admin_locked`), before it writes.
+//! A demoted admin is refused with the gate's answer to them as they now stand: the exact refusal a
+//! non-admin with no role on either team gets.
 //!
 //! **In flight:** the admin's demotion is left open, the door is started, and the test waits until
 //! it is blocked at `… kb_principal_governance … FOR KEY SHARE`; the pool reads ahead of it are
@@ -153,35 +151,34 @@ async fn await_blocked_at_the_recheck(pool: &PgPool, holder: i32) {
     }
 }
 
-/// A refusal a non-admin with no role on either team gets at these doors.
-fn refused(err: &ApiError) -> bool {
-    matches!(err, ApiError::Forbidden | ApiError::NotFound(_))
-}
-
-/// Both races on `door`. `admin` is an admin again afterwards.
-async fn both_races<T, F, Fut>(pool: &PgPool, admin: Uuid, door: F)
+/// Both races on `door`, run as `who`. `admin` is an admin again afterwards. Each refusal must be
+/// the one `stranger`, a non-admin with no role on either team, gets at the same door.
+async fn both_races<T, F, Fut>(pool: &PgPool, admin: Uuid, stranger: Uuid, door: F)
 where
     T: std::fmt::Debug + Send + 'static,
-    F: Fn(PgPool) -> Fut,
+    F: Fn(PgPool, Uuid) -> Fut,
     Fut: Future<Output = Result<T, ApiError>> + Send + 'static,
 {
+    let refusal = format!("{:?}", door(pool.clone(), stranger).await.unwrap_err());
+
     let (holder, pid) = demotion_in_flight(pool, admin).await;
-    let contender = tokio::spawn(door(pool.clone()));
+    let contender = tokio::spawn(door(pool.clone(), admin));
     await_blocked_at_the_recheck(pool, pid).await;
     holder.commit().await.unwrap();
     let err = contender.await.unwrap().unwrap_err();
-    assert!(refused(&err), "in flight: {err:?}");
+    assert_eq!(format!("{err:?}"), refusal, "in flight");
     test_support::grant_governance(pool, admin).await;
 
     let (holder, _) = demotion_in_flight(pool, admin).await;
     holder.commit().await.unwrap();
-    let err = door(pool.clone()).await.unwrap_err();
-    assert!(refused(&err), "committed first: {err:?}");
+    let err = door(pool.clone(), admin).await.unwrap_err();
+    assert_eq!(format!("{err:?}"), refusal, "committed first");
     test_support::grant_governance(pool, admin).await;
 }
 
 struct Fixture {
     admin: Uuid,
+    stranger: Uuid,
     ctx: Uuid,
     to: Uuid,
 }
@@ -189,20 +186,36 @@ struct Fixture {
 async fn fixture(pool: &PgPool) -> Fixture {
     let admin = profile(pool, "ra-admin").await;
     test_support::approved_admin(pool, admin).await;
+    let stranger = profile(pool, "ra-stranger").await;
     let owner = team(pool, "ra-owner").await;
     let to = team(pool, "ra-to").await;
     let ctx = team_context(pool, owner, "ra-ctx").await;
-    Fixture { admin, ctx, to }
+    Fixture {
+        admin,
+        stranger,
+        ctx,
+        to,
+    }
 }
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn share_and_unshare(pool: PgPool) {
-    let Fixture { admin, ctx, to } = fixture(&pool).await;
+    let Fixture {
+        admin,
+        stranger,
+        ctx,
+        to,
+    } = fixture(&pool).await;
     let before = context_row(&pool, ctx).await;
-    both_races(&pool, admin, move |pool: PgPool| async move {
-        let by = test_support::human_principal_for(&pool, admin).await;
-        context_service::share(&pool, &by, ctx, &ShareContextRequest { team_id: to }).await
-    })
+    both_races(
+        &pool,
+        admin,
+        stranger,
+        move |pool: PgPool, who| async move {
+            let by = test_support::human_principal_for(&pool, who).await;
+            context_service::share(&pool, &by, ctx, &ShareContextRequest { team_id: to }).await
+        },
+    )
     .await;
     assert_eq!(
         context_row(&pool, ctx).await,
@@ -215,10 +228,15 @@ async fn share_and_unshare(pool: PgPool) {
         .await
         .expect("the admin shares it");
     let shared = context_row(&pool, ctx).await;
-    both_races(&pool, admin, move |pool: PgPool| async move {
-        let by = test_support::human_principal_for(&pool, admin).await;
-        context_service::unshare(&pool, &by, ctx, to).await
-    })
+    both_races(
+        &pool,
+        admin,
+        stranger,
+        move |pool: PgPool, who| async move {
+            let by = test_support::human_principal_for(&pool, who).await;
+            context_service::unshare(&pool, &by, ctx, to).await
+        },
+    )
     .await;
     assert_eq!(
         context_row(&pool, ctx).await,
@@ -229,12 +247,22 @@ async fn share_and_unshare(pool: PgPool) {
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn reassign(pool: PgPool) {
-    let Fixture { admin, ctx, to } = fixture(&pool).await;
+    let Fixture {
+        admin,
+        stranger,
+        ctx,
+        to,
+    } = fixture(&pool).await;
     let before = context_row(&pool, ctx).await;
-    both_races(&pool, admin, move |pool: PgPool| async move {
-        let by = test_support::human_principal_for(&pool, admin).await;
-        context_service::reassign(&pool, &by, ctx, to).await
-    })
+    both_races(
+        &pool,
+        admin,
+        stranger,
+        move |pool: PgPool, who| async move {
+            let by = test_support::human_principal_for(&pool, who).await;
+            context_service::reassign(&pool, &by, ctx, to).await
+        },
+    )
     .await;
     assert_eq!(
         context_row(&pool, ctx).await,
@@ -244,50 +272,23 @@ async fn reassign(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn rename_retire_restore(pool: PgPool) {
-    let Fixture { admin, ctx, .. } = fixture(&pool).await;
-    let before = context_row(&pool, ctx).await;
-    both_races(&pool, admin, move |pool: PgPool| async move {
-        let by = test_support::caller_for(&pool, admin).await;
-        context_service::rename(&pool, &by, ctx, "ra-renamed").await
-    })
-    .await;
-    both_races(&pool, admin, move |pool: PgPool| async move {
-        let by = test_support::caller_for(&pool, admin).await;
-        context_service::retire(&pool, &by, ctx).await
-    })
-    .await;
-    assert_eq!(
-        context_row(&pool, ctx).await,
-        before,
-        "a refused rename or retire wrote"
-    );
-
-    let by = test_support::caller_for(&pool, admin).await;
-    context_service::retire(&pool, &by, ctx)
-        .await
-        .expect("the admin retires it");
-    let retired = context_row(&pool, ctx).await;
-    both_races(&pool, admin, move |pool: PgPool| async move {
-        let by = test_support::caller_for(&pool, admin).await;
-        context_service::restore(&pool, &by, ctx).await
-    })
-    .await;
-    assert_eq!(
-        context_row(&pool, ctx).await,
-        retired,
-        "a refused restore wrote"
-    );
-}
-
-#[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn bind_and_unbind(pool: PgPool) {
-    let Fixture { admin, to, .. } = fixture(&pool).await;
+    let Fixture {
+        admin,
+        stranger,
+        to,
+        ..
+    } = fixture(&pool).await;
     let map = cogmap(&pool).await;
-    both_races(&pool, admin, move |pool: PgPool| async move {
-        let by = test_support::human_principal_for(&pool, admin).await;
-        cogmap_service::bind_team(&pool, &by, map, &BindTeamRequest { team_id: to }).await
-    })
+    both_races(
+        &pool,
+        admin,
+        stranger,
+        move |pool: PgPool, who| async move {
+            let by = test_support::human_principal_for(&pool, who).await;
+            cogmap_service::bind_team(&pool, &by, map, &BindTeamRequest { team_id: to }).await
+        },
+    )
     .await;
     assert_eq!(bindings(&pool, map).await, 0, "a refused bind wrote");
 
@@ -295,10 +296,15 @@ async fn bind_and_unbind(pool: PgPool) {
     cogmap_service::bind_team(&pool, &by, map, &BindTeamRequest { team_id: to })
         .await
         .expect("the admin binds it");
-    both_races(&pool, admin, move |pool: PgPool| async move {
-        let by = test_support::human_principal_for(&pool, admin).await;
-        cogmap_service::unbind_team(&pool, &by, map, to).await
-    })
+    both_races(
+        &pool,
+        admin,
+        stranger,
+        move |pool: PgPool, who| async move {
+            let by = test_support::human_principal_for(&pool, who).await;
+            cogmap_service::unbind_team(&pool, &by, map, to).await
+        },
+    )
     .await;
     assert_eq!(
         bindings(&pool, map).await,

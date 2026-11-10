@@ -2424,24 +2424,8 @@ pub async fn rename_context_with(
     ctx: EventContext,
 ) -> Result<()> {
     let mut tx = begin_scoped(pool).await?;
-    rename_context_on(&mut tx, context, from, to, emitter, ctx).await?;
-    tx.commit().await?;
-    Ok(())
-}
-
-/// [`rename_context_with`] on the caller's connection, inside the caller's transaction, so a door can
-/// take its own locks (the acting admin's governance row) before the write and hold them to its
-/// commit. Commits nothing itself.
-pub async fn rename_context_on(
-    conn: &mut sqlx::PgConnection,
-    context: ContextId,
-    from: (&str, &str),
-    to: (&str, &str),
-    emitter: EntityId,
-    ctx: EventContext,
-) -> Result<()> {
     fire_with(
-        &mut *conn,
+        &mut tx,
         SeedAction::ContextRename {
             context,
             from_name: from.0,
@@ -2453,6 +2437,7 @@ pub async fn rename_context_on(
         ctx,
     )
     .await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -2471,24 +2456,8 @@ pub async fn retire_context_with(
     ctx: EventContext,
 ) -> Result<()> {
     let mut tx = begin_scoped(pool).await?;
-    retire_context_on(&mut tx, context, from_slug, to_slug, emitter, ctx).await?;
-    tx.commit().await?;
-    Ok(())
-}
-
-/// [`retire_context_with`] on the caller's connection, inside the caller's transaction, so a door can
-/// take its own locks (the acting admin's governance row) before the write and hold them to its
-/// commit. Commits nothing itself.
-pub async fn retire_context_on(
-    conn: &mut sqlx::PgConnection,
-    context: ContextId,
-    from_slug: &str,
-    to_slug: &str,
-    emitter: EntityId,
-    ctx: EventContext,
-) -> Result<()> {
     fire_with(
-        &mut *conn,
+        &mut tx,
         SeedAction::ContextRetire {
             context,
             from_slug,
@@ -2498,6 +2467,7 @@ pub async fn retire_context_on(
         ctx,
     )
     .await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -2514,24 +2484,8 @@ pub async fn restore_context_with(
     ctx: EventContext,
 ) -> Result<()> {
     let mut tx = begin_scoped(pool).await?;
-    restore_context_on(&mut tx, context, from_slug, to_slug, emitter, ctx).await?;
-    tx.commit().await?;
-    Ok(())
-}
-
-/// [`restore_context_with`] on the caller's connection, inside the caller's transaction, so a door can
-/// take its own locks (the acting admin's governance row) before the write and hold them to its
-/// commit. Commits nothing itself.
-pub async fn restore_context_on(
-    conn: &mut sqlx::PgConnection,
-    context: ContextId,
-    from_slug: &str,
-    to_slug: &str,
-    emitter: EntityId,
-    ctx: EventContext,
-) -> Result<()> {
     fire_with(
-        &mut *conn,
+        &mut tx,
         SeedAction::ContextRestore {
             context,
             from_slug,
@@ -2541,6 +2495,7 @@ pub async fn restore_context_on(
         ctx,
     )
     .await?;
+    tx.commit().await?;
     Ok(())
 }
 
