@@ -148,6 +148,10 @@ pub(crate) struct AuthorizedReach<'a> {
     registrar: &'a HumanPrincipal,
     teams: &'a [TeamSpec],
     grants: Vec<AuthorizedGrant>,
+    /// Whether the reach was authorized on the system-admin arm, read on the pool. The
+    /// registration's transaction asks it again under the governance lock
+    /// ([`Self::recheck_admin_arm`]) before its first write.
+    on_admin_arm: bool,
 }
 
 impl<'a> AuthorizedReach<'a> {
@@ -162,6 +166,25 @@ impl<'a> AuthorizedReach<'a> {
 
     pub(crate) fn grants(&self) -> &[AuthorizedGrant] {
         &self.grants
+    }
+
+    /// The admin re-check of a registration, on its transaction, before its first write. A reach
+    /// authorized on the system-admin arm was decided by a plain pool read of governance; the
+    /// registration holds only while the registrar is still an admin, so it is asked again with
+    /// the locked read ([`crate::auth::is_system_admin_locked`]): a demotion committed since
+    /// refuses with the arm's own denial (`403`, what `authorize` gives a caller with no
+    /// authority), and one in flight makes this wait, then refuses. A demoted admin who also owns
+    /// the team is refused too; a retry decides on the owner arm, with its containment.
+    ///
+    /// A reach on the owner arm has nothing to re-check here: its team memberships are decided
+    /// again under each team lock (`apply_reach`), and nothing about it reads governance.
+    pub(crate) async fn recheck_admin_arm(&self, tx: &mut sqlx::PgConnection) -> ApiResult<()> {
+        if self.on_admin_arm
+            && !crate::auth::is_system_admin_locked(tx, self.registrar.profile_id()).await?
+        {
+            return Err(ApiError::Forbidden);
+        }
+        Ok(())
     }
 
     /// Seal a slice of specs. Private, and the ONLY way an `AuthorizedGrant` comes into existence —
@@ -249,6 +272,7 @@ pub(crate) async fn authorize_registration<'a>(
                 registrar: authed,
                 teams,
                 grants: AuthorizedReach::seal(grants),
+                on_admin_arm: true,
             })
         }
         MachineRegistrationAuthority::TeamOwner => {
@@ -257,6 +281,7 @@ pub(crate) async fn authorize_registration<'a>(
                 registrar: authed,
                 teams,
                 grants: AuthorizedReach::seal(grants),
+                on_admin_arm: false,
             })
         }
         // Unreachable — `authorize` refuses a denial before returning. Enumerated rather than
