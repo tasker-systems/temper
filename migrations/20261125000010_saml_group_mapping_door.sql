@@ -12,7 +12,9 @@
 --     team manager, so it is admin-only by the ledger's fail-closed default.
 --   * `_admin_saml_group_mapping_write`, the one writer for both acts. It performs the row change and
 --     appends the event in one statement, and answers jsonb `{outcome, ...}`:
---       created  needs_confirmation  role `owner`, or the root or gating team, without p_confirmed;
+--       created  an existing row is answered first (noop for the same role, conflict for another), so
+--                an identical re-run never needs the confirmation.
+--                needs_confirmation  role `owner`, or the root or gating team, without p_confirmed;
 --                                    `needs` names which. Nothing written.
 --                absent_idp / absent_team / personal_team   nothing written.
 --                conflict            the key exists with another role (`role` names it). Nothing written.
@@ -59,9 +61,12 @@ BEGIN
         OR t.slug = (SELECT s.gating_team_slug FROM kb_system_settings s WHERE s.id = 1);
     IF v_found IS NOT NULL THEN
         RAISE EXCEPTION 'SAML group mappings above the maintainer ceiling or onto an instance team, '
-                        'none of them confirmed (%): delete each row or lower its role to maintainer '
-                        'or below before this migration, then re-create any that should stand with '
-                        '`temper admin saml map-group --confirm-elevated`', v_found
+                        'none of them confirmed (%). Before this migration: an `owner` row on an '
+                        'ordinary team can be lowered to maintainer or below, or deleted; a row onto '
+                        'temper-system or the gating team must be deleted (lowering its role does not '
+                        'clear it). Once this migration has applied, re-create any that should stand '
+                        'with `temper admin saml map-group --confirm-elevated`. In between, a login''s '
+                        'IdP reconcile may revoke the idp-sourced memberships those rows conferred.', v_found
             USING ERRCODE = 'check_violation';
     END IF;
 END;
@@ -200,6 +205,15 @@ BEGIN
         IF v_slug = 'temper-system'
            OR EXISTS (SELECT 1 FROM kb_system_settings WHERE id = 1 AND gating_team_slug = v_slug) THEN
             v_needs := v_needs || 'instance_team'::text;
+        END IF;
+        -- An existing row is answered before the confirmation is asked, so re-running an identical
+        -- mapping is a no-op even without it (the bootstrap script re-runs every mapping).
+        SELECT role INTO v_held FROM kb_saml_group_mappings
+         WHERE idp_key = p_idp_key AND group_value = p_group AND team_id = p_team;
+        IF v_held = p_role THEN
+            RETURN jsonb_build_object('outcome', 'noop', 'role', v_held);
+        ELSIF v_held IS NOT NULL THEN
+            RETURN jsonb_build_object('outcome', 'conflict', 'role', v_held);
         END IF;
         IF cardinality(v_needs) > 0 AND NOT p_confirmed THEN
             RETURN jsonb_build_object('outcome', 'needs_confirmation', 'needs', to_jsonb(v_needs));

@@ -574,7 +574,11 @@ async fn the_migration_refuses_an_unconfirmed_mapping_above_the_ceiling(pool: Pg
             .expect_err("the guard refuses a mapping above the ceiling");
         let msg = err.to_string();
         assert!(msg.contains(named), "the guard names {named}, got {msg}");
-        assert!(msg.contains("before this migration"), "{msg}");
+        assert!(msg.contains("Before this migration"), "{msg}");
+        assert!(
+            msg.contains("must be deleted") && msg.contains("--confirm-elevated"),
+            "the guard says which remedy fits which row: {msg}"
+        );
         clear().await;
         insert(f.eng, "eng", "maintainer").await;
     }
@@ -630,4 +634,103 @@ async fn a_gating_repoint_in_flight_onto_the_target_needs_confirmation(pool: PgP
     assert_needs_confirmation(err, "instance team");
     assert!(mappings(&pool).await.is_empty());
     assert!(records(&pool).await.is_empty());
+}
+
+/// A re-run of an identical mapping is a no-op without the confirmation, even for an `owner` or
+/// instance-team mapping: the existing row is answered first. The bootstrap script re-runs every
+/// mapping it declares.
+///
+/// FAILS IF the confirmation is asked before the existing row is read.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_identical_rerun_is_a_noop_without_confirmation(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let admin = test_support::system_admin_proof_for(&pool, f.admin).await;
+    for (team, group, role) in [
+        (f.eng, "leads", TeamRole::Owner),
+        (f.gating, "staff", TeamRole::Member),
+    ] {
+        saml_mapping_service::create(&pool, &admin, &req(team, group, role, true))
+            .await
+            .expect("the confirmed create");
+        let again = saml_mapping_service::create(&pool, &admin, &req(team, group, role, false))
+            .await
+            .expect("an identical re-run needs no confirmation");
+        assert!(!again.created && !again.confirmed, "{again:?}");
+    }
+    assert_eq!(
+        records(&pool).await.len(),
+        2,
+        "the re-runs recorded nothing"
+    );
+    // A different role on the same key is still a named conflict, confirmation or not.
+    let err =
+        saml_mapping_service::create(&pool, &admin, &req(f.eng, "leads", TeamRole::Member, false))
+            .await
+            .unwrap_err();
+    assert!(
+        matches!(&err, ApiError::Conflict(m) if m.contains("`owner`")),
+        "{err:?}"
+    );
+}
+
+/// The create arm takes the shared gating lock BEFORE the team row. A rename takes the gating lock
+/// exclusively and then the team row, so the reverse order would deadlock with it. Pinned by
+/// holding the exclusive gating lock: the create waits on it, and while it waits the team row is
+/// still free to lock `FOR UPDATE NOWAIT` (it would not be had the create locked the row first).
+///
+/// FAILS IF the create arm locks the team row before the gating lock.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_create_takes_the_gating_lock_before_the_team_row(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let admin = test_support::system_admin_proof_for(&pool, f.admin).await;
+
+    let mut holder = pool.begin().await.unwrap();
+    let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *holder)
+        .await
+        .unwrap();
+    sqlx::query("SELECT _gating_team_lock(true)")
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+
+    let contender = tokio::spawn({
+        let pool = pool.clone();
+        let r = req(f.eng, "eng", TeamRole::Member, false);
+        async move { saml_mapping_service::create(&pool, &admin, &r).await }
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let waiting: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM pg_stat_activity \
+                             WHERE datname = current_database() AND wait_event_type = 'Lock' \
+                               AND $1 = ANY (pg_blocking_pids(pid)))",
+        )
+        .bind(pid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        if waiting {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the create never waited on the gating lock"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    let mut probe = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM kb_teams WHERE id = $1 FOR UPDATE NOWAIT")
+        .bind(f.eng)
+        .fetch_one(&mut *probe)
+        .await
+        .expect("the waiting create holds no lock on the team row");
+    probe.rollback().await.unwrap();
+
+    holder.commit().await.unwrap();
+    contender
+        .await
+        .unwrap()
+        .expect("the create completes once the gating lock is released");
 }
