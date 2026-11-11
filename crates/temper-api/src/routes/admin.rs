@@ -96,6 +96,12 @@ pub(super) fn admin_routes() -> OpenApiRouter<AppState> {
         // which the service holds to a system admin; `auth::machine_door`); rebind alone requires
         // the proof, because team ownership cannot bound the reach a rebind inherits.
         .routes(routes!(handlers::machine_clients::rebind))
+        // SAML group mappings: create and remove, each a recorded act, capped at maintainer unless
+        // confirmed. The IdP reconcile reads the rows; these are their only writers.
+        .routes(routes!(
+            handlers::saml_mappings::create,
+            handlers::saml_mappings::remove
+        ))
 }
 
 #[cfg(test)]
@@ -109,7 +115,7 @@ mod tests {
     /// The admin group's documented surface, pinned by operation id. A route added here, dropped
     /// from here, or moved back to an undocumented plain mount changes this set and fails —
     /// the review the move deserves happens at the diff of this list.
-    const ADMIN_OPERATIONS: [&str; 32] = [
+    const ADMIN_OPERATIONS: [&str; 34] = [
         "admin_list_join_requests",
         "admin_count_join_requests",
         "admin_review_join_request",
@@ -142,6 +148,8 @@ mod tests {
         "admin_survey_resource_field_scrub",
         "admin_list_resource_field_families",
         "admin_rebind_machine_client",
+        "admin_create_saml_group_mapping",
+        "admin_remove_saml_group_mapping",
     ];
 
     fn operations() -> Vec<(String, Operation)> {

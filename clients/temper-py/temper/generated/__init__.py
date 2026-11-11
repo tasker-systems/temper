@@ -202,6 +202,8 @@ __all__ = [
     "CreateInvitationRequest",
     "CreateRequestBody",
     "CreateReviewBody",
+    "CreateSamlGroupMappingOutcome",
+    "CreateSamlGroupMappingRequest",
     "CreateSubscriptionRequest",
     "CredentialVerification",
     "Deactivated",
@@ -422,6 +424,7 @@ __all__ = [
     "RelationshipTarget",
     "RemoteConnection",
     "RemoveMemberOutcome",
+    "RemoveSamlGroupMappingOutcome",
     "RenameContextOutcome",
     "RenameContextRequest",
     "RenameTeamSlugOutcome",
@@ -473,6 +476,7 @@ __all__ = [
     "Revoked",
     "ReweightRelationshipRequest",
     "RotateSecretRequest",
+    "SamlGroupMapping",
     "ScoreKind",
     "Scoring",
     "ScrubFieldKind",
@@ -744,6 +748,8 @@ from temper.generated.models.create_cogmap_request import CreateCogmapRequest as
 from temper.generated.models.create_invitation_request import CreateInvitationRequest as CreateInvitationRequest
 from temper.generated.models.create_request_body import CreateRequestBody as CreateRequestBody
 from temper.generated.models.create_review_body import CreateReviewBody as CreateReviewBody
+from temper.generated.models.create_saml_group_mapping_outcome import CreateSamlGroupMappingOutcome as CreateSamlGroupMappingOutcome
+from temper.generated.models.create_saml_group_mapping_request import CreateSamlGroupMappingRequest as CreateSamlGroupMappingRequest
 from temper.generated.models.create_subscription_request import CreateSubscriptionRequest as CreateSubscriptionRequest
 from temper.generated.models.credential_verification import CredentialVerification as CredentialVerification
 from temper.generated.models.deactivated import Deactivated as Deactivated
@@ -964,6 +970,7 @@ from temper.generated.models.relationship_ack import RelationshipAck as Relation
 from temper.generated.models.relationship_target import RelationshipTarget as RelationshipTarget
 from temper.generated.models.remote_connection import RemoteConnection as RemoteConnection
 from temper.generated.models.remove_member_outcome import RemoveMemberOutcome as RemoveMemberOutcome
+from temper.generated.models.remove_saml_group_mapping_outcome import RemoveSamlGroupMappingOutcome as RemoveSamlGroupMappingOutcome
 from temper.generated.models.rename_context_outcome import RenameContextOutcome as RenameContextOutcome
 from temper.generated.models.rename_context_request import RenameContextRequest as RenameContextRequest
 from temper.generated.models.rename_team_slug_outcome import RenameTeamSlugOutcome as RenameTeamSlugOutcome
@@ -1015,6 +1022,7 @@ from temper.generated.models.revoke_principal_body import RevokePrincipalBody as
 from temper.generated.models.revoked import Revoked as Revoked
 from temper.generated.models.reweight_relationship_request import ReweightRelationshipRequest as ReweightRelationshipRequest
 from temper.generated.models.rotate_secret_request import RotateSecretRequest as RotateSecretRequest
+from temper.generated.models.saml_group_mapping import SamlGroupMapping as SamlGroupMapping
 from temper.generated.models.score_kind import ScoreKind as ScoreKind
 from temper.generated.models.scoring import Scoring as Scoring
 from temper.generated.models.scrub_field_kind import ScrubFieldKind as ScrubFieldKind

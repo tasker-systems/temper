@@ -434,6 +434,10 @@ refine = [
 "/from" = { disposition = "out-of-scope", note = "a team's prior slug or auto_join_role: team grain, anchored on no resource; not the resource's text" }
 "/to"   = { disposition = "out-of-scope", note = "a team's new slug or auto_join_role: team grain, anchored on no resource; not the resource's text" }
 
+[payload."saml_group_mapping_changed"]
+"/idp_key"     = { disposition = "out-of-scope", note = "an IdP's configured key: instance SAML configuration, anchored on no resource; not the resource's text" }
+"/group_value" = { disposition = "out-of-scope", note = "a group value the IdP asserts: instance SAML configuration, anchored on no resource; not the resource's text" }
+
 [payload."public_within_effect_changed"]
 "/act" = { disposition = "structural", note = "the admin event type of the act that changed a row's effect: vocabulary, anchored on no resource" }
 

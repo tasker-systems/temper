@@ -1,0 +1,43 @@
+title    = "SAML group mappings are created and removed through an admin door, as recorded acts capped at maintainer"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp", "cli-stdout", "clients", "schema", "erasure-policy"]
+status   = "signal-only"
+body = '''
+A SAML group mapping (kb_saml_group_mappings: an IdP group conferring a role on a team at each
+login's reconcile) now has its own doors. Before this, its only writer was SQL that
+`temper admin saml map-group` rendered for psql.
+
+- POST /api/admin/saml/group-mappings { idp_key, group, team_id, role, confirm_elevated? } creates
+  a mapping. System admin only (403 otherwise; a machine principal is refused at the tier). The
+  ceiling is `maintainer`: an `owner` role, or temper-system or the gating team as the target, is
+  400 "confirmation required: ..." unless `confirm_elevated` is true, and nothing is written. Other
+  answers: 404 for an unknown idp_key or a team that is not live, 400 for a personal team, and 409
+  when the group already maps to the team at another role. The same mapping again answers
+  200 { created: false } and records nothing.
+- DELETE /api/admin/saml/group-mappings?idp_key&group&team_id removes one (404 if absent). It
+  deletes no membership: the answer counts the team's IdP memberships left in place and says that
+  the reconcile governs them.
+- Both acts re-check admin standing under the governance lock on their own transaction, and each
+  appends one new admin event, saml_group_mapping_changed (act, actor, idp_key, group_value,
+  team_id, role, confirmed; migration 20261125000010). It is readable by system admins on the admin
+  ledger.
+- Existing mappings are untouched. The migration adds no constraint, and it names any mapping
+  already at `owner` or onto temper-system or the gating team in a WARNING.
+- Erasure policy: the event's idp_key and group_value are declared out-of-scope for resource
+  erasure (instance SAML configuration, not resource text).
+- MCP: `team_manage` gains `saml_map_group` and `saml_unmap_group` (fields idp_key, group, role,
+  confirm_elevated).
+- Clients: AdminClient gains create_saml_group_mapping / remove_saml_group_mapping, and the SDKs
+  gain the matching operations and models. The ts-rs bindings gain saml_mapping.ts.
+- Behavioral (CLI): `temper admin saml map-group` no longer prints an INSERT or takes `--apply`. It
+  calls the door and prints the answer. It takes `--confirm-elevated`. `temper admin saml
+  unmap-group` is new. `--from-seen` is unchanged. scripts/bootstrap/saml-setup.sh runs map-group
+  only with `--apply-db` (and passes a profile's `confirm_elevated`), and prints the command
+  otherwise.
+
+Who observes it: operators who scripted `map-group` output into psql (that output is gone and
+`--apply` is refused), SDK users (new operations and models), and admin-ledger readers (the new
+event type). No existing shape changes.
+Release relevance: signal-only.
+'''

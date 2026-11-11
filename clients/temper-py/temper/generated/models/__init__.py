@@ -157,6 +157,8 @@ from temper.generated.models.create_cogmap_request import CreateCogmapRequest
 from temper.generated.models.create_invitation_request import CreateInvitationRequest
 from temper.generated.models.create_request_body import CreateRequestBody
 from temper.generated.models.create_review_body import CreateReviewBody
+from temper.generated.models.create_saml_group_mapping_outcome import CreateSamlGroupMappingOutcome
+from temper.generated.models.create_saml_group_mapping_request import CreateSamlGroupMappingRequest
 from temper.generated.models.create_subscription_request import CreateSubscriptionRequest
 from temper.generated.models.credential_verification import CredentialVerification
 from temper.generated.models.deactivated import Deactivated
@@ -377,6 +379,7 @@ from temper.generated.models.relationship_ack import RelationshipAck
 from temper.generated.models.relationship_target import RelationshipTarget
 from temper.generated.models.remote_connection import RemoteConnection
 from temper.generated.models.remove_member_outcome import RemoveMemberOutcome
+from temper.generated.models.remove_saml_group_mapping_outcome import RemoveSamlGroupMappingOutcome
 from temper.generated.models.rename_context_outcome import RenameContextOutcome
 from temper.generated.models.rename_context_request import RenameContextRequest
 from temper.generated.models.rename_team_slug_outcome import RenameTeamSlugOutcome
@@ -428,6 +431,7 @@ from temper.generated.models.revoke_principal_body import RevokePrincipalBody
 from temper.generated.models.revoked import Revoked
 from temper.generated.models.reweight_relationship_request import ReweightRelationshipRequest
 from temper.generated.models.rotate_secret_request import RotateSecretRequest
+from temper.generated.models.saml_group_mapping import SamlGroupMapping
 from temper.generated.models.score_kind import ScoreKind
 from temper.generated.models.scoring import Scoring
 from temper.generated.models.scrub_field_kind import ScrubFieldKind

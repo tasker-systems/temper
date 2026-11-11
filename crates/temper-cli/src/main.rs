@@ -1246,8 +1246,8 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     group,
                     team,
                     role,
+                    confirm_elevated,
                     from_seen,
-                    apply,
                 } => {
                     if from_seen {
                         temper_cli::commands::admin_saml::from_seen(&idp_key)
@@ -1263,13 +1263,37 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         temper_cli::actions::runtime::with_client(|client| {
                             Box::pin(async move {
                                 temper_cli::commands::admin_saml::map_group(
-                                    client, &idp_key, &group, &team, &role, apply,
+                                    client,
+                                    temper_cli::commands::admin_saml::MapGroupArgs {
+                                        idp_key: &idp_key,
+                                        group: &group,
+                                        team: &team,
+                                        role: &role,
+                                        confirm_elevated,
+                                    },
+                                    output_format,
                                 )
                                 .await
                             })
                         })
                     }
                 }
+                AdminSamlAction::UnmapGroup {
+                    idp_key,
+                    group,
+                    team,
+                } => temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::admin_saml::unmap_group(
+                            client,
+                            &idp_key,
+                            &group,
+                            &team,
+                            output_format,
+                        )
+                        .await
+                    })
+                }),
                 AdminSamlAction::Verify { instance_url, db } => {
                     temper_cli::actions::runtime::with_client(|client| {
                         Box::pin(async move {

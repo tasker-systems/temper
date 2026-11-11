@@ -180,6 +180,8 @@ temper/generated/models/create_cogmap_request.py
 temper/generated/models/create_invitation_request.py
 temper/generated/models/create_request_body.py
 temper/generated/models/create_review_body.py
+temper/generated/models/create_saml_group_mapping_outcome.py
+temper/generated/models/create_saml_group_mapping_request.py
 temper/generated/models/create_subscription_request.py
 temper/generated/models/credential_verification.py
 temper/generated/models/deactivated.py
@@ -400,6 +402,7 @@ temper/generated/models/relationship_ack.py
 temper/generated/models/relationship_target.py
 temper/generated/models/remote_connection.py
 temper/generated/models/remove_member_outcome.py
+temper/generated/models/remove_saml_group_mapping_outcome.py
 temper/generated/models/rename_context_outcome.py
 temper/generated/models/rename_context_request.py
 temper/generated/models/rename_team_slug_outcome.py
@@ -451,6 +454,7 @@ temper/generated/models/revoke_principal_body.py
 temper/generated/models/revoked.py
 temper/generated/models/reweight_relationship_request.py
 temper/generated/models/rotate_secret_request.py
+temper/generated/models/saml_group_mapping.py
 temper/generated/models/score_kind.py
 temper/generated/models/scoring.py
 temper/generated/models/scrub_field_kind.py

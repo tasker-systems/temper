@@ -95,8 +95,13 @@ remain the authoritative reference and the manual fallback.
    temper admin saml map-group --idp-key <acme-okta> --from-seen   # groups the IdP has actually asserted
    ```
 
-   Emits a `kb_saml_group_mappings` INSERT (add `--apply` to run it). `--from-seen` reads
-   `kb_saml_seen_groups` so you can add mappings reactively.
+   Creates the mapping through the admin API, as a system admin's act recorded on the admin
+   ledger (`saml_group_mapping_changed`). The ceiling is `maintainer`: an `owner` role, or
+   `temper-system` or the gating team as the target, is refused unless you add
+   `--confirm-elevated`. `--from-seen` reads `kb_saml_seen_groups` so you can add mappings
+   reactively. `temper admin saml unmap-group --idp-key <acme-okta> engineering +engineering`
+   removes a mapping (also recorded). Memberships it already conferred stay until each member's
+   next login, when the IdP reconcile removes those no remaining mapping confers.
 
 3. **Verify**:
 

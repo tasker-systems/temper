@@ -3,8 +3,9 @@
 //! `team_manage` carries every team act a person takes (ruling R7, reversed, of temper-artifacts
 //! `specs/2026-11-06-team-dag-and-lifecycle-doors-design.md`): `create`, `update`, `delete`,
 //! `restore`, `add_member`, `change_role`, `remove_member`, `leave`, `attach`, `detach`,
-//! `reparent`, `rename_slug`, `set_auto_join`, and the public_within acts `public_within_open`,
-//! `public_within_close` and `public_within_policy`. `team_read` carries the reads: `list` (your
+//! `reparent`, `rename_slug`, `set_auto_join`, the public_within acts `public_within_open`,
+//! `public_within_close` and `public_within_policy`, and the SAML group-mapping acts
+//! `saml_map_group` and `saml_unmap_group`. `team_read` carries the reads: `list` (your
 //! teams), `detail` (one team: its roster, its parents, its children when you manage it, and its
 //! public_within rows to whom the API shows them) and `public_within` (the openings that confer on
 //! you).
@@ -13,8 +14,8 @@
 //!
 //! Every action resolves its team refs and forwards one route on the caller's own bearer through
 //! `relay_client`; this module decides no authority. Each team route extracts
-//! `AuthUser(HumanPrincipal)`, which only `classify_caller` mints, and `set_auto_join` also mints
-//! `SystemAdmin`. So a machine principal's call is refused by the API, and the refusal sentence
+//! `AuthUser(HumanPrincipal)`, which only `classify_caller` mints, and `set_auto_join` and the SAML
+//! mapping acts also mint `SystemAdmin`. So a machine principal's call is refused by the API, and the refusal sentence
 //! arrives verbatim through `map_team_err`. There is deliberately **no** machine check here: a
 //! second copy of that policy would be the one that drifts (spec § Surfaces).
 //!
@@ -22,7 +23,9 @@
 //!
 //! These are the same acts as `temper team ...`, on the same routes. The human check on an agent's
 //! write is the client's approval of the call, which `destructiveHint: true` asks for. The API keeps
-//! the guards: the last owner, a membership the identity provider assigned, a personal team.
+//! the guards: the last owner, a membership the identity provider assigned, a personal team. The
+//! one exception is the API's own: a SAML mapping that confers `owner`, or targets temper-system or
+//! the gating team, is refused unless the call carries `confirm_elevated: true`.
 //!
 //! # Text in the answer
 //!
@@ -37,6 +40,9 @@ use uuid::Uuid;
 
 use temper_client::error::ClientError;
 use temper_core::types::reassign::ResidualOwnedReach;
+use temper_core::types::saml_mapping::{
+    CreateSamlGroupMappingRequest, RemoveSamlGroupMappingParams,
+};
 use temper_core::types::team::{
     AddMemberRequest, ChangeRoleRequest, PublicWithinPolicyRequest, RenameTeamSlugRequest,
     ReparentRequest, SetAutoJoinRequest, TeamCreateRequest, TeamRole, TeamUpdateRequest,
@@ -193,6 +199,13 @@ pub enum TeamManageAction {
     PublicWithinClose,
     /// Forbid or allow openings over a team and everything beneath it.
     PublicWithinPolicy,
+    /// Map an IdP group to a role on `team` (a system admin's act). Needs `idp_key`, `group` and
+    /// `role`; an `owner` role, or temper-system or the gating team, also needs
+    /// `confirm_elevated: true`.
+    SamlMapGroup,
+    /// Remove a SAML group mapping from `team` (a system admin's act). Needs `idp_key` and `group`.
+    /// Memberships it already conferred are left to the IdP reconcile.
+    SamlUnmapGroup,
 }
 
 impl TeamManageAction {
@@ -214,6 +227,8 @@ impl TeamManageAction {
             Self::PublicWithinOpen => "team_manage public_within_open",
             Self::PublicWithinClose => "team_manage public_within_close",
             Self::PublicWithinPolicy => "team_manage public_within_policy",
+            Self::SamlMapGroup => "team_manage saml_map_group",
+            Self::SamlUnmapGroup => "team_manage saml_unmap_group",
         }
     }
 }
@@ -254,7 +269,7 @@ pub struct TeamManageInput {
     /// team_read view `detail`).
     #[serde(default)]
     pub profile_id: Option<Uuid>,
-    /// `add_member` / `change_role`: owner, maintainer, member or watcher.
+    /// `add_member` / `change_role` / `saml_map_group`: owner, maintainer, member or watcher.
     #[serde(default)]
     pub role: Option<MemberRole>,
     /// `create` / `set_auto_join`: member or watcher; for `set_auto_join`, omit or null to clear.
@@ -268,6 +283,17 @@ pub struct TeamManageInput {
     /// `false` clears this team's forbid (a forbid set higher up still holds). Required.
     #[serde(default)]
     pub forbidden: Option<bool>,
+    /// `saml_map_group` / `saml_unmap_group`: the IdP's key (`kb_saml_idp.idp_key`). Required.
+    #[serde(default)]
+    pub idp_key: Option<String>,
+    /// `saml_map_group` / `saml_unmap_group`: the group value, exactly as the IdP asserts it.
+    /// Required.
+    #[serde(default)]
+    pub group: Option<String>,
+    /// `saml_map_group`: the admin's explicit confirmation, required for an `owner` role and for
+    /// temper-system or the gating team as the target. Default `false`.
+    #[serde(default)]
+    pub confirm_elevated: bool,
 }
 
 /// Dispatch the consolidated team-manage tool.
@@ -462,6 +488,30 @@ pub async fn team_manage(
                         forbidden: required(input.forbidden, act, "forbidden")?,
                     },
                 )
+                .await
+                .across_auth(err)?,
+        ),
+        TeamManageAction::SamlMapGroup => to_text(
+            &client
+                .admin()
+                .create_saml_group_mapping(&CreateSamlGroupMappingRequest {
+                    idp_key: required(input.idp_key, act, "idp_key")?,
+                    group: required(input.group, act, "group")?,
+                    team_id: team_id()?,
+                    role: required(input.role, act, "role")?.into(),
+                    confirm_elevated: input.confirm_elevated,
+                })
+                .await
+                .across_auth(err)?,
+        ),
+        TeamManageAction::SamlUnmapGroup => to_text(
+            &client
+                .admin()
+                .remove_saml_group_mapping(&RemoveSamlGroupMappingParams {
+                    idp_key: required(input.idp_key, act, "idp_key")?,
+                    group: required(input.group, act, "group")?,
+                    team_id: team_id()?,
+                })
                 .await
                 .across_auth(err)?,
         ),

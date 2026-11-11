@@ -2431,7 +2431,11 @@ pub enum AdminSamlAction {
         #[arg(long)]
         apply: bool,
     },
-    /// Emit a kb_saml_group_mappings INSERT for `group → (+team, role)` (run AFTER teams exist).
+    /// Map an IdP group to a role on a team (a system admin's act, recorded on the admin ledger).
+    ///
+    /// At each login the IdP reconcile gives everyone the IdP puts in `group` that role on the
+    /// team. The ceiling is `maintainer`: an `owner` role, or temper-system or the gating team as
+    /// the team, is refused unless `--confirm-elevated` is passed.
     MapGroup {
         #[arg(long)]
         idp_key: String,
@@ -2441,15 +2445,28 @@ pub enum AdminSamlAction {
         /// Team to map into: a slug (optionally `+`-prefixed) or a UUID. Required unless `--from-seen`.
         #[arg(required_unless_present = "from_seen")]
         team: Option<String>,
+        /// owner, maintainer, member or watcher. `owner` needs `--confirm-elevated`.
         #[arg(long, default_value = "member")]
         role: String,
-        /// Instead of emitting a mapping, list groups the IdP has actually asserted
+        /// Confirm a mapping above the ceiling: an `owner` role, or temper-system or the gating
+        /// team as the target. Ignored otherwise.
+        #[arg(long)]
+        confirm_elevated: bool,
+        /// Instead of creating a mapping, list groups the IdP has actually asserted
         /// (reads kb_saml_seen_groups via psql; needs DATABASE_URL).
         #[arg(long)]
         from_seen: bool,
-        /// Run the INSERT against $DATABASE_URL via psql (default: emit only).
+    },
+    /// Remove an IdP group's mapping onto a team (a system admin's act, recorded on the admin
+    /// ledger). Memberships the mapping already conferred are left in place: the IdP reconcile
+    /// removes those no remaining mapping confers, at each member's next login.
+    UnmapGroup {
         #[arg(long)]
-        apply: bool,
+        idp_key: String,
+        /// The group value, exactly as the mapping holds it.
+        group: String,
+        /// The mapping's team: a slug (optionally `+`-prefixed) or a UUID.
+        team: String,
     },
     /// Verify a provisioned instance: AS metadata reachable, caller is a system admin
     /// (governance grant + approved standing), and — with --db — one active kb_saml_idp row.

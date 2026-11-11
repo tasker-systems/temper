@@ -41,6 +41,7 @@ pub mod reassign_service;
 pub mod region_service;
 pub mod resource_erasure_service;
 pub mod resource_service;
+pub mod saml_mapping_service;
 pub mod saml_provisioning_service;
 pub mod sensitivity_sweep_service;
 pub mod shape_loader;

@@ -99,6 +99,10 @@ const ADMIN_EVENT_TYPES: &[&str] = &[
     // A team created, deleted, restored, renamed or auto-join-changed (team DAG and lifecycle doors
     // D8): the team is the subject, and its managers read it through the same arm.
     "team_lifecycle_changed",
+    // A SAML group mapping created or removed. The team is the subject, but no arm below reads it
+    // for a team manager, so it is admin-only by the fail-closed default: the mapping is an
+    // instance act about the IdP, not one of the team's own.
+    "saml_group_mapping_changed",
     // A public_within row opened, closed, lapsed or cascade-deleted, its effect changed, or a
     // team's forbid changed. Each row record names BOTH the team and the anchor as `subject`
     // references, so a manager of either side reads it through the same arm. A forbid record names

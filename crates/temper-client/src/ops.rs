@@ -177,6 +177,8 @@ registry! {
         ADMIN_LIST_ERASURE_RETENTION = Get "/api/admin/erasure/retention" => "admin_list_erasure_retention";
         ADMIN_SET_ERASURE_RETENTION = Put "/api/admin/erasure/retention" => "admin_set_erasure_retention";
         ADMIN_REMOVE_ERASURE_RETENTION = Delete "/api/admin/erasure/retention/{category}" => "admin_remove_erasure_retention";
+        ADMIN_CREATE_SAML_GROUP_MAPPING = Post "/api/admin/saml/group-mappings" => "admin_create_saml_group_mapping";
+        ADMIN_REMOVE_SAML_GROUP_MAPPING = Delete "/api/admin/saml/group-mappings" => "admin_remove_saml_group_mapping";
         ADMIN_ERASE_RESOURCE = Post "/api/admin/resources/erasure" => "admin_erase_resource";
         ADMIN_SURVEY_RESOURCE_ERASURE = Post "/api/admin/resources/erasure/survey" => "admin_survey_resource_erasure";
         ADMIN_SCRUB_BLOCK_HISTORY = Post "/api/admin/resources/block-history-scrub" => "admin_scrub_block_history";

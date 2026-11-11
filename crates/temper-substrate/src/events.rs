@@ -180,6 +180,10 @@ pub enum EventKind {
     /// lifecycle doors D8). Category `admin`, NULL-anchored, written only by
     /// `_admin_team_lifecycle_write` in the same statement as the `kb_teams` change.
     TeamLifecycleChanged,
+    /// A SAML group mapping created or removed by a system admin. Category `admin`,
+    /// NULL-anchored, written only by `_admin_saml_group_mapping_write` in the same statement as
+    /// the `kb_saml_group_mappings` row.
+    SamlGroupMappingChanged,
     /// A `public_within` row opened, closed, lapsed or cascade-deleted.
     /// Category `admin`, NULL-anchored. Row STATE is replayed from `kb_team_public_within`.
     TeamPublicWithinChanged,
@@ -285,6 +289,7 @@ impl EventKind {
             EventKind::TeamMembershipChanged => "team_membership_changed",
             EventKind::TeamParentLinkChanged => "team_parent_link_changed",
             EventKind::TeamLifecycleChanged => "team_lifecycle_changed",
+            EventKind::SamlGroupMappingChanged => "saml_group_mapping_changed",
             EventKind::TeamPublicWithinChanged => "team_public_within_changed",
             EventKind::PublicWithinEffectChanged => "public_within_effect_changed",
             EventKind::PublicWithinPolicyChanged => "public_within_policy_changed",
@@ -353,6 +358,7 @@ impl EventKind {
             "team_membership_changed" => EventKind::TeamMembershipChanged,
             "team_parent_link_changed" => EventKind::TeamParentLinkChanged,
             "team_lifecycle_changed" => EventKind::TeamLifecycleChanged,
+            "saml_group_mapping_changed" => EventKind::SamlGroupMappingChanged,
             "team_public_within_changed" => EventKind::TeamPublicWithinChanged,
             "public_within_effect_changed" => EventKind::PublicWithinEffectChanged,
             "public_within_policy_changed" => EventKind::PublicWithinPolicyChanged,

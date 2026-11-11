@@ -166,23 +166,6 @@ impl SamlProvisionConfig {
     }
 }
 
-/// Render one `kb_saml_group_mappings` INSERT (`group → (team, role)`).
-pub fn render_group_mapping_sql(
-    idp_key: &str,
-    group_value: &str,
-    team_id: uuid::Uuid,
-    role: &str,
-) -> String {
-    format!(
-        "INSERT INTO kb_saml_group_mappings (idp_key, group_value, team_id, role)\n\
-         VALUES ({idp}, {group}, '{team}', {role})\nON CONFLICT DO NOTHING;\n",
-        idp = sql_str(idp_key),
-        group = sql_str(group_value),
-        team = team_id,
-        role = sql_str(role),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,16 +270,6 @@ mod tests {
         assert!(sql.contains("groups_attr"));
         assert!(sql.contains("'a''quote'"));
         assert!(sql.contains("saml/metadata")); // derived sp_entity_id
-    }
-
-    #[test]
-    fn group_mapping_sql_renders() {
-        let team = uuid::Uuid::nil();
-        let sql = render_group_mapping_sql("acme-okta", "engineering", team, "member");
-        assert!(sql.contains("INSERT INTO kb_saml_group_mappings"));
-        assert!(sql.contains("'engineering'"));
-        assert!(sql.contains(&team.to_string()));
-        assert!(sql.contains("'member'"));
     }
 
     /// Proves the round-trip the TS AS now performs: `render_env` escapes the PEM's real

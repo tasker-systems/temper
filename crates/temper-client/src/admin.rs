@@ -24,6 +24,10 @@ use temper_core::types::erasure::{
     RetentionCategory, RetentionPolicies, RetentionPolicySet,
 };
 use temper_core::types::reblock::{ReblockReceipt, ReblockRequest};
+use temper_core::types::saml_mapping::{
+    CreateSamlGroupMappingOutcome, CreateSamlGroupMappingRequest, RemoveSamlGroupMappingOutcome,
+    RemoveSamlGroupMappingParams,
+};
 use temper_core::types::team::TeamMemberRow;
 
 /// Sub-client for admin / system-settings operations.
@@ -461,6 +465,37 @@ impl<'a> AdminClient<'a> {
         let op = &ops::ADMIN_REMOVE_ERASURE_RETENTION;
         let path = op.path(&[&category.as_str()])?;
         let req = self.http.request(op, &path);
+        self.http
+            .send_json(&op.method(), &path, req, token.as_deref())
+            .await
+    }
+
+    /// Map an IdP group to a role on a team (system admin only). Refused with a 400 naming why when
+    /// the role is `owner`, or the team is temper-system or the gating team, unless
+    /// `confirm_elevated` is set. Recorded as `saml_group_mapping_changed`.
+    pub async fn create_saml_group_mapping(
+        &self,
+        body: &CreateSamlGroupMappingRequest,
+    ) -> Result<CreateSamlGroupMappingOutcome> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::ADMIN_CREATE_SAML_GROUP_MAPPING;
+        let path = op.path(&[])?;
+        let req = self.http.request(op, &path).json(body);
+        self.http
+            .send_json(&op.method(), &path, req, token.as_deref())
+            .await
+    }
+
+    /// Remove a SAML group mapping (system admin only). Memberships it already conferred are left
+    /// in place; the IdP reconcile governs them. Recorded as `saml_group_mapping_changed`.
+    pub async fn remove_saml_group_mapping(
+        &self,
+        params: &RemoveSamlGroupMappingParams,
+    ) -> Result<RemoveSamlGroupMappingOutcome> {
+        let token = self.http.resolve_token()?;
+        let op = &ops::ADMIN_REMOVE_SAML_GROUP_MAPPING;
+        let path = op.path(&[])?;
+        let req = self.http.request(op, &path).query(params);
         self.http
             .send_json(&op.method(), &path, req, token.as_deref())
             .await

@@ -64,6 +64,7 @@ pub mod relationship_requests;
 pub mod resource;
 pub mod resource_grant;
 pub mod resource_view;
+pub mod saml_mapping;
 pub mod schema;
 pub mod search;
 pub mod slack;

@@ -742,6 +742,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/saml/group-mappings": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a SAML group mapping
+         * @description Maps a group the IdP asserts to a role on a team: at each login, the IdP reconcile gives everyone in the group that role. The ceiling is `maintainer`. An `owner` role, or a target of temper-system or the gating team, needs `confirm_elevated: true`; without it the request is refused, naming why, and nothing is written. Recorded as `saml_group_mapping_changed`. The same mapping again records nothing and answers `created: false`. Requires a system admin.
+         */
+        post: operations["admin_create_saml_group_mapping"];
+        /**
+         * Remove a SAML group mapping
+         * @description Removes one mapping. Memberships it already conferred are left in place: the IdP reconcile governs them, and at each member's next login removes those no remaining mapping confers. The answer counts the team's IdP memberships and says so. Recorded as `saml_group_mapping_changed`. Requires a system admin.
+         */
+        delete: operations["admin_remove_saml_group_mapping"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/slack/links/disconnect": {
         parameters: {
             query?: never;
@@ -6361,6 +6388,34 @@ export interface components {
         CreateReviewBody: {
             message?: string | null;
         };
+        /** @description Response body for `POST /api/admin/saml/group-mappings`. */
+        CreateSamlGroupMappingOutcome: {
+            /** @description `true` when the act needed `confirm_elevated` and had it. */
+            confirmed: boolean;
+            /** @description `false` when the mapping already existed with this role: nothing was written or recorded. */
+            created: boolean;
+            mapping: components["schemas"]["SamlGroupMapping"];
+        };
+        /** @description Request body for `POST /api/admin/saml/group-mappings`. */
+        CreateSamlGroupMappingRequest: {
+            /**
+             * @description The admin's explicit confirmation, required for an `owner` role and for a target of
+             *     `temper-system` or the gating team. Without it such a request is refused and nothing is
+             *     written. Ignored otherwise. Defaults to `false`.
+             */
+            confirm_elevated?: boolean;
+            /** @description The group value, exactly as the IdP asserts it. */
+            group: string;
+            /** @description The IdP whose assertions carry the group (`kb_saml_idp.idp_key`). */
+            idp_key: string;
+            /** @description The role conferred. `owner` needs `confirm_elevated`. */
+            role: components["schemas"]["TeamRole"];
+            /**
+             * Format: uuid
+             * @description The team the mapping confers a role on. Not a personal team.
+             */
+            team_id: string;
+        };
         /** @description Create a subscription. */
         CreateSubscriptionRequest: {
             /**
@@ -9812,6 +9867,24 @@ export interface components {
             residual_owned: components["schemas"]["ResidualOwnedReach"];
         };
         /**
+         * @description Response body for `DELETE /api/admin/saml/group-mappings`.
+         *
+         *     Removing a mapping deletes no membership. The team's IdP memberships stay until each member's
+         *     next login, when the reconcile removes those that no remaining mapping confers.
+         */
+        RemoveSamlGroupMappingOutcome: {
+            /**
+             * Format: int64
+             * @description The team's memberships written by the IdP reconcile (`source = idp`), from this mapping or
+             *     any other. The removal left every one of them in place.
+             */
+            idp_memberships_left_in_place: number;
+            /** @description What the removal left in place, and what governs it, in a sentence. */
+            memberships: string;
+            /** @description The mapping as it was. */
+            removed: components["schemas"]["SamlGroupMapping"];
+        };
+        /**
          * @description Result of a context rename. `renamed` is `false` when the canonical name already equalled
          *     the stored one (idempotent no-op).
          *
@@ -10943,6 +11016,14 @@ export interface components {
              * @description Seconds the previous secret stays valid after rotation, from 0 to 604800 (7 days).
              */
             grace_seconds: number;
+        };
+        /** @description One `kb_saml_group_mappings` row. */
+        SamlGroupMapping: {
+            group: string;
+            idp_key: string;
+            role: components["schemas"]["TeamRole"];
+            /** Format: uuid */
+            team_id: string;
         };
         /**
          * @description Which quantity a hit's score is, named so that combining two of different kinds reads as the
@@ -14483,6 +14564,142 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    admin_create_saml_group_mapping: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateSamlGroupMappingRequest"];
+            };
+        };
+        responses: {
+            /** @description Created, or already so */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateSamlGroupMappingOutcome"];
+                };
+            };
+            /** @description Confirmation required (an `owner` role, or temper-system or the gating team, without `confirm_elevated`); a personal team; or an empty idp_key or group. Nothing is written */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No IdP has this idp_key, or the team does not exist or is soft-deleted */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The group already maps to the team with another role; remove that mapping first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The body is JSON but not the expected shape (a plain-text rejection, not an ErrorBody) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    admin_remove_saml_group_mapping: {
+        parameters: {
+            query: {
+                /** @description The IdP whose assertions carry the group. */
+                idp_key: string;
+                /** @description The group value, exactly as the mapping holds it. */
+                group: string;
+                /** @description The team the mapping targets. */
+                team_id: string;
+            };
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoveSamlGroupMappingOutcome"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such mapping */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };

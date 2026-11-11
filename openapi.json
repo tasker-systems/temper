@@ -2991,6 +2991,198 @@
         "x-apidog-folder": "Reference/API Reference/Admin"
       }
     },
+    "/api/admin/saml/group-mappings": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Create a SAML group mapping",
+        "description": "Maps a group the IdP asserts to a role on a team: at each login, the IdP reconcile gives everyone in the group that role. The ceiling is `maintainer`. An `owner` role, or a target of temper-system or the gating team, needs `confirm_elevated: true`; without it the request is refused, naming why, and nothing is written. Recorded as `saml_group_mapping_changed`. The same mapping again records nothing and answers `created: false`. Requires a system admin.",
+        "operationId": "admin_create_saml_group_mapping",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSamlGroupMappingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Created, or already so",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateSamlGroupMappingOutcome"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Confirmation required (an `owner` role, or temper-system or the gating team, without `confirm_elevated`); a personal team; or an empty idp_key or group. Nothing is written",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No IdP has this idp_key, or the team does not exist or is soft-deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The group already maps to the team with another role; remove that mapping first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The body is JSON but not the expected shape (a plain-text rejection, not an ErrorBody)"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin"
+      },
+      "delete": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Remove a SAML group mapping",
+        "description": "Removes one mapping. Memberships it already conferred are left in place: the IdP reconcile governs them, and at each member's next login removes those no remaining mapping confers. The answer counts the team's IdP memberships and says so. Recorded as `saml_group_mapping_changed`. Requires a system admin.",
+        "operationId": "admin_remove_saml_group_mapping",
+        "parameters": [
+          {
+            "name": "idp_key",
+            "in": "query",
+            "description": "The IdP whose assertions carry the group.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "group",
+            "in": "query",
+            "description": "The group value, exactly as the mapping holds it.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "team_id",
+            "in": "query",
+            "description": "The team the mapping targets.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemoveSamlGroupMappingOutcome"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`); or the caller is a machine principal (`FORBIDDEN_DETAIL`: this action is not available to a machine principal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such mapping",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin"
+      }
+    },
     "/api/admin/slack/links/disconnect": {
       "parameters": [
         {
@@ -20462,6 +20654,61 @@
           }
         }
       },
+      "CreateSamlGroupMappingOutcome": {
+        "type": "object",
+        "description": "Response body for `POST /api/admin/saml/group-mappings`.",
+        "required": [
+          "mapping",
+          "created",
+          "confirmed"
+        ],
+        "properties": {
+          "confirmed": {
+            "type": "boolean",
+            "description": "`true` when the act needed `confirm_elevated` and had it."
+          },
+          "created": {
+            "type": "boolean",
+            "description": "`false` when the mapping already existed with this role: nothing was written or recorded."
+          },
+          "mapping": {
+            "$ref": "#/components/schemas/SamlGroupMapping"
+          }
+        }
+      },
+      "CreateSamlGroupMappingRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/admin/saml/group-mappings`.",
+        "required": [
+          "idp_key",
+          "group",
+          "team_id",
+          "role"
+        ],
+        "properties": {
+          "confirm_elevated": {
+            "type": "boolean",
+            "description": "The admin's explicit confirmation, required for an `owner` role and for a target of\n`temper-system` or the gating team. Without it such a request is refused and nothing is\nwritten. Ignored otherwise. Defaults to `false`."
+          },
+          "group": {
+            "type": "string",
+            "description": "The group value, exactly as the IdP asserts it."
+          },
+          "idp_key": {
+            "type": "string",
+            "description": "The IdP whose assertions carry the group (`kb_saml_idp.idp_key`)."
+          },
+          "role": {
+            "$ref": "#/components/schemas/TeamRole",
+            "description": "The role conferred. `owner` needs `confirm_elevated`."
+          },
+          "team_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The team the mapping confers a role on. Not a personal team."
+          }
+        }
+      },
       "CreateSubscriptionRequest": {
         "type": "object",
         "description": "Create a subscription.",
@@ -26521,6 +26768,30 @@
           }
         }
       },
+      "RemoveSamlGroupMappingOutcome": {
+        "type": "object",
+        "description": "Response body for `DELETE /api/admin/saml/group-mappings`.\n\nRemoving a mapping deletes no membership. The team's IdP memberships stay until each member's\nnext login, when the reconcile removes those that no remaining mapping confers.",
+        "required": [
+          "removed",
+          "idp_memberships_left_in_place",
+          "memberships"
+        ],
+        "properties": {
+          "idp_memberships_left_in_place": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The team's memberships written by the IdP reconcile (`source = idp`), from this mapping or\nany other. The removal left every one of them in place."
+          },
+          "memberships": {
+            "type": "string",
+            "description": "What the removal left in place, and what governs it, in a sentence."
+          },
+          "removed": {
+            "$ref": "#/components/schemas/SamlGroupMapping",
+            "description": "The mapping as it was."
+          }
+        }
+      },
       "RenameContextOutcome": {
         "type": "object",
         "description": "Result of a context rename. `renamed` is `false` when the canonical name already equalled\nthe stored one (idempotent no-op).\n\nCarries the **composed** `context_ref` as well as the `owner_ref` + `slug` halves it is built\nfrom: the caller has just had their address changed out from under them, so making them\nreconstruct the new one from parts is the wrong place to save a field.",
@@ -28187,6 +28458,31 @@
             "type": "integer",
             "format": "int64",
             "description": "Seconds the previous secret stays valid after rotation, from 0 to 604800 (7 days)."
+          }
+        }
+      },
+      "SamlGroupMapping": {
+        "type": "object",
+        "description": "One `kb_saml_group_mappings` row.",
+        "required": [
+          "idp_key",
+          "group",
+          "team_id",
+          "role"
+        ],
+        "properties": {
+          "group": {
+            "type": "string"
+          },
+          "idp_key": {
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/TeamRole"
+          },
+          "team_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },

@@ -634,10 +634,11 @@ SAML provisioning: generate keys + emit the consistent env bundle and SQL (opera
 Usage: temper admin saml [OPTIONS] <COMMAND>
 
 Commands:
-  provision  Generate the AS signing key + reconcile secret and emit the env bundle + kb_saml_idp SQL
-  map-group  Emit a kb_saml_group_mappings INSERT for `group → (+team, role)` (run AFTER teams exist)
-  verify     Verify a provisioned instance: AS metadata reachable, caller is a system admin (governance grant + approved standing), and — with --db — one active kb_saml_idp row
-  help       Print this message or the help of the given subcommand(s)
+  provision    Generate the AS signing key + reconcile secret and emit the env bundle + kb_saml_idp SQL
+  map-group    Map an IdP group to a role on a team (a system admin's act, recorded on the admin ledger)
+  unmap-group  Remove an IdP group's mapping onto a team (a system admin's act, recorded on the admin ledger). Memberships the mapping already conferred are left in place: the IdP reconcile removes those no remaining mapping confers, at each member's next login
+  verify       Verify a provisioned instance: AS metadata reachable, caller is a system admin (governance grant + approved standing), and — with --db — one active kb_saml_idp row
+  help         Print this message or the help of the given subcommand(s)
 
 Options:
       --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
@@ -724,22 +725,66 @@ Options:
 #### `temper admin saml map-group`
 
 ```text
-Emit a kb_saml_group_mappings INSERT for `group → (+team, role)` (run AFTER teams exist)
+Map an IdP group to a role on a team (a system admin's act, recorded on the admin ledger).
+
+At each login the IdP reconcile gives everyone the IdP puts in `group` that role on the team. The ceiling is `maintainer`: an `owner` role, or temper-system or the gating team as the team, is refused unless `--confirm-elevated` is passed.
 
 Usage: temper admin saml map-group [OPTIONS] --idp-key <IDP_KEY> [GROUP] [TEAM]
 
 Arguments:
-  [GROUP]  The IdP-asserted group value. Required unless `--from-seen`
-  [TEAM]   Team to map into: a slug (optionally `+`-prefixed) or a UUID. Required unless `--from-seen`
+  [GROUP]
+          The IdP-asserted group value. Required unless `--from-seen`
+
+  [TEAM]
+          Team to map into: a slug (optionally `+`-prefixed) or a UUID. Required unless `--from-seen`
+
+Options:
+      --idp-key <IDP_KEY>
+          
+
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --role <ROLE>
+          owner, maintainer, member or watcher. `owner` needs `--confirm-elevated`
+          
+          [default: member]
+
+      --confirm-elevated
+          Confirm a mapping above the ceiling: an `owner` role, or temper-system or the gating team as the target. Ignored otherwise
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+      --from-seen
+          Instead of creating a mapping, list groups the IdP has actually asserted (reads kb_saml_seen_groups via psql; needs DATABASE_URL)
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+#### `temper admin saml unmap-group`
+
+```text
+Remove an IdP group's mapping onto a team (a system admin's act, recorded on the admin ledger). Memberships the mapping already conferred are left in place: the IdP reconcile removes those no remaining mapping confers, at each member's next login
+
+Usage: temper admin saml unmap-group [OPTIONS] --idp-key <IDP_KEY> <GROUP> <TEAM>
+
+Arguments:
+  <GROUP>  The group value, exactly as the mapping holds it
+  <TEAM>   The mapping's team: a slug (optionally `+`-prefixed) or a UUID
 
 Options:
       --idp-key <IDP_KEY>  
       --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
       --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
-      --role <ROLE>        [default: member]
       --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
-      --from-seen          Instead of emitting a mapping, list groups the IdP has actually asserted (reads kb_saml_seen_groups via psql; needs DATABASE_URL)
-      --apply              Run the INSERT against $DATABASE_URL via psql (default: emit only)
       --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
   -h, --help               Print help
 ```
