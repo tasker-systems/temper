@@ -1,0 +1,39 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(derived_access_profile($1, 'grant', $2, $3), false) AS \"derived!: bool\",\n                  (NOT $4 OR COALESCE(can_read_by_membership($1, $2, $3), false))\n                  AND (NOT $5 OR COALESCE(can('kb_profiles', $1, 'write', $2, $3), false))\n                  AND (NOT $6 OR COALESCE(can('kb_profiles', $1, 'delete', $2, $3), false))\n                      AS \"attenuated!: bool\",\n                  (SELECT t.id FROM kb_teams t WHERE t.personal_of = $1 AND t.is_active)\n                      AS personal_team",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "derived!: bool",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "attenuated!: bool",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "personal_team",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Bool",
+        "Bool",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "89aa3179215b42c2ba24e5148c4bcd544182c127cea162275374b38658e3822d"
+}

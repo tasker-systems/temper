@@ -1,0 +1,34 @@
+title    = "The grant door re-decides a delegated granter's grant right under the locks it is held through"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http"]
+status   = "signal-only"
+body = '''
+grant_capability's delegated arm decided the granter's grant right (and the attenuation that bounds
+what they may confer) on a pool read and never asked again on its write transaction. A grant
+outlives the right that made it, so a granter whose can_grant came through a team, and who was
+removed from that team, demoted below maintainer, or had the team's can_grant withdrawn while the
+grant was in flight, still wrote it. The grant can name a team the granter manages or a machine
+they control, so the stale act could leave them holding access.
+
+The door now asks again on its transaction, before any write: the teams the right is held through
+(a can_grant row on a team where the granter holds a direct owner or maintainer row) under their
+row locks (FOR NO KEY UPDATE, ascending, the lock every membership writer takes first); then the
+grant rows carrying the right, FOR SHARE, in one ascending pass with the row the grant writes,
+which is taken FOR UPDATE. The grant right, its attenuation and, for a recipient that is the
+granter's own machine, the in-person grant bar are re-read there. A removal, demotion or
+withdrawal committed first refuses the grant; one in flight makes it wait, then refuses, with the
+403 a caller who never held the right gets. No grant row is written.
+
+Not changed: revoke_capability's delegated arm. A revocation only removes a grant, so a stale one
+leaves the revoker no access. The recipient team's manage bar stays a pool read, as for
+grant_reach.
+
+Lock order: the team rows (ascending), then the subject floor's resource row, then grant rows
+(ascending). Membership writers take their team row first and no grant or resource row; a demotion
+or standing act takes standing and governance rows only; machine registration takes its team rows
+ascending, then grant rows; revoke takes no team row. No new wait cycle. No schema or response
+shape change. Witnesses: a_granter_removed_from_the_source_team_in_flight_writes_no_grant and
+a_grant_right_withdrawn_from_the_source_team_in_flight_writes_no_grant. Release relevance:
+signal-only.
+'''

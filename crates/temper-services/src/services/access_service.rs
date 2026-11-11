@@ -554,9 +554,186 @@ async fn admin_arm_still_grants(
     }
 }
 
+/// The first half of the grant door's delegated re-check: lock the teams the caller's grant right
+/// on the subject is held through, and keep the ones they still manage. `None` off the delegated
+/// arm, where there is nothing to ask again here.
+///
+/// A team-held grant right is a `can_grant` row anchored on a team where the caller holds a direct,
+/// active owner or maintainer row (`profile_authoring_teams`' grant arm, which never inherits). The
+/// pool decided it, and the grant it admits outlives the caller's removal from that team, so each
+/// such team is locked here with [`team_membership::role_under_lock`], one at a time in ascending
+/// id order, before any other row the door takes. Every membership writer takes its team's row
+/// lock first, so a removal or demotion in flight makes this wait, and the role read afterwards is
+/// the one it committed. A team the caller no longer manages, or one soft-deleted, is dropped.
+///
+/// The candidate teams are read plainly first. A removal committed before that read leaves the
+/// team out, which is the answer the lock would give; one still in flight is not yet visible as a
+/// removal, so its team is a candidate and is locked.
+async fn lock_delegated_grant_teams(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    proof: &crate::authz::Authorized<GrantAuthority>,
+    caller: ProfileId,
+) -> ApiResult<Option<Vec<Uuid>>> {
+    if proof.authority() != GrantAuthority::Delegated {
+        return Ok(None);
+    }
+    let subject = proof.subject();
+    let candidates = sqlx::query_scalar!(
+        r#"SELECT DISTINCT g.principal_id FROM kb_access_grants g
+            WHERE g.subject_table = $2 AND g.subject_id = $3
+              AND g.principal_table = 'kb_teams' AND g.can_grant
+              AND EXISTS (SELECT 1 FROM kb_team_members tm
+                           WHERE tm.team_id = g.principal_id AND tm.profile_id = $1
+                             AND tm.role IN ('owner', 'maintainer'))
+            ORDER BY g.principal_id"#,
+        *caller,
+        subject.kind.as_str(),
+        subject.id,
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+    let mut managed = Vec::with_capacity(candidates.len());
+    for team in candidates {
+        let role = team_membership::role_under_lock(tx, team, caller, &[]).await?;
+        if matches!(role, Some(role) if crate::services::team_service::can_manage(role)) {
+            managed.push(team);
+        }
+    }
+    Ok(Some(managed))
+}
+
+/// The second half of the grant door's delegated re-check, after the subject floor: the grant
+/// right and the attenuation [`authorize_capability_grant`] decided on the pool, asked again on
+/// the grant's transaction. A right withdrawn since refuses with `Forbidden`, what a caller who
+/// never held one is told.
+///
+/// The grant rows that carry the right (anchored on the caller's profile, or on a team
+/// [`lock_delegated_grant_teams`] kept) are locked in one ascending id pass with the row the grant
+/// will write, if it exists: that row `FOR UPDATE`, the others `FOR SHARE`, as
+/// [`callers_machine_grant_holds_on`] takes them. A withdrawal in flight (`grant_capability`
+/// setting `can_grant = false`, `revoke_capability`) holds its row and makes this wait; the row is
+/// re-read once it commits, and a row that no longer carries `can_grant` does not count. The
+/// write's own row is taken in the same pass and in its final mode, so two delegates writing the
+/// row their own right comes from never both hold it shared and then wait on each other to
+/// upgrade. [`delegated_may_change_row`]'s `FOR UPDATE` on it afterwards then waits on nothing.
+///
+/// Where the recipient is a machine the caller controls, [`callers_machine_grant_bar`] is asked
+/// again over the same locked rows: only a right held in the caller's own name (their profile,
+/// their live personal team) or the structural floor admits it.
+///
+/// Asked plainly on the transaction, as `callers_machine_grant_holds_on` asks them: the structural
+/// floor (`derived_access_profile`, a resource home's owner, which no team confers) and the
+/// attenuation reads (`can_read_by_membership`, `can(write)`, `can(delete)`).
+async fn delegated_arm_still_grants(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    teams: &[Uuid],
+    caller: ProfileId,
+    subject: RefTarget,
+    caps: RequestedCapabilities,
+    req: &GrantCapabilityRequest,
+) -> ApiResult<()> {
+    let ids = sqlx::query!(
+        r#"SELECT g.id,
+                  (g.principal_table = $5 AND g.principal_id = $6) AS "is_target!: bool"
+             FROM kb_access_grants g
+            WHERE g.subject_table = $2 AND g.subject_id = $3
+              AND ( (g.can_grant
+                     AND ( (g.principal_table = 'kb_profiles' AND g.principal_id = $1)
+                        OR (g.principal_table = 'kb_teams' AND g.principal_id = ANY($4)) ))
+                 OR (g.principal_table = $5 AND g.principal_id = $6) )
+            ORDER BY g.id"#,
+        *caller,
+        subject.kind.as_str(),
+        subject.id,
+        teams,
+        req.principal_table,
+        req.principal_id,
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+
+    // The rows that still carry the right once locked, as (principal_table, principal_id).
+    let mut held: Vec<(String, Uuid)> = Vec::new();
+    for row in ids {
+        let locked = if row.is_target {
+            sqlx::query!(
+                r#"SELECT principal_table, principal_id, can_grant FROM kb_access_grants
+                    WHERE id = $1 FOR UPDATE"#,
+                row.id,
+            )
+            .fetch_optional(&mut **tx)
+            .await?
+            .map(|r| (r.principal_table, r.principal_id, r.can_grant))
+        } else {
+            sqlx::query!(
+                r#"SELECT principal_table, principal_id, can_grant FROM kb_access_grants
+                    WHERE id = $1 FOR SHARE"#,
+                row.id,
+            )
+            .fetch_optional(&mut **tx)
+            .await?
+            .map(|r| (r.principal_table, r.principal_id, r.can_grant))
+        };
+        let Some((table, id, can_grant)) = locked else {
+            continue;
+        };
+        let carries = can_grant
+            && ((table == "kb_profiles" && id == *caller)
+                || (table == "kb_teams" && teams.contains(&id)));
+        if carries {
+            held.push((table, id));
+        }
+    }
+
+    let floor = sqlx::query!(
+        r#"SELECT COALESCE(derived_access_profile($1, 'grant', $2, $3), false) AS "derived!: bool",
+                  (NOT $4 OR COALESCE(can_read_by_membership($1, $2, $3), false))
+                  AND (NOT $5 OR COALESCE(can('kb_profiles', $1, 'write', $2, $3), false))
+                  AND (NOT $6 OR COALESCE(can('kb_profiles', $1, 'delete', $2, $3), false))
+                      AS "attenuated!: bool",
+                  (SELECT t.id FROM kb_teams t WHERE t.personal_of = $1 AND t.is_active)
+                      AS personal_team"#,
+        *caller,
+        subject.kind.as_str(),
+        subject.id,
+        caps.read,
+        caps.write,
+        caps.delete,
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    if !(floor.derived || !held.is_empty()) || !floor.attenuated {
+        return Err(ApiError::Forbidden);
+    }
+    if req.principal_table == "kb_profiles"
+        && is_machine_controlled_by(&mut **tx, req.principal_id, caller).await?
+    {
+        let in_person = floor.derived
+            || held.iter().any(|(table, id)| {
+                (table == "kb_profiles" && *id == *caller)
+                    || (table == "kb_teams" && Some(*id) == floor.personal_team)
+            });
+        if !in_person {
+            return Err(ApiError::Forbidden);
+        }
+    }
+    Ok(())
+}
+
 /// Mint/update one access grant. Auth before write: `can_administer_grant`. The DB coherence CHECK
 /// (`write|delete|grant ⇒ read`) is the integrity backstop. Idempotent upsert — `granted=false` when
 /// the row already existed and was updated in place.
+///
+/// Both authority arms are asked again on the write's transaction before the write: the admin arm
+/// under the governance lock (`admin_arm_still_grants`), the delegated arm under the locks of
+/// the teams and grant rows its right is held through (`lock_delegated_grant_teams`,
+/// `delegated_arm_still_grants`). A grant outlives the right that made it, so a right withdrawn
+/// while the door is in flight refuses the grant.
+///
+/// Lock order: team rows ascending (delegated arm) or the governance row (admin arm), then the
+/// subject floor's `kb_resources` row, then grant rows ascending. A membership writer takes its
+/// team row first and no grant or resource row; a demotion takes standing and governance rows and
+/// none of these; the gating advisory lock is not taken here.
 pub async fn grant_capability(
     pool: &PgPool,
     authed: &HumanPrincipal,
@@ -587,8 +764,19 @@ pub async fn grant_capability(
         drop(tx);
         return Err(erased_or_refused(pool, caller, subject, refusal).await);
     }
+    // The delegated arm's re-check, in two halves around the subject floor so the door keeps one
+    // lock order: the teams the grant right is held through first, then the floor's resource row,
+    // then the grant rows.
+    let delegated_teams = lock_delegated_grant_teams(&mut tx, &proof, caller).await?;
     if let Err(refusal) = grant_subject_floor_in_tx(&mut tx, caller, subject).await {
         return Err(write_floor::rollback_with(tx, refusal).await);
+    }
+    if let Some(teams) = &delegated_teams {
+        if let Err(refusal) =
+            delegated_arm_still_grants(&mut tx, teams, caller, subject, req.into(), req).await
+        {
+            return Err(write_floor::rollback_with(tx, refusal).await);
+        }
     }
     // An upsert over an existing row is an overwrite of someone's grant: a delegate may do that
     // only to a row that is theirs to change.
@@ -744,11 +932,14 @@ async fn recipient_bar(
 /// team (route 3, closed by Pete's ruling of 2026-11-01, decision
 /// `01a19843-b86b-766f-b06e-65560b0f6f6f`). The owning team's liveness is deliberately not asked:
 /// a soft-deleted team's owner holding the bar is the stricter answer, never a looser one.
-async fn is_machine_controlled_by(
-    pool: &PgPool,
+async fn is_machine_controlled_by<'e, E>(
+    executor: E,
     profile_id: Uuid,
     caller: ProfileId,
-) -> ApiResult<bool> {
+) -> ApiResult<bool>
+where
+    E: sqlx::PgExecutor<'e>,
+{
     Ok(sqlx::query_scalar!(
         r#"SELECT EXISTS (
              SELECT 1 FROM kb_machine_clients mc
@@ -761,7 +952,7 @@ async fn is_machine_controlled_by(
         profile_id,
         *caller,
     )
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await?)
 }
 
@@ -825,8 +1016,10 @@ pub(crate) async fn callers_machine_grant_bar(
 /// The registrar's own grant-right rows on the map (profile-anchored, or on their live personal
 /// team) are taken `FOR SHARE`. A revocation or a downgrade of one in flight
 /// (`revoke_capability`, `grant_capability`) holds that row and makes this wait; once it commits,
-/// the row is re-read and no longer counts. Neither of those doors takes a team row, and the
-/// registration takes these rows after its team locks, so the share lock adds no cycle. A
+/// the row is re-read and no longer counts. The registration takes these rows after its team
+/// locks, in ascending id order. `revoke_capability` takes no team row; `grant_capability`'s
+/// delegated arm takes its team rows ascending first and its grant rows ascending after them
+/// (`delegated_arm_still_grants`), the same order as here, so the share lock adds no cycle. A
 /// [`sqlx::Transaction`] rather than a bare connection, so the share lock cannot be taken in
 /// autocommit and released before the registration writes. The
 /// structural floor (`derived_access_profile`) and the attenuation reads (`can_read_by_membership`,
@@ -1008,7 +1201,10 @@ pub async fn revoke_capability(
             Err(refusal) => return Err(erased_or_refused(pool, caller, subject, refusal).await),
         };
     // The subject floor at the head of the revoke's own transaction (see `grant_capability`), after
-    // the admin arm's re-check.
+    // the admin arm's re-check. The delegated arm is NOT asked again here, by design: a revocation
+    // only removes a grant, so a delegate whose right was withdrawn while it waited leaves nothing
+    // behind that reaches them or a proxy of theirs. A locked re-check is worth its locks only where
+    // a stale act leaves the actor with access, and this one cannot.
     let mut tx = pool.begin().await?;
     if let Err(refusal) = admin_arm_still_grants(&mut tx, &proof, caller).await {
         drop(tx);
