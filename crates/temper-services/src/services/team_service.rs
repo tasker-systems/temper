@@ -1202,8 +1202,14 @@ pub async fn delete_team(
     .await?;
     // Decided under the team's row lock and the shared gating lock, so a repoint committed since
     // any earlier read is seen. The instance is never without its gating team.
+    // Only an admin reaches the gating team's delete on purpose; an owner whose team became the
+    // gating team after the check above gets the refusal a non-admin gets there.
     if outcome == LifecycleOutcome::Gating {
-        return Err(gating_team_cannot_be_deleted());
+        return Err(if admin {
+            gating_team_cannot_be_deleted()
+        } else {
+            ApiError::Forbidden
+        });
     }
     // The owner arm passed above, so the caller owned the team the delete just made dead.
     let owned = (!admin).then_some(team_id);

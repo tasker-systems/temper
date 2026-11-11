@@ -11,7 +11,9 @@
 --   gating_team_stays_live()              deferred constraint triggers on kb_teams (a live team dies,
 --                                         changes slug or is deleted) and kb_system_settings (the slug
 --                                         is written, or the row is deleted): run the check at commit,
---                                         and on the settings side refuse a set slug becoming unset.
+--                                         under READ COMMITTED only, and on the settings side refuse a
+--                                         set slug becoming unset. A TRUNCATE of either table is
+--                                         refused while a slug is set.
 --   _admin_team_lifecycle_act,            body-only CREATE OR REPLACE: the delete arm answers
 --   _admin_gating_team_slug_write         {outcome: gating} for the gating team, the slug write
 --                                         {outcome: dead_team} for a soft-deleted one, so the doors
@@ -76,6 +78,14 @@ DECLARE
 BEGIN
     -- No replay skip: replay restores kb_teams into an unseeded namespace with no settings row, which
     -- passes, and a skip would be a switch any writer could set.
+    -- The lock below orders this read after any concurrent slug write or team change, but only a
+    -- READ COMMITTED read then sees it: an older snapshot would read around it (write skew), and no
+    -- door runs these writes at another level.
+    IF current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'a change to the gating slug or to a live team''s life or slug must run under READ COMMITTED, not %',
+            current_setting('transaction_isolation')
+            USING ERRCODE = 'check_violation', CONSTRAINT = 'gating_team_stays_live';
+    END IF;
     -- After the team row locks this transaction already holds (the order of every team act); a slug
     -- writer holds the exclusive side to its commit, so what is read below is committed.
     PERFORM _gating_team_lock(false);
@@ -109,7 +119,8 @@ COMMENT ON FUNCTION gating_team_stays_live() IS
 $c$At commit (DEFERRABLE INITIALLY DEFERRED constraint triggers on kb_teams and kb_system_settings):
 refuses the transaction if the gating slug is set and no live team holds it, and, on the settings
 side, if a set slug was cleared (NULL is the seed row's birth state only) or the row deleted. Reads
-under the shared _gating_team_lock, after the team row locks the transaction holds. Not skipped
+under the shared _gating_team_lock, after the team row locks the transaction holds, and only under
+READ COMMITTED (another level's snapshot would read around a concurrent write). Not skipped
 under replay (temper.replaying): it binds every writer. The doors refuse by name before this is reached; this is the refusal for
 every other writer.$c$;
 
@@ -132,6 +143,33 @@ CREATE CONSTRAINT TRIGGER trg_gating_team_stays_live_settings
     DEFERRABLE INITIALLY DEFERRED
     FOR EACH ROW
     EXECUTE FUNCTION gating_team_stays_live();
+
+-- TRUNCATE fires no row trigger, so it is refused outright while a gating slug is set.
+CREATE FUNCTION gating_team_stays_live_truncate() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM kb_system_settings WHERE gating_team_slug IS NOT NULL) THEN
+        RAISE EXCEPTION 'cannot truncate % while the gating slug is set: the instance is never without its gating team',
+            TG_TABLE_NAME
+            USING ERRCODE = 'check_violation', CONSTRAINT = 'gating_team_stays_live';
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+COMMENT ON FUNCTION gating_team_stays_live_truncate() IS
+$c$Before a TRUNCATE of kb_teams or kb_system_settings, which fires no row trigger: refused while a
+gating slug is set, the statement-level arm of gating_team_stays_live.$c$;
+
+CREATE TRIGGER trg_gating_team_stays_live_truncate
+    BEFORE TRUNCATE ON kb_teams
+    FOR EACH STATEMENT EXECUTE FUNCTION gating_team_stays_live_truncate();
+
+CREATE TRIGGER trg_gating_team_stays_live_settings_truncate
+    BEFORE TRUNCATE ON kb_system_settings
+    FOR EACH STATEMENT EXECUTE FUNCTION gating_team_stays_live_truncate();
 
 -- ── 3. The doors refuse by name ───────────────────────────────────────────────────────────────────
 -- Bodies as 20261124000010 but for the marked lines.
@@ -321,8 +359,10 @@ SELECT declare_migration(
     'additive',
     'the gating team stays live: a new function _gating_team_dangling() and three DEFERRABLE INITIALLY '
     'DEFERRED constraint triggers (kb_teams update of is_active or slug on a live team, kb_teams delete, '
-    'kb_system_settings insert, update of gating_team_slug or delete) that refuse at commit a state in '
-    'which a set gating slug names no live team, or a set slug was cleared; body-only CREATE OR REPLACE '
+    'kb_system_settings insert, update of gating_team_slug or delete) and two BEFORE TRUNCATE triggers '
+    'that refuse at commit (or truncate) a state in '
+    'which a set gating slug names no live team, or a set slug was cleared, and refuse such a change '
+    'outside READ COMMITTED; body-only CREATE OR REPLACE '
     '(signatures unchanged) of _admin_gating_team_slug_write (answers dead_team for a soft-deleted team) '
     'and _admin_team_lifecycle_act (the delete arm answers gating for the gating team). Every other '
     'answer is unchanged. An older binary that deletes the gating team or points the slug at a dead team '

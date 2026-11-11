@@ -1516,6 +1516,7 @@ async fn the_gating_slug_cannot_name_a_dead_team_or_be_cleared(pool: PgPool) {
         "UPDATE kb_system_settings SET gating_team_slug = '' WHERE id = 1",
         "UPDATE kb_system_settings SET gating_team_slug = NULL WHERE id = 1",
         "DELETE FROM kb_system_settings WHERE id = 1",
+        "TRUNCATE kb_system_settings",
     ] {
         let err = sql_act(&pool, sql, None)
             .await
@@ -1551,4 +1552,34 @@ async fn the_old_gating_team_is_deleted_once_the_slug_moves_to_a_live_team(pool:
         lifecycle_events(&pool, f.gate, "deleted", Some(f.admin)).await,
         1
     );
+}
+
+/// The backstop reads under the gating lock, which orders it after a concurrent write only for a
+/// READ COMMITTED reader; at another level its snapshot could read around one, so a change it
+/// guards is refused there. The same change under READ COMMITTED commits.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_backstop_refuses_a_guarded_change_outside_read_committed(pool: PgPool) {
+    let f = fixture(&pool).await;
+    for level in ["REPEATABLE READ", "SERIALIZABLE"] {
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query(&format!("SET TRANSACTION ISOLATION LEVEL {level}"))
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE kb_teams SET is_active = false WHERE id = $1")
+            .bind(f.side)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let err = tx.commit().await.expect_err(level);
+        assert!(is_gating_refusal(&err), "{level}: {err}");
+        assert!(is_live(&pool, f.side).await, "{level}");
+    }
+    let err = sql_act(
+        &pool,
+        "UPDATE kb_teams SET is_active = false WHERE id = $1",
+        Some(f.side),
+    )
+    .await;
+    assert!(err.is_none(), "{err:?}");
 }
