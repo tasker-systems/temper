@@ -1073,6 +1073,44 @@ pub(crate) async fn lock_team(conn: &mut PgConnection, team_id: Uuid) -> ApiResu
     Ok(live == Some(true))
 }
 
+/// The caller's role on `team`, read under its row lock: the owner or manager arm of a door that
+/// decided it on the pool, asked again on the door's transaction before its first write.
+///
+/// `team` and every team in `with` are locked first, in one ascending id order, as
+/// [`lock_team`] takes them (`FOR NO KEY UPDATE`). Every membership writer takes its team's row
+/// lock before anything else, so a removal or demotion in flight makes this wait, and one
+/// committed first is what this reads. `with` holds the other teams the door's own writes will
+/// lock (a registration's reach, a rotation's severed personal teams), so no team is taken out of
+/// that order afterwards.
+///
+/// **Takes a [`sqlx::Transaction`], not a bare connection, on purpose.** A row lock lasts until
+/// its transaction ends. On an autocommit connection each `FOR NO KEY UPDATE` would be a
+/// one-statement transaction whose lock is gone before the role is read, and this would quietly
+/// become a plain read that serializes with nothing. The type makes that call uncompilable.
+///
+/// A missing or soft-deleted `team` answers `None` as soon as its lock reports it, without
+/// locking the teams after it: the caller refuses, and its rollback releases whatever was taken.
+/// A missing team in `with` takes no lock and is not an error; the door's own writes decide it.
+/// On any error the loop stops at that team, the transaction is aborted, and the caller's `?`
+/// drops it, so every lock taken so far is released by the rollback, never left held.
+pub(crate) async fn role_under_lock(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    team: Uuid,
+    caller: ProfileId,
+    with: &[Uuid],
+) -> ApiResult<Option<TeamRole>> {
+    let mut teams: Vec<Uuid> = with.iter().copied().chain(std::iter::once(team)).collect();
+    teams.sort();
+    teams.dedup();
+    for id in teams {
+        let live = lock_team(tx, id).await?;
+        if id == team && !live {
+            return Ok(None);
+        }
+    }
+    crate::services::team_service::role_on_team_on(tx, team, caller).await
+}
+
 /// What a recorded membership write did. Every other outcome of the SQL writer is an error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MembershipOutcome {

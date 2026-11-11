@@ -618,7 +618,7 @@ gate audit_gate d25214a0b269
 gate connection 66c36643c716
 gate context_admin b07eeb1d5289
 gate grant bccea040b6cf
-gate machine 537f8ea86d10
+gate machine 1547fc936497
 gate read_gates 6a6ce4847fbc
 gate ledger_subject b13d3929eb94
 gate subscription f45d76e9be69
@@ -627,7 +627,7 @@ gate reconcile_regime 5339d74ce2eb
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e
-gate team_membership 981f2c3a943d
+gate team_membership 9c1c70011167
 EOF
 
 CURRENT="$(current_claims; current_gates)"

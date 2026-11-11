@@ -159,7 +159,7 @@ read -r -d '' BASELINE <<'EOF' || true
 2 crates/temper-services/src/services/connection_service.rs
 1 crates/temper-services/src/services/machine_authz.rs
 1 crates/temper-services/src/services/machine_client_service.rs
-1 crates/temper-services/src/services/machine_registration_service.rs
+2 crates/temper-services/src/services/machine_registration_service.rs
 2 crates/temper-services/src/services/materialize_service.rs
 1 crates/temper-services/src/services/steward_service.rs
 1 crates/temper-services/src/services/subscription_service.rs
