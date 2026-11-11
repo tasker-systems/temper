@@ -16,6 +16,9 @@ require 'time'
 module Temper::Generated
   # Instance-wide system settings (singleton row).
   class SystemSettings < ApiModelBase
+    # On the answer to a settings write that repoints `gating_team_slug`: the new gating team's live ancestors, by every path, ordered by slug, excluding the gating team itself (which `gating_team_slug` names). The gating team is a pool every approved profile reads, so this is what the whole instance now reads through it. The walk stops at a soft-deleted team, so a team reached only through a dead one is absent. Read on the write's own transaction, after the write. `null` on every other answer: a read, a write that leaves the slug alone, or one that names the slug it already holds. An empty list means the new gating team has no live parent.
+    attr_accessor :gating_pool_ancestors
+
     attr_accessor :gating_team_slug
 
     attr_accessor :id
@@ -31,6 +34,7 @@ module Temper::Generated
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
+        :'gating_pool_ancestors' => :'gating_pool_ancestors',
         :'gating_team_slug' => :'gating_team_slug',
         :'id' => :'id',
         :'instance_name' => :'instance_name',
@@ -53,6 +57,7 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
+        :'gating_pool_ancestors' => :'Array<TeamRef>',
         :'gating_team_slug' => :'String',
         :'id' => :'Integer',
         :'instance_name' => :'String',
@@ -65,6 +70,7 @@ module Temper::Generated
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
+        :'gating_pool_ancestors',
         :'gating_team_slug',
         :'instance_name',
         :'terms_resource_uri',
@@ -87,6 +93,12 @@ module Temper::Generated
         end
         h[k.to_sym] = v
       }
+
+      if attributes.key?(:'gating_pool_ancestors')
+        if (value = attributes[:'gating_pool_ancestors']).is_a?(Array)
+          self.gating_pool_ancestors = value
+        end
+      end
 
       if attributes.key?(:'gating_team_slug')
         self.gating_team_slug = attributes[:'gating_team_slug']
@@ -167,6 +179,7 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
+          gating_pool_ancestors == o.gating_pool_ancestors &&
           gating_team_slug == o.gating_team_slug &&
           id == o.id &&
           instance_name == o.instance_name &&
@@ -184,7 +197,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [gating_team_slug, id, instance_name, terms_resource_uri, terms_version, updated].hash
+      [gating_pool_ancestors, gating_team_slug, id, instance_name, terms_resource_uri, terms_version, updated].hash
     end
 
     # Builds the object from hash
