@@ -1379,6 +1379,141 @@ async fn only_an_admin_restores_an_auto_join_team(pool: PgPool) {
         .expect("an admin restores it");
 }
 
+// --- The reach an act confers is in its answer ------------------------------------------------
+//
+// attach, reparent and restore answer with the team's full live ancestor chain after the act, read
+// on the act's own transaction (the reader `set_auto_join` already used), so the caller sees every
+// team whose material the team's members now read.
+
+/// The ids of an answer's `ancestors`, in the order given (by slug).
+fn ids(chain: &[temper_core::types::team::TeamRef]) -> Vec<Uuid> {
+    chain.iter().map(|t| t.id).collect()
+}
+
+/// Attaching X under P answers with P and every live ancestor of P, not just P: the child's members
+/// now read everything attached to each. A repeat (`exists`) answers the same chain.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_attach_answers_with_the_parents_whole_live_chain(pool: PgPool) {
+    use temper_core::types::team::AttachOutcome;
+    let f = fixture(&pool).await;
+    let both = f.on("side", "owner");
+    join(&pool, f.eng_web, both, "maintainer").await;
+    let p = test_support::human_principal_for(&pool, both).await;
+
+    let out = team_service::attach_child(&pool, &p, f.eng_web, f.side)
+        .await
+        .expect("attach side under eng-web");
+    assert_eq!(out.outcome, AttachOutcome::Linked);
+    // By slug: dg-eng, dg-eng-web, dg-org.
+    assert_eq!(ids(&out.ancestors), vec![f.eng, f.eng_web, f.org]);
+
+    let again = team_service::attach_child(&pool, &p, f.eng_web, f.side)
+        .await
+        .expect("repeat");
+    assert_eq!(again.outcome, AttachOutcome::Exists);
+    assert_eq!(ids(&again.ancestors), vec![f.eng, f.eng_web, f.org]);
+}
+
+/// A reparent answers with the chain after the move: the new parent's, and none of the teams that
+/// were above only the old parent.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_reparent_answers_with_the_new_chain_only(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let mover = f.on("eng-web", "owner");
+    join(&pool, f.side, mover, "maintainer").await;
+
+    let moved = reparent(&pool, mover, f.eng_web, "+dg-eng", &f.side.to_string())
+        .await
+        .expect("move eng-web from eng to side");
+    assert_eq!(
+        ids(&moved.ancestors),
+        vec![f.side],
+        "eng and org were above only the old parent"
+    );
+}
+
+/// A soft-deleted team in the chain cuts the reach above it, and the answer says so: attaching under
+/// eng-web while eng is dead answers eng-web alone, without eng or org above it.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_dead_team_in_the_chain_cuts_what_the_answer_names(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let eng_owner = test_support::human_principal_for(&pool, f.on("eng", "owner")).await;
+    team_service::delete_team(&pool, &eng_owner, f.eng)
+        .await
+        .expect("delete eng");
+
+    let both = f.on("side", "owner");
+    join(&pool, f.eng_web, both, "maintainer").await;
+    let p = test_support::human_principal_for(&pool, both).await;
+    let out = team_service::attach_child(&pool, &p, f.eng_web, f.side)
+        .await
+        .expect("attach side under eng-web");
+    assert_eq!(ids(&out.ancestors), vec![f.eng_web]);
+    assert!(
+        !reaches(&pool, f.on("side", "watcher"), f.org).await,
+        "the answer matches the reach: org is not reached through dead eng"
+    );
+}
+
+/// A restore answers with the restored team's whole live chain, and with only the live part of it
+/// when a team above is itself dead.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_restore_answers_with_its_live_chain(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let web_owner = test_support::human_principal_for(&pool, f.on("eng-web", "owner")).await;
+    team_service::delete_team(&pool, &web_owner, f.eng_web)
+        .await
+        .expect("delete eng-web");
+    let out = team_service::restore_team(&pool, &web_owner, f.eng_web)
+        .await
+        .expect("the owner restores eng-web");
+    assert_eq!(ids(&out.parents), vec![f.eng], "the direct parent only");
+    assert_eq!(
+        ids(&out.ancestors),
+        vec![f.eng, f.org],
+        "the whole chain above"
+    );
+
+    let eng_owner = test_support::human_principal_for(&pool, f.on("eng", "owner")).await;
+    team_service::delete_team(&pool, &web_owner, f.eng_web)
+        .await
+        .expect("delete eng-web again");
+    team_service::delete_team(&pool, &eng_owner, f.eng)
+        .await
+        .expect("delete eng");
+    let out = team_service::restore_team(&pool, &web_owner, f.eng_web)
+        .await
+        .expect("restore eng-web under dead eng");
+    assert!(
+        out.ancestors.is_empty(),
+        "dead eng cuts org off: {:?}",
+        out.ancestors
+    );
+}
+
+/// "By every path": a child with another parent answers that parent's chain too, and an ancestor
+/// reached by two paths (a diamond) is named once. eng-web stays under eng ▸ org and gains side,
+/// which sits under org as well.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_attach_answers_every_paths_chain_once(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let side_owner = f.on("side", "owner");
+    join(&pool, f.org, side_owner, "maintainer").await;
+    let p = test_support::human_principal_for(&pool, side_owner).await;
+    team_service::attach_child(&pool, &p, f.org, f.side)
+        .await
+        .expect("attach side under org");
+
+    let web_owner = f.on("eng-web", "owner");
+    join(&pool, f.side, web_owner, "maintainer").await;
+    let p = test_support::human_principal_for(&pool, web_owner).await;
+    let out = team_service::attach_child(&pool, &p, f.side, f.eng_web)
+        .await
+        .expect("give eng-web a second parent");
+    // By slug: dg-eng, dg-org, dg-side; org once, though both parents reach it.
+    assert_eq!(ids(&out.ancestors), vec![f.eng, f.org, f.side]);
+}
+
 // ---------------------------------------------------------------------------------------------
 // The gating team stays live (migration 20261124000050): once the gating slug is set, every
 // committed state has a live team holding it, whichever writer acted.

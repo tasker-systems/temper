@@ -1,0 +1,34 @@
+title    = "Team attach, reparent and restore answer with the team's full live ancestor chain"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "clients", "schema", "cli-stdout", "mcp"]
+status   = "signal-only"
+body = '''
+Three team acts now answer with the reach they confer: every live team above the team, by any path,
+whose material the team's members read after the act.
+
+- PUT /api/teams/{id}/children/{child_id} (AttachChildOutcome) gains `ancestors: TeamRef[]`, the
+  child's live ancestors after the link: the parent and everything above it, plus any other parent's
+  chain. An `exists` answer carries the same chain.
+- POST /api/teams/{id}/reparent (ReparentOutcome) gains `ancestors`, the team's chain after the
+  move. A team that was above only the old parent is absent.
+- POST /api/teams/{id}/restore (RestoreTeamOutcome) gains `ancestors` beside the direct `parents`.
+- PUT /api/teams/{id}/auto-join (SetAutoJoinOutcome) already answered `ancestors`. It now reads
+  them with the same reader, on the act's own transaction, rather than after commit.
+
+In every answer the chain is ordered by slug, excludes the team itself, and is read on the act's own
+transaction after the write. It is the team's whole reach after the act, not only what the act
+added. The walk is the reach walk: live teams only, and a soft-deleted team cuts everything reached
+only through it, so the answer never names a team that is not in reach.
+
+Behavioral (disclosure): the chain names more teams than team detail shows a member, which is the
+direct `parents` only. A grandparent, or a team above the team's other parents, is now named to the
+act's caller even when it holds no material. The caller is always a system admin or holds a live
+row on the team (attach and reparent: a manager of it; restore: its owner).
+
+Class: additive. Each new field is optional in the schema (`#[serde(default)]`), so an older server's
+answer deserializes with an empty list and an older client ignores the field. `temper team attach`,
+`team reparent` and `team restore` print it, and MCP `team_manage` names it for those actions.
+Witnesses: crates/temper-services/tests/team_dag_doors_test.rs (the four tests after "The reach an
+act confers is in its answer").
+'''

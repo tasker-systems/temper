@@ -532,6 +532,14 @@ pub struct AttachChildOutcome {
     /// The effective rows the child's roster now reads through the new parent.
     #[serde(default)]
     pub public_within_in_reach: PublicWithinReach,
+    /// The child's live ancestors after the link, by every path, ordered by slug: every member of
+    /// the child reads everything attached to each of them. The walk stops at a soft-deleted team,
+    /// which confers nothing, so a team reached only through a dead one is absent. This is the
+    /// child's whole reach, not only what the link added, and it names more than team detail's
+    /// direct `parents`. Read on the act's own transaction, after the link. Empty when the server
+    /// does not report it.
+    #[serde(default)]
+    pub ancestors: Vec<TeamRef>,
 }
 
 /// Request body for `POST /api/teams/{id}/reparent` (team DAG doors D3): move the team from one
@@ -565,6 +573,12 @@ pub struct ReparentOutcome {
     /// any path is deleted (`lapsed`) and never revives, even if the team moves back.
     #[serde(default)]
     pub public_within: PublicWithinEffects,
+    /// The team's live ancestors after the move, by every path, ordered by slug: what its members
+    /// now read. A team that was above only the old parent is absent, and the walk stops at a
+    /// soft-deleted team. Read on the act's own transaction. Empty when the server does not report
+    /// it.
+    #[serde(default)]
+    pub ancestors: Vec<TeamRef>,
 }
 
 /// Request body for `PUT /api/teams/{id}/auto-join` (team DAG doors D5, system admin only):
@@ -578,9 +592,10 @@ pub struct SetAutoJoinRequest {
     pub role: Option<TeamRole>,
 }
 
-/// Response body for `PUT /api/teams/{id}/auto-join`. `ancestors` are the team's live ancestors:
-/// with auto-join set, every approved profile reads everything attached to each of them, so the
-/// admin sees exactly what the change opened.
+/// Response body for `PUT /api/teams/{id}/auto-join`. `ancestors` are the team's live ancestors,
+/// by every path, ordered by slug, read on the act's own transaction (the walk stops at a
+/// soft-deleted team): with auto-join set, every approved profile reads everything attached to each
+/// of them, so the admin sees exactly what the change opened.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
@@ -611,6 +626,12 @@ pub struct RestoreTeamOutcome {
     /// The `public_within` rows the restore revived (or, for a restored pool team, made dormant).
     #[serde(default)]
     pub public_within: PublicWithinEffects,
+    /// The restored team's live ancestors, by every path, ordered by slug: its roster, and every
+    /// live team beneath it, reads everything attached to each of them. That includes any team
+    /// linked above its parents while it was dead. The walk stops at a soft-deleted team. Read on
+    /// the act's own transaction, after the restore. Empty when the server does not report it.
+    #[serde(default)]
+    pub ancestors: Vec<TeamRef>,
 }
 
 /// Request body for `POST /api/teams/{id}/rename-slug` (team DAG doors D7). The new slug is

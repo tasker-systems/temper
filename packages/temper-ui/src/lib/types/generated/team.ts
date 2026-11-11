@@ -17,7 +17,16 @@ public_within: PublicWithinEffects,
 /**
  * The effective rows the child's roster now reads through the new parent.
  */
-public_within_in_reach: PublicWithinReach, };
+public_within_in_reach: PublicWithinReach, 
+/**
+ * The child's live ancestors after the link, by every path, ordered by slug: every member of
+ * the child reads everything attached to each of them. The walk stops at a soft-deleted team,
+ * which confers nothing, so a team reached only through a dead one is absent. This is the
+ * child's whole reach, not only what the link added, and it names more than team detail's
+ * direct `parents`. Read on the act's own transaction, after the link. Empty when the server
+ * does not report it.
+ */
+ancestors: Array<TeamRef>, };
 
 /**
  * What `PUT /api/teams/{id}/children/{child_id}` did (team DAG doors D1).
@@ -145,7 +154,14 @@ export type ReparentOutcome = { team: TeamRef, from: TeamRef, to: TeamRef, corre
  * What the move did to `public_within` rows. A row whose anchor is no longer above the team by
  * any path is deleted (`lapsed`) and never revives, even if the team moves back.
  */
-public_within: PublicWithinEffects, };
+public_within: PublicWithinEffects, 
+/**
+ * The team's live ancestors after the move, by every path, ordered by slug: what its members
+ * now read. A team that was above only the old parent is absent, and the walk stops at a
+ * soft-deleted team. Read on the act's own transaction. Empty when the server does not report
+ * it.
+ */
+ancestors: Array<TeamRef>, };
 
 /**
  * Request body for `POST /api/teams/{id}/reparent` (team DAG doors D3): move the team from one
@@ -171,12 +187,20 @@ export type RestoreTeamOutcome = { team: TeamRow, parents: Array<TeamRef>, child
 /**
  * The `public_within` rows the restore revived (or, for a restored pool team, made dormant).
  */
-public_within: PublicWithinEffects, };
+public_within: PublicWithinEffects, 
+/**
+ * The restored team's live ancestors, by every path, ordered by slug: its roster, and every
+ * live team beneath it, reads everything attached to each of them. That includes any team
+ * linked above its parents while it was dead. The walk stops at a soft-deleted team. Read on
+ * the act's own transaction, after the restore. Empty when the server does not report it.
+ */
+ancestors: Array<TeamRef>, };
 
 /**
- * Response body for `PUT /api/teams/{id}/auto-join`. `ancestors` are the team's live ancestors:
- * with auto-join set, every approved profile reads everything attached to each of them, so the
- * admin sees exactly what the change opened.
+ * Response body for `PUT /api/teams/{id}/auto-join`. `ancestors` are the team's live ancestors,
+ * by every path, ordered by slug, read on the act's own transaction (the walk stops at a
+ * soft-deleted team): with auto-join set, every approved profile reads everything attached to each
+ * of them, so the admin sees exactly what the change opened.
  */
 export type SetAutoJoinOutcome = { team: TeamRow, ancestors: Array<TeamRef>, 
 /**

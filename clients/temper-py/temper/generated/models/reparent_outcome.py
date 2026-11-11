@@ -30,12 +30,13 @@ class ReparentOutcome(BaseModel):
     """
     Response body for `POST /api/teams/{id}/reparent`. Both `team_parent_link_changed` records of the move carry `correlation_id`, so the ledger shows one move rather than two unrelated acts.
     """ # noqa: E501
+    ancestors: Optional[List[TeamRef]] = Field(default=None, description="The team's live ancestors after the move, by every path, ordered by slug: what its members now read. A team that was above only the old parent is absent, and the walk stops at a soft-deleted team. Read on the act's own transaction. Empty when the server does not report it.")
     correlation_id: UUID
     var_from: TeamRef = Field(alias="from")
     public_within: Optional[PublicWithinEffects] = Field(default=None, description="What the move did to `public_within` rows. A row whose anchor is no longer above the team by any path is deleted (`lapsed`) and never revives, even if the team moves back.")
     team: TeamRef
     to: TeamRef
-    __properties: ClassVar[List[str]] = ["correlation_id", "from", "public_within", "team", "to"]
+    __properties: ClassVar[List[str]] = ["ancestors", "correlation_id", "from", "public_within", "team", "to"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -76,6 +77,13 @@ class ReparentOutcome(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # override the default output from pydantic by calling `to_dict()` of each item in ancestors (list)
+        _items = []
+        if self.ancestors:
+            for _item_ancestors in self.ancestors:
+                if _item_ancestors:
+                    _items.append(_item_ancestors.to_dict())
+            _dict['ancestors'] = _items
         # override the default output from pydantic by calling `to_dict()` of var_from
         if self.var_from:
             _dict['from'] = self.var_from.to_dict()
@@ -100,6 +108,7 @@ class ReparentOutcome(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
+            "ancestors": [TeamRef.from_dict(_item) for _item in obj["ancestors"]] if obj.get("ancestors") is not None else None,
             "correlation_id": obj.get("correlation_id"),
             "from": TeamRef.from_dict(obj["from"]) if obj.get("from") is not None else None,
             "public_within": PublicWithinEffects.from_dict(obj["public_within"]) if obj.get("public_within") is not None else None,

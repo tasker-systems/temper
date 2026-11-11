@@ -1339,9 +1339,9 @@ pub async fn rename_slug(
 /// `is_active = true` and its `team_lifecycle_changed` record are one statement. The slug is still
 /// held (soft-deleted slugs stay reserved), so nothing collides. Every preserved row confers again:
 /// the roster, the parent links (and through them the children's reach to everything above), its
-/// contexts, shares and grants. So the outcome lists the live parents, the live children and the
-/// roster: the restorer sees the reach they revived. After commit, an auto-join team backfills the
-/// profiles approved while it was dead. `NotFound` when the team is absent or not deleted.
+/// contexts, shares and grants. So the outcome lists the live parents, the live children, the
+/// roster and the full live ancestor chain: the restorer sees the reach they revived. After commit,
+/// an auto-join team backfills the profiles approved while it was dead. `NotFound` when the team is absent or not deleted.
 pub async fn restore_team(
     pool: &PgPool,
     caller: &HumanPrincipal,
@@ -1390,6 +1390,7 @@ pub async fn restore_team(
         ));
     }
     let public_within = name_effects(&mut tx, caller, effects).await?;
+    let ancestors = live_ancestors(&mut tx, team_id).await?;
     tx.commit().await?;
 
     let team = sqlx::query_as!(
@@ -1413,6 +1414,7 @@ pub async fn restore_team(
         members: roster(&mut conn, team_id).await?,
         team: team.into(),
         public_within,
+        ancestors,
     })
 }
 
@@ -1467,6 +1469,35 @@ async fn restore_authority(
         Some(r) if r.role == TeamRole::Owner => Ok(()),
         _ => Err(ApiError::Forbidden),
     }
+}
+
+/// `team_id`'s live ancestors, itself excluded, ordered by slug: the reach an act that links,
+/// moves, restores or pools the team confers on everyone who reads through it. The one reader for
+/// every such answer (attach, reparent, restore, auto-join), so the doors answer alike. It is
+/// `team_ancestors`, the reach walk: live teams only, and the walk stops at a soft-deleted team, so
+/// a team reached only through a dead one is not in reach and not named. Call it on the act's own
+/// transaction, after the write, so the answer is the act's own view of what it wrote; ancestors
+/// above the locked teams are not locked, so a concurrent change above them can still land before
+/// commit. Empty for a dead team.
+///
+/// This names more than `team_detail` shows a member, which is the direct `parents` only: a
+/// grandparent, or a team above the team's other parents, is named here even when it holds no
+/// material. That is deliberate. The reach an act confers is shown to the caller who confers it,
+/// so they can see what they opened. The caller is a system admin, or holds a live row on the team
+/// itself (attach and reparent re-check managing it under the lock; restore requires its owner),
+/// so every team named is one the caller's own team now reads through.
+async fn live_ancestors(conn: &mut sqlx::PgConnection, team_id: Uuid) -> ApiResult<Vec<TeamRef>> {
+    Ok(sqlx::query_as!(
+        TeamRef,
+        r#"SELECT t.id, t.slug, t.name
+             FROM team_ancestors($1) a
+             JOIN kb_teams t ON t.id = a.team_id
+            WHERE a.team_id <> $1
+            ORDER BY t.slug"#,
+        team_id,
+    )
+    .fetch_all(&mut *conn)
+    .await?)
 }
 
 async fn live_parents(conn: &mut sqlx::PgConnection, team_id: Uuid) -> ApiResult<Vec<TeamRef>> {
@@ -1592,6 +1623,7 @@ pub async fn set_auto_join(
             public_within.dormant.push(row);
         }
     }
+    let ancestors = live_ancestors(&mut tx, team_id).await?;
     tx.commit().await?;
 
     if role.is_some() {
@@ -1607,17 +1639,6 @@ pub async fn set_auto_join(
         team_id,
     )
     .fetch_one(pool)
-    .await?;
-    let ancestors = sqlx::query_as!(
-        TeamRef,
-        r#"SELECT t.id, t.slug, t.name
-             FROM team_ancestors($1) a
-             JOIN kb_teams t ON t.id = a.team_id
-            WHERE a.team_id <> $1
-            ORDER BY t.slug"#,
-        team_id,
-    )
-    .fetch_all(pool)
     .await?;
     Ok(SetAutoJoinOutcome {
         team: team.into(),
@@ -1908,6 +1929,7 @@ pub async fn reparent(
         to: team_ref_of(&mut tx, to).await?,
         correlation_id: correlation,
         public_within,
+        ancestors: live_ancestors(&mut tx, child_id).await?,
     };
     tx.commit().await?;
     Ok(outcome)
@@ -2179,6 +2201,7 @@ pub async fn attach_child(
     let public_within = name_effects(&mut tx, caller, effects).await?;
     let after = rows_in_reach(&mut tx, child_id).await?;
     let public_within_in_reach = name_reach(&mut tx, caller, &before, after).await?;
+    let ancestors = live_ancestors(&mut tx, child_id).await?;
     tx.commit().await?;
     Ok(AttachChildOutcome {
         outcome: if outcome == "linked" {
@@ -2188,6 +2211,7 @@ pub async fn attach_child(
         },
         public_within,
         public_within_in_reach,
+        ancestors,
     })
 }
 
