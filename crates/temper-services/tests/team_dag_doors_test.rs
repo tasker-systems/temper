@@ -1378,3 +1378,208 @@ async fn only_an_admin_restores_an_auto_join_team(pool: PgPool) {
         .await
         .expect("an admin restores it");
 }
+
+// ---------------------------------------------------------------------------------------------
+// The gating team stays live (migration 20261124000050): once the gating slug is set, every
+// committed state has a live team holding it, whichever writer acted.
+// ---------------------------------------------------------------------------------------------
+
+/// The gating slug as the settings row holds it.
+async fn gating_slug(pool: &PgPool) -> Option<String> {
+    sqlx::query_scalar("SELECT gating_team_slug FROM kb_system_settings WHERE id = 1")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+async fn is_live(pool: &PgPool, team: Uuid) -> bool {
+    sqlx::query_scalar("SELECT is_active FROM kb_teams WHERE id = $1")
+        .bind(team)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// Run `sql` (one transaction, binding `team` as `$1` when it names one) and answer its error, if
+/// any, from the statement or from the commit.
+async fn sql_act(pool: &PgPool, sql: &str, team: Option<Uuid>) -> Option<sqlx::Error> {
+    let mut tx = pool.begin().await.unwrap();
+    let mut q = sqlx::query(sql);
+    if let Some(t) = team {
+        q = q.bind(t);
+    }
+    if let Err(e) = q.execute(&mut *tx).await {
+        return Some(e);
+    }
+    tx.commit().await.err()
+}
+
+/// The backstop's refusal: a check violation from the gating constraint trigger.
+fn is_gating_refusal(err: &sqlx::Error) -> bool {
+    err.as_database_error().is_some_and(|d| {
+        d.code().as_deref() == Some("23514") && d.constraint() == Some("gating_team_stays_live")
+    })
+}
+
+async fn set_gating_slug(pool: &PgPool, admin: Uuid, slug: &str) -> Result<(), ApiError> {
+    let proof = test_support::system_admin_proof_for(pool, admin).await;
+    temper_services::services::access_service::update_system_settings(
+        pool,
+        &proof,
+        &temper_core::types::admin::UpdateSettingsRequest {
+            gating_team_slug: Some(slug.to_owned()),
+            ..Default::default()
+        },
+    )
+    .await
+    .map(|_| ())
+}
+
+/// A system admin's delete of the live gating team is refused through the door, by name, and
+/// changes nothing; the team stays live and the slug still names it.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_admin_cannot_delete_the_live_gating_team(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let before = all_lifecycle_events(&pool).await;
+    let p = test_support::human_principal_for(&pool, f.admin).await;
+    let refusal = team_service::delete_team(&pool, &p, f.gate)
+        .await
+        .expect_err("the gating team is never deleted");
+    match &refusal {
+        ApiError::Conflict(msg) => assert!(msg.contains("gating team cannot be deleted"), "{msg}"),
+        other => panic!("expected a named 409, got {other:?}"),
+    }
+    assert!(is_live(&pool, f.gate).await);
+    assert_eq!(gating_slug(&pool).await.as_deref(), Some("dg-gate"));
+    assert_eq!(
+        all_lifecycle_events(&pool).await,
+        before,
+        "nothing recorded"
+    );
+}
+
+/// A writer that skips the doors cannot leave the instance without its gating team either: a soft
+/// delete, a hard delete and a slug change that leaves the settings behind are each refused at
+/// commit, and the team is as it was.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn plain_sql_cannot_kill_the_gating_team(pool: PgPool) {
+    let f = fixture(&pool).await;
+    for sql in [
+        "UPDATE kb_teams SET is_active = false WHERE id = $1",
+        "DELETE FROM kb_teams WHERE id = $1",
+        "UPDATE kb_teams SET slug = 'dg-gate-moved' WHERE id = $1",
+    ] {
+        let err = sql_act(&pool, sql, Some(f.gate))
+            .await
+            .unwrap_or_else(|| panic!("committed: {sql}"));
+        assert!(is_gating_refusal(&err), "{sql}: {err}");
+        assert!(is_live(&pool, f.gate).await, "{sql}");
+        assert_eq!(slug_of(&pool, f.gate).await, "dg-gate", "{sql}");
+    }
+    // A rename that moves the settings with it, in one transaction, is the legal shape.
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("UPDATE kb_teams SET slug = 'dg-gate-moved' WHERE id = $1")
+        .bind(f.gate)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'dg-gate-moved' WHERE id = 1")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.expect("the slug moved with its team");
+    assert_eq!(gating_slug(&pool).await.as_deref(), Some("dg-gate-moved"));
+}
+
+/// A gating slug naming a soft-deleted team is refused, through the settings door by name and by
+/// plain SQL at commit; one naming no team, or clearing a set slug, is refused by plain SQL too.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_gating_slug_cannot_name_a_dead_team_or_be_cleared(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let p = test_support::human_principal_for(&pool, f.on("side", "owner")).await;
+    team_service::delete_team(&pool, &p, f.side)
+        .await
+        .expect("the owner deletes side");
+
+    let refusal = set_gating_slug(&pool, f.admin, "dg-side")
+        .await
+        .expect_err("a dead team");
+    match &refusal {
+        ApiError::BadRequest(msg) => assert!(msg.contains("deleted team"), "{msg}"),
+        other => panic!("expected a named 400, got {other:?}"),
+    }
+    assert_eq!(gating_slug(&pool).await.as_deref(), Some("dg-gate"));
+
+    for sql in [
+        "UPDATE kb_system_settings SET gating_team_slug = 'dg-side' WHERE id = 1",
+        "UPDATE kb_system_settings SET gating_team_slug = 'dg-no-such-team' WHERE id = 1",
+        "UPDATE kb_system_settings SET gating_team_slug = '' WHERE id = 1",
+        "UPDATE kb_system_settings SET gating_team_slug = NULL WHERE id = 1",
+        "DELETE FROM kb_system_settings WHERE id = 1",
+        "TRUNCATE kb_system_settings",
+    ] {
+        let err = sql_act(&pool, sql, None)
+            .await
+            .unwrap_or_else(|| panic!("committed: {sql}"));
+        assert!(is_gating_refusal(&err), "{sql}: {err}");
+        assert_eq!(
+            gating_slug(&pool).await.as_deref(),
+            Some("dg-gate"),
+            "{sql}"
+        );
+    }
+}
+
+/// The refusals take nothing away: a slug write naming a live team succeeds, and the former gating
+/// team, no longer named, can then be deleted.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_old_gating_team_is_deleted_once_the_slug_moves_to_a_live_team(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let p = test_support::human_principal_for(&pool, f.admin).await;
+    team_service::delete_team(&pool, &p, f.gate)
+        .await
+        .expect_err("while it is the gating team");
+    set_gating_slug(&pool, f.admin, "dg-side")
+        .await
+        .expect("a live team");
+    assert_eq!(gating_slug(&pool).await.as_deref(), Some("dg-side"));
+
+    team_service::delete_team(&pool, &p, f.gate)
+        .await
+        .expect("no longer the gating team");
+    assert!(!is_live(&pool, f.gate).await);
+    assert_eq!(
+        lifecycle_events(&pool, f.gate, "deleted", Some(f.admin)).await,
+        1
+    );
+}
+
+/// The backstop reads under the gating lock, which orders it after a concurrent write only for a
+/// READ COMMITTED reader; at another level its snapshot could read around one, so a change it
+/// guards is refused there. The same change under READ COMMITTED commits.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_backstop_refuses_a_guarded_change_outside_read_committed(pool: PgPool) {
+    let f = fixture(&pool).await;
+    for level in ["REPEATABLE READ", "SERIALIZABLE"] {
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query(&format!("SET TRANSACTION ISOLATION LEVEL {level}"))
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE kb_teams SET is_active = false WHERE id = $1")
+            .bind(f.side)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let err = tx.commit().await.expect_err(level);
+        assert!(is_gating_refusal(&err), "{level}: {err}");
+        assert!(is_live(&pool, f.side).await, "{level}");
+    }
+    let err = sql_act(
+        &pool,
+        "UPDATE kb_teams SET is_active = false WHERE id = $1",
+        Some(f.side),
+    )
+    .await;
+    assert!(err.is_none(), "{err:?}");
+}

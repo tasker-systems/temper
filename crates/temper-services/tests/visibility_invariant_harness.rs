@@ -2554,30 +2554,23 @@ async fn public_within_reads_for_people_under_the_anchor_and_nobody_else(
         }
     }
 
-    // The other answer of each predicate. A pool under the anchor: make eng the gating team.
-    let gating: Option<String> =
-        sqlx::query_scalar("SELECT gating_team_slug FROM kb_system_settings WHERE id = 1")
-            .fetch_one(&pool)
-            .await?;
+    // The other answer of each predicate. A pool under the anchor: make eng the gating team, in a
+    // transaction rolled back after the probe, since a set gating slug is never cleared again
+    // (20261124000050) and the world may have started with none.
+    let mut probe = pool.begin().await?;
     sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'eng' WHERE id = 1")
-        .execute(&pool)
+        .execute(&mut *probe)
         .await?;
-    let pool_true = ask(
-        "SELECT anchor_subtree_holds_pool($1) AND $2 IS NOT NULL",
-        t_eng,
-        t_eng,
-    )
-    .await?;
-    let pool_row = ask(
-        "SELECT public_within_row_effective($1, $2, false)",
-        t_pub,
-        t_eng,
-    )
-    .await?;
-    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = $1 WHERE id = 1")
-        .bind(&gating)
-        .execute(&pool)
+    let pool_true: bool = sqlx::query_scalar("SELECT anchor_subtree_holds_pool($1)")
+        .bind(t_eng)
+        .fetch_one(&mut *probe)
         .await?;
+    let pool_row: bool = sqlx::query_scalar("SELECT public_within_row_effective($1, $2, false)")
+        .bind(t_pub)
+        .bind(t_eng)
+        .fetch_one(&mut *probe)
+        .await?;
+    probe.rollback().await?;
     // A forbid above T.
     sqlx::query("UPDATE kb_teams SET public_within_forbidden = true WHERE id = $1")
         .bind(t_eng)
