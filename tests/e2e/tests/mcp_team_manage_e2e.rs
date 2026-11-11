@@ -339,11 +339,12 @@ fn assert_same_refusal(act: &str, mcp: &rmcp::ErrorData, http: ClientError) {
             status: 400,
             message,
         } => {
+            // The tool passes the API's cause through without its status label.
+            let cause = message
+                .split_once(": ")
+                .map_or(message.as_str(), |(_, cause)| cause);
             assert_eq!(mcp.code, ErrorCode::INVALID_PARAMS, "{act}: {mcp:?}");
-            assert!(
-                message.contains(mcp.message.as_ref()),
-                "{act}: {mcp:?} vs {message}"
-            );
+            assert_eq!(mcp.message, cause, "{act}: HTTP said {message:?}");
         }
         other => panic!("{act}: HTTP gave an unexpected refusal {other:?}; MCP gave {mcp:?}"),
     }
@@ -465,14 +466,14 @@ async fn a_person_manages_a_roster_over_mcp(pool: sqlx::PgPool) {
         &svc,
         &parts,
         input(json!({
-            "action": "add_member", "team": "+mcp-roster", "profile_id": other, "role": "member",
+            "action": "add_member", "team": "+mcp-roster", "profile_id": other, "role": "maintainer",
         })),
     )
     .await
     .expect("its owner adds a member");
     assert_eq!(
         role_of(&detail(&svc, &parts, team).await, other).as_deref(),
-        Some("member")
+        Some("maintainer")
     );
 
     team_manage(
@@ -537,6 +538,10 @@ async fn a_person_manages_a_roster_over_mcp(pool: sqlx::PgPool) {
     )
     .await
     .expect("its owner re-adds the member");
+    assert_eq!(
+        role_of(&detail(&svc, &parts, team).await, other).as_deref(),
+        Some("member")
+    );
     let left = one_json(
         &team_manage(
             &svc,
@@ -671,6 +676,7 @@ async fn a_person_reshapes_a_tree_over_mcp(pool: sqlx::PgPool) {
         .await
         .expect_err("HTTP refuses the stranger");
     assert_same_refusal("team_manage rename_slug", &mcp, http);
+    assert_eq!(detail(&svc, &parts, team).await["slug"], "mcp-shape-team");
 
     team_manage(
         &svc,
@@ -780,7 +786,7 @@ async fn a_person_forbids_and_allows_public_within_over_mcp(pool: sqlx::PgPool) 
         json!({ "action": "create", "slug": "mcp-pol-anchor" }),
     )
     .await;
-    create(
+    let team = create(
         &svc,
         &parts,
         json!({ "action": "create", "slug": "mcp-pol-team", "parents": ["+mcp-pol-anchor"] }),
@@ -830,9 +836,20 @@ async fn a_person_forbids_and_allows_public_within_over_mcp(pool: sqlx::PgPool) 
     );
     assert_eq!(set["forbidden"], true, "{set}");
     assert!(forbidden(app.pool.clone()).await);
-    team_manage(&svc, &parts, input(open.clone()))
+    let mcp = team_manage(&svc, &parts, input(open.clone()))
         .await
         .expect_err("no opening under a forbid");
+    let http = app
+        .client
+        .teams()
+        .open_public_within(team, anchor)
+        .await
+        .expect_err("HTTP refuses an opening under a forbid");
+    assert!(
+        matches!(http, ClientError::ForbiddenDetail { .. }),
+        "the forbid is named: {http:?}"
+    );
+    assert_same_refusal("team_manage public_within_open", &mcp, http);
 
     team_manage(
         &svc,
