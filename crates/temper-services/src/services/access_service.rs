@@ -826,12 +826,14 @@ pub(crate) async fn callers_machine_grant_bar(
 /// team) are taken `FOR SHARE`. A revocation or a downgrade of one in flight
 /// (`revoke_capability`, `grant_capability`) holds that row and makes this wait; once it commits,
 /// the row is re-read and no longer counts. Neither of those doors takes a team row, and the
-/// registration takes these rows after its team locks, so the share lock adds no cycle. The
+/// registration takes these rows after its team locks, so the share lock adds no cycle. A
+/// [`sqlx::Transaction`] rather than a bare connection, so the share lock cannot be taken in
+/// autocommit and released before the registration writes. The
 /// structural floor (`derived_access_profile`) and the attenuation reads (`can_read_by_membership`,
 /// `can(write)`) are asked plainly on the transaction: they read committed state, and nothing in
 /// them is a right a single revocation withdraws.
 pub(crate) async fn callers_machine_grant_holds_on(
-    conn: &mut sqlx::PgConnection,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     caller: ProfileId,
     cogmap: Uuid,
     write: bool,
@@ -851,7 +853,7 @@ pub(crate) async fn callers_machine_grant_holds_on(
         *caller,
         cogmap,
     )
-    .fetch_all(&mut *conn)
+    .fetch_all(&mut **tx)
     .await?;
     let held = sqlx::query_scalar!(
         r#"SELECT ($3 OR COALESCE(derived_access_profile($1, 'grant', 'kb_cogmaps', $2), false))
@@ -863,7 +865,7 @@ pub(crate) async fn callers_machine_grant_holds_on(
         !rows.is_empty(),
         write,
     )
-    .fetch_one(&mut *conn)
+    .fetch_one(&mut **tx)
     .await?;
     Ok(held)
 }

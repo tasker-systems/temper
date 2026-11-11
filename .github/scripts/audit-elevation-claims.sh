@@ -627,7 +627,7 @@ gate reconcile_regime 5339d74ce2eb
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e
-gate team_membership 57fa95fc1e80
+gate team_membership 9c1c70011167
 EOF
 
 CURRENT="$(current_claims; current_gates)"

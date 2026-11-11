@@ -1081,12 +1081,20 @@ pub(crate) async fn lock_team(conn: &mut PgConnection, team_id: Uuid) -> ApiResu
 /// lock before anything else, so a removal or demotion in flight makes this wait, and one
 /// committed first is what this reads. `with` holds the other teams the door's own writes will
 /// lock (a registration's reach, a rotation's severed personal teams), so no team is taken out of
-/// that order afterwards. A soft-deleted team answers `None`, as [`role_on_team_on`] reads only
-/// live teams.
+/// that order afterwards.
 ///
-/// [`role_on_team_on`]: crate::services::team_service::role_on_team_on
+/// **Takes a [`sqlx::Transaction`], not a bare connection, on purpose.** A row lock lasts until
+/// its transaction ends. On an autocommit connection each `FOR NO KEY UPDATE` would be a
+/// one-statement transaction whose lock is gone before the role is read, and this would quietly
+/// become a plain read that serializes with nothing. The type makes that call uncompilable.
+///
+/// A missing or soft-deleted `team` answers `None` as soon as its lock reports it, without
+/// locking the teams after it: the caller refuses, and its rollback releases whatever was taken.
+/// A missing team in `with` takes no lock and is not an error; the door's own writes decide it.
+/// On any error the loop stops at that team, the transaction is aborted, and the caller's `?`
+/// drops it, so every lock taken so far is released by the rollback, never left held.
 pub(crate) async fn role_under_lock(
-    conn: &mut PgConnection,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     team: Uuid,
     caller: ProfileId,
     with: &[Uuid],
@@ -1095,9 +1103,12 @@ pub(crate) async fn role_under_lock(
     teams.sort();
     teams.dedup();
     for id in teams {
-        lock_team(conn, id).await?;
+        let live = lock_team(tx, id).await?;
+        if id == team && !live {
+            return Ok(None);
+        }
     }
-    crate::services::team_service::role_on_team_on(conn, team, caller).await
+    crate::services::team_service::role_on_team_on(tx, team, caller).await
 }
 
 /// What a recorded membership write did. Every other outcome of the SQL writer is an error.

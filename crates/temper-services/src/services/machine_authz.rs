@@ -205,7 +205,10 @@ impl<'a> AuthorizedReach<'a> {
     ///   makes this wait, then refuses.
     ///
     /// A reach on the admin arm has nothing to re-check here; [`Self::recheck_admin_arm`] asks it.
-    pub(crate) async fn recheck_owner_arm(&self, tx: &mut sqlx::PgConnection) -> ApiResult<()> {
+    pub(crate) async fn recheck_owner_arm(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> ApiResult<()> {
         if self.on_admin_arm {
             return Ok(());
         }
