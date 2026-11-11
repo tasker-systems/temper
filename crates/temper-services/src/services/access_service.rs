@@ -817,6 +817,59 @@ pub(crate) async fn callers_machine_grant_bar(
     }
 }
 
+/// [`callers_machine_grant_bar`] and the attenuation of [`authorize_capability_grant`]'s delegated
+/// arm, asked again on a registration's transaction for one cogmap grant of an owner-arm reach
+/// (`machine_authz::AuthorizedReach::recheck_owner_arm`). The pool check decided both; the grant
+/// lands on a machine whose secret the registrar holds, so a right withdrawn since must refuse it.
+///
+/// The registrar's own grant-right rows on the map (profile-anchored, or on their live personal
+/// team) are taken `FOR SHARE`. A revocation or a downgrade of one in flight
+/// (`revoke_capability`, `grant_capability`) holds that row and makes this wait; once it commits,
+/// the row is re-read and no longer counts. Neither of those doors takes a team row, and the
+/// registration takes these rows after its team locks, so the share lock adds no cycle. A
+/// [`sqlx::Transaction`] rather than a bare connection, so the share lock cannot be taken in
+/// autocommit and released before the registration writes. The
+/// structural floor (`derived_access_profile`) and the attenuation reads (`can_read_by_membership`,
+/// `can(write)`) are asked plainly on the transaction: they read committed state, and nothing in
+/// them is a right a single revocation withdraws.
+pub(crate) async fn callers_machine_grant_holds_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    caller: ProfileId,
+    cogmap: Uuid,
+    write: bool,
+) -> ApiResult<bool> {
+    // Fetched for the share lock and the count only: any row left after a withdrawal commits is a
+    // right still held in person.
+    let rows = sqlx::query_scalar!(
+        r#"SELECT g.id FROM kb_access_grants g
+            WHERE g.subject_table = 'kb_cogmaps' AND g.subject_id = $2 AND g.can_grant
+              AND ( (g.principal_table = 'kb_profiles' AND g.principal_id = $1)
+                 OR (g.principal_table = 'kb_teams'
+                     AND EXISTS (SELECT 1 FROM kb_teams t
+                                  WHERE t.id = g.principal_id
+                                    AND t.personal_of = $1 AND t.is_active)) )
+            ORDER BY g.id
+              FOR SHARE OF g"#,
+        *caller,
+        cogmap,
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+    let held = sqlx::query_scalar!(
+        r#"SELECT ($3 OR COALESCE(derived_access_profile($1, 'grant', 'kb_cogmaps', $2), false))
+                  AND COALESCE(can_read_by_membership($1, 'kb_cogmaps', $2), false)
+                  AND (NOT $4 OR COALESCE(can('kb_profiles', $1, 'write', 'kb_cogmaps', $2), false))
+               AS "held!: bool""#,
+        *caller,
+        cogmap,
+        !rows.is_empty(),
+        write,
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(held)
+}
+
 /// May a DELEGATED caller overwrite or revoke the existing grant row for `(subject, principal)`?
 /// (team-authority fixes D2.) Admitted when there is no row (an insert, or a no-op revoke), when
 /// the caller granted it, when it is anchored on a live team the caller manages directly (never the

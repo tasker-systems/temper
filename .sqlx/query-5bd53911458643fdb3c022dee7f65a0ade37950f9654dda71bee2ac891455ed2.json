@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT ($3 OR COALESCE(derived_access_profile($1, 'grant', 'kb_cogmaps', $2), false))\n                  AND COALESCE(can_read_by_membership($1, 'kb_cogmaps', $2), false)\n                  AND (NOT $4 OR COALESCE(can('kb_profiles', $1, 'write', 'kb_cogmaps', $2), false))\n               AS \"held!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "held!: bool",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Bool",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "5bd53911458643fdb3c022dee7f65a0ade37950f9654dda71bee2ac891455ed2"
+}

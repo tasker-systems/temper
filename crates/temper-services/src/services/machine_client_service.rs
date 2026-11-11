@@ -362,8 +362,20 @@ pub(crate) async fn sever_personal_reach(
     profile: Uuid,
     minter: ProfileId,
 ) -> ApiResult<Vec<Uuid>> {
-    use crate::authz::team_membership::{self, AuthorizedMembershipChange};
     let teams = others_personal_teams(conn, profile, *minter).await?;
+    sever_personal_reach_from(conn, profile, minter, teams).await
+}
+
+/// [`sever_personal_reach`], over a list of teams the caller already read with
+/// [`others_personal_teams`] (and may already hold locked), so one list decides both what was
+/// locked and what is severed.
+async fn sever_personal_reach_from(
+    conn: &mut sqlx::PgConnection,
+    profile: Uuid,
+    minter: ProfileId,
+    teams: Vec<Uuid>,
+) -> ApiResult<Vec<Uuid>> {
+    use crate::authz::team_membership::{self, AuthorizedMembershipChange};
     for team in &teams {
         let target = team_membership::locked(conn, *team, ProfileId::from(profile)).await?;
         if target.current().is_none() {
@@ -469,7 +481,9 @@ pub async fn rotate_secret(
         )));
     }
 
-    let profile = get(pool, id).await?.profile_id;
+    let existing = get(pool, id).await?;
+    let profile = existing.profile_id;
+    let rotator = ProfileId::from(authed.profile().id);
     let mut tx = pool
         .begin()
         .await
@@ -483,16 +497,36 @@ pub async fn rotate_secret(
     // `revoke` takes the machine's standing row, then governance, then the credential row, and no
     // team; an owner's takes the owning team, then the credential row. Every act that takes a team
     // row and the credential row takes the team first, and a demotion takes none of these rows.
-    if !crate::auth::admin_arm_holds(&mut tx, ProfileId::from(authed.profile().id), on_admin_arm)
-        .await?
-    {
+    if !crate::auth::admin_arm_holds(&mut tx, rotator, on_admin_arm).await? {
         return Err(ApiError::NotFound(MACHINE_CLIENT_REFUSAL.to_string()));
+    }
+
+    // The owner arm, likewise decided on the pool, is asked again under the owning team's row lock,
+    // with the personal teams the severance below will lock taken in the same ascending pass. An
+    // owner removed from the team (or demoted) since the pool check, or while this runs, is refused
+    // as a caller with no authority over the row is, and mints no secret. Lock order on this arm:
+    // those teams, then the credential row, as an owner's `revoke` takes them.
+    // One read of the personal teams decides both the locks below and the severance, so no team
+    // the severance takes can be missing from the ascending pass.
+    let severed = others_personal_teams(&mut tx, profile, *rotator).await?;
+    if !on_admin_arm {
+        let owns = match existing.team_id {
+            Some(team_id) => {
+                crate::authz::team_membership::role_under_lock(&mut tx, team_id, rotator, &severed)
+                    .await?
+                    == Some(temper_core::types::team::TeamRole::Owner)
+            }
+            None => false,
+        };
+        if !owns {
+            return Err(ApiError::NotFound(MACHINE_CLIENT_REFUSAL.to_string()));
+        }
     }
 
     // A secret minted by anyone but the person whose personal team admits this machine costs the
     // machine that team. First after the re-check, so its team locks come before the row lock
     // below, as every membership writer orders them; a refusal below rolls it back.
-    sever_personal_reach(&mut tx, profile, ProfileId::from(authed.profile().id)).await?;
+    sever_personal_reach_from(&mut tx, profile, rotator, severed).await?;
 
     // FOR UPDATE locks the row so a concurrent revoke cannot land between these guards and the
     // write — the issuer/revoked checks and the rotation see one consistent, pinned row.
@@ -754,6 +788,116 @@ mod tests {
         .await
         .expect("seed temper-issued");
         id
+    }
+
+    /// BITE: `rotate_secret`'s owner arm is decided again under the owning team's lock. An admin
+    /// removes the machine's team owner from the team, uncommitted; the owner's rotation blocks on
+    /// the team row; the removal commits. The owner is refused as a stranger to the team is (the
+    /// missing-id sentence), and no secret is minted: the stored hash, and who rotated it, are as
+    /// they were. Before the fix the pool check's verdict stood and the removed owner walked away
+    /// with a live secret.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn an_owner_removed_while_rotation_waits_on_the_team_lock_mints_no_secret(pool: PgPool) {
+        let admin = seed_admin(&pool, "rot-remover").await;
+        // The removal is a recorded act; its actor needs the `<handle>@web` emitter it authors from.
+        let mut conn = pool.acquire().await.unwrap();
+        crate::services::profile_service::provision_profile_entities(
+            &mut conn,
+            admin.uuid(),
+            "rot-remover",
+        )
+        .await
+        .expect("remover emitters");
+        drop(conn);
+        let id = seed_temper_issued(&pool, "tmpr_rot_owner", "old-secret").await;
+        let person = |handle: &'static str| {
+            let pool = pool.clone();
+            async move {
+                let id = Uuid::now_v7();
+                sqlx::query(
+                    "INSERT INTO kb_profiles (id, handle, display_name) VALUES ($1, $2, $2)",
+                )
+                .bind(id)
+                .bind(handle)
+                .execute(&pool)
+                .await
+                .expect("seed person");
+                id
+            }
+        };
+        let (owner, co_owner, stranger) = (
+            person("rot-owner").await,
+            person("rot-co-owner").await,
+            person("rot-stranger").await,
+        );
+        let team: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_teams (slug, name) VALUES ('rot', 'rot') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        for who in [owner, co_owner] {
+            sqlx::query(
+                "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'owner')",
+            )
+            .bind(team)
+            .bind(who)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query("UPDATE kb_machine_clients SET team_id = $2 WHERE id = $1")
+            .bind(id)
+            .bind(team)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let mode = crate::auth_config::AuthMode::TemperAs;
+        let stranger_err = svc::rotate_secret(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, stranger).await,
+            id,
+            0,
+            mode,
+        )
+        .await
+        .expect_err("a stranger to the team rotates nothing");
+
+        let holder =
+            crate::test_support::hold_member_removal(&pool, admin.uuid(), team, owner).await;
+        let (p, by) = (
+            pool.clone(),
+            crate::test_support::human_principal_for(&pool, owner).await,
+        );
+        let contender = tokio::spawn(async move { svc::rotate_secret(&p, &by, id, 0, mode).await });
+        crate::test_support::await_team_lock_waiter(&pool).await;
+        holder.commit().await.unwrap();
+
+        let err = contender
+            .await
+            .unwrap()
+            .expect_err("an owner removed under the lock mints no secret");
+        assert!(
+            matches!(&err, crate::error::ApiError::NotFound(m) if m == svc::MACHINE_CLIENT_REFUSAL),
+            "got {err:?}"
+        );
+        assert_eq!(
+            format!("{err:?}"),
+            format!("{stranger_err:?}"),
+            "the removed owner is told what a stranger is told"
+        );
+        let row: (Option<String>, Option<Uuid>) = sqlx::query_as(
+            "SELECT secret_hash, secret_rotated_by_profile_id FROM kb_machine_clients WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            row,
+            (Some(crate::auth::secret::sha256_hex("old-secret")), None),
+            "the secret is the one it was, and nobody rotated it"
+        );
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]

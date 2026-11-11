@@ -169,6 +169,42 @@ async fn write_tx(
     Ok(tx)
 }
 
+/// [`write_tx`] for [`grant_reach`], with the owner arm asked again too. A reach grant hands READ on
+/// what the connection receives to a team the caller manages, so an owner removed from the
+/// connection's owning team mid-act would keep reaching it through that team. Off the admin arm,
+/// the caller's ownership of the owning team is therefore decided again under that team's row lock
+/// (the lock every membership writer takes first): a removal or demotion committed since refuses,
+/// one in flight makes this wait, then refuses. The refusal is `CONNECTION_REFUSAL`, what a caller
+/// with no authority over the connection gets. Lock order: governance (admin arm only), then the
+/// owning team, then the grant row.
+async fn reach_tx(
+    pool: &PgPool,
+    authed: &HumanPrincipal,
+    on_admin_arm: bool,
+    owning_team: Option<Uuid>,
+) -> ApiResult<sqlx::Transaction<'static, sqlx::Postgres>> {
+    let mut tx = write_tx(pool, authed, on_admin_arm).await?;
+    if !on_admin_arm {
+        let owns = match owning_team {
+            Some(team) => {
+                crate::authz::team_membership::role_under_lock(
+                    &mut tx,
+                    team,
+                    authed.profile_id(),
+                    &[],
+                )
+                .await?
+                    == Some(temper_core::types::team::TeamRole::Owner)
+            }
+            None => false,
+        };
+        if !owns {
+            return Err(ApiError::NotFound(CONNECTION_REFUSAL.to_string()));
+        }
+    }
+    Ok(tx)
+}
+
 /// List connections visible to `caller`, newest first. Revoked rows are hidden unless asked for.
 /// A system admin sees every row but those of someone else's personal team (teamless ones
 /// included); a team owner sees only connections owned by a team they own.
@@ -692,7 +728,7 @@ pub async fn grant_reach(
             let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
                 .await
                 .map_err(|e| ApiError::Internal(e.to_string()))?;
-            let mut tx = write_tx(pool, authed, on_admin_arm).await?;
+            let mut tx = reach_tx(pool, authed, on_admin_arm, connection.owner_team_id).await?;
             sqlx::query!(
                 r#"UPDATE kb_connections
                       SET reach_affirmed_by = $2, reach_affirmed_at = now(), reach_affirmation = $3
@@ -728,7 +764,7 @@ pub async fn grant_reach(
             let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
                 .await
                 .map_err(|e| ApiError::Internal(e.to_string()))?;
-            let mut tx = write_tx(pool, authed, on_admin_arm).await?;
+            let mut tx = reach_tx(pool, authed, on_admin_arm, connection.owner_team_id).await?;
             access_service::insert_grant(
                 &mut tx,
                 &crate::authz::GrantWarrant::ConnectionReach(&proof),
@@ -2015,6 +2051,79 @@ mod tests {
         assert!(
             reach_grant_exists(&pool, c.id, beta).await,
             "the read-reach grant must be visible after granting"
+        );
+    }
+
+    /// BITE: `grant_reach`'s owner arm is decided again under the owning team's lock. An admin
+    /// removes the connection's owner from the owning team, uncommitted; the owner's grant of reach
+    /// to a team they manage blocks on the owning team's row; the removal commits. The owner is
+    /// refused as a stranger to the connection is, and nothing is written: no reach grant (which
+    /// would have kept them reading the connection through `beta`), no affirmation.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn an_owner_removed_while_grant_reach_waits_on_the_team_lock_grants_nothing(
+        pool: PgPool,
+    ) {
+        let admin = seed_admin(&pool).await;
+        let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
+        seed_team_member(&pool, "reach-co-owner", "acme", TeamRole::Owner).await;
+        let (stranger, _) =
+            seed_team_member(&pool, "reach-stranger", "elsewhere", TeamRole::Owner).await;
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, owner.uuid()).await,
+            &req("Acme GitHub", Some(team)),
+        )
+        .await
+        .expect("provision");
+        let beta = seed_managed_team(&pool, "beta", owner).await;
+
+        let stranger_err = svc::grant_reach(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, stranger.uuid()).await,
+            c.id,
+            beta,
+            Some("not theirs".into()),
+        )
+        .await
+        .expect_err("a stranger to the connection grants nothing");
+
+        let holder =
+            crate::test_support::hold_member_removal(&pool, admin.uuid(), team, owner.uuid()).await;
+        let (p, by, id) = (
+            pool.clone(),
+            crate::test_support::human_principal_for(&pool, owner.uuid()).await,
+            c.id,
+        );
+        let contender = tokio::spawn(async move {
+            svc::grant_reach(&p, &by, id, beta, Some("beta reviews acme CI".into())).await
+        });
+        crate::test_support::await_team_lock_waiter(&pool).await;
+        holder.commit().await.unwrap();
+
+        let err = contender
+            .await
+            .unwrap()
+            .expect_err("an owner removed under the lock grants no reach");
+        assert!(
+            matches!(&err, ApiError::NotFound(m) if m == svc::CONNECTION_REFUSAL),
+            "got {err:?}"
+        );
+        assert_eq!(
+            format!("{err:?}"),
+            format!("{stranger_err:?}"),
+            "the removed owner is told what a stranger is told"
+        );
+        assert!(
+            !reach_grant_exists(&pool, c.id, beta).await,
+            "no reach grant was written"
+        );
+        assert!(
+            svc::get(&pool, c.id)
+                .await
+                .unwrap()
+                .reach_affirmed_by
+                .is_none(),
+            "no affirmation was stamped"
         );
     }
 

@@ -152,6 +152,9 @@ pub(crate) struct AuthorizedReach<'a> {
     /// registration's transaction asks it again under the governance lock
     /// ([`Self::recheck_admin_arm`]) before its first write.
     on_admin_arm: bool,
+    /// The team that will own the machine, as authorized. Carried so the owner arm's re-check
+    /// ([`Self::recheck_owner_arm`]) asks about exactly the team the pool check admitted.
+    owning_team: Option<Uuid>,
 }
 
 impl<'a> AuthorizedReach<'a> {
@@ -183,6 +186,57 @@ impl<'a> AuthorizedReach<'a> {
             && !crate::auth::is_system_admin_locked(tx, self.registrar.profile_id()).await?
         {
             return Err(ApiError::Forbidden);
+        }
+        Ok(())
+    }
+
+    /// The owner arm's re-check of a registration, on its transaction, before its first write. A
+    /// reach authorized on the team-owner arm was decided by pool reads: ownership of the owning
+    /// team, and the grant half of `contain_reach`. Both leave something the registrar keeps, a
+    /// credential owned by that team and grants that reach a machine they hold the secret of, so
+    /// both are asked again here:
+    ///
+    /// - ownership of the owning team, under its row lock (with the reach's teams, in one ascending
+    ///   pass, so `apply_reach` takes none of them out of that order afterwards). An owner removed
+    ///   or demoted since the pool check, or while this runs, is refused with the arm's own denial
+    ///   (`403`, what `authorize` gives a caller who owns nothing there);
+    /// - each grant's bar, with the registrar's own grant rights on the map share-locked
+    ///   ([`access_service::callers_machine_grant_holds_on`]): a `can_grant` withdrawn in flight
+    ///   makes this wait, then refuses.
+    ///
+    /// A reach on the admin arm has nothing to re-check here; [`Self::recheck_admin_arm`] asks it.
+    pub(crate) async fn recheck_owner_arm(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> ApiResult<()> {
+        if self.on_admin_arm {
+            return Ok(());
+        }
+        let Some(team) = self.owning_team else {
+            return Err(ApiError::Forbidden);
+        };
+        let reach_teams: Vec<Uuid> = self.teams.iter().map(|spec| spec.team_id).collect();
+        let role = crate::authz::team_membership::role_under_lock(
+            tx,
+            team,
+            self.registrar.profile_id(),
+            &reach_teams,
+        )
+        .await?;
+        if role != Some(TeamRole::Owner) {
+            return Err(ApiError::Forbidden);
+        }
+        for grant in &self.grants {
+            if !access_service::callers_machine_grant_holds_on(
+                tx,
+                self.registrar.profile_id(),
+                grant.cogmap_id,
+                grant.can_write,
+            )
+            .await?
+            {
+                return Err(ApiError::Forbidden);
+            }
         }
         Ok(())
     }
@@ -273,6 +327,7 @@ pub(crate) async fn authorize_registration<'a>(
                 teams,
                 grants: AuthorizedReach::seal(grants),
                 on_admin_arm: true,
+                owning_team: team,
             })
         }
         MachineRegistrationAuthority::TeamOwner => {
@@ -282,6 +337,7 @@ pub(crate) async fn authorize_registration<'a>(
                 teams,
                 grants: AuthorizedReach::seal(grants),
                 on_admin_arm: false,
+                owning_team: team,
             })
         }
         // Unreachable — `authorize` refuses a denial before returning. Enumerated rather than
