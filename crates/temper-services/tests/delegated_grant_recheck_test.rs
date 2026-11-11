@@ -254,11 +254,48 @@ async fn a_grant_right_withdrawn_from_the_source_team_in_flight_writes_no_grant(
     assert_eq!(grant_rows_to(&pool, f.ctx, f.to).await, 0, "no grant row");
 }
 
+/// BITE: the granter is demoted on the source team from maintainer to member, uncommitted, the
+/// lock and write a role change takes. A member holds no team-anchored grant right. The grant
+/// blocks on the team row; the demotion commits; the grant is refused as a stranger's is.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_granter_demoted_on_the_source_team_in_flight_writes_no_grant(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let stranger = strangers_refusal(&pool, &f).await;
+
+    let mut holder = pool.begin().await.unwrap();
+    let pid = backend_pid(&mut holder).await;
+    sqlx::query("SELECT id FROM kb_teams WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(f.source)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE kb_team_members SET role = 'member'::team_role \
+          WHERE team_id = $1 AND profile_id = $2",
+    )
+    .bind(f.source)
+    .bind(f.granter)
+    .execute(&mut *holder)
+    .await
+    .expect("the demotion, uncommitted");
+    let (p, who, req) = (pool.clone(), f.granter, read_on(f.ctx, f.to));
+    let contender = tokio::spawn(async move { grant_as(&p, who, &req).await });
+    await_blocked_at(&pool, pid, "%FROM kb_teams%FOR NO KEY UPDATE%").await;
+    holder.commit().await.unwrap();
+
+    let err = contender
+        .await
+        .unwrap()
+        .expect_err("a granter demoted under the lock confers nothing");
+    assert_eq!(format!("{err:?}"), stranger, "told what a stranger is told");
+    assert_eq!(grant_rows_to(&pool, f.ctx, f.to).await, 0, "no grant row");
+}
+
 // ── Pins ──────────────────────────────────────────────────────────────────────────────────────────
 
 /// PIN: the re-check admits who the pool admitted. A team-held right still grants, and a delegate
-/// may rewrite the very row their right comes from: that row is taken once, `FOR UPDATE`, in the
-/// ascending pass, never shared and then upgraded.
+/// may rewrite the very row their right comes from: it is share-locked by the re-check and then
+/// taken `FOR UPDATE` by the write.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_team_held_right_still_grants_and_may_rewrite_its_own_row(pool: PgPool) {
     let f = fixture(&pool).await;
@@ -277,9 +314,9 @@ async fn a_team_held_right_still_grants_and_may_rewrite_its_own_row(pool: PgPool
     assert_eq!(grant_rows_to(&pool, f.ctx, f.source).await, 1);
 }
 
-/// PIN: two managers of the source team rewriting its row at once both land. Each takes the row
-/// `FOR UPDATE` in its one pass, so the second waits for the first and neither deadlocks on a
-/// shared-then-upgraded lock.
+/// PIN: two managers of the source team rewriting its row at once both land. Each holds the
+/// source team's row lock before it share-locks the grant row, so the second waits for the first
+/// at the team row and the share-then-update on the grant row never interleaves.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn two_managers_rewriting_the_source_row_at_once_both_land(pool: PgPool) {
     let f = fixture(&pool).await;
@@ -295,4 +332,32 @@ async fn two_managers_rewriting_the_source_row_at_once_both_land(pool: PgPool) {
     let b = tokio::spawn(async move { grant_as(&p2, second, &r2).await });
     a.await.unwrap().expect("the first rewrite");
     b.await.unwrap().expect("the second rewrite");
+}
+
+/// PIN: a granter who holds the right both in person and through the source team keeps it when the
+/// team's is gone: the re-check counts any carrying row, not the one the pool happened to see.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_right_also_held_in_person_survives_losing_the_team(pool: PgPool) {
+    let f = fixture(&pool).await;
+    sqlx::query(
+        "INSERT INTO kb_access_grants (subject_table, subject_id, principal_table, principal_id, \
+                                       can_read, can_write, can_delete, can_grant, \
+                                       granted_by_profile_id) \
+         VALUES ('kb_contexts', $1, 'kb_profiles', $2, true, false, false, true, $3)",
+    )
+    .bind(f.ctx)
+    .bind(f.granter)
+    .bind(f.admin)
+    .execute(&pool)
+    .await
+    .expect("the in-person right");
+    test_support::hold_member_removal(&pool, f.admin, f.source, f.granter)
+        .await
+        .commit()
+        .await
+        .unwrap();
+    grant_as(&pool, f.granter, &read_on(f.ctx, f.to))
+        .await
+        .expect("the in-person right still grants");
+    assert_eq!(grant_rows_to(&pool, f.ctx, f.to).await, 1);
 }

@@ -608,14 +608,15 @@ async fn lock_delegated_grant_teams(
 /// never held one is told.
 ///
 /// The grant rows that carry the right (anchored on the caller's profile, or on a team
-/// [`lock_delegated_grant_teams`] kept) are locked in one ascending id pass with the row the grant
-/// will write, if it exists: that row `FOR UPDATE`, the others `FOR SHARE`, as
+/// [`lock_delegated_grant_teams`] kept) are taken `FOR SHARE` in ascending id order, as
 /// [`callers_machine_grant_holds_on`] takes them. A withdrawal in flight (`grant_capability`
 /// setting `can_grant = false`, `revoke_capability`) holds its row and makes this wait; the row is
-/// re-read once it commits, and a row that no longer carries `can_grant` does not count. The
-/// write's own row is taken in the same pass and in its final mode, so two delegates writing the
-/// row their own right comes from never both hold it shared and then wait on each other to
-/// upgrade. [`delegated_may_change_row`]'s `FOR UPDATE` on it afterwards then waits on nothing.
+/// re-read once it commits, and a row that no longer carries `can_grant` does not count.
+///
+/// [`delegated_may_change_row`] then takes the written row `FOR UPDATE`. When that row is also one
+/// taken here, it is anchored on a team this transaction already holds locked (a row on the
+/// caller's own profile is refused earlier, by [`recipient_bar`]), so every other delegate who
+/// could share-lock it waits on that team row first, and the upgrade cannot deadlock.
 ///
 /// Where the recipient is a machine the caller controls, [`callers_machine_grant_bar`] is asked
 /// again over the same locked rows: only a right held in the caller's own name (their profile,
@@ -623,7 +624,10 @@ async fn lock_delegated_grant_teams(
 ///
 /// Asked plainly on the transaction, as `callers_machine_grant_holds_on` asks them: the structural
 /// floor (`derived_access_profile`, a resource home's owner, which no team confers) and the
-/// attenuation reads (`can_read_by_membership`, `can(write)`, `can(delete)`).
+/// attenuation reads (`can_read_by_membership`, `can(write)`, `can(delete)`). Those read committed
+/// state and take no lock: a read or write right that reaches the caller only through a team whose
+/// membership change is still in flight is decided as it stood before that change. Only the grant
+/// right is serialized here.
 async fn delegated_arm_still_grants(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     teams: &[Uuid],
@@ -632,58 +636,25 @@ async fn delegated_arm_still_grants(
     caps: RequestedCapabilities,
     req: &GrantCapabilityRequest,
 ) -> ApiResult<()> {
-    let ids = sqlx::query!(
-        r#"SELECT g.id,
-                  (g.principal_table = $5 AND g.principal_id = $6) AS "is_target!: bool"
-             FROM kb_access_grants g
-            WHERE g.subject_table = $2 AND g.subject_id = $3
-              AND ( (g.can_grant
-                     AND ( (g.principal_table = 'kb_profiles' AND g.principal_id = $1)
-                        OR (g.principal_table = 'kb_teams' AND g.principal_id = ANY($4)) ))
-                 OR (g.principal_table = $5 AND g.principal_id = $6) )
-            ORDER BY g.id"#,
+    // The rows that still carry the right once locked, as (principal_table, principal_id). A row
+    // whose `can_grant` was withdrawn while this waited is re-read and filtered out.
+    let held: Vec<(String, Uuid)> = sqlx::query!(
+        r#"SELECT g.principal_table, g.principal_id FROM kb_access_grants g
+            WHERE g.subject_table = $2 AND g.subject_id = $3 AND g.can_grant
+              AND ( (g.principal_table = 'kb_profiles' AND g.principal_id = $1)
+                 OR (g.principal_table = 'kb_teams' AND g.principal_id = ANY($4)) )
+            ORDER BY g.id
+              FOR SHARE OF g"#,
         *caller,
         subject.kind.as_str(),
         subject.id,
         teams,
-        req.principal_table,
-        req.principal_id,
     )
     .fetch_all(&mut **tx)
-    .await?;
-
-    // The rows that still carry the right once locked, as (principal_table, principal_id).
-    let mut held: Vec<(String, Uuid)> = Vec::new();
-    for row in ids {
-        let locked = if row.is_target {
-            sqlx::query!(
-                r#"SELECT principal_table, principal_id, can_grant FROM kb_access_grants
-                    WHERE id = $1 FOR UPDATE"#,
-                row.id,
-            )
-            .fetch_optional(&mut **tx)
-            .await?
-            .map(|r| (r.principal_table, r.principal_id, r.can_grant))
-        } else {
-            sqlx::query!(
-                r#"SELECT principal_table, principal_id, can_grant FROM kb_access_grants
-                    WHERE id = $1 FOR SHARE"#,
-                row.id,
-            )
-            .fetch_optional(&mut **tx)
-            .await?
-            .map(|r| (r.principal_table, r.principal_id, r.can_grant))
-        };
-        let Some((table, id, can_grant)) = locked else {
-            continue;
-        };
-        let carries = can_grant
-            && ((table == "kb_profiles" && id == *caller)
-                || (table == "kb_teams" && teams.contains(&id)));
-        if carries {
-            held.push((table, id));
-        }
-    }
+    .await?
+    .into_iter()
+    .map(|r| (r.principal_table, r.principal_id))
+    .collect();
 
     let floor = sqlx::query!(
         r#"SELECT COALESCE(derived_access_profile($1, 'grant', $2, $3), false) AS "derived!: bool",
@@ -727,8 +698,9 @@ async fn delegated_arm_still_grants(
 /// Both authority arms are asked again on the write's transaction before the write: the admin arm
 /// under the governance lock (`admin_arm_still_grants`), the delegated arm under the locks of
 /// the teams and grant rows its right is held through (`lock_delegated_grant_teams`,
-/// `delegated_arm_still_grants`). A grant outlives the right that made it, so a right withdrawn
-/// while the door is in flight refuses the grant.
+/// `delegated_arm_still_grants`). A grant outlives the right that made it, so a grant right
+/// withdrawn while the door is in flight refuses the grant. The delegated arm's attenuation is
+/// re-read on the transaction but not under a lock.
 ///
 /// Lock order: team rows ascending (delegated arm) or the governance row (admin arm), then the
 /// subject floor's `kb_resources` row, then grant rows ascending. A membership writer takes its
