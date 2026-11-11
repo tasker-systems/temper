@@ -1248,8 +1248,16 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     role,
                     confirm_elevated,
                     from_seen,
+                    apply,
                 } => {
-                    if from_seen {
+                    if apply {
+                        Err(temper_cli::error::TemperError::Config(
+                            "map-group no longer renders SQL, so --apply is retired: without it, \
+                             map-group creates the mapping through the admin API and records it. \
+                             Drop --apply to proceed."
+                                .into(),
+                        ))
+                    } else if from_seen {
                         temper_cli::commands::admin_saml::from_seen(&idp_key)
                     } else {
                         // clap `required_unless_present = "from_seen"` guarantees both are

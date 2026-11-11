@@ -22,16 +22,18 @@ login's reconcile) now has its own doors. Before this, its only writer was SQL t
   appends one new admin event, saml_group_mapping_changed (act, actor, idp_key, group_value,
   team_id, role, confirmed; migration 20261125000010). It is readable by system admins on the admin
   ledger.
-- Existing mappings are untouched. The migration adds no constraint, and it names any mapping
-  already at `owner` or onto temper-system or the gating team in a WARNING.
+- The migration refuses to apply over an existing mapping that is `owner` or targets
+  temper-system or the gating team, naming each (Pete, 2026-11-11). Remove the row or lower its
+  role first. It adds no constraint to the table.
 - Erasure policy: the event's idp_key and group_value are declared out-of-scope for resource
   erasure (instance SAML configuration, not resource text).
 - MCP: `team_manage` gains `saml_map_group` and `saml_unmap_group` (fields idp_key, group, role,
   confirm_elevated).
 - Clients: AdminClient gains create_saml_group_mapping / remove_saml_group_mapping, and the SDKs
   gain the matching operations and models. The ts-rs bindings gain saml_mapping.ts.
-- Behavioral (CLI): `temper admin saml map-group` no longer prints an INSERT or takes `--apply`. It
-  calls the door and prints the answer. It takes `--confirm-elevated`. `temper admin saml
+- Behavioral (CLI): `temper admin saml map-group` now WRITES by default: it used to print an
+  INSERT (a dry run) and write only with `--apply`. It calls the door and prints the answer, and
+  `--apply` is refused with a message saying so. It takes `--confirm-elevated`. `temper admin saml
   unmap-group` is new. `--from-seen` is unchanged. scripts/bootstrap/saml-setup.sh runs map-group
   only with `--apply-db` (and passes a profile's `confirm_elevated`), and prints the command
   otherwise.

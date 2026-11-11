@@ -21,15 +21,20 @@
 --       removed  absent | changed (`role` as it was; `idp_memberships` counts the team's
 --                `source = 'idp'` rows, which the removal leaves in place).
 --
--- EXISTING ROWS ARE NOT TOUCHED. No CHECK and no trigger is added to the table: a mapping already
--- above the ceiling keeps working, the reconcile keeps reading it, and the DO block below names each
--- such row in a WARNING so an operator can remove it through the door. Converting would demote
--- people silently; refusing would block the deploy. The ceiling binds this writer, which the doors
--- call; a direct INSERT still bypasses it, as direct database access bypasses every door.
+-- EXISTING ROWS ABOVE THE CEILING REFUSE THE MIGRATION (Pete, 2026-11-11). Every mapping the doors
+-- did not write was written without confirmation, so the DO block below fails the migration, naming
+-- each mapping that is `owner` or targets temper-system or the gating team; the operator removes the
+-- row or lowers its role first. No CHECK and no trigger is added to the table: the ceiling binds this
+-- writer, which the doors call, and a direct INSERT still bypasses it, as direct database access
+-- bypasses every door. The reconcile reads the table as before.
 --
 -- A later edit must keep the create arm's lock order: `_gating_team_lock(false)` BEFORE the team row
 -- (`FOR SHARE`). A rename takes the gating lock exclusively and then the team row, so taking the row
--- first would wait in a cycle with it. The row lock holds a soft delete off until commit.
+-- first would wait in a cycle with it. The row lock holds a soft delete off until commit. This is the
+-- reverse of the delete arm's order (row, then the shared gating lock); shared against shared never
+-- conflicts, so the two cannot deadlock, but with an exclusive gating request queued between them
+-- the delete's shared request waits behind it and the deadlock detector reorders the queue after
+-- deadlock_timeout: a stall of about a second, not an error.
 --
 -- WHAT THE FUNCTION DOES NOT DO: AUTHORIZE. `saml_mapping_service` asks for the system-admin proof
 -- and re-asks it under the governance lock, before calling it. A later parameter goes on the end
@@ -39,6 +44,7 @@
 -- `crates/temper-substrate/tests/fixtures/payloads/saml_group_mapping_changed.v1.schema.json`, and
 -- `the_migration_literal_matches_the_committed_fixture` pins the pair.
 
+-- Section 0. Refuse over a mapping above the ceiling (Pete, 2026-11-11).
 DO $$
 DECLARE
     v_found text;
@@ -52,13 +58,16 @@ BEGIN
         OR t.slug = 'temper-system'
         OR t.slug = (SELECT s.gating_team_slug FROM kb_system_settings s WHERE s.id = 1);
     IF v_found IS NOT NULL THEN
-        RAISE WARNING 'SAML group mappings above the maintainer ceiling or onto an instance team, '
-                      'kept as they are (%): review each, and remove it with '
-                      '`temper admin saml unmap-group` if it should not stand', v_found;
+        RAISE EXCEPTION 'SAML group mappings above the maintainer ceiling or onto an instance team, '
+                        'none of them confirmed (%): delete each row or lower its role to maintainer '
+                        'or below before this migration, then re-create any that should stand with '
+                        '`temper admin saml map-group --confirm-elevated`', v_found
+            USING ERRCODE = 'check_violation';
     END IF;
 END;
 $$;
 
+-- Section 1. The record and its writer.
 INSERT INTO kb_event_types (name, payload_schema, schema_version, category) VALUES
   ('saml_group_mapping_changed', $JS$
 {
@@ -163,12 +172,17 @@ DECLARE
     v_held     team_role;
     v_needs    text[] := '{}';
     v_members  bigint;
+    v_try      integer;
 BEGIN
     IF p_act = 'created' THEN
         IF p_role IS NULL THEN
             RAISE EXCEPTION '_admin_saml_group_mapping_write: created needs p_role';
         END IF;
-        IF NOT EXISTS (SELECT 1 FROM kb_saml_idp WHERE idp_key = p_idp_key) THEN
+        -- An inactive IdP is accepted: an operator may stage mappings before activating it. KEY
+        -- SHARE holds its row against a concurrent delete, which would otherwise surface as an FK
+        -- violation.
+        PERFORM 1 FROM kb_saml_idp WHERE idp_key = p_idp_key FOR KEY SHARE;
+        IF NOT FOUND THEN
             RETURN jsonb_build_object('outcome', 'absent_idp');
         END IF;
         PERFORM _gating_team_lock(false);
@@ -191,17 +205,24 @@ BEGIN
             RETURN jsonb_build_object('outcome', 'needs_confirmation', 'needs', to_jsonb(v_needs));
         END IF;
 
-        INSERT INTO kb_saml_group_mappings (idp_key, group_value, team_id, role)
-        VALUES (p_idp_key, p_group, p_team, p_role)
-        ON CONFLICT (idp_key, group_value, team_id) DO NOTHING;
-        IF NOT FOUND THEN
+        -- A conflicting row a concurrent removal deletes before it is read is retried once, so a
+        -- conflict always names the role actually held.
+        FOR v_try IN 1..2 LOOP
+            INSERT INTO kb_saml_group_mappings (idp_key, group_value, team_id, role)
+            VALUES (p_idp_key, p_group, p_team, p_role)
+            ON CONFLICT (idp_key, group_value, team_id) DO NOTHING;
+            EXIT WHEN FOUND;
             SELECT role INTO v_held FROM kb_saml_group_mappings
              WHERE idp_key = p_idp_key AND group_value = p_group AND team_id = p_team;
             IF v_held = p_role THEN
                 RETURN jsonb_build_object('outcome', 'noop', 'role', v_held);
+            ELSIF v_held IS NOT NULL THEN
+                RETURN jsonb_build_object('outcome', 'conflict', 'role', v_held);
+            ELSIF v_try = 2 THEN
+                RAISE EXCEPTION '_admin_saml_group_mapping_write: the mapping kept vanishing under a create'
+                    USING ERRCODE = 'serialization_failure';
             END IF;
-            RETURN jsonb_build_object('outcome', 'conflict', 'role', v_held);
-        END IF;
+        END LOOP;
         v_held := p_role;
     ELSIF p_act = 'removed' THEN
         DELETE FROM kb_saml_group_mappings
@@ -249,7 +270,8 @@ SELECT declare_migration(
     'additive',
     'Adds the saml_group_mapping_changed admin event type and _admin_saml_group_mapping_write, '
     'which creates or removes a kb_saml_group_mappings row and appends its ledger record in one '
-    'statement. No table, column, constraint or existing function changes, and existing mappings '
-    'are left as they are (the ones above the new ceiling are named in a WARNING), so a binary '
-    'without this change keeps working and the IdP reconcile reads the table as before.'
+    'statement. No table, column, constraint or existing function changes, so a binary without this '
+    'change keeps working and the IdP reconcile reads the table as before. It refuses to apply over '
+    'an existing mapping that is owner or targets temper-system or the gating team (Pete, '
+    '2026-11-11), naming each.'
 );

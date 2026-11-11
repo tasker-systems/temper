@@ -204,7 +204,12 @@ async fn an_instance_team_target_without_confirmation_is_refused(pool: PgPool) {
     )
     .await
     .unwrap_err();
+    let msg = format!("{err:?}");
     assert_needs_confirmation(err, "`owner`");
+    assert!(
+        msg.contains("instance team"),
+        "both conditions are named: {msg}"
+    );
     assert!(mappings(&pool).await.is_empty());
     assert!(records(&pool).await.is_empty());
 }
@@ -498,4 +503,131 @@ async fn a_demotion_in_flight_refuses_create_and_remove(pool: PgPool) {
     assert!(matches!(err, ApiError::Forbidden), "{err:?}");
     assert_eq!(mappings(&pool).await.len(), 1, "a refused remove deleted");
     assert_eq!(records(&pool).await.len(), 1, "a refused remove recorded");
+}
+
+// ── The migration's refusal over existing rows (Pete, 2026-11-11) ────────────────────────────────
+
+/// Migration 20261125000010, read whole so its Section 0 guard can run against rows it must refuse.
+const DOOR_MIGRATION: &str =
+    include_str!("../../../migrations/20261125000010_saml_group_mapping_door.sql");
+
+/// FAILS IF the migration would apply over a mapping that is `owner` or targets temper-system or the
+/// gating team, or stops naming it. A mapping within the ceiling on an ordinary team passes.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_migration_refuses_an_unconfirmed_mapping_above_the_ceiling(pool: PgPool) {
+    use sqlx::Executor;
+    let section = DOOR_MIGRATION
+        .split_once("-- Section 0.")
+        .and_then(|(_, rest)| rest.split_once("-- Section 1."))
+        .map(|(body, _)| body)
+        .expect("the migration carries its Section 0 guard");
+    let guard = &section[section.find("DO $$").expect("the guard is a DO block")..];
+    let f = fixture(&pool).await;
+
+    let insert = |team: Uuid, group: &'static str, role: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(
+                "INSERT INTO kb_saml_group_mappings (idp_key, group_value, team_id, role) \
+                 VALUES ($1, $2, $3, $4::team_role)",
+            )
+            .bind(IDP)
+            .bind(group)
+            .bind(team)
+            .bind(role)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+    };
+    let clear = || async {
+        sqlx::query("DELETE FROM kb_saml_group_mappings")
+            .execute(&pool)
+            .await
+            .unwrap();
+    };
+
+    insert(f.eng, "eng", "maintainer").await;
+    pool.execute(guard)
+        .await
+        .expect("a maintainer mapping on an ordinary team passes the guard");
+
+    for (team, group, role, named) in [
+        (f.eng, "leads", "owner", "sm-okta/leads -> sm-eng (owner)"),
+        (
+            f.root,
+            "everyone",
+            "member",
+            "sm-okta/everyone -> temper-system (member)",
+        ),
+        (
+            f.gating,
+            "staff",
+            "watcher",
+            "sm-okta/staff -> sm-gate (watcher)",
+        ),
+    ] {
+        insert(team, group, role).await;
+        let err = pool
+            .execute(guard)
+            .await
+            .expect_err("the guard refuses a mapping above the ceiling");
+        let msg = err.to_string();
+        assert!(msg.contains(named), "the guard names {named}, got {msg}");
+        assert!(msg.contains("before this migration"), "{msg}");
+        clear().await;
+        insert(f.eng, "eng", "maintainer").await;
+    }
+}
+
+/// The gating designation is read under the gating lock on the create's transaction: a repoint
+/// onto the target team that is in flight makes the create wait, and once it commits the create is
+/// refused for want of confirmation, having written nothing.
+///
+/// FAILS IF the instance-team test reads the gating slug outside `_gating_team_lock`.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_gating_repoint_in_flight_onto_the_target_needs_confirmation(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let admin = test_support::system_admin_proof_for(&pool, f.admin).await;
+
+    let mut repoint = pool.begin().await.unwrap();
+    let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *repoint)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'sm-eng' WHERE id = 1")
+        .execute(&mut *repoint)
+        .await
+        .expect("repoint the gating slug onto the target");
+
+    let contender = tokio::spawn({
+        let pool = pool.clone();
+        let r = req(f.eng, "eng", TeamRole::Member, false);
+        async move { saml_mapping_service::create(&pool, &admin, &r).await }
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let waiting: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM pg_stat_activity \
+                             WHERE datname = current_database() AND wait_event_type = 'Lock' \
+                               AND $1 = ANY (pg_blocking_pids(pid)))",
+        )
+        .bind(pid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        if waiting {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the create never waited on the repoint"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    repoint.commit().await.unwrap();
+    let err = contender.await.unwrap().unwrap_err();
+    assert_needs_confirmation(err, "instance team");
+    assert!(mappings(&pool).await.is_empty());
+    assert!(records(&pool).await.is_empty());
 }

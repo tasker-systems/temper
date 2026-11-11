@@ -2456,6 +2456,10 @@ pub enum AdminSamlAction {
         /// (reads kb_saml_seen_groups via psql; needs DATABASE_URL).
         #[arg(long)]
         from_seen: bool,
+        /// Retired: map-group no longer renders SQL; it writes through the admin API. Refused
+        /// with a message saying so.
+        #[arg(long, hide = true)]
+        apply: bool,
     },
     /// Remove an IdP group's mapping onto a team (a system admin's act, recorded on the admin
     /// ledger). Memberships the mapping already conferred are left in place: the IdP reconcile
