@@ -869,8 +869,8 @@ async fn the_upward_pool_check_answers_as_the_downward_one(pool: PgPool) {
     gating("org").await;
     auto_join(w.eng, true).await;
     checked += check("the gating team as an anchor, an auto-join mid-tier").await;
-    set_team_live(&pool, w.org, false).await;
-    checked += check("a dead gating team as the anchor").await;
+    // No "dead gating team" case: the gating team is never dead at a committed state
+    // (20261124000050).
     assert!(checked > 0);
 }
 
