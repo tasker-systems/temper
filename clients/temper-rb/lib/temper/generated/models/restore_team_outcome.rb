@@ -16,6 +16,9 @@ require 'time'
 module Temper::Generated
   # Response body for `POST /api/teams/{id}/restore` (team DAG doors D6). Restoring revives every preserved row's reach: the roster (`members`, exactly as it was at deletion), the links to the live `parents`, and the live `children` that reach through the team again.
   class RestoreTeamOutcome < ApiModelBase
+    # The restored team's live ancestors, by every path, ordered by slug: its roster reads everything attached to each of them again, as does every live team beneath it. The walk stops at a soft-deleted team. Read on the act's own transaction. Empty when the server does not report it.
+    attr_accessor :ancestors
+
     attr_accessor :children
 
     attr_accessor :members
@@ -30,6 +33,7 @@ module Temper::Generated
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
+        :'ancestors' => :'ancestors',
         :'children' => :'children',
         :'members' => :'members',
         :'parents' => :'parents',
@@ -51,6 +55,7 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
+        :'ancestors' => :'Array<TeamRef>',
         :'children' => :'Array<TeamRef>',
         :'members' => :'Array<TeamMemberDetail>',
         :'parents' => :'Array<TeamRef>',
@@ -80,6 +85,12 @@ module Temper::Generated
         end
         h[k.to_sym] = v
       }
+
+      if attributes.key?(:'ancestors')
+        if (value = attributes[:'ancestors']).is_a?(Array)
+          self.ancestors = value
+        end
+      end
 
       if attributes.key?(:'children')
         if (value = attributes[:'children']).is_a?(Array)
@@ -196,6 +207,7 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
+          ancestors == o.ancestors &&
           children == o.children &&
           members == o.members &&
           parents == o.parents &&
@@ -212,7 +224,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [children, members, parents, public_within, team].hash
+      [ancestors, children, members, parents, public_within, team].hash
     end
 
     # Builds the object from hash

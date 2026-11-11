@@ -175,7 +175,7 @@ Options:
 ```text
 Attach a child team under a parent team (a manager of both; a temper-system or gating-team parent, or a child with an auto-join or the gating team in or below it, a system admin)
 
-Every member of the child, at any role, then reads everything attached to the parent and its ancestors. Also the way to give a team a second parent.
+Every member of the child, at any role, then reads everything attached to the parent and its ancestors; the output lists them as `ancestors` (the child's whole live chain after the link). Also the way to give a team a second parent.
 
 Usage: temper team attach [OPTIONS] <PARENT> <CHILD>
 
@@ -208,7 +208,7 @@ Options:
 ```text
 Move a team from one parent to another, in one act (a manager of the team and of `--to`)
 
-The new link is written before the old one is cut, so a refusal leaves the team where it was.
+The new link is written before the old one is cut, so a refusal leaves the team where it was. The output lists `ancestors`, the team's live chain after the move.
 
 Usage: temper team reparent [OPTIONS] --from <FROM> --to <TO> <TEAM>
 
@@ -244,7 +244,7 @@ Options:
 ```text
 Restore a soft-deleted team (its owner, or a system admin)
 
-Every preserved membership, parent link and child's reach revives; the output lists them. A system admin's act alone when the team keeps a link to temper-system or the gating team, or when it or any team below it, live or deleted, is an auto-join or the gating team. A deleted team is no longer in `team list`, so name it by UUID.
+Every preserved membership, parent link and child's reach revives; the output lists them, and `ancestors`, every live team above the restored one. A system admin's act alone when the team keeps a link to temper-system or the gating team, or when it or any team below it, live or deleted, is an auto-join or the gating team. A deleted team is no longer in `team list`, so name it by UUID.
 
 Usage: temper team restore [OPTIONS] <TEAM>
 

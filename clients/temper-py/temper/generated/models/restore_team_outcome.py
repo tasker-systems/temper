@@ -31,12 +31,13 @@ class RestoreTeamOutcome(BaseModel):
     """
     Response body for `POST /api/teams/{id}/restore` (team DAG doors D6). Restoring revives every preserved row's reach: the roster (`members`, exactly as it was at deletion), the links to the live `parents`, and the live `children` that reach through the team again.
     """ # noqa: E501
+    ancestors: Optional[List[TeamRef]] = Field(default=None, description="The restored team's live ancestors, by every path, ordered by slug: its roster reads everything attached to each of them again, as does every live team beneath it. The walk stops at a soft-deleted team. Read on the act's own transaction. Empty when the server does not report it.")
     children: List[TeamRef]
     members: List[TeamMemberDetail]
     parents: List[TeamRef]
     public_within: Optional[PublicWithinEffects] = Field(default=None, description="The `public_within` rows the restore revived (or, for a restored pool team, made dormant).")
     team: TeamRow
-    __properties: ClassVar[List[str]] = ["children", "members", "parents", "public_within", "team"]
+    __properties: ClassVar[List[str]] = ["ancestors", "children", "members", "parents", "public_within", "team"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -77,6 +78,13 @@ class RestoreTeamOutcome(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # override the default output from pydantic by calling `to_dict()` of each item in ancestors (list)
+        _items = []
+        if self.ancestors:
+            for _item_ancestors in self.ancestors:
+                if _item_ancestors:
+                    _items.append(_item_ancestors.to_dict())
+            _dict['ancestors'] = _items
         # override the default output from pydantic by calling `to_dict()` of each item in children (list)
         _items = []
         if self.children:
@@ -116,6 +124,7 @@ class RestoreTeamOutcome(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
+            "ancestors": [TeamRef.from_dict(_item) for _item in obj["ancestors"]] if obj.get("ancestors") is not None else None,
             "children": [TeamRef.from_dict(_item) for _item in obj["children"]] if obj.get("children") is not None else None,
             "members": [TeamMemberDetail.from_dict(_item) for _item in obj["members"]] if obj.get("members") is not None else None,
             "parents": [TeamRef.from_dict(_item) for _item in obj["parents"]] if obj.get("parents") is not None else None,

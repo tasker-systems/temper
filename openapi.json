@@ -18035,6 +18035,13 @@
           "outcome"
         ],
         "properties": {
+          "ancestors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TeamRef"
+            },
+            "description": "The child's live ancestors after the link, by every path, ordered by slug: every member of\nthe child reads everything attached to each of them. The walk stops at a soft-deleted team,\nwhich confers nothing, so a team reached only through a dead one is absent. Read on the\nact's own transaction, so it is what the link committed. Empty when the server does not\nreport it."
+          },
           "outcome": {
             "$ref": "#/components/schemas/AttachOutcome"
           },
@@ -26608,6 +26615,13 @@
           "correlation_id"
         ],
         "properties": {
+          "ancestors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TeamRef"
+            },
+            "description": "The team's live ancestors after the move, by every path, ordered by slug: what its members\nnow read. A team that was above only the old parent is absent, and the walk stops at a\nsoft-deleted team. Read on the act's own transaction. Empty when the server does not report\nit."
+          },
           "correlation_id": {
             "type": "string",
             "format": "uuid"
@@ -27862,6 +27876,13 @@
           "members"
         ],
         "properties": {
+          "ancestors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TeamRef"
+            },
+            "description": "The restored team's live ancestors, by every path, ordered by slug: its roster reads\neverything attached to each of them again, as does every live team beneath it. The walk\nstops at a soft-deleted team. Read on the act's own transaction. Empty when the server does\nnot report it."
+          },
           "children": {
             "type": "array",
             "items": {
@@ -28551,7 +28572,7 @@
       },
       "SetAutoJoinOutcome": {
         "type": "object",
-        "description": "Response body for `PUT /api/teams/{id}/auto-join`. `ancestors` are the team's live ancestors:\nwith auto-join set, every approved profile reads everything attached to each of them, so the\nadmin sees exactly what the change opened.",
+        "description": "Response body for `PUT /api/teams/{id}/auto-join`. `ancestors` are the team's live ancestors,\nby every path, ordered by slug, read on the act's own transaction (the walk stops at a\nsoft-deleted team): with auto-join set, every approved profile reads everything attached to each\nof them, so the admin sees exactly what the change opened.",
         "required": [
           "team",
           "ancestors"

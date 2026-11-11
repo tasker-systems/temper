@@ -4750,6 +4750,14 @@ export interface components {
         };
         /** @description Response body for `PUT /api/teams/{id}/children/{child_id}`. */
         AttachChildOutcome: {
+            /**
+             * @description The child's live ancestors after the link, by every path, ordered by slug: every member of
+             *     the child reads everything attached to each of them. The walk stops at a soft-deleted team,
+             *     which confers nothing, so a team reached only through a dead one is absent. Read on the
+             *     act's own transaction, so it is what the link committed. Empty when the server does not
+             *     report it.
+             */
+            ancestors?: components["schemas"]["TeamRef"][];
             outcome: components["schemas"]["AttachOutcome"];
             /**
              * @description What the link did to `public_within` rows: a pool brought under an anchor, or a forbid
@@ -9872,6 +9880,13 @@ export interface components {
          *     move carry `correlation_id`, so the ledger shows one move rather than two unrelated acts.
          */
         ReparentOutcome: {
+            /**
+             * @description The team's live ancestors after the move, by every path, ordered by slug: what its members
+             *     now read. A team that was above only the old parent is absent, and the walk stops at a
+             *     soft-deleted team. Read on the act's own transaction. Empty when the server does not report
+             *     it.
+             */
+            ancestors?: components["schemas"]["TeamRef"][];
             /** Format: uuid */
             correlation_id: string;
             from: components["schemas"]["TeamRef"];
@@ -10785,6 +10800,13 @@ export interface components {
          *     live `parents`, and the live `children` that reach through the team again.
          */
         RestoreTeamOutcome: {
+            /**
+             * @description The restored team's live ancestors, by every path, ordered by slug: its roster reads
+             *     everything attached to each of them again, as does every live team beneath it. The walk
+             *     stops at a soft-deleted team. Read on the act's own transaction. Empty when the server does
+             *     not report it.
+             */
+            ancestors?: components["schemas"]["TeamRef"][];
             children: components["schemas"]["TeamRef"][];
             members: components["schemas"]["TeamMemberDetail"][];
             parents: components["schemas"]["TeamRef"][];
@@ -11180,9 +11202,10 @@ export interface components {
             resource_id: string;
         };
         /**
-         * @description Response body for `PUT /api/teams/{id}/auto-join`. `ancestors` are the team's live ancestors:
-         *     with auto-join set, every approved profile reads everything attached to each of them, so the
-         *     admin sees exactly what the change opened.
+         * @description Response body for `PUT /api/teams/{id}/auto-join`. `ancestors` are the team's live ancestors,
+         *     by every path, ordered by slug, read on the act's own transaction (the walk stops at a
+         *     soft-deleted team): with auto-join set, every approved profile reads everything attached to each
+         *     of them, so the admin sees exactly what the change opened.
          */
         SetAutoJoinOutcome: {
             ancestors: components["schemas"]["TeamRef"][];

@@ -16,6 +16,9 @@ require 'time'
 module Temper::Generated
   # Response body for `PUT /api/teams/{id}/children/{child_id}`.
   class AttachChildOutcome < ApiModelBase
+    # The child's live ancestors after the link, by every path, ordered by slug: every member of the child reads everything attached to each of them. The walk stops at a soft-deleted team, which confers nothing, so a team reached only through a dead one is absent. Read on the act's own transaction, so it is what the link committed. Empty when the server does not report it.
+    attr_accessor :ancestors
+
     attr_accessor :outcome
 
     # What the link did to `public_within` rows: a pool brought under an anchor, or a forbid brought above a team, makes rows dormant; a new live path can revive one.
@@ -49,6 +52,7 @@ module Temper::Generated
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
+        :'ancestors' => :'ancestors',
         :'outcome' => :'outcome',
         :'public_within' => :'public_within',
         :'public_within_in_reach' => :'public_within_in_reach'
@@ -68,6 +72,7 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
+        :'ancestors' => :'Array<TeamRef>',
         :'outcome' => :'AttachOutcome',
         :'public_within' => :'PublicWithinEffects',
         :'public_within_in_reach' => :'PublicWithinReach'
@@ -95,6 +100,12 @@ module Temper::Generated
         end
         h[k.to_sym] = v
       }
+
+      if attributes.key?(:'ancestors')
+        if (value = attributes[:'ancestors']).is_a?(Array)
+          self.ancestors = value
+        end
+      end
 
       if attributes.key?(:'outcome')
         self.outcome = attributes[:'outcome']
@@ -146,6 +157,7 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
+          ancestors == o.ancestors &&
           outcome == o.outcome &&
           public_within == o.public_within &&
           public_within_in_reach == o.public_within_in_reach
@@ -160,7 +172,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [outcome, public_within, public_within_in_reach].hash
+      [ancestors, outcome, public_within, public_within_in_reach].hash
     end
 
     # Builds the object from hash
