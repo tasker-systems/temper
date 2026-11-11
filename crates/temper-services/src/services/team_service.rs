@@ -1316,8 +1316,8 @@ pub async fn rename_slug(
 /// held (soft-deleted slugs stay reserved), so nothing collides. Every preserved row confers again:
 /// the roster, the parent links (and through them the children's reach to everything above), its
 /// contexts, shares and grants. So the outcome lists the live parents, the live children, the
-/// roster and the full live ancestor chain: the restorer sees the reach they revived. After commit, an auto-join team backfills the
-/// profiles approved while it was dead. `NotFound` when the team is absent or not deleted.
+/// roster and the full live ancestor chain: the restorer sees the reach they revived. After commit,
+/// an auto-join team backfills the profiles approved while it was dead. `NotFound` when the team is absent or not deleted.
 pub async fn restore_team(
     pool: &PgPool,
     caller: &HumanPrincipal,
