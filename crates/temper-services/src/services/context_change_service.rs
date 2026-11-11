@@ -361,17 +361,43 @@ mod tests {
         );
     }
 
+    /// Both numbers are seven or more decimal digits, so a random token cannot spell either by
+    /// chance: its payload is 75 base64url characters, and the odds that one contains a given
+    /// seven-digit string are about 69 × 64⁻⁷ ≈ 2 × 10⁻¹¹ (a two-digit number such as `42` turns
+    /// up in about one run in fifty-five). The byte check catches a seal that copies either number
+    /// into the 56 decoded bytes as a u64 or u32, either byte order, or as decimal text. By chance,
+    /// an eight-byte pattern turns up about 49 × 2⁻⁶⁴, a seven-byte one 50 × 2⁻⁵⁶, and a four-byte
+    /// one 53 × 2⁻³² ≈ 10⁻⁸; with four of those, about one run in twenty million.
     #[test]
     fn a_position_shows_neither_number() {
         let pos = RawPosition {
             xact: 9_000_017,
-            seq: 42,
+            seq: 42_000_042,
         };
         let token = seal(&KEY, ctx(), pos).unwrap();
         assert!(
-            !token.contains("9000017") && !token.contains("42"),
+            !token.contains("9000017") && !token.contains("42000042"),
             "{token}"
         );
+        let bytes = URL_SAFE_NO_PAD
+            .decode(token.strip_prefix(POSITION_PREFIX).unwrap())
+            .unwrap();
+        for n in [pos.xact, pos.seq] {
+            let narrow = u32::try_from(n).unwrap();
+            let encodings: [Vec<u8>; 5] = [
+                n.to_be_bytes().to_vec(),
+                n.to_le_bytes().to_vec(),
+                narrow.to_be_bytes().to_vec(),
+                narrow.to_le_bytes().to_vec(),
+                n.to_string().into_bytes(),
+            ];
+            for encoded in encodings {
+                assert!(
+                    !bytes.windows(encoded.len()).any(|w| w == encoded),
+                    "{n} appears in the sealed bytes as {encoded:?}: {token}"
+                );
+            }
+        }
         assert_ne!(
             seal(&KEY, ctx(), pos).unwrap(),
             token,
