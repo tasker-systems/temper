@@ -1718,3 +1718,93 @@ async fn the_backstop_refuses_a_guarded_change_outside_read_committed(pool: PgPo
     .await;
     assert!(err.is_none(), "{err:?}");
 }
+
+// --- A gating repoint answers the chain the pool now reads -----------------------------------
+//
+// The gating team is a pool every approved profile reads, so a settings write that repoints the
+// slug answers the new gating team's live ancestor chain (`gating_pool_ancestors`), read on the
+// write's own transaction with the reader the team acts use.
+
+/// The settings door's answer to `req`, as the fixture's system admin.
+async fn write_settings(
+    pool: &PgPool,
+    admin: Uuid,
+    req: temper_core::types::admin::UpdateSettingsRequest,
+) -> temper_core::types::access_gate::SystemSettings {
+    let proof = test_support::system_admin_proof_for(pool, admin).await;
+    temper_services::services::access_service::update_system_settings(pool, &proof, &req)
+        .await
+        .expect("the settings write")
+}
+
+fn repoint_to(slug: &str) -> temper_core::types::admin::UpdateSettingsRequest {
+    temper_core::types::admin::UpdateSettingsRequest {
+        gating_team_slug: Some(slug.to_owned()),
+        ..Default::default()
+    }
+}
+
+/// Repointing to eng-web answers eng and org, its parent and grandparent, and not eng-web itself:
+/// the whole instance now reads both through the pool, not only the direct parent.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_gating_repoint_answers_the_new_gating_teams_whole_live_chain(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let out = write_settings(&pool, f.admin, repoint_to("dg-eng-web")).await;
+    assert_eq!(out.gating_team_slug.as_deref(), Some("dg-eng-web"));
+    // By slug: dg-eng, dg-org.
+    assert_eq!(
+        out.gating_pool_ancestors.as_deref().map(ids),
+        Some(vec![f.eng, f.org])
+    );
+}
+
+/// A dead team in the chain cuts what lies above it: with eng deleted, org is reached only through
+/// it and is not named, while side, a live second parent of eng-web, still is.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_dead_team_in_the_chain_cuts_what_a_gating_repoint_answers(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let admin_p = test_support::human_principal_for(&pool, f.admin).await;
+    team_service::attach_child(&pool, &admin_p, f.side, f.eng_web)
+        .await
+        .expect("give eng-web a second parent");
+    let eng_owner = test_support::human_principal_for(&pool, f.on("eng", "owner")).await;
+    team_service::delete_team(&pool, &eng_owner, f.eng)
+        .await
+        .expect("delete eng");
+
+    let out = write_settings(&pool, f.admin, repoint_to("dg-eng-web")).await;
+    assert_eq!(
+        out.gating_pool_ancestors.as_deref().map(ids),
+        Some(vec![f.side]),
+        "dead eng, and org above it, are not in the pool's reach"
+    );
+}
+
+/// A write that leaves the slug alone answers no chain, and neither does one that names the slug
+/// the instance already holds: neither opened any reach. A read answers none either.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_settings_write_that_does_not_repoint_answers_no_chain(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let out = write_settings(
+        &pool,
+        f.admin,
+        temper_core::types::admin::UpdateSettingsRequest {
+            instance_name: Some("dg instance".to_owned()),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(out.instance_name.as_deref(), Some("dg instance"));
+    assert_eq!(
+        out.gating_pool_ancestors, None,
+        "the slug was not in the write"
+    );
+
+    let same = write_settings(&pool, f.admin, repoint_to("dg-gate")).await;
+    assert_eq!(same.gating_pool_ancestors, None, "the slug did not move");
+
+    let read = temper_services::services::access_service::get_system_settings(&pool)
+        .await
+        .expect("read the settings");
+    assert_eq!(read.gating_pool_ancestors, None);
+}

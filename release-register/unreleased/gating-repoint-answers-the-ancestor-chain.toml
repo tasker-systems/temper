@@ -1,0 +1,24 @@
+title    = "A settings write that repoints the gating slug answers the new gating team's live ancestor chain"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "clients", "schema", "cli-stdout"]
+status   = "signal-only"
+body = '''
+PATCH /api/access/admin/settings (SystemSettings) gains `gating_pool_ancestors: TeamRef[] | null`.
+When the write repoints `gating_team_slug` to a different team, it names every live team above the
+new gating team, by any path, ordered by slug, excluding the gating team itself: the gating team is
+a pool every approved profile reads, so this is what the whole instance now reads through it. It is
+read on the write's own transaction, after the write, with the reader attach, reparent, restore and
+auto-join answer through (a soft-deleted team cuts everything reached only through it). Every other
+answer carries `null`: GET /api/access/admin/settings, a write that leaves the slug alone, and one
+that names the slug the instance already holds. `[]` means the new gating team has no live parent.
+
+Behavioral (disclosure): the chain can name teams the admin holds no row on. The only caller is a
+system admin (team DAG R9: an act's answer names the whole live chain to anyone the door admits).
+The public settings read (PublicSystemSettings) is unchanged.
+
+Class: additive. The field is an `Option`, absent from the schema's `required`, so an older
+server's answer deserializes with `null` and an older client ignores the field. `temper admin settings`
+prints it. Witnesses: crates/temper-services/tests/team_dag_doors_test.rs (the three tests after
+"A gating repoint answers the chain the pool now reads").
+'''

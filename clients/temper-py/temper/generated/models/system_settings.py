@@ -18,8 +18,9 @@ import re  # noqa: F401
 import json
 
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict, StrictInt, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional
+from temper.generated.models.team_ref import TeamRef
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
@@ -28,13 +29,14 @@ class SystemSettings(BaseModel):
     """
     Instance-wide system settings (singleton row).
     """ # noqa: E501
+    gating_pool_ancestors: Optional[List[TeamRef]] = Field(default=None, description="On the answer to a settings write that repoints `gating_team_slug`: the new gating team's live ancestors, by every path, ordered by slug, excluding the gating team itself (which `gating_team_slug` names). The gating team is a pool every approved profile reads, so this is what the whole instance now reads through it. The walk stops at a soft-deleted team, so a team reached only through a dead one is absent. Read on the write's own transaction, after the write. `null` on every other answer: a read, a write that leaves the slug alone, or one that names the slug it already holds. An empty list means the new gating team has no live parent.")
     gating_team_slug: Optional[StrictStr] = None
     id: StrictInt
     instance_name: Optional[StrictStr] = None
     terms_resource_uri: Optional[StrictStr] = None
     terms_version: Optional[StrictStr] = None
     updated: datetime
-    __properties: ClassVar[List[str]] = ["gating_team_slug", "id", "instance_name", "terms_resource_uri", "terms_version", "updated"]
+    __properties: ClassVar[List[str]] = ["gating_pool_ancestors", "gating_team_slug", "id", "instance_name", "terms_resource_uri", "terms_version", "updated"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -75,6 +77,18 @@ class SystemSettings(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # override the default output from pydantic by calling `to_dict()` of each item in gating_pool_ancestors (list)
+        _items = []
+        if self.gating_pool_ancestors:
+            for _item_gating_pool_ancestors in self.gating_pool_ancestors:
+                if _item_gating_pool_ancestors:
+                    _items.append(_item_gating_pool_ancestors.to_dict())
+            _dict['gating_pool_ancestors'] = _items
+        # set to None if gating_pool_ancestors (nullable) is None
+        # and model_fields_set contains the field
+        if self.gating_pool_ancestors is None and "gating_pool_ancestors" in self.model_fields_set:
+            _dict['gating_pool_ancestors'] = None
+
         # set to None if gating_team_slug (nullable) is None
         # and model_fields_set contains the field
         if self.gating_team_slug is None and "gating_team_slug" in self.model_fields_set:
@@ -107,6 +121,7 @@ class SystemSettings(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
+            "gating_pool_ancestors": [TeamRef.from_dict(_item) for _item in obj["gating_pool_ancestors"]] if obj.get("gating_pool_ancestors") is not None else None,
             "gating_team_slug": obj.get("gating_team_slug"),
             "id": obj.get("id"),
             "instance_name": obj.get("instance_name"),

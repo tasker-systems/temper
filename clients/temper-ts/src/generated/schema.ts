@@ -12013,6 +12013,17 @@ export interface components {
         };
         /** @description Instance-wide system settings (singleton row). */
         SystemSettings: {
+            /**
+             * @description On the answer to a settings write that repoints `gating_team_slug`: the new gating team's
+             *     live ancestors, by every path, ordered by slug, excluding the gating team itself (which
+             *     `gating_team_slug` names). The gating team is a pool every approved profile reads, so this
+             *     is what the whole instance now reads through it. The walk stops at a soft-deleted team, so a
+             *     team reached only through a dead one is absent. Read on the write's own transaction, after
+             *     the write. `null` on every other answer: a read, a write that leaves the slug alone, or one
+             *     that names the slug it already holds. An empty list means the new gating team has no live
+             *     parent.
+             */
+            gating_pool_ancestors?: components["schemas"]["TeamRef"][] | null;
             gating_team_slug?: string | null;
             /** Format: int32 */
             id: number;
