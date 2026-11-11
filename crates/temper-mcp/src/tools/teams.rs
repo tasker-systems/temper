@@ -310,7 +310,7 @@ pub async fn team_manage(
                     team_id()?,
                     &TeamUpdateRequest {
                         name: input.name,
-                        description: None, // BITE-CHECK: drops the description
+                        description: input.description,
                     },
                 )
                 .await
@@ -342,10 +342,7 @@ pub async fn team_manage(
                     team_id()?,
                     required(input.profile_id, act, "profile_id")?,
                     &ChangeRoleRequest {
-                        role: {
-                            let _ = required(input.role, act, "role")?;
-                            TeamRole::Member
-                        }, // BITE-CHECK
+                        role: required(input.role, act, "role")?.into(),
                     },
                 )
                 .await
@@ -406,8 +403,8 @@ pub async fn team_manage(
                 .reparent(
                     team_id()?,
                     &ReparentRequest {
-                        to: required(input.from, act, "from")?, // BITE-CHECK: swapped
-                        from: required(input.to, act, "to")?,
+                        from: required(input.from, act, "from")?,
+                        to: required(input.to, act, "to")?,
                     },
                 )
                 .await
@@ -429,10 +426,7 @@ pub async fn team_manage(
                 .set_auto_join(
                     team_id()?,
                     &SetAutoJoinRequest {
-                        role: {
-                            let _ = input.auto_join_role;
-                            None
-                        }, // BITE-CHECK: always clears
+                        role: input.auto_join_role.map(TeamRole::from),
                     },
                 )
                 .await
@@ -465,7 +459,7 @@ pub async fn team_manage(
                 .set_public_within_policy(
                     team_id()?,
                     &PublicWithinPolicyRequest {
-                        forbidden: !required(input.forbidden, act, "forbidden")?, // BITE-CHECK: inverted
+                        forbidden: required(input.forbidden, act, "forbidden")?,
                     },
                 )
                 .await
