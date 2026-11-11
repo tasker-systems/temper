@@ -16,7 +16,7 @@ require 'time'
 module Temper::Generated
   # Response body for `POST /api/teams/{id}/restore` (team DAG doors D6). Restoring revives every preserved row's reach: the roster (`members`, exactly as it was at deletion), the links to the live `parents`, and the live `children` that reach through the team again.
   class RestoreTeamOutcome < ApiModelBase
-    # The restored team's live ancestors, by every path, ordered by slug: its roster reads everything attached to each of them again, as does every live team beneath it. The walk stops at a soft-deleted team. Read on the act's own transaction. Empty when the server does not report it.
+    # The restored team's live ancestors, by every path, ordered by slug: its roster, and every live team beneath it, reads everything attached to each of them. That includes any team linked above its parents while it was dead. The walk stops at a soft-deleted team. Read on the act's own transaction, after the restore. Empty when the server does not report it.
     attr_accessor :ancestors
 
     attr_accessor :children

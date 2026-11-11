@@ -1452,11 +1452,16 @@ async fn restore_authority(
 /// every such answer (attach, reparent, restore, auto-join), so the doors answer alike. It is
 /// `team_ancestors`, the reach walk: live teams only, and the walk stops at a soft-deleted team, so
 /// a team reached only through a dead one is not in reach and not named. Call it on the act's own
-/// transaction, after the write, so the answer is what the act committed. Empty for a dead team.
+/// transaction, after the write, so the answer is the act's own view of what it wrote; ancestors
+/// above the locked teams are not locked, so a concurrent change above them can still land before
+/// commit. Empty for a dead team.
 ///
-/// Naming these discloses nothing to the act's caller: a system admin reads every team, and every
-/// other caller of these doors holds a row on the team itself, whose members already read what
-/// each ancestor holds (the argument `team_detail` makes for `parents`).
+/// This names more than `team_detail` shows a member, which is the direct `parents` only: a
+/// grandparent, or a team above the team's other parents, is named here even when it holds no
+/// material. That is deliberate. The reach an act confers is shown to the caller who confers it,
+/// so they can see what they opened. The caller is a system admin, or holds a live row on the team
+/// itself (attach and reparent re-check managing it under the lock; restore requires its owner),
+/// so every team named is one the caller's own team now reads through.
 async fn live_ancestors(conn: &mut sqlx::PgConnection, team_id: Uuid) -> ApiResult<Vec<TeamRef>> {
     Ok(sqlx::query_as!(
         TeamRef,

@@ -1,6 +1,6 @@
 title    = "Team attach, reparent and restore answer with the team's full live ancestor chain"
 pr       = "self"
-classes  = ["additive"]
+classes  = ["additive", "behavioral"]
 surfaces = ["http", "clients", "schema", "cli-stdout", "mcp"]
 status   = "signal-only"
 body = '''
@@ -17,10 +17,14 @@ whose material the team's members read after the act.
   them with the same reader, on the act's own transaction, rather than after commit.
 
 In every answer the chain is ordered by slug, excludes the team itself, and is read on the act's own
-transaction after the write. The walk is the reach walk: live teams only, and a soft-deleted team
-cuts everything reached only through it, so the answer never names a team the act did not put in
-reach. The names disclose nothing new: a system admin reads every team, and any other caller of
-these doors is on the team, whose members already read each ancestor's material.
+transaction after the write. It is the team's whole reach after the act, not only what the act
+added. The walk is the reach walk: live teams only, and a soft-deleted team cuts everything reached
+only through it, so the answer never names a team that is not in reach.
+
+Behavioral (disclosure): the chain names more teams than team detail shows a member, which is the
+direct `parents` only. A grandparent, or a team above the team's other parents, is now named to the
+act's caller even when it holds no material. The caller is always a system admin or holds a live
+row on the team (attach and reparent: a manager of it; restore: its owner).
 
 Class: additive. Each new field is optional in the schema (`#[serde(default)]`), so an older server's
 answer deserializes with an empty list and an older client ignores the field. `temper team attach`,

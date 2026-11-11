@@ -1490,3 +1490,26 @@ async fn a_restore_answers_with_its_live_chain(pool: PgPool) {
         out.ancestors
     );
 }
+
+/// "By every path": a child with another parent answers that parent's chain too, and an ancestor
+/// reached by two paths (a diamond) is named once. eng-web stays under eng ▸ org and gains side,
+/// which sits under org as well.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_attach_answers_every_paths_chain_once(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let side_owner = f.on("side", "owner");
+    join(&pool, f.org, side_owner, "maintainer").await;
+    let p = test_support::human_principal_for(&pool, side_owner).await;
+    team_service::attach_child(&pool, &p, f.org, f.side)
+        .await
+        .expect("attach side under org");
+
+    let web_owner = f.on("eng-web", "owner");
+    join(&pool, f.side, web_owner, "maintainer").await;
+    let p = test_support::human_principal_for(&pool, web_owner).await;
+    let out = team_service::attach_child(&pool, &p, f.side, f.eng_web)
+        .await
+        .expect("give eng-web a second parent");
+    // By slug: dg-eng, dg-org, dg-side; org once, though both parents reach it.
+    assert_eq!(ids(&out.ancestors), vec![f.eng, f.org, f.side]);
+}

@@ -4753,9 +4753,10 @@ export interface components {
             /**
              * @description The child's live ancestors after the link, by every path, ordered by slug: every member of
              *     the child reads everything attached to each of them. The walk stops at a soft-deleted team,
-             *     which confers nothing, so a team reached only through a dead one is absent. Read on the
-             *     act's own transaction, so it is what the link committed. Empty when the server does not
-             *     report it.
+             *     which confers nothing, so a team reached only through a dead one is absent. This is the
+             *     child's whole reach, not only what the link added, and it names more than team detail's
+             *     direct `parents`. Read on the act's own transaction, after the link. Empty when the server
+             *     does not report it.
              */
             ancestors?: components["schemas"]["TeamRef"][];
             outcome: components["schemas"]["AttachOutcome"];
@@ -10801,10 +10802,10 @@ export interface components {
          */
         RestoreTeamOutcome: {
             /**
-             * @description The restored team's live ancestors, by every path, ordered by slug: its roster reads
-             *     everything attached to each of them again, as does every live team beneath it. The walk
-             *     stops at a soft-deleted team. Read on the act's own transaction. Empty when the server does
-             *     not report it.
+             * @description The restored team's live ancestors, by every path, ordered by slug: its roster, and every
+             *     live team beneath it, reads everything attached to each of them. That includes any team
+             *     linked above its parents while it was dead. The walk stops at a soft-deleted team. Read on
+             *     the act's own transaction, after the restore. Empty when the server does not report it.
              */
             ancestors?: components["schemas"]["TeamRef"][];
             children: components["schemas"]["TeamRef"][];

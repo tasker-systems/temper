@@ -31,7 +31,7 @@ class AttachChildOutcome(BaseModel):
     """
     Response body for `PUT /api/teams/{id}/children/{child_id}`.
     """ # noqa: E501
-    ancestors: Optional[List[TeamRef]] = Field(default=None, description="The child's live ancestors after the link, by every path, ordered by slug: every member of the child reads everything attached to each of them. The walk stops at a soft-deleted team, which confers nothing, so a team reached only through a dead one is absent. Read on the act's own transaction, so it is what the link committed. Empty when the server does not report it.")
+    ancestors: Optional[List[TeamRef]] = Field(default=None, description="The child's live ancestors after the link, by every path, ordered by slug: every member of the child reads everything attached to each of them. The walk stops at a soft-deleted team, which confers nothing, so a team reached only through a dead one is absent. This is the child's whole reach, not only what the link added, and it names more than team detail's direct `parents`. Read on the act's own transaction, after the link. Empty when the server does not report it.")
     outcome: AttachOutcome
     public_within: Optional[PublicWithinEffects] = Field(default=None, description="What the link did to `public_within` rows: a pool brought under an anchor, or a forbid brought above a team, makes rows dormant; a new live path can revive one.")
     public_within_in_reach: Optional[PublicWithinReach] = Field(default=None, description="The effective rows the child's roster now reads through the new parent.")
