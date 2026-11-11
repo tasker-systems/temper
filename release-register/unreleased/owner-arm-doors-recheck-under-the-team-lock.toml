@@ -1,0 +1,44 @@
+title    = "The doors that leave a removed owner or manager holding access re-decide that arm under the owning team's lock"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "mcp"]
+status   = "signal-only"
+body = '''
+Four doors decided the caller's owner or team-manager arm on a pool read and never asked again on
+their write transaction, so an owner removed from the team (or demoted) while the act was in flight
+still completed it. Each of these acts leaves the caller holding something, so each now asks again,
+under the team's row lock (FOR NO KEY UPDATE, the lock every membership writer takes first), before
+its first write:
+
+- machine issue, owner arm: ownership of the machine's owning team, locked in one ascending pass
+  with the reach's teams. Each cogmap grant in the reach is asked again too: the registrar's own
+  grant-right rows on the map are taken FOR SHARE, and the grant bar and its attenuation are
+  re-read on the transaction. Refused with 403, the refusal a caller who owns nothing there gets.
+- machine-client rotate_secret, owner arm: ownership of the owning team, locked in one ascending
+  pass with the personal teams the rotation severs. Refused with the missing-id 404.
+- connection grant_reach, owner arm: ownership of the connection's owning team. Refused with the
+  missing-id 404.
+- subscription create, team-manager arm (and the personal-context bar an admin passes only as a
+  manager): management of the authoring team, taken before the governance lock, the order the team
+  acts take the two. Refused with 403.
+
+A removal or demotion committed first refuses the act; one still in flight makes it wait, then
+refuses. Nothing is written: no credential, secret, grant or subscription.
+
+Not changed, because they leave the caller no retained access: machine provision (admin-only or
+refused in every auth mode; its admin re-check already covers it), connection provision, revoke,
+revoke_reach, attach_credential, set_webhook_events and set_tool_manifest, and subscription revoke.
+Within grant_reach, the receiving team's manage bar stays a pool read: a caller who loses it
+mid-act keeps nothing through that team that the connection's ownership, re-decided above, does not
+already give them.
+
+Lock order: on the owner arm, the team rows (ascending), then the member rows and the governance row
+FOR KEY SHARE that the membership writes take (as every membership writer orders them), then the
+grant or credential rows the act writes. Subscription create takes the authoring team before its
+governance lock. A demotion and a standing act take no team row, and the grant doors take no team
+row, so no new wait cycle. Who observes: an owner or manager removed or demoted
+while one of these acts is in flight. No schema or response shape change. Witnesses: the in-flight
+tests named an_owner_removed_while_*, a_grant_right_withdrawn_while_issue_waits_mints_nothing and
+a_manager_removed_while_create_waits_on_the_team_lock_subscribes_nothing. Release relevance:
+signal-only.
+'''

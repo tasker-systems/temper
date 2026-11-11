@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT g.id FROM kb_access_grants g\n            WHERE g.subject_table = 'kb_cogmaps' AND g.subject_id = $2 AND g.can_grant\n              AND ( (g.principal_table = 'kb_profiles' AND g.principal_id = $1)\n                 OR (g.principal_table = 'kb_teams'\n                     AND EXISTS (SELECT 1 FROM kb_teams t\n                                  WHERE t.id = g.principal_id\n                                    AND t.personal_of = $1 AND t.is_active)) )\n            ORDER BY g.id\n              FOR SHARE OF g",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0f894388073061af297547d67d6ec3cf6a663a51cfdf5b25ddc3f22d249b0476"
+}

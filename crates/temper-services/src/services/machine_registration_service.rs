@@ -250,6 +250,9 @@ pub async fn provision(
     } else {
         reach.recheck_admin_arm(&mut tx).await?;
     }
+    // No owner-arm re-check is needed here, unlike `issue`. This door is admin-only or refused in
+    // every mode (`machine_door_policy`), so whatever arm the reach was authorized on, the
+    // registration lands only for a caller who is an admin under the governance lock above.
 
     // The friendly-conflict check. It is NOT the race guard — two concurrent provisions both
     // pass it. The unique constraints are the guard, and `map_duplicate` turns either one into
@@ -369,8 +372,11 @@ pub async fn issue(
         .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {e}")))?;
 
     // A reach authorized on the admin arm was read on the pool; ask again under the governance
-    // lock, before any write (see `AuthorizedReach::recheck_admin_arm`).
+    // lock, before any write (see `AuthorizedReach::recheck_admin_arm`). One on the owner arm is
+    // asked again under the owning team's row lock, its grants with it, also before any write: an
+    // owner removed since mints no credential (`AuthorizedReach::recheck_owner_arm`).
     reach.recheck_admin_arm(&mut tx).await?;
+    reach.recheck_owner_arm(&mut tx).await?;
 
     let (profile_id, handle) = profile_service::create_agent_profile_and_link(&mut tx, &client_id)
         .await
@@ -1561,6 +1567,202 @@ mod tests {
             machine_reach_events(&pool).await.is_empty(),
             "no machine_reach event names the demoted registrar"
         );
+    }
+
+    /// BITE: `issue`'s owner arm is decided again under the owning team's lock. The request names
+    /// the team as owner and asks for no team reach, so before the fix nothing on the transaction
+    /// took that team's row and the pool check's verdict stood. An admin removes the registrar from
+    /// the team, uncommitted; the registration blocks on the team row; the removal commits. The
+    /// registrar is refused as a stranger to the team is, and nothing is minted: no machine row, no
+    /// agent profile.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn an_owner_removed_while_issue_waits_on_the_team_lock_mints_nothing(pool: PgPool) {
+        let (registrar, team) = seed_registrar(&pool, "removed-registrar").await;
+        let admin = seed_admin(&pool).await;
+        let (co_owner, _) = seed_team_owner(&pool, "co-owner").await;
+        sqlx::query!(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'owner')",
+            team,
+            co_owner,
+        )
+        .execute(&pool)
+        .await
+        .expect("co-owner");
+        let (stranger, _) = seed_registrar(&pool, "stranger").await;
+        let ownerless = IssueMachineRequest {
+            teams: vec![],
+            ..issue_onto(team)
+        };
+        let mode = crate::auth_config::AuthMode::TemperAs;
+        let agents = || async {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM kb_profiles")
+                .fetch_one(&pool)
+                .await
+                .expect("count profiles")
+        };
+        let profiles_before = agents().await;
+
+        let stranger_err = svc::issue(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, stranger).await,
+            &ownerless,
+            mode,
+        )
+        .await
+        .expect_err("a stranger to the team mints nothing");
+
+        let holder =
+            crate::test_support::hold_member_removal(&pool, admin.uuid(), team, registrar).await;
+        let (p, by, request) = (
+            pool.clone(),
+            crate::test_support::human_principal_for(&pool, registrar).await,
+            ownerless.clone(),
+        );
+        let contender = tokio::spawn(async move { svc::issue(&p, &by, &request, mode).await });
+        crate::test_support::await_team_lock_waiter(&pool).await;
+        holder.commit().await.unwrap();
+
+        let err = contender
+            .await
+            .unwrap()
+            .expect_err("an owner removed under the lock mints no credential");
+        assert!(
+            matches!(err, crate::error::ApiError::Forbidden),
+            "got {err:?}"
+        );
+        assert_eq!(
+            format!("{err:?}"),
+            format!("{stranger_err:?}"),
+            "the removed owner is told what a stranger is told"
+        );
+        assert_eq!(machine_count(&pool).await, 0, "no credential was minted");
+        assert_eq!(
+            agents().await,
+            profiles_before,
+            "no agent profile was created"
+        );
+    }
+
+    /// BITE: the grant half of `issue`'s owner arm is decided again on the transaction, with the
+    /// registrar's own grant right on the map share-locked. The registrar owns the team and holds
+    /// `can_grant` on a map in their own name; the right is withdrawn, uncommitted; the registration
+    /// blocks on the grant row; the withdrawal commits. The registration is refused as one from a
+    /// caller who never held the right is, and nothing is written: no machine, no grant on the map
+    /// to anyone but the registrar.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_grant_right_withdrawn_while_issue_waits_mints_nothing(pool: PgPool) {
+        let (registrar, team) = seed_registrar(&pool, "granting-registrar").await;
+        let (stranger, stranger_team) = seed_registrar(&pool, "no-right").await;
+        let telos: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_resources (title, origin_uri) VALUES ('t', 't') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let map: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_cogmaps (name, telos_resource_id) VALUES ('m', $1) RETURNING id",
+        )
+        .bind(telos)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO kb_access_grants (subject_table, subject_id, principal_table, principal_id,
+                                           can_read, can_write, can_delete, can_grant,
+                                           granted_by_profile_id)
+             VALUES ('kb_cogmaps', $1, 'kb_profiles', $2, true, false, false, true, $2)",
+        )
+        .bind(map)
+        .bind(registrar)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let reaching = |owner: Uuid| IssueMachineRequest {
+            label: "worker".to_string(),
+            owner_team_id: Some(owner),
+            teams: vec![],
+            grants: vec![GrantSpec {
+                cogmap_id: map,
+                can_write: false,
+            }],
+        };
+        let mode = crate::auth_config::AuthMode::TemperAs;
+
+        let stranger_err = svc::issue(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, stranger).await,
+            &reaching(stranger_team),
+            mode,
+        )
+        .await
+        .expect_err("a caller with no grant right on the map confers none");
+
+        let mut holder = pool.begin().await.unwrap();
+        let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *holder)
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE kb_access_grants SET can_grant = false
+              WHERE subject_id = $1 AND principal_id = $2",
+        )
+        .bind(map)
+        .bind(registrar)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+        let (p, by, request) = (
+            pool.clone(),
+            crate::test_support::human_principal_for(&pool, registrar).await,
+            reaching(team),
+        );
+        let contender = tokio::spawn(async move { svc::issue(&p, &by, &request, mode).await });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let waiting: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+                                 WHERE datname = current_database() AND wait_event_type = 'Lock'
+                                   AND $1 = ANY (pg_blocking_pids(pid))
+                                   AND query ILIKE '%FROM kb_access_grants%FOR SHARE%')",
+            )
+            .bind(pid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            if waiting {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the registration never blocked on the registrar's grant row"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        holder.commit().await.unwrap();
+
+        let err = contender
+            .await
+            .unwrap()
+            .expect_err("a grant right withdrawn under the lock confers nothing");
+        assert!(
+            matches!(err, crate::error::ApiError::Forbidden),
+            "got {err:?}"
+        );
+        assert_eq!(
+            format!("{err:?}"),
+            format!("{stranger_err:?}"),
+            "the registrar is told what a caller with no right is told"
+        );
+        assert_eq!(machine_count(&pool).await, 0, "no credential was minted");
+        let others: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM kb_access_grants WHERE subject_id = $1 AND principal_id <> $2",
+        )
+        .bind(map)
+        .bind(registrar)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(others, 0, "no grant on the map reached a machine");
     }
 
     /// Task `01a14592-3f83`, PIN: the re-check under the lock admits who the pool check admitted.

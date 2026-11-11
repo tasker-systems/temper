@@ -181,8 +181,9 @@ pub async fn create(
     // authoring team the context was shared into passes this check, but the share alone is not
     // enough: leg 3 below also requires them to author the context, which for someone else's
     // personal context means a write grant its owner gave.
-    if req.subscriber_table == "kb_contexts"
-        && context_service::is_others_personal_context(pool, req.subscriber_id, caller).await?
+    let into_others_personal = req.subscriber_table == "kb_contexts"
+        && context_service::is_others_personal_context(pool, req.subscriber_id, caller).await?;
+    if into_others_personal
         && !matches!(
             team_service::role_on_team(pool, authoring_team, caller).await?,
             Some(role) if team_service::can_manage(role)
@@ -241,6 +242,28 @@ pub async fn create(
     // the team arm. A demoted admin on leg 1's admin arm is refused with the gate's answer to them
     // as they now stand.
     let mut tx = pool.begin().await?;
+    // The team-manager arm, likewise read on the pool, is asked again under the authoring team's
+    // row lock (the lock every membership writer takes first), ahead of the governance lock, in the
+    // order the team acts take the two. Deliveries carry what the authoring team reaches on the
+    // connection into a subscriber the caller authors, so a manager removed from the team mid-act
+    // would keep reading it there. A removal or demotion committed since refuses; one in flight
+    // makes this wait, then refuses. A caller the pool gate now refuses gets its answer; an admin
+    // who also managed the team (leg 1 resolves the team arm first) is refused too, and a retry
+    // decides on the admin arm. It is
+    // asked wherever the pool decision rested on managing the team: leg 1's team arm, and the
+    // personal-context bar above, which an admin passes only as a manager.
+    if (!on_admin_arm || into_others_personal)
+        && !matches!(
+            crate::authz::team_membership::role_under_lock(&mut tx, authoring_team, caller, &[])
+                .await?,
+            Some(role) if team_service::can_manage(role)
+        )
+    {
+        drop(tx);
+        authorize::<SubscriptionAuthority>(pool, Principal::Human(authed), req.authoring_team_id)
+            .await?;
+        return Err(ApiError::Forbidden);
+    }
     let admin_now = crate::auth::is_system_admin_locked(&mut tx, caller).await?;
     if on_admin_arm && !admin_now {
         drop(tx);
@@ -896,6 +919,60 @@ mod tests {
         .expect("revoke");
         assert!(revoked.revoked_at.is_some());
         assert_eq!(revoked.revoked_by_profile_id, Some(*admin));
+    }
+
+    /// BITE: create's team-manager arm is decided again under the authoring team's lock. An admin
+    /// removes the team's maintainer, uncommitted; the maintainer's create blocks on the team row;
+    /// the removal commits. The maintainer is refused as a caller who manages nothing there is
+    /// (`403`), and no subscription is written. Before the fix the pool check's verdict stood.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_manager_removed_while_create_waits_on_the_team_lock_subscribes_nothing(
+        pool: PgPool,
+    ) {
+        let admin = seed_admin(&pool).await;
+        let maintainer = seed_plain_profile(&pool, "removed-maintainer").await;
+        let stranger = seed_plain_profile(&pool, "stranger").await;
+        let team = seed_team_with_maintainer(&pool, maintainer).await;
+        let conn = seed_connection(&pool, Some(team), admin).await;
+        grant_reach(&pool, admin, conn, team).await;
+
+        let stranger_err = create(
+            &pool,
+            &crate::test_support::human_principal_for(&pool, stranger.uuid()).await,
+            &req("kb_teams", team, team, conn),
+        )
+        .await
+        .expect_err("a stranger to the team subscribes nothing");
+
+        let holder =
+            crate::test_support::hold_member_removal(&pool, admin.uuid(), team, maintainer.uuid())
+                .await;
+        let (p, by) = (
+            pool.clone(),
+            crate::test_support::human_principal_for(&pool, maintainer.uuid()).await,
+        );
+        let contender =
+            tokio::spawn(async move { create(&p, &by, &req("kb_teams", team, team, conn)).await });
+        crate::test_support::await_team_lock_waiter(&pool).await;
+        holder.commit().await.unwrap();
+
+        let err = contender
+            .await
+            .unwrap()
+            .expect_err("a manager removed under the lock subscribes nothing");
+        assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
+        assert_eq!(
+            format!("{err:?}"),
+            format!("{stranger_err:?}"),
+            "the removed manager is told what a stranger is told"
+        );
+        let written: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM kb_subscriptions WHERE connection_id = $1")
+                .bind(conn)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(written, 0, "a refused create wrote a subscription");
     }
 
     /// The admin arm of subscription create and revoke is asked again on the write's transaction,

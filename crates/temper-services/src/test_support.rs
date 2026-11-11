@@ -258,6 +258,36 @@ pub async fn system_admin_proof_for(pool: &PgPool, profile_id: Uuid) -> crate::a
         .expect("the seeded profile must satisfy is_system_admin to mint a proof")
 }
 
+/// Remove `target` from `team` through the routed membership writer, as `by`, and hand back the
+/// transaction **uncommitted**. It holds the team row lock and the removal until the caller commits
+/// it, so a door started after this blocks on the team row if, and only if, it re-decides its arm
+/// under that lock. `by` must be able to remove `target` (a system admin, for an owner), and `team`
+/// must keep another owner (C6).
+pub async fn hold_member_removal(
+    pool: &PgPool,
+    by: Uuid,
+    team: Uuid,
+    target: Uuid,
+) -> sqlx::Transaction<'static, sqlx::Postgres> {
+    use crate::authz::team_membership::{self, MembershipAct, MembershipAuthority};
+    use temper_core::types::ids::ProfileId;
+
+    let by = human_principal_for(pool, by).await;
+    let mut holder = pool.begin().await.expect("begin the removal");
+    let locked = team_membership::locked(&mut holder, team, ProfileId::from(target))
+        .await
+        .expect("lock the team and the member row");
+    let resolved = MembershipAuthority::resolve(&mut holder, &by, team)
+        .await
+        .expect("resolve the remover's authority");
+    let change = team_membership::authorize(resolved, MembershipAct::Remove, &locked)
+        .expect("the remover may remove the target");
+    team_membership::membership_write(&mut holder, None, change)
+        .await
+        .expect("write the removal");
+    holder
+}
+
 /// Wait until a backend in this test's database is blocked on a lock while taking a team row — the
 /// `FOR NO KEY UPDATE` of `team_membership::locked`, or of SAML reconcile's multi-team lock. A race
 /// test calls this before releasing its holder, so a pass means the contender really passed its
