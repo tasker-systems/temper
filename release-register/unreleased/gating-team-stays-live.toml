@@ -1,0 +1,33 @@
+title    = "The gating team cannot be deleted, and the gating slug cannot name a deleted team, no team, or nothing once set"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http", "mcp", "cli-stdout", "schema"]
+status   = "signal-only"
+body = '''
+Once the instance's gating slug (kb_system_settings.gating_team_slug) is set, every committed state
+has a live team holding it, whatever writes the change.
+
+Through the doors: deleting the gating team, even as a system admin, is refused with 409 "the gating
+team cannot be deleted; point the gating slug at another live team first", and nothing is written
+or recorded. Setting the gating slug to a soft-deleted team is refused with 400 (before, it was
+accepted, because a deleted team's slug stays reserved). A slug naming a live shared team is
+accepted as before, and the former gating team can be deleted once the slug points elsewhere.
+Renaming the gating team still carries the slug with it.
+
+For every other writer (an older binary during a rolling deploy, operator SQL, fixtures): migration
+20261124000050 adds deferred constraint triggers on kb_teams and kb_system_settings that refuse, at
+commit, a transaction leaving a set gating slug naming no live team (a soft or hard delete of the
+gating team, a slug change on it that leaves the settings behind, a settings slug naming a dead team,
+no team, or the empty string), or clearing a set slug back to NULL or deleting the settings row. The
+error is a check_violation on constraint gating_team_stays_live. The seed's NULL slug stays the
+unconfigured birth state; the root step (system_initialization.sql), which sets the slug before
+inserting its team in one transaction, still commits.
+
+Who observes: a system admin deleting the gating team, or repointing it at a deleted team; an
+operator whose SQL did either. An older binary that tries either now gets an error instead of
+committing. The migration refuses to apply to a deployment already in the refused state, naming the
+slug. No response shape change. Witnesses in crates/temper-services/tests/team_dag_doors_test.rs:
+`an_admin_cannot_delete_the_live_gating_team`, `plain_sql_cannot_kill_the_gating_team`,
+`the_gating_slug_cannot_name_a_dead_team_or_be_cleared`, and
+`the_old_gating_team_is_deleted_once_the_slug_moves_to_a_live_team`. Release relevance: signal-only.
+'''

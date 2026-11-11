@@ -480,12 +480,15 @@ async fn name_reach(
 }
 
 /// What [`lifecycle_write`] did: the act was written and recorded, it asked for the value already
-/// held (nothing written), or there was no team in the state the act needs (nothing written).
+/// held (nothing written), there was no team in the state the act needs (nothing written), or it
+/// was a delete of the instance's gating team, which is never deleted (nothing written; migration
+/// `20261124000050`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LifecycleOutcome {
     Changed,
     Noop,
     Absent,
+    Gating,
 }
 
 /// Perform one team lifecycle act through `_admin_team_lifecycle_act` (migration
@@ -520,6 +523,7 @@ pub(crate) async fn lifecycle_write(
         "changed" => LifecycleOutcome::Changed,
         "noop" => LifecycleOutcome::Noop,
         "absent" => LifecycleOutcome::Absent,
+        "gating" => LifecycleOutcome::Gating,
         other => {
             return Err(ApiError::Internal(format!(
                 "_admin_team_lifecycle_act answered {other}"
@@ -1139,7 +1143,8 @@ pub async fn update_team(
 /// team, a system admin only; on a personal team, its owner only (task `01a19006`).
 ///
 /// Refuses the `temper-system` root (load-bearing: every profile descends from
-/// it). Idempotency: a team that is absent OR already soft-deleted yields
+/// it), and the instance's gating team (`409`): the instance is never without a live gating team, so
+/// the gating slug moves to another live team first. Idempotency: a team that is absent OR already soft-deleted yields
 /// `NotFound`. Rows are preserved — [`restore_team`] is the inverse.
 /// Children are NOT recursively deleted (see the migration's cascade note).
 pub async fn delete_team(
@@ -1195,6 +1200,11 @@ pub async fn delete_team(
         None,
     )
     .await?;
+    // Decided under the team's row lock and the shared gating lock, so a repoint committed since
+    // any earlier read is seen. The instance is never without its gating team.
+    if outcome == LifecycleOutcome::Gating {
+        return Err(gating_team_cannot_be_deleted());
+    }
     // The owner arm passed above, so the caller owned the team the delete just made dead.
     let owned = (!admin).then_some(team_id);
     let public_within = name_effects_owning(&mut tx, caller, owned, effects).await?;
@@ -1218,6 +1228,14 @@ pub async fn delete_team(
         });
     }
     Ok(public_within)
+}
+
+/// The refusal of a delete aimed at the instance's gating team: it is named, and says how to proceed.
+fn gating_team_cannot_be_deleted() -> ApiError {
+    ApiError::Conflict(
+        "the gating team cannot be deleted; point the gating slug at another live team first"
+            .to_string(),
+    )
 }
 
 /// Change a team's slug (team DAG doors D7) — its own door, not a `PATCH` field (review L3).
