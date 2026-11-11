@@ -361,17 +361,33 @@ mod tests {
         );
     }
 
+    /// Both numbers are seven or more decimal digits, so a random token cannot spell either by
+    /// chance: its payload is 75 base64url characters, and the odds that one contains a given
+    /// seven-digit string are about 69 × 64⁻⁷ ≈ 2 × 10⁻¹¹ (a two-digit number such as `42` turns
+    /// up in about one run in seventy). The byte check catches a seal that copies either number
+    /// into the payload in binary; any fixed eight-byte run turns up by chance about 49 × 2⁻⁶⁴.
     #[test]
     fn a_position_shows_neither_number() {
         let pos = RawPosition {
             xact: 9_000_017,
-            seq: 42,
+            seq: 42_000_042,
         };
         let token = seal(&KEY, ctx(), pos).unwrap();
         assert!(
-            !token.contains("9000017") && !token.contains("42"),
+            !token.contains("9000017") && !token.contains("42000042"),
             "{token}"
         );
+        let bytes = URL_SAFE_NO_PAD
+            .decode(token.strip_prefix(POSITION_PREFIX).unwrap())
+            .unwrap();
+        for n in [pos.xact, pos.seq] {
+            for encoded in [n.to_be_bytes(), n.to_le_bytes()] {
+                assert!(
+                    !bytes.windows(8).any(|w| w == encoded),
+                    "{n} appears in the sealed bytes: {token}"
+                );
+            }
+        }
         assert_ne!(
             seal(&KEY, ctx(), pos).unwrap(),
             token,
