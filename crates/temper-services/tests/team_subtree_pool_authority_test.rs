@@ -407,24 +407,8 @@ async fn restoring_under_the_root_or_the_gating_team_is_an_admins_act(pool: PgPo
         );
     }
 
-    // A dead gating parent counts too: an admin's later restore of it would complete the link.
-    let gate2 = create(&pool, &f.admin, "spi-gate2", None, None).await;
-    let t = dead_child_of(&pool, &f, "spi-under-dead-gate", "spi-gate2").await;
-    team_service::delete_team(&pool, &f.admin, gate2)
-        .await
-        .unwrap();
-    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'spi-gate2'")
-        .execute(&pool)
-        .await
-        .unwrap();
-    let refusal = team_service::restore_team(&pool, &f.mgr, t)
-        .await
-        .expect_err("the owner restores under a dead gating parent");
-    assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
-    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'sp3-gate'")
-        .execute(&pool)
-        .await
-        .unwrap();
+    // No dead-gating-parent case: the gating team is never dead at a committed state
+    // (20261124000050).
 
     let t = dead_child_of(&pool, &f, "spi-plain", "sp-hub").await;
     team_service::restore_team(&pool, &f.mgr, t)
