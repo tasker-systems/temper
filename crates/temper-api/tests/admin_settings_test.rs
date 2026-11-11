@@ -228,11 +228,23 @@ async fn promote_admin_rejects_nonexistent_profile(pool: sqlx::PgPool) {
 /// Soft-delete a team the way `DELETE /api/teams/{id}` does — a bare `is_active` flip that leaves
 /// every membership row intact, so these tests cannot pass because something also tidied up.
 async fn soft_delete_team(pool: &sqlx::PgPool, team_id: Uuid) {
+    // The gating team is never dead at a committed state (20261124000050), so the state these
+    // tests guard against, one a deployment could only hold from before that migration, is made
+    // with the liveness trigger set aside. Each statement is its own transaction, so no deferred
+    // event is pending at the ALTERs.
+    sqlx::query("ALTER TABLE kb_teams DISABLE TRIGGER trg_gating_team_stays_live_team")
+        .execute(pool)
+        .await
+        .expect("set the liveness trigger aside");
     sqlx::query("UPDATE kb_teams SET is_active = false WHERE id = $1")
         .bind(team_id)
         .execute(pool)
         .await
         .expect("soft-delete team");
+    sqlx::query("ALTER TABLE kb_teams ENABLE TRIGGER trg_gating_team_stays_live_team")
+        .execute(pool)
+        .await
+        .expect("restore the liveness trigger");
 }
 
 /// Insert a gating team and point `kb_system_settings` at it. Raw SQL, not
@@ -251,11 +263,25 @@ async fn configure_gating(pool: &sqlx::PgPool, slug: &str) -> Uuid {
 
 /// Point the settings row's `gating_team_slug` at `slug`, whether or not a team carries it.
 async fn point_gating_at(pool: &sqlx::PgPool, slug: &str) {
+    // A slug naming no live team is refused at commit (20261124000050); as in `soft_delete_team`,
+    // the pre-migration state is made with the liveness trigger set aside.
+    sqlx::query(
+        "ALTER TABLE kb_system_settings DISABLE TRIGGER trg_gating_team_stays_live_settings",
+    )
+    .execute(pool)
+    .await
+    .expect("set the liveness trigger aside");
     sqlx::query("UPDATE kb_system_settings SET gating_team_slug = $1 WHERE id = 1")
         .bind(slug)
         .execute(pool)
         .await
         .expect("set gating slug");
+    sqlx::query(
+        "ALTER TABLE kb_system_settings ENABLE TRIGGER trg_gating_team_stays_live_settings",
+    )
+    .execute(pool)
+    .await
+    .expect("restore the liveness trigger");
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
