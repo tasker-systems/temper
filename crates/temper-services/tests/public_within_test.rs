@@ -869,8 +869,8 @@ async fn the_upward_pool_check_answers_as_the_downward_one(pool: PgPool) {
     gating("org").await;
     auto_join(w.eng, true).await;
     checked += check("the gating team as an anchor, an auto-join mid-tier").await;
-    set_team_live(&pool, w.org, false).await;
-    checked += check("a dead gating team as the anchor").await;
+    // No "dead gating team" case: the gating team is never dead at a committed state
+    // (20261124000050).
     assert!(checked > 0);
 }
 
@@ -1835,7 +1835,8 @@ async fn an_instance_wide_admin_row_survives_a_pool_under_a(pool: PgPool) {
         !reads(&pool, w.web_member, w.r_t).await,
         "T is the gating team"
     );
-    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = NULL WHERE id = 1")
+    // Away to a team in no tree of A's: a set gating slug is never cleared (20261124000050).
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'ops' WHERE id = 1")
         .execute(&pool)
         .await
         .unwrap();

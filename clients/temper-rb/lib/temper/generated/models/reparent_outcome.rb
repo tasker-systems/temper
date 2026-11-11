@@ -16,6 +16,9 @@ require 'time'
 module Temper::Generated
   # Response body for `POST /api/teams/{id}/reparent`. Both `team_parent_link_changed` records of the move carry `correlation_id`, so the ledger shows one move rather than two unrelated acts.
   class ReparentOutcome < ApiModelBase
+    # The team's live ancestors after the move, by every path, ordered by slug: what its members now read. A team that was above only the old parent is absent, and the walk stops at a soft-deleted team. Read on the act's own transaction. Empty when the server does not report it.
+    attr_accessor :ancestors
+
     attr_accessor :correlation_id
 
     attr_accessor :from
@@ -30,6 +33,7 @@ module Temper::Generated
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
+        :'ancestors' => :'ancestors',
         :'correlation_id' => :'correlation_id',
         :'from' => :'from',
         :'public_within' => :'public_within',
@@ -51,6 +55,7 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
+        :'ancestors' => :'Array<TeamRef>',
         :'correlation_id' => :'String',
         :'from' => :'TeamRef',
         :'public_within' => :'PublicWithinEffects',
@@ -80,6 +85,12 @@ module Temper::Generated
         end
         h[k.to_sym] = v
       }
+
+      if attributes.key?(:'ancestors')
+        if (value = attributes[:'ancestors']).is_a?(Array)
+          self.ancestors = value
+        end
+      end
 
       if attributes.key?(:'correlation_id')
         self.correlation_id = attributes[:'correlation_id']
@@ -190,6 +201,7 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
+          ancestors == o.ancestors &&
           correlation_id == o.correlation_id &&
           from == o.from &&
           public_within == o.public_within &&
@@ -206,7 +218,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [correlation_id, from, public_within, team, to].hash
+      [ancestors, correlation_id, from, public_within, team, to].hash
     end
 
     # Builds the object from hash

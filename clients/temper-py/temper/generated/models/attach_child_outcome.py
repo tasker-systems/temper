@@ -22,6 +22,7 @@ from typing import Any, ClassVar, Dict, List, Optional
 from temper.generated.models.attach_outcome import AttachOutcome
 from temper.generated.models.public_within_effects import PublicWithinEffects
 from temper.generated.models.public_within_reach import PublicWithinReach
+from temper.generated.models.team_ref import TeamRef
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
@@ -30,10 +31,11 @@ class AttachChildOutcome(BaseModel):
     """
     Response body for `PUT /api/teams/{id}/children/{child_id}`.
     """ # noqa: E501
+    ancestors: Optional[List[TeamRef]] = Field(default=None, description="The child's live ancestors after the link, by every path, ordered by slug: every member of the child reads everything attached to each of them. The walk stops at a soft-deleted team, which confers nothing, so a team reached only through a dead one is absent. This is the child's whole reach, not only what the link added, and it names more than team detail's direct `parents`. Read on the act's own transaction, after the link. Empty when the server does not report it.")
     outcome: AttachOutcome
     public_within: Optional[PublicWithinEffects] = Field(default=None, description="What the link did to `public_within` rows: a pool brought under an anchor, or a forbid brought above a team, makes rows dormant; a new live path can revive one.")
     public_within_in_reach: Optional[PublicWithinReach] = Field(default=None, description="The effective rows the child's roster now reads through the new parent.")
-    __properties: ClassVar[List[str]] = ["outcome", "public_within", "public_within_in_reach"]
+    __properties: ClassVar[List[str]] = ["ancestors", "outcome", "public_within", "public_within_in_reach"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -74,6 +76,13 @@ class AttachChildOutcome(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # override the default output from pydantic by calling `to_dict()` of each item in ancestors (list)
+        _items = []
+        if self.ancestors:
+            for _item_ancestors in self.ancestors:
+                if _item_ancestors:
+                    _items.append(_item_ancestors.to_dict())
+            _dict['ancestors'] = _items
         # override the default output from pydantic by calling `to_dict()` of public_within
         if self.public_within:
             _dict['public_within'] = self.public_within.to_dict()
@@ -92,6 +101,7 @@ class AttachChildOutcome(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
+            "ancestors": [TeamRef.from_dict(_item) for _item in obj["ancestors"]] if obj.get("ancestors") is not None else None,
             "outcome": obj.get("outcome"),
             "public_within": PublicWithinEffects.from_dict(obj["public_within"]) if obj.get("public_within") is not None else None,
             "public_within_in_reach": PublicWithinReach.from_dict(obj["public_within_in_reach"]) if obj.get("public_within_in_reach") is not None else None

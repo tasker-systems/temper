@@ -325,7 +325,7 @@ pub async fn reparent_remote(
 }
 
 /// Restore a soft-deleted team (its owner, or a system admin), printing the revived parents,
-/// children and roster.
+/// children, roster and live ancestor chain.
 pub async fn restore_remote(
     client: &temper_client::TemperClient,
     team: &str,

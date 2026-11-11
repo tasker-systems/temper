@@ -28,7 +28,7 @@ from pydantic_core import to_jsonable_python
 
 class SetAutoJoinOutcome(BaseModel):
     """
-    Response body for `PUT /api/teams/{id}/auto-join`. `ancestors` are the team's live ancestors: with auto-join set, every approved profile reads everything attached to each of them, so the admin sees exactly what the change opened.
+    Response body for `PUT /api/teams/{id}/auto-join`. `ancestors` are the team's live ancestors, by every path, ordered by slug, read on the act's own transaction (the walk stops at a soft-deleted team): with auto-join set, every approved profile reads everything attached to each of them, so the admin sees exactly what the change opened.
     """ # noqa: E501
     ancestors: List[TeamRef]
     public_within: Optional[PublicWithinEffects] = Field(default=None, description="An auto-join team under an anchor makes that anchor's rows dormant unless an admin opened them instance-wide; clearing it revives them.")

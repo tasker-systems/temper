@@ -112,7 +112,7 @@ async fn a_demoted_admins_leftover_owner_row_governs_nothing(pool: PgPool) {
         .expect_err("a non-admin does not delete the gating team");
     assert!(matches!(refusal, ApiError::Forbidden), "{refusal:?}");
 
-    // The admin does all three.
+    // The admin creates a child and renames it.
     let admin_principal = test_support::human_principal_for(&pool, root_admin).await;
     let made = team_service::create_team(&pool, &admin_principal, &child)
         .await
@@ -128,9 +128,12 @@ async fn a_demoted_admins_leftover_owner_row_governs_nothing(pool: PgPool) {
     team_service::update_team(&pool, &admin_principal, gate, &rename)
         .await
         .expect("an admin renames the gating team");
-    team_service::delete_team(&pool, &admin_principal, gate)
+    // The delete is past the admin bar but is the gating team's, which no one deletes while it is
+    // the gating team (20261124000050): a named conflict, not the non-admin's 403.
+    let refusal = team_service::delete_team(&pool, &admin_principal, gate)
         .await
-        .expect("an admin soft-deletes the gating team");
+        .expect_err("the live gating team is never deleted");
+    assert!(matches!(refusal, ApiError::Conflict(_)), "{refusal:?}");
 }
 
 /// The root behaves the same whether or not it is the configured gating team.

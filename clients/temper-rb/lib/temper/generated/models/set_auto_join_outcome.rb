@@ -14,7 +14,7 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # Response body for `PUT /api/teams/{id}/auto-join`. `ancestors` are the team's live ancestors: with auto-join set, every approved profile reads everything attached to each of them, so the admin sees exactly what the change opened.
+  # Response body for `PUT /api/teams/{id}/auto-join`. `ancestors` are the team's live ancestors, by every path, ordered by slug, read on the act's own transaction (the walk stops at a soft-deleted team): with auto-join set, every approved profile reads everything attached to each of them, so the admin sees exactly what the change opened.
   class SetAutoJoinOutcome < ApiModelBase
     attr_accessor :ancestors
 

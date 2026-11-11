@@ -72,31 +72,38 @@ async fn a_shared_team_is_still_accepted(pool: PgPool) {
 }
 
 /// The other side of the combination: the slug already names the gating team, and a team carrying
-/// `personal_of` arrives at it. Only hand-written SQL can leave the gating slug naming no team, but
-/// that is enough for genesis to create a personal team under it.
+/// `personal_of` arrives at it. The gating slug names no team only inside the transaction that sets
+/// it before creating its team (the root step's order; a commit in that state is refused,
+/// 20261124000050), and that is enough for a personal team to try the slug.
 #[sqlx::test(migrations = "../../migrations")]
 async fn a_personal_team_never_takes_the_gating_slug(pool: PgPool) {
+    let mut tx = pool.begin().await.unwrap();
     sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'not-yet-a-team' WHERE id = 1")
-        .execute(&pool)
+        .execute(&mut *tx)
         .await
-        .expect("a slug naming no team is not this rule's concern");
+        .expect("a slug naming no team yet is not this rule's concern");
 
     let err = sqlx::query(
         "INSERT INTO kb_teams (slug, name, personal_of) VALUES ('not-yet-a-team', 'x', $1)",
     )
     .bind(Uuid::now_v7())
-    .execute(&pool)
+    .execute(&mut *tx)
     .await
     .expect_err("a personal team cannot be created under the gating slug");
     assert!(
         is_check_violation(&err),
         "refused as a check violation: {err}"
     );
+    tx.rollback().await.unwrap();
 
     sqlx::query("INSERT INTO kb_teams (slug, name) VALUES ('not-yet-a-team', 'Gate')")
         .execute(&pool)
         .await
         .expect("a shared team takes the slug");
+    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'not-yet-a-team' WHERE id = 1")
+        .execute(&pool)
+        .await
+        .expect("and is the gating team");
     let err = sqlx::query("UPDATE kb_teams SET personal_of = $1 WHERE slug = 'not-yet-a-team'")
         .bind(Uuid::now_v7())
         .execute(&pool)
@@ -112,14 +119,16 @@ async fn a_personal_team_never_takes_the_gating_slug(pool: PgPool) {
 #[sqlx::test(migrations = "../../migrations")]
 async fn a_personal_team_never_renames_onto_the_gating_slug(pool: PgPool) {
     let (_, personal) = person_with_personal_team(&pool, "gus").await;
+    // In one transaction: a gating slug naming no team is never committed (20261124000050).
+    let mut tx = pool.begin().await.unwrap();
     sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'not-yet-a-team' WHERE id = 1")
-        .execute(&pool)
+        .execute(&mut *tx)
         .await
-        .expect("a slug naming no team is not this rule's concern");
+        .expect("a slug naming no team yet is not this rule's concern");
 
     let err = sqlx::query("UPDATE kb_teams SET slug = 'not-yet-a-team' WHERE slug = $1")
         .bind(&personal)
-        .execute(&pool)
+        .execute(&mut *tx)
         .await
         .expect_err("a personal team cannot take the gating slug by rename");
     assert!(
@@ -128,18 +137,36 @@ async fn a_personal_team_never_renames_onto_the_gating_slug(pool: PgPool) {
     );
 }
 
-/// Sign-up never fails on the rule. The gating slug can name no team and have the
-/// `personal-<handle>` shape — erasure renames a former personal team away and frees its handle —
-/// and genesis takes the next free slug rather than one the trigger would refuse.
+/// Sign-up never fails on the rule. Inside the transaction that sets it, before its team exists,
+/// the gating slug can name no team and have the `personal-<handle>` shape, and genesis takes the
+/// next free slug rather than one the trigger would refuse. (No committed state has a gating slug
+/// naming no team: 20261124000050.)
 #[sqlx::test(migrations = "../../migrations")]
 async fn sign_up_skips_a_gating_slug_that_names_no_team(pool: PgPool) {
+    let mut tx = pool.begin().await.unwrap();
     sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'personal-erin' WHERE id = 1")
-        .execute(&pool)
+        .execute(&mut *tx)
         .await
-        .expect("a slug naming no team is not this rule's concern");
+        .expect("a slug naming no team yet is not this rule's concern");
 
-    let (_, personal) = person_with_personal_team(&pool, "erin").await;
+    let profile: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_profiles (handle, display_name) VALUES ('erin', 'erin') RETURNING id",
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .expect("insert profile");
+    let personal: String = sqlx::query_scalar("SELECT slug FROM kb_teams WHERE personal_of = $1")
+        .bind(profile)
+        .fetch_one(&mut *tx)
+        .await
+        .expect("genesis made a personal team");
     assert_eq!(personal, "personal-erin-2");
+    // The root step's second half: the shared gating team takes its slug, and the whole commits.
+    sqlx::query("INSERT INTO kb_teams (slug, name) VALUES ('personal-erin', 'Gate')")
+        .execute(&mut *tx)
+        .await
+        .expect("the gating team");
+    tx.commit().await.expect("the root step's order commits");
     assert_eq!(gating_slug(&pool).await.as_deref(), Some("personal-erin"));
 }
 
@@ -166,9 +193,13 @@ async fn sign_up_skips_a_shared_gating_team_holding_its_slug(pool: PgPool) {
 async fn an_unchanged_gating_slug_is_not_judged(pool: PgPool) {
     let (_, personal) = person_with_personal_team(&pool, "hal").await;
     // The state the migration refuses to apply over, made by going around both triggers.
+    // The liveness trigger (20261124000050) is set aside too: its deferred event would hold the
+    // ALTER back, and a personal team is live, so it would pass anyway.
     sqlx::raw_sql(&format!(
         "ALTER TABLE kb_system_settings DISABLE TRIGGER trg_gating_team_is_never_personal; \
+         ALTER TABLE kb_system_settings DISABLE TRIGGER trg_gating_team_stays_live_settings; \
          UPDATE kb_system_settings SET gating_team_slug = '{personal}' WHERE id = 1; \
+         ALTER TABLE kb_system_settings ENABLE TRIGGER trg_gating_team_stays_live_settings; \
          ALTER TABLE kb_system_settings ENABLE TRIGGER trg_gating_team_is_never_personal;"
     ))
     .execute(&pool)
@@ -304,7 +335,12 @@ async fn sign_up_waits_for_an_inflight_gating_slug_change_then_skips_it(pool: Pg
     sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'personal-ivy' WHERE id = 1")
         .execute(&mut *a)
         .await
-        .expect("a slug naming no team is not this rule's concern");
+        .expect("a slug naming no team yet is not this rule's concern");
+    // The root step's order: the slug, then its shared team, in one transaction.
+    sqlx::query("INSERT INTO kb_teams (slug, name) VALUES ('personal-ivy', 'Gate')")
+        .execute(&mut *a)
+        .await
+        .expect("the gating team");
 
     let signup = tokio::spawn({
         let pool = pool.clone();

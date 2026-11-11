@@ -1228,7 +1228,13 @@ mod tests {
             .expect("authenticate");
         let id = authed.profile.id;
 
-        sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'nonexistent-gating-team'")
+        // A live gating team the profile is not on: a set gating slug always names one
+        // (20261124000050).
+        sqlx::query("INSERT INTO kb_teams (slug, name) VALUES ('seam-gating-team', 'gate')")
+            .execute(&pool)
+            .await
+            .expect("the gating team");
+        sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'seam-gating-team'")
             .execute(&pool)
             .await
             .expect("enable gate");

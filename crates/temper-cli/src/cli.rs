@@ -1671,7 +1671,8 @@ pub enum TeamAction {
     /// parent, or a child with an auto-join or the gating team in or below it, a system admin)
     ///
     /// Every member of the child, at any role, then reads everything attached to the parent and
-    /// its ancestors. Also the way to give a team a second parent.
+    /// its ancestors; the output lists them as `ancestors` (the child's whole live chain after the
+    /// link). Also the way to give a team a second parent.
     Attach {
         /// Parent team slug (optionally `+`-prefixed) or UUID
         parent: String,
@@ -1681,6 +1682,7 @@ pub enum TeamAction {
     /// Move a team from one parent to another, in one act (a manager of the team and of `--to`)
     ///
     /// The new link is written before the old one is cut, so a refusal leaves the team where it was.
+    /// The output lists `ancestors`, the team's live chain after the move.
     Reparent {
         /// The team being moved: slug (optionally `+`-prefixed) or UUID
         team: String,
@@ -1693,7 +1695,8 @@ pub enum TeamAction {
     },
     /// Restore a soft-deleted team (its owner, or a system admin)
     ///
-    /// Every preserved membership, parent link and child's reach revives; the output lists them.
+    /// Every preserved membership, parent link and child's reach revives; the output lists them,
+    /// and `ancestors`, every live team above the restored one.
     /// A system admin's act alone when the team keeps a link to temper-system or the gating team,
     /// or when it or any team below it, live or deleted, is an auto-join or the gating team.
     /// A deleted team is no longer in `team list`, so name it by UUID.

@@ -1117,7 +1117,7 @@ pub async fn admin_get_settings(pool: &PgPool, _admin: &SystemAdmin) -> ApiResul
 /// retired as a control (spec §14 / D18); the column survives read-only until
 /// Phase 2 drops it, so this function never touches it.
 ///
-/// Two guards on a `gating_team_slug` being set: the team must exist, and must not be
+/// Three guards on a `gating_team_slug` being set: the team must exist, be live, and not be
 /// someone's personal team. The gating team is the conventional
 /// home for the side-effect `owner` row `promote_admin` writes, so pointing the
 /// slug at a nonexistent team would orphan that row. This is *not* the old
@@ -1133,25 +1133,22 @@ pub async fn update_system_settings(
     // one erasure take the org's content with it. The database refuses it too
     // (20261025100000); this check is what renders the reason.
     if let Some(ref slug) = req.gating_team_slug {
-        let personal: Option<bool> = sqlx::query_scalar!(
-            r#"SELECT personal_of IS NOT NULL AS "personal!" FROM kb_teams WHERE slug = $1"#,
+        let team = sqlx::query!(
+            r#"SELECT personal_of IS NOT NULL AS "personal!", is_active FROM kb_teams WHERE slug = $1"#,
             slug
         )
         .fetch_optional(pool)
         .await?;
-        match personal {
-            None => {
-                return Err(ApiError::BadRequest(format!(
-                    "gating_team_slug '{slug}' does not exist — create the team first"
-                )));
-            }
-            Some(true) => {
+        match team {
+            None => return Err(gating_slug_names_no_team(slug)),
+            Some(t) if t.personal => {
                 return Err(ApiError::BadRequest(format!(
                     "gating_team_slug '{slug}' is a personal team — the gating team holds \
                      org-wide content, and erasing the person would erase it; choose a shared team"
                 )));
             }
-            Some(false) => {}
+            Some(t) if !t.is_active => return Err(gating_slug_names_a_dead_team(slug)),
+            Some(_) => {}
         }
     }
 
@@ -1170,17 +1167,34 @@ pub async fn update_system_settings(
         )
         .fetch_one(&mut *tx)
         .await?;
-        // Re-checked under the exclusive gating lock, which a rename also takes: a rename committed
-        // since the check above may have taken the slug away.
-        if written.get("outcome").and_then(|o| o.as_str()) == Some("no_team") {
-            return Err(ApiError::BadRequest(format!(
-                "gating_team_slug '{slug}' does not exist — create the team first"
-            )));
+        // Re-checked under the exclusive gating lock, which a rename and a delete's gating check also
+        // take: a rename committed since the check above may have taken the slug away, and a delete
+        // the team's life. The instance is never without a live gating team (20261124000050).
+        match written.get("outcome").and_then(|o| o.as_str()) {
+            Some("no_team") => return Err(gating_slug_names_no_team(slug)),
+            Some("dead_team") => return Err(gating_slug_names_a_dead_team(slug)),
+            _ => {}
         }
     }
     let row = update_settings_fields(&mut tx, req).await?;
     tx.commit().await?;
     Ok(row)
+}
+
+/// The refusal of a gating slug that no team holds.
+fn gating_slug_names_no_team(slug: &str) -> ApiError {
+    ApiError::BadRequest(format!(
+        "gating_team_slug '{slug}' does not exist — create the team first"
+    ))
+}
+
+/// The refusal of a gating slug whose team is soft-deleted: the instance is never without a live
+/// gating team.
+fn gating_slug_names_a_dead_team(slug: &str) -> ApiError {
+    ApiError::BadRequest(format!(
+        "gating_team_slug '{slug}' is a deleted team — the gating team must be live; restore it \
+         or choose another live team"
+    ))
 }
 
 /// The settings row's one-statement write. `gating_team_slug` is coalesced like the rest; when it is
