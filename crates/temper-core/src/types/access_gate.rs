@@ -98,7 +98,7 @@ pub struct ReviewRequestWithProfile {
 
 /// Instance-wide system settings (singleton row).
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemSettings {
     pub id: i32,
     pub gating_team_slug: Option<String>,
@@ -106,6 +106,16 @@ pub struct SystemSettings {
     pub terms_resource_uri: Option<String>,
     pub instance_name: Option<String>,
     pub updated: DateTime<Utc>,
+    /// On the answer to a settings write that repoints `gating_team_slug`: the new gating team's
+    /// live ancestors, by every path, ordered by slug, excluding the gating team itself (which
+    /// `gating_team_slug` names). The gating team is a pool every approved profile reads, so this
+    /// is what the whole instance now reads through it. The walk stops at a soft-deleted team, so a
+    /// team reached only through a dead one is absent. Read on the write's own transaction, after
+    /// the write. `null` on every other answer: a read, a write that leaves the slug alone, or one
+    /// that names the slug it already holds. An empty list means the new gating team has no live
+    /// parent.
+    #[serde(default)]
+    pub gating_pool_ancestors: Option<Vec<crate::types::team::TeamRef>>,
 }
 
 /// Public-facing system settings (no gating_team_slug — prevents info leakage).

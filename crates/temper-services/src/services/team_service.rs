@@ -1473,7 +1473,8 @@ async fn restore_authority(
 
 /// `team_id`'s live ancestors, itself excluded, ordered by slug: the reach an act that links,
 /// moves, restores or pools the team confers on everyone who reads through it. The one reader for
-/// every such answer (attach, reparent, restore, auto-join), so the doors answer alike. It is
+/// every such answer (attach, reparent, restore, auto-join, and a settings write that repoints the
+/// gating team), so the doors answer alike. It is
 /// `team_ancestors`, the reach walk: live teams only, and the walk stops at a soft-deleted team, so
 /// a team reached only through a dead one is not in reach and not named. Call it on the act's own
 /// transaction, after the write, so the answer is the act's own view of what it wrote; ancestors
@@ -1486,7 +1487,10 @@ async fn restore_authority(
 /// so they can see what they opened. The caller is a system admin, or holds a live row on the team
 /// itself (attach and reparent re-check managing it under the lock; restore requires its owner),
 /// so every team named is one the caller's own team now reads through.
-async fn live_ancestors(conn: &mut sqlx::PgConnection, team_id: Uuid) -> ApiResult<Vec<TeamRef>> {
+pub(crate) async fn live_ancestors(
+    conn: &mut sqlx::PgConnection,
+    team_id: Uuid,
+) -> ApiResult<Vec<TeamRef>> {
     Ok(sqlx::query_as!(
         TeamRef,
         r#"SELECT t.id, t.slug, t.name

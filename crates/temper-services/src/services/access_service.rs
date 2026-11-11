@@ -1254,13 +1254,38 @@ pub(crate) async fn cogmap_write_requires_admin_on(
 /// Read the singleton system settings row.
 pub async fn get_system_settings(pool: &PgPool) -> ApiResult<SystemSettings> {
     let row = sqlx::query_as!(
-        SystemSettings,
+        SettingsRow,
         "SELECT id, gating_team_slug, terms_version, terms_resource_uri, instance_name, updated FROM kb_system_settings LIMIT 1",
     )
     .fetch_one(pool)
     .await?;
 
-    Ok(row)
+    Ok(row.into())
+}
+
+/// The `kb_system_settings` columns. [`SystemSettings`] adds `gating_pool_ancestors`, which no
+/// column holds: only a slug repoint answers it.
+struct SettingsRow {
+    id: i32,
+    gating_team_slug: Option<String>,
+    terms_version: Option<String>,
+    terms_resource_uri: Option<String>,
+    instance_name: Option<String>,
+    updated: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<SettingsRow> for SystemSettings {
+    fn from(r: SettingsRow) -> Self {
+        Self {
+            id: r.id,
+            gating_team_slug: r.gating_team_slug,
+            terms_version: r.terms_version,
+            terms_resource_uri: r.terms_resource_uri,
+            instance_name: r.instance_name,
+            updated: r.updated,
+            gating_pool_ancestors: None,
+        }
+    }
 }
 
 /// Return the public-safe subset of system settings (no gating_team_slug).
@@ -1328,6 +1353,7 @@ pub async fn update_system_settings(
     // was minted refuses the change, and one in flight makes it wait, then refuses.
     let mut tx = pool.begin().await?;
     still_admin(&mut tx, admin, None).await?;
+    let mut repointed = false;
     if let Some(ref slug) = req.gating_team_slug {
         let written = sqlx::query_scalar!(
             r#"SELECT _admin_gating_team_slug_write($1, NULL) AS "w!""#,
@@ -1341,10 +1367,25 @@ pub async fn update_system_settings(
         match written.get("outcome").and_then(|o| o.as_str()) {
             Some("no_team") => return Err(gating_slug_names_no_team(slug)),
             Some("dead_team") => return Err(gating_slug_names_a_dead_team(slug)),
+            Some("changed") => repointed = true,
             _ => {}
         }
     }
-    let row = update_settings_fields(&mut tx, req).await?;
+    let mut row = update_settings_fields(&mut tx, req).await?;
+    // A repoint answers the reach it opened: the new gating team is a pool every approved profile
+    // reads, so the whole instance now reads its live ancestor chain (team DAG R9: the act names
+    // it to the admin the door admits). Read on this transaction, after the write. A write that
+    // leaves the slug alone, or names the one it holds (`noop`), opened nothing and answers none.
+    if repointed {
+        let gating_id = sqlx::query_scalar!(
+            "SELECT id FROM kb_teams WHERE slug = $1",
+            req.gating_team_slug.as_deref(),
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        row.gating_pool_ancestors =
+            Some(super::team_service::live_ancestors(&mut tx, gating_id).await?);
+    }
     tx.commit().await?;
     Ok(row)
 }
@@ -1373,7 +1414,7 @@ async fn update_settings_fields(
     req: &UpdateSettingsRequest,
 ) -> ApiResult<SystemSettings> {
     let row = sqlx::query_as!(
-        SystemSettings,
+        SettingsRow,
         r#"
         UPDATE kb_system_settings
            SET gating_team_slug   = COALESCE($1, gating_team_slug),
@@ -1393,7 +1434,7 @@ async fn update_settings_fields(
     .fetch_one(&mut *conn)
     .await?;
 
-    Ok(row)
+    Ok(row.into())
 }
 
 /// Admin-only: grant `profile_id` the `owner` role on a team (idempotent).

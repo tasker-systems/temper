@@ -29617,6 +29617,16 @@
           "updated"
         ],
         "properties": {
+          "gating_pool_ancestors": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/TeamRef"
+            },
+            "description": "On the answer to a settings write that repoints `gating_team_slug`: the new gating team's\nlive ancestors, by every path, ordered by slug, excluding the gating team itself (which\n`gating_team_slug` names). The gating team is a pool every approved profile reads, so this\nis what the whole instance now reads through it. The walk stops at a soft-deleted team, so a\nteam reached only through a dead one is absent. Read on the write's own transaction, after\nthe write. `null` on every other answer: a read, a write that leaves the slug alone, or one\nthat names the slug it already holds. An empty list means the new gating team has no live\nparent."
+          },
           "gating_team_slug": {
             "type": [
               "string",
