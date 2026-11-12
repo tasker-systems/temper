@@ -1129,7 +1129,9 @@ async fn replay_of_a_resource_erasure_is_byte_identical(pool: sqlx::PgPool) {
 }
 
 /// Every `kb_block_content` and `kb_chunk_content` row of the resource, and how many of them are
-/// not the empty string: (block rows, non-empty block rows, chunk rows, non-empty chunk rows).
+/// not the empty string: (block rows, block rows with bytes or a hash of bytes, chunk rows,
+/// non-empty chunk rows). A block row's hash counts: an emptied row that kept the sha256 of its
+/// old text still names it (20261127000010).
 async fn content_rows(pool: &PgPool, resource: ResourceId) -> (i64, i64, i64, i64) {
     sqlx::query_as(
         "SELECT (SELECT count(*) FROM kb_block_content bc \
@@ -1139,7 +1141,8 @@ async fn content_rows(pool: &PgPool, resource: ResourceId) -> (i64, i64, i64, i6
                 (SELECT count(*) FROM kb_block_content bc \
                    JOIN kb_block_revisions br ON br.id = bc.block_revision_id \
                    JOIN kb_content_blocks b ON b.id = br.block_id \
-                  WHERE b.resource_id = $1 AND bc.content IS DISTINCT FROM ''), \
+                  WHERE b.resource_id = $1 AND (bc.content IS DISTINCT FROM '' \
+                        OR bc.content_hash <> encode(sha256(''::bytea), 'hex'))), \
                 (SELECT count(*) FROM kb_chunk_content cc \
                    JOIN kb_chunks c ON c.id = cc.chunk_id \
                   WHERE c.resource_id = $1), \
@@ -1303,8 +1306,8 @@ async fn history_is_reached_across_revisions_folds_and_supersession(pool: sqlx::
     assert_eq!(
         (blocks_left, chunks_left),
         (0, 0),
-        "every kb_block_content and kb_chunk_content row of R is '' — every revision, the \
-         folded block, every superseded chunk"
+        "every kb_block_content and kb_chunk_content row of R is '' and every block row's hash \
+         is sha256('') — every revision, the folded block, every superseded chunk"
     );
     let still_embedded: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kb_chunks WHERE resource_id = $1 \

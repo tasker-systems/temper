@@ -465,6 +465,7 @@ mod tests {
             ingest_state: Some(temper_core::types::resource::IngestState::Complete),
             ingest_ended: None,
             body_storage: Some(temper_core::types::resource::BodyStorage::Derived),
+            bytes_merkle: None,
             managed_meta: temper_core::types::managed_meta::ManagedMeta::default(),
             open_meta: None,
             content: None,

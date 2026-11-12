@@ -1575,6 +1575,7 @@ mod enriched_resource_tests {
             ingest_state: Some(temper_core::types::resource::IngestState::Complete),
             ingest_ended: None,
             body_storage: Some(temper_core::types::resource::BodyStorage::Derived),
+            bytes_merkle: None,
             managed_meta: ManagedMeta {
                 stage: Some("in-progress".to_string()),
                 ..ManagedMeta::default()

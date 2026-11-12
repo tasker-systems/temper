@@ -187,6 +187,30 @@ pub struct ResourceView {
     /// version skew, as with `ingest_state`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body_storage: Option<BodyStorage>,
+    /// Byte identity of the body: proves a cached copy is Temper's bytes without downloading the
+    /// body again. Bare lowercase hex.
+    ///
+    /// It is the sha256 of the live blocks' `bytes_sha256` values (each the bare lowercase hex
+    /// sha256 of that block's raw bytes), concatenated in `seq` order with no separator. Get the
+    /// per-block values and the block boundaries (`seq`, `bytes_len`) from
+    /// `GET /api/resources/{id}/blocks`, which answers a caller who can modify the resource. To
+    /// verify a whole cached body, cut it at those byte lengths,
+    /// sha256 each piece, concatenate the hex digests, and sha256 that string. To verify one block,
+    /// compare its sha256 with its `bytes_sha256`. The concatenation of the pieces is exactly the
+    /// body `content` serves.
+    ///
+    /// Present only when every live block carries its raw bytes, which is when `body_storage` is
+    /// `verbatim`. It is absent on a `derived` body, which reads back as a reconstruction no stored
+    /// hash describes, and absent from a server that predates the field. Unlike `body_hash` it moves
+    /// on every byte change, a heading-only edit included, and stays put across a re-block that
+    /// keeps the bytes and their block boundaries.
+    ///
+    /// Beside `content` (a read that asked for the body) it is computed in the same statement as
+    /// that content, so the two always describe the same bytes. Without `content` it is read with
+    /// the rest of this view, in one statement; a write after the read can move it, exactly as it
+    /// moves `updated`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes_merkle: Option<String>,
 
     // ---- the two metadata tiers, and the body ----------------------------------
     /// Typed managed (`temper-*`) frontmatter — the closed Property vocabulary.
@@ -550,6 +574,7 @@ mod tests {
             ingest_state: Some(IngestState::Complete),
             ingest_ended: None,
             body_storage: Some(BodyStorage::Derived),
+            bytes_merkle: None,
             managed_meta: ManagedMeta::default(),
             open_meta: None,
             content: None,

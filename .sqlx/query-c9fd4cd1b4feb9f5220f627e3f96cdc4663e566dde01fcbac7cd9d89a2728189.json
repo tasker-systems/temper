@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT b.seq AS \"seq!\", r.block_body_hash AS \"block_body_hash!\",\n                   bc.content_hash AS \"bytes_sha256?\",\n                   octet_length(bc.content)::bigint AS \"bytes_len?\"\n              FROM kb_content_blocks b\n              JOIN LATERAL (\n                     SELECT block_body_hash FROM kb_block_revisions\n                      WHERE block_id = b.id ORDER BY created DESC LIMIT 1\n                   ) r ON true\n              -- The current revision's bytes: the ones the verbatim readback serves and\n              -- resource_bytes_merkle folds, so a client verifies against what it was served.\n              LEFT JOIN kb_block_content bc ON bc.block_revision_id = b.current_revision_id\n             WHERE b.resource_id = $1 AND NOT b.is_folded\n             ORDER BY b.seq\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "seq!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "block_body_hash!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "bytes_sha256?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "bytes_len?",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "c9fd4cd1b4feb9f5220f627e3f96cdc4663e566dde01fcbac7cd9d89a2728189"
+}

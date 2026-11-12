@@ -1350,6 +1350,7 @@ mod tests {
             ingest_state: None,
             ingest_ended: None,
             body_storage: None,
+            bytes_merkle: None,
             managed_meta: Default::default(),
             open_meta: None,
             content: None,

@@ -27961,6 +27961,13 @@
               }
             ]
           },
+          "bytes_merkle": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Byte identity of the body: proves a cached copy is Temper's bytes without downloading the\nbody again. Bare lowercase hex.\n\nIt is the sha256 of the live blocks' `bytes_sha256` values (each the bare lowercase hex\nsha256 of that block's raw bytes), concatenated in `seq` order with no separator. Get the\nper-block values and the block boundaries (`seq`, `bytes_len`) from\n`GET /api/resources/{id}/blocks`, which answers a caller who can modify the resource. To\nverify a whole cached body, cut it at those byte lengths,\nsha256 each piece, concatenate the hex digests, and sha256 that string. To verify one block,\ncompare its sha256 with its `bytes_sha256`. The concatenation of the pieces is exactly the\nbody `content` serves.\n\nPresent only when every live block carries its raw bytes, which is when `body_storage` is\n`verbatim`. It is absent on a `derived` body, which reads back as a reconstruction no stored\nhash describes, and absent from a server that predates the field. Unlike `body_hash` it moves\non every byte change, a heading-only edit included, and stays put across a re-block that\nkeeps the bytes and their block boundaries.\n\nBeside `content` (a read that asked for the body) it is computed in the same statement as\nthat content, so the two always describe the same bytes. Without `content` it is read with\nthe rest of this view, in one statement; a write after the read can move it, exactly as it\nmoves `updated`."
+          },
           "changed_by_me_at": {
             "type": [
               "string",
@@ -28815,6 +28822,22 @@
           "content_hash"
         ],
         "properties": {
+          "bytes_len": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The length in bytes (UTF-8) of this block's raw bytes: its boundary in the body\n`content` serves, which is the blocks' bytes concatenated in `seq` order. Present exactly\nwhen `bytes_sha256` is.",
+            "minimum": 0
+          },
+          "bytes_sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Byte identity of this block: the bare lowercase hex sha256 of its raw bytes, as stored\n(`kb_block_content.content_hash`). Not `content_hash` above, which is the chunk merkle.\n\nA client holding this block's bytes verifies them by comparing their sha256 with this\nvalue. The resource's `bytes_merkle` is the sha256 of these values concatenated in `seq`\norder. Absent when the block carries no raw bytes (a `derived` body, which reads back as a\nreconstruction), and from a server that predates the field. A block a redaction emptied\ncarries the sha256 of the empty string, never a hash of the text it held."
+          },
           "content_hash": {
             "type": "string"
           },

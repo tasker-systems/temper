@@ -356,7 +356,7 @@ fn block_line(block: Uuid, folded: bool, revisions: i64, chunks: i64) -> serde_j
     })
 }
 
-/// (non-current revisions with bytes, non-current chunks with prose, a header_path, an embedding
+/// (non-current revisions with bytes or a hash of bytes, non-current chunks with prose, a header_path, an embedding
 /// or embedded_with) of one block: what the scrub must leave at zero for a live block.
 async fn history_left(pool: &PgPool, block: Uuid) -> (i64, i64) {
     sqlx::query_as(
@@ -364,7 +364,8 @@ async fn history_left(pool: &PgPool, block: Uuid) -> (i64, i64) {
                    JOIN kb_content_blocks b ON b.id = br.block_id
                    JOIN kb_block_content bc ON bc.block_revision_id = br.id
                   WHERE br.block_id = $1 AND br.id IS DISTINCT FROM b.current_revision_id
-                    AND bc.content <> ''),
+                    AND (bc.content <> ''
+                         OR bc.content_hash <> encode(sha256(''::bytea), 'hex'))),
                 (SELECT count(*) FROM kb_chunks c
                    LEFT JOIN kb_chunk_content cc ON cc.chunk_id = c.id
                   WHERE c.block_id = $1 AND NOT c.is_current
@@ -377,13 +378,15 @@ async fn history_left(pool: &PgPool, block: Uuid) -> (i64, i64) {
     .unwrap()
 }
 
-/// (revisions with bytes, chunks with prose, a header_path, an embedding or embedded_with) of one
+/// (revisions with bytes or a hash of bytes, chunks with prose, a header_path, an embedding or embedded_with) of one
 /// block, current or not: what the scrub must leave at zero for a folded block.
 async fn anything_left(pool: &PgPool, block: Uuid) -> (i64, i64) {
     sqlx::query_as(
         "SELECT (SELECT count(*) FROM kb_block_revisions br
                    JOIN kb_block_content bc ON bc.block_revision_id = br.id
-                  WHERE br.block_id = $1 AND bc.content <> ''),
+                  WHERE br.block_id = $1
+                    AND (bc.content <> ''
+                         OR bc.content_hash <> encode(sha256(''::bytea), 'hex'))),
                 (SELECT count(*) FROM kb_chunks c
                    LEFT JOIN kb_chunk_content cc ON cc.chunk_id = c.id
                   WHERE c.block_id = $1

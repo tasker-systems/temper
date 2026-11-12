@@ -698,11 +698,15 @@ async fn fill_sections(
     }
     if sections.contains(ResourceSection::Body) {
         for view in views.iter_mut() {
-            view.content = Some(
-                readback::body(pool, profile_id, view.id)
+            // The merkle beside `content` comes from the statement that read the content, so the
+            // two describe the same bytes; it replaces the identity read's value, which an
+            // intervening write could have made describe other bytes.
+            let (content, bytes_merkle) =
+                readback::body_with_bytes_merkle(pool, profile_id, view.id)
                     .await
-                    .map_err(|e| ApiError::from(map_readback_err(e)))?,
-            );
+                    .map_err(|e| ApiError::from(map_readback_err(e)))?;
+            view.content = Some(content);
+            view.bytes_merkle = bytes_merkle;
         }
     }
     Ok(())

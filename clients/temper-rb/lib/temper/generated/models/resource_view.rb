@@ -22,6 +22,9 @@ module Temper::Generated
     # Do the bytes read back exactly, or only approximately? `Option` purely for version skew, as with `ingest_state`.
     attr_accessor :body_storage
 
+    # Byte identity of the body: proves a cached copy is Temper's bytes without downloading the body again. Bare lowercase hex.  It is the sha256 of the live blocks' `bytes_sha256` values (each the bare lowercase hex sha256 of that block's raw bytes), concatenated in `seq` order with no separator. Get the per-block values and the block boundaries (`seq`, `bytes_len`) from `GET /api/resources/{id}/blocks`, which answers a caller who can modify the resource. To verify a whole cached body, cut it at those byte lengths, sha256 each piece, concatenate the hex digests, and sha256 that string. To verify one block, compare its sha256 with its `bytes_sha256`. The concatenation of the pieces is exactly the body `content` serves.  Present only when every live block carries its raw bytes, which is when `body_storage` is `verbatim`. It is absent on a `derived` body, which reads back as a reconstruction no stored hash describes, and absent from a server that predates the field. Unlike `body_hash` it moves on every byte change, a heading-only edit included, and stays put across a re-block that keeps the bytes and their block boundaries.  Beside `content` (a read that asked for the body) it is computed in the same statement as that content, so the two always describe the same bytes. Without `content` it is read with the rest of this view, in one statement; a write after the read can move it, exactly as it moves `updated`.
+    attr_accessor :bytes_merkle
+
     # When the caller last changed this resource themselves. Present only on a row read with `changed_by=@me`, the same time `sort=changed_by_me` orders by; absent on every other read.  Not `updated`, which can be a teammate's later change: this counts only the caller's own authored events on the resource, so it never reports another principal's activity.
     attr_accessor :changed_by_me_at
 
@@ -119,6 +122,7 @@ module Temper::Generated
       {
         :'body_hash' => :'body_hash',
         :'body_storage' => :'body_storage',
+        :'bytes_merkle' => :'bytes_merkle',
         :'changed_by_me_at' => :'changed_by_me_at',
         :'cogmap_id' => :'cogmap_id',
         :'cogmap_name' => :'cogmap_name',
@@ -163,6 +167,7 @@ module Temper::Generated
       {
         :'body_hash' => :'String',
         :'body_storage' => :'BodyStorage',
+        :'bytes_merkle' => :'String',
         :'changed_by_me_at' => :'Time',
         :'cogmap_id' => :'String',
         :'cogmap_name' => :'String',
@@ -197,6 +202,7 @@ module Temper::Generated
       Set.new([
         :'body_hash',
         :'body_storage',
+        :'bytes_merkle',
         :'changed_by_me_at',
         :'cogmap_id',
         :'cogmap_name',
@@ -236,6 +242,10 @@ module Temper::Generated
 
       if attributes.key?(:'body_storage')
         self.body_storage = attributes[:'body_storage']
+      end
+
+      if attributes.key?(:'bytes_merkle')
+        self.bytes_merkle = attributes[:'bytes_merkle']
       end
 
       if attributes.key?(:'changed_by_me_at')
@@ -552,6 +562,7 @@ module Temper::Generated
       self.class == o.class &&
           body_hash == o.body_hash &&
           body_storage == o.body_storage &&
+          bytes_merkle == o.bytes_merkle &&
           changed_by_me_at == o.changed_by_me_at &&
           cogmap_id == o.cogmap_id &&
           cogmap_name == o.cogmap_name &&
@@ -589,7 +600,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [body_hash, body_storage, changed_by_me_at, cogmap_id, cogmap_name, content, context_name, context_owner_ref, context_ref, context_slug, created, doc_type_name, embedding_status, id, ingest_ended, ingest_state, is_active, kb_context_id, managed_meta, open_meta, origin_uri, originator_profile_id, owner_handle, owner_profile_id, reach, ref, title, updated].hash
+      [body_hash, body_storage, bytes_merkle, changed_by_me_at, cogmap_id, cogmap_name, content, context_name, context_owner_ref, context_ref, context_slug, created, doc_type_name, embedding_status, id, ingest_ended, ingest_state, is_active, kb_context_id, managed_meta, open_meta, origin_uri, originator_profile_id, owner_handle, owner_profile_id, reach, ref, title, updated].hash
     end
 
     # Builds the object from hash

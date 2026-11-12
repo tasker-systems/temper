@@ -16,6 +16,12 @@ require 'time'
 module Temper::Generated
   # One landed segment, as `begin`/`append`/`list-blocks` report it — the resume unit.  `content_hash` is the **block merkle** (`kb_block_revisions.block_body_hash`, i.e. `temper_substrate::content::body_hash_from_chunk_hashes` over the block's own chunk hashes) — NOT the whole-segment-text sha256 the client sends inbound as `AppendBlockPayload.content_hash`. The two are deliberately distinct hashes over the same segment: the inbound one is the client's cheap identity check on raw text; this outbound one is the server-computed chunk merkle that already exists as the block's canonical hash. The client re-derives this same merkle from its own packed chunk hashes (not the raw text) to diff against on resume — comparing against the raw-text hash would never match.
   class SegmentInfo < ApiModelBase
+    # The length in bytes (UTF-8) of this block's raw bytes: its boundary in the body `content` serves, which is the blocks' bytes concatenated in `seq` order. Present exactly when `bytes_sha256` is.
+    attr_accessor :bytes_len
+
+    # Byte identity of this block: the bare lowercase hex sha256 of its raw bytes, as stored (`kb_block_content.content_hash`). Not `content_hash` above, which is the chunk merkle.  A client holding this block's bytes verifies them by comparing their sha256 with this value. The resource's `bytes_merkle` is the sha256 of these values concatenated in `seq` order. Absent when the block carries no raw bytes (a `derived` body, which reads back as a reconstruction), and from a server that predates the field. A block a redaction emptied carries the sha256 of the empty string, never a hash of the text it held.
+    attr_accessor :bytes_sha256
+
     attr_accessor :content_hash
 
     attr_accessor :seq
@@ -23,6 +29,8 @@ module Temper::Generated
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
+        :'bytes_len' => :'bytes_len',
+        :'bytes_sha256' => :'bytes_sha256',
         :'content_hash' => :'content_hash',
         :'seq' => :'seq'
       }
@@ -41,6 +49,8 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
+        :'bytes_len' => :'Integer',
+        :'bytes_sha256' => :'String',
         :'content_hash' => :'String',
         :'seq' => :'Integer'
       }
@@ -49,6 +59,8 @@ module Temper::Generated
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
+        :'bytes_len',
+        :'bytes_sha256',
       ])
     end
 
@@ -68,6 +80,14 @@ module Temper::Generated
         h[k.to_sym] = v
       }
 
+      if attributes.key?(:'bytes_len')
+        self.bytes_len = attributes[:'bytes_len']
+      end
+
+      if attributes.key?(:'bytes_sha256')
+        self.bytes_sha256 = attributes[:'bytes_sha256']
+      end
+
       if attributes.key?(:'content_hash')
         self.content_hash = attributes[:'content_hash']
       else
@@ -86,6 +106,10 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
+      if !@bytes_len.nil? && @bytes_len < 0
+        invalid_properties.push('invalid value for "bytes_len", must be greater than or equal to 0.')
+      end
+
       if @content_hash.nil?
         invalid_properties.push('invalid value for "content_hash", content_hash cannot be nil.')
       end
@@ -105,10 +129,21 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
+      return false if !@bytes_len.nil? && @bytes_len < 0
       return false if @content_hash.nil?
       return false if @seq.nil?
       return false if @seq < 0
       true
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] bytes_len Value to be assigned
+    def bytes_len=(bytes_len)
+      if !bytes_len.nil? && bytes_len < 0
+        fail ArgumentError, 'invalid value for "bytes_len", must be greater than or equal to 0.'
+      end
+
+      @bytes_len = bytes_len
     end
 
     # Custom attribute writer method with validation
@@ -140,6 +175,8 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
+          bytes_len == o.bytes_len &&
+          bytes_sha256 == o.bytes_sha256 &&
           content_hash == o.content_hash &&
           seq == o.seq
     end
@@ -153,7 +190,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [content_hash, seq].hash
+      [bytes_len, bytes_sha256, content_hash, seq].hash
     end
 
     # Builds the object from hash

@@ -1,0 +1,29 @@
+title    = "Reads serve byte identity (bytes_sha256 per block, bytes_merkle per verbatim body), and a redaction no longer leaves the hash of the text it emptied"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp", "clients", "schema"]
+status   = "signal-only"
+body = '''
+A client holding cached text could not prove the bytes were Temper's without downloading the body
+again: `body_hash` is a merkle over chunk prose, not over bytes.
+
+- Additive (http, clients): the rows of GET /api/resources/{id}/blocks (and the append and
+  segmented-begin responses, which share `SegmentInfo`) gain `bytes_sha256`, the stored sha256 of
+  the block's raw bytes, and `bytes_len`, their length in bytes. Both are absent for a block with
+  no raw bytes. The row's `content_hash` (the chunk merkle) is unchanged.
+- Additive (http, mcp, clients): `ResourceView` gains `bytes_merkle`, the sha256 of the live
+  blocks' `bytes_sha256` concatenated in seq order, on show, list rows and search hits. It is
+  present only when every live block carries raw bytes (`body_storage` = `verbatim`) and is
+  computed at read: no new column. Beside `content` it comes from the statement that read the
+  content. It is served under the same visibility gate as the content.
+- Behavioral (schema): resource erasure, its block-history scrub and the principal act's
+  hash-keyed redaction now set `kb_block_content.content_hash` to sha256('') in the UPDATE that
+  empties the bytes. Before, the emptied row kept the sha256 of the erased text. Migration
+  20261127000010 recomputes it on rows already emptied and adds a CHECK that an emptied row
+  carries that hash. Chunk hashes and the block and body merkles (which are over chunk hashes)
+  are unchanged, as is the principal act's record in `kb_erased_content`.
+
+Who observes it: corpus consumers verifying cached bytes (new fields); nobody reads the stored
+block hash today, so the erasure change is visible only in the database.
+Release relevance: signal-only.
+'''

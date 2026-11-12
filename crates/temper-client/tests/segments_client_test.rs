@@ -65,6 +65,8 @@ async fn begin_segmented_posts_to_ingest_and_parses_response() {
         blocks: vec![SegmentInfo {
             seq: 0,
             content_hash: "h0".to_string(),
+            bytes_sha256: None,
+            bytes_len: None,
         }],
         body_hash: "sha256:live".to_string(),
     };
@@ -97,10 +99,14 @@ async fn append_block_posts_to_resources_blocks_path() {
             SegmentInfo {
                 seq: 0,
                 content_hash: "h0".to_string(),
+                bytes_sha256: None,
+                bytes_len: None,
             },
             SegmentInfo {
                 seq: 1,
                 content_hash: "h1".to_string(),
+                bytes_sha256: None,
+                bytes_len: None,
             },
         ],
         body_hash: "sha256:live".to_string(),
@@ -169,6 +175,8 @@ async fn list_blocks_gets_resources_blocks_path() {
         blocks: vec![SegmentInfo {
             seq: 0,
             content_hash: "h0".to_string(),
+            bytes_sha256: None,
+            bytes_len: None,
         }],
         body_hash: "sha256:live".to_string(),
     };

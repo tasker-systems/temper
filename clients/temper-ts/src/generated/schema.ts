@@ -10766,6 +10766,31 @@ export interface components {
             body_hash?: string | null;
             body_storage?: components["schemas"]["BodyStorage"] | null;
             /**
+             * @description Byte identity of the body: proves a cached copy is Temper's bytes without downloading the
+             *     body again. Bare lowercase hex.
+             *
+             *     It is the sha256 of the live blocks' `bytes_sha256` values (each the bare lowercase hex
+             *     sha256 of that block's raw bytes), concatenated in `seq` order with no separator. Get the
+             *     per-block values and the block boundaries (`seq`, `bytes_len`) from
+             *     `GET /api/resources/{id}/blocks`, which answers a caller who can modify the resource. To
+             *     verify a whole cached body, cut it at those byte lengths,
+             *     sha256 each piece, concatenate the hex digests, and sha256 that string. To verify one block,
+             *     compare its sha256 with its `bytes_sha256`. The concatenation of the pieces is exactly the
+             *     body `content` serves.
+             *
+             *     Present only when every live block carries its raw bytes, which is when `body_storage` is
+             *     `verbatim`. It is absent on a `derived` body, which reads back as a reconstruction no stored
+             *     hash describes, and absent from a server that predates the field. Unlike `body_hash` it moves
+             *     on every byte change, a heading-only edit included, and stays put across a re-block that
+             *     keeps the bytes and their block boundaries.
+             *
+             *     Beside `content` (a read that asked for the body) it is computed in the same statement as
+             *     that content, so the two always describe the same bytes. Without `content` it is read with
+             *     the rest of this view, in one statement; a write after the read can move it, exactly as it
+             *     moves `updated`.
+             */
+            bytes_merkle?: string | null;
+            /**
              * Format: date-time
              * @description When the caller last changed this resource themselves. Present only on a row read with
              *     `changed_by=@me`, the same time `sort=changed_by_me` orders by; absent on every other read.
@@ -11258,6 +11283,24 @@ export interface components {
          *     raw-text hash would never match.
          */
         SegmentInfo: {
+            /**
+             * Format: int64
+             * @description The length in bytes (UTF-8) of this block's raw bytes: its boundary in the body
+             *     `content` serves, which is the blocks' bytes concatenated in `seq` order. Present exactly
+             *     when `bytes_sha256` is.
+             */
+            bytes_len?: number | null;
+            /**
+             * @description Byte identity of this block: the bare lowercase hex sha256 of its raw bytes, as stored
+             *     (`kb_block_content.content_hash`). Not `content_hash` above, which is the chunk merkle.
+             *
+             *     A client holding this block's bytes verifies them by comparing their sha256 with this
+             *     value. The resource's `bytes_merkle` is the sha256 of these values concatenated in `seq`
+             *     order. Absent when the block carries no raw bytes (a `derived` body, which reads back as a
+             *     reconstruction), and from a server that predates the field. A block a redaction emptied
+             *     carries the sha256 of the empty string, never a hash of the text it held.
+             */
+            bytes_sha256?: string | null;
             content_hash: string;
             /** Format: int32 */
             seq: number;

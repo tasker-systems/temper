@@ -831,6 +831,7 @@ mod list_paging_tests {
             ingest_state: Some(IngestState::Complete),
             ingest_ended: None,
             body_storage: Some(BodyStorage::Derived),
+            bytes_merkle: None,
             managed_meta: ManagedMeta::default(),
             open_meta: None,
             content: None,

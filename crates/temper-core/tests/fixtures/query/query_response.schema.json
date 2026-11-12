@@ -814,6 +814,13 @@
           ],
           "description": "Do the bytes read back exactly, or only approximately? `Option` purely for\nversion skew, as with `ingest_state`."
         },
+        "bytes_merkle": {
+          "description": "Byte identity of the body: proves a cached copy is Temper's bytes without downloading the\nbody again. Bare lowercase hex.\n\nIt is the sha256 of the live blocks' `bytes_sha256` values (each the bare lowercase hex\nsha256 of that block's raw bytes), concatenated in `seq` order with no separator. Get the\nper-block values and the block boundaries (`seq`, `bytes_len`) from\n`GET /api/resources/{id}/blocks`, which answers a caller who can modify the resource. To\nverify a whole cached body, cut it at those byte lengths,\nsha256 each piece, concatenate the hex digests, and sha256 that string. To verify one block,\ncompare its sha256 with its `bytes_sha256`. The concatenation of the pieces is exactly the\nbody `content` serves.\n\nPresent only when every live block carries its raw bytes, which is when `body_storage` is\n`verbatim`. It is absent on a `derived` body, which reads back as a reconstruction no stored\nhash describes, and absent from a server that predates the field. Unlike `body_hash` it moves\non every byte change, a heading-only edit included, and stays put across a re-block that\nkeeps the bytes and their block boundaries.\n\nBeside `content` (a read that asked for the body) it is computed in the same statement as\nthat content, so the two always describe the same bytes. Without `content` it is read with\nthe rest of this view, in one statement; a write after the read can move it, exactly as it\nmoves `updated`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "changed_by_me_at": {
           "description": "When the caller last changed this resource themselves. Present only on a row read with\n`changed_by=@me`, the same time `sort=changed_by_me` orders by; absent on every other read.\n\nNot `updated`, which can be a teammate's later change: this counts only the caller's own\nauthored events on the resource, so it never reports another principal's activity.",
           "format": "date-time",

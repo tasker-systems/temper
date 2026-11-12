@@ -165,6 +165,8 @@ fn plan_segments(content: &str, budget: usize) -> Result<SegmentPlan> {
         infos.push(SegmentInfo {
             seq: seg.seq,
             content_hash: temper_ingest::merkle::block_merkle(&chunk_hashes),
+            bytes_sha256: None,
+            bytes_len: None,
         });
         chunked.push(chunks);
     }
@@ -1214,6 +1216,7 @@ mod tests {
             ingest_state: Some(temper_core::types::resource::IngestState::Complete),
             ingest_ended: None,
             body_storage: Some(temper_core::types::resource::BodyStorage::Derived),
+            bytes_merkle: None,
             managed_meta: temper_core::types::managed_meta::ManagedMeta::default(),
             open_meta: None,
             content: None,

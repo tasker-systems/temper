@@ -723,13 +723,32 @@ pub async fn body(
     principal: ProfileId,
     new_id: ResourceId,
 ) -> std::result::Result<String, ReadbackError> {
+    Ok(body_with_bytes_merkle(pool, principal, new_id).await?.0)
+}
+
+/// [`body`], plus the body's `bytes_merkle` computed **in the same statement as the bytes**.
+///
+/// The merkle is `Some` exactly when the body came back verbatim; a derived reconstruction has no
+/// stored hash that describes it, so it is `None`. Because one statement produces both, they share
+/// one snapshot: a write landing between the identity read and this one moves both together, and
+/// never serves bytes beside a merkle of other bytes. That is why `show` takes the merkle beside
+/// `content` from here, not from the identity read (`hit_identities_with`).
+///
+/// Gated exactly as the bytes are: `ensure_visible` first, then the one statement.
+pub async fn body_with_bytes_merkle(
+    pool: &PgPool,
+    principal: ProfileId,
+    new_id: ResourceId,
+) -> std::result::Result<(String, Option<String>), ReadbackError> {
     ensure_visible(pool, principal, new_id).await?;
 
-    // Path 1: verbatim, coverage-verified. `.flatten()` collapses both "no row" (partial coverage,
-    // HAVING excludes it) and "row with NULL agg" (zero live blocks) to `None` → the derived fallback.
-    // The macro's own nullability is what makes that double-Option explicit rather than incidental.
-    let verbatim = sqlx::query_scalar!(
-        r#"SELECT string_agg(bc.content, '' ORDER BY b.seq)
+    // Path 1: verbatim, coverage-verified. `fetch_optional` is `None` on partial coverage (HAVING
+    // excludes the row); a row with a NULL agg is zero live blocks. Both fall to the derived path.
+    // `resource_bytes_merkle` is STABLE, so it reads this statement's snapshot: the same rows the
+    // `string_agg` reads, under the same coverage rule.
+    let verbatim = sqlx::query!(
+        r#"SELECT string_agg(bc.content, '' ORDER BY b.seq) AS body,
+                  resource_bytes_merkle($1) AS bytes_merkle
              FROM kb_content_blocks b
              LEFT JOIN kb_block_content bc ON bc.block_revision_id = b.current_revision_id
             WHERE b.resource_id = $1 AND NOT b.is_folded
@@ -737,10 +756,11 @@ pub async fn body(
         new_id.uuid(),
     )
     .fetch_optional(pool)
-    .await?
-    .flatten();
-    if let Some(body) = verbatim {
-        return Ok(body);
+    .await?;
+    if let Some(row) = verbatim {
+        if let Some(body) = row.body {
+            return Ok((body, row.bytes_merkle));
+        }
     }
 
     // Path 2: derived reconstruction (legacy pre-PR-3 rows, or partial verbatim coverage).
@@ -769,7 +789,7 @@ pub async fn body(
             content: row.content,
         })
         .collect();
-    Ok(crate::content::reconstruct_body(&chunks))
+    Ok((crate::content::reconstruct_body(&chunks), None))
 }
 
 // ── the block-addressed resolution (the defined-dangling-state design, D-D1..D-D4) ──────────
@@ -2274,6 +2294,10 @@ async fn hit_identities_with(
                     ELSE NULL
                   END                        AS "context_owner_ref?",
                   mm.managed                 AS "managed?",
+                  -- In the SELECT list, so it runs only for a row the gate below admitted: a
+                  -- hash of the bytes is a disclosure about the bytes, and this is the gate the
+                  -- body read passes too. STABLE, so it reads this statement's snapshot.
+                  resource_bytes_merkle(r.id) AS "bytes_merkle?",
                   -- In the SELECT list, so it runs only for a row the gate below admitted: the
                   -- reach function takes "the principal reads it" as its precondition.
                   CASE WHEN $4 THEN resource_reached_via($1, r.id) END AS "reach_via?"
@@ -2370,6 +2394,7 @@ async fn hit_identities_with(
                 ingest_state,
                 ingest_ended,
                 body_storage: BodyStorage::from_wire(&row.body_storage),
+                bytes_merkle: row.bytes_merkle,
                 managed_meta,
                 // All three are sections this read does not serve — see the doc comment.
                 open_meta: None,

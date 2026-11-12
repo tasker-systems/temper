@@ -106,6 +106,21 @@ pub struct SegmentedBegin {
 pub struct SegmentInfo {
     pub seq: u32,
     pub content_hash: String,
+    /// Byte identity of this block: the bare lowercase hex sha256 of its raw bytes, as stored
+    /// (`kb_block_content.content_hash`). Not `content_hash` above, which is the chunk merkle.
+    ///
+    /// A client holding this block's bytes verifies them by comparing their sha256 with this
+    /// value. The resource's `bytes_merkle` is the sha256 of these values concatenated in `seq`
+    /// order. Absent when the block carries no raw bytes (a `derived` body, which reads back as a
+    /// reconstruction), and from a server that predates the field. A block a redaction emptied
+    /// carries the sha256 of the empty string, never a hash of the text it held.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes_sha256: Option<String>,
+    /// The length in bytes (UTF-8) of this block's raw bytes: its boundary in the body
+    /// `content` serves, which is the blocks' bytes concatenated in `seq` order. Present exactly
+    /// when `bytes_sha256` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes_len: Option<u64>,
 }
 
 /// Response to a segmented begin (block 0 landed via the ordinary create path).
@@ -682,6 +697,8 @@ mod tests {
         let s = SegmentInfo {
             seq: 3,
             content_hash: "merkle-hash".to_owned(),
+            bytes_sha256: None,
+            bytes_len: None,
         };
         let j = serde_json::to_string(&s).unwrap();
         let back: SegmentInfo = serde_json::from_str(&j).unwrap();
@@ -696,10 +713,14 @@ mod tests {
                 SegmentInfo {
                     seq: 0,
                     content_hash: "h0".to_owned(),
+                    bytes_sha256: None,
+                    bytes_len: None,
                 },
                 SegmentInfo {
                     seq: 1,
                     content_hash: "h1".to_owned(),
+                    bytes_sha256: None,
+                    bytes_len: None,
                 },
             ],
             body_hash: "sha256:deadbeef".to_owned(),
@@ -735,6 +756,8 @@ mod tests {
             blocks: vec![SegmentInfo {
                 seq: 0,
                 content_hash: "h0".to_owned(),
+                bytes_sha256: None,
+                bytes_len: None,
             }],
             body_hash: "sha256:beef".to_owned(),
         };
