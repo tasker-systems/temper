@@ -24,7 +24,10 @@ eval "$(mise activate zsh --shims)"
 ## Cloud sessions
 
 - **Setup:** `tools/bin/setup-claude-web.sh` runs on SessionStart (`.claude/settings.json`) and must
-  finish in seconds: env files, PATH, hooks, `bun install`. `tools/bin/setup-claude-web-full.sh` is
+  finish in seconds: env files, PATH, hooks, `bun install`. It also restarts Docker Postgres
+  (dockerd, then `docker compose up -d`) when the image is already pulled. That matters because a
+  resume or restart keeps the disk but loses processes, while the environment's own setup script
+  runs only on a fresh build. It never pulls or builds; `TEMPER_SKIP_DOCKER_START=1` opts out. `tools/bin/setup-claude-web-full.sh` is
   run by hand when a task needs the toolchain, Docker Postgres and migrations. Cloud sessions do not
   use mise yet.
 - **Authenticating the CLI without a browser:** `TEMPER_TOKEN` (a JWT, used in memory; a malformed
