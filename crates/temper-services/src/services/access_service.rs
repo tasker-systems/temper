@@ -569,10 +569,20 @@ async fn admin_arm_still_grants(
 /// The candidate teams are read plainly first. A removal committed before that read leaves the
 /// team out, which is the answer the lock would give; one still in flight is not yet visible as a
 /// removal, so its team is a candidate and is locked.
+///
+/// `recipient_team` is the team the grant is TO, when it is one. It is locked in the same
+/// ascending pass, and [`recipient_bar`]'s manage bar on it (a direct owner or maintainer row,
+/// `team_service::require_manage_on_team`) is asked again under that lock: a caller removed or
+/// demoted on it since the pool check is refused with `Forbidden`, the bar's own refusal. Locking
+/// it is also what keeps the door free of a wait cycle. A delegate who share-locks a grant row
+/// anchored on a team holds that team's lock first, so a writer of that row must hold the same
+/// lock. Without it, a delegate whose recipient bar went stale could take the row `FOR UPDATE`
+/// while holding a team another delegate waits on, and the two would deadlock.
 async fn lock_delegated_grant_teams(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     proof: &crate::authz::Authorized<GrantAuthority>,
     caller: ProfileId,
+    recipient_team: Option<Uuid>,
 ) -> ApiResult<Option<Vec<Uuid>>> {
     if proof.authority() != GrantAuthority::Delegated {
         return Ok(None);
@@ -592,10 +602,18 @@ async fn lock_delegated_grant_teams(
     )
     .fetch_all(&mut **tx)
     .await?;
+    let mut teams = candidates.clone();
+    teams.extend(recipient_team);
+    teams.sort();
+    teams.dedup();
     let mut managed = Vec::with_capacity(candidates.len());
-    for team in candidates {
+    for team in teams {
         let role = team_membership::role_under_lock(tx, team, caller, &[]).await?;
-        if matches!(role, Some(role) if crate::services::team_service::can_manage(role)) {
+        let manages = matches!(role, Some(role) if crate::services::team_service::can_manage(role));
+        if Some(team) == recipient_team && !manages {
+            return Err(ApiError::Forbidden);
+        }
+        if manages && candidates.contains(&team) {
             managed.push(team);
         }
     }
@@ -702,7 +720,8 @@ async fn delegated_arm_still_grants(
 /// withdrawn while the door is in flight refuses the grant. The delegated arm's attenuation is
 /// re-read on the transaction but not under a lock.
 ///
-/// Lock order: team rows ascending (delegated arm) or the governance row (admin arm), then the
+/// Lock order: team rows ascending (delegated arm: the teams the right is held through and the
+/// recipient team, in one pass) or the governance row (admin arm), then the
 /// subject floor's `kb_resources` row, then grant rows ascending. A membership writer takes its
 /// team row first and no grant or resource row; a demotion takes standing and governance rows and
 /// none of these; the gating advisory lock is not taken here.
@@ -737,9 +756,14 @@ pub async fn grant_capability(
         return Err(erased_or_refused(pool, caller, subject, refusal).await);
     }
     // The delegated arm's re-check, in two halves around the subject floor so the door keeps one
-    // lock order: the teams the grant right is held through first, then the floor's resource row,
-    // then the grant rows.
-    let delegated_teams = lock_delegated_grant_teams(&mut tx, &proof, caller).await?;
+    // lock order: the teams the grant right is held through and the recipient team first, then the
+    // floor's resource row, then the grant rows.
+    let recipient_team = (req.principal_table == "kb_teams").then_some(req.principal_id);
+    let delegated_teams =
+        match lock_delegated_grant_teams(&mut tx, &proof, caller, recipient_team).await {
+            Ok(teams) => teams,
+            Err(refusal) => return Err(write_floor::rollback_with(tx, refusal).await),
+        };
     if let Err(refusal) = grant_subject_floor_in_tx(&mut tx, caller, subject).await {
         return Err(write_floor::rollback_with(tx, refusal).await);
     }
@@ -790,6 +814,9 @@ pub async fn grant_capability(
 }
 
 /// The grant door's bar on the RECIPIENT of a grant (team-authority fixes D2).
+///
+/// Decided on the pool. A delegated grant's manage bar on a recipient team is asked again under that
+/// team's lock on the write transaction (`lock_delegated_grant_teams`); the rest of this bar is not.
 ///
 /// Authority over the subject (`GrantAuthority`) decides what may be conferred; it never looked at
 /// who receives it. So a delegate could grant to any team id in the instance — `temper-system`,

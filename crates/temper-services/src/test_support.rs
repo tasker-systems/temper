@@ -288,6 +288,36 @@ pub async fn hold_member_removal(
     holder
 }
 
+/// Change `target`'s role on `team` to `role` through the routed membership writer, as `by`, and
+/// hand back the transaction **uncommitted**: [`hold_member_removal`] for a demotion or promotion.
+/// It holds the team row lock and the change until the caller commits it. `by` must be able to make
+/// the change, and `team` must keep an owner (C6).
+pub async fn hold_member_role_change(
+    pool: &PgPool,
+    by: Uuid,
+    team: Uuid,
+    target: Uuid,
+    role: temper_core::types::team::TeamRole,
+) -> sqlx::Transaction<'static, sqlx::Postgres> {
+    use crate::authz::team_membership::{self, MembershipAct, MembershipAuthority};
+    use temper_core::types::ids::ProfileId;
+
+    let by = human_principal_for(pool, by).await;
+    let mut holder = pool.begin().await.expect("begin the role change");
+    let locked = team_membership::locked(&mut holder, team, ProfileId::from(target))
+        .await
+        .expect("lock the team and the member row");
+    let resolved = MembershipAuthority::resolve(&mut holder, &by, team)
+        .await
+        .expect("resolve the changer's authority");
+    let change = team_membership::authorize(resolved, MembershipAct::Change { role }, &locked)
+        .expect("the changer may change the target's role");
+    team_membership::membership_write(&mut holder, None, change)
+        .await
+        .expect("write the role change");
+    holder
+}
+
 /// Wait until a backend in this test's database is blocked on a lock while taking a team row — the
 /// `FOR NO KEY UPDATE` of `team_membership::locked`, or of SAML reconcile's multi-team lock. A race
 /// test calls this before releasing its holder, so a pass means the contender really passed its
