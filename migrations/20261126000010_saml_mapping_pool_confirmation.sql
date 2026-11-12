@@ -71,10 +71,15 @@
 -- root or the gating team is left as it is, unrecorded.
 
 -- Section 1. One definition of "the subtree holds a pool", and the mappings over one.
+-- PL/pgSQL, not SQL, so the body is not resolved at CREATE time: temper-substrate's test baseline
+-- omits kb_teams.auto_join_role (crates/temper-substrate/tests/common/mod.rs), and this migration
+-- must still apply there for the payload schema it re-registers.
 CREATE FUNCTION _teams_over_pool() RETURNS SETOF uuid
-LANGUAGE sql STABLE
+LANGUAGE plpgsql STABLE
 SET search_path = public, pg_temp
 AS $$
+BEGIN
+    RETURN QUERY
     WITH RECURSIVE up AS (
         SELECT t.id FROM kb_teams t WHERE t.auto_join_role IS NOT NULL
         UNION
@@ -85,7 +90,8 @@ AS $$
         UNION
         SELECT tp.parent_id FROM kb_teams_parents tp JOIN up ON tp.child_id = up.id
     )
-    SELECT id FROM up;
+    SELECT up.id FROM up;
+END;
 $$;
 
 COMMENT ON FUNCTION _teams_over_pool() IS
