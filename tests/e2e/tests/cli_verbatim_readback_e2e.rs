@@ -13,9 +13,9 @@
 //! added the byte.
 //!
 //! The bodies are the shapes that matter for a leading separator: prose-led, heading-led,
-//! frontmatter-led (a body that opens with its own `---` fence), bodies that genuinely begin
-//! with one and two `\n`, and three past the segment budget so the segmented create writer is
-//! covered too.
+//! frontmatter-led (a body that opens with its own `---` fence), and bodies that genuinely begin
+//! with one and two `\n`. A second test runs one body past the segment budget through the
+//! segmented create writer, kept separate so neither test carries the other's embed cost.
 //!
 //! **This is a guard, and it passes on the code it was written against.** `show` prints
 //! `GET /content`'s markdown as served and touches no local file, so nothing on this path can
@@ -33,9 +33,9 @@ mod common;
 use serde_json::Value;
 use uuid::Uuid;
 
-/// The bodies under test, each with a label for the failure message.
-fn bodies() -> Vec<(&'static str, String)> {
-    let small: Vec<(&'static str, &'static str)> = vec![
+/// The one-shot bodies, each with a label for the failure message.
+fn small_bodies() -> Vec<(&'static str, String)> {
+    [
         (
             "prose-led",
             "Plain prose opens this body.\n\nA second paragraph.\n",
@@ -50,26 +50,18 @@ fn bodies() -> Vec<(&'static str, String)> {
             "\nA body that really starts with a newline.\n",
         ),
         ("two-leading-newlines", "\n\nTwo newlines lead this one.\n"),
-    ];
-    let mut all: Vec<(&'static str, String)> = small
-        .into_iter()
-        .map(|(label, body)| (label, body.to_string()))
-        .collect();
-    // Past the segment budget, the CLI streams the body through the segmented
-    // begin/append/finalize path instead of the one-shot create — a separate writer.
-    all.push((
-        "segmented-prose-led",
-        large_body("Prose leads this large body.\n\n"),
-    ));
-    all.push(("segmented-heading-led", large_body("# Big Document\n\n")));
-    all.push((
-        "segmented-leading-newline",
-        large_body("\nA newline leads this one.\n\n"),
-    ));
-    all
+    ]
+    .into_iter()
+    .map(|(label, body)| (label, body.to_string()))
+    .collect()
 }
 
 /// A body just over one segment budget (so two segments), opening with `lead`.
+///
+/// Past the budget the CLI streams the body through the segmented begin/append/finalize path, a
+/// separate writer from the one-shot create. Each such body costs a client-side embed of ~320 KiB,
+/// so this file carries one: `byte_exact_roundtrip_test.rs` already covers a heading-led segmented
+/// body, and the shape that matters for a leading separator is one that opens with `\n`.
 fn large_body(lead: &str) -> String {
     const FILLER: &str =
         "The quick brown fox jumps over the lazy dog, padding this section past the \
@@ -150,8 +142,9 @@ fn age_projection(root: &std::path::Path) {
     }
 }
 
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn stdin_create_reads_back_byte_exact_through_show(pool: sqlx::PgPool) {
+/// Create each body through the real binary with it on stdin, then check it at three points: the
+/// stored bytes, `show` right after create, and `show` once the projection is stale.
+async fn assert_round_trips(pool: sqlx::PgPool, bodies: Vec<(&'static str, String)>) {
     let app = common::setup(pool).await;
     app.client
         .profile()
@@ -164,7 +157,7 @@ async fn stdin_create_reads_back_byte_exact_through_show(pool: sqlx::PgPool) {
         .await
         .expect("ctx create");
 
-    for (label, body) in bodies() {
+    for (label, body) in bodies {
         let body = body.as_str();
         let title = format!("verbatim readback {label}");
         let created = cli_json_stdin(
@@ -218,4 +211,21 @@ async fn stdin_create_reads_back_byte_exact_through_show(pool: sqlx::PgPool) {
             "{label}: show on a stale projection is not byte-exact"
         );
     }
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn stdin_create_reads_back_byte_exact_through_show(pool: sqlx::PgPool) {
+    assert_round_trips(pool, small_bodies()).await;
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn segmented_stdin_create_reads_back_byte_exact_through_show(pool: sqlx::PgPool) {
+    assert_round_trips(
+        pool,
+        vec![(
+            "segmented-leading-newline",
+            large_body("\nA newline leads this one.\n\n"),
+        )],
+    )
+    .await;
 }
