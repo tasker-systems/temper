@@ -1903,9 +1903,13 @@ pub struct SamlGroupMappingChanged {
     /// The role the mapping confers: as written on `created`, as it was on `removed`.
     pub role: temper_core::types::team::TeamRole,
     /// True on a `created` that needed the admin's explicit confirmation (an `owner` role, or the
-    /// root or gating team as the target) and had it. Absent otherwise.
+    /// root or gating team as the target) and had it, and on every `adopted`. Absent otherwise.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub confirmed: bool,
+    /// On `adopted` only: the version of the migration that recorded the row as confirmed. Such a
+    /// record has no person actor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migration: Option<i64>,
 }
 
 /// What happened to the mapping in a [`SamlGroupMappingChanged`] record.
@@ -1917,6 +1921,9 @@ pub enum SamlGroupMappingAct {
     Created,
     /// The mapping was removed; the memberships it conferred were left in place.
     Removed,
+    /// A mapping that already existed above the ceiling when the doors arrived, recorded as
+    /// confirmed by the migration that introduced them (`migration` names it). No row changed.
+    Adopted,
 }
 
 /// `team_public_within_changed` — a `public_within` row was opened, closed, lapsed or cascade-deleted.

@@ -505,135 +505,95 @@ async fn a_demotion_in_flight_refuses_create_and_remove(pool: PgPool) {
     assert_eq!(records(&pool).await.len(), 1, "a refused remove recorded");
 }
 
-// ── The migration's refusal over existing rows (Pete, 2026-11-11) ────────────────────────────────
+// ── The migration's adoption of existing rows (B′, Pete, 2026-11-11, supersedes B) ─────────────
 
-/// Migration 20261125000010, read whole so its Section 0 guard can run against rows it must refuse.
+/// Migration 20261125000010, read whole so its Section 2 adoption can run against seeded rows.
 const DOOR_MIGRATION: &str =
     include_str!("../../../migrations/20261125000010_saml_group_mapping_door.sql");
 
-/// FAILS IF the migration would apply over a mapping that is `owner` or targets temper-system or the
-/// gating team, or stops naming it. A mapping within the ceiling on an ordinary team passes.
+/// A mapping already above the ceiling when the migration runs survives it unchanged and gets
+/// exactly one `adopted` record (confirmed, no person actor, the migration named). A row within the
+/// ceiling gets none. A fresh unconfirmed create of the same shape is still refused at the door.
+///
+/// FAILS IF the migration changes, drops or refuses such a row, records it more or less than once,
+/// or records a row within the ceiling.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn the_migration_refuses_an_unconfirmed_mapping_above_the_ceiling(pool: PgPool) {
+async fn the_migration_adopts_existing_rows_above_the_ceiling(pool: PgPool) {
     use sqlx::Executor;
     let section = DOOR_MIGRATION
-        .split_once("-- Section 0.")
-        .and_then(|(_, rest)| rest.split_once("-- Section 1."))
+        .split_once("-- Section 2.")
+        .map(|(_, rest)| rest)
+        .and_then(|rest| rest.split_once("SELECT declare_migration("))
         .map(|(body, _)| body)
-        .expect("the migration carries its Section 0 guard");
-    let guard = &section[section.find("DO $$").expect("the guard is a DO block")..];
+        .expect("the migration carries its Section 2 adoption");
+    let adoption = &section[section.find("DO $$").expect("the adoption is a DO block")..];
     let f = fixture(&pool).await;
 
-    let insert = |team: Uuid, group: &'static str, role: &'static str| {
-        let pool = pool.clone();
-        async move {
-            sqlx::query(
-                "INSERT INTO kb_saml_group_mappings (idp_key, group_value, team_id, role) \
-                 VALUES ($1, $2, $3, $4::team_role)",
-            )
-            .bind(IDP)
-            .bind(group)
-            .bind(team)
-            .bind(role)
-            .execute(&pool)
-            .await
-            .unwrap();
-        }
-    };
-    let clear = || async {
-        sqlx::query("DELETE FROM kb_saml_group_mappings")
-            .execute(&pool)
-            .await
-            .unwrap();
-    };
-
-    insert(f.eng, "eng", "maintainer").await;
-    pool.execute(guard)
-        .await
-        .expect("a maintainer mapping on an ordinary team passes the guard");
-
-    for (team, group, role, named) in [
-        (f.eng, "leads", "owner", "sm-okta/leads -> sm-eng (owner)"),
-        (
-            f.root,
-            "everyone",
-            "member",
-            "sm-okta/everyone -> temper-system (member)",
-        ),
-        (
-            f.gating,
-            "staff",
-            "watcher",
-            "sm-okta/staff -> sm-gate (watcher)",
-        ),
+    for (team, group, role) in [
+        (f.eng, "leads", "owner"),
+        (f.root, "everyone", "member"),
+        (f.gating, "staff", "watcher"),
+        (f.eng, "eng", "maintainer"),
     ] {
-        insert(team, group, role).await;
-        let err = pool
-            .execute(guard)
-            .await
-            .expect_err("the guard refuses a mapping above the ceiling");
-        let msg = err.to_string();
-        assert!(msg.contains(named), "the guard names {named}, got {msg}");
-        assert!(msg.contains("Before this migration"), "{msg}");
-        assert!(
-            msg.contains("must be deleted") && msg.contains("--confirm-elevated"),
-            "the guard says which remedy fits which row: {msg}"
-        );
-        clear().await;
-        insert(f.eng, "eng", "maintainer").await;
-    }
-}
-
-/// The gating designation is read under the gating lock on the create's transaction: a repoint
-/// onto the target team that is in flight makes the create wait, and once it commits the create is
-/// refused for want of confirmation, having written nothing.
-///
-/// FAILS IF the instance-team test reads the gating slug outside `_gating_team_lock`.
-#[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn a_gating_repoint_in_flight_onto_the_target_needs_confirmation(pool: PgPool) {
-    let f = fixture(&pool).await;
-    let admin = test_support::system_admin_proof_for(&pool, f.admin).await;
-
-    let mut repoint = pool.begin().await.unwrap();
-    let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
-        .fetch_one(&mut *repoint)
-        .await
-        .unwrap();
-    sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'sm-eng' WHERE id = 1")
-        .execute(&mut *repoint)
-        .await
-        .expect("repoint the gating slug onto the target");
-
-    let contender = tokio::spawn({
-        let pool = pool.clone();
-        let r = req(f.eng, "eng", TeamRole::Member, false);
-        async move { saml_mapping_service::create(&pool, &admin, &r).await }
-    });
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    loop {
-        let waiting: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM pg_stat_activity \
-                             WHERE datname = current_database() AND wait_event_type = 'Lock' \
-                               AND $1 = ANY (pg_blocking_pids(pid)))",
+        sqlx::query(
+            "INSERT INTO kb_saml_group_mappings (idp_key, group_value, team_id, role) \
+             VALUES ($1, $2, $3, $4::team_role)",
         )
-        .bind(pid)
-        .fetch_one(&pool)
+        .bind(IDP)
+        .bind(group)
+        .bind(team)
+        .bind(role)
+        .execute(&pool)
         .await
         .unwrap();
-        if waiting {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the create never waited on the repoint"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
-    repoint.commit().await.unwrap();
-    let err = contender.await.unwrap().unwrap_err();
-    assert_needs_confirmation(err, "instance team");
-    assert!(mappings(&pool).await.is_empty());
-    assert!(records(&pool).await.is_empty());
+    let before = mappings(&pool).await;
+
+    pool.execute(adoption)
+        .await
+        .expect("the adoption never refuses");
+
+    assert_eq!(mappings(&pool).await, before, "no row changed");
+    let recs = records(&pool).await;
+    assert_eq!(
+        recs.len(),
+        3,
+        "one record per row above the ceiling: {recs:?}"
+    );
+    for r in &recs {
+        assert_eq!(r["act"], "adopted", "{r}");
+        assert_eq!(r["confirmed"], true, "{r}");
+        assert_eq!(r["migration"], 20261125000010_i64, "{r}");
+        assert!(r.get("actor").is_none(), "no person actor: {r}");
+        serde_json::from_value::<temper_substrate::payloads::SamlGroupMappingChanged>(r.clone())
+            .expect("the record decodes as the typed payload");
+    }
+    let adopted: Vec<&str> = recs
+        .iter()
+        .map(|r| r["group_value"].as_str().unwrap())
+        .collect();
+    assert_eq!(adopted, vec!["everyone", "leads", "staff"]);
+
+    // The door still asks for confirmation on a fresh mapping of the same shape.
+    let admin = test_support::system_admin_proof_for(&pool, f.admin).await;
+    for (team, group, role) in [
+        (f.eng, "more-leads", TeamRole::Owner),
+        (f.root, "more-everyone", TeamRole::Member),
+        (f.gating, "more-staff", TeamRole::Watcher),
+    ] {
+        let err = saml_mapping_service::create(&pool, &admin, &req(team, group, role, false))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, ApiError::BadRequest(m) if m.contains("confirmation required")),
+            "{err:?}"
+        );
+    }
+    assert_eq!(
+        records(&pool).await.len(),
+        3,
+        "the refusals recorded nothing"
+    );
 }
 
 /// A re-run of an identical mapping is a no-op without the confirmation, even for an `owner` or

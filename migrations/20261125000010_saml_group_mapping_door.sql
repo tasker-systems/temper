@@ -8,7 +8,7 @@
 -- mapping, and nothing recorded either act. This migration adds:
 --
 --   * the admin event type `saml_group_mapping_changed` (payload: act, actor, idp_key, group_value,
---     team_id, role, confirmed). The team is the `subject` reference. No ledger arm reads it for a
+--     team_id, role, confirmed, migration). The team is the `subject` reference. No ledger arm reads it for a
 --     team manager, so it is admin-only by the ledger's fail-closed default.
 --   * `_admin_saml_group_mapping_write`, the one writer for both acts. It performs the row change and
 --     appends the event in one statement, and answers jsonb `{outcome, ...}`:
@@ -23,12 +23,17 @@
 --       removed  absent | changed (`role` as it was; `idp_memberships` counts the team's
 --                `source = 'idp'` rows, which the removal leaves in place).
 --
--- EXISTING ROWS ABOVE THE CEILING REFUSE THE MIGRATION (Pete, 2026-11-11). Every mapping the doors
--- did not write was written without confirmation, so the DO block below fails the migration, naming
--- each mapping that is `owner` or targets temper-system or the gating team; the operator removes the
--- row or lowers its role first. No CHECK and no trigger is added to the table: the ceiling binds this
--- writer, which the doors call, and a direct INSERT still bypasses it, as direct database access
--- bypasses every door. The reconcile reads the table as before.
+-- EXISTING ROWS ABOVE THE CEILING ARE ADOPTED (B′, Pete, 2026-11-11, supersedes B). A mapping that
+-- is already `owner`, or already targets temper-system or the gating team, was written before any
+-- door could ask for confirmation. Section 2 records each one as confirmed by this migration: one
+-- `saml_group_mapping_changed` event per row, act `adopted`, `confirmed: true`, `migration` naming
+-- this version, emitted by the bare `system` entity with no person actor (the admin ledger epoch's
+-- emitter, 20260717000020). No row is changed, deleted or demoted, and the reconcile reads the table
+-- as before; a NOTICE lists every adopted row. The ledger event is the record of the confirmation:
+-- the row carries no column for it, and the doors read none.
+--
+-- No CHECK and no trigger is added to the table: the ceiling binds this writer, which the doors
+-- call, and a direct INSERT still bypasses it, as direct database access bypasses every door.
 --
 -- A later edit must keep the create arm's lock order: `_gating_team_lock(false)` BEFORE the team row
 -- (`FOR SHARE`). A rename takes the gating lock exclusively and then the team row, so taking the row
@@ -45,32 +50,6 @@
 -- The payload schema literal below is
 -- `crates/temper-substrate/tests/fixtures/payloads/saml_group_mapping_changed.v1.schema.json`, and
 -- `the_migration_literal_matches_the_committed_fixture` pins the pair.
-
--- Section 0. Refuse over a mapping above the ceiling (Pete, 2026-11-11).
-DO $$
-DECLARE
-    v_found text;
-BEGIN
-    SELECT string_agg(format('%s/%s -> %s (%s)', m.idp_key, m.group_value, t.slug, m.role), ', '
-                      ORDER BY m.idp_key, m.group_value, t.slug)
-      INTO v_found
-      FROM kb_saml_group_mappings m
-      JOIN kb_teams t ON t.id = m.team_id
-     WHERE m.role = 'owner'
-        OR t.slug = 'temper-system'
-        OR t.slug = (SELECT s.gating_team_slug FROM kb_system_settings s WHERE s.id = 1);
-    IF v_found IS NOT NULL THEN
-        RAISE EXCEPTION 'SAML group mappings above the maintainer ceiling or onto an instance team, '
-                        'none of them confirmed (%). Before this migration: an `owner` row on an '
-                        'ordinary team can be lowered to maintainer or below, or deleted; a row onto '
-                        'temper-system or the gating team must be deleted (lowering its role does not '
-                        'clear it). Once this migration has applied, re-create any that should stand '
-                        'with `temper admin saml map-group --confirm-elevated`. In between, a login''s '
-                        'IdP reconcile may revoke the idp-sourced memberships those rows conferred.', v_found
-            USING ERRCODE = 'check_violation';
-    END IF;
-END;
-$$;
 
 -- Section 1. The record and its writer.
 INSERT INTO kb_event_types (name, payload_schema, schema_version, category) VALUES
@@ -95,7 +74,7 @@ INSERT INTO kb_event_types (name, payload_schema, schema_version, category) VALU
       ]
     },
     "confirmed": {
-      "description": "True on a `created` that needed the admin's explicit confirmation (an `owner` role, or the\nroot or gating team as the target) and had it. Absent otherwise.",
+      "description": "True on a `created` that needed the admin's explicit confirmation (an `owner` role, or the\nroot or gating team as the target) and had it, and on every `adopted`. Absent otherwise.",
       "type": "boolean"
     },
     "group_value": {
@@ -105,6 +84,14 @@ INSERT INTO kb_event_types (name, payload_schema, schema_version, category) VALU
     "idp_key": {
       "description": "The IdP whose assertions the mapping reads (`kb_saml_idp.idp_key`).",
       "type": "string"
+    },
+    "migration": {
+      "description": "On `adopted` only: the version of the migration that recorded the row as confirmed. Such a\nrecord has no person actor.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64"
     },
     "role": {
       "description": "The role the mapping confers: as written on `created`, as it was on `removed`.",
@@ -140,6 +127,11 @@ INSERT INTO kb_event_types (name, payload_schema, schema_version, category) VALU
           "description": "The mapping was removed; the memberships it conferred were left in place.",
           "type": "string",
           "const": "removed"
+        },
+        {
+          "description": "A mapping that already existed above the ceiling when the doors arrived, recorded as\nconfirmed by the migration that introduced them (`migration` names it). No row changed.",
+          "type": "string",
+          "const": "adopted"
         }
       ]
     },
@@ -279,13 +271,57 @@ event, atomically. A create of role owner, or onto temper-system or the gating t
 p_confirmed. A removal leaves every membership in place. Answers jsonb {outcome, ...}; only
 outcome changed writes or emits. It NEVER AUTHORIZES: saml_mapping_service decides who may.$c$;
 
+-- Section 2. Adopt the rows already above the ceiling (B′, Pete, 2026-11-11, supersedes B).
+DO $$
+DECLARE
+    v_emitter uuid;
+    v_list    text;
+    r         record;
+BEGIN
+    SELECT id INTO v_emitter FROM kb_entities WHERE name = 'system';
+    FOR r IN
+        SELECT m.idp_key, m.group_value, m.team_id, m.role, t.slug
+          FROM kb_saml_group_mappings m
+          JOIN kb_teams t ON t.id = m.team_id
+         WHERE m.role = 'owner'
+            OR t.slug = 'temper-system'
+            OR t.slug = (SELECT s.gating_team_slug FROM kb_system_settings s WHERE s.id = 1)
+         ORDER BY m.idp_key, m.group_value, t.slug
+    LOOP
+        IF v_emitter IS NULL THEN
+            RAISE EXCEPTION 'the system entity is missing, so the SAML mappings above the ceiling '
+                            'cannot be recorded as adopted';
+        END IF;
+        PERFORM _event_append(
+            'saml_group_mapping_changed', v_emitter, NULL, NULL,
+            jsonb_build_object(
+                'act',         'adopted',
+                'idp_key',     r.idp_key,
+                'group_value', r.group_value,
+                'team_id',     r.team_id,
+                'role',        r.role,
+                'confirmed',   true,
+                'migration',   20261125000010),
+            p_references => jsonb_build_array(
+                jsonb_build_object('rel', 'subject',
+                                   'target', jsonb_build_object('kind', 'kb_teams', 'id', r.team_id))));
+        v_list := concat_ws(', ', v_list,
+                            format('%s/%s -> %s (%s)', r.idp_key, r.group_value, r.slug, r.role));
+    END LOOP;
+    IF v_list IS NOT NULL THEN
+        RAISE NOTICE 'SAML group mappings above the maintainer ceiling or onto an instance team, '
+                     'adopted as confirmed by this migration and recorded on the admin ledger: %', v_list;
+    END IF;
+END;
+$$;
+
 SELECT declare_migration(
     20261125000010,
     'additive',
     'Adds the saml_group_mapping_changed admin event type and _admin_saml_group_mapping_write, '
     'which creates or removes a kb_saml_group_mappings row and appends its ledger record in one '
     'statement. No table, column, constraint or existing function changes, so a binary without this '
-    'change keeps working and the IdP reconcile reads the table as before. It refuses to apply over '
-    'an existing mapping that is owner or targets temper-system or the gating team (Pete, '
-    '2026-11-11), naming each.'
+    'change keeps working and the IdP reconcile reads the table as before. An existing mapping that '
+    'is owner or targets temper-system or the gating team is left as it is and recorded as adopted '
+    '(one ledger event each; B-prime, Pete, 2026-11-11, supersedes B).'
 );

@@ -18,7 +18,7 @@
       ]
     },
     "confirmed": {
-      "description": "True on a `created` that needed the admin's explicit confirmation (an `owner` role, or the\nroot or gating team as the target) and had it. Absent otherwise.",
+      "description": "True on a `created` that needed the admin's explicit confirmation (an `owner` role, or the\nroot or gating team as the target) and had it, and on every `adopted`. Absent otherwise.",
       "type": "boolean"
     },
     "group_value": {
@@ -28,6 +28,14 @@
     "idp_key": {
       "description": "The IdP whose assertions the mapping reads (`kb_saml_idp.idp_key`).",
       "type": "string"
+    },
+    "migration": {
+      "description": "On `adopted` only: the version of the migration that recorded the row as confirmed. Such a\nrecord has no person actor.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64"
     },
     "role": {
       "description": "The role the mapping confers: as written on `created`, as it was on `removed`.",
@@ -63,6 +71,11 @@
           "description": "The mapping was removed; the memberships it conferred were left in place.",
           "type": "string",
           "const": "removed"
+        },
+        {
+          "description": "A mapping that already existed above the ceiling when the doors arrived, recorded as\nconfirmed by the migration that introduced them (`migration` names it). No row changed.",
+          "type": "string",
+          "const": "adopted"
         }
       ]
     },
