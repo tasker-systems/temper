@@ -195,19 +195,52 @@ impl E2eTestApp {
 /// `warmup.rs` still passed the test written to catch it, because the 24-minute-old binary on
 /// disk still carried the fix. A green run proved nothing about the change under test.
 ///
-/// CI is unaffected — it runs `cargo nextest run --workspace`, which builds every bin target —
-/// so this is a trap for scoped local runs only. **Before trusting a local run of these tests,
-/// and always before a bite probe, `cargo build -p temper-cli --bin temper`.**
+/// CI was not immune either. Its `cargo nextest run --workspace` build does not guarantee the
+/// uplifted binary, and rust-cache restores `target/` without one, so the suite either ran a stale
+/// binary from the cache or failed every spawn with `NotFound`. The integration job now builds the
+/// bins explicitly before the run (`.github/workflows/test-rust.yml`). **Before trusting a local
+/// run of these tests, and always before a bite probe, `cargo build -p temper-cli --bin temper`.**
 ///
-/// The test executable lives in `<target>/<profile>/deps/`; the `temper` binary
-/// is one level up in `<target>/<profile>/`.
+/// Resolution, in order:
+/// 1. `TEMPER_E2E_BIN`, when set. CI sets it to the binary its build step produced, so CI never
+///    depends on where cargo or nextest happen to put test executables.
+/// 2. The nearest ancestor of the running test executable that holds a `temper` file. With the
+///    classic layout the test executable is `<target>/<profile>/deps/<test>`, so that ancestor is
+///    `<target>/<profile>/`. Walking up instead of popping a fixed count keeps working when a
+///    toolchain or runner moves test executables deeper. Neither is pinned in CI
+///    (`dtolnay/rust-toolchain@stable`, `install-action: nextest`), so assuming the layout broke
+///    every spawn at once without a code change.
+///
+/// Neither found: panic, naming every place looked. That replaces a bare `NotFound` from `spawn`.
 fn temper_bin_path() -> std::path::PathBuf {
-    let mut path = std::env::current_exe().expect("current_exe() for the running test binary");
-    path.pop(); // drop the test-binary filename → .../deps
-    if path.ends_with("deps") {
-        path.pop(); // → .../<profile>
+    if let Some(explicit) = std::env::var_os("TEMPER_E2E_BIN") {
+        let path = std::path::PathBuf::from(explicit);
+        assert!(
+            path.is_file(),
+            "TEMPER_E2E_BIN={} is not a file",
+            path.display()
+        );
+        return path;
     }
-    path.join("temper")
+    let exe = std::env::current_exe().expect("current_exe() for the running test binary");
+    let mut looked = Vec::new();
+    for dir in exe.ancestors().skip(1) {
+        let candidate = dir.join("temper");
+        if candidate.is_file() {
+            return candidate;
+        }
+        looked.push(candidate);
+    }
+    panic!(
+        "no `temper` binary found above the test executable {}; looked at:\n{}\n\
+         build it with `cargo build -p temper-cli --bin temper`, or set TEMPER_E2E_BIN",
+        exe.display(),
+        looked
+            .iter()
+            .map(|p| format!("  {}", p.display()))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
 }
 
 /// Run the `temper` CLI binary against the in-process Axum server.

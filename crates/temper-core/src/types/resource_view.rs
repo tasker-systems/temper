@@ -133,6 +133,16 @@ pub struct ResourceView {
     pub originator_profile_id: ProfileId,
     pub is_active: bool,
     pub created: DateTime<Utc>,
+    /// When the resource's own row last changed: the `occurred_at` of the event that last wrote
+    /// it. This is not "when anything about the resource last changed".
+    ///
+    /// It moves on a body write (every block create, mutate or re-block, including a re-block
+    /// that changes no byte), a `title` or `origin_uri` change, deletion and erasure.
+    ///
+    /// It does **not** move on a property write (a facet, an `open_meta` key, the stage or any
+    /// other managed key), an edge assert, re-weight, re-type or fold, a data-artifact commit, a
+    /// move to another context, or a provenance annotation. To see those, read the context's
+    /// change feed (`GET /api/events/{context}/changes`, `temper context changes`).
     pub updated: DateTime<Utc>,
     /// When the caller last changed this resource themselves. Present only on a row read with
     /// `changed_by=@me`, the same time `sort=changed_by_me` orders by; absent on every other read.
@@ -165,8 +175,13 @@ pub struct ResourceView {
     /// Such an edit still writes: the stored bytes, the read-back body, and `updated` all
     /// change. The hash **does** move when the chunk sequence changes, and also when the same
     /// chunks are regrouped into different blocks. That happens on a re-block, or on the first
-    /// whole-body write to a resource whose blocks predate the blocking policy. So read
-    /// `updated` (or compare the content) to detect an edit, never `body_hash`.
+    /// whole-body write to a resource whose blocks predate the blocking policy. It also depends
+    /// on the chunker's parameters (how it splits an oversized section). So the hash can move
+    /// with **no** byte change, as well as stay put through one: a moved hash means "re-read",
+    /// never "the text changed". It is the merkle of one segmentation, not a content identity.
+    ///
+    /// To detect a body or title edit, read `updated` (or compare the content), never
+    /// `body_hash`. Neither one sees a property, edge or data-artifact write: see `updated`.
     ///
     /// This is the identity segmented ingest echoes at finalize (`expected_body_hash`) and the
     /// one the re-block keeps blocks by. The byte-level check of an upload is finalize's

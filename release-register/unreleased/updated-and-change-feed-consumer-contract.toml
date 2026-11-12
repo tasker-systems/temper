@@ -1,0 +1,26 @@
+title    = "`updated`, `body_hash`, the change feed and the context cursor say what they do and do not see"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["http", "mcp", "cli-stdout", "clients"]
+status   = "signal-only"
+body = '''
+Doc only. No field, route, parameter or behavior changes; openapi.json grows by descriptions alone,
+and the three SDKs and the ts-rs bindings are regenerated from it.
+
+- `ResourceView.updated` names what moves it (a body write, including a re-block; a title or
+  origin_uri change; deletion; erasure) and what does not (property writes such as facets,
+  open_meta and stage; edges; data artifacts; moves; provenance annotation), and points at the
+  change feed for those.
+- `ResourceView.body_hash` says it can move with no byte change (a re-block, the chunker's
+  parameters) as well as stay put through one, and qualifies "read `updated`" to body and title
+  edits. The MCP `get_resource` description and the MCP skill's trap line say the same.
+- `GET /api/events/{kb_context_id}/changes` and `temper context changes` carry the consumer
+  contract: record `through` before reading bodies; an edge entry names the edge, in its home
+  context's feed only; `resource_departed` is a deletion or a move; a facet scrub is not
+  announced; `GET /api/resources?ids=` is the periodic sweep.
+- `GET /api/events/{kb_context_id}/cursor` says it is a hint that can miss a change: it orders by
+  `occurred_at` (transaction start), so a long transaction that commits late never moves it.
+
+Who observes: a reader of the OpenAPI descriptions, the SDK doc comments, the MCP tool list and the
+CLI help. Release relevance: signal-only.
+'''
