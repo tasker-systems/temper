@@ -195,9 +195,11 @@ impl E2eTestApp {
 /// `warmup.rs` still passed the test written to catch it, because the 24-minute-old binary on
 /// disk still carried the fix. A green run proved nothing about the change under test.
 ///
-/// CI is unaffected — it runs `cargo nextest run --workspace`, which builds every bin target —
-/// so this is a trap for scoped local runs only. **Before trusting a local run of these tests,
-/// and always before a bite probe, `cargo build -p temper-cli --bin temper`.**
+/// CI was not immune either. Its `cargo nextest run --workspace` build does not guarantee the
+/// uplifted binary, and rust-cache restores `target/` without one, so the suite either ran a stale
+/// binary from the cache or failed every spawn with `NotFound`. The integration job now builds the
+/// bins explicitly before the run (`.github/workflows/test-rust.yml`). **Before trusting a local
+/// run of these tests, and always before a bite probe, `cargo build -p temper-cli --bin temper`.**
 ///
 /// The test executable lives in `<target>/<profile>/deps/`; the `temper` binary
 /// is one level up in `<target>/<profile>/`.

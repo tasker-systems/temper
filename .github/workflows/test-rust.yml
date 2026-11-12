@@ -267,6 +267,17 @@ jobs:
       - name: Migrate the test-database template
         run: bash .github/scripts/sqlx-test-template.sh
 
+      # The e2e suite spawns the real `temper` binary at `<target>/debug/temper`
+      # (`tests/e2e/tests/common/mod.rs::temper_bin_path`), and nothing in the test build guarantees
+      # it is there: a test build need not leave the uplifted binary behind, and rust-cache restores
+      # `target/` without top-level binaries. When the restored cache happened to hold one, the suite
+      # ran whatever stale binary it was; when it did not, every CLI-spawning test failed in under a
+      # second with `spawn temper: NotFound` (main, run 43280598944). An explicit build of the bins,
+      # with the SAME feature set as the run below, puts the current binary there. It shares the test
+      # build's artifacts, so it costs only the link.
+      - name: Build the workspace binaries the e2e suite spawns
+        run: cargo build --workspace --exclude temper-cloud --features test-db,test-embed --bins --locked
+
       - name: Run integration & E2E tests (shard ${{ matrix.partition }}/3)
         # ONE command for the whole DB-backed workspace, SHARDED. `--partition count:i/3` runs a
         # deterministic (test-name-hash) 1/3 slice; the `--workspace` selection is UNCHANGED, so this
