@@ -275,8 +275,16 @@ jobs:
       # second with `spawn temper: NotFound` (main, run 43280598944). An explicit build of the bins,
       # with the SAME feature set as the run below, puts the current binary there. It shares the test
       # build's artifacts, so it costs only the link.
+      # The harness takes TEMPER_E2E_BIN before any layout guess. The path comes from cargo's own
+      # report of what it built, never from a guess about where it put it.
       - name: Build the workspace binaries the e2e suite spawns
-        run: cargo build --workspace --exclude temper-cloud --features test-db,test-embed --bins --locked
+        run: |
+          cargo build --workspace --exclude temper-cloud --features test-db,test-embed --bins --locked \
+            --message-format=json-render-diagnostics > /tmp/cargo-build.jsonl
+          bin=$(jq -r 'select(.reason == "compiler-artifact" and .target.name == "temper" and (.target.kind | index("bin"))) | .executable' /tmp/cargo-build.jsonl | tail -1)
+          test -x "$bin" || { echo "::error::cargo reported no temper executable (got '$bin')"; exit 1; }
+          echo "built temper at $bin"
+          echo "TEMPER_E2E_BIN=$bin" >> "$GITHUB_ENV"
 
       - name: Run integration & E2E tests (shard ${{ matrix.partition }}/3)
         # ONE command for the whole DB-backed workspace, SHARDED. `--partition count:i/3` runs a
