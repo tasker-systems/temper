@@ -13,8 +13,17 @@
 //! added the byte.
 //!
 //! The bodies are the shapes that matter for a leading separator: prose-led, heading-led,
-//! frontmatter-led (a body that opens with its own `---` fence), and bodies that genuinely begin
-//! with one and two `\n`.
+//! frontmatter-led (a body that opens with its own `---` fence), bodies that genuinely begin
+//! with one and two `\n`, and three past the segment budget so the segmented create writer is
+//! covered too.
+//!
+//! **This is a guard, and it passes on the code it was written against.** `show` prints
+//! `GET /content`'s markdown as served and touches no local file, so nothing on this path can
+//! prepend a byte today. The local projection file does carry one: `normalize_body_for_vault`
+//! (`crates/temper-cli/src/actions/ingest.rs`) adds a `\n` separator after the frontmatter fence.
+//! That is the projection's own format, and no in-tree reader turns it back into a body. A change
+//! that routed `show` through the projection, or a store that stopped holding the bytes
+//! verbatim, fails here.
 //!
 //! Before trusting a local run: `cargo build -p temper-cli --bin temper` — `-p temper-e2e` does not
 //! rebuild the binary these tests spawn (see `common::temper_bin_path`).
