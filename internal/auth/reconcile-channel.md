@@ -122,6 +122,10 @@ Even if the endpoint were reached by an attacker, the damage is bounded by desig
 - It can only apply **operator-pre-configured** `kb_saml_group_mappings` — never arbitrary
   grants. An attacker cannot invent a team or a role; they can only trigger the mappings an
   operator already wrote.
+- It **never confers more than `watcher` on temper-system or the gating team**, whatever a
+  mapping row says (migration `20261126000010`, Pete, 2026-11-12). A forged assertion naming an
+  admins group reaches read-only membership there at most; an authoring role on either team is a
+  system admin's native act.
 - It **never touches `native` memberships** (added in-app or by join-request approval) or
   auto-join teams — reconcile manages only `source='idp'` rows.
 - It **never deletes or deactivates a profile.** It *can* JIT-create one — the same

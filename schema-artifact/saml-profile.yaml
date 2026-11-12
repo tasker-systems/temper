@@ -25,10 +25,14 @@ env_out: "schema-artifact/acme-saml.env"   # --env-out (chmod 0600 — contains 
 sql_out: "schema-artifact/acme-saml-idp.sql"  # --sql-out
 
 # group → (+team, role) mappings — applied at step 11, AFTER the teams exist (system-bootstrap.sh).
+# temper-system and the gating team take `watcher` only: an IdP group never confers an authoring
+# role on either, so a spoofed assertion cannot carry one. Give owners there directly
+# (`temper team add-member`, as a system admin). An owner role elsewhere, or an authoring role onto
+# a team with an auto-join team beneath it, needs `confirm_elevated: true`.
 group_mappings:
   - group: "temper-admins"
     team: "temper-system"
-    role: "owner"
+    role: "watcher"
   - group: "everyone"
     team: "everyone"
     role: "watcher"

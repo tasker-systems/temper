@@ -16,7 +16,7 @@ require 'time'
 module Temper::Generated
   # Request body for `POST /api/admin/saml/group-mappings`.
   class CreateSamlGroupMappingRequest < ApiModelBase
-    # The admin's explicit confirmation, required for an `owner` role, and for an authoring role (owner, maintainer, member) onto a team with a pool at or beneath it (`temper-system`, the gating team or an auto-join team, live or deleted). Never for `watcher`. Without it such a request is refused and nothing is written. Ignored otherwise. Defaults to `false`.
+    # The admin's explicit confirmation, required for an `owner` role, and for an authoring role (owner, maintainer, member) onto a team with a pool beneath it (the gating team or an auto-join team, live or deleted). Never for `watcher`. It cannot lift the instance-team rule: onto `temper-system` or the gating team, only `watcher` is accepted. Without it such a request is refused and nothing is written. Ignored otherwise. Defaults to `false`.
     attr_accessor :confirm_elevated
 
     # The group value, exactly as the IdP asserts it.

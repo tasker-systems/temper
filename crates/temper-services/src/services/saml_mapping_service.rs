@@ -13,9 +13,10 @@
 //!
 //! The row change, the ceiling and the confirmation are decided in `_admin_saml_group_mapping_write`
 //! (migrations `20261125000010`, `20261126000010`) under the team and gating locks, so the decision
-//! holds to commit. An `owner` role, or an authoring role (owner, maintainer, member) onto a team
-//! whose subtree holds a pool (the root, the gating team or an auto-join team, dead teams included),
-//! needs the admin's confirmation; a watcher mapping never does. This module maps its named outcomes
+//! holds to commit. Onto temper-system or the gating team a mapping is `watcher` only, and the IdP
+//! reconcile clamps any row there to `watcher` (Pete, 2026-11-12). Elsewhere an `owner` role, or an
+//! authoring role (owner, maintainer, member) onto a team whose subtree holds a pool (dead teams
+//! included), needs the admin's confirmation; a watcher mapping never does. This module maps its named outcomes
 //! to the wire.
 //!
 //! It also holds the one elevation scan every structural team act runs (`elevation_before` and
@@ -56,13 +57,6 @@ fn needs_confirmation(needs: &[String], role: TeamRole) -> ApiError {
             "the role `{}` is above the `maintainer` ceiling",
             role.as_str()
         ));
-    }
-    if needs.iter().any(|n| n == "instance_team") {
-        why.push(
-            "the team is an instance team (temper-system or the gating team), which reaches every \
-             profile"
-                .to_string(),
-        );
     }
     if needs.iter().any(|n| n == "pool_beneath") {
         why.push(format!(
@@ -123,10 +117,12 @@ async fn write(
     Ok((answer, tx))
 }
 
-/// Create a mapping. Refused (`400`, naming why, nothing written) without `confirm_elevated` when
-/// the role is `owner`, or is an authoring role (owner, maintainer, member) and the team's subtree,
-/// dead teams included, holds a pool: the team is `temper-system`, the gating team or an auto-join
-/// team, or one of them is beneath it. A `watcher` mapping never needs it. `404` for an unknown IdP
+/// Create a mapping. Onto `temper-system` or the gating team, `watcher` only: any other role is
+/// refused (`400`, nothing written) with or without `confirm_elevated`, since a higher role there
+/// is a system admin's native act. Elsewhere, refused (`400`, naming why, nothing written) without
+/// `confirm_elevated` when the role is `owner`, or is an authoring role (owner, maintainer, member)
+/// and the team's subtree, dead teams included, holds a pool (the gating team or an auto-join team
+/// beneath it). A `watcher` mapping never needs it. `404` for an unknown IdP
 /// or a team that is not live; `400` for a personal team; `409` when the key already maps to
 /// another role, or when the team's subtree changed while the act waited for its locks (retry).
 /// The same mapping again is answered `created: false` and records nothing.
@@ -172,6 +168,14 @@ pub async fn create(
                 "a personal team takes no other member, so no SAML mapping can target one"
                     .to_string(),
             ))
+        }
+        "instance_team_watcher_only" => {
+            return Err(ApiError::BadRequest(format!(
+                "an identity-provider group confers at most `watcher` on temper-system or the \
+                 gating team; `{}` there is a system admin's native act (add the member directly), \
+                 with or without `confirm_elevated`. Nothing was written",
+                req.role.as_str()
+            )))
         }
         "subtree_changed" => {
             return Err(ApiError::Conflict(
@@ -298,4 +302,28 @@ pub(crate) async fn record_elevations(
     .await?;
     serde_json::from_value(raw)
         .map_err(|e| ApiError::Internal(format!("_saml_mapping_elevations_record: {e}")))
+}
+
+/// After a gating repoint, on its transaction: each mapping above `watcher` onto the new gating team
+/// gets one `saml_group_mapping_changed` event, act `clamped`, naming `actor`
+/// (`_saml_mappings_clamped_record`): the IdP reconcile confers `watcher` there from now on. Answered,
+/// ordered by idp_key, group and team.
+pub(crate) async fn record_clamps(
+    conn: &mut sqlx::PgConnection,
+    teams: &[Uuid],
+    emitter: Uuid,
+    actor: temper_core::types::ids::ProfileId,
+    correlation: Option<Uuid>,
+) -> ApiResult<Vec<SamlGroupMapping>> {
+    let raw = sqlx::query_scalar!(
+        r#"SELECT _saml_mappings_clamped_record($1, $2, $3, NULL, $4) AS "c!""#,
+        emitter,
+        *actor,
+        teams,
+        correlation,
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    serde_json::from_value(raw)
+        .map_err(|e| ApiError::Internal(format!("_saml_mappings_clamped_record: {e}")))
 }

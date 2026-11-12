@@ -42,6 +42,9 @@ pub struct ReconcileCounts {
     /// wins over the last-owner guard). The event carries `left_ownerless`; a system admin
     /// repairs the team.
     pub left_ownerless: usize,
+    /// Teams where a mapping asked for more than `watcher` on temper-system or the gating team,
+    /// and the reconcile conferred `watcher` (migration `20261126000010`).
+    pub clamped: usize,
 }
 
 /// What a call to [`reconcile_idp_memberships`] did — an enum, so that "declined to try" cannot be
@@ -226,6 +229,41 @@ async fn reconcile_pass(
         .map(|t| t.id)
         .collect();
 
+    // 2a'. The instance clamp (Pete, 2026-11-12): an IdP group confers at most `watcher` on
+    //      temper-system or the gating team, whatever the mapping row says. A spoofed or
+    //      intercepted assertion must not be a path to an authoring role on a team every approved
+    //      profile reads; a higher role there is a system admin's native act. Read under the
+    //      shared gating lock, after the team rows (the order of every team act), so a concurrent
+    //      repoint is committed or waits, and decided here, not at the mapping door, so a row
+    //      written before the rule, or by SQL, is bound too.
+    sqlx::query_scalar!(r#"SELECT 1 AS "one!" FROM (SELECT _gating_team_lock(false)) g"#)
+        .fetch_one(&mut *tx)
+        .await?;
+    let instance: std::collections::HashSet<Uuid> = sqlx::query_scalar!(
+        r#"SELECT t.id AS "id!" FROM kb_teams t
+            WHERE t.id = ANY($1)
+              AND (t.slug = 'temper-system'
+                   OR t.slug = (SELECT s.gating_team_slug FROM kb_system_settings s
+                                 WHERE s.id = 1))"#,
+        &to_lock[..],
+    )
+    .fetch_all(&mut *tx)
+    .await?
+    .into_iter()
+    .collect();
+    let mut clamped = 0usize;
+    let desired: HashMap<Uuid, TeamRole> = desired
+        .iter()
+        .map(|(&team_id, &role)| {
+            if instance.contains(&team_id) && role != TeamRole::Watcher {
+                clamped += 1;
+                (team_id, TeamRole::Watcher)
+            } else {
+                (team_id, role)
+            }
+        })
+        .collect();
+
     // 2b. Current state under the locks: role + source per team, as it NOW stands.
     let current = sqlx::query!(
         r#"SELECT team_id, role AS "role: TeamRole", source::text AS "source: String"
@@ -264,7 +302,10 @@ async fn reconcile_pass(
     }
 
     let token = IdpReconcileToken { _private: () };
-    let mut out = ReconcileCounts::default();
+    let mut out = ReconcileCounts {
+        clamped,
+        ..ReconcileCounts::default()
+    };
 
     // 3. Add / update desired teams (skipping any team the profile is native in).
     for m in desired

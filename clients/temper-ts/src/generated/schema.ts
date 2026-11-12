@@ -756,7 +756,7 @@ export interface paths {
         put?: never;
         /**
          * Create a SAML group mapping
-         * @description Maps a group the IdP asserts to a role on a team: at each login, the IdP reconcile gives everyone in the group that role. The ceiling is `maintainer`. An `owner` role, or an owner, maintainer or member role onto a team with a pool at or beneath it (temper-system, the gating team or an auto-join team, live or deleted), needs `confirm_elevated: true` (a watcher mapping never does); without it the request is refused, naming why, and nothing is written. Recorded as `saml_group_mapping_changed`. The same mapping again records nothing and answers `created: false`. Requires a system admin.
+         * @description Maps a group the IdP asserts to a role on a team: at each login, the IdP reconcile gives everyone in the group that role. The ceiling is `maintainer`. Onto temper-system or the gating team, only `watcher` is accepted, with or without `confirm_elevated` (a higher role there is a system admin's native act, and the reconcile clamps any such row to watcher). Elsewhere an `owner` role, or an owner, maintainer or member role onto a team with the gating team or an auto-join team (live or deleted) beneath it, needs `confirm_elevated: true` (a watcher mapping never does); without it the request is refused, naming why, and nothing is written. Recorded as `saml_group_mapping_changed`. The same mapping again records nothing and answers `created: false`. Requires a system admin.
          */
         post: operations["admin_create_saml_group_mapping"];
         /**
@@ -6408,8 +6408,9 @@ export interface components {
         CreateSamlGroupMappingRequest: {
             /**
              * @description The admin's explicit confirmation, required for an `owner` role, and for an authoring role
-             *     (owner, maintainer, member) onto a team with a pool at or beneath it (`temper-system`, the
-             *     gating team or an auto-join team, live or deleted). Never for `watcher`. Without it such a
+             *     (owner, maintainer, member) onto a team with a pool beneath it (the gating team or an
+             *     auto-join team, live or deleted). Never for `watcher`. It cannot lift the instance-team rule:
+             *     onto `temper-system` or the gating team, only `watcher` is accepted. Without it such a
              *     request is refused and nothing is written. Ignored otherwise. Defaults to `false`.
              */
             confirm_elevated?: boolean;
@@ -12129,8 +12130,18 @@ export interface components {
         SystemSettings: {
             /**
              * @description On the answer to a settings write that repoints `gating_team_slug`: the SAML group mappings
+             *     onto the new gating team with a role above `watcher`. An identity-provider group confers at
+             *     most `watcher` on the gating team, so from now on the reconcile confers `watcher` for each;
+             *     a higher role there is a system admin's native act. Each is recorded once as
+             *     `saml_group_mapping_changed`, act `clamped`. No mapping row changes. Empty on every other
+             *     answer.
+             */
+            clamped_mappings?: components["schemas"]["SamlGroupMapping"][];
+            /**
+             * @description On the answer to a settings write that repoints `gating_team_slug`: the SAML group mappings
              *     the repoint elevated, each authoring-role (owner, maintainer, member) mapping onto a team that
-             *     had no pool beneath it before and has the new gating team beneath it now (dead teams count).
+             *     had no pool beneath it before and has the new gating team beneath it now (dead teams count),
+             *     other than the gating team itself (see `clamped_mappings`).
              *     Each is recorded once as `saml_group_mapping_changed`, act `elevated`. Read on the write's own
              *     transaction. Empty on every other answer.
              */
@@ -14652,7 +14663,7 @@ export interface operations {
                     "application/json": components["schemas"]["CreateSamlGroupMappingOutcome"];
                 };
             };
-            /** @description Confirmation required (an `owner` role, or an authoring role onto a team with a pool at or beneath it, without `confirm_elevated`); a personal team; or an empty idp_key or group. Nothing is written */
+            /** @description Confirmation required (an `owner` role, or an authoring role onto a team with a pool beneath it, without `confirm_elevated`); a role above `watcher` onto temper-system or the gating team; a personal team; or an empty idp_key or group. Nothing is written */
             400: {
                 headers: {
                     [name: string]: unknown;

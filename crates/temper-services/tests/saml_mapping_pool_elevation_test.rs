@@ -25,6 +25,9 @@ use sqlx::PgPool;
 use temper_core::types::saml_mapping::{CreateSamlGroupMappingRequest, SamlGroupMapping};
 use temper_core::types::team::{ReparentRequest, TeamCreateRequest, TeamRole};
 use temper_services::error::ApiError;
+use temper_services::services::saml_provisioning_service::{
+    reconcile_idp_memberships, ReconcileOutcome,
+};
 use temper_services::services::{access_service, saml_mapping_service, team_service};
 use temper_services::test_support;
 use temper_workflow::operations::Surface;
@@ -701,8 +704,8 @@ async fn the_elevation_diff_is_scoped_to_the_acts_own_teams(pool: PgPool) {
     assert!(records(&pool, "elevated").await.is_empty());
 }
 
-/// An authoring create onto temper-system locks the root row only, never its subtree (every team):
-/// a concurrent act holding a team below the root does not hold it up.
+/// An authoring create onto temper-system locks the root row only, never its subtree (every team),
+/// and is refused (watcher only): a concurrent act holding a team below the root does not hold it up.
 ///
 /// FAILS IF the root's subtree is locked: the create waits on the held row past the timeout.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
@@ -716,13 +719,181 @@ async fn a_create_onto_the_root_locks_only_the_root_row(pool: PgPool) {
         .await
         .unwrap();
     let admin = test_support::system_admin_proof_for(&pool, f.admin).await;
-    let out = tokio::time::timeout(
+    let err = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         saml_mapping_service::create(&pool, &admin, &req(f.root, "all", TeamRole::Member, true)),
     )
     .await
     .expect("the create does not wait on a team below the root")
-    .expect("the create");
-    assert!(out.created && out.confirmed);
+    .unwrap_err();
+    assert!(
+        matches!(&err, ApiError::BadRequest(m) if m.contains("at most `watcher`")),
+        "{err:?}"
+    );
     act.rollback().await.unwrap();
+}
+
+// ── The instance clamp (Pete, 2026-11-12) ───────────────────────────────────────────────────────
+
+/// A mapping row onto temper-system or the gating team above `watcher`, however it was written
+/// (before the rule, or by SQL), confers `watcher` at the reconcile; an IdP row already held above
+/// it is lowered. A mapping onto an ordinary team still confers its role.
+///
+/// FAILS IF the reconcile confers the row's role on an instance team.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_reconcile_confers_watcher_only_on_an_instance_team(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let person = profile(&pool, "pe-person").await;
+    for (group, team, role) in [
+        ("admins", f.gating, "owner"),
+        ("everyone", f.root, "member"),
+        ("plain", f.plain, "maintainer"),
+    ] {
+        sqlx::query(
+            "INSERT INTO kb_saml_group_mappings (idp_key, group_value, team_id, role) \
+             VALUES ($1, $2, $3, $4::team_role)",
+        )
+        .bind(IDP)
+        .bind(group)
+        .bind(team)
+        .bind(role)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let groups = vec![
+        "admins".to_string(),
+        "everyone".to_string(),
+        "plain".to_string(),
+    ];
+    let ReconcileOutcome::Reconciled(counts) =
+        reconcile_idp_memberships(&pool, person, IDP, Some(&groups))
+            .await
+            .expect("reconcile")
+    else {
+        panic!("expected a reconcile");
+    };
+    assert_eq!(counts.clamped, 2, "{counts:?}");
+    let role = |team: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>(
+                "SELECT role::text FROM kb_team_members WHERE team_id = $1 AND profile_id = $2",
+            )
+            .bind(team)
+            .bind(person)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(role(f.gating).await, "watcher");
+    assert_eq!(role(f.root).await, "watcher");
+    assert_eq!(role(f.plain).await, "maintainer");
+}
+
+/// A repoint that makes a mapped team the gating team records each mapping above `watcher` onto it
+/// as `clamped`, naming the repoint's actor, answers it in `clamped_mappings`, and does not answer it
+/// as elevated. A mapping onto the team's parent is elevated as before.
+///
+/// FAILS IF the repoint records no clamp, or reports the new gating team's own mapping as elevated.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_gating_repoint_records_the_mappings_it_clamps(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let top = team(&pool, "pe-top").await;
+    let cand = team(&pool, "pe-cand").await;
+    link(&pool, top, cand).await;
+    map(&pool, f.admin, cand, "cand", TeamRole::Member).await;
+    map(&pool, f.admin, cand, "cand-ro", TeamRole::Watcher).await;
+    map(&pool, f.admin, top, "top", TeamRole::Member).await;
+
+    let proof = test_support::system_admin_proof_for(&pool, f.admin).await;
+    let out = access_service::update_system_settings(
+        &pool,
+        &proof,
+        &temper_core::types::admin::UpdateSettingsRequest {
+            gating_team_slug: Some("pe-cand".to_owned()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("repoint");
+    let cand_m = mapping(cand, "cand", TeamRole::Member);
+    assert_eq!(out.clamped_mappings, vec![cand_m.clone()]);
+    assert_eq!(
+        out.elevated_mappings,
+        vec![mapping(top, "top", TeamRole::Member)]
+    );
+    let recs = records(&pool, "clamped").await;
+    assert_eq!(recs.len(), 1, "{recs:?}");
+    assert_eq!(
+        recs[0],
+        serde_json::json!({
+            "act": "clamped",
+            "actor": f.admin,
+            "idp_key": IDP,
+            "group_value": "cand",
+            "team_id": cand,
+            "role": "member",
+        })
+    );
+    serde_json::from_value::<temper_substrate::payloads::SamlGroupMappingChanged>(recs[0].clone())
+        .expect("the record decodes as the typed payload");
+}
+
+/// The migration's Section 4, run against seeded rows: each mapping above `watcher` onto
+/// temper-system or the gating team gets exactly one `clamped` record naming the migration, with no
+/// person actor; a watcher row and an ordinary team's row get none; no row changes. And nothing is
+/// recorded as confirmed (the B′ extension was withdrawn, Pete, 2026-11-12).
+///
+/// FAILS IF the section records any other row, records one twice, or changes a row.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_migration_records_existing_instance_mappings_as_clamped(pool: PgPool) {
+    use sqlx::Executor;
+    let f = fixture(&pool).await;
+    for (team, group, role) in [
+        (f.root, "admins", "owner"),
+        (f.gating, "staff", "member"),
+        (f.gating, "staff-ro", "watcher"),
+        (f.org, "org", "member"),
+    ] {
+        sqlx::query(
+            "INSERT INTO kb_saml_group_mappings (idp_key, group_value, team_id, role) \
+             VALUES ($1, $2, $3, $4::team_role)",
+        )
+        .bind(IDP)
+        .bind(group)
+        .bind(team)
+        .bind(role)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let migration =
+        include_str!("../../../migrations/20261126000010_saml_mapping_pool_confirmation.sql");
+    let rest = migration
+        .split_once("-- Section 4.")
+        .and_then(|(_, rest)| rest.split_once("SELECT declare_migration("))
+        .map(|(body, _)| body)
+        .expect("the migration carries its Section 4");
+    let block = &rest[rest.find("DO $$").expect("Section 4 is a DO block")..];
+    let before = mapping_count(&pool).await;
+    pool.execute(block).await.expect("Section 4 never refuses");
+
+    assert_eq!(mapping_count(&pool).await, before, "no row changed");
+    let recs = records(&pool, "clamped").await;
+    let groups: Vec<&str> = recs
+        .iter()
+        .map(|r| r["group_value"].as_str().unwrap())
+        .collect();
+    assert_eq!(groups, vec!["admins", "staff"], "{recs:?}");
+    for r in &recs {
+        assert_eq!(r["migration"], 20261126000010_i64, "{r}");
+        assert!(r.get("actor").is_none(), "no person actor: {r}");
+        assert!(
+            r.get("confirmed").is_none(),
+            "a clamp confirms nothing: {r}"
+        );
+    }
+    assert!(records(&pool, "adopted").await.is_empty());
 }

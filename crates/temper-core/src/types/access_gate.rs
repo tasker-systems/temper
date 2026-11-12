@@ -118,11 +118,20 @@ pub struct SystemSettings {
     pub gating_pool_ancestors: Option<Vec<crate::types::team::TeamRef>>,
     /// On the answer to a settings write that repoints `gating_team_slug`: the SAML group mappings
     /// the repoint elevated, each authoring-role (owner, maintainer, member) mapping onto a team that
-    /// had no pool beneath it before and has the new gating team beneath it now (dead teams count).
+    /// had no pool beneath it before and has the new gating team beneath it now (dead teams count),
+    /// other than the gating team itself (see `clamped_mappings`).
     /// Each is recorded once as `saml_group_mapping_changed`, act `elevated`. Read on the write's own
     /// transaction. Empty on every other answer.
     #[serde(default)]
     pub elevated_mappings: Vec<crate::types::saml_mapping::SamlGroupMapping>,
+    /// On the answer to a settings write that repoints `gating_team_slug`: the SAML group mappings
+    /// onto the new gating team with a role above `watcher`. An identity-provider group confers at
+    /// most `watcher` on the gating team, so from now on the reconcile confers `watcher` for each;
+    /// a higher role there is a system admin's native act. Each is recorded once as
+    /// `saml_group_mapping_changed`, act `clamped`. No mapping row changes. Empty on every other
+    /// answer.
+    #[serde(default)]
+    pub clamped_mappings: Vec<crate::types::saml_mapping::SamlGroupMapping>,
 }
 
 /// Public-facing system settings (no gating_team_slug — prevents info leakage).

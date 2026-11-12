@@ -1312,6 +1312,7 @@ impl From<SettingsRow> for SystemSettings {
             updated: r.updated,
             gating_pool_ancestors: None,
             elevated_mappings: Vec::new(),
+            clamped_mappings: Vec::new(),
         }
     }
 }
@@ -1448,6 +1449,16 @@ pub async fn update_system_settings(
         .await?;
         row.gating_pool_ancestors =
             Some(super::team_service::live_ancestors(&mut tx, gating_id).await?);
+        // Mappings above watcher onto the new gating team now confer watcher (the reconcile's
+        // clamp); each is recorded as clamped and answered.
+        row.clamped_mappings = super::saml_mapping_service::record_clamps(
+            &mut tx,
+            &[gating_id],
+            emitter.uuid(),
+            admin.actor(),
+            Some(correlation),
+        )
+        .await?;
     }
     tx.commit().await?;
     Ok(row)

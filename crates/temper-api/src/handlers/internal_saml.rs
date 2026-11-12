@@ -59,6 +59,7 @@ pub async fn reconcile(
                 revoked = counts.revoked,
                 skipped_native = counts.skipped_native,
                 left_ownerless = counts.left_ownerless,
+                clamped = counts.clamped,
                 "saml reconcile complete",
             );
             // The identity provider wins over the last-owner guard (R8), so a reconcile can leave

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "SamlGroupMappingChanged",
-  "description": "`saml_group_mapping_changed` — a SAML group mapping (`kb_saml_group_mappings`: an IdP's group\nvalue conferring a role on a team) was created or removed by a system admin, or was elevated by a\nstructural team act. `created` and `removed` are written only by `_admin_saml_group_mapping_write`,\nin the same statement as the row; `elevated` only by `_saml_mapping_elevations_record`, in the\nstructural act's own transaction.\n\nA mapping confers membership on every person the IdP asserts the group for, at each login's\nreconcile, so who made one, and who removed one, is an authority record like a membership\nchange. The team is the event's `subject` reference. Removing a mapping deletes no membership:\nthe next reconcile of each member decides those.",
+  "description": "`saml_group_mapping_changed` — a SAML group mapping (`kb_saml_group_mappings`: an IdP's group\nvalue conferring a role on a team) was created or removed by a system admin, or was elevated or\nclamped by a structural team act or a migration. `created` and `removed` are written only by\n`_admin_saml_group_mapping_write`, in the same statement as the row; `elevated` only by\n`_saml_mapping_elevations_record` and `clamped` only by `_saml_mappings_clamped_record`.\n\nA mapping confers membership on every person the IdP asserts the group for, at each login's\nreconcile, so who made one, and who removed one, is an authority record like a membership\nchange. The team is the event's `subject` reference. Removing a mapping deletes no membership:\nthe next reconcile of each member decides those.",
   "type": "object",
   "properties": {
     "act": {
@@ -18,7 +18,7 @@
       ]
     },
     "confirmed": {
-      "description": "True on a `created` that needed the admin's explicit confirmation (an `owner` role, or an\nauthoring role onto a team whose subtree, dead teams included, holds a pool: the root, the\ngating team or an auto-join team) and had it, and on every `adopted`. Absent otherwise.",
+      "description": "True on a `created` that needed the admin's explicit confirmation (an `owner` role, or an\nauthoring role onto a team whose subtree, dead teams included, holds an auto-join team) and\nhad it, and on every `adopted`. Absent otherwise. It records an admin's acknowledgement of a\nmapping's reach; it says nothing about any principal's standing.",
       "type": "boolean"
     },
     "group_value": {
@@ -30,7 +30,7 @@
       "type": "string"
     },
     "migration": {
-      "description": "On `adopted` only: the version of the migration that recorded the row as confirmed. Such a\nrecord has no person actor.",
+      "description": "On `adopted`, the version of the migration that recorded the row as confirmed; on a\n`clamped` written by a migration, the version that recorded the clamp. Such a record has no\nperson actor.",
       "type": [
         "integer",
         "null"
@@ -81,6 +81,11 @@
           "description": "A structural team act (a gating repoint, an attach, a reparent, setting auto-join, creating\nan auto-join team under a parent) put a pool beneath the team of an authoring-role mapping\nwhose team held none, so the mapping now confers a role that the whole pool reads the\nmaterial of. `actor` is the act's. No row changed and nothing was asked to confirm.",
           "type": "string",
           "const": "elevated"
+        },
+        {
+          "description": "A mapping that asks for more than `watcher` on temper-system or the gating team, which an\nIdP group never confers there: the reconcile confers `watcher` instead, and a higher role on\neither team is a system admin's native act. Written by the migration that introduced the\nrule for each such row (`migration` names it, no person actor), and by a gating repoint for\neach such mapping onto the new gating team (`actor` is the repoint's). No row changed.",
+          "type": "string",
+          "const": "clamped"
         }
       ]
     },

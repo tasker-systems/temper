@@ -1882,10 +1882,10 @@ pub enum TeamLifecycleAct {
 }
 
 /// `saml_group_mapping_changed` — a SAML group mapping (`kb_saml_group_mappings`: an IdP's group
-/// value conferring a role on a team) was created or removed by a system admin, or was elevated by a
-/// structural team act. `created` and `removed` are written only by `_admin_saml_group_mapping_write`,
-/// in the same statement as the row; `elevated` only by `_saml_mapping_elevations_record`, in the
-/// structural act's own transaction.
+/// value conferring a role on a team) was created or removed by a system admin, or was elevated or
+/// clamped by a structural team act or a migration. `created` and `removed` are written only by
+/// `_admin_saml_group_mapping_write`, in the same statement as the row; `elevated` only by
+/// `_saml_mapping_elevations_record` and `clamped` only by `_saml_mappings_clamped_record`.
 ///
 /// A mapping confers membership on every person the IdP asserts the group for, at each login's
 /// reconcile, so who made one, and who removed one, is an authority record like a membership
@@ -1905,12 +1905,14 @@ pub struct SamlGroupMappingChanged {
     /// The role the mapping confers: as written on `created`, as it was on `removed`.
     pub role: temper_core::types::team::TeamRole,
     /// True on a `created` that needed the admin's explicit confirmation (an `owner` role, or an
-    /// authoring role onto a team whose subtree, dead teams included, holds a pool: the root, the
-    /// gating team or an auto-join team) and had it, and on every `adopted`. Absent otherwise.
+    /// authoring role onto a team whose subtree, dead teams included, holds an auto-join team) and
+    /// had it, and on every `adopted`. Absent otherwise. It records an admin's acknowledgement of a
+    /// mapping's reach; it says nothing about any principal's standing.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub confirmed: bool,
-    /// On `adopted` only: the version of the migration that recorded the row as confirmed. Such a
-    /// record has no person actor.
+    /// On `adopted`, the version of the migration that recorded the row as confirmed; on a
+    /// `clamped` written by a migration, the version that recorded the clamp. Such a record has no
+    /// person actor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub migration: Option<i64>,
 }
@@ -1932,6 +1934,12 @@ pub enum SamlGroupMappingAct {
     /// whose team held none, so the mapping now confers a role that the whole pool reads the
     /// material of. `actor` is the act's. No row changed and nothing was asked to confirm.
     Elevated,
+    /// A mapping that asks for more than `watcher` on temper-system or the gating team, which an
+    /// IdP group never confers there: the reconcile confers `watcher` instead, and a higher role on
+    /// either team is a system admin's native act. Written by the migration that introduced the
+    /// rule for each such row (`migration` names it, no person actor), and by a gating repoint for
+    /// each such mapping onto the new gating team (`actor` is the repoint's). No row changed.
+    Clamped,
 }
 
 /// `team_public_within_changed` — a `public_within` row was opened, closed, lapsed or cascade-deleted.
