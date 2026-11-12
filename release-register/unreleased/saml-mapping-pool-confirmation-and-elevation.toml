@@ -20,9 +20,9 @@ instance reads.
   and admission never reads membership.
 - Behavioral (http): an authoring-role create locks the target team and every team beneath it
   before the gating lock, and answers 409 "the team tree changed ...; retry" with nothing
-  written when a team was linked beneath the target while it waited. It now takes the team rows
-  before the gating lock, the order every team act uses. The old order could deadlock with a
-  rename of the target.
+  written when a team was linked beneath the target while it waited. #1350 took the gating lock
+  before the team row, which deadlocks with a rename; this PR reverses it, to the order every
+  team act uses (rows, then the gating lock).
 - Additive (http, clients, schema): the team acts that can put a pool beneath a team answer
   `elevated_mappings`, the authoring-role mappings onto a team that had no pool beneath it
   before the act and has one after. They are PUT /api/teams/{id}/children/{child_id},

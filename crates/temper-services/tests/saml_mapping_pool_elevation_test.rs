@@ -660,3 +660,69 @@ async fn a_create_waiting_on_its_target_does_not_deadlock_a_rename(pool: PgPool)
     let out = create.await.unwrap().expect("the create proceeds");
     assert!(out.created && !out.confirmed);
 }
+
+// ── The elevation scan's scope ──────────────────────────────────────────────────────────────────
+
+/// An act's elevation diff covers only mappings at or above the teams it writes at. A mapping onto
+/// another pooled team that commits between the act's two reads (simulated here, between the
+/// before-read and the record, on one connection) is not the act's to answer or record.
+///
+/// FAILS IF the diff is taken over the whole instance: the unrelated mapping would be recorded as
+/// `elevated`, under the act's actor.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_elevation_diff_is_scoped_to_the_acts_own_teams(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let host = team(&pool, "pe-host").await;
+    let emitter: Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_entities WHERE profile_id = $1 ORDER BY name LIMIT 1",
+    )
+    .bind(f.admin)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    let before: serde_json::Value = sqlx::query_scalar("SELECT _saml_mappings_over_pool($1)")
+        .bind(vec![host])
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap();
+    // A concurrent, unrelated confirmed mapping onto org, a pool's parent.
+    map(&pool, f.admin, f.org, "org", TeamRole::Member).await;
+    let recorded: serde_json::Value =
+        sqlx::query_scalar("SELECT _saml_mapping_elevations_record($1, $2, $3, $4, NULL)")
+            .bind(emitter)
+            .bind(f.admin)
+            .bind(vec![host])
+            .bind(before)
+            .fetch_one(&mut *conn)
+            .await
+            .unwrap();
+    assert_eq!(recorded, serde_json::json!([]));
+    assert!(records(&pool, "elevated").await.is_empty());
+}
+
+/// An authoring create onto temper-system locks the root row only, never its subtree (every team):
+/// a concurrent act holding a team below the root does not hold it up.
+///
+/// FAILS IF the root's subtree is locked: the create waits on the held row past the timeout.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_create_onto_the_root_locks_only_the_root_row(pool: PgPool) {
+    let f = fixture(&pool).await;
+    link(&pool, f.root, f.plain).await;
+    let (mut act, _pid) = holder(&pool).await;
+    sqlx::query("SELECT id FROM kb_teams WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(f.plain)
+        .execute(&mut *act)
+        .await
+        .unwrap();
+    let admin = test_support::system_admin_proof_for(&pool, f.admin).await;
+    let out = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        saml_mapping_service::create(&pool, &admin, &req(f.root, "all", TeamRole::Member, true)),
+    )
+    .await
+    .expect("the create does not wait on a team below the root")
+    .expect("the create");
+    assert!(out.created && out.confirmed);
+    act.rollback().await.unwrap();
+}

@@ -15,13 +15,20 @@
 --     dead team is latent reach, which a restore revives (the R-z reasoning). It is the ONE
 --     definition of "the subtree holds a pool"; `_team_subtree_holds_pool(uuid)` reads it, and so
 --     does `team_service::subtree_holds_pool_on`.
---   * `_saml_mappings_over_pool()`: the authoring-role mappings whose team is in that set, as a
---     jsonb array of {idp_key, group, team_id, role} ordered by idp_key, group, team_id.
---   * `_saml_mapping_elevations_record(emitter, actor, before, correlation)`: reads that set again,
---     and for every mapping in it that is not in `before` appends one `saml_group_mapping_changed`
---     event, act `elevated`, naming the act's actor; answers the array of them. A structural act
---     reads `_saml_mappings_over_pool()` on its own transaction after its locks and before its
---     write, and calls this after the write. The acts: the gating repoint, attach, reparent,
+--   * `_saml_mappings_over_pool(seeds)`: the authoring-role mappings whose team is in that set AND
+--     is one of `seeds` or above one of them (dead teams included), as a jsonb array of {idp_key,
+--     group, team_id, role} ordered by idp_key, group, team_id. The seeds are the teams the act
+--     writes at: the parent it links under, the team it flips, the new gating team. Only a team at
+--     or above a seed can gain a pool from the act, so the scope keeps every other team's mappings,
+--     and every concurrent create of them, out of the act's answer and its records.
+--   * `_saml_mapping_elevations_record(emitter, actor, seeds, before, correlation)`: reads that set
+--     again, and for every mapping in it that is not in `before` appends one
+--     `saml_group_mapping_changed` event, act `elevated`, naming the act's actor; answers the array
+--     of them. A structural act takes `_public_within_effects_lock()` (so elevating acts serialize
+--     and never record one mapping twice), reads `_saml_mappings_over_pool(seeds)` on its own
+--     transaction after its row locks and before its write, and calls this after the write. A
+--     create onto a team at or above a seed locks the seed row FOR SHARE, which the act holds FOR NO
+--     KEY UPDATE, so no such create commits between the two reads. The acts: the gating repoint, attach, reparent,
 --     set_auto_join, restore, and creating an auto-join team under a parent. Restore never elevates:
 --     it flips is_active only, and dead teams already count. No act asks for confirmation; all of
 --     them that can put a pool beneath a team are already a system admin's.
@@ -42,7 +49,11 @@
 -- links under; set_auto_join the team), which FOR SHARE conflicts with; the gating repoint takes the
 -- gating lock exclusively. So whichever commits first, the other reads it, on a fresh READ
 -- COMMITTED statement after its lock wait: the create's predicate sees the pool, or the act's
--- elevation scan sees the mapping. A watcher create locks the target row only.
+-- elevation scan sees the mapping. A watcher create locks the target row only, and so does a create
+-- onto temper-system or the gating team: each is a pool by itself, which only a repoint (the
+-- exclusive gating lock) can change, so its subtree cannot move the answer. temper-system's subtree
+-- is every team, which this keeps from being locked; a gating target that a repoint moved before the
+-- gating lock was held answers subtree_changed.
 --
 -- The order is rows, then the shared gating lock: the order of every team act (lock_teams_and_subtree,
 -- a delete's gating check, a rename's row then exclusive lock). 20261125000010 took the gating lock
@@ -52,6 +63,9 @@
 -- the rename holding the row and waiting on the exclusive lock). Rows ascending against rows
 -- ascending cannot cycle, and the repoint holds no team row while it waits on the exclusive lock.
 -- A later edit must keep this order.
+--
+-- #1350's writer (20261125000010) took the gating lock before the team row, which deadlocks with a
+-- rename of the target; this migration reverses it (Section 3).
 --
 -- No existing row is changed or adopted: an authoring mapping already over a pool that is not the
 -- root or the gating team is left as it is, unrecorded.
@@ -90,26 +104,34 @@ $$;
 COMMENT ON FUNCTION _team_subtree_holds_pool(uuid) IS
 $c$True when the team itself, or any team below it, live or dead, is a pool (_teams_over_pool).$c$;
 
-CREATE FUNCTION _saml_mappings_over_pool() RETURNS jsonb
+CREATE FUNCTION _saml_mappings_over_pool(p_seeds uuid[]) RETURNS jsonb
 LANGUAGE sql STABLE
 SET search_path = public, pg_temp
 AS $$
+    WITH RECURSIVE up AS (
+        SELECT unnest(p_seeds) AS id
+        UNION
+        SELECT tp.parent_id FROM kb_teams_parents tp JOIN up ON tp.child_id = up.id
+    )
     SELECT coalesce(jsonb_agg(jsonb_build_object(
                'idp_key', m.idp_key, 'group', m.group_value, 'team_id', m.team_id, 'role', m.role)
                ORDER BY m.idp_key, m.group_value, m.team_id), '[]'::jsonb)
       FROM kb_saml_group_mappings m
      WHERE m.role <> 'watcher'
+       AND m.team_id IN (SELECT id FROM up)
        AND m.team_id IN (SELECT o FROM _teams_over_pool() o);
 $$;
 
-COMMENT ON FUNCTION _saml_mappings_over_pool() IS
-$c$The authoring-role (owner, maintainer, member) SAML group mappings whose team's subtree holds a
-pool, as a jsonb array of {idp_key, group, team_id, role}, ordered. A structural team act reads it
-before its write and hands it to _saml_mapping_elevations_record after.$c$;
+COMMENT ON FUNCTION _saml_mappings_over_pool(uuid[]) IS
+$c$The authoring-role (owner, maintainer, member) SAML group mappings whose team is one of p_seeds or
+above one (dead teams included) and whose subtree holds a pool, as a jsonb array of {idp_key, group,
+team_id, role}, ordered. A structural team act reads it before its write and hands it, with the same
+seeds, to _saml_mapping_elevations_record after.$c$;
 
 CREATE FUNCTION _saml_mapping_elevations_record(
     p_emitter     uuid,
     p_actor       uuid,
+    p_seeds       uuid[],
     p_before      jsonb,
     p_correlation uuid DEFAULT NULL
 ) RETURNS jsonb
@@ -121,7 +143,7 @@ DECLARE
     r     record;
 BEGIN
     FOR r IN
-        SELECT a.m FROM jsonb_array_elements(_saml_mappings_over_pool()) AS a(m)
+        SELECT a.m FROM jsonb_array_elements(_saml_mappings_over_pool(p_seeds)) AS a(m)
          WHERE NOT (coalesce(p_before, '[]'::jsonb) @> jsonb_build_array(a.m))
     LOOP
         PERFORM _event_append(
@@ -144,9 +166,9 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION _saml_mapping_elevations_record(uuid, uuid, jsonb, uuid) IS
-$c$For each authoring-role SAML mapping now over a pool (_saml_mappings_over_pool) that p_before
-(the same read, taken by the act before its write) did not hold, append one
+COMMENT ON FUNCTION _saml_mapping_elevations_record(uuid, uuid, uuid[], jsonb, uuid) IS
+$c$For each authoring-role SAML mapping at or above p_seeds now over a pool (_saml_mappings_over_pool)
+that p_before (the same read, with the same seeds, taken by the act before its write) did not hold, append one
 saml_group_mapping_changed event, act elevated, naming p_actor; answer the array of them. Call it on
 the structural act's own transaction, after the write. It changes no row and NEVER AUTHORIZES.$c$;
 
@@ -280,6 +302,7 @@ DECLARE
     v_members  bigint;
     v_try      integer;
     v_set      uuid[];
+    v_instance boolean;
 BEGIN
     IF p_act = 'created' THEN
         IF p_role IS NULL THEN
@@ -294,7 +317,14 @@ BEGIN
         END IF;
         -- The rows, then the shared gating lock (the header's LOCKS). An authoring role locks the
         -- whole subtree, dead teams included, in one ascending pass; a watcher the target only.
-        IF p_role = 'watcher' THEN
+        -- The target itself a pool that only the exclusive gating lock (held off below) can unmake:
+        -- its subtree cannot change the answer, so the target row alone. temper-system's subtree is
+        -- every team, which this keeps an authoring create onto the root from locking.
+        SELECT slug INTO v_slug FROM kb_teams WHERE id = p_team;
+        v_instance := coalesce(v_slug = 'temper-system'
+                               OR EXISTS (SELECT 1 FROM kb_system_settings
+                                           WHERE id = 1 AND gating_team_slug = v_slug), false);
+        IF p_role = 'watcher' OR v_instance THEN
             v_set := ARRAY[p_team];
         ELSE
             v_set := ARRAY(
@@ -325,7 +355,15 @@ BEGIN
         END IF;
         -- A team linked under the subtree while this create waited is not locked: refuse rather than
         -- decide on a subtree held only in part.
-        IF p_role <> 'watcher' AND NOT (ARRAY(
+        -- An instance target locked alone must still be one now that the gating lock is held (a
+        -- repoint may have committed before it); otherwise its subtree was not locked.
+        IF p_role <> 'watcher' AND v_instance
+           AND NOT (v_slug = 'temper-system'
+                    OR EXISTS (SELECT 1 FROM kb_system_settings
+                                WHERE id = 1 AND gating_team_slug = v_slug)) THEN
+            RETURN jsonb_build_object('outcome', 'subtree_changed');
+        END IF;
+        IF p_role <> 'watcher' AND NOT v_instance AND NOT (ARRAY(
                 WITH RECURSIVE s AS (
                     SELECT p_team AS id
                     UNION

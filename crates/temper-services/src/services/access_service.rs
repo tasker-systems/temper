@@ -1391,7 +1391,11 @@ pub async fn update_system_settings(
         sqlx::query_scalar!(r#"SELECT 1 AS "one!" FROM (SELECT _gating_team_lock(true)) g"#)
             .fetch_one(&mut *tx)
             .await?;
-        elevation = Some(super::saml_mapping_service::elevation_before(&mut tx).await?);
+        let target: Vec<Uuid> =
+            sqlx::query_scalar!("SELECT id FROM kb_teams WHERE slug = $1", slug)
+                .fetch_all(&mut *tx)
+                .await?;
+        elevation = Some(super::saml_mapping_service::elevation_before(&mut tx, &target).await?);
         let written = sqlx::query_scalar!(
             r#"SELECT _admin_gating_team_slug_write($1, NULL) AS "w!""#,
             slug
@@ -1424,7 +1428,7 @@ pub async fn update_system_settings(
     // reads, so the whole instance now reads its live ancestor chain (team DAG R9: the act names
     // it to the admin the door admits). Read on this transaction, after the write. A write that
     // leaves the slug alone, or names the one it holds (`noop`), opened nothing and answers none.
-    if let (Some(correlation), Some(elevation)) = (repointed, elevation) {
+    if let Some(correlation) = repointed {
         let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, admin.actor(), "web")
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;

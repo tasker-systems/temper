@@ -241,36 +241,57 @@ pub async fn remove(
     })
 }
 
-/// The authoring-role mappings whose team's subtree holds a pool, read by a structural team act on
-/// its own transaction after its locks and before its write. Hand it to [`record_elevations`] after
-/// the write.
-pub(crate) struct ElevationBefore(serde_json::Value);
-
-/// Read [`ElevationBefore`] on `conn` (`_saml_mappings_over_pool`).
-pub(crate) async fn elevation_before(conn: &mut sqlx::PgConnection) -> ApiResult<ElevationBefore> {
-    let before = sqlx::query_scalar!(r#"SELECT _saml_mappings_over_pool() AS "m!""#)
-        .fetch_one(&mut *conn)
-        .await?;
-    Ok(ElevationBefore(before))
+/// The authoring-role mappings at or above an act's seed teams whose subtree holds a pool, read by
+/// a structural team act on its own transaction after its row locks and before its write. Hand it
+/// to [`record_elevations`] after the write.
+pub(crate) struct ElevationBefore {
+    seeds: Vec<Uuid>,
+    before: serde_json::Value,
 }
 
-/// After a structural act's write, on its transaction: every authoring-role mapping now over a pool
-/// that `before` did not hold. Each gets one `saml_group_mapping_changed` event, act `elevated`,
-/// naming `actor` (`_saml_mapping_elevations_record`), and is answered, ordered by idp_key, group
-/// and team. The one scan of every door that can put a pool beneath a team, so the doors cannot
-/// drift apart.
+/// Read [`ElevationBefore`] on `conn` (`_saml_mappings_over_pool`) for `seeds`: the teams the act
+/// writes at (the parent it links under, the team it flips, the new gating team), the only teams
+/// at or above which it can put a pool. Takes `_public_within_effects_lock` first, which every
+/// elevating act holds to commit, so two acts never both record one mapping; it is re-entrant, and
+/// the act would take it later in its write anyway.
+pub(crate) async fn elevation_before(
+    conn: &mut sqlx::PgConnection,
+    seeds: &[Uuid],
+) -> ApiResult<ElevationBefore> {
+    sqlx::query_scalar!(r#"SELECT 1 AS "one!" FROM (SELECT _public_within_effects_lock()) l"#)
+        .fetch_one(&mut *conn)
+        .await?;
+    let before = sqlx::query_scalar!(r#"SELECT _saml_mappings_over_pool($1) AS "m!""#, seeds)
+        .fetch_one(&mut *conn)
+        .await?;
+    Ok(ElevationBefore {
+        seeds: seeds.to_vec(),
+        before,
+    })
+}
+
+/// After a structural act's write, on its transaction: every authoring-role mapping at or above the
+/// act's seeds now over a pool that `before` did not hold. Each gets one `saml_group_mapping_changed`
+/// event, act `elevated`, naming `actor` (`_saml_mapping_elevations_record`), and is answered,
+/// ordered by idp_key, group and team. The one scan of every door that can put a pool beneath a
+/// team, so the doors cannot drift apart. `None` (an act on an arm that cannot put a pool beneath
+/// a team, which is every non-admin arm) answers none and records nothing.
 pub(crate) async fn record_elevations(
     conn: &mut sqlx::PgConnection,
-    before: ElevationBefore,
+    before: Option<ElevationBefore>,
     emitter: Uuid,
     actor: temper_core::types::ids::ProfileId,
     correlation: Option<Uuid>,
 ) -> ApiResult<Vec<SamlGroupMapping>> {
+    let Some(before) = before else {
+        return Ok(Vec::new());
+    };
     let raw = sqlx::query_scalar!(
-        r#"SELECT _saml_mapping_elevations_record($1, $2, $3, $4) AS "e!""#,
+        r#"SELECT _saml_mapping_elevations_record($1, $2, $3, $4, $5) AS "e!""#,
         emitter,
         *actor,
-        before.0,
+        &before.seeds,
+        before.before,
         correlation,
     )
     .fetch_one(&mut *conn)

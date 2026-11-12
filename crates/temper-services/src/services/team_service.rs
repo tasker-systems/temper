@@ -691,10 +691,12 @@ pub async fn create_team_with_effects(
     }
     // An auto-join team created under a parent is a pool beneath the parent and everything above
     // it: the SAML mappings over a pool, read before the links, after the parents' row locks.
-    let elevation = if parent_ids.is_empty() {
+    // Only an auto-join team (a system admin's create) is a pool; a plain child team elevates
+    // nothing, so the scan runs on that arm alone.
+    let elevation = if parent_ids.is_empty() || req.auto_join_role.is_none() {
         None
     } else {
-        Some(saml_mapping_service::elevation_before(&mut tx).await?)
+        Some(saml_mapping_service::elevation_before(&mut tx, &parent_ids).await?)
     };
 
     let row = sqlx::query_as!(
@@ -721,7 +723,7 @@ pub async fn create_team_with_effects(
     // dormant).
     let mut effects = ActEffects::default();
     let mut elevated_mappings = Vec::new();
-    if let Some(elevation) = elevation {
+    if !parent_ids.is_empty() {
         let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, creator, "web")
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -1394,8 +1396,13 @@ pub async fn restore_team(
         }
     }
     // Restore flips `is_active` only, and the pool walk counts dead teams, so this answers none
-    // today; it runs the one scan anyway, so the doors cannot drift apart.
-    let elevation = saml_mapping_service::elevation_before(&mut tx).await?;
+    // today; the admin arm runs the one scan anyway, so the doors cannot drift apart. The owner arm
+    // never restores a pool's ancestor (`restore_authority`), so it does not scan.
+    let elevation = if admin {
+        Some(saml_mapping_service::elevation_before(&mut tx, &[team_id]).await?)
+    } else {
+        None
+    };
     let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -1627,7 +1634,7 @@ pub async fn set_auto_join(
     if !crate::auth::is_system_admin_locked(&mut tx, admin.actor()).await? {
         return Err(ApiError::Forbidden);
     }
-    let elevation = saml_mapping_service::elevation_before(&mut tx).await?;
+    let elevation = Some(saml_mapping_service::elevation_before(&mut tx, &[team_id]).await?);
     let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, admin.actor(), "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -1942,7 +1949,12 @@ pub async fn reparent(
     }
 
     let correlation = Uuid::now_v7();
-    let elevation = saml_mapping_service::elevation_before(&mut tx).await?;
+    // A pool moved under `to` is a system admin's act (`attach_authority`), so only that arm scans.
+    let elevation = if admin {
+        Some(saml_mapping_service::elevation_before(&mut tx, &[to]).await?)
+    } else {
+        None
+    };
     let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -2233,7 +2245,13 @@ pub async fn attach_child(
     let before = rows_in_reach(&mut tx, child_id).await?;
     // The SAML mappings over a pool before the link, after the row locks: a pool brought under
     // the parent elevates every authoring mapping above it that had none.
-    let elevation = saml_mapping_service::elevation_before(&mut tx).await?;
+    // A pool attached under the parent is a system admin's act (`attach_authority`), so only that
+    // arm scans.
+    let elevation = if admin {
+        Some(saml_mapping_service::elevation_before(&mut tx, &[parent_id]).await?)
+    } else {
+        None
+    };
     let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
