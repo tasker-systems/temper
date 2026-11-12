@@ -25,8 +25,8 @@ use serde_json::Value;
 use uuid::Uuid;
 
 /// The bodies under test, each with a label for the failure message.
-fn bodies() -> Vec<(&'static str, &'static str)> {
-    vec![
+fn bodies() -> Vec<(&'static str, String)> {
+    let small: Vec<(&'static str, &'static str)> = vec![
         (
             "prose-led",
             "Plain prose opens this body.\n\nA second paragraph.\n",
@@ -41,7 +41,42 @@ fn bodies() -> Vec<(&'static str, &'static str)> {
             "\nA body that really starts with a newline.\n",
         ),
         ("two-leading-newlines", "\n\nTwo newlines lead this one.\n"),
-    ]
+    ];
+    let mut all: Vec<(&'static str, String)> = small
+        .into_iter()
+        .map(|(label, body)| (label, body.to_string()))
+        .collect();
+    // Past the segment budget, the CLI streams the body through the segmented
+    // begin/append/finalize path instead of the one-shot create — a separate writer.
+    all.push((
+        "segmented-prose-led",
+        large_body("Prose leads this large body.\n\n"),
+    ));
+    all.push(("segmented-heading-led", large_body("# Big Document\n\n")));
+    all.push((
+        "segmented-leading-newline",
+        large_body("\nA newline leads this one.\n\n"),
+    ));
+    all
+}
+
+/// A body just over one segment budget (so two segments), opening with `lead`.
+fn large_body(lead: &str) -> String {
+    const FILLER: &str =
+        "The quick brown fox jumps over the lazy dog, padding this section past the \
+                          segmentation budget so the streaming ingest splits the document.\n";
+    let target = temper_ingest::stream::SEGMENT_BUDGET_BYTES + 64 * 1024;
+    let mut body = String::from(lead);
+    let mut section = 0usize;
+    while body.len() < target {
+        body.push_str(&format!("## Section {section}\n\n"));
+        for _ in 0..40 {
+            body.push_str(FILLER);
+        }
+        body.push('\n');
+        section += 1;
+    }
+    body
 }
 
 /// Run the CLI with `input` on stdin and parse stdout as exactly one JSON document.
@@ -121,6 +156,7 @@ async fn stdin_create_reads_back_byte_exact_through_show(pool: sqlx::PgPool) {
         .expect("ctx create");
 
     for (label, body) in bodies() {
+        let body = body.as_str();
         let title = format!("verbatim readback {label}");
         let created = cli_json_stdin(
             &app,
