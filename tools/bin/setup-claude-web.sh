@@ -354,8 +354,7 @@ start_docker_postgres() {
     fi
     # setsid: detach from the hook's process group so dockerd outlives the hook.
     "${runner[@]}" setsid dockerd >/tmp/temper-dockerd.log 2>&1 < /dev/null &
-    local i
-    for i in $(seq 1 15); do
+    for _ in $(seq 1 15); do
       docker info >/dev/null 2>&1 && break
       sleep 1
     done
@@ -376,7 +375,7 @@ start_docker_postgres() {
     log_warn "docker compose up failed; see /tmp/temper-compose.log"
     return 0
   fi
-  for i in $(seq 1 15); do
+  for _ in $(seq 1 15); do
     pg_isready -h localhost -p 5437 -q 2>/dev/null && { log_ok "PostgreSQL restarted (Docker, port 5437)"; return 0; }
     sleep 1
   done
