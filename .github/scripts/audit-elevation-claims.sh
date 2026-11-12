@@ -572,7 +572,7 @@ claim crates/temper-api/src/handlers/slack_disconnect.rs 1 -
 claim crates/temper-api/src/handlers/subscriptions.rs 7 subscription
 claim crates/temper-api/src/handlers/teams.rs 32 team_membership,is_system_admin
 claim crates/temper-api/src/openapi.rs 5 is_system_admin,machine,connection,subscription,read_gates,grant,ledger_subject
-claim crates/temper-cli/src/cli.rs 35 team_membership
+claim crates/temper-cli/src/cli.rs 36 team_membership
 claim crates/temper-cli/src/commands/admin.rs 4 -
 claim crates/temper-cli/src/commands/admin_connection.rs 2 connection
 claim crates/temper-cli/src/commands/admin_erasure.rs 1 -
@@ -584,12 +584,13 @@ claim crates/temper-cli/src/commands/cogmap.rs 3 two_sided,is_system_admin
 claim crates/temper-cli/src/commands/context_cmd.rs 2 context_admin
 claim crates/temper-cli/src/commands/team.rs 10 team_membership
 claim crates/temper-cli/src/commands/warmup.rs 1 is_system_admin
+claim crates/temper-core/src/types/access_gate.rs 1 -
 claim crates/temper-core/src/types/admin.rs 5 is_system_admin,read_gates
 claim crates/temper-core/src/types/connection.rs 2 machine,connection
 claim crates/temper-core/src/types/erasure.rs 3 is_system_admin
 claim crates/temper-core/src/types/invitation.rs 3 team_membership
 claim crates/temper-core/src/types/machine.rs 1 machine
-claim crates/temper-core/src/types/saml_mapping.rs 1 is_system_admin
+claim crates/temper-core/src/types/saml_mapping.rs 2 is_system_admin
 claim crates/temper-core/src/types/subscription.rs 1 subscription
 claim crates/temper-core/src/types/team.rs 16 team_membership,is_system_admin
 claim crates/temper-mcp/src/service.rs 6 -
@@ -610,6 +611,7 @@ claim crates/temper-services/src/services/machine_authz.rs 11 machine,team_membe
 claim crates/temper-services/src/services/machine_client_service.rs 9 machine
 claim crates/temper-services/src/services/machine_registration_service.rs 10 machine
 claim crates/temper-services/src/services/resource_erasure_service.rs 3 is_system_admin
+claim crates/temper-services/src/services/saml_mapping_service.rs 1 -
 claim crates/temper-services/src/services/saml_provisioning_service.rs 1 team_membership
 claim crates/temper-services/src/services/slack_disconnect_service.rs 3 -
 claim crates/temper-services/src/services/standing_service.rs 2 -
