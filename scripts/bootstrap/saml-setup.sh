@@ -7,8 +7,9 @@
 # map IdP groups to teams, and verify. It is the SAML sibling of system-bootstrap.sh (the auth-
 # agnostic db+admin spine) — kept separate so system-bootstrap.sh stays usable for Auth0/OAuth.
 #
-# Idempotency + emit-by-default are INHERITED from `temper admin saml *`. DB-touching steps run only
-# with --apply-db + DATABASE_URL; default is inert emit (safe to run anytime).
+# Idempotency + emit-by-default are INHERITED from `temper admin saml *`. Writing steps (the
+# kb_saml_idp row via psql, and the group mappings via the admin API) run only with --apply-db
+# (+ DATABASE_URL for the row); default is inert emit (safe to run anytime).
 #
 # Canonical rationale: docs/guides/enterprise-install.md + docs/guides/self-hosting-saml.md
 #
@@ -107,10 +108,18 @@ if [ "$map_count" != "0" ] && [ "$map_count" != "null" ]; then
     grp="$(yq -r ".group_mappings[$i].group" "$PROFILE")"
     tm="$(yq -r ".group_mappings[$i].team" "$PROFILE")"
     rl="$(yq -r ".group_mappings[$i].role" "$PROFILE")"
+    ce="$(yq -r ".group_mappings[$i].confirm_elevated // false" "$PROFILE")"
     # group + team are POSITIONAL args (cli.rs MapGroup), not --group/--team flags.
     mg_args=(admin saml map-group --idp-key "$IDP_KEY" "$grp" "$tm" --role "$rl")
-    [ "$APPLY_DB" -eq 1 ] && mg_args+=(--apply)
-    run temper "${mg_args[@]}"
+    # An owner role, or temper-system / the gating team, is refused unless the profile confirms it.
+    [ "$ce" = "true" ] && mg_args+=(--confirm-elevated)
+    # map-group writes through the admin API as a recorded act (it no longer emits SQL), so it runs
+    # only in apply mode; otherwise the command is printed.
+    if [ "$APPLY_DB" -eq 1 ]; then
+      run temper "${mg_args[@]}"
+    else
+      printf '   (apply with --apply-db) temper %s\n' "${mg_args[*]}"
+    fi
     i=$((i + 1))
   done
 else

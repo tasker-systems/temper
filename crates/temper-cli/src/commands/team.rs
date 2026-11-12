@@ -9,7 +9,7 @@ use temper_core::types::team::{
 };
 
 /// Parse a CLI role string into the `TeamRole` enum (snake_case wire form).
-fn parse_role(s: &str) -> Result<TeamRole> {
+pub(crate) fn parse_role(s: &str) -> Result<TeamRole> {
     match s {
         "owner" => Ok(TeamRole::Owner),
         "maintainer" => Ok(TeamRole::Maintainer),

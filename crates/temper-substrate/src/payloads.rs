@@ -1881,6 +1881,51 @@ pub enum TeamLifecycleAct {
     AutoJoinChanged,
 }
 
+/// `saml_group_mapping_changed` — a SAML group mapping (`kb_saml_group_mappings`: an IdP's group
+/// value conferring a role on a team) was created or removed by a system admin. Written only by
+/// `_admin_saml_group_mapping_write`, in the same statement as the row.
+///
+/// A mapping confers membership on every person the IdP asserts the group for, at each login's
+/// reconcile, so who made one, and who removed one, is an authority record like a membership
+/// change. The team is the event's `subject` reference. Removing a mapping deletes no membership:
+/// the next reconcile of each member decides those.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct SamlGroupMappingChanged {
+    pub act: SamlGroupMappingAct,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<ProfileId>,
+    /// The IdP whose assertions the mapping reads (`kb_saml_idp.idp_key`).
+    pub idp_key: String,
+    /// The asserted group value the mapping matches.
+    pub group_value: String,
+    pub team_id: Uuid,
+    /// The role the mapping confers: as written on `created`, as it was on `removed`.
+    pub role: temper_core::types::team::TeamRole,
+    /// True on a `created` that needed the admin's explicit confirmation (an `owner` role, or the
+    /// root or gating team as the target) and had it, and on every `adopted`. Absent otherwise.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub confirmed: bool,
+    /// On `adopted` only: the version of the migration that recorded the row as confirmed. Such a
+    /// record has no person actor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migration: Option<i64>,
+}
+
+/// What happened to the mapping in a [`SamlGroupMappingChanged`] record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum SamlGroupMappingAct {
+    /// The mapping was created.
+    Created,
+    /// The mapping was removed; the memberships it conferred were left in place.
+    Removed,
+    /// A mapping that already existed above the ceiling when the doors arrived, recorded as
+    /// confirmed by the migration that introduced them (`migration` names it). No row changed.
+    Adopted,
+}
+
 /// `team_public_within_changed` — a `public_within` row was opened, closed, lapsed or cascade-deleted.
 /// The row lets the people under the anchor team read the team's owned contexts. Both the team (T)
 /// and the anchor (A) are the event's `subject` references, so the managers of either side read it
@@ -2174,7 +2219,7 @@ impl FoldDisposition {
 }
 
 /// The typed event names — the registry-stamping and snapshot surfaces iterate this.
-pub const TYPED_EVENT_NAMES: [&str; 40] = [
+pub const TYPED_EVENT_NAMES: [&str; 41] = [
     "cogmap_seeded",
     "resource_created",
     "relationship_asserted",
@@ -2212,6 +2257,7 @@ pub const TYPED_EVENT_NAMES: [&str; 40] = [
     "team_membership_changed",
     "team_parent_link_changed",
     "team_lifecycle_changed",
+    "saml_group_mapping_changed",
     "team_public_within_changed",
     "public_within_effect_changed",
     "public_within_policy_changed",
@@ -2234,7 +2280,7 @@ pub const FOREIGN_EVENT_NAMES: [&str; 1] = ["webhook_received"];
 /// `20260718000020`). The migration stamps these on an existing registry; this const is what
 /// re-stamps them on a path that rebuilds the registry from scratch (`bootseed::seed_system` after
 /// a `reset_schema` truncate), so the classification cannot be lost to a reseed.
-pub const ADMIN_EVENT_NAMES: [&str; 18] = [
+pub const ADMIN_EVENT_NAMES: [&str; 19] = [
     "admin_ledger_opened",
     "grant_created",
     "grant_revoked",
@@ -2250,6 +2296,7 @@ pub const ADMIN_EVENT_NAMES: [&str; 18] = [
     "team_membership_changed",
     "team_parent_link_changed",
     "team_lifecycle_changed",
+    "saml_group_mapping_changed",
     "team_public_within_changed",
     "public_within_effect_changed",
     "public_within_policy_changed",
@@ -2389,6 +2436,9 @@ pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> 
                 }
                 "team_lifecycle_changed" => {
                     serde_json::from_value::<TeamLifecycleChanged>(r.payload.clone())?;
+                }
+                "saml_group_mapping_changed" => {
+                    serde_json::from_value::<SamlGroupMappingChanged>(r.payload.clone())?;
                 }
                 "team_public_within_changed" => {
                     serde_json::from_value::<TeamPublicWithinChanged>(r.payload.clone())?;

@@ -298,6 +298,81 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Create a SAML group mapping
+    # Maps a group the IdP asserts to a role on a team: at each login, the IdP reconcile gives everyone in the group that role. The ceiling is `maintainer`. An `owner` role, or a target of temper-system or the gating team, needs `confirm_elevated: true`; without it the request is refused, naming why, and nothing is written. Recorded as `saml_group_mapping_changed`. The same mapping again records nothing and answers `created: false`. Requires a system admin.
+    # @param create_saml_group_mapping_request [CreateSamlGroupMappingRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [CreateSamlGroupMappingOutcome]
+    def admin_create_saml_group_mapping(create_saml_group_mapping_request, opts = {})
+      data, _status_code, _headers = admin_create_saml_group_mapping_with_http_info(create_saml_group_mapping_request, opts)
+      data
+    end
+
+    # Create a SAML group mapping
+    # Maps a group the IdP asserts to a role on a team: at each login, the IdP reconcile gives everyone in the group that role. The ceiling is &#x60;maintainer&#x60;. An &#x60;owner&#x60; role, or a target of temper-system or the gating team, needs &#x60;confirm_elevated: true&#x60;; without it the request is refused, naming why, and nothing is written. Recorded as &#x60;saml_group_mapping_changed&#x60;. The same mapping again records nothing and answers &#x60;created: false&#x60;. Requires a system admin.
+    # @param create_saml_group_mapping_request [CreateSamlGroupMappingRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(CreateSamlGroupMappingOutcome, Integer, Hash)>] CreateSamlGroupMappingOutcome data, response status code and response headers
+    def admin_create_saml_group_mapping_with_http_info(create_saml_group_mapping_request, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: AdminApi.admin_create_saml_group_mapping ...'
+      end
+      # verify the required parameter 'create_saml_group_mapping_request' is set
+      if @api_client.config.client_side_validation && create_saml_group_mapping_request.nil?
+        fail ArgumentError, "Missing the required parameter 'create_saml_group_mapping_request' when calling AdminApi.admin_create_saml_group_mapping"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/admin/saml/group-mappings'
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      # HTTP header 'Content-Type'
+      content_type = @api_client.select_header_content_type(['application/json'])
+      if !content_type.nil?
+          header_params['Content-Type'] = content_type
+      end
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body] || @api_client.object_to_http_body(create_saml_group_mapping_request)
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'CreateSamlGroupMappingOutcome'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"AdminApi.admin_create_saml_group_mapping",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:POST, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: AdminApi#admin_create_saml_group_mapping\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # Deactivate a principal
     # Deactivates a principal. Requires a system admin.
     # @param id [String] Profile ID of the principal
@@ -1437,6 +1512,91 @@ module Temper::Generated
       data, status_code, headers = @api_client.call_api(:DELETE, local_var_path, new_options)
       if @api_client.config.debugging
         @api_client.config.logger.debug "API called: AdminApi#admin_remove_erasure_retention\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
+    # Remove a SAML group mapping
+    # Removes one mapping. Memberships it already conferred are left in place: the IdP reconcile governs them, and at each member's next login removes those no remaining mapping confers. The answer counts the team's IdP memberships and says so. Recorded as `saml_group_mapping_changed`. Requires a system admin.
+    # @param idp_key [String] The IdP whose assertions carry the group.
+    # @param group [String] The group value, exactly as the mapping holds it.
+    # @param team_id [String] The team the mapping targets.
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [RemoveSamlGroupMappingOutcome]
+    def admin_remove_saml_group_mapping(idp_key, group, team_id, opts = {})
+      data, _status_code, _headers = admin_remove_saml_group_mapping_with_http_info(idp_key, group, team_id, opts)
+      data
+    end
+
+    # Remove a SAML group mapping
+    # Removes one mapping. Memberships it already conferred are left in place: the IdP reconcile governs them, and at each member&#39;s next login removes those no remaining mapping confers. The answer counts the team&#39;s IdP memberships and says so. Recorded as &#x60;saml_group_mapping_changed&#x60;. Requires a system admin.
+    # @param idp_key [String] The IdP whose assertions carry the group.
+    # @param group [String] The group value, exactly as the mapping holds it.
+    # @param team_id [String] The team the mapping targets.
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(RemoveSamlGroupMappingOutcome, Integer, Hash)>] RemoveSamlGroupMappingOutcome data, response status code and response headers
+    def admin_remove_saml_group_mapping_with_http_info(idp_key, group, team_id, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: AdminApi.admin_remove_saml_group_mapping ...'
+      end
+      # verify the required parameter 'idp_key' is set
+      if @api_client.config.client_side_validation && idp_key.nil?
+        fail ArgumentError, "Missing the required parameter 'idp_key' when calling AdminApi.admin_remove_saml_group_mapping"
+      end
+      # verify the required parameter 'group' is set
+      if @api_client.config.client_side_validation && group.nil?
+        fail ArgumentError, "Missing the required parameter 'group' when calling AdminApi.admin_remove_saml_group_mapping"
+      end
+      # verify the required parameter 'team_id' is set
+      if @api_client.config.client_side_validation && team_id.nil?
+        fail ArgumentError, "Missing the required parameter 'team_id' when calling AdminApi.admin_remove_saml_group_mapping"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/admin/saml/group-mappings'
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+      query_params[:'idp_key'] = idp_key
+      query_params[:'group'] = group
+      query_params[:'team_id'] = team_id
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body]
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'RemoveSamlGroupMappingOutcome'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"AdminApi.admin_remove_saml_group_mapping",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:DELETE, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: AdminApi#admin_remove_saml_group_mapping\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
       end
       return data, status_code, headers
     end

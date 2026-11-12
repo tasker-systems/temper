@@ -337,6 +337,8 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             | EventKind::TeamParentLinkChanged
             // A team lifecycle act (team DAG and lifecycle doors D8): the same posture.
             | EventKind::TeamLifecycleChanged
+            // A SAML group mapping act: the same posture.
+            | EventKind::SamlGroupMappingChanged
             // The public_within records: the same posture.
             | EventKind::TeamPublicWithinChanged
             | EventKind::PublicWithinEffectChanged
@@ -1051,6 +1053,9 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // A team lifecycle act: the same posture. Team STATE (is_active, slug,
             // auto_join_role) is replayed from the kb_teams input table.
             | EventKind::TeamLifecycleChanged
+            // A SAML group mapping act: the same posture. Replay rebuilds no SAML configuration;
+            // kb_saml_group_mappings is not one of its input tables.
+            | EventKind::SamlGroupMappingChanged
             // The public_within records: the same posture. Row STATE is replayed from the
             // kb_team_public_within input table; the forbid rides kb_teams, which replay does not
             // rebuild from events either.

@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT _admin_saml_group_mapping_write(\n                  p_emitter => $1, p_actor => $2, p_act => $3, p_idp_key => $4, p_group => $5,\n                  p_team => $6, p_role => $7, p_confirmed => $8) AS \"w!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "w!",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Uuid",
+        {
+          "Custom": {
+            "name": "team_role",
+            "kind": {
+              "Enum": [
+                "owner",
+                "maintainer",
+                "member",
+                "watcher"
+              ]
+            }
+          }
+        },
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "cb67b37308b1cd22e7a4e1b11134190e1d4c715f603653d46a8d5780194a5be9"
+}

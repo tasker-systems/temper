@@ -71,6 +71,7 @@ fn payload_schemas_match_snapshots() {
     check::<p::TeamMembershipChanged>("team_membership_changed");
     check::<p::TeamParentLinkChanged>("team_parent_link_changed");
     check::<p::TeamLifecycleChanged>("team_lifecycle_changed");
+    check::<p::SamlGroupMappingChanged>("saml_group_mapping_changed");
     check::<p::TeamPublicWithinChanged>("team_public_within_changed");
     check::<p::PublicWithinEffectChanged>("public_within_effect_changed");
     check::<p::PublicWithinPolicyChanged>("public_within_policy_changed");
@@ -196,6 +197,10 @@ fn the_migration_literal_matches_the_committed_fixture() {
         (
             "20261118000010_team_lifecycle_changed.sql",
             &["team_lifecycle_changed.v1.schema.json"],
+        ),
+        (
+            "20261125000010_saml_group_mapping_door.sql",
+            &["saml_group_mapping_changed.v1.schema.json"],
         ),
         (
             "20261120000000_public_within_policy_and_helpers.sql",

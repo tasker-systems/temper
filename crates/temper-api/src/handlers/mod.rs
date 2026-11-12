@@ -35,6 +35,7 @@ pub mod reblock;
 pub mod region;
 pub mod resource_erasure;
 pub mod resources;
+pub mod saml_mappings;
 pub mod schema;
 pub mod search;
 pub mod segments;

@@ -209,6 +209,11 @@ async fn a_machine_is_refused_every_team_act(pool: sqlx::PgPool) {
         json!({ "action": "public_within_close", "team": m.team, "anchor": m.team }),
         json!({ "action": "public_within_policy", "team": m.team, "forbidden": true }),
         json!({ "action": "public_within_policy", "team": m.team, "forbidden": false }),
+        json!({
+            "action": "saml_map_group", "team": m.team, "idp_key": "mcp-okta", "group": "eng",
+            "role": "member",
+        }),
+        json!({ "action": "saml_unmap_group", "team": m.team, "idp_key": "mcp-okta", "group": "eng" }),
     ];
     for args in acts {
         let err = team_manage(&svc, &parts, input(args.clone()))
@@ -865,4 +870,142 @@ async fn a_person_forbids_and_allows_public_within_over_mcp(pool: sqlx::PgPool) 
             .expect("an opening once allowed"),
     );
     assert_eq!(opened["outcome"], "opened", "{opened}");
+}
+
+/// Seed the IdP a SAML group mapping reads.
+async fn seed_idp(pool: &sqlx::PgPool, idp_key: &str) {
+    sqlx::query(
+        "INSERT INTO kb_saml_idp (idp_key, is_active, idp_cert, idp_sso_url, idp_entity_id, \
+                                  sp_entity_id, acs_url, nameid_format, email_attr, \
+                                  stable_id_attr, groups_attr) \
+         VALUES ($1, true, 'x', 'https://idp/sso', 'idp', 'sp', 'https://sp/acs', 'persistent', \
+                 'email', 'uid', 'groups')",
+    )
+    .bind(idp_key)
+    .execute(pool)
+    .await
+    .expect("seed idp");
+}
+
+/// A system admin maps an IdP group onto a team and removes the mapping over MCP, on their own
+/// bearer. An `owner` mapping is refused by name until it is confirmed; a person who owns the team
+/// but is no admin is refused as HTTP refuses them; each act lands one ledger record.
+///
+/// FAILS IF `saml_map_group` / `saml_unmap_group` stop relaying, drop `confirm_elevated`, or the
+/// refusal stops naming the confirmation.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_admin_maps_and_unmaps_a_saml_group_over_mcp(pool: sqlx::PgPool) {
+    let app = common::setup_relay(pool).await;
+    let svc = app.mcp_relay_service().await;
+    common::make_system_admin(&app.pool, me(&app).await).await;
+    let admin = app.relay_parts_for(&app.token);
+    seed_idp(&app.pool, "mcp-okta").await;
+
+    common::provision_and_approve_second(&app).await;
+    let second = common::generate_second_user_jwt();
+    let owner = app.relay_parts_for(&second);
+    let team = create(
+        &svc,
+        &owner,
+        json!({ "action": "create", "slug": "mcp-saml-team" }),
+    )
+    .await;
+    let records = |pool: sqlx::PgPool| async move {
+        sqlx::query_scalar::<_, Value>(
+            "SELECT e.payload FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+              WHERE t.name = 'saml_group_mapping_changed' ORDER BY e.id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+    };
+
+    // The team's owner is no admin: refused as HTTP refuses them.
+    let map = json!({
+        "action": "saml_map_group", "team": team, "idp_key": "mcp-okta", "group": "eng",
+        "role": "maintainer",
+    });
+    let mcp = team_manage(&svc, &owner, input(map.clone()))
+        .await
+        .expect_err("an owner who is no admin is refused");
+    let http = app
+        .client_for(&second)
+        .admin()
+        .create_saml_group_mapping(
+            &temper_core::types::saml_mapping::CreateSamlGroupMappingRequest {
+                idp_key: "mcp-okta".into(),
+                group: "eng".into(),
+                team_id: team,
+                role: temper_core::types::team::TeamRole::Maintainer,
+                confirm_elevated: false,
+            },
+        )
+        .await
+        .expect_err("HTTP refuses the owner");
+    assert_same_refusal("team_manage saml_map_group", &mcp, http);
+    assert!(records(app.pool.clone()).await.is_empty());
+
+    // `owner` without confirmation: refused by name, nothing written.
+    let err = team_manage(
+        &svc,
+        &admin,
+        input(json!({
+            "action": "saml_map_group", "team": team, "idp_key": "mcp-okta", "group": "leads",
+            "role": "owner",
+        })),
+    )
+    .await
+    .expect_err("an unconfirmed owner mapping is refused");
+    assert_eq!(err.code, ErrorCode::INVALID_PARAMS, "{err:?}");
+    assert!(err.message.contains("confirmation required"), "{err:?}");
+    assert!(err.message.contains("confirm_elevated"), "{err:?}");
+    assert!(records(app.pool.clone()).await.is_empty());
+
+    let made = one_json(
+        &team_manage(
+            &svc,
+            &admin,
+            input(json!({
+                "action": "saml_map_group", "team": team, "idp_key": "mcp-okta", "group": "leads",
+                "role": "owner", "confirm_elevated": true,
+            })),
+        )
+        .await
+        .expect("a confirmed owner mapping"),
+    );
+    assert_eq!(made["created"], true, "{made}");
+    assert_eq!(made["confirmed"], true, "{made}");
+    assert_eq!(made["mapping"]["role"], "owner", "{made}");
+
+    let removed = one_json(
+        &team_manage(
+            &svc,
+            &admin,
+            input(json!({
+                "action": "saml_unmap_group", "team": team, "idp_key": "mcp-okta",
+                "group": "leads",
+            })),
+        )
+        .await
+        .expect("an admin removes the mapping"),
+    );
+    assert_eq!(removed["removed"]["role"], "owner", "{removed}");
+    assert_eq!(removed["idp_memberships_left_in_place"], 0, "{removed}");
+    assert_eq!(
+        removed["memberships"],
+        temper_core::types::saml_mapping::MAPPING_REMOVAL_LEAVES_MEMBERSHIPS,
+        "{removed}"
+    );
+
+    let recs = records(app.pool.clone()).await;
+    assert_eq!(recs.len(), 2, "{recs:?}");
+    assert_eq!(recs[0]["act"], "created");
+    assert_eq!(recs[0]["confirmed"], true);
+    assert_eq!(recs[1]["act"], "removed");
+    for r in &recs {
+        assert_eq!(r["actor"], me(&app).await.to_string());
+        assert_eq!(r["group_value"], "leads");
+        assert_eq!(r["team_id"], team.to_string());
+        assert_eq!(r["role"], "owner");
+    }
 }

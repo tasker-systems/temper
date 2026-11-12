@@ -95,8 +95,13 @@ remain the authoritative reference and the manual fallback.
    temper admin saml map-group --idp-key <acme-okta> --from-seen   # groups the IdP has actually asserted
    ```
 
-   Emits a `kb_saml_group_mappings` INSERT (add `--apply` to run it). `--from-seen` reads
-   `kb_saml_seen_groups` so you can add mappings reactively.
+   Creates the mapping through the admin API, as a system admin's act recorded on the admin
+   ledger (`saml_group_mapping_changed`). The ceiling is `maintainer`: an `owner` role, or
+   `temper-system` or the gating team as the target, is refused unless you add
+   `--confirm-elevated`. `--from-seen` reads `kb_saml_seen_groups` so you can add mappings
+   reactively. `temper admin saml unmap-group --idp-key <acme-okta> engineering +engineering`
+   removes a mapping (also recorded). Memberships it already conferred stay until each member's
+   next login, when the IdP reconcile removes those no remaining mapping confers.
 
 3. **Verify**:
 
@@ -269,18 +274,21 @@ is removed.
    ```
    Leave `groups_attr` NULL to keep authentication-only behavior (no membership changes).
 
-2. Map groups to `(team, role)`. Teams must already exist. Two groups mapping to the same team
-   collapse to the strongest role (`owner > maintainer > member > watcher`):
+2. Map groups to `(team, role)` with the admin door. Teams must already exist. Two groups mapping
+   to the same team collapse to the strongest role (`owner > maintainer > member > watcher`):
 
-   ```sql
-   INSERT INTO kb_saml_group_mappings (idp_key, group_value, team_id, role) VALUES
-     ('acme-okta', 'engineering',   '<team-uuid>', 'member'),
-     ('acme-okta', 'eng-leads',     '<team-uuid>', 'maintainer'),
-     ('acme-okta', 'temper-admins', '<gating-team-uuid>', 'owner');
+   ```bash
+   temper admin saml map-group --idp-key acme-okta engineering +engineering --role member
+   temper admin saml map-group --idp-key acme-okta eng-leads   +engineering --role maintainer
    ```
-   The last row is "admin via group" — it makes members of `temper-admins` owners of the gating
-   team. Note: the **first** admin still requires the SQL bootstrap step; SAML does not
-   bootstrap the system.
+   Each mapping is a system admin's act, recorded on the admin ledger. The ceiling is
+   `maintainer`: an `owner` role, or `temper-system` or the gating team as the target, is refused
+   unless you add `--confirm-elevated` (for example `--role owner --confirm-elevated`). Re-running
+   an identical mapping changes nothing. `temper admin saml unmap-group` removes one.
+
+   Owning the gating team does not make anyone a system admin: that is the governance grant
+   (`temper admin promote`). The **first** admin still requires the SQL bootstrap step; SAML does
+   not bootstrap the system.
 
 Unmapped asserted groups are ignored for provisioning, but they ARE recorded in
 `kb_saml_seen_groups` (with first/last-seen) so you can discover what the IdP actually sends and

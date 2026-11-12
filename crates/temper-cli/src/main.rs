@@ -1246,10 +1246,18 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     group,
                     team,
                     role,
+                    confirm_elevated,
                     from_seen,
                     apply,
                 } => {
-                    if from_seen {
+                    if apply {
+                        Err(temper_cli::error::TemperError::Config(
+                            "map-group no longer renders SQL, so --apply is retired: without it, \
+                             map-group creates the mapping through the admin API and records it. \
+                             Drop --apply to proceed."
+                                .into(),
+                        ))
+                    } else if from_seen {
                         temper_cli::commands::admin_saml::from_seen(&idp_key)
                     } else {
                         // clap `required_unless_present = "from_seen"` guarantees both are
@@ -1263,13 +1271,37 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         temper_cli::actions::runtime::with_client(|client| {
                             Box::pin(async move {
                                 temper_cli::commands::admin_saml::map_group(
-                                    client, &idp_key, &group, &team, &role, apply,
+                                    client,
+                                    temper_cli::commands::admin_saml::MapGroupArgs {
+                                        idp_key: &idp_key,
+                                        group: &group,
+                                        team: &team,
+                                        role: &role,
+                                        confirm_elevated,
+                                    },
+                                    output_format,
                                 )
                                 .await
                             })
                         })
                     }
                 }
+                AdminSamlAction::UnmapGroup {
+                    idp_key,
+                    group,
+                    team,
+                } => temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::admin_saml::unmap_group(
+                            client,
+                            &idp_key,
+                            &group,
+                            &team,
+                            output_format,
+                        )
+                        .await
+                    })
+                }),
                 AdminSamlAction::Verify { instance_url, db } => {
                     temper_cli::actions::runtime::with_client(|client| {
                         Box::pin(async move {

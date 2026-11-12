@@ -13,6 +13,9 @@ use dialoguer::{theme::ColorfulTheme, Input};
 use crate::error::{Result, TemperError};
 use crate::output;
 use crate::saml::{self, SamlProvisionConfig};
+use temper_core::types::saml_mapping::{
+    CreateSamlGroupMappingRequest, RemoveSamlGroupMappingParams,
+};
 
 /// AS access-token TTL baked into the emitted env bundle (15 minutes).
 const ACCESS_TTL_SECS: u32 = 900;
@@ -300,24 +303,60 @@ pub fn apply_sql_via_psql(sql: &str) -> Result<()> {
     Ok(())
 }
 
-/// `temper admin saml map-group` — resolve `team` via the authenticated client, render the
-/// `kb_saml_group_mappings` INSERT via `saml::render_group_mapping_sql`, then emit or `--apply`.
+/// The `map-group` arguments, by reference.
+#[derive(Debug, Clone, Copy)]
+pub struct MapGroupArgs<'a> {
+    pub idp_key: &'a str,
+    pub group: &'a str,
+    pub team: &'a str,
+    pub role: &'a str,
+    pub confirm_elevated: bool,
+}
+
+/// `temper admin saml map-group` — resolve `team` via the authenticated client and create the
+/// mapping through the admin door, which records it and holds the `maintainer` ceiling.
 pub async fn map_group(
+    client: &temper_client::TemperClient,
+    args: MapGroupArgs<'_>,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let role = crate::commands::team::parse_role(args.role)?;
+    let team_id = crate::actions::cogmap::resolve_team_id(client, args.team).await?;
+    let outcome = client
+        .admin()
+        .create_saml_group_mapping(&CreateSamlGroupMappingRequest {
+            idp_key: args.idp_key.to_string(),
+            group: args.group.to_string(),
+            team_id,
+            role,
+            confirm_elevated: args.confirm_elevated,
+        })
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+    println!("{}", crate::format::render(&outcome, fmt)?);
+    Ok(())
+}
+
+/// `temper admin saml unmap-group` — remove a mapping through the admin door. The answer counts
+/// the team's IdP memberships, which the removal leaves in place.
+pub async fn unmap_group(
     client: &temper_client::TemperClient,
     idp_key: &str,
     group: &str,
     team: &str,
-    role: &str,
-    apply: bool,
+    fmt: crate::format::OutputFormat,
 ) -> Result<()> {
     let team_id = crate::actions::cogmap::resolve_team_id(client, team).await?;
-    let sql = saml::render_group_mapping_sql(idp_key, group, team_id, role);
-    if apply {
-        apply_sql_via_psql(&sql)?;
-        output::success(format!("mapped '{group}' → {team} ({role})"));
-    } else {
-        println!("{sql}");
-    }
+    let outcome = client
+        .admin()
+        .remove_saml_group_mapping(&RemoveSamlGroupMappingParams {
+            idp_key: idp_key.to_string(),
+            group: group.to_string(),
+            team_id,
+        })
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+    println!("{}", crate::format::render(&outcome, fmt)?);
     Ok(())
 }
 

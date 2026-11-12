@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SamlGroupMappingChanged",
+  "description": "`saml_group_mapping_changed` — a SAML group mapping (`kb_saml_group_mappings`: an IdP's group\nvalue conferring a role on a team) was created or removed by a system admin. Written only by\n`_admin_saml_group_mapping_write`, in the same statement as the row.\n\nA mapping confers membership on every person the IdP asserts the group for, at each login's\nreconcile, so who made one, and who removed one, is an authority record like a membership\nchange. The team is the event's `subject` reference. Removing a mapping deletes no membership:\nthe next reconcile of each member decides those.",
+  "type": "object",
+  "properties": {
+    "act": {
+      "$ref": "#/$defs/SamlGroupMappingAct"
+    },
+    "actor": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProfileId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "confirmed": {
+      "description": "True on a `created` that needed the admin's explicit confirmation (an `owner` role, or the\nroot or gating team as the target) and had it, and on every `adopted`. Absent otherwise.",
+      "type": "boolean"
+    },
+    "group_value": {
+      "description": "The asserted group value the mapping matches.",
+      "type": "string"
+    },
+    "idp_key": {
+      "description": "The IdP whose assertions the mapping reads (`kb_saml_idp.idp_key`).",
+      "type": "string"
+    },
+    "migration": {
+      "description": "On `adopted` only: the version of the migration that recorded the row as confirmed. Such a\nrecord has no person actor.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64"
+    },
+    "role": {
+      "description": "The role the mapping confers: as written on `created`, as it was on `removed`.",
+      "$ref": "#/$defs/TeamRole"
+    },
+    "team_id": {
+      "type": "string",
+      "format": "uuid"
+    }
+  },
+  "required": [
+    "act",
+    "idp_key",
+    "group_value",
+    "team_id",
+    "role"
+  ],
+  "$defs": {
+    "ProfileId": {
+      "description": "A `kb_profiles.id` value.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "SamlGroupMappingAct": {
+      "description": "What happened to the mapping in a [`SamlGroupMappingChanged`] record.",
+      "oneOf": [
+        {
+          "description": "The mapping was created.",
+          "type": "string",
+          "const": "created"
+        },
+        {
+          "description": "The mapping was removed; the memberships it conferred were left in place.",
+          "type": "string",
+          "const": "removed"
+        },
+        {
+          "description": "A mapping that already existed above the ceiling when the doors arrived, recorded as\nconfirmed by the migration that introduced them (`migration` names it). No row changed.",
+          "type": "string",
+          "const": "adopted"
+        }
+      ]
+    },
+    "TeamRole": {
+      "description": "Team role — strict hierarchy: Owner > Maintainer > Member > Watcher.\n\nMaps directly to the `team_role` Postgres enum. Four roles is small enough\nthat explicit matching in SQL functions and Rust logic is clearer than a\njoin-table permission model.",
+      "type": "string",
+      "enum": [
+        "owner",
+        "maintainer",
+        "member",
+        "watcher"
+      ]
+    }
+  }
+}

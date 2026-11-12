@@ -878,7 +878,7 @@ fn remove_admin_files(skill_dir: &Path, shipped: &[&str]) -> Result<Vec<String>>
 /// made by an earlier release is recognized as ours to retract. Editing `admin.md` fails
 /// `the_current_admin_revision_is_in_its_table` until its new hash is added here. Recompute a
 /// path's history with `git log --follow --name-only` and `git show <commit>:<path> | shasum -a 256`.
-const ADMIN_SHIPPED_REVISIONS: [&str; 10] = [
+const ADMIN_SHIPPED_REVISIONS: [&str; 11] = [
     "08954f96db388ac317a13874ba5bb83cddfc51c7fbae3cef5cb3b19b16772eaf",
     "1f39616f4d83f59be3c9d069a297d1b4d2ea5111b681964e190e258c84e91535",
     "2db09a7648f824d0483087bc6886816b4f1d92ade99680d157bd60b655e9d309",
@@ -889,6 +889,7 @@ const ADMIN_SHIPPED_REVISIONS: [&str; 10] = [
     "71553a12e9f42b55d11e6672fea86fba75c97ba05fd0025a41fd882b66b0214b",
     "ea83382bad6770ee03a1dc0bf4071227d0cd0e0690bc5c862ce5d7539ab87e91",
     "f7518d65d12d434604a7d72275cb2de2371bfaeb76d0cd7034b3cb85fb57613b",
+    "fdefdea664a3b8fb99a0c19976bc05c05e5a8c3acdae9dbbe9790151881fa8ff",
 ];
 
 /// The pre-root-shipping installer wrote the grounding pair into `guidance/`. It now ships at the

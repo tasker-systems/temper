@@ -39,7 +39,7 @@ characters, copied from a state card's `profile_id` (the card also names the ena
 | `admin reviews` | Reconsideration requests: `list`, then `close`, which records the decision and grants nothing. |
 | `admin profiles` | The operator directory: `list` and `show` (by UUID or exact verified email). |
 | `admin ledger` | Who granted what, to whom, when. Every standing and governance act lands here; read it after acting. |
-| `admin saml` | `provision` (keys, env bundle, SQL), `map-group` (IdP group to team), `verify`. |
+| `admin saml` | `provision` (keys, env bundle, SQL), `map-group` (IdP group to team, a recorded act; above `maintainer` or onto an instance team needs `--confirm-elevated`), `unmap-group`, `verify`. |
 | `admin machine` | Machine principals (client_credentials); see below. |
 | `admin slack` | Account links: `disconnect` (idempotent). |
 | `admin team` | `auto-join <team> <member\|watcher\|none>`. Every approved person (never a machine) is enrolled and reads what the team and its ancestors hold; existing memberships never change. Refused on temper-system, the gating team and personal teams. |
