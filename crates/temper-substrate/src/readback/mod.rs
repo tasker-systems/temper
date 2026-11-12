@@ -68,6 +68,7 @@ use serde_json::{Map, Value};
 use sqlx::{PgPool, Row};
 use temper_core::types::data_artifact::ArtifactCursor;
 use temper_core::types::home::HomeAnchor;
+use temper_core::types::resource_view::ByteBlock;
 use uuid::Uuid;
 
 use crate::ids::{
@@ -723,32 +724,52 @@ pub async fn body(
     principal: ProfileId,
     new_id: ResourceId,
 ) -> std::result::Result<String, ReadbackError> {
-    Ok(body_with_bytes_merkle(pool, principal, new_id).await?.0)
+    Ok(body_with_byte_identity(pool, principal, new_id)
+        .await?
+        .content)
 }
 
-/// [`body`], plus the body's `bytes_merkle` computed **in the same statement as the bytes**.
+/// A body read back with its byte identity: what [`body_with_byte_identity`] answers.
+#[derive(Debug, Clone)]
+pub struct BodyRead {
+    /// The body, verbatim or reconstructed.
+    pub content: String,
+    /// `Some` exactly when `content` came back verbatim: the resource's `bytes_merkle`.
+    pub bytes_merkle: Option<String>,
+    /// `Some` exactly when `bytes_merkle` is: each live block's `seq`, byte length and byte
+    /// hash, in `seq` order.
+    pub byte_blocks: Option<Vec<ByteBlock>>,
+}
+
+/// [`body`], plus the body's `bytes_merkle` and block boundaries, computed **in the same
+/// statement as the bytes**.
 ///
-/// The merkle is `Some` exactly when the body came back verbatim; a derived reconstruction has no
-/// stored hash that describes it, so it is `None`. Because one statement produces both, they share
-/// one snapshot: a write landing between the identity read and this one moves both together, and
-/// never serves bytes beside a merkle of other bytes. That is why `show` takes the merkle beside
-/// `content` from here, not from the identity read (`hit_identities_with`).
+/// The merkle and boundaries are `Some` exactly when the body came back verbatim; a derived
+/// reconstruction has no stored hash that describes it, so both are `None`. Because one statement
+/// produces all three, they share one snapshot: a write landing between the identity read and
+/// this one moves them together, and never serves bytes beside a merkle or boundaries of other
+/// bytes. That is why `show` takes the merkle beside `content` from here, not from the identity
+/// read (`hit_identities_with`).
 ///
 /// Gated exactly as the bytes are: `ensure_visible` first, then the one statement.
-pub async fn body_with_bytes_merkle(
+pub async fn body_with_byte_identity(
     pool: &PgPool,
     principal: ProfileId,
     new_id: ResourceId,
-) -> std::result::Result<(String, Option<String>), ReadbackError> {
+) -> std::result::Result<BodyRead, ReadbackError> {
     ensure_visible(pool, principal, new_id).await?;
 
     // Path 1: verbatim, coverage-verified. `fetch_optional` is `None` on partial coverage (HAVING
     // excludes the row); a row with a NULL agg is zero live blocks. Both fall to the derived path.
     // `resource_bytes_merkle` is STABLE, so it reads this statement's snapshot: the same rows the
-    // `string_agg` reads, under the same coverage rule.
+    // aggregates read, under the same coverage rule.
     let verbatim = sqlx::query!(
         r#"SELECT string_agg(bc.content, '' ORDER BY b.seq) AS body,
-                  resource_bytes_merkle($1) AS bytes_merkle
+                  resource_bytes_merkle($1) AS bytes_merkle,
+                  jsonb_agg(jsonb_build_object(
+                      'seq', b.seq,
+                      'bytes_len', octet_length(bc.content),
+                      'bytes_sha256', bc.content_hash) ORDER BY b.seq) AS byte_blocks
              FROM kb_content_blocks b
              LEFT JOIN kb_block_content bc ON bc.block_revision_id = b.current_revision_id
             WHERE b.resource_id = $1 AND NOT b.is_folded
@@ -759,7 +780,11 @@ pub async fn body_with_bytes_merkle(
     .await?;
     if let Some(row) = verbatim {
         if let Some(body) = row.body {
-            return Ok((body, row.bytes_merkle));
+            return Ok(BodyRead {
+                content: body,
+                byte_blocks: decode_byte_blocks(new_id, row.byte_blocks)?,
+                bytes_merkle: row.bytes_merkle,
+            });
         }
     }
 
@@ -789,7 +814,60 @@ pub async fn body_with_bytes_merkle(
             content: row.content,
         })
         .collect();
-    Ok((crate::content::reconstruct_body(&chunks), None))
+    Ok(BodyRead {
+        content: crate::content::reconstruct_body(&chunks),
+        bytes_merkle: None,
+        byte_blocks: None,
+    })
+}
+
+/// A verbatim body's `bytes_merkle` and block boundaries **without its content**, computed in one
+/// statement: the `byte-blocks` section on a read that did not ask for the body.
+///
+/// Both are `None` unless every live block carries bytes (the coverage rule
+/// `resource_bytes_merkle` and the verbatim readback share). Gated as the bytes are:
+/// `ensure_visible` first, then the one statement, so a caller who cannot read the content
+/// cannot read the hashes of it either.
+pub async fn byte_identity(
+    pool: &PgPool,
+    principal: ProfileId,
+    new_id: ResourceId,
+) -> std::result::Result<(Option<String>, Option<Vec<ByteBlock>>), ReadbackError> {
+    ensure_visible(pool, principal, new_id).await?;
+    let row = sqlx::query!(
+        r#"SELECT resource_bytes_merkle($1) AS bytes_merkle,
+                  jsonb_agg(jsonb_build_object(
+                      'seq', b.seq,
+                      'bytes_len', octet_length(bc.content),
+                      'bytes_sha256', bc.content_hash) ORDER BY b.seq) AS byte_blocks
+             FROM kb_content_blocks b
+             LEFT JOIN kb_block_content bc ON bc.block_revision_id = b.current_revision_id
+            WHERE b.resource_id = $1 AND NOT b.is_folded
+           HAVING count(*) > 0 AND count(*) = count(bc.block_revision_id)"#,
+        new_id.uuid(),
+    )
+    .fetch_optional(pool)
+    .await?;
+    match row {
+        Some(row) => Ok((
+            row.bytes_merkle,
+            decode_byte_blocks(new_id, row.byte_blocks)?,
+        )),
+        None => Ok((None, None)),
+    }
+}
+
+/// The `jsonb_agg` of a verbatim read's blocks, as [`ByteBlock`]s. A shape that does not decode
+/// is a fault in the statement above, never a value to drop.
+fn decode_byte_blocks(
+    id: ResourceId,
+    raw: Option<serde_json::Value>,
+) -> std::result::Result<Option<Vec<ByteBlock>>, ReadbackError> {
+    raw.map(|v| {
+        serde_json::from_value(v)
+            .map_err(|e| anyhow::anyhow!("byte blocks of resource {id} do not decode: {e}").into())
+    })
+    .transpose()
 }
 
 // ── the block-addressed resolution (the defined-dangling-state design, D-D1..D-D4) ──────────
@@ -2395,6 +2473,7 @@ async fn hit_identities_with(
                 ingest_ended,
                 body_storage: BodyStorage::from_wire(&row.body_storage),
                 bytes_merkle: row.bytes_merkle,
+                byte_blocks: None,
                 managed_meta,
                 // All three are sections this read does not serve — see the doc comment.
                 open_meta: None,

@@ -886,6 +886,7 @@ mod tests {
             ingest_ended: None,
             body_storage: None,
             bytes_merkle: None,
+            byte_blocks: None,
             managed_meta: ManagedMeta {
                 stage: Some(stage.to_string()),
                 mode: Some("build".to_string()),

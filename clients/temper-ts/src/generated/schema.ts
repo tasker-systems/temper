@@ -5546,6 +5546,21 @@ export interface components {
             /** Format: uuid */
             to_profile_id: string;
         };
+        /** @description One live block of a verbatim body, as [`ResourceView::byte_blocks`] serves it. */
+        ByteBlock: {
+            /**
+             * Format: int64
+             * @description The length in bytes (UTF-8) of the block's raw bytes: where it ends in the body.
+             */
+            bytes_len: number;
+            /** @description The bare lowercase hex sha256 of the block's raw bytes. */
+            bytes_sha256: string;
+            /**
+             * Format: int32
+             * @description The block's position in the body. Blocks are served in ascending `seq`.
+             */
+            seq: number;
+        };
         /** @description Request body for `PATCH /api/teams/{id}/members/{profile_id}`. */
         ChangeRoleRequest: {
             role: components["schemas"]["TeamRole"];
@@ -10617,7 +10632,7 @@ export interface components {
          *     `openapi.json` is unmoved.
          * @enum {string}
          */
-        ResourceSection: "body" | "open-meta" | "edges" | "embedding-status";
+        ResourceSection: "body" | "open-meta" | "edges" | "embedding-status" | "byte-blocks";
         /**
          * @description Sort field for resource listing.
          * @enum {string}
@@ -10786,17 +10801,27 @@ export interface components {
             body_hash?: string | null;
             body_storage?: components["schemas"]["BodyStorage"] | null;
             /**
+             * @description The body's block boundaries and per-block byte hashes, in `seq` order: what a client needs
+             *     to check a whole cached body against [`Self::bytes_merkle`]. The `byte-blocks` section.
+             *
+             *     Absent when the section was not requested, and absent when it was but the body is not
+             *     wholly verbatim (exactly when `bytes_merkle` is absent): a `derived` body has no stored
+             *     bytes to cut it by. It is served under the same visibility gate as `content`, and computed
+             *     in the same statement as `bytes_merkle` (and as `content`, when the body was requested
+             *     too), so the boundaries always describe the bytes beside them.
+             */
+            byte_blocks?: components["schemas"]["ByteBlock"][] | null;
+            /**
              * @description Byte identity of the body: proves a cached copy is Temper's bytes without downloading the
              *     body again. Bare lowercase hex.
              *
              *     It is the sha256 of the live blocks' `bytes_sha256` values (each the bare lowercase hex
              *     sha256 of that block's raw bytes), concatenated in `seq` order with no separator. Get the
-             *     per-block values and the block boundaries (`seq`, `bytes_len`) from
-             *     `GET /api/resources/{id}/blocks`, which answers a caller who can modify the resource. To
-             *     verify a whole cached body, cut it at those byte lengths,
-             *     sha256 each piece, concatenate the hex digests, and sha256 that string. To verify one block,
-             *     compare its sha256 with its `bytes_sha256`. The concatenation of the pieces is exactly the
-             *     body `content` serves.
+             *     per-block values and the block boundaries from the `byte-blocks` section of this same read
+             *     ([`Self::byte_blocks`]). To verify a whole cached body, cut it at those byte lengths in
+             *     `seq` order, sha256 each piece, concatenate the hex digests, and sha256 that string. To
+             *     verify one block, compare its sha256 with its `bytes_sha256`. The concatenation of the
+             *     pieces is exactly the body `content` serves.
              *
              *     Present only when every live block carries its raw bytes, which is when `body_storage` is
              *     `verbatim`. It is absent on a `derived` body, which reads back as a reconstruction no stored
@@ -10804,10 +10829,10 @@ export interface components {
              *     on every byte change, a heading-only edit included, and stays put across a re-block that
              *     keeps the bytes and their block boundaries.
              *
-             *     Beside `content` (a read that asked for the body) it is computed in the same statement as
-             *     that content, so the two always describe the same bytes. Without `content` it is read with
-             *     the rest of this view, in one statement; a write after the read can move it, exactly as it
-             *     moves `updated`.
+             *     Beside `content` or `byte_blocks` (a read that asked for the `body` or `byte-blocks`
+             *     section) it is computed in the same statement as them, so all three always describe the
+             *     same bytes. Otherwise it is read with the rest of this view, in one statement; a write after
+             *     the read can move it, exactly as it moves `updated`.
              */
             bytes_merkle?: string | null;
             /**

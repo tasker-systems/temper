@@ -360,6 +360,7 @@ mod tests {
             ingest_ended: None,
             body_storage: None,
             bytes_merkle: None,
+            byte_blocks: None,
             managed_meta: Default::default(),
             open_meta: None,
             content: None,

@@ -26,7 +26,7 @@ use temper_core::types::ingest::{
 /// Section-aligned segments (see `segments_handler_test.rs`): their concatenation chunks back to
 /// the two landed chunks, so finalize accepts it.
 const SEG1: &str = "# One\n\nfirst segment";
-const SEG2: &str = "\n## Two\n\nsecond segment";
+const SEG2: &str = "\n## Two\n\nsecond segment — naïve café";
 
 fn one_chunk_packed(text: &str) -> String {
     let c = &temper_ingest::chunk::chunk_markdown(text)[0];
@@ -323,4 +323,144 @@ async fn the_hash_is_gated_as_the_bytes_are(pool: PgPool) {
         !list.contains(&id.to_string()),
         "nor see it on a list of its context"
     );
+}
+
+/// A read-only grant on `ctx` for `reader` (read, never write): the principal the `byte-blocks`
+/// section exists for, since `/blocks` answers only a caller who can modify the resource.
+async fn grant_read_only(pool: &PgPool, ctx: Uuid, reader: Uuid) {
+    sqlx::query(
+        "INSERT INTO kb_access_grants \
+             (subject_table, subject_id, principal_table, principal_id, can_read, can_write, \
+              granted_by_profile_id) \
+         VALUES ('kb_contexts', $1, 'kb_profiles', $2, true, false, $2)",
+    )
+    .bind(ctx)
+    .bind(reader)
+    .execute(pool)
+    .await
+    .expect("read-only grant");
+}
+
+/// Cut `content` at each block's `bytes_len`, check every piece against its `bytes_sha256`, and
+/// return the merkle a client computes from the pieces. Panics if the lengths do not tile it.
+fn verify_by_boundaries(content: &str, blocks: &[Value]) -> String {
+    let mut at = 0usize;
+    let mut hexes = String::new();
+    let mut last_seq = i64::MIN;
+    for b in blocks {
+        let seq = b["seq"].as_i64().expect("seq");
+        assert!(
+            seq > last_seq,
+            "blocks are served in ascending seq: {blocks:?}"
+        );
+        last_seq = seq;
+        let n = b["bytes_len"].as_u64().expect("bytes_len") as usize;
+        let piece = &content[at..at + n];
+        let hex = sha256_hex(piece.as_bytes());
+        assert_eq!(
+            Some(hex.as_str()),
+            b["bytes_sha256"].as_str(),
+            "block {seq} verifies against its served hash"
+        );
+        hexes.push_str(&hex);
+        at += n;
+    }
+    assert_eq!(at, content.len(), "the boundaries tile the whole body");
+    sha256_hex(hexes.as_bytes())
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_read_only_reader_verifies_a_whole_body_from_the_byte_blocks(pool: PgPool) {
+    let app = common::setup_test_app(pool.clone()).await;
+    let (owner, ctx) = auth(&pool, "bb-owner").await;
+    let id = two_block_resource(&app, &pool, &owner, ctx).await;
+    let email = format!("bytes-bb-reader-{}@example.com", Uuid::new_v4());
+    let reader_id = common::fixtures::create_test_profile(&pool, &email).await;
+    let reader = common::generate_test_jwt(&format!("test|{reader_id}"), &email);
+    grant_read_only(&pool, ctx, reader_id).await;
+
+    // The reader cannot use the editing read, so the boundaries must come from the read door.
+    let blocks_status = app
+        .client
+        .get(app.url(&format!("/api/resources/{id}/blocks")))
+        .header("Authorization", format!("Bearer {reader}"))
+        .send()
+        .await
+        .expect("list blocks")
+        .status()
+        .as_u16();
+    assert_eq!(blocks_status, 403, "the reader cannot modify the resource");
+
+    // Boundaries and merkle alone (the cached-body case), then beside the content.
+    let (status, bare) = show(&app, &reader, id, "?sections=byte-blocks").await;
+    assert_eq!(status, 200, "the reader can show it: {bare}");
+    assert!(
+        bare.get("content").is_none(),
+        "byte-blocks alone serves no body"
+    );
+    let blocks = bare["byte_blocks"]
+        .as_array()
+        .expect("byte_blocks served")
+        .clone();
+    assert_eq!(blocks.len(), 2);
+    let cached = format!("{SEG1}{SEG2}");
+    let computed = verify_by_boundaries(&cached, &blocks);
+    assert_eq!(
+        bare["bytes_merkle"].as_str(),
+        Some(computed.as_str()),
+        "a cached body verifies whole against bytes_merkle from the served boundaries"
+    );
+
+    let (_, full) = show(&app, &reader, id, "?sections=body,byte-blocks").await;
+    let content = full["content"].as_str().expect("content").to_owned();
+    let blocks = full["byte_blocks"].as_array().expect("byte_blocks").clone();
+    assert_eq!(
+        full["bytes_merkle"].as_str(),
+        Some(verify_by_boundaries(&content, &blocks).as_str()),
+        "beside the content, the boundaries and merkle describe that content"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn byte_blocks_are_gated_and_absent_on_a_derived_body(pool: PgPool) {
+    let app = common::setup_test_app(pool.clone()).await;
+    let (owner, ctx) = auth(&pool, "bb-gate").await;
+    let id = two_block_resource(&app, &pool, &owner, ctx).await;
+
+    let (stranger, _) = auth(&pool, "bb-stranger").await;
+    let (status, view) = show(&app, &stranger, id, "?sections=byte-blocks").await;
+    assert_eq!(status, 404, "a stranger cannot show it");
+    assert!(view.get("byte_blocks").is_none() && view.get("bytes_merkle").is_none());
+
+    // The list door does not take the section.
+    let list_status = app
+        .client
+        .get(app.url(&format!(
+            "/api/resources?context_ref={ctx}&sections=byte-blocks"
+        )))
+        .header("Authorization", format!("Bearer {owner}"))
+        .send()
+        .await
+        .expect("list")
+        .status()
+        .as_u16();
+    assert_eq!(list_status, 400, "list refuses the per-resource section");
+
+    sqlx::query(
+        "DELETE FROM kb_block_content WHERE block_revision_id = \
+           (SELECT current_revision_id FROM kb_content_blocks \
+             WHERE resource_id = $1 AND NOT is_folded ORDER BY seq DESC LIMIT 1)",
+    )
+    .bind(id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    for query in ["?sections=byte-blocks", "?sections=body,byte-blocks"] {
+        let (status, view) = show(&app, &owner, id, query).await;
+        assert_eq!(status, 200);
+        assert!(
+            view.get("byte_blocks").is_none() && view.get("bytes_merkle").is_none(),
+            "a body that is not wholly verbatim serves no boundaries ({query:?}): {view}"
+        );
+    }
 }

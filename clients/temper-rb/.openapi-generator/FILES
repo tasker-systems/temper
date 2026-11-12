@@ -134,6 +134,7 @@ lib/temper/generated/models/bound_kind.rb
 lib/temper/generated/models/bridge.rb
 lib/temper/generated/models/bulk_reassign_ack.rb
 lib/temper/generated/models/bulk_reassign_request.rb
+lib/temper/generated/models/byte_block.rb
 lib/temper/generated/models/change_role_request.rb
 lib/temper/generated/models/charter_block.rb
 lib/temper/generated/models/charter_disposition.rb

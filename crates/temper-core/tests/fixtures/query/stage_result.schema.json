@@ -54,6 +54,32 @@
         }
       ]
     },
+    "ByteBlock": {
+      "description": "One live block of a verbatim body, as [`ResourceView::byte_blocks`] serves it.",
+      "properties": {
+        "bytes_len": {
+          "description": "The length in bytes (UTF-8) of the block's raw bytes: where it ends in the body.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "bytes_sha256": {
+          "description": "The bare lowercase hex sha256 of the block's raw bytes.",
+          "type": "string"
+        },
+        "seq": {
+          "description": "The block's position in the body. Blocks are served in ascending `seq`.",
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seq",
+        "bytes_len",
+        "bytes_sha256"
+      ],
+      "type": "object"
+    },
     "CogmapRegionRow": {
       "description": "One non-folded region of a cognitive map under a lens, as returned by `cogmap_shape`.",
       "properties": {
@@ -681,8 +707,18 @@
           ],
           "description": "Do the bytes read back exactly, or only approximately? `Option` purely for\nversion skew, as with `ingest_state`."
         },
+        "byte_blocks": {
+          "description": "The body's block boundaries and per-block byte hashes, in `seq` order: what a client needs\nto check a whole cached body against [`Self::bytes_merkle`]. The `byte-blocks` section.\n\nAbsent when the section was not requested, and absent when it was but the body is not\nwholly verbatim (exactly when `bytes_merkle` is absent): a `derived` body has no stored\nbytes to cut it by. It is served under the same visibility gate as `content`, and computed\nin the same statement as `bytes_merkle` (and as `content`, when the body was requested\ntoo), so the boundaries always describe the bytes beside them.",
+          "items": {
+            "$ref": "#/$defs/ByteBlock"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "bytes_merkle": {
-          "description": "Byte identity of the body: proves a cached copy is Temper's bytes without downloading the\nbody again. Bare lowercase hex.\n\nIt is the sha256 of the live blocks' `bytes_sha256` values (each the bare lowercase hex\nsha256 of that block's raw bytes), concatenated in `seq` order with no separator. Get the\nper-block values and the block boundaries (`seq`, `bytes_len`) from\n`GET /api/resources/{id}/blocks`, which answers a caller who can modify the resource. To\nverify a whole cached body, cut it at those byte lengths,\nsha256 each piece, concatenate the hex digests, and sha256 that string. To verify one block,\ncompare its sha256 with its `bytes_sha256`. The concatenation of the pieces is exactly the\nbody `content` serves.\n\nPresent only when every live block carries its raw bytes, which is when `body_storage` is\n`verbatim`. It is absent on a `derived` body, which reads back as a reconstruction no stored\nhash describes, and absent from a server that predates the field. Unlike `body_hash` it moves\non every byte change, a heading-only edit included, and stays put across a re-block that\nkeeps the bytes and their block boundaries.\n\nBeside `content` (a read that asked for the body) it is computed in the same statement as\nthat content, so the two always describe the same bytes. Without `content` it is read with\nthe rest of this view, in one statement; a write after the read can move it, exactly as it\nmoves `updated`.",
+          "description": "Byte identity of the body: proves a cached copy is Temper's bytes without downloading the\nbody again. Bare lowercase hex.\n\nIt is the sha256 of the live blocks' `bytes_sha256` values (each the bare lowercase hex\nsha256 of that block's raw bytes), concatenated in `seq` order with no separator. Get the\nper-block values and the block boundaries from the `byte-blocks` section of this same read\n([`Self::byte_blocks`]). To verify a whole cached body, cut it at those byte lengths in\n`seq` order, sha256 each piece, concatenate the hex digests, and sha256 that string. To\nverify one block, compare its sha256 with its `bytes_sha256`. The concatenation of the\npieces is exactly the body `content` serves.\n\nPresent only when every live block carries its raw bytes, which is when `body_storage` is\n`verbatim`. It is absent on a `derived` body, which reads back as a reconstruction no stored\nhash describes, and absent from a server that predates the field. Unlike `body_hash` it moves\non every byte change, a heading-only edit included, and stays put across a re-block that\nkeeps the bytes and their block boundaries.\n\nBeside `content` or `byte_blocks` (a read that asked for the `body` or `byte-blocks`\nsection) it is computed in the same statement as them, so all three always describe the\nsame bytes. Otherwise it is read with the rest of this view, in one statement; a write after\nthe read can move it, exactly as it moves `updated`.",
           "type": [
             "string",
             "null"

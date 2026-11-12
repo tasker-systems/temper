@@ -437,27 +437,34 @@ fn enriched_sections() -> SectionSet {
 /// The single-resource read for `create`/`update`/`get`, so those three cannot drift on
 /// which sections a response carries: the door's `GET /api/resources/{id}?sections=` fills
 /// both tiers plus the derived embedding readiness on the row the gate already admitted,
-/// and the body — a SECTION in the direct-service binding — arrives from `/content` only
-/// when asked, as its own markdown part.
+/// and the body — when asked — rides the same read as the `body` section and is returned as its
+/// own markdown part.
 async fn enriched_view(
     client: &TemperClient,
     id: Uuid,
     include_content: bool,
 ) -> Result<(ResourceView, Option<String>), rmcp::ErrorData> {
-    let view = client
+    // The body rides the SAME view read as a section, never a second `/content` request: the
+    // view's `bytes_merkle` is then computed in the statement that read the body, so the two
+    // parts of the answer always describe the same bytes.
+    let sections = if include_content {
+        [
+            ResourceSection::OpenMeta,
+            ResourceSection::EmbeddingStatus,
+            ResourceSection::Body,
+        ]
+        .into_iter()
+        .collect()
+    } else {
+        enriched_sections()
+    };
+    let mut view = client
         .resources()
-        .get(id, Some(&enriched_sections()))
+        .get(id, Some(&sections))
         .await
         .across_auth(map_read_err)?;
     let body_markdown = if include_content {
-        Some(
-            client
-                .resources()
-                .content(id)
-                .await
-                .across_auth(map_read_err)?
-                .markdown,
-        )
+        Some(view.content.take().unwrap_or_default())
     } else {
         None
     };
@@ -1576,6 +1583,7 @@ mod enriched_resource_tests {
             ingest_ended: None,
             body_storage: Some(temper_core::types::resource::BodyStorage::Derived),
             bytes_merkle: None,
+            byte_blocks: None,
             managed_meta: ManagedMeta {
                 stage: Some("in-progress".to_string()),
                 ..ManagedMeta::default()
