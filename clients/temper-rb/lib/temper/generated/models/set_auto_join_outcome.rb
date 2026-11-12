@@ -18,6 +18,9 @@ module Temper::Generated
   class SetAutoJoinOutcome < ApiModelBase
     attr_accessor :ancestors
 
+    # The SAML group mappings this act elevated: each authoring-role (owner, maintainer, member) mapping onto a team that had no pool beneath it before the act and has one after (a pool is temper-system, the gating team or an auto-join team; dead teams count). Each is recorded once as `saml_group_mapping_changed`, act `elevated`. Read on the act's own transaction. Empty when the act elevated none, or the server does not report it.
+    attr_accessor :elevated_mappings
+
     # An auto-join team under an anchor makes that anchor's rows dormant unless an admin opened them instance-wide; clearing it revives them.
     attr_accessor :public_within
 
@@ -27,6 +30,7 @@ module Temper::Generated
     def self.attribute_map
       {
         :'ancestors' => :'ancestors',
+        :'elevated_mappings' => :'elevated_mappings',
         :'public_within' => :'public_within',
         :'team' => :'team'
       }
@@ -46,6 +50,7 @@ module Temper::Generated
     def self.openapi_types
       {
         :'ancestors' => :'Array<TeamRef>',
+        :'elevated_mappings' => :'Array<SamlGroupMapping>',
         :'public_within' => :'PublicWithinEffects',
         :'team' => :'TeamRow'
       }
@@ -79,6 +84,12 @@ module Temper::Generated
         end
       else
         self.ancestors = nil
+      end
+
+      if attributes.key?(:'elevated_mappings')
+        if (value = attributes[:'elevated_mappings']).is_a?(Array)
+          self.elevated_mappings = value
+        end
       end
 
       if attributes.key?(:'public_within')
@@ -143,6 +154,7 @@ module Temper::Generated
       return true if self.equal?(o)
       self.class == o.class &&
           ancestors == o.ancestors &&
+          elevated_mappings == o.elevated_mappings &&
           public_within == o.public_within &&
           team == o.team
     end
@@ -156,7 +168,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [ancestors, public_within, team].hash
+      [ancestors, elevated_mappings, public_within, team].hash
     end
 
     # Builds the object from hash

@@ -23,6 +23,7 @@ from typing import Any, ClassVar, Dict, List, Optional
 from uuid import UUID
 from temper.generated.models.public_within_effects import PublicWithinEffects
 from temper.generated.models.public_within_reach import PublicWithinReach
+from temper.generated.models.saml_group_mapping import SamlGroupMapping
 from temper.generated.models.team_role import TeamRole
 from typing import Optional, Set
 from typing_extensions import Self
@@ -35,12 +36,13 @@ class TeamRow(BaseModel):
     auto_join_role: Optional[TeamRole] = Field(default=None, description="NULL = not an auto-join (\"everyone\") team; otherwise the role new members are enrolled at. Admin-gated to set.")
     created: datetime
     description: Optional[StrictStr] = Field(default=None, description="Optional human description; NULL until set via `PATCH /api/teams/{id}`.")
+    elevated_mappings: Optional[List[SamlGroupMapping]] = Field(default=None, description="The SAML group mappings the create elevated: creating an auto-join team under a parent puts a pool beneath the parent and every team above it, so each authoring-role mapping onto one of them that had no pool beneath it is named here, and recorded once as `saml_group_mapping_changed`, act `elevated`. Present only on `POST /api/teams` asked with `?answer=effects`; the records are written either way.")
     id: UUID
     name: StrictStr
     public_within: Optional[PublicWithinEffects] = Field(default=None, description="What creating the team did to `public_within` rows (an auto-join team created under an anchor makes that anchor's rows stop conferring). Present only on `POST /api/teams` asked with `?answer=effects`; absent from every other answer. A row is named only to a caller who manages its team or its anchor, or is a system admin, and counted otherwise.")
     public_within_in_reach: Optional[PublicWithinReach] = Field(default=None, description="The effective `public_within` rows the new team's roster reads through its parents, filtered as `public_within` is. Present only on `POST /api/teams` asked with `?answer=effects`.")
     slug: StrictStr
-    __properties: ClassVar[List[str]] = ["auto_join_role", "created", "description", "id", "name", "public_within", "public_within_in_reach", "slug"]
+    __properties: ClassVar[List[str]] = ["auto_join_role", "created", "description", "elevated_mappings", "id", "name", "public_within", "public_within_in_reach", "slug"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -81,6 +83,13 @@ class TeamRow(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # override the default output from pydantic by calling `to_dict()` of each item in elevated_mappings (list)
+        _items = []
+        if self.elevated_mappings:
+            for _item_elevated_mappings in self.elevated_mappings:
+                if _item_elevated_mappings:
+                    _items.append(_item_elevated_mappings.to_dict())
+            _dict['elevated_mappings'] = _items
         # override the default output from pydantic by calling `to_dict()` of public_within
         if self.public_within:
             _dict['public_within'] = self.public_within.to_dict()
@@ -96,6 +105,11 @@ class TeamRow(BaseModel):
         # and model_fields_set contains the field
         if self.description is None and "description" in self.model_fields_set:
             _dict['description'] = None
+
+        # set to None if elevated_mappings (nullable) is None
+        # and model_fields_set contains the field
+        if self.elevated_mappings is None and "elevated_mappings" in self.model_fields_set:
+            _dict['elevated_mappings'] = None
 
         # set to None if public_within (nullable) is None
         # and model_fields_set contains the field
@@ -122,6 +136,7 @@ class TeamRow(BaseModel):
             "auto_join_role": obj.get("auto_join_role"),
             "created": obj.get("created"),
             "description": obj.get("description"),
+            "elevated_mappings": [SamlGroupMapping.from_dict(_item) for _item in obj["elevated_mappings"]] if obj.get("elevated_mappings") is not None else None,
             "id": obj.get("id"),
             "name": obj.get("name"),
             "public_within": PublicWithinEffects.from_dict(obj["public_within"]) if obj.get("public_within") is not None else None,

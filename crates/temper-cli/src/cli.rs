@@ -2434,8 +2434,11 @@ pub enum AdminSamlAction {
     /// Map an IdP group to a role on a team (a system admin's act, recorded on the admin ledger).
     ///
     /// At each login the IdP reconcile gives everyone the IdP puts in `group` that role on the
-    /// team. The ceiling is `maintainer`: an `owner` role, or temper-system or the gating team as
-    /// the team, is refused unless `--confirm-elevated` is passed.
+    /// team. Onto temper-system or the gating team only `watcher` is accepted; a higher role there
+    /// is added directly by a system admin (`temper team add-member`). Elsewhere the ceiling is
+    /// `maintainer`: an `owner` role, or an owner, maintainer or member role onto a team with the
+    /// gating team or an auto-join team beneath it, is refused unless `--confirm-elevated` is
+    /// passed. A watcher mapping never is.
     MapGroup {
         #[arg(long)]
         idp_key: String,
@@ -2448,8 +2451,9 @@ pub enum AdminSamlAction {
         /// owner, maintainer, member or watcher. `owner` needs `--confirm-elevated`.
         #[arg(long, default_value = "member")]
         role: String,
-        /// Confirm a mapping above the ceiling: an `owner` role, or temper-system or the gating
-        /// team as the target. Ignored otherwise.
+        /// Confirm a mapping above the ceiling: an `owner` role, or an authoring role onto a team
+        /// with a pool beneath it. It does not lift the watcher-only rule on temper-system or the
+        /// gating team. Ignored otherwise.
         #[arg(long)]
         confirm_elevated: bool,
         /// Instead of creating a mapping, list groups the IdP has actually asserted

@@ -20,6 +20,7 @@ import json
 from pydantic import BaseModel, ConfigDict, Field
 from typing import Any, ClassVar, Dict, List, Optional
 from temper.generated.models.public_within_effects import PublicWithinEffects
+from temper.generated.models.saml_group_mapping import SamlGroupMapping
 from temper.generated.models.team_member_detail import TeamMemberDetail
 from temper.generated.models.team_ref import TeamRef
 from temper.generated.models.team_row import TeamRow
@@ -33,11 +34,12 @@ class RestoreTeamOutcome(BaseModel):
     """ # noqa: E501
     ancestors: Optional[List[TeamRef]] = Field(default=None, description="The restored team's live ancestors, by every path, ordered by slug: its roster, and every live team beneath it, reads everything attached to each of them. That includes any team linked above its parents while it was dead. The walk stops at a soft-deleted team. Read on the act's own transaction, after the restore. Empty when the server does not report it.")
     children: List[TeamRef]
+    elevated_mappings: Optional[List[SamlGroupMapping]] = Field(default=None, description="The SAML group mappings this act elevated: each authoring-role (owner, maintainer, member) mapping onto a team that had no pool beneath it before the act and has one after (a pool is temper-system, the gating team or an auto-join team; dead teams count). Each is recorded once as `saml_group_mapping_changed`, act `elevated`. Read on the act's own transaction. Empty when the act elevated none, or the server does not report it.")
     members: List[TeamMemberDetail]
     parents: List[TeamRef]
     public_within: Optional[PublicWithinEffects] = Field(default=None, description="The `public_within` rows the restore revived (or, for a restored pool team, made dormant).")
     team: TeamRow
-    __properties: ClassVar[List[str]] = ["ancestors", "children", "members", "parents", "public_within", "team"]
+    __properties: ClassVar[List[str]] = ["ancestors", "children", "elevated_mappings", "members", "parents", "public_within", "team"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -92,6 +94,13 @@ class RestoreTeamOutcome(BaseModel):
                 if _item_children:
                     _items.append(_item_children.to_dict())
             _dict['children'] = _items
+        # override the default output from pydantic by calling `to_dict()` of each item in elevated_mappings (list)
+        _items = []
+        if self.elevated_mappings:
+            for _item_elevated_mappings in self.elevated_mappings:
+                if _item_elevated_mappings:
+                    _items.append(_item_elevated_mappings.to_dict())
+            _dict['elevated_mappings'] = _items
         # override the default output from pydantic by calling `to_dict()` of each item in members (list)
         _items = []
         if self.members:
@@ -126,6 +135,7 @@ class RestoreTeamOutcome(BaseModel):
         _obj = cls.model_validate({
             "ancestors": [TeamRef.from_dict(_item) for _item in obj["ancestors"]] if obj.get("ancestors") is not None else None,
             "children": [TeamRef.from_dict(_item) for _item in obj["children"]] if obj.get("children") is not None else None,
+            "elevated_mappings": [SamlGroupMapping.from_dict(_item) for _item in obj["elevated_mappings"]] if obj.get("elevated_mappings") is not None else None,
             "members": [TeamMemberDetail.from_dict(_item) for _item in obj["members"]] if obj.get("members") is not None else None,
             "parents": [TeamRef.from_dict(_item) for _item in obj["parents"]] if obj.get("parents") is not None else None,
             "public_within": PublicWithinEffects.from_dict(obj["public_within"]) if obj.get("public_within") is not None else None,

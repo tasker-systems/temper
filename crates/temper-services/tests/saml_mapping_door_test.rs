@@ -181,35 +181,35 @@ async fn an_owner_mapping_without_confirmation_is_refused_and_writes_nothing(poo
     assert!(out.created && !out.confirmed);
 }
 
+/// An IdP group confers at most `watcher` on temper-system or the gating team (Pete, 2026-11-12):
+/// every authoring role onto either is refused, with or without confirmation, and nothing is
+/// written. A higher role there is a system admin's native act.
+///
+/// FAILS IF the instance-team refusal is reduced to a confirmation (an assertion carrying the group
+/// would then confer an authoring role on the team every approved profile reads).
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn an_instance_team_target_without_confirmation_is_refused(pool: PgPool) {
+async fn an_instance_team_takes_watcher_only_mappings(pool: PgPool) {
     let f = fixture(&pool).await;
     let admin = test_support::system_admin_proof_for(&pool, f.admin).await;
 
     for target in [f.root, f.gating] {
-        let err = saml_mapping_service::create(
-            &pool,
-            &admin,
-            &req(target, "everyone", TeamRole::Member, false),
-        )
-        .await
-        .unwrap_err();
-        assert_needs_confirmation(err, "instance team");
+        for role in [TeamRole::Owner, TeamRole::Maintainer, TeamRole::Member] {
+            for confirm in [false, true] {
+                let err = saml_mapping_service::create(
+                    &pool,
+                    &admin,
+                    &req(target, "everyone", role, confirm),
+                )
+                .await
+                .unwrap_err();
+                assert!(
+                    matches!(&err, ApiError::BadRequest(m)
+                        if m.contains("at most `watcher`") && m.contains(role.as_str())),
+                    "{role:?} confirm={confirm}: {err:?}"
+                );
+            }
+        }
     }
-    // Both conditions at once are both named.
-    let err = saml_mapping_service::create(
-        &pool,
-        &admin,
-        &req(f.root, "admins", TeamRole::Owner, false),
-    )
-    .await
-    .unwrap_err();
-    let msg = format!("{err:?}");
-    assert_needs_confirmation(err, "`owner`");
-    assert!(
-        msg.contains("instance team"),
-        "both conditions are named: {msg}"
-    );
     assert!(mappings(&pool).await.is_empty());
     assert!(records(&pool).await.is_empty());
 }
@@ -227,14 +227,14 @@ async fn with_confirmation_both_succeed_and_are_recorded_as_confirmed(pool: PgPo
     .await
     .expect("a confirmed owner mapping");
     assert!(owner.created && owner.confirmed);
-    let gate = saml_mapping_service::create(
+    let admins = saml_mapping_service::create(
         &pool,
         &admin,
-        &req(f.gating, "staff", TeamRole::Member, true),
+        &req(f.eng, "eng-admins", TeamRole::Owner, true),
     )
     .await
-    .expect("a confirmed gating-team mapping");
-    assert!(gate.created && gate.confirmed);
+    .expect("a second confirmed owner mapping");
+    assert!(admins.created && admins.confirmed);
     // Confirmation on an ordinary mapping is ignored, and not recorded as one.
     let plain =
         saml_mapping_service::create(&pool, &admin, &req(f.eng, "eng", TeamRole::Member, true))
@@ -579,13 +579,21 @@ async fn the_migration_adopts_existing_rows_above_the_ceiling(pool: PgPool) {
     for (team, group, role) in [
         (f.eng, "more-leads", TeamRole::Owner),
         (f.root, "more-everyone", TeamRole::Member),
-        (f.gating, "more-staff", TeamRole::Watcher),
+        // Since 20261126000010 an instance team takes watcher only: refused outright.
+        (f.gating, "more-staff", TeamRole::Maintainer),
     ] {
         let err = saml_mapping_service::create(&pool, &admin, &req(team, group, role, false))
             .await
             .unwrap_err();
+        // An instance team refuses every role above watcher outright; an ordinary team's owner
+        // mapping asks for confirmation.
+        let why = if team == f.eng {
+            "confirmation required"
+        } else {
+            "at most `watcher`"
+        };
         assert!(
-            matches!(&err, ApiError::BadRequest(m) if m.contains("confirmation required")),
+            matches!(&err, ApiError::BadRequest(m) if m.contains(why)),
             "{err:?}"
         );
     }
@@ -605,13 +613,24 @@ async fn the_migration_adopts_existing_rows_above_the_ceiling(pool: PgPool) {
 async fn an_identical_rerun_is_a_noop_without_confirmation(pool: PgPool) {
     let f = fixture(&pool).await;
     let admin = test_support::system_admin_proof_for(&pool, f.admin).await;
+    saml_mapping_service::create(&pool, &admin, &req(f.eng, "leads", TeamRole::Owner, true))
+        .await
+        .expect("the confirmed create");
+    // A gating-team row above watcher can only exist from before the watcher-only rule (or SQL);
+    // the bootstrap script re-running it is still a no-op, not a refusal.
+    sqlx::query(
+        "INSERT INTO kb_saml_group_mappings (idp_key, group_value, team_id, role) \
+         VALUES ($1, 'staff', $2, 'member')",
+    )
+    .bind(IDP)
+    .bind(f.gating)
+    .execute(&pool)
+    .await
+    .unwrap();
     for (team, group, role) in [
         (f.eng, "leads", TeamRole::Owner),
         (f.gating, "staff", TeamRole::Member),
     ] {
-        saml_mapping_service::create(&pool, &admin, &req(team, group, role, true))
-            .await
-            .expect("the confirmed create");
         let again = saml_mapping_service::create(&pool, &admin, &req(team, group, role, false))
             .await
             .expect("an identical re-run needs no confirmation");
@@ -619,7 +638,7 @@ async fn an_identical_rerun_is_a_noop_without_confirmation(pool: PgPool) {
     }
     assert_eq!(
         records(&pool).await.len(),
-        2,
+        1,
         "the re-runs recorded nothing"
     );
     // A different role on the same key is still a named conflict, confirmation or not.
@@ -633,14 +652,16 @@ async fn an_identical_rerun_is_a_noop_without_confirmation(pool: PgPool) {
     );
 }
 
-/// The create arm takes the shared gating lock BEFORE the team row. A rename takes the gating lock
-/// exclusively and then the team row, so the reverse order would deadlock with it. Pinned by
-/// holding the exclusive gating lock: the create waits on it, and while it waits the team row is
-/// still free to lock `FOR UPDATE NOWAIT` (it would not be had the create locked the row first).
+/// The create arm takes its team rows BEFORE the shared gating lock (since 20261126000010), the
+/// order of every team act. A rename locks its team row and then takes the gating lock exclusively,
+/// so the first door's order (gating lock first) waited in a cycle with it. Pinned by holding the
+/// exclusive gating lock: the create waits on it, and while it waits it already holds the team row,
+/// so `FOR UPDATE NOWAIT` on that row is refused. The deadlock itself is witnessed in
+/// `saml_mapping_pool_elevation_test`.
 ///
-/// FAILS IF the create arm locks the team row before the gating lock.
+/// FAILS IF the create arm takes the gating lock before the team row.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn the_create_takes_the_gating_lock_before_the_team_row(pool: PgPool) {
+async fn the_create_takes_the_team_row_before_the_gating_lock(pool: PgPool) {
     let f = fixture(&pool).await;
     let admin = test_support::system_admin_proof_for(&pool, f.admin).await;
 
@@ -681,11 +702,16 @@ async fn the_create_takes_the_gating_lock_before_the_team_row(pool: PgPool) {
     }
 
     let mut probe = pool.begin().await.unwrap();
-    sqlx::query("SELECT id FROM kb_teams WHERE id = $1 FOR UPDATE NOWAIT")
+    let err = sqlx::query("SELECT id FROM kb_teams WHERE id = $1 FOR UPDATE NOWAIT")
         .bind(f.eng)
         .fetch_one(&mut *probe)
         .await
-        .expect("the waiting create holds no lock on the team row");
+        .expect_err("the waiting create already holds the team row");
+    assert!(
+        err.as_database_error()
+            .is_some_and(|e| e.code().as_deref() == Some("55P03")),
+        "{err:?}"
+    );
     probe.rollback().await.unwrap();
 
     holder.commit().await.unwrap();

@@ -21,6 +21,9 @@ module Temper::Generated
 
     attr_accessor :children
 
+    # The SAML group mappings this act elevated: each authoring-role (owner, maintainer, member) mapping onto a team that had no pool beneath it before the act and has one after (a pool is temper-system, the gating team or an auto-join team; dead teams count). Each is recorded once as `saml_group_mapping_changed`, act `elevated`. Read on the act's own transaction. Empty when the act elevated none, or the server does not report it.
+    attr_accessor :elevated_mappings
+
     attr_accessor :members
 
     attr_accessor :parents
@@ -35,6 +38,7 @@ module Temper::Generated
       {
         :'ancestors' => :'ancestors',
         :'children' => :'children',
+        :'elevated_mappings' => :'elevated_mappings',
         :'members' => :'members',
         :'parents' => :'parents',
         :'public_within' => :'public_within',
@@ -57,6 +61,7 @@ module Temper::Generated
       {
         :'ancestors' => :'Array<TeamRef>',
         :'children' => :'Array<TeamRef>',
+        :'elevated_mappings' => :'Array<SamlGroupMapping>',
         :'members' => :'Array<TeamMemberDetail>',
         :'parents' => :'Array<TeamRef>',
         :'public_within' => :'PublicWithinEffects',
@@ -98,6 +103,12 @@ module Temper::Generated
         end
       else
         self.children = nil
+      end
+
+      if attributes.key?(:'elevated_mappings')
+        if (value = attributes[:'elevated_mappings']).is_a?(Array)
+          self.elevated_mappings = value
+        end
       end
 
       if attributes.key?(:'members')
@@ -209,6 +220,7 @@ module Temper::Generated
       self.class == o.class &&
           ancestors == o.ancestors &&
           children == o.children &&
+          elevated_mappings == o.elevated_mappings &&
           members == o.members &&
           parents == o.parents &&
           public_within == o.public_within &&
@@ -224,7 +236,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [ancestors, children, members, parents, public_within, team].hash
+      [ancestors, children, elevated_mappings, members, parents, public_within, team].hash
     end
 
     # Builds the object from hash

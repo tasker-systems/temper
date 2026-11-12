@@ -1234,7 +1234,7 @@ class AdminApi:
     ) -> CreateSamlGroupMappingOutcome:
         """Create a SAML group mapping
 
-        Maps a group the IdP asserts to a role on a team: at each login, the IdP reconcile gives everyone in the group that role. The ceiling is `maintainer`. An `owner` role, or a target of temper-system or the gating team, needs `confirm_elevated: true`; without it the request is refused, naming why, and nothing is written. Recorded as `saml_group_mapping_changed`. The same mapping again records nothing and answers `created: false`. Requires a system admin.
+        Maps a group the IdP asserts to a role on a team: at each login, the IdP reconcile gives everyone in the group that role. The ceiling is `maintainer`. Onto temper-system or the gating team, only `watcher` is accepted, with or without `confirm_elevated` (a higher role there is a system admin's native act, and the reconcile clamps any such row to watcher). Elsewhere an `owner` role, or an owner, maintainer or member role onto a team with the gating team or an auto-join team (live or deleted) beneath it, needs `confirm_elevated: true` (a watcher mapping never does); without it the request is refused, naming why, and nothing is written. Recorded as `saml_group_mapping_changed`. The same mapping again records nothing and answers `created: false`. Requires a system admin.
 
         :param create_saml_group_mapping_request: (required)
         :type create_saml_group_mapping_request: CreateSamlGroupMappingRequest
@@ -1311,7 +1311,7 @@ class AdminApi:
     ) -> ApiResponse[CreateSamlGroupMappingOutcome]:
         """Create a SAML group mapping
 
-        Maps a group the IdP asserts to a role on a team: at each login, the IdP reconcile gives everyone in the group that role. The ceiling is `maintainer`. An `owner` role, or a target of temper-system or the gating team, needs `confirm_elevated: true`; without it the request is refused, naming why, and nothing is written. Recorded as `saml_group_mapping_changed`. The same mapping again records nothing and answers `created: false`. Requires a system admin.
+        Maps a group the IdP asserts to a role on a team: at each login, the IdP reconcile gives everyone in the group that role. The ceiling is `maintainer`. Onto temper-system or the gating team, only `watcher` is accepted, with or without `confirm_elevated` (a higher role there is a system admin's native act, and the reconcile clamps any such row to watcher). Elsewhere an `owner` role, or an owner, maintainer or member role onto a team with the gating team or an auto-join team (live or deleted) beneath it, needs `confirm_elevated: true` (a watcher mapping never does); without it the request is refused, naming why, and nothing is written. Recorded as `saml_group_mapping_changed`. The same mapping again records nothing and answers `created: false`. Requires a system admin.
 
         :param create_saml_group_mapping_request: (required)
         :type create_saml_group_mapping_request: CreateSamlGroupMappingRequest
@@ -1388,7 +1388,7 @@ class AdminApi:
     ) -> RESTResponseType:
         """Create a SAML group mapping
 
-        Maps a group the IdP asserts to a role on a team: at each login, the IdP reconcile gives everyone in the group that role. The ceiling is `maintainer`. An `owner` role, or a target of temper-system or the gating team, needs `confirm_elevated: true`; without it the request is refused, naming why, and nothing is written. Recorded as `saml_group_mapping_changed`. The same mapping again records nothing and answers `created: false`. Requires a system admin.
+        Maps a group the IdP asserts to a role on a team: at each login, the IdP reconcile gives everyone in the group that role. The ceiling is `maintainer`. Onto temper-system or the gating team, only `watcher` is accepted, with or without `confirm_elevated` (a higher role there is a system admin's native act, and the reconcile clamps any such row to watcher). Elsewhere an `owner` role, or an owner, maintainer or member role onto a team with the gating team or an auto-join team (live or deleted) beneath it, needs `confirm_elevated: true` (a watcher mapping never does); without it the request is refused, naming why, and nothing is written. Recorded as `saml_group_mapping_changed`. The same mapping again records nothing and answers `created: false`. Requires a system admin.
 
         :param create_saml_group_mapping_request: (required)
         :type create_saml_group_mapping_request: CreateSamlGroupMappingRequest

@@ -3012,7 +3012,7 @@
           "Admin"
         ],
         "summary": "Create a SAML group mapping",
-        "description": "Maps a group the IdP asserts to a role on a team: at each login, the IdP reconcile gives everyone in the group that role. The ceiling is `maintainer`. An `owner` role, or a target of temper-system or the gating team, needs `confirm_elevated: true`; without it the request is refused, naming why, and nothing is written. Recorded as `saml_group_mapping_changed`. The same mapping again records nothing and answers `created: false`. Requires a system admin.",
+        "description": "Maps a group the IdP asserts to a role on a team: at each login, the IdP reconcile gives everyone in the group that role. The ceiling is `maintainer`. Onto temper-system or the gating team, only `watcher` is accepted, with or without `confirm_elevated` (a higher role there is a system admin's native act, and the reconcile clamps any such row to watcher). Elsewhere an `owner` role, or an owner, maintainer or member role onto a team with the gating team or an auto-join team (live or deleted) beneath it, needs `confirm_elevated: true` (a watcher mapping never does); without it the request is refused, naming why, and nothing is written. Recorded as `saml_group_mapping_changed`. The same mapping again records nothing and answers `created: false`. Requires a system admin.",
         "operationId": "admin_create_saml_group_mapping",
         "requestBody": {
           "content": {
@@ -3036,7 +3036,7 @@
             }
           },
           "400": {
-            "description": "Confirmation required (an `owner` role, or temper-system or the gating team, without `confirm_elevated`); a personal team; or an empty idp_key or group. Nothing is written",
+            "description": "Confirmation required (an `owner` role, or an authoring role onto a team with a pool beneath it, without `confirm_elevated`); a role above `watcher` onto temper-system or the gating team; a personal team; or an empty idp_key or group. Nothing is written",
             "content": {
               "application/json": {
                 "schema": {
@@ -18234,6 +18234,13 @@
             },
             "description": "The child's live ancestors after the link, by every path, ordered by slug: every member of\nthe child reads everything attached to each of them. The walk stops at a soft-deleted team,\nwhich confers nothing, so a team reached only through a dead one is absent. This is the\nchild's whole reach, not only what the link added, and it names more than team detail's\ndirect `parents`. Read on the act's own transaction, after the link. Empty when the server\ndoes not report it."
           },
+          "elevated_mappings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SamlGroupMapping"
+            },
+            "description": "The SAML group mappings this act elevated: each authoring-role (owner, maintainer, member)\nmapping onto a team that had no pool beneath it before the act and has one after (a pool is\ntemper-system, the gating team or an auto-join team; dead teams count). Each is recorded once\nas `saml_group_mapping_changed`, act `elevated`. Read on the act's own transaction. Empty\nwhen the act elevated none, or the server does not report it."
+          },
           "outcome": {
             "$ref": "#/components/schemas/AttachOutcome"
           },
@@ -20688,7 +20695,7 @@
         "properties": {
           "confirm_elevated": {
             "type": "boolean",
-            "description": "The admin's explicit confirmation, required for an `owner` role and for a target of\n`temper-system` or the gating team. Without it such a request is refused and nothing is\nwritten. Ignored otherwise. Defaults to `false`."
+            "description": "The admin's explicit confirmation, required for an `owner` role, and for an authoring role\n(owner, maintainer, member) onto a team with a pool beneath it (the gating team or an\nauto-join team, live or deleted). Never for `watcher`. It cannot lift the instance-team rule:\nonto `temper-system` or the gating team, only `watcher` is accepted. Without it such a\nrequest is refused and nothing is written. Ignored otherwise. Defaults to `false`."
           },
           "group": {
             "type": "string",
@@ -26897,6 +26904,13 @@
             "type": "string",
             "format": "uuid"
           },
+          "elevated_mappings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SamlGroupMapping"
+            },
+            "description": "The SAML group mappings this act elevated: each authoring-role (owner, maintainer, member)\nmapping onto a team that had no pool beneath it before the act and has one after (a pool is\ntemper-system, the gating team or an auto-join team; dead teams count). Each is recorded once\nas `saml_group_mapping_changed`, act `elevated`. Read on the act's own transaction. Empty\nwhen the act elevated none, or the server does not report it."
+          },
           "from": {
             "$ref": "#/components/schemas/TeamRef"
           },
@@ -28160,6 +28174,13 @@
               "$ref": "#/components/schemas/TeamRef"
             }
           },
+          "elevated_mappings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SamlGroupMapping"
+            },
+            "description": "The SAML group mappings this act elevated: each authoring-role (owner, maintainer, member)\nmapping onto a team that had no pool beneath it before the act and has one after (a pool is\ntemper-system, the gating team or an auto-join team; dead teams count). Each is recorded once\nas `saml_group_mapping_changed`, act `elevated`. Read on the act's own transaction. Empty\nwhen the act elevated none, or the server does not report it."
+          },
           "members": {
             "type": "array",
             "items": {
@@ -28879,6 +28900,13 @@
             "items": {
               "$ref": "#/components/schemas/TeamRef"
             }
+          },
+          "elevated_mappings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SamlGroupMapping"
+            },
+            "description": "The SAML group mappings this act elevated: each authoring-role (owner, maintainer, member)\nmapping onto a team that had no pool beneath it before the act and has one after (a pool is\ntemper-system, the gating team or an auto-join team; dead teams count). Each is recorded once\nas `saml_group_mapping_changed`, act `elevated`. Read on the act's own transaction. Empty\nwhen the act elevated none, or the server does not report it."
           },
           "public_within": {
             "$ref": "#/components/schemas/PublicWithinEffects",
@@ -29913,6 +29941,20 @@
           "updated"
         ],
         "properties": {
+          "clamped_mappings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SamlGroupMapping"
+            },
+            "description": "On the answer to a settings write that repoints `gating_team_slug`: the SAML group mappings\nonto the new gating team with a role above `watcher`. An identity-provider group confers at\nmost `watcher` on the gating team, so from now on the reconcile confers `watcher` for each;\na higher role there is a system admin's native act. Each is recorded once as\n`saml_group_mapping_changed`, act `clamped`. No mapping row changes. Empty on every other\nanswer."
+          },
+          "elevated_mappings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SamlGroupMapping"
+            },
+            "description": "On the answer to a settings write that repoints `gating_team_slug`: the SAML group mappings\nthe repoint elevated, each authoring-role (owner, maintainer, member) mapping onto a team that\nhad no pool beneath it before and has the new gating team beneath it now (dead teams count),\nother than the gating team itself (see `clamped_mappings`).\nEach is recorded once as `saml_group_mapping_changed`, act `elevated`. Read on the write's own\ntransaction. Empty on every other answer."
+          },
           "gating_pool_ancestors": {
             "type": [
               "array",
@@ -29950,6 +29992,13 @@
               "string",
               "null"
             ]
+          },
+          "unclamped_mappings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SamlGroupMapping"
+            },
+            "description": "On the answer to a settings write that repoints `gating_team_slug`: the SAML group mappings\nonto the OLD gating team with a role above `watcher`. That team is an ordinary team again,\nso from each member's next login the reconcile confers each mapping's own role there again.\nEach is recorded once as `saml_group_mapping_changed`, act `unclamped`. No mapping row\nchanges.\nEmpty on every other answer, and when the old gating team was temper-system."
           },
           "updated": {
             "type": "string",
@@ -30296,6 +30345,16 @@
               "null"
             ],
             "description": "Optional human description; NULL until set via `PATCH /api/teams/{id}`."
+          },
+          "elevated_mappings": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/SamlGroupMapping"
+            },
+            "description": "The SAML group mappings the create elevated: creating an auto-join team under a parent puts\na pool beneath the parent and every team above it, so each authoring-role mapping onto one of\nthem that had no pool beneath it is named here, and recorded once as\n`saml_group_mapping_changed`, act `elevated`. Present only on `POST /api/teams` asked with\n`?answer=effects`; the records are written either way."
           },
           "id": {
             "type": "string",

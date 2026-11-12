@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from typing import Any, ClassVar, Dict, List, Optional
 from uuid import UUID
 from temper.generated.models.public_within_effects import PublicWithinEffects
+from temper.generated.models.saml_group_mapping import SamlGroupMapping
 from temper.generated.models.team_ref import TeamRef
 from typing import Optional, Set
 from typing_extensions import Self
@@ -32,11 +33,12 @@ class ReparentOutcome(BaseModel):
     """ # noqa: E501
     ancestors: Optional[List[TeamRef]] = Field(default=None, description="The team's live ancestors after the move, by every path, ordered by slug: what its members now read. A team that was above only the old parent is absent, and the walk stops at a soft-deleted team. Read on the act's own transaction. Empty when the server does not report it.")
     correlation_id: UUID
+    elevated_mappings: Optional[List[SamlGroupMapping]] = Field(default=None, description="The SAML group mappings this act elevated: each authoring-role (owner, maintainer, member) mapping onto a team that had no pool beneath it before the act and has one after (a pool is temper-system, the gating team or an auto-join team; dead teams count). Each is recorded once as `saml_group_mapping_changed`, act `elevated`. Read on the act's own transaction. Empty when the act elevated none, or the server does not report it.")
     var_from: TeamRef = Field(alias="from")
     public_within: Optional[PublicWithinEffects] = Field(default=None, description="What the move did to `public_within` rows. A row whose anchor is no longer above the team by any path is deleted (`lapsed`) and never revives, even if the team moves back.")
     team: TeamRef
     to: TeamRef
-    __properties: ClassVar[List[str]] = ["ancestors", "correlation_id", "from", "public_within", "team", "to"]
+    __properties: ClassVar[List[str]] = ["ancestors", "correlation_id", "elevated_mappings", "from", "public_within", "team", "to"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -84,6 +86,13 @@ class ReparentOutcome(BaseModel):
                 if _item_ancestors:
                     _items.append(_item_ancestors.to_dict())
             _dict['ancestors'] = _items
+        # override the default output from pydantic by calling `to_dict()` of each item in elevated_mappings (list)
+        _items = []
+        if self.elevated_mappings:
+            for _item_elevated_mappings in self.elevated_mappings:
+                if _item_elevated_mappings:
+                    _items.append(_item_elevated_mappings.to_dict())
+            _dict['elevated_mappings'] = _items
         # override the default output from pydantic by calling `to_dict()` of var_from
         if self.var_from:
             _dict['from'] = self.var_from.to_dict()
@@ -110,6 +119,7 @@ class ReparentOutcome(BaseModel):
         _obj = cls.model_validate({
             "ancestors": [TeamRef.from_dict(_item) for _item in obj["ancestors"]] if obj.get("ancestors") is not None else None,
             "correlation_id": obj.get("correlation_id"),
+            "elevated_mappings": [SamlGroupMapping.from_dict(_item) for _item in obj["elevated_mappings"]] if obj.get("elevated_mappings") is not None else None,
             "from": TeamRef.from_dict(obj["from"]) if obj.get("from") is not None else None,
             "public_within": PublicWithinEffects.from_dict(obj["public_within"]) if obj.get("public_within") is not None else None,
             "team": TeamRef.from_dict(obj["team"]) if obj.get("team") is not None else None,

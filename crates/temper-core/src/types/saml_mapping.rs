@@ -3,8 +3,11 @@
 //! A mapping turns an IdP's asserted group into a role on a team, at every login's reconcile, for
 //! everyone the IdP puts in the group. Creating and removing one are a system admin's acts, each
 //! recorded as `saml_group_mapping_changed`. A mapping confers at most `maintainer` unless the admin
-//! sets `confirm_elevated`, which an `owner` role and a target of `temper-system` or the gating team
-//! both need.
+//! sets `confirm_elevated`, which an `owner` role needs, and so does an authoring role (owner,
+//! maintainer, member) onto a team with a pool (the gating team or an auto-join team, live or
+//! deleted) beneath it. A `watcher` mapping never needs it. Onto `temper-system` or the gating team
+//! itself a mapping is `watcher` only, confirmed or not, and the IdP reconcile clamps any row there
+//! to `watcher`: a higher role on either is a system admin's native act.
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -26,9 +29,11 @@ pub struct CreateSamlGroupMappingRequest {
     pub team_id: Uuid,
     /// The role conferred. `owner` needs `confirm_elevated`.
     pub role: TeamRole,
-    /// The admin's explicit confirmation, required for an `owner` role and for a target of
-    /// `temper-system` or the gating team. Without it such a request is refused and nothing is
-    /// written. Ignored otherwise. Defaults to `false`.
+    /// The admin's explicit confirmation, required for an `owner` role, and for an authoring role
+    /// (owner, maintainer, member) onto a team with a pool beneath it (the gating team or an
+    /// auto-join team, live or deleted). Never for `watcher`. It cannot lift the instance-team rule:
+    /// onto `temper-system` or the gating team, only `watcher` is accepted. Without it such a
+    /// request is refused and nothing is written. Ignored otherwise. Defaults to `false`.
     #[serde(default)]
     pub confirm_elevated: bool,
 }

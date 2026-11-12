@@ -1,0 +1,69 @@
+title    = "SAML mappings onto temper-system or the gating team are watcher only, one onto a team with a pool beneath it needs confirmation, and team acts record the mappings they elevate"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp", "cli-stdout", "clients", "schema"]
+status   = "signal-only"
+body = '''
+Reads flow down the team DAG, so a pool's members (temper-system's, the gating team's, an
+auto-join team's: every approved profile) read every team above it. A SAML group mapping that
+confers an authoring role (owner, maintainer, member) on such a team writes what the whole
+instance reads.
+
+- Behavioral (http, mcp, cli-stdout): POST /api/admin/saml/group-mappings now needs
+  `confirm_elevated: true` for an `owner` role, or for an authoring role onto a team whose
+  subtree holds a pool: the team itself, or any team beneath it, live or soft-deleted, is an
+  auto-join team, or a team beneath it is the gating team (temper-system and the gating team
+  themselves take watcher only, below). Without it the answer is 400
+  "confirmation required: ..." naming the reason (`pool_beneath` in the writer's needs), and
+  nothing is written. Before, only temper-system and the gating team themselves needed it.
+- Behavioral (http, mcp, cli-stdout): temper-system and the gating team take `watcher`
+  mappings only (Pete, 2026-11-12). An owner, maintainer or member mapping onto either is 400
+  ("an identity-provider group confers at most `watcher` ..."), with or without
+  `confirm_elevated`; before, it was accepted with confirmation. A higher role there is a
+  system admin's native act (`temper team add-member`). A SAML assertion is an access-promotion
+  path if it is spoofed or intercepted, and the gating roster is already admin-only natively.
+- Behavioral (reconcile): the IdP reconcile confers at most `watcher` on temper-system or the
+  gating team, whatever a mapping row says, so rows written before this rule, by #1350's door
+  with confirmation, or by SQL, are bound too. An IdP membership already held above watcher
+  there is lowered at the member's next login. Native memberships are untouched. The reconcile
+  log line gains `clamped`.
+- Behavioral (relaxation): a `watcher` mapping never needs confirmation, onto temper-system
+  and the gating team included. Before, any role onto either needed it. A watcher only reads,
+  and admission never reads membership.
+- Behavioral (http): an authoring-role create locks the target team and every team beneath it
+  before the gating lock, and answers 409 "the team tree changed ...; retry" with nothing
+  written when a team was linked beneath the target while it waited. #1350 took the gating lock
+  before the team row, which deadlocks with a rename; this PR reverses it, to the order every
+  team act uses (rows, then the gating lock).
+- Additive (http, clients, schema): the team acts that can put a pool beneath a team answer
+  `elevated_mappings`, the authoring-role mappings onto a team that had no pool beneath it
+  before the act and has one after. They are PUT /api/teams/{id}/children/{child_id},
+  POST /api/teams/{id}/reparent, PUT /api/teams/{id}/auto-join, POST /api/teams/{id}/restore
+  (always empty: dead teams already count) and the settings write that repoints
+  gating_team_slug (`SystemSettings.elevated_mappings`). POST /api/teams with `?answer=effects`
+  answers it as `TeamRow.elevated_mappings` (creating an auto-join team under a parent). Each
+  field defaults to empty. No act gains a confirmation; all of them that can add a pool are
+  already a system admin's.
+- Additive (schema): saml_group_mapping_changed gains the acts `elevated`, `clamped` and
+  `unclamped`
+  (migration 20261126000010). An act writes one per elevated mapping, naming its actor, with the act's
+  correlation id where it has one. The payload schema is re-registered with the new act.
+- Additive (http, clients): a settings write that repoints gating_team_slug answers
+  `SystemSettings.clamped_mappings`, the mappings above watcher onto the new gating team, which
+  now confer watcher. Each is recorded once as `saml_group_mapping_changed`, act `clamped`,
+  naming the actor. A mapping onto the new gating team is clamped, never elevated. It also
+  answers `SystemSettings.unclamped_mappings`: the mappings above watcher onto the OLD gating
+  team, which is an ordinary team again, so the reconcile confers their own role there from
+  each member's next login. Each is recorded once, act `unclamped`, and not as elevated.
+- Existing rows: none is changed. Each mapping above watcher onto temper-system or the gating
+  team is recorded once as `clamped` by migration 20261126000010 (no person actor, a NOTICE
+  lists them). No row is recorded as confirmed: `confirmed` is an admin's acknowledgement of a
+  mapping's reach, not a statement about any principal, and the proposed backfill of existing
+  pool-ancestor mappings as confirmed was withdrawn (Pete, 2026-11-12). An authoring mapping
+  already above another pool stays as it is and confers as before.
+
+Who observes it: admins and agents creating SAML mappings (the new refusal, and watcher
+mappings onto instance teams succeeding without confirmation), SDK users (the new fields),
+and admin-ledger readers (the new act).
+Release relevance: signal-only.
+'''

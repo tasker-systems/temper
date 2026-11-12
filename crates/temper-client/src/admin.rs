@@ -471,8 +471,9 @@ impl<'a> AdminClient<'a> {
     }
 
     /// Map an IdP group to a role on a team (system admin only). Refused with a 400 naming why when
-    /// the role is `owner`, or the team is temper-system or the gating team, unless
-    /// `confirm_elevated` is set. Recorded as `saml_group_mapping_changed`.
+    /// the role is `owner`, or is an authoring role and the team has a pool (the gating team or an
+    /// auto-join team) beneath it, unless `confirm_elevated` is set; and onto temper-system or the
+    /// gating team for any role above `watcher`, confirmed or not. Recorded as `saml_group_mapping_changed`.
     pub async fn create_saml_group_mapping(
         &self,
         body: &CreateSamlGroupMappingRequest,

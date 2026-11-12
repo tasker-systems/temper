@@ -24,8 +24,11 @@
 //! These are the same acts as `temper team ...`, on the same routes. The human check on an agent's
 //! write is the client's approval of the call, which `destructiveHint: true` asks for. The API keeps
 //! the guards: the last owner, a membership the identity provider assigned, a personal team. The
-//! one exception is the API's own: a SAML mapping that confers `owner`, or targets temper-system or
-//! the gating team, is refused unless the call carries `confirm_elevated: true`.
+//! one exception is the API's own: a SAML mapping that confers `owner`, or confers an authoring role
+//! (owner, maintainer, member) on a team with a pool beneath it (the gating team or an auto-join
+//! team, live or deleted), is refused unless the call carries `confirm_elevated: true`. A watcher
+//! mapping never needs it. Onto temper-system or the gating team itself, only `watcher` is accepted,
+//! confirmed or not.
 //!
 //! # Text in the answer
 //!
@@ -200,8 +203,9 @@ pub enum TeamManageAction {
     /// Forbid or allow openings over a team and everything beneath it.
     PublicWithinPolicy,
     /// Map an IdP group to a role on `team` (a system admin's act). Needs `idp_key`, `group` and
-    /// `role`; an `owner` role, or temper-system or the gating team, also needs
-    /// `confirm_elevated: true`.
+    /// `role`; an `owner` role, or an authoring role onto a team with a pool beneath it (the gating
+    /// team or an auto-join team), also needs `confirm_elevated: true`. A watcher mapping never does.
+    /// Onto temper-system or the gating team, only `watcher` is accepted.
     SamlMapGroup,
     /// Remove a SAML group mapping from `team` (a system admin's act). Needs `idp_key` and `group`.
     /// Memberships it already conferred are left to the IdP reconcile.

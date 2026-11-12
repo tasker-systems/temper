@@ -12,8 +12,16 @@
 //! re-check anyway, so the ledger never records an admin act committed after its actor's demotion.
 //!
 //! The row change, the ceiling and the confirmation are decided in `_admin_saml_group_mapping_write`
-//! (migration `20261125000010`) under the gating and team locks, so the decision about the root and
-//! gating team holds to commit. This module maps its named outcomes to the wire.
+//! (migrations `20261125000010`, `20261126000010`) under the team and gating locks, so the decision
+//! holds to commit. Onto temper-system or the gating team a mapping is `watcher` only, and the IdP
+//! reconcile clamps any row there to `watcher` (Pete, 2026-11-12). Elsewhere an `owner` role, or an
+//! authoring role (owner, maintainer, member) onto a team whose subtree holds a pool (dead teams
+//! included), needs the admin's confirmation; a watcher mapping never does. This module maps its named outcomes
+//! to the wire.
+//!
+//! It also holds the one elevation scan every structural team act runs (`elevation_before` and
+//! `record_elevations`): an act that puts a pool beneath a team already holding an authoring-role
+//! mapping answers each mapping it elevated and records it, act `elevated`.
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -50,12 +58,12 @@ fn needs_confirmation(needs: &[String], role: TeamRole) -> ApiError {
             role.as_str()
         ));
     }
-    if needs.iter().any(|n| n == "instance_team") {
-        why.push(
-            "the team is an instance team (temper-system or the gating team), which reaches every \
-             profile"
-                .to_string(),
-        );
+    if needs.iter().any(|n| n == "pool_beneath") {
+        why.push(format!(
+            "the role `{}` authors onto a team with a pool beneath it (the gating team or an \
+             auto-join team, live or deleted), whose members read everything the team holds",
+            role.as_str()
+        ));
     }
     ApiError::BadRequest(format!(
         "confirmation required: {}. Re-send with `confirm_elevated: true` to confirm; nothing was \
@@ -109,10 +117,15 @@ async fn write(
     Ok((answer, tx))
 }
 
-/// Create a mapping. Refused (`400`, naming why, nothing written) when the role is `owner` or the
-/// team is `temper-system` or the gating team and `confirm_elevated` is not set; `404` for an
-/// unknown IdP or a team that is not live; `400` for a personal team; `409` when the key already
-/// maps to another role. The same mapping again is answered `created: false` and records nothing.
+/// Create a mapping. Onto `temper-system` or the gating team, `watcher` only: any other role is
+/// refused (`400`, nothing written) with or without `confirm_elevated`, since a higher role there
+/// is a system admin's native act. Elsewhere, refused (`400`, naming why, nothing written) without
+/// `confirm_elevated` when the role is `owner`, or is an authoring role (owner, maintainer, member)
+/// and the team's subtree, dead teams included, holds a pool (the gating team or an auto-join team
+/// beneath it). A `watcher` mapping never needs it. `404` for an unknown IdP
+/// or a team that is not live; `400` for a personal team; `409` when the key already maps to
+/// another role, or when the team's subtree changed while the act waited for its locks (retry).
+/// The same mapping again is answered `created: false` and records nothing.
 pub async fn create(
     pool: &PgPool,
     admin: &SystemAdmin,
@@ -154,6 +167,19 @@ pub async fn create(
             return Err(ApiError::BadRequest(
                 "a personal team takes no other member, so no SAML mapping can target one"
                     .to_string(),
+            ))
+        }
+        "instance_team_watcher_only" => {
+            return Err(ApiError::BadRequest(format!(
+                "an identity-provider group confers at most `watcher` on temper-system or the \
+                 gating team; `{}` there is a system admin's native act (add the member directly), \
+                 with or without `confirm_elevated`. Nothing was written",
+                req.role.as_str()
+            )))
+        }
+        "subtree_changed" => {
+            return Err(ApiError::Conflict(
+                "the team tree changed while this act was being checked; retry".to_string(),
             ))
         }
         "conflict" => {
@@ -217,4 +243,120 @@ pub async fn remove(
         idp_memberships_left_in_place: answer.idp_memberships.unwrap_or(0),
         memberships: MAPPING_REMOVAL_LEAVES_MEMBERSHIPS.to_string(),
     })
+}
+
+/// The authoring-role mappings at or above an act's seed teams whose subtree holds a pool, read by
+/// a structural team act on its own transaction after its row locks and before its write. Hand it
+/// to [`record_elevations`] after the write.
+pub(crate) struct ElevationBefore {
+    seeds: Vec<Uuid>,
+    before: serde_json::Value,
+}
+
+/// Read [`ElevationBefore`] on `conn` (`_saml_mappings_over_pool`) for `seeds`: the teams the act
+/// writes at (the parent it links under, the team it flips, the new gating team), the only teams
+/// at or above which it can put a pool. Takes `_public_within_effects_lock` first, which every
+/// elevating act holds to commit, so two acts never both record one mapping; it is re-entrant, and
+/// the act would take it later in its write anyway.
+pub(crate) async fn elevation_before(
+    conn: &mut sqlx::PgConnection,
+    seeds: &[Uuid],
+) -> ApiResult<ElevationBefore> {
+    sqlx::query_scalar!(r#"SELECT 1 AS "one!" FROM (SELECT _public_within_effects_lock()) l"#)
+        .fetch_one(&mut *conn)
+        .await?;
+    let before = sqlx::query_scalar!(r#"SELECT _saml_mappings_over_pool($1) AS "m!""#, seeds)
+        .fetch_one(&mut *conn)
+        .await?;
+    Ok(ElevationBefore {
+        seeds: seeds.to_vec(),
+        before,
+    })
+}
+
+/// After a structural act's write, on its transaction: every authoring-role mapping at or above the
+/// act's seeds now over a pool that `before` did not hold. Each gets one `saml_group_mapping_changed`
+/// event, act `elevated`, naming `actor` (`_saml_mapping_elevations_record`), and is answered,
+/// ordered by idp_key, group and team. The one scan of every door that can put a pool beneath a
+/// team, so the doors cannot drift apart. `None` (an act on an arm that cannot put a pool beneath
+/// a team, which is every non-admin arm) answers none and records nothing.
+pub(crate) async fn record_elevations(
+    conn: &mut sqlx::PgConnection,
+    before: Option<ElevationBefore>,
+    emitter: Uuid,
+    actor: temper_core::types::ids::ProfileId,
+    correlation: Option<Uuid>,
+) -> ApiResult<Vec<SamlGroupMapping>> {
+    record_elevations_excluding(conn, before, emitter, actor, correlation, &[]).await
+}
+
+/// [`record_elevations`], skipping mappings onto `exclude`: a gating repoint's old gating team,
+/// whose mappings it records as unclamped instead.
+pub(crate) async fn record_elevations_excluding(
+    conn: &mut sqlx::PgConnection,
+    before: Option<ElevationBefore>,
+    emitter: Uuid,
+    actor: temper_core::types::ids::ProfileId,
+    correlation: Option<Uuid>,
+    exclude: &[Uuid],
+) -> ApiResult<Vec<SamlGroupMapping>> {
+    let Some(before) = before else {
+        return Ok(Vec::new());
+    };
+    let raw = sqlx::query_scalar!(
+        r#"SELECT _saml_mapping_elevations_record($1, $2, $3, $4, $5, $6) AS "e!""#,
+        emitter,
+        *actor,
+        &before.seeds,
+        before.before,
+        correlation,
+        exclude,
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    serde_json::from_value(raw)
+        .map_err(|e| ApiError::Internal(format!("_saml_mapping_elevations_record: {e}")))
+}
+
+/// Which instance-team change a gating repoint records for a team's mappings above `watcher`.
+#[derive(Clone, Copy)]
+pub(crate) enum ClampAct {
+    /// The team is now the gating team: the reconcile confers `watcher` there.
+    Clamped,
+    /// The team was the gating team and is an ordinary team again: the reconcile confers each
+    /// mapping's own role there from the member's next login.
+    Unclamped,
+}
+
+/// After a gating repoint, on its transaction: each mapping above `watcher` onto `teams` gets one
+/// `saml_group_mapping_changed` event, act `clamped` (the new gating team) or `unclamped` (the old
+/// one), naming `actor` (`_saml_mappings_clamped_record`). Answered, ordered by idp_key, group and
+/// team.
+pub(crate) async fn record_clamps(
+    conn: &mut sqlx::PgConnection,
+    teams: &[Uuid],
+    emitter: Uuid,
+    actor: temper_core::types::ids::ProfileId,
+    correlation: Option<Uuid>,
+    act: ClampAct,
+) -> ApiResult<Vec<SamlGroupMapping>> {
+    if teams.is_empty() {
+        return Ok(Vec::new());
+    }
+    let act = match act {
+        ClampAct::Clamped => "clamped",
+        ClampAct::Unclamped => "unclamped",
+    };
+    let raw = sqlx::query_scalar!(
+        r#"SELECT _saml_mappings_clamped_record($1, $2, $3, NULL, $4, $5) AS "c!""#,
+        emitter,
+        *actor,
+        teams,
+        correlation,
+        act,
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    serde_json::from_value(raw)
+        .map_err(|e| ApiError::Internal(format!("_saml_mappings_clamped_record: {e}")))
 }

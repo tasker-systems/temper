@@ -16,6 +16,12 @@ require 'time'
 module Temper::Generated
   # Instance-wide system settings (singleton row).
   class SystemSettings < ApiModelBase
+    # On the answer to a settings write that repoints `gating_team_slug`: the SAML group mappings onto the new gating team with a role above `watcher`. An identity-provider group confers at most `watcher` on the gating team, so from now on the reconcile confers `watcher` for each; a higher role there is a system admin's native act. Each is recorded once as `saml_group_mapping_changed`, act `clamped`. No mapping row changes. Empty on every other answer.
+    attr_accessor :clamped_mappings
+
+    # On the answer to a settings write that repoints `gating_team_slug`: the SAML group mappings the repoint elevated, each authoring-role (owner, maintainer, member) mapping onto a team that had no pool beneath it before and has the new gating team beneath it now (dead teams count), other than the gating team itself (see `clamped_mappings`). Each is recorded once as `saml_group_mapping_changed`, act `elevated`. Read on the write's own transaction. Empty on every other answer.
+    attr_accessor :elevated_mappings
+
     # On the answer to a settings write that repoints `gating_team_slug`: the new gating team's live ancestors, by every path, ordered by slug, excluding the gating team itself (which `gating_team_slug` names). The gating team is a pool every approved profile reads, so this is what the whole instance now reads through it. The walk stops at a soft-deleted team, so a team reached only through a dead one is absent. Read on the write's own transaction, after the write. `null` on every other answer: a read, a write that leaves the slug alone, or one that names the slug it already holds. An empty list means the new gating team has no live parent.
     attr_accessor :gating_pool_ancestors
 
@@ -29,17 +35,23 @@ module Temper::Generated
 
     attr_accessor :terms_version
 
+    # On the answer to a settings write that repoints `gating_team_slug`: the SAML group mappings onto the OLD gating team with a role above `watcher`. That team is an ordinary team again, so from each member's next login the reconcile confers each mapping's own role there again. Each is recorded once as `saml_group_mapping_changed`, act `unclamped`. No mapping row changes. Empty on every other answer, and when the old gating team was temper-system.
+    attr_accessor :unclamped_mappings
+
     attr_accessor :updated
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
+        :'clamped_mappings' => :'clamped_mappings',
+        :'elevated_mappings' => :'elevated_mappings',
         :'gating_pool_ancestors' => :'gating_pool_ancestors',
         :'gating_team_slug' => :'gating_team_slug',
         :'id' => :'id',
         :'instance_name' => :'instance_name',
         :'terms_resource_uri' => :'terms_resource_uri',
         :'terms_version' => :'terms_version',
+        :'unclamped_mappings' => :'unclamped_mappings',
         :'updated' => :'updated'
       }
     end
@@ -57,12 +69,15 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
+        :'clamped_mappings' => :'Array<SamlGroupMapping>',
+        :'elevated_mappings' => :'Array<SamlGroupMapping>',
         :'gating_pool_ancestors' => :'Array<TeamRef>',
         :'gating_team_slug' => :'String',
         :'id' => :'Integer',
         :'instance_name' => :'String',
         :'terms_resource_uri' => :'String',
         :'terms_version' => :'String',
+        :'unclamped_mappings' => :'Array<SamlGroupMapping>',
         :'updated' => :'Time'
       }
     end
@@ -94,6 +109,18 @@ module Temper::Generated
         h[k.to_sym] = v
       }
 
+      if attributes.key?(:'clamped_mappings')
+        if (value = attributes[:'clamped_mappings']).is_a?(Array)
+          self.clamped_mappings = value
+        end
+      end
+
+      if attributes.key?(:'elevated_mappings')
+        if (value = attributes[:'elevated_mappings']).is_a?(Array)
+          self.elevated_mappings = value
+        end
+      end
+
       if attributes.key?(:'gating_pool_ancestors')
         if (value = attributes[:'gating_pool_ancestors']).is_a?(Array)
           self.gating_pool_ancestors = value
@@ -120,6 +147,12 @@ module Temper::Generated
 
       if attributes.key?(:'terms_version')
         self.terms_version = attributes[:'terms_version']
+      end
+
+      if attributes.key?(:'unclamped_mappings')
+        if (value = attributes[:'unclamped_mappings']).is_a?(Array)
+          self.unclamped_mappings = value
+        end
       end
 
       if attributes.key?(:'updated')
@@ -179,12 +212,15 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
+          clamped_mappings == o.clamped_mappings &&
+          elevated_mappings == o.elevated_mappings &&
           gating_pool_ancestors == o.gating_pool_ancestors &&
           gating_team_slug == o.gating_team_slug &&
           id == o.id &&
           instance_name == o.instance_name &&
           terms_resource_uri == o.terms_resource_uri &&
           terms_version == o.terms_version &&
+          unclamped_mappings == o.unclamped_mappings &&
           updated == o.updated
     end
 
@@ -197,7 +233,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [gating_pool_ancestors, gating_team_slug, id, instance_name, terms_resource_uri, terms_version, updated].hash
+      [clamped_mappings, elevated_mappings, gating_pool_ancestors, gating_team_slug, id, instance_name, terms_resource_uri, terms_version, unclamped_mappings, updated].hash
     end
 
     # Builds the object from hash

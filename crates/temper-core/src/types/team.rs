@@ -88,6 +88,15 @@ pub struct TeamRow {
     #[cfg_attr(feature = "typescript", ts(optional))]
     #[cfg_attr(feature = "web-api", schema(required = false))]
     pub public_within_in_reach: Option<PublicWithinReach>,
+    /// The SAML group mappings the create elevated: creating an auto-join team under a parent puts
+    /// a pool beneath the parent and every team above it, so each authoring-role mapping onto one of
+    /// them that had no pool beneath it is named here, and recorded once as
+    /// `saml_group_mapping_changed`, act `elevated`. Present only on `POST /api/teams` asked with
+    /// `?answer=effects`; the records are written either way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional))]
+    #[cfg_attr(feature = "web-api", schema(required = false))]
+    pub elevated_mappings: Option<Vec<crate::types::saml_mapping::SamlGroupMapping>>,
 }
 
 /// What a team act's answer carries beyond its default, as `?answer=` on `POST /api/teams`,
@@ -540,6 +549,13 @@ pub struct AttachChildOutcome {
     /// does not report it.
     #[serde(default)]
     pub ancestors: Vec<TeamRef>,
+    /// The SAML group mappings this act elevated: each authoring-role (owner, maintainer, member)
+    /// mapping onto a team that had no pool beneath it before the act and has one after (a pool is
+    /// temper-system, the gating team or an auto-join team; dead teams count). Each is recorded once
+    /// as `saml_group_mapping_changed`, act `elevated`. Read on the act's own transaction. Empty
+    /// when the act elevated none, or the server does not report it.
+    #[serde(default)]
+    pub elevated_mappings: Vec<crate::types::saml_mapping::SamlGroupMapping>,
 }
 
 /// Request body for `POST /api/teams/{id}/reparent` (team DAG doors D3): move the team from one
@@ -579,6 +595,13 @@ pub struct ReparentOutcome {
     /// it.
     #[serde(default)]
     pub ancestors: Vec<TeamRef>,
+    /// The SAML group mappings this act elevated: each authoring-role (owner, maintainer, member)
+    /// mapping onto a team that had no pool beneath it before the act and has one after (a pool is
+    /// temper-system, the gating team or an auto-join team; dead teams count). Each is recorded once
+    /// as `saml_group_mapping_changed`, act `elevated`. Read on the act's own transaction. Empty
+    /// when the act elevated none, or the server does not report it.
+    #[serde(default)]
+    pub elevated_mappings: Vec<crate::types::saml_mapping::SamlGroupMapping>,
 }
 
 /// Request body for `PUT /api/teams/{id}/auto-join` (team DAG doors D5, system admin only):
@@ -608,6 +631,13 @@ pub struct SetAutoJoinOutcome {
     /// them instance-wide; clearing it revives them.
     #[serde(default)]
     pub public_within: PublicWithinEffects,
+    /// The SAML group mappings this act elevated: each authoring-role (owner, maintainer, member)
+    /// mapping onto a team that had no pool beneath it before the act and has one after (a pool is
+    /// temper-system, the gating team or an auto-join team; dead teams count). Each is recorded once
+    /// as `saml_group_mapping_changed`, act `elevated`. Read on the act's own transaction. Empty
+    /// when the act elevated none, or the server does not report it.
+    #[serde(default)]
+    pub elevated_mappings: Vec<crate::types::saml_mapping::SamlGroupMapping>,
 }
 
 /// Response body for `POST /api/teams/{id}/restore` (team DAG doors D6). Restoring revives every
@@ -632,6 +662,13 @@ pub struct RestoreTeamOutcome {
     /// the act's own transaction, after the restore. Empty when the server does not report it.
     #[serde(default)]
     pub ancestors: Vec<TeamRef>,
+    /// The SAML group mappings this act elevated: each authoring-role (owner, maintainer, member)
+    /// mapping onto a team that had no pool beneath it before the act and has one after (a pool is
+    /// temper-system, the gating team or an auto-join team; dead teams count). Each is recorded once
+    /// as `saml_group_mapping_changed`, act `elevated`. Read on the act's own transaction. Empty
+    /// when the act elevated none, or the server does not report it.
+    #[serde(default)]
+    pub elevated_mappings: Vec<crate::types::saml_mapping::SamlGroupMapping>,
 }
 
 /// Request body for `POST /api/teams/{id}/rename-slug` (team DAG doors D7). The new slug is
