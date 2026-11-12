@@ -11,6 +11,8 @@
 #   - Environment variables (persisted to CLAUDE_ENV_FILE)
 #   - Git hooks
 #   - .env file generation
+#   - restarting an already-provisioned Docker Postgres after a container
+#     restart (never pulls or builds; see Phase 3e)
 #
 # Heavy installations (cargo tools, PostgreSQL, etc.) are handled by
 # individual scripts in tools/cargo-make/scripts/claude-web/ and documented
@@ -320,6 +322,67 @@ if command_exists rtk; then
   rtk_marker="${XDG_DATA_HOME:-$HOME/.local/share}/rtk/.hook_warn_last"
   mkdir -p "$(dirname "$rtk_marker")" 2>/dev/null && : > "$rtk_marker" 2>/dev/null || true
 fi
+
+# ---------------------------------------------------------------------------
+# Phase 3e: bring Docker Postgres back after a container restart
+# ---------------------------------------------------------------------------
+# The cloud environment's setup script starts dockerd and creates the
+# temper-postgres container (PG18 + pgvector, port 5437), but it runs only when
+# a container is built fresh. A resume or restart keeps the disk and loses the
+# processes, so without this the session comes back with no Docker and no
+# database, and setup-claude-web-full.sh falls back to native PG16, which the
+# migrations refuse. This phase only restarts what is already there: it starts
+# dockerd if the binary exists, then `docker compose up -d` if the image is
+# already pulled. It never pulls or builds, so it stays within the hook's budget.
+# TEMPER_SKIP_DOCKER_START=1 opts out.
+start_docker_postgres() {
+  [ "${TEMPER_SKIP_DOCKER_START:-}" = "1" ] && return 0
+  command_exists docker || return 0
+  local compose="$PROJECT_DIR/docker-compose.yml"
+  [ -f "$compose" ] || return 0
+  pg_isready -h localhost -p 5437 -q 2>/dev/null && return 0
+
+  if ! docker info >/dev/null 2>&1; then
+    if ! command_exists dockerd; then
+      log_warn "docker CLI present but no dockerd binary; skipping Postgres start"
+      return 0
+    fi
+    local runner=()
+    if [ "$(id -u)" -ne 0 ]; then
+      command_exists sudo || { log_warn "dockerd not running and no sudo; skipping Postgres start"; return 0; }
+      runner=(sudo -n)
+    fi
+    # setsid: detach from the hook's process group so dockerd outlives the hook.
+    "${runner[@]}" setsid dockerd >/tmp/temper-dockerd.log 2>&1 < /dev/null &
+    for _ in $(seq 1 15); do
+      docker info >/dev/null 2>&1 && break
+      sleep 1
+    done
+    if ! docker info >/dev/null 2>&1; then
+      log_warn "dockerd did not come up; see /tmp/temper-dockerd.log"
+      return 0
+    fi
+  fi
+
+  local image
+  image=$(awk '/^[[:space:]]*image:/ {print $2; exit}' "$compose")
+  if [ -n "$image" ] && ! docker image inspect "$image" >/dev/null 2>&1; then
+    log_warn "image $image not pulled; run setup-claude-web-full.sh to fetch it"
+    return 0
+  fi
+
+  if ! timeout 30 docker compose -f "$compose" up -d >/tmp/temper-compose.log 2>&1; then
+    log_warn "docker compose up failed; see /tmp/temper-compose.log"
+    return 0
+  fi
+  for _ in $(seq 1 15); do
+    pg_isready -h localhost -p 5437 -q 2>/dev/null && { log_ok "PostgreSQL restarted (Docker, port 5437)"; return 0; }
+    sleep 1
+  done
+  log_warn "temper-postgres started but not ready on 5437 yet"
+}
+
+start_docker_postgres || true
 
 # ---------------------------------------------------------------------------
 # Phase 4: Detect available tools and services
