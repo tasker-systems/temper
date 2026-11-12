@@ -114,7 +114,9 @@ run_case "an unresolvable base only warns outside CI" 0 "NOT checked"
 # --- wiring ---------------------------------------------------------------------------------
 wired() {
     local name="$1" file="$2" pattern="$3"
-    if grep -vE '^[[:space:]]*#' "$file" | grep -qF -- "$pattern"; then
+    # No -q: under pipefail, grep -q exits at the first match and the upstream grep dies of
+    # SIGPIPE (141) whenever it has more to write, failing the check at random.
+    if grep -vE '^[[:space:]]*#' "$file" | grep -F -- "$pattern" >/dev/null; then
         echo "PASS: ${name}"
         PASS=$((PASS + 1))
     else
