@@ -16,6 +16,9 @@ require 'time'
 module Temper::Generated
   # Instance-wide system settings (singleton row).
   class SystemSettings < ApiModelBase
+    # On the answer to a settings write that repoints `gating_team_slug`: the SAML group mappings the repoint elevated, each authoring-role (owner, maintainer, member) mapping onto a team that had no pool beneath it before and has the new gating team beneath it now (dead teams count). Each is recorded once as `saml_group_mapping_changed`, act `elevated`. Read on the write's own transaction. Empty on every other answer.
+    attr_accessor :elevated_mappings
+
     # On the answer to a settings write that repoints `gating_team_slug`: the new gating team's live ancestors, by every path, ordered by slug, excluding the gating team itself (which `gating_team_slug` names). The gating team is a pool every approved profile reads, so this is what the whole instance now reads through it. The walk stops at a soft-deleted team, so a team reached only through a dead one is absent. Read on the write's own transaction, after the write. `null` on every other answer: a read, a write that leaves the slug alone, or one that names the slug it already holds. An empty list means the new gating team has no live parent.
     attr_accessor :gating_pool_ancestors
 
@@ -34,6 +37,7 @@ module Temper::Generated
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
+        :'elevated_mappings' => :'elevated_mappings',
         :'gating_pool_ancestors' => :'gating_pool_ancestors',
         :'gating_team_slug' => :'gating_team_slug',
         :'id' => :'id',
@@ -57,6 +61,7 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
+        :'elevated_mappings' => :'Array<SamlGroupMapping>',
         :'gating_pool_ancestors' => :'Array<TeamRef>',
         :'gating_team_slug' => :'String',
         :'id' => :'Integer',
@@ -93,6 +98,12 @@ module Temper::Generated
         end
         h[k.to_sym] = v
       }
+
+      if attributes.key?(:'elevated_mappings')
+        if (value = attributes[:'elevated_mappings']).is_a?(Array)
+          self.elevated_mappings = value
+        end
+      end
 
       if attributes.key?(:'gating_pool_ancestors')
         if (value = attributes[:'gating_pool_ancestors']).is_a?(Array)
@@ -179,6 +190,7 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
+          elevated_mappings == o.elevated_mappings &&
           gating_pool_ancestors == o.gating_pool_ancestors &&
           gating_team_slug == o.gating_team_slug &&
           id == o.id &&
@@ -197,7 +209,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [gating_pool_ancestors, gating_team_slug, id, instance_name, terms_resource_uri, terms_version, updated].hash
+      [elevated_mappings, gating_pool_ancestors, gating_team_slug, id, instance_name, terms_resource_uri, terms_version, updated].hash
     end
 
     # Builds the object from hash

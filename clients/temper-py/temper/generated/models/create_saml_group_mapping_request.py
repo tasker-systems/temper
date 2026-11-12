@@ -29,7 +29,7 @@ class CreateSamlGroupMappingRequest(BaseModel):
     """
     Request body for `POST /api/admin/saml/group-mappings`.
     """ # noqa: E501
-    confirm_elevated: Optional[StrictBool] = Field(default=None, description="The admin's explicit confirmation, required for an `owner` role and for a target of `temper-system` or the gating team. Without it such a request is refused and nothing is written. Ignored otherwise. Defaults to `false`.")
+    confirm_elevated: Optional[StrictBool] = Field(default=None, description="The admin's explicit confirmation, required for an `owner` role, and for an authoring role (owner, maintainer, member) onto a team with a pool at or beneath it (`temper-system`, the gating team or an auto-join team, live or deleted). Never for `watcher`. Without it such a request is refused and nothing is written. Ignored otherwise. Defaults to `false`.")
     group: StrictStr = Field(description="The group value, exactly as the IdP asserts it.")
     idp_key: StrictStr = Field(description="The IdP whose assertions carry the group (`kb_saml_idp.idp_key`).")
     role: TeamRole = Field(description="The role conferred. `owner` needs `confirm_elevated`.")

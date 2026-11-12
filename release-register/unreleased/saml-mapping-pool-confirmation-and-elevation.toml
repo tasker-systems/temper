@@ -1,0 +1,45 @@
+title    = "A SAML mapping onto a team with a pool beneath it needs confirmation, and a team act that puts a pool beneath a mapped team answers and records the mappings it elevated"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http", "mcp", "cli-stdout", "clients", "schema"]
+status   = "signal-only"
+body = '''
+Reads flow down the team DAG, so a pool's members (temper-system's, the gating team's, an
+auto-join team's: every approved profile) read every team above it. A SAML group mapping that
+confers an authoring role (owner, maintainer, member) on such a team writes what the whole
+instance reads.
+
+- Behavioral (http, mcp, cli-stdout): POST /api/admin/saml/group-mappings now needs
+  `confirm_elevated: true` for an `owner` role, or for an authoring role onto a team whose
+  subtree holds a pool: the team itself, or any team beneath it, live or soft-deleted, is
+  temper-system, the gating team or an auto-join team. Without it the answer is 400
+  "confirmation required: ..." naming the reason (`pool_beneath` in the writer's needs), and
+  nothing is written. Before, only temper-system and the gating team themselves needed it.
+- Behavioral (relaxation): a `watcher` mapping never needs confirmation, onto temper-system
+  and the gating team included. Before, any role onto either needed it. A watcher only reads,
+  and admission never reads membership.
+- Behavioral (http): an authoring-role create locks the target team and every team beneath it
+  before the gating lock, and answers 409 "the team tree changed ...; retry" with nothing
+  written when a team was linked beneath the target while it waited. It now takes the team rows
+  before the gating lock, the order every team act uses. The old order could deadlock with a
+  rename of the target.
+- Additive (http, clients, schema): the team acts that can put a pool beneath a team answer
+  `elevated_mappings`, the authoring-role mappings onto a team that had no pool beneath it
+  before the act and has one after. They are PUT /api/teams/{id}/children/{child_id},
+  POST /api/teams/{id}/reparent, PUT /api/teams/{id}/auto-join, POST /api/teams/{id}/restore
+  (always empty: dead teams already count) and the settings write that repoints
+  gating_team_slug (`SystemSettings.elevated_mappings`). POST /api/teams with `?answer=effects`
+  answers it as `TeamRow.elevated_mappings` (creating an auto-join team under a parent). Each
+  field defaults to empty. No act gains a confirmation; all of them that can add a pool are
+  already a system admin's.
+- Additive (schema): saml_group_mapping_changed gains the act `elevated` (migration
+  20261126000010). An act writes one per elevated mapping, naming its actor, with the act's
+  correlation id where it has one. The payload schema is re-registered with the new act.
+- No existing mapping is changed or adopted. An authoring mapping already above a pool that is
+  not temper-system or the gating team stays as it is, unrecorded.
+
+Who observes it: admins and agents creating SAML mappings (the new refusal, and watcher
+mappings onto instance teams succeeding without confirmation), SDK users (the new fields),
+and admin-ledger readers (the new act).
+Release relevance: signal-only.
+'''

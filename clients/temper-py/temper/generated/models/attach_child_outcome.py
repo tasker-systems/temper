@@ -22,6 +22,7 @@ from typing import Any, ClassVar, Dict, List, Optional
 from temper.generated.models.attach_outcome import AttachOutcome
 from temper.generated.models.public_within_effects import PublicWithinEffects
 from temper.generated.models.public_within_reach import PublicWithinReach
+from temper.generated.models.saml_group_mapping import SamlGroupMapping
 from temper.generated.models.team_ref import TeamRef
 from typing import Optional, Set
 from typing_extensions import Self
@@ -32,10 +33,11 @@ class AttachChildOutcome(BaseModel):
     Response body for `PUT /api/teams/{id}/children/{child_id}`.
     """ # noqa: E501
     ancestors: Optional[List[TeamRef]] = Field(default=None, description="The child's live ancestors after the link, by every path, ordered by slug: every member of the child reads everything attached to each of them. The walk stops at a soft-deleted team, which confers nothing, so a team reached only through a dead one is absent. This is the child's whole reach, not only what the link added, and it names more than team detail's direct `parents`. Read on the act's own transaction, after the link. Empty when the server does not report it.")
+    elevated_mappings: Optional[List[SamlGroupMapping]] = Field(default=None, description="The SAML group mappings this act elevated: each authoring-role (owner, maintainer, member) mapping onto a team that had no pool beneath it before the act and has one after (a pool is temper-system, the gating team or an auto-join team; dead teams count). Each is recorded once as `saml_group_mapping_changed`, act `elevated`. Read on the act's own transaction. Empty when the act elevated none, or the server does not report it.")
     outcome: AttachOutcome
     public_within: Optional[PublicWithinEffects] = Field(default=None, description="What the link did to `public_within` rows: a pool brought under an anchor, or a forbid brought above a team, makes rows dormant; a new live path can revive one.")
     public_within_in_reach: Optional[PublicWithinReach] = Field(default=None, description="The effective rows the child's roster now reads through the new parent.")
-    __properties: ClassVar[List[str]] = ["ancestors", "outcome", "public_within", "public_within_in_reach"]
+    __properties: ClassVar[List[str]] = ["ancestors", "elevated_mappings", "outcome", "public_within", "public_within_in_reach"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -83,6 +85,13 @@ class AttachChildOutcome(BaseModel):
                 if _item_ancestors:
                     _items.append(_item_ancestors.to_dict())
             _dict['ancestors'] = _items
+        # override the default output from pydantic by calling `to_dict()` of each item in elevated_mappings (list)
+        _items = []
+        if self.elevated_mappings:
+            for _item_elevated_mappings in self.elevated_mappings:
+                if _item_elevated_mappings:
+                    _items.append(_item_elevated_mappings.to_dict())
+            _dict['elevated_mappings'] = _items
         # override the default output from pydantic by calling `to_dict()` of public_within
         if self.public_within:
             _dict['public_within'] = self.public_within.to_dict()
@@ -102,6 +111,7 @@ class AttachChildOutcome(BaseModel):
 
         _obj = cls.model_validate({
             "ancestors": [TeamRef.from_dict(_item) for _item in obj["ancestors"]] if obj.get("ancestors") is not None else None,
+            "elevated_mappings": [SamlGroupMapping.from_dict(_item) for _item in obj["elevated_mappings"]] if obj.get("elevated_mappings") is not None else None,
             "outcome": obj.get("outcome"),
             "public_within": PublicWithinEffects.from_dict(obj["public_within"]) if obj.get("public_within") is not None else None,
             "public_within_in_reach": PublicWithinReach.from_dict(obj["public_within_in_reach"]) if obj.get("public_within_in_reach") is not None else None

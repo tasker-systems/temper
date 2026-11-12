@@ -20,6 +20,7 @@ use uuid::Uuid;
 use crate::auth::{Caller, HumanPrincipal, SystemAdmin};
 use crate::authz::team_membership::{self, MembershipAct, MembershipAuthority};
 use crate::error::{ApiError, ApiResult};
+use crate::services::saml_mapping_service;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::reassign::{RemoveMemberOutcome, ResidualContext, ResidualOwnedReach};
 use temper_core::types::team::{
@@ -267,6 +268,7 @@ impl From<TeamRowDb> for TeamRow {
             auto_join_role: r.auto_join_role,
             public_within: None,
             public_within_in_reach: None,
+            elevated_mappings: None,
         }
     }
 }
@@ -579,6 +581,9 @@ pub struct CreatedTeam {
     pub team: TeamRow,
     pub public_within: PublicWithinEffects,
     pub public_within_in_reach: PublicWithinReach,
+    /// The SAML group mappings the create elevated (an auto-join team under a parent), each
+    /// recorded once as `saml_group_mapping_changed`, act `elevated`.
+    pub elevated_mappings: Vec<temper_core::types::saml_mapping::SamlGroupMapping>,
 }
 
 /// [`create_team`], answering what the create did to `public_within` rows as well.
@@ -684,6 +689,13 @@ pub async fn create_team_with_effects(
     if req.auto_join_role.is_some() {
         require_admin_in(&mut tx, authed).await?;
     }
+    // An auto-join team created under a parent is a pool beneath the parent and everything above
+    // it: the SAML mappings over a pool, read before the links, after the parents' row locks.
+    let elevation = if parent_ids.is_empty() {
+        None
+    } else {
+        Some(saml_mapping_service::elevation_before(&mut tx).await?)
+    };
 
     let row = sqlx::query_as!(
         TeamRowDb,
@@ -708,7 +720,8 @@ pub async fn create_team_with_effects(
     // `public_within` rows it flips (an auto-join team created under an anchor makes its rows
     // dormant).
     let mut effects = ActEffects::default();
-    if !parent_ids.is_empty() {
+    let mut elevated_mappings = Vec::new();
+    if let Some(elevation) = elevation {
         let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, creator, "web")
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -725,6 +738,14 @@ pub async fn create_team_with_effects(
             .await?;
             effects.absorb(linked);
         }
+        elevated_mappings = saml_mapping_service::record_elevations(
+            &mut tx,
+            elevation,
+            emitter.uuid(),
+            creator,
+            Some(correlation),
+        )
+        .await?;
     }
     let public_within = name_effects(&mut tx, authed, effects).await?;
     let in_reach = if parent_ids.is_empty() {
@@ -780,6 +801,7 @@ pub async fn create_team_with_effects(
         team: row.into(),
         public_within,
         public_within_in_reach: in_reach,
+        elevated_mappings,
     })
 }
 
@@ -1371,6 +1393,9 @@ pub async fn restore_team(
             return Err(subtree_changed());
         }
     }
+    // Restore flips `is_active` only, and the pool walk counts dead teams, so this answers none
+    // today; it runs the one scan anyway, so the doors cannot drift apart.
+    let elevation = saml_mapping_service::elevation_before(&mut tx).await?;
     let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -1391,6 +1416,14 @@ pub async fn restore_team(
     }
     let public_within = name_effects(&mut tx, caller, effects).await?;
     let ancestors = live_ancestors(&mut tx, team_id).await?;
+    let elevated_mappings = saml_mapping_service::record_elevations(
+        &mut tx,
+        elevation,
+        emitter.uuid(),
+        caller.profile_id(),
+        None,
+    )
+    .await?;
     tx.commit().await?;
 
     let team = sqlx::query_as!(
@@ -1415,6 +1448,7 @@ pub async fn restore_team(
         team: team.into(),
         public_within,
         ancestors,
+        elevated_mappings,
     })
 }
 
@@ -1593,6 +1627,7 @@ pub async fn set_auto_join(
     if !crate::auth::is_system_admin_locked(&mut tx, admin.actor()).await? {
         return Err(ApiError::Forbidden);
     }
+    let elevation = saml_mapping_service::elevation_before(&mut tx).await?;
     let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, admin.actor(), "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -1628,6 +1663,14 @@ pub async fn set_auto_join(
         }
     }
     let ancestors = live_ancestors(&mut tx, team_id).await?;
+    let elevated_mappings = saml_mapping_service::record_elevations(
+        &mut tx,
+        elevation,
+        emitter.uuid(),
+        admin.actor(),
+        None,
+    )
+    .await?;
     tx.commit().await?;
 
     if role.is_some() {
@@ -1648,6 +1691,7 @@ pub async fn set_auto_join(
         team: team.into(),
         ancestors,
         public_within,
+        elevated_mappings,
     })
 }
 
@@ -1898,6 +1942,7 @@ pub async fn reparent(
     }
 
     let correlation = Uuid::now_v7();
+    let elevation = saml_mapping_service::elevation_before(&mut tx).await?;
     let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -1934,6 +1979,14 @@ pub async fn reparent(
         correlation_id: correlation,
         public_within,
         ancestors: live_ancestors(&mut tx, child_id).await?,
+        elevated_mappings: saml_mapping_service::record_elevations(
+            &mut tx,
+            elevation,
+            emitter.uuid(),
+            caller.profile_id(),
+            Some(correlation),
+        )
+        .await?,
     };
     tx.commit().await?;
     Ok(outcome)
@@ -1975,30 +2028,18 @@ async fn link_side(conn: &mut sqlx::PgConnection, team_id: Uuid) -> ApiResult<Op
 /// is an authority walk, not reach, so it differs from `team_live_descendants` on purpose; the
 /// subtree it reads is the one `lock_teams_and_subtree` locks, dead teams included.
 ///
-/// The root and gating test is `access_service::is_root_or_gating_team_on`'s, applied to every team
-/// in the set: the same root-slug constant and the same `kb_system_settings` read. Change the two
-/// together.
+/// The walk is `_team_subtree_holds_pool` (migration `20261126000010`), which reads
+/// `_teams_over_pool`: the one definition of the predicate, shared with the SAML mapping door's
+/// confirmation rule and its elevation scan, so the three cannot disagree. Its root and gating test
+/// is `access_service::is_root_or_gating_team_on`'s: the `temper-system` slug and the same
+/// `kb_system_settings` read. Change them together.
 async fn subtree_holds_pool_on(conn: &mut sqlx::PgConnection, team_id: Uuid) -> ApiResult<bool> {
-    let holds = sqlx::query_scalar!(
-        r#"WITH RECURSIVE s AS (
-             SELECT $1::uuid AS id
-             UNION
-             SELECT tp.child_id FROM kb_teams_parents tp JOIN s ON tp.parent_id = s.id
-           )
-           SELECT EXISTS(
-             SELECT 1
-               FROM s
-               JOIN kb_teams t ON t.id = s.id
-              WHERE t.auto_join_role IS NOT NULL
-                 OR t.slug = $2
-                 OR t.slug = (SELECT ss.gating_team_slug FROM kb_system_settings ss WHERE ss.id = 1))
-           AS "e!: bool""#,
-        team_id,
-        crate::services::access_service::ROOT_TEAM_SLUG,
+    Ok(sqlx::query_scalar!(
+        r#"SELECT _team_subtree_holds_pool($1) AS "e!: bool""#,
+        team_id
     )
     .fetch_one(&mut *conn)
-    .await?;
-    Ok(holds)
+    .await?)
 }
 
 /// Map a refusal from the `kb_teams_parents` triggers to its status: the cycle check is a `409`,
@@ -2190,6 +2231,9 @@ pub async fn attach_child(
     // transitions take, so a concurrent open cannot move the difference.
     effects_lock(&mut tx).await?;
     let before = rows_in_reach(&mut tx, child_id).await?;
+    // The SAML mappings over a pool before the link, after the row locks: a pool brought under
+    // the parent elevates every authoring mapping above it that had none.
+    let elevation = saml_mapping_service::elevation_before(&mut tx).await?;
     let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller.profile_id(), "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -2206,6 +2250,14 @@ pub async fn attach_child(
     let after = rows_in_reach(&mut tx, child_id).await?;
     let public_within_in_reach = name_reach(&mut tx, caller, &before, after).await?;
     let ancestors = live_ancestors(&mut tx, child_id).await?;
+    let elevated_mappings = saml_mapping_service::record_elevations(
+        &mut tx,
+        elevation,
+        emitter.uuid(),
+        caller.profile_id(),
+        None,
+    )
+    .await?;
     tx.commit().await?;
     Ok(AttachChildOutcome {
         outcome: if outcome == "linked" {
@@ -2216,6 +2268,7 @@ pub async fn attach_child(
         public_within,
         public_within_in_reach,
         ancestors,
+        elevated_mappings,
     })
 }
 

@@ -19,6 +19,9 @@ module Temper::Generated
     # The child's live ancestors after the link, by every path, ordered by slug: every member of the child reads everything attached to each of them. The walk stops at a soft-deleted team, which confers nothing, so a team reached only through a dead one is absent. This is the child's whole reach, not only what the link added, and it names more than team detail's direct `parents`. Read on the act's own transaction, after the link. Empty when the server does not report it.
     attr_accessor :ancestors
 
+    # The SAML group mappings this act elevated: each authoring-role (owner, maintainer, member) mapping onto a team that had no pool beneath it before the act and has one after (a pool is temper-system, the gating team or an auto-join team; dead teams count). Each is recorded once as `saml_group_mapping_changed`, act `elevated`. Read on the act's own transaction. Empty when the act elevated none, or the server does not report it.
+    attr_accessor :elevated_mappings
+
     attr_accessor :outcome
 
     # What the link did to `public_within` rows: a pool brought under an anchor, or a forbid brought above a team, makes rows dormant; a new live path can revive one.
@@ -53,6 +56,7 @@ module Temper::Generated
     def self.attribute_map
       {
         :'ancestors' => :'ancestors',
+        :'elevated_mappings' => :'elevated_mappings',
         :'outcome' => :'outcome',
         :'public_within' => :'public_within',
         :'public_within_in_reach' => :'public_within_in_reach'
@@ -73,6 +77,7 @@ module Temper::Generated
     def self.openapi_types
       {
         :'ancestors' => :'Array<TeamRef>',
+        :'elevated_mappings' => :'Array<SamlGroupMapping>',
         :'outcome' => :'AttachOutcome',
         :'public_within' => :'PublicWithinEffects',
         :'public_within_in_reach' => :'PublicWithinReach'
@@ -104,6 +109,12 @@ module Temper::Generated
       if attributes.key?(:'ancestors')
         if (value = attributes[:'ancestors']).is_a?(Array)
           self.ancestors = value
+        end
+      end
+
+      if attributes.key?(:'elevated_mappings')
+        if (value = attributes[:'elevated_mappings']).is_a?(Array)
+          self.elevated_mappings = value
         end
       end
 
@@ -158,6 +169,7 @@ module Temper::Generated
       return true if self.equal?(o)
       self.class == o.class &&
           ancestors == o.ancestors &&
+          elevated_mappings == o.elevated_mappings &&
           outcome == o.outcome &&
           public_within == o.public_within &&
           public_within_in_reach == o.public_within_in_reach
@@ -172,7 +184,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [ancestors, outcome, public_within, public_within_in_reach].hash
+      [ancestors, elevated_mappings, outcome, public_within, public_within_in_reach].hash
     end
 
     # Builds the object from hash

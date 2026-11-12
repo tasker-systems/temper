@@ -1882,8 +1882,10 @@ pub enum TeamLifecycleAct {
 }
 
 /// `saml_group_mapping_changed` — a SAML group mapping (`kb_saml_group_mappings`: an IdP's group
-/// value conferring a role on a team) was created or removed by a system admin. Written only by
-/// `_admin_saml_group_mapping_write`, in the same statement as the row.
+/// value conferring a role on a team) was created or removed by a system admin, or was elevated by a
+/// structural team act. `created` and `removed` are written only by `_admin_saml_group_mapping_write`,
+/// in the same statement as the row; `elevated` only by `_saml_mapping_elevations_record`, in the
+/// structural act's own transaction.
 ///
 /// A mapping confers membership on every person the IdP asserts the group for, at each login's
 /// reconcile, so who made one, and who removed one, is an authority record like a membership
@@ -1902,8 +1904,9 @@ pub struct SamlGroupMappingChanged {
     pub team_id: Uuid,
     /// The role the mapping confers: as written on `created`, as it was on `removed`.
     pub role: temper_core::types::team::TeamRole,
-    /// True on a `created` that needed the admin's explicit confirmation (an `owner` role, or the
-    /// root or gating team as the target) and had it, and on every `adopted`. Absent otherwise.
+    /// True on a `created` that needed the admin's explicit confirmation (an `owner` role, or an
+    /// authoring role onto a team whose subtree, dead teams included, holds a pool: the root, the
+    /// gating team or an auto-join team) and had it, and on every `adopted`. Absent otherwise.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub confirmed: bool,
     /// On `adopted` only: the version of the migration that recorded the row as confirmed. Such a
@@ -1924,6 +1927,11 @@ pub enum SamlGroupMappingAct {
     /// A mapping that already existed above the ceiling when the doors arrived, recorded as
     /// confirmed by the migration that introduced them (`migration` names it). No row changed.
     Adopted,
+    /// A structural team act (a gating repoint, an attach, a reparent, setting auto-join, creating
+    /// an auto-join team under a parent) put a pool beneath the team of an authoring-role mapping
+    /// whose team held none, so the mapping now confers a role that the whole pool reads the
+    /// material of. `actor` is the act's. No row changed and nothing was asked to confirm.
+    Elevated,
 }
 
 /// `team_public_within_changed` — a `public_within` row was opened, closed, lapsed or cascade-deleted.

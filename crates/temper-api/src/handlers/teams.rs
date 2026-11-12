@@ -77,6 +77,7 @@ pub async fn create(
     let mut row = created.team;
     row.public_within = Some(created.public_within);
     row.public_within_in_reach = Some(created.public_within_in_reach);
+    row.elevated_mappings = Some(created.elevated_mappings);
     Ok((StatusCode::CREATED, Json(row)))
 }
 

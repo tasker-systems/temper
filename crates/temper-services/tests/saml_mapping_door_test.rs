@@ -579,7 +579,8 @@ async fn the_migration_adopts_existing_rows_above_the_ceiling(pool: PgPool) {
     for (team, group, role) in [
         (f.eng, "more-leads", TeamRole::Owner),
         (f.root, "more-everyone", TeamRole::Member),
-        (f.gating, "more-staff", TeamRole::Watcher),
+        // A watcher onto an instance team needs no confirmation since 20261126000010.
+        (f.gating, "more-staff", TeamRole::Maintainer),
     ] {
         let err = saml_mapping_service::create(&pool, &admin, &req(team, group, role, false))
             .await
@@ -633,14 +634,16 @@ async fn an_identical_rerun_is_a_noop_without_confirmation(pool: PgPool) {
     );
 }
 
-/// The create arm takes the shared gating lock BEFORE the team row. A rename takes the gating lock
-/// exclusively and then the team row, so the reverse order would deadlock with it. Pinned by
-/// holding the exclusive gating lock: the create waits on it, and while it waits the team row is
-/// still free to lock `FOR UPDATE NOWAIT` (it would not be had the create locked the row first).
+/// The create arm takes its team rows BEFORE the shared gating lock (since 20261126000010), the
+/// order of every team act. A rename locks its team row and then takes the gating lock exclusively,
+/// so the first door's order (gating lock first) waited in a cycle with it. Pinned by holding the
+/// exclusive gating lock: the create waits on it, and while it waits it already holds the team row,
+/// so `FOR UPDATE NOWAIT` on that row is refused. The deadlock itself is witnessed in
+/// `saml_mapping_pool_elevation_test`.
 ///
-/// FAILS IF the create arm locks the team row before the gating lock.
+/// FAILS IF the create arm takes the gating lock before the team row.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn the_create_takes_the_gating_lock_before_the_team_row(pool: PgPool) {
+async fn the_create_takes_the_team_row_before_the_gating_lock(pool: PgPool) {
     let f = fixture(&pool).await;
     let admin = test_support::system_admin_proof_for(&pool, f.admin).await;
 
@@ -681,11 +684,16 @@ async fn the_create_takes_the_gating_lock_before_the_team_row(pool: PgPool) {
     }
 
     let mut probe = pool.begin().await.unwrap();
-    sqlx::query("SELECT id FROM kb_teams WHERE id = $1 FOR UPDATE NOWAIT")
+    let err = sqlx::query("SELECT id FROM kb_teams WHERE id = $1 FOR UPDATE NOWAIT")
         .bind(f.eng)
         .fetch_one(&mut *probe)
         .await
-        .expect("the waiting create holds no lock on the team row");
+        .expect_err("the waiting create already holds the team row");
+    assert!(
+        err.as_database_error()
+            .is_some_and(|e| e.code().as_deref() == Some("55P03")),
+        "{err:?}"
+    );
     probe.rollback().await.unwrap();
 
     holder.commit().await.unwrap();

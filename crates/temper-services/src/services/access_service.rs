@@ -1311,6 +1311,7 @@ impl From<SettingsRow> for SystemSettings {
             instance_name: r.instance_name,
             updated: r.updated,
             gating_pool_ancestors: None,
+            elevated_mappings: Vec::new(),
         }
     }
 }
@@ -1380,8 +1381,17 @@ pub async fn update_system_settings(
     // was minted refuses the change, and one in flight makes it wait, then refuses.
     let mut tx = pool.begin().await?;
     still_admin(&mut tx, admin, None).await?;
-    let mut repointed = false;
+    let mut repointed = None;
+    let mut elevation = None;
     if let Some(ref slug) = req.gating_team_slug {
+        // The SAML mappings over a pool before the repoint, read under the exclusive gating lock
+        // the writer takes next (re-entrant, and in the writer's own order: after the admin
+        // re-check, before the settings row), so no slug change lands between the read and the
+        // write. The new gating team is a pool beneath every team above it.
+        sqlx::query_scalar!(r#"SELECT 1 AS "one!" FROM (SELECT _gating_team_lock(true)) g"#)
+            .fetch_one(&mut *tx)
+            .await?;
+        elevation = Some(super::saml_mapping_service::elevation_before(&mut tx).await?);
         let written = sqlx::query_scalar!(
             r#"SELECT _admin_gating_team_slug_write($1, NULL) AS "w!""#,
             slug
@@ -1394,7 +1404,18 @@ pub async fn update_system_settings(
         match written.get("outcome").and_then(|o| o.as_str()) {
             Some("no_team") => return Err(gating_slug_names_no_team(slug)),
             Some("dead_team") => return Err(gating_slug_names_a_dead_team(slug)),
-            Some("changed") => repointed = true,
+            Some("changed") => {
+                repointed = written
+                    .get("correlation_id")
+                    .and_then(|c| c.as_str())
+                    .and_then(|c| Uuid::parse_str(c).ok());
+                if repointed.is_none() {
+                    return Err(ApiError::Internal(
+                        "_admin_gating_team_slug_write changed without a correlation id"
+                            .to_string(),
+                    ));
+                }
+            }
             _ => {}
         }
     }
@@ -1403,7 +1424,18 @@ pub async fn update_system_settings(
     // reads, so the whole instance now reads its live ancestor chain (team DAG R9: the act names
     // it to the admin the door admits). Read on this transaction, after the write. A write that
     // leaves the slug alone, or names the one it holds (`noop`), opened nothing and answers none.
-    if repointed {
+    if let (Some(correlation), Some(elevation)) = (repointed, elevation) {
+        let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, admin.actor(), "web")
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+        row.elevated_mappings = super::saml_mapping_service::record_elevations(
+            &mut tx,
+            elevation,
+            emitter.uuid(),
+            admin.actor(),
+            Some(correlation),
+        )
+        .await?;
         let gating_id = sqlx::query_scalar!(
             "SELECT id FROM kb_teams WHERE slug = $1",
             req.gating_team_slug.as_deref(),

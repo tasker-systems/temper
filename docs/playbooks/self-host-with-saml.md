@@ -96,9 +96,10 @@ remain the authoritative reference and the manual fallback.
    ```
 
    Creates the mapping through the admin API, as a system admin's act recorded on the admin
-   ledger (`saml_group_mapping_changed`). The ceiling is `maintainer`: an `owner` role, or
-   `temper-system` or the gating team as the target, is refused unless you add
-   `--confirm-elevated`. `--from-seen` reads `kb_saml_seen_groups` so you can add mappings
+   ledger (`saml_group_mapping_changed`). The ceiling is `maintainer`: an `owner` role, or an
+   owner, maintainer or member role onto a team with `temper-system`, the gating team or an
+   auto-join team at or beneath it, is refused unless you add `--confirm-elevated`. A watcher
+   mapping never needs it. `--from-seen` reads `kb_saml_seen_groups` so you can add mappings
    reactively. `temper admin saml unmap-group --idp-key <acme-okta> engineering +engineering`
    removes a mapping (also recorded). Memberships it already conferred stay until each member's
    next login, when the IdP reconcile removes those no remaining mapping confers.
@@ -282,8 +283,9 @@ is removed.
    temper admin saml map-group --idp-key acme-okta eng-leads   +engineering --role maintainer
    ```
    Each mapping is a system admin's act, recorded on the admin ledger. The ceiling is
-   `maintainer`: an `owner` role, or `temper-system` or the gating team as the target, is refused
-   unless you add `--confirm-elevated` (for example `--role owner --confirm-elevated`). Re-running
+   `maintainer`: an `owner` role, or an authoring role onto a team with a pool (`temper-system`,
+   the gating team or an auto-join team) at or beneath it, is refused unless you add
+   `--confirm-elevated` (for example `--role owner --confirm-elevated`). Re-running
    an identical mapping changes nothing. `temper admin saml unmap-group` removes one.
 
    Owning the gating team does not make anyone a system admin: that is the governance grant

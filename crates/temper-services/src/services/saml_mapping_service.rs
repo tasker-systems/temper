@@ -12,8 +12,15 @@
 //! re-check anyway, so the ledger never records an admin act committed after its actor's demotion.
 //!
 //! The row change, the ceiling and the confirmation are decided in `_admin_saml_group_mapping_write`
-//! (migration `20261125000010`) under the gating and team locks, so the decision about the root and
-//! gating team holds to commit. This module maps its named outcomes to the wire.
+//! (migrations `20261125000010`, `20261126000010`) under the team and gating locks, so the decision
+//! holds to commit. An `owner` role, or an authoring role (owner, maintainer, member) onto a team
+//! whose subtree holds a pool (the root, the gating team or an auto-join team, dead teams included),
+//! needs the admin's confirmation; a watcher mapping never does. This module maps its named outcomes
+//! to the wire.
+//!
+//! It also holds the one elevation scan every structural team act runs (`elevation_before` and
+//! `record_elevations`): an act that puts a pool beneath a team already holding an authoring-role
+//! mapping answers each mapping it elevated and records it, act `elevated`.
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -56,6 +63,13 @@ fn needs_confirmation(needs: &[String], role: TeamRole) -> ApiError {
              profile"
                 .to_string(),
         );
+    }
+    if needs.iter().any(|n| n == "pool_beneath") {
+        why.push(format!(
+            "the role `{}` authors onto a team with a pool beneath it (the gating team or an \
+             auto-join team, live or deleted), whose members read everything the team holds",
+            role.as_str()
+        ));
     }
     ApiError::BadRequest(format!(
         "confirmation required: {}. Re-send with `confirm_elevated: true` to confirm; nothing was \
@@ -109,10 +123,13 @@ async fn write(
     Ok((answer, tx))
 }
 
-/// Create a mapping. Refused (`400`, naming why, nothing written) when the role is `owner` or the
-/// team is `temper-system` or the gating team and `confirm_elevated` is not set; `404` for an
-/// unknown IdP or a team that is not live; `400` for a personal team; `409` when the key already
-/// maps to another role. The same mapping again is answered `created: false` and records nothing.
+/// Create a mapping. Refused (`400`, naming why, nothing written) without `confirm_elevated` when
+/// the role is `owner`, or is an authoring role (owner, maintainer, member) and the team's subtree,
+/// dead teams included, holds a pool: the team is `temper-system`, the gating team or an auto-join
+/// team, or one of them is beneath it. A `watcher` mapping never needs it. `404` for an unknown IdP
+/// or a team that is not live; `400` for a personal team; `409` when the key already maps to
+/// another role, or when the team's subtree changed while the act waited for its locks (retry).
+/// The same mapping again is answered `created: false` and records nothing.
 pub async fn create(
     pool: &PgPool,
     admin: &SystemAdmin,
@@ -154,6 +171,11 @@ pub async fn create(
             return Err(ApiError::BadRequest(
                 "a personal team takes no other member, so no SAML mapping can target one"
                     .to_string(),
+            ))
+        }
+        "subtree_changed" => {
+            return Err(ApiError::Conflict(
+                "the team tree changed while this act was being checked; retry".to_string(),
             ))
         }
         "conflict" => {
@@ -217,4 +239,42 @@ pub async fn remove(
         idp_memberships_left_in_place: answer.idp_memberships.unwrap_or(0),
         memberships: MAPPING_REMOVAL_LEAVES_MEMBERSHIPS.to_string(),
     })
+}
+
+/// The authoring-role mappings whose team's subtree holds a pool, read by a structural team act on
+/// its own transaction after its locks and before its write. Hand it to [`record_elevations`] after
+/// the write.
+pub(crate) struct ElevationBefore(serde_json::Value);
+
+/// Read [`ElevationBefore`] on `conn` (`_saml_mappings_over_pool`).
+pub(crate) async fn elevation_before(conn: &mut sqlx::PgConnection) -> ApiResult<ElevationBefore> {
+    let before = sqlx::query_scalar!(r#"SELECT _saml_mappings_over_pool() AS "m!""#)
+        .fetch_one(&mut *conn)
+        .await?;
+    Ok(ElevationBefore(before))
+}
+
+/// After a structural act's write, on its transaction: every authoring-role mapping now over a pool
+/// that `before` did not hold. Each gets one `saml_group_mapping_changed` event, act `elevated`,
+/// naming `actor` (`_saml_mapping_elevations_record`), and is answered, ordered by idp_key, group
+/// and team. The one scan of every door that can put a pool beneath a team, so the doors cannot
+/// drift apart.
+pub(crate) async fn record_elevations(
+    conn: &mut sqlx::PgConnection,
+    before: ElevationBefore,
+    emitter: Uuid,
+    actor: temper_core::types::ids::ProfileId,
+    correlation: Option<Uuid>,
+) -> ApiResult<Vec<SamlGroupMapping>> {
+    let raw = sqlx::query_scalar!(
+        r#"SELECT _saml_mapping_elevations_record($1, $2, $3, $4) AS "e!""#,
+        emitter,
+        *actor,
+        before.0,
+        correlation,
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    serde_json::from_value(raw)
+        .map_err(|e| ApiError::Internal(format!("_saml_mapping_elevations_record: {e}")))
 }

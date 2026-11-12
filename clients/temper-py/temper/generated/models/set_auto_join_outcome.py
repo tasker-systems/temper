@@ -20,6 +20,7 @@ import json
 from pydantic import BaseModel, ConfigDict, Field
 from typing import Any, ClassVar, Dict, List, Optional
 from temper.generated.models.public_within_effects import PublicWithinEffects
+from temper.generated.models.saml_group_mapping import SamlGroupMapping
 from temper.generated.models.team_ref import TeamRef
 from temper.generated.models.team_row import TeamRow
 from typing import Optional, Set
@@ -31,9 +32,10 @@ class SetAutoJoinOutcome(BaseModel):
     Response body for `PUT /api/teams/{id}/auto-join`. `ancestors` are the team's live ancestors, by every path, ordered by slug, read on the act's own transaction (the walk stops at a soft-deleted team): with auto-join set, every approved profile reads everything attached to each of them, so the admin sees exactly what the change opened.
     """ # noqa: E501
     ancestors: List[TeamRef]
+    elevated_mappings: Optional[List[SamlGroupMapping]] = Field(default=None, description="The SAML group mappings this act elevated: each authoring-role (owner, maintainer, member) mapping onto a team that had no pool beneath it before the act and has one after (a pool is temper-system, the gating team or an auto-join team; dead teams count). Each is recorded once as `saml_group_mapping_changed`, act `elevated`. Read on the act's own transaction. Empty when the act elevated none, or the server does not report it.")
     public_within: Optional[PublicWithinEffects] = Field(default=None, description="An auto-join team under an anchor makes that anchor's rows dormant unless an admin opened them instance-wide; clearing it revives them.")
     team: TeamRow
-    __properties: ClassVar[List[str]] = ["ancestors", "public_within", "team"]
+    __properties: ClassVar[List[str]] = ["ancestors", "elevated_mappings", "public_within", "team"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -81,6 +83,13 @@ class SetAutoJoinOutcome(BaseModel):
                 if _item_ancestors:
                     _items.append(_item_ancestors.to_dict())
             _dict['ancestors'] = _items
+        # override the default output from pydantic by calling `to_dict()` of each item in elevated_mappings (list)
+        _items = []
+        if self.elevated_mappings:
+            for _item_elevated_mappings in self.elevated_mappings:
+                if _item_elevated_mappings:
+                    _items.append(_item_elevated_mappings.to_dict())
+            _dict['elevated_mappings'] = _items
         # override the default output from pydantic by calling `to_dict()` of public_within
         if self.public_within:
             _dict['public_within'] = self.public_within.to_dict()
@@ -100,6 +109,7 @@ class SetAutoJoinOutcome(BaseModel):
 
         _obj = cls.model_validate({
             "ancestors": [TeamRef.from_dict(_item) for _item in obj["ancestors"]] if obj.get("ancestors") is not None else None,
+            "elevated_mappings": [SamlGroupMapping.from_dict(_item) for _item in obj["elevated_mappings"]] if obj.get("elevated_mappings") is not None else None,
             "public_within": PublicWithinEffects.from_dict(obj["public_within"]) if obj.get("public_within") is not None else None,
             "team": TeamRow.from_dict(obj["team"]) if obj.get("team") is not None else None
         })

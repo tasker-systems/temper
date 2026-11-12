@@ -116,6 +116,13 @@ pub struct SystemSettings {
     /// parent.
     #[serde(default)]
     pub gating_pool_ancestors: Option<Vec<crate::types::team::TeamRef>>,
+    /// On the answer to a settings write that repoints `gating_team_slug`: the SAML group mappings
+    /// the repoint elevated, each authoring-role (owner, maintainer, member) mapping onto a team that
+    /// had no pool beneath it before and has the new gating team beneath it now (dead teams count).
+    /// Each is recorded once as `saml_group_mapping_changed`, act `elevated`. Read on the write's own
+    /// transaction. Empty on every other answer.
+    #[serde(default)]
+    pub elevated_mappings: Vec<crate::types::saml_mapping::SamlGroupMapping>,
 }
 
 /// Public-facing system settings (no gating_team_slug — prevents info leakage).

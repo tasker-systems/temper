@@ -299,7 +299,7 @@ module Temper::Generated
     end
 
     # Create a SAML group mapping
-    # Maps a group the IdP asserts to a role on a team: at each login, the IdP reconcile gives everyone in the group that role. The ceiling is `maintainer`. An `owner` role, or a target of temper-system or the gating team, needs `confirm_elevated: true`; without it the request is refused, naming why, and nothing is written. Recorded as `saml_group_mapping_changed`. The same mapping again records nothing and answers `created: false`. Requires a system admin.
+    # Maps a group the IdP asserts to a role on a team: at each login, the IdP reconcile gives everyone in the group that role. The ceiling is `maintainer`. An `owner` role, or an owner, maintainer or member role onto a team with a pool at or beneath it (temper-system, the gating team or an auto-join team, live or deleted), needs `confirm_elevated: true` (a watcher mapping never does); without it the request is refused, naming why, and nothing is written. Recorded as `saml_group_mapping_changed`. The same mapping again records nothing and answers `created: false`. Requires a system admin.
     # @param create_saml_group_mapping_request [CreateSamlGroupMappingRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -310,7 +310,7 @@ module Temper::Generated
     end
 
     # Create a SAML group mapping
-    # Maps a group the IdP asserts to a role on a team: at each login, the IdP reconcile gives everyone in the group that role. The ceiling is &#x60;maintainer&#x60;. An &#x60;owner&#x60; role, or a target of temper-system or the gating team, needs &#x60;confirm_elevated: true&#x60;; without it the request is refused, naming why, and nothing is written. Recorded as &#x60;saml_group_mapping_changed&#x60;. The same mapping again records nothing and answers &#x60;created: false&#x60;. Requires a system admin.
+    # Maps a group the IdP asserts to a role on a team: at each login, the IdP reconcile gives everyone in the group that role. The ceiling is &#x60;maintainer&#x60;. An &#x60;owner&#x60; role, or an owner, maintainer or member role onto a team with a pool at or beneath it (temper-system, the gating team or an auto-join team, live or deleted), needs &#x60;confirm_elevated: true&#x60; (a watcher mapping never does); without it the request is refused, naming why, and nothing is written. Recorded as &#x60;saml_group_mapping_changed&#x60;. The same mapping again records nothing and answers &#x60;created: false&#x60;. Requires a system admin.
     # @param create_saml_group_mapping_request [CreateSamlGroupMappingRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.

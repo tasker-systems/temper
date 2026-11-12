@@ -200,6 +200,10 @@ fn the_migration_literal_matches_the_committed_fixture() {
         ),
         (
             "20261125000010_saml_group_mapping_door.sql",
+            &[SUPERSEDED], // saml_group_mapping_changed: 20261126000010
+        ),
+        (
+            "20261126000010_saml_mapping_pool_confirmation.sql",
             &["saml_group_mapping_changed.v1.schema.json"],
         ),
         (

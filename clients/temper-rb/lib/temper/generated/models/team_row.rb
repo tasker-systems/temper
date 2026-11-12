@@ -24,6 +24,9 @@ module Temper::Generated
     # Optional human description; NULL until set via `PATCH /api/teams/{id}`.
     attr_accessor :description
 
+    # The SAML group mappings the create elevated: creating an auto-join team under a parent puts a pool beneath the parent and every team above it, so each authoring-role mapping onto one of them that had no pool beneath it is named here, and recorded once as `saml_group_mapping_changed`, act `elevated`. Present only on `POST /api/teams` asked with `?answer=effects`; the records are written either way.
+    attr_accessor :elevated_mappings
+
     attr_accessor :id
 
     attr_accessor :name
@@ -64,6 +67,7 @@ module Temper::Generated
         :'auto_join_role' => :'auto_join_role',
         :'created' => :'created',
         :'description' => :'description',
+        :'elevated_mappings' => :'elevated_mappings',
         :'id' => :'id',
         :'name' => :'name',
         :'public_within' => :'public_within',
@@ -88,6 +92,7 @@ module Temper::Generated
         :'auto_join_role' => :'TeamRole',
         :'created' => :'Time',
         :'description' => :'String',
+        :'elevated_mappings' => :'Array<SamlGroupMapping>',
         :'id' => :'String',
         :'name' => :'String',
         :'public_within' => :'PublicWithinEffects',
@@ -101,6 +106,7 @@ module Temper::Generated
       Set.new([
         :'auto_join_role',
         :'description',
+        :'elevated_mappings',
         :'public_within',
         :'public_within_in_reach',
       ])
@@ -134,6 +140,12 @@ module Temper::Generated
 
       if attributes.key?(:'description')
         self.description = attributes[:'description']
+      end
+
+      if attributes.key?(:'elevated_mappings')
+        if (value = attributes[:'elevated_mappings']).is_a?(Array)
+          self.elevated_mappings = value
+        end
       end
 
       if attributes.key?(:'id')
@@ -246,6 +258,7 @@ module Temper::Generated
           auto_join_role == o.auto_join_role &&
           created == o.created &&
           description == o.description &&
+          elevated_mappings == o.elevated_mappings &&
           id == o.id &&
           name == o.name &&
           public_within == o.public_within &&
@@ -262,7 +275,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [auto_join_role, created, description, id, name, public_within, public_within_in_reach, slug].hash
+      [auto_join_role, created, description, elevated_mappings, id, name, public_within, public_within_in_reach, slug].hash
     end
 
     # Builds the object from hash
