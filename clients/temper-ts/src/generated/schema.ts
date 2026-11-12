@@ -1978,6 +1978,14 @@ export interface paths {
          *     Omit `after` to start: the answer has no entries and a `through` at the present, never a tail of history. Hand `through` back as `after` to resume. A position is opaque and is valid only for the context it was issued for. Every answer says how far it looked (`through`) and whether more exists (`has_more`).
          *
          *     **This is a change hint, not a cache-invalidation guarantee.** The feed never announces an admin act, such as an erasure or a scrub. A consumer that mirrors content must periodically re-read the subjects it holds and drop whatever is refused: that re-read is how erased or scrubbed content leaves a mirror.
+         *
+         *     **The consumer contract.**
+         *     - Record `through` *before* reading the bodies an answer points at, never after. A change that commits between the bodies read and a later `through` is behind the recorded position, and is lost. A change seen again after an early `through` costs one redundant re-read.
+         *     - An edge entry names the edge (`kb_edges` and the edge id), not its endpoints. To learn which resources it touches, read the edge.
+         *     - An edge appears in the feed of its own home context, not in its endpoints' contexts. An edge homed elsewhere that touches a resource homed here is not in this feed.
+         *     - `resource_departed` is a deletion or a move, and does not say which. Treat it as "re-resolve this resource": it may still exist in another context you can read.
+         *     - A scrub of a facet or other property is not announced. Re-read `GET /api/resources/{id}/facets` for the resources you hold on the same periodic cadence, not only on a feed hint.
+         *     - `GET /api/resources?ids=` (up to 256 ids) is the cheap periodic sweep: it returns `updated`, `body_hash` and `body_storage` for exactly the ids you can still read, and leaves out the rest, without downloading a body.
          */
         get: operations["context_changes"];
         put?: never;
@@ -1998,7 +2006,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Read the event cursor for a context */
+        /**
+         * Read the event cursor for a context
+         * @description The newest event id on the context among the events its change feed would serve you, or null. **A hint that can miss a change, not a freshness proof.** It is ordered by `occurred_at`, when the acting transaction began, so a long transaction that begins before a short one and commits after it never moves the cursor past the short one's event. To see every change, read the change feed (`GET /api/events/{kb_context_id}/changes`), which is commit-ordered and does not have this race.
+         */
         get: operations["cursor"];
         put?: never;
         post?: never;
@@ -7122,6 +7133,10 @@ export interface components {
              *     change feed would serve the reader. Never an admin act's, a connection's traffic, region
              *     bookkeeping or an edge the reader cannot see. `None` when none of the newest events
              *     qualifies.
+             *
+             *     A hint that can miss a change: `occurred_at` is when the acting transaction began, so a
+             *     long transaction that commits after a shorter, later-starting one never moves the cursor.
+             *     The change feed is commit-ordered and does not have this race.
              */
             latest_event_id?: string | null;
         };
@@ -10755,8 +10770,13 @@ export interface components {
              *     Such an edit still writes: the stored bytes, the read-back body, and `updated` all
              *     change. The hash **does** move when the chunk sequence changes, and also when the same
              *     chunks are regrouped into different blocks. That happens on a re-block, or on the first
-             *     whole-body write to a resource whose blocks predate the blocking policy. So read
-             *     `updated` (or compare the content) to detect an edit, never `body_hash`.
+             *     whole-body write to a resource whose blocks predate the blocking policy. It also depends
+             *     on the chunker's parameters (how it splits an oversized section). So the hash can move
+             *     with **no** byte change, as well as stay put through one: a moved hash means "re-read",
+             *     never "the text changed". It is the merkle of one segmentation, not a content identity.
+             *
+             *     To detect a body or title edit, read `updated` (or compare the content), never
+             *     `body_hash`. Neither one sees a property, edge or data-artifact write: see `updated`.
              *
              *     This is the identity segmented ingest echoes at finalize (`expected_body_hash`) and the
              *     one the re-block keeps blocks by. The byte-level check of an upload is finalize's
@@ -10851,7 +10871,19 @@ export interface components {
              */
             ref: string;
             title: string;
-            /** Format: date-time */
+            /**
+             * Format: date-time
+             * @description When the resource's own row last changed: the `occurred_at` of the event that last wrote
+             *     it. This is not "when anything about the resource last changed".
+             *
+             *     It moves on a body write (every block create, mutate or re-block, including a re-block
+             *     that changes no byte), a `title` or `origin_uri` change, deletion and erasure.
+             *
+             *     It does **not** move on a property write (a facet, an `open_meta` key, the stage or any
+             *     other managed key), an edge assert, re-weight, re-type or fold, a data-artifact commit, a
+             *     move to another context, or a provenance annotation. To see those, read the context's
+             *     change feed (`GET /api/events/{context}/changes`, `temper context changes`).
+             */
             updated: string;
         };
         /**
