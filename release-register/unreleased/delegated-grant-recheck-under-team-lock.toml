@@ -1,0 +1,41 @@
+title    = "The grant door re-decides a delegated granter's grant right under the locks it is held through"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http"]
+status   = "signal-only"
+body = '''
+grant_capability's delegated arm decided the granter's grant right (and the attenuation that bounds
+what they may confer) on a pool read and never asked again on its write transaction. A grant
+outlives the right that made it, so a granter whose can_grant came through a team, and who was
+removed from that team, demoted below maintainer, or had the team's can_grant withdrawn while the
+grant was in flight, still wrote it. The grant can name a team the granter manages or a machine
+they control, so the stale act could leave them holding access.
+
+The door now asks again on its transaction, before any write: the teams the right is held through
+(a can_grant row on a team where the granter holds a direct owner or maintainer row), and the
+recipient team when the grant is to a team, under their row locks (FOR NO KEY UPDATE, ascending,
+in one pass, the lock every membership writer takes first). The granter's manage bar on the
+recipient team is re-read there: a granter removed or demoted on it is refused too. Then the
+grant rows carrying the right, FOR SHARE, ascending. The grant right and, for a recipient that is
+the granter's own machine, the in-person grant bar are re-read under those locks. A removal,
+demotion or can_grant withdrawal on the team the right comes through, committed first, refuses the
+grant; one in flight makes it wait, then refuses, with the 403 a caller who never held the right
+gets. No grant row is written. The attenuation (read, write, delete held by the granter) is re-read
+on the transaction but not under a lock, so a write or read right reaching the granter through
+another team whose membership change is still in flight is decided as it stood before it.
+
+Not changed: revoke_capability's delegated arm. A revocation only removes a grant, so a stale one
+leaves the revoker no access.
+
+Lock order: the team rows (ascending), then the subject floor's resource row, then grant rows
+(ascending). Membership writers take their team row first and no grant or resource row; a demotion
+or standing act takes standing and governance rows only; machine registration takes its team rows
+ascending, then grant rows; revoke takes no team row. No new wait cycle. No schema or response
+shape change. Witnesses: a_granter_removed_from_the_source_team_in_flight_writes_no_grant,
+a_granter_demoted_on_the_source_team_in_flight_writes_no_grant,
+a_grant_right_withdrawn_from_the_source_team_in_flight_writes_no_grant,
+a_granter_removed_from_the_recipient_team_in_flight_writes_no_grant,
+an_in_person_right_withdrawn_in_flight_grants_nothing_to_the_granters_machine and
+two_managers_rewriting_the_source_row_at_once_both_land. Release relevance:
+signal-only.
+'''
