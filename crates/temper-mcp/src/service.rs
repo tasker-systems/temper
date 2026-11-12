@@ -239,7 +239,7 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "Get a resource by its ref (UUID or the decorated `slug-<uuid>` form). Set include_content to true to get the full markdown body. `body_hash` is the identity of the body's prose chunks as grouped into blocks, not of its bytes. It excludes `#`..`######` heading lines and edge whitespace, so an edit that only changes a heading's text or level (even on the first line) usually leaves it unchanged. Detect an edit by `updated` or the content, never by `body_hash`.",
+        description = "Get a resource by its ref (UUID or the decorated `slug-<uuid>` form). Set include_content to true to get the full markdown body. `body_hash` is the identity of the body's prose chunks as grouped into blocks, not of its bytes. It excludes `#`..`######` heading lines and edge whitespace, so an edit that only changes a heading's text or level (even on the first line) usually leaves it unchanged. Detect a body or title edit by `updated` or the content, never by `body_hash`, which can also move with no byte change (a re-block). `updated` does not move on a facet, open_meta, stage, edge or data-artifact write, or a move: the context change feed sees those.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_resource(

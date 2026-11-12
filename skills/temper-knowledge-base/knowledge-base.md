@@ -103,7 +103,9 @@ reassign. Moving a context to a team is `context_manage` transfer.
 
 ## Traps
 
-- **`body_hash` is not an edit detector** — a heading-only edit leaves it unchanged. Use `updated`.
+- **`body_hash` is not an edit detector** — a heading-only edit leaves it unchanged, and a re-block
+  moves it with no byte change. Use `updated` for body and title edits only: it does not move on a
+  facet, `open_meta`, stage, edge or data-artifact write, or a move. The context change feed sees those.
 - **`get_resource` collapses facets** into a newest-wins `open_meta` value and drops the weight.
   Confirm a `facet_set` with `facets_read`.
 - **`search` has two arms, never merged.** `exact` (`fts_norm`) and `wide` (`vec_norm`) are not

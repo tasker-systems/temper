@@ -369,6 +369,8 @@ Each entry is a pointer â€” kind, subject (table and id), actor, time and act â€
 
 A change hint, not a cache-invalidation guarantee: the feed never announces an erasure or a scrub, so a mirror must periodically re-read the subjects it holds and drop what is refused.
 
+The consumer contract: record `through` before reading the bodies an answer points at, never after, or a change that commits in between is lost. An edge entry names the edge, not its endpoints, and an edge is in the feed of its own home context only. `resource_departed` is a deletion or a move, without saying which. A facet scrub is not announced, so re-read `resource facets` periodically. `resource list --ids` is the cheap periodic sweep.
+
 Usage: temper context changes [OPTIONS] <CONTEXT>
 
 Arguments:
