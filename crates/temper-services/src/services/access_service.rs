@@ -1313,6 +1313,7 @@ impl From<SettingsRow> for SystemSettings {
             gating_pool_ancestors: None,
             elevated_mappings: Vec::new(),
             clamped_mappings: Vec::new(),
+            unclamped_mappings: Vec::new(),
         }
     }
 }
@@ -1384,6 +1385,7 @@ pub async fn update_system_settings(
     still_admin(&mut tx, admin, None).await?;
     let mut repointed = None;
     let mut elevation = None;
+    let mut old_gating: Option<Uuid> = None;
     if let Some(ref slug) = req.gating_team_slug {
         // The SAML mappings over a pool before the repoint, read under the exclusive gating lock
         // the writer takes next (re-entrant, and in the writer's own order: after the admin
@@ -1397,6 +1399,15 @@ pub async fn update_system_settings(
                 .fetch_all(&mut *tx)
                 .await?;
         elevation = Some(super::saml_mapping_service::elevation_before(&mut tx, &target).await?);
+        // The gating team before the repoint, under the same lock: if the slug moves, it is an
+        // ordinary team again (unless it is the root, which stays an instance team).
+        old_gating = sqlx::query_scalar!(
+            r#"SELECT t.id AS "id!" FROM kb_teams t
+                 JOIN kb_system_settings s ON s.id = 1 AND t.slug = s.gating_team_slug
+                WHERE t.slug <> 'temper-system'"#,
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
         let written = sqlx::query_scalar!(
             r#"SELECT _admin_gating_team_slug_write($1, NULL) AS "w!""#,
             slug
@@ -1433,12 +1444,15 @@ pub async fn update_system_settings(
         let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, admin.actor(), "web")
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
-        row.elevated_mappings = super::saml_mapping_service::record_elevations(
+        // The old gating team's own mappings are recorded as unclamped below, not as elevated.
+        let unclamping: Vec<Uuid> = old_gating.into_iter().collect();
+        row.elevated_mappings = super::saml_mapping_service::record_elevations_excluding(
             &mut tx,
             elevation,
             emitter.uuid(),
             admin.actor(),
             Some(correlation),
+            &unclamping,
         )
         .await?;
         let gating_id = sqlx::query_scalar!(
@@ -1457,6 +1471,18 @@ pub async fn update_system_settings(
             emitter.uuid(),
             admin.actor(),
             Some(correlation),
+            super::saml_mapping_service::ClampAct::Clamped,
+        )
+        .await?;
+        // Mappings above watcher onto the old gating team confer their own role again from each
+        // member's next login; each is recorded as unclamped and answered.
+        row.unclamped_mappings = super::saml_mapping_service::record_clamps(
+            &mut tx,
+            &unclamping,
+            emitter.uuid(),
+            admin.actor(),
+            Some(correlation),
+            super::saml_mapping_service::ClampAct::Unclamped,
         )
         .await?;
     }

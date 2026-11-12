@@ -38,8 +38,9 @@ class SystemSettings(BaseModel):
     instance_name: Optional[StrictStr] = None
     terms_resource_uri: Optional[StrictStr] = None
     terms_version: Optional[StrictStr] = None
+    unclamped_mappings: Optional[List[SamlGroupMapping]] = Field(default=None, description="On the answer to a settings write that repoints `gating_team_slug`: the SAML group mappings onto the OLD gating team with a role above `watcher`. That team is an ordinary team again, so from each member's next login the reconcile confers each mapping's own role there again. Each is recorded once as `saml_group_mapping_changed`, act `unclamped`. No mapping row changes. Empty on every other answer, and when the old gating team was temper-system.")
     updated: datetime
-    __properties: ClassVar[List[str]] = ["clamped_mappings", "elevated_mappings", "gating_pool_ancestors", "gating_team_slug", "id", "instance_name", "terms_resource_uri", "terms_version", "updated"]
+    __properties: ClassVar[List[str]] = ["clamped_mappings", "elevated_mappings", "gating_pool_ancestors", "gating_team_slug", "id", "instance_name", "terms_resource_uri", "terms_version", "unclamped_mappings", "updated"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -101,6 +102,13 @@ class SystemSettings(BaseModel):
                 if _item_gating_pool_ancestors:
                     _items.append(_item_gating_pool_ancestors.to_dict())
             _dict['gating_pool_ancestors'] = _items
+        # override the default output from pydantic by calling `to_dict()` of each item in unclamped_mappings (list)
+        _items = []
+        if self.unclamped_mappings:
+            for _item_unclamped_mappings in self.unclamped_mappings:
+                if _item_unclamped_mappings:
+                    _items.append(_item_unclamped_mappings.to_dict())
+            _dict['unclamped_mappings'] = _items
         # set to None if gating_pool_ancestors (nullable) is None
         # and model_fields_set contains the field
         if self.gating_pool_ancestors is None and "gating_pool_ancestors" in self.model_fields_set:
@@ -146,6 +154,7 @@ class SystemSettings(BaseModel):
             "instance_name": obj.get("instance_name"),
             "terms_resource_uri": obj.get("terms_resource_uri"),
             "terms_version": obj.get("terms_version"),
+            "unclamped_mappings": [SamlGroupMapping.from_dict(_item) for _item in obj["unclamped_mappings"]] if obj.get("unclamped_mappings") is not None else None,
             "updated": obj.get("updated")
         })
         return _obj

@@ -894,6 +894,134 @@ async fn the_migration_records_existing_instance_mappings_as_clamped(pool: PgPoo
             r.get("confirmed").is_none(),
             "a clamp confirms nothing: {r}"
         );
+        serde_json::from_value::<temper_substrate::payloads::SamlGroupMappingChanged>(r.clone())
+            .expect("the migration's record decodes as the typed payload");
     }
     assert!(records(&pool, "adopted").await.is_empty());
+}
+
+/// The clamp over a team's whole life as the gating team, end to end through the reconcile.
+/// - An IdP owner row held on an ordinary team is LOWERED to watcher at the next login after the team
+///   becomes the gating team.
+/// - A native row on the same team, held by another person whose groups map there too, is never
+///   touched.
+/// - A repoint away records the old gating team's mapping as `unclamped`, answers it in
+///   `unclamped_mappings` and not as elevated, and the next login confers the mapping's role again.
+///
+/// FAILS IF the reconcile clamps only on add (not on an existing row), touches a native row, or a
+/// repoint away leaves the un-clamp unrecorded or reports it as elevated.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_gating_teams_mappings_are_clamped_while_it_is_one_and_unclamped_after(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let host = team(&pool, "pe-host").await;
+    let next = team(&pool, "pe-next").await;
+    // host is next's parent, so host's own mapping would read as elevated when the gating team moves
+    // from host to next, were it not recorded as unclamped instead.
+    link(&pool, host, next).await;
+    map(&pool, f.admin, host, "leads", TeamRole::Owner).await;
+    let lead = profile(&pool, "pe-lead").await;
+    let native = profile(&pool, "pe-native").await;
+    for p in [lead, native] {
+        test_support::approve(&pool, p).await;
+    }
+    let groups = vec!["leads".to_string()];
+    let role = |team: Uuid, who: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT role::text, source::text FROM kb_team_members \
+                  WHERE team_id = $1 AND profile_id = $2",
+            )
+            .bind(team)
+            .bind(who)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let reconcile = |who: Uuid| {
+        let pool = pool.clone();
+        let groups = groups.clone();
+        async move {
+            match reconcile_idp_memberships(&pool, who, IDP, Some(&groups))
+                .await
+                .expect("reconcile")
+            {
+                ReconcileOutcome::Reconciled(c) => c,
+                ReconcileOutcome::SignalMissing => panic!("expected a reconcile"),
+            }
+        }
+    };
+
+    reconcile(lead).await;
+    assert_eq!(role(host, lead).await, ("owner".into(), "idp".into()));
+    let admin_p = test_support::human_principal_for(&pool, f.admin).await;
+    team_service::add_member(
+        &pool,
+        &admin_p,
+        host,
+        &temper_core::types::team::AddMemberRequest {
+            profile_id: native,
+            role: TeamRole::Maintainer,
+        },
+    )
+    .await
+    .expect("a native maintainer");
+
+    let admin_id = f.admin;
+    let repoint = |slug: &'static str| {
+        let pool = pool.clone();
+        async move {
+            let proof = test_support::system_admin_proof_for(&pool, admin_id).await;
+            access_service::update_system_settings(
+                &pool,
+                &proof,
+                &temper_core::types::admin::UpdateSettingsRequest {
+                    gating_team_slug: Some(slug.to_owned()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("repoint")
+        }
+    };
+    let onto = repoint("pe-host").await;
+    let leads = mapping(host, "leads", TeamRole::Owner);
+    assert_eq!(onto.clamped_mappings, vec![leads.clone()]);
+
+    // The existing IdP owner row is lowered; the native maintainer is untouched.
+    let c = reconcile(lead).await;
+    assert_eq!(c.clamped, 1, "{c:?}");
+    assert_eq!(role(host, lead).await, ("watcher".into(), "idp".into()));
+    reconcile(native).await;
+    assert_eq!(
+        role(host, native).await,
+        ("maintainer".into(), "native".into())
+    );
+
+    // Away from host: recorded as unclamped, not answered as elevated, and conferred again.
+    let away = repoint("pe-next").await;
+    assert_eq!(away.unclamped_mappings, vec![leads.clone()]);
+    assert!(
+        !away.elevated_mappings.contains(&leads),
+        "the old gating team's mapping is unclamped, not elevated: {away:?}"
+    );
+    let recs = records(&pool, "unclamped").await;
+    assert_eq!(recs.len(), 1, "{recs:?}");
+    assert_eq!(
+        recs[0],
+        serde_json::json!({
+            "act": "unclamped",
+            "actor": f.admin,
+            "idp_key": IDP,
+            "group_value": "leads",
+            "team_id": host,
+            "role": "owner",
+        })
+    );
+    serde_json::from_value::<temper_substrate::payloads::SamlGroupMappingChanged>(recs[0].clone())
+        .expect("the record decodes as the typed payload");
+    let c = reconcile(lead).await;
+    assert_eq!(c.clamped, 0, "{c:?}");
+    assert_eq!(role(host, lead).await, ("owner".into(), "idp".into()));
 }

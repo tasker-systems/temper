@@ -1882,10 +1882,11 @@ pub enum TeamLifecycleAct {
 }
 
 /// `saml_group_mapping_changed` — a SAML group mapping (`kb_saml_group_mappings`: an IdP's group
-/// value conferring a role on a team) was created or removed by a system admin, or was elevated or
-/// clamped by a structural team act or a migration. `created` and `removed` are written only by
-/// `_admin_saml_group_mapping_write`, in the same statement as the row; `elevated` only by
-/// `_saml_mapping_elevations_record` and `clamped` only by `_saml_mappings_clamped_record`.
+/// value conferring a role on a team) was created or removed by a system admin, or was elevated,
+/// clamped or unclamped by a structural team act or a migration. `created` and `removed` are
+/// written only by `_admin_saml_group_mapping_write`, in the same statement as the row; `elevated`
+/// only by `_saml_mapping_elevations_record`; `clamped` and `unclamped` only by
+/// `_saml_mappings_clamped_record`.
 ///
 /// A mapping confers membership on every person the IdP asserts the group for, at each login's
 /// reconcile, so who made one, and who removed one, is an authority record like a membership
@@ -1940,6 +1941,10 @@ pub enum SamlGroupMappingAct {
     /// rule for each such row (`migration` names it, no person actor), and by a gating repoint for
     /// each such mapping onto the new gating team (`actor` is the repoint's). No row changed.
     Clamped,
+    /// A gating repoint moved the gating team away from this mapping's team, which is an ordinary
+    /// team again: the reconcile confers the mapping's own role there from each member's next login,
+    /// where it conferred `watcher`. `actor` is the repoint's. No row changed.
+    Unclamped,
 }
 
 /// `team_public_within_changed` — a `public_within` row was opened, closed, lapsed or cascade-deleted.

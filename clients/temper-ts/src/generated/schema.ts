@@ -12163,6 +12163,15 @@ export interface components {
             instance_name?: string | null;
             terms_resource_uri?: string | null;
             terms_version?: string | null;
+            /**
+             * @description On the answer to a settings write that repoints `gating_team_slug`: the SAML group mappings
+             *     onto the OLD gating team with a role above `watcher`. That team is an ordinary team again,
+             *     so from each member's next login the reconcile confers each mapping's own role there again.
+             *     Each is recorded once as `saml_group_mapping_changed`, act `unclamped`. No mapping row
+             *     changes.
+             *     Empty on every other answer, and when the old gating team was temper-system.
+             */
+            unclamped_mappings?: components["schemas"]["SamlGroupMapping"][];
             /** Format: date-time */
             updated: string;
         };

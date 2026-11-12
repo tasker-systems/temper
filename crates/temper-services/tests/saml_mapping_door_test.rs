@@ -585,7 +585,17 @@ async fn the_migration_adopts_existing_rows_above_the_ceiling(pool: PgPool) {
         let err = saml_mapping_service::create(&pool, &admin, &req(team, group, role, false))
             .await
             .unwrap_err();
-        assert!(matches!(&err, ApiError::BadRequest(_)), "{err:?}");
+        // An instance team refuses every role above watcher outright; an ordinary team's owner
+        // mapping asks for confirmation.
+        let why = if team == f.eng {
+            "confirmation required"
+        } else {
+            "at most `watcher`"
+        };
+        assert!(
+            matches!(&err, ApiError::BadRequest(m) if m.contains(why)),
+            "{err:?}"
+        );
     }
     assert_eq!(
         records(&pool).await.len(),

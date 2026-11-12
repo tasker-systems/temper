@@ -42,8 +42,10 @@ pub struct ReconcileCounts {
     /// wins over the last-owner guard). The event carries `left_ownerless`; a system admin
     /// repairs the team.
     pub left_ownerless: usize,
-    /// Teams where a mapping asked for more than `watcher` on temper-system or the gating team,
-    /// and the reconcile conferred `watcher` (migration `20261126000010`).
+    /// Teams (temper-system or the gating team) whose asserted mappings asked for more than
+    /// `watcher`, so the reconcile's desired role there was clamped to `watcher` (migration
+    /// `20261126000010`). Counted on every login the clamp applies, whether or not a row changed:
+    /// a team the profile holds natively, or already holds at `watcher`, still counts.
     pub clamped: usize,
 }
 

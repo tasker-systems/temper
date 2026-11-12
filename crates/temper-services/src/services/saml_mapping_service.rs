@@ -287,16 +287,30 @@ pub(crate) async fn record_elevations(
     actor: temper_core::types::ids::ProfileId,
     correlation: Option<Uuid>,
 ) -> ApiResult<Vec<SamlGroupMapping>> {
+    record_elevations_excluding(conn, before, emitter, actor, correlation, &[]).await
+}
+
+/// [`record_elevations`], skipping mappings onto `exclude`: a gating repoint's old gating team,
+/// whose mappings it records as unclamped instead.
+pub(crate) async fn record_elevations_excluding(
+    conn: &mut sqlx::PgConnection,
+    before: Option<ElevationBefore>,
+    emitter: Uuid,
+    actor: temper_core::types::ids::ProfileId,
+    correlation: Option<Uuid>,
+    exclude: &[Uuid],
+) -> ApiResult<Vec<SamlGroupMapping>> {
     let Some(before) = before else {
         return Ok(Vec::new());
     };
     let raw = sqlx::query_scalar!(
-        r#"SELECT _saml_mapping_elevations_record($1, $2, $3, $4, $5) AS "e!""#,
+        r#"SELECT _saml_mapping_elevations_record($1, $2, $3, $4, $5, $6) AS "e!""#,
         emitter,
         *actor,
         &before.seeds,
         before.before,
         correlation,
+        exclude,
     )
     .fetch_one(&mut *conn)
     .await?;
@@ -304,23 +318,42 @@ pub(crate) async fn record_elevations(
         .map_err(|e| ApiError::Internal(format!("_saml_mapping_elevations_record: {e}")))
 }
 
-/// After a gating repoint, on its transaction: each mapping above `watcher` onto the new gating team
-/// gets one `saml_group_mapping_changed` event, act `clamped`, naming `actor`
-/// (`_saml_mappings_clamped_record`): the IdP reconcile confers `watcher` there from now on. Answered,
-/// ordered by idp_key, group and team.
+/// Which instance-team change a gating repoint records for a team's mappings above `watcher`.
+#[derive(Clone, Copy)]
+pub(crate) enum ClampAct {
+    /// The team is now the gating team: the reconcile confers `watcher` there.
+    Clamped,
+    /// The team was the gating team and is an ordinary team again: the reconcile confers each
+    /// mapping's own role there from the member's next login.
+    Unclamped,
+}
+
+/// After a gating repoint, on its transaction: each mapping above `watcher` onto `teams` gets one
+/// `saml_group_mapping_changed` event, act `clamped` (the new gating team) or `unclamped` (the old
+/// one), naming `actor` (`_saml_mappings_clamped_record`). Answered, ordered by idp_key, group and
+/// team.
 pub(crate) async fn record_clamps(
     conn: &mut sqlx::PgConnection,
     teams: &[Uuid],
     emitter: Uuid,
     actor: temper_core::types::ids::ProfileId,
     correlation: Option<Uuid>,
+    act: ClampAct,
 ) -> ApiResult<Vec<SamlGroupMapping>> {
+    if teams.is_empty() {
+        return Ok(Vec::new());
+    }
+    let act = match act {
+        ClampAct::Clamped => "clamped",
+        ClampAct::Unclamped => "unclamped",
+    };
     let raw = sqlx::query_scalar!(
-        r#"SELECT _saml_mappings_clamped_record($1, $2, $3, NULL, $4) AS "c!""#,
+        r#"SELECT _saml_mappings_clamped_record($1, $2, $3, NULL, $4, $5) AS "c!""#,
         emitter,
         *actor,
         teams,
         correlation,
+        act,
     )
     .fetch_one(&mut *conn)
     .await?;

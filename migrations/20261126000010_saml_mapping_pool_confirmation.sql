@@ -10,7 +10,9 @@
 -- says, so a row written before this rule, by #1350's door with confirmation, or by SQL, is bound
 -- too. A higher role on either team is a system admin's native act (the gating roster is admin-only,
 -- R11). A gating repoint records each authoring mapping onto the new gating team as `clamped`
--- (`_saml_mappings_clamped_record`), and Section 4 records every existing one.
+-- (`_saml_mappings_clamped_record`), and each one onto the old gating team as `unclamped`: that team
+-- is an ordinary one again, so its mappings confer their role again from each member's next login.
+-- Section 4 records every existing clamped one.
 --
 -- `confirmed` (20261125000010) is a key of the event payload, not a column: an admin's
 -- acknowledgement of a mapping's reach, read by no door and no reconcile, and saying nothing about any
@@ -46,10 +48,11 @@
 --     set_auto_join, restore, and creating an auto-join team under a parent. Restore never elevates:
 --     it flips is_active only, and dead teams already count. No act asks for confirmation; all of
 --     them that can put a pool beneath a team are already a system admin's.
---   * the payload schema re-registered with the acts `elevated` and `clamped` (the committed fixture
+--   * the payload schema re-registered with the acts `elevated`, `clamped` and `unclamped` (the
+--     committed fixture
 --     saml_group_mapping_changed.v1.schema.json; payload_schema.rs pins the pair).
---   * `_saml_mappings_clamped_record(emitter, actor, teams, migration, correlation)`: one `clamped`
---     event per mapping above watcher onto one of `teams`.
+--   * `_saml_mappings_clamped_record(emitter, actor, teams, migration, correlation, act)`: one
+--     `clamped` (or `unclamped`) event per mapping above watcher onto one of `teams`.
 --   * `_admin_saml_group_mapping_write`, body-only CREATE OR REPLACE (signature as before; outcomes
 --     gain `instance_team_watcher_only` and `subtree_changed`, needs gains `pool_beneath`, and
 --     `instance_team` is no longer answered). An authoring role onto temper-system or the gating
@@ -162,7 +165,8 @@ CREATE FUNCTION _saml_mapping_elevations_record(
     p_actor       uuid,
     p_seeds       uuid[],
     p_before      jsonb,
-    p_correlation uuid DEFAULT NULL
+    p_correlation uuid   DEFAULT NULL,
+    p_exclude     uuid[] DEFAULT '{}'
 ) RETURNS jsonb
 LANGUAGE plpgsql
 SET search_path = public, pg_temp
@@ -174,6 +178,9 @@ BEGIN
     FOR r IN
         SELECT a.m FROM jsonb_array_elements(_saml_mappings_over_pool(p_seeds)) AS a(m)
          WHERE NOT (coalesce(p_before, '[]'::jsonb) @> jsonb_build_array(a.m))
+           -- A team the act recorded otherwise (a repoint's old gating team, recorded as
+           -- unclamped) is not answered as elevated too.
+           AND NOT ((a.m->>'team_id')::uuid = ANY(coalesce(p_exclude, '{}')))
     LOOP
         PERFORM _event_append(
             'saml_group_mapping_changed', p_emitter, NULL, NULL,
@@ -195,18 +202,20 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION _saml_mapping_elevations_record(uuid, uuid, uuid[], jsonb, uuid) IS
+COMMENT ON FUNCTION _saml_mapping_elevations_record(uuid, uuid, uuid[], jsonb, uuid, uuid[]) IS
 $c$For each authoring-role SAML mapping at or above p_seeds now over a pool (_saml_mappings_over_pool)
 that p_before (the same read, with the same seeds, taken by the act before its write) did not hold, append one
 saml_group_mapping_changed event, act elevated, naming p_actor; answer the array of them. Call it on
-the structural act's own transaction, after the write. It changes no row and NEVER AUTHORIZES.$c$;
+the structural act's own transaction, after the write. Mappings onto p_exclude are skipped. It changes
+no row and NEVER AUTHORIZES.$c$;
 
 CREATE FUNCTION _saml_mappings_clamped_record(
     p_emitter     uuid,
     p_actor       uuid,
     p_teams       uuid[],
     p_migration   bigint DEFAULT NULL,
-    p_correlation uuid   DEFAULT NULL
+    p_correlation uuid   DEFAULT NULL,
+    p_act         text   DEFAULT 'clamped'
 ) RETURNS jsonb
 LANGUAGE plpgsql
 SET search_path = public, pg_temp
@@ -215,6 +224,9 @@ DECLARE
     v_out jsonb := '[]'::jsonb;
     r     record;
 BEGIN
+    IF p_act NOT IN ('clamped', 'unclamped') THEN
+        RAISE EXCEPTION '_saml_mappings_clamped_record: p_act must be clamped or unclamped, got %', p_act;
+    END IF;
     FOR r IN
         SELECT m.idp_key, m.group_value, m.team_id, m.role
           FROM kb_saml_group_mappings m
@@ -224,7 +236,7 @@ BEGIN
         PERFORM _event_append(
             'saml_group_mapping_changed', p_emitter, NULL, NULL,
             jsonb_strip_nulls(jsonb_build_object(
-                'act',         'clamped',
+                'act',         p_act,
                 'actor',       p_actor,
                 'idp_key',     r.idp_key,
                 'group_value', r.group_value,
@@ -242,11 +254,14 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION _saml_mappings_clamped_record(uuid, uuid, uuid[], bigint, uuid) IS
-$c$For each SAML mapping onto one of p_teams (temper-system or the gating team) with a role above
-watcher, append one saml_group_mapping_changed event, act clamped: the IdP reconcile confers watcher
-there, whatever the row says. Answers the array of them. Called by a gating repoint for the new
-gating team, and by 20261126000010 for every such row. It changes no row and NEVER AUTHORIZES.$c$;
+COMMENT ON FUNCTION _saml_mappings_clamped_record(uuid, uuid, uuid[], bigint, uuid, text) IS
+$c$For each SAML mapping onto one of p_teams with a role above watcher, append one
+saml_group_mapping_changed event, act p_act: clamped when the teams are now temper-system or the
+gating team (the IdP reconcile confers watcher there, whatever the row says), unclamped when a
+repoint has just made the team an ordinary one again (the reconcile confers the row's role there
+from the member's next login). Answers the array of them. Called by a gating repoint (clamped for the
+new gating team, unclamped for the old one) and by 20261126000010 for every existing clamped row. It
+changes no row and NEVER AUTHORIZES.$c$;
 
 -- Section 2. The payload schema, re-registered with the act `elevated`. The literal is the committed
 -- fixture crates/temper-substrate/tests/fixtures/payloads/saml_group_mapping_changed.v1.schema.json;
@@ -257,7 +272,7 @@ UPDATE kb_event_types
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "SamlGroupMappingChanged",
-  "description": "`saml_group_mapping_changed` — a SAML group mapping (`kb_saml_group_mappings`: an IdP's group\nvalue conferring a role on a team) was created or removed by a system admin, or was elevated or\nclamped by a structural team act or a migration. `created` and `removed` are written only by\n`_admin_saml_group_mapping_write`, in the same statement as the row; `elevated` only by\n`_saml_mapping_elevations_record` and `clamped` only by `_saml_mappings_clamped_record`.\n\nA mapping confers membership on every person the IdP asserts the group for, at each login's\nreconcile, so who made one, and who removed one, is an authority record like a membership\nchange. The team is the event's `subject` reference. Removing a mapping deletes no membership:\nthe next reconcile of each member decides those.",
+  "description": "`saml_group_mapping_changed` — a SAML group mapping (`kb_saml_group_mappings`: an IdP's group\nvalue conferring a role on a team) was created or removed by a system admin, or was elevated,\nclamped or unclamped by a structural team act or a migration. `created` and `removed` are\nwritten only by `_admin_saml_group_mapping_write`, in the same statement as the row; `elevated`\nonly by `_saml_mapping_elevations_record`; `clamped` and `unclamped` only by\n`_saml_mappings_clamped_record`.\n\nA mapping confers membership on every person the IdP asserts the group for, at each login's\nreconcile, so who made one, and who removed one, is an authority record like a membership\nchange. The team is the event's `subject` reference. Removing a mapping deletes no membership:\nthe next reconcile of each member decides those.",
   "type": "object",
   "properties": {
     "act": {
@@ -342,6 +357,11 @@ UPDATE kb_event_types
           "description": "A mapping that asks for more than `watcher` on temper-system or the gating team, which an\nIdP group never confers there: the reconcile confers `watcher` instead, and a higher role on\neither team is a system admin's native act. Written by the migration that introduced the\nrule for each such row (`migration` names it, no person actor), and by a gating repoint for\neach such mapping onto the new gating team (`actor` is the repoint's). No row changed.",
           "type": "string",
           "const": "clamped"
+        },
+        {
+          "description": "A gating repoint moved the gating team away from this mapping's team, which is an ordinary\nteam again: the reconcile confers the mapping's own role there from each member's next login,\nwhere it conferred `watcher`. `actor` is the repoint's. No row changed.",
+          "type": "string",
+          "const": "unclamped"
         }
       ]
     },
@@ -544,11 +564,21 @@ DECLARE
     v_emitter uuid;
     v_teams   uuid[];
     v_out     jsonb;
+    v_held    bigint;
 BEGIN
     v_teams := ARRAY(SELECT t.id FROM kb_teams t
                       WHERE t.slug = 'temper-system'
                          OR t.slug = (SELECT s.gating_team_slug FROM kb_system_settings s
                                        WHERE s.id = 1));
+    -- The memberships the clamp lowers only at each member's next login (Pete, 2026-11-12), counted
+    -- so an operator can see how many remain above watcher until then. Nothing is changed.
+    SELECT count(*) INTO v_held FROM kb_team_members
+     WHERE team_id = ANY(v_teams) AND source = 'idp' AND role <> 'watcher';
+    IF v_held > 0 THEN
+        RAISE NOTICE '% identity-provider membership(s) above watcher on temper-system or the gating '
+                     'team keep their role until each member''s next login, when the reconcile lowers '
+                     'them to watcher', v_held;
+    END IF;
     IF NOT EXISTS (SELECT 1 FROM kb_saml_group_mappings
                     WHERE team_id = ANY(v_teams) AND role <> 'watcher') THEN
         RETURN;
@@ -569,7 +599,7 @@ SELECT declare_migration(
     'additive',
     'Adds _teams_over_pool, _team_subtree_holds_pool, _saml_mappings_over_pool, '
     '_saml_mapping_elevations_record and _saml_mappings_clamped_record; re-registers the '
-    'saml_group_mapping_changed payload schema with the acts elevated and clamped; records each '
+    'saml_group_mapping_changed payload schema with the acts elevated, clamped and unclamped; records each '
     'existing mapping above watcher onto temper-system or the gating team as clamped (no row '
     'changes); and body-only CREATE OR REPLACE (signature unchanged) of '
     '_admin_saml_group_mapping_write: an authoring role onto an instance team is refused, an '

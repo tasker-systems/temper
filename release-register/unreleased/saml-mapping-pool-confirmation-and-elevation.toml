@@ -44,13 +44,17 @@ instance reads.
   answers it as `TeamRow.elevated_mappings` (creating an auto-join team under a parent). Each
   field defaults to empty. No act gains a confirmation; all of them that can add a pool are
   already a system admin's.
-- Additive (schema): saml_group_mapping_changed gains the acts `elevated` and `clamped`
+- Additive (schema): saml_group_mapping_changed gains the acts `elevated`, `clamped` and
+  `unclamped`
   (migration 20261126000010). An act writes one per elevated mapping, naming its actor, with the act's
   correlation id where it has one. The payload schema is re-registered with the new act.
 - Additive (http, clients): a settings write that repoints gating_team_slug answers
   `SystemSettings.clamped_mappings`, the mappings above watcher onto the new gating team, which
   now confer watcher. Each is recorded once as `saml_group_mapping_changed`, act `clamped`,
-  naming the actor. A mapping onto the new gating team is clamped, never elevated.
+  naming the actor. A mapping onto the new gating team is clamped, never elevated. It also
+  answers `SystemSettings.unclamped_mappings`: the mappings above watcher onto the OLD gating
+  team, which is an ordinary team again, so the reconcile confers their own role there from
+  each member's next login. Each is recorded once, act `unclamped`, and not as elevated.
 - Existing rows: none is changed. Each mapping above watcher onto temper-system or the gating
   team is recorded once as `clamped` by migration 20261126000010 (no person actor, a NOTICE
   lists them). No row is recorded as confirmed: `confirmed` is an admin's acknowledgement of a

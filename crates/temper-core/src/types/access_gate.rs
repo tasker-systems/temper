@@ -132,6 +132,14 @@ pub struct SystemSettings {
     /// answer.
     #[serde(default)]
     pub clamped_mappings: Vec<crate::types::saml_mapping::SamlGroupMapping>,
+    /// On the answer to a settings write that repoints `gating_team_slug`: the SAML group mappings
+    /// onto the OLD gating team with a role above `watcher`. That team is an ordinary team again,
+    /// so from each member's next login the reconcile confers each mapping's own role there again.
+    /// Each is recorded once as `saml_group_mapping_changed`, act `unclamped`. No mapping row
+    /// changes.
+    /// Empty on every other answer, and when the old gating team was temper-system.
+    #[serde(default)]
+    pub unclamped_mappings: Vec<crate::types::saml_mapping::SamlGroupMapping>,
 }
 
 /// Public-facing system settings (no gating_team_slug — prevents info leakage).
