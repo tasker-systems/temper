@@ -16,7 +16,7 @@ require 'time'
 module Temper::Generated
   # Response body for the event-cursor endpoint: the most recent event id recorded for a context, or `None` if the context has no events.
   class EventCursorResponse < ApiModelBase
-    # The newest `kb_events.id` on the context, by `occurred_at`, among the events the context's change feed would serve the reader. Never an admin act's, a connection's traffic, region bookkeeping or an edge the reader cannot see. `None` when none of the newest events qualifies.
+    # The newest `kb_events.id` on the context, by `occurred_at`, among the events the context's change feed would serve the reader. Never an admin act's, a connection's traffic, region bookkeeping or an edge the reader cannot see. `None` when none of the newest events qualifies.  A hint that can miss a change: `occurred_at` is when the acting transaction began, so a long transaction that commits after a shorter, later-starting one never moves the cursor. The change feed is commit-ordered and does not have this race.
     attr_accessor :latest_event_id
 
     # Attribute mapping from ruby-style variable name to JSON key.

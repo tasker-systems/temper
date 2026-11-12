@@ -31,6 +31,10 @@ pub struct EventCursorResponse {
     /// change feed would serve the reader. Never an admin act's, a connection's traffic, region
     /// bookkeeping or an edge the reader cannot see. `None` when none of the newest events
     /// qualifies.
+    ///
+    /// A hint that can miss a change: `occurred_at` is when the acting transaction began, so a
+    /// long transaction that commits after a shorter, later-starting one never moves the cursor.
+    /// The change feed is commit-ordered and does not have this race.
     pub latest_event_id: Option<Uuid>,
 }
 
