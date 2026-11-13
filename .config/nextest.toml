@@ -102,3 +102,26 @@ slow-timeout = { period = "60s", terminate-after = 5 }
 [[profile.default.overrides]]
 filter = 'binary(=data_artifact_ask_walk_e2e)'
 slow-timeout = { period = "60s", terminate-after = 5 }
+
+# ---------------------------------------------------------------------------
+# Test groups: tests that must not run concurrently with each other.
+#
+# `embed-heavy-segmented` holds the e2e tests whose CLI create embeds a body past
+# `SEGMENT_BUDGET_BYTES` (~320–640 KiB) on the client, so ONNX inference dominates their run time.
+# CI sets `TEMPER_ONNX_INTRA_THREADS=0`, so each one's inference asks for every core of the runner.
+# Two of them at once do not finish sooner, they just stretch each other. MEASURED locally, same
+# setting: `byte_exact_roundtrip` 17.8s alone, `segmented_stdin_create_reads_back_byte_exact_through_show`
+# 21.5s alone, both ~32.5s run together. On CI, beside the rest of the shard, that stretch put both
+# past the 120s default on both tries (main push run 43334202435, Integration & E2E 1/3, finishing at
+# 717 and 722 of 2309). `max-threads = 1` runs them one after another. Time spent waiting for the
+# group is not counted against a test's slow-timeout — the clock starts when the test does.
+#
+# This is not a timeout loosening: every test here keeps the bound it had. Keyed to the BINARY for the
+# reason the compile_fail entry gives — a renamed test stays in the group. A new test that embeds a
+# body past the segment budget through the CLI belongs in this filter.
+[test-groups]
+embed-heavy-segmented = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'binary(=byte_exact_roundtrip_test) | binary(=cli_verbatim_readback_e2e) | binary(=streaming_ingest_test)'
+test-group = 'embed-heavy-segmented'
