@@ -386,6 +386,9 @@ fn section_advice(section: ResourceSection) -> &'static str {
         ResourceSection::EmbeddingStatus => {
             "Embedding readiness rides `show` as the `embedding-status` section"
         }
+        ResourceSection::ByteBlocks => {
+            "A body's block boundaries ride `show` as the `byte-blocks` section"
+        }
         ResourceSection::OpenMeta => "",
     }
 }

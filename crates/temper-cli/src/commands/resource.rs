@@ -1843,8 +1843,8 @@ pub(crate) fn build_show_document(
 /// See `internal/vault-projection-cache-design.md`.
 ///
 /// **Sections decide what is fetched, not just what is printed.** `--without body` skips the
-/// `GET /content` round-trip entirely, which is the whole reason the old `--meta-only` was
-/// cheap; it is the same saving under a name that composes. `--without open-meta` is a
+/// body read entirely (the `body` section of the one view call), which is the whole reason the
+/// old `--meta-only` was cheap; it is the same saving under a name that composes. `--without open-meta` is a
 /// render-time drop rather than a saving, because `GET /api/resources/{id}` carries both tiers
 /// unconditionally — one call either way, so there is nothing to skip.
 pub fn show(_config: &Config, params: ShowParams<'_>) -> Result<()> {
@@ -1858,18 +1858,18 @@ pub fn show(_config: &Config, params: ShowParams<'_>) -> Result<()> {
     let want_body = sections.contains(ResourceSection::Body);
 
     // [added — 2026-09-24, found in review] The requested sections RIDE the view call: `--with embedding-status`
-    // used to parse, print in help, and then silently never be requested. `body` is
-    // excluded — this command fetches content through `GET /content` below, and the
-    // view call is not where it comes from — and so is `edges`, which has its own
-    // request and output block here; the `?sections=` parameter is additive onto the
-    // open-meta baseline, so what remains lands on the view this command already
-    // renders.
+    // used to parse, print in help, and then silently never be requested. `edges` is
+    // excluded — it has its own request and output block here; the `?sections=` parameter
+    // is additive onto the open-meta baseline, so what remains lands on the view this
+    // command already renders. `body` rides it too (it used to be a second `GET /content`
+    // request): the view's `bytes_merkle` and `byte_blocks` are then computed in the statement
+    // that read the body, so the printed body and its byte identity describe the same bytes.
     let metadata_sections = SectionSet::from_iter(
         ResourceSection::ALL
             .iter()
             .copied()
             .filter(|s| sections.contains(*s))
-            .filter(|s| !matches!(s, ResourceSection::Body | ResourceSection::Edges)),
+            .filter(|s| !matches!(s, ResourceSection::Edges)),
     );
 
     let (mut metadata, body) = crate::actions::runtime::with_client(move |client| {
@@ -1877,19 +1877,15 @@ pub fn show(_config: &Config, params: ShowParams<'_>) -> Result<()> {
             // `get` returns a `ResourceView` — the same shape a `list` row is, with the
             // `open-meta` section filled. The tiers are what make a body-less `show` a
             // strict subset of the full one.
-            let detail = client
+            let mut detail = client
                 .resources()
                 .get(uuid::Uuid::from(id), Some(&metadata_sections))
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)?;
 
+            // The body is printed as its own part, never inside the metadata document.
             let body = if want_body {
-                let resp = client
-                    .resources()
-                    .content(uuid::Uuid::from(id))
-                    .await
-                    .map_err(crate::actions::runtime::client_err_to_temper)?;
-                Some(resp.markdown)
+                Some(detail.content.take().unwrap_or_default())
             } else {
                 None
             };
@@ -3969,6 +3965,8 @@ mod action_result_tests {
             ingest_state: Some(temper_core::types::resource::IngestState::Complete),
             ingest_ended: None,
             body_storage: Some(temper_core::types::resource::BodyStorage::Derived),
+            bytes_merkle: None,
+            byte_blocks: None,
             managed_meta: ManagedMeta::default(),
             open_meta: None,
             content: None,
@@ -4362,6 +4360,8 @@ mod resource_list_render_tests {
             ingest_state: Some(temper_core::types::resource::IngestState::Complete),
             ingest_ended: None,
             body_storage: Some(temper_core::types::resource::BodyStorage::Derived),
+            bytes_merkle: None,
+            byte_blocks: None,
             managed_meta: ManagedMeta::default(),
             open_meta: None,
             content: None,

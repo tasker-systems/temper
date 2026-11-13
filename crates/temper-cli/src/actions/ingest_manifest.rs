@@ -194,6 +194,8 @@ mod tests {
         SegmentInfo {
             seq,
             content_hash: hash.to_string(),
+            bytes_sha256: None,
+            bytes_len: None,
         }
     }
 

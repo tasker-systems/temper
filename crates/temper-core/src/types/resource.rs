@@ -27,6 +27,11 @@ use crate::types::resource_view::ResourceView;
 #[serde(rename_all = "snake_case")]
 pub enum BodyStorage {
     /// Every live block carries its raw source bytes; the body reads back byte-for-byte.
+    ///
+    /// Byte-exact on two paths: `markdown` from `GET /api/resources/{id}/content`, and `content`
+    /// in `temper --format json resource show` (with or without `--fields content`), which is
+    /// that `markdown` unchanged. The `toon` output of `resource show` is not: it prints the
+    /// frontmatter, then `---\n`, then the body plus one extra trailing `\n`.
     Verbatim,
     /// The body is reconstructed from chunks (lossy) — a pre-PR-3 resource, or one with only partial
     /// verbatim coverage.
@@ -582,6 +587,8 @@ pub struct ContentChunk {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ContentResponse {
     pub resource_id: ResourceId,
+    /// The body. For a `verbatim` resource ([`BodyStorage::Verbatim`]) these are the stored bytes
+    /// unchanged; for a `derived` one, a reconstruction from chunks.
     pub markdown: String,
     /// Typed server-side managed_meta from kb_resource_manifests — the closed
     /// Property vocabulary. Only the named `temper-*` keys are represented;
@@ -831,6 +838,8 @@ mod list_paging_tests {
             ingest_state: Some(IngestState::Complete),
             ingest_ended: None,
             body_storage: Some(BodyStorage::Derived),
+            bytes_merkle: None,
+            byte_blocks: None,
             managed_meta: ManagedMeta::default(),
             open_meta: None,
             content: None,

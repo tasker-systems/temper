@@ -19,6 +19,7 @@ module Temper::Generated
     # Typed server-side managed_meta from kb_resource_manifests — the closed Property vocabulary. Only the named `temper-*` keys are represented; there is no catch-all. Used by CLI sync pull to reconstruct complete frontmatter (identity/type/home come from the resource row, not here).
     attr_accessor :managed_meta
 
+    # The body. For a `verbatim` resource ([`BodyStorage::Verbatim`]) these are the stored bytes unchanged; for a `derived` one, a reconstruction from chunks.
     attr_accessor :markdown
 
     attr_accessor :open_meta

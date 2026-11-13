@@ -22,6 +22,12 @@ module Temper::Generated
     # Do the bytes read back exactly, or only approximately? `Option` purely for version skew, as with `ingest_state`.
     attr_accessor :body_storage
 
+    # The body's block boundaries and per-block byte hashes, in `seq` order: what a client needs to check a whole cached body against [`Self::bytes_merkle`]. The `byte-blocks` section.  Absent when the section was not requested, and absent when it was but the body is not wholly verbatim (exactly when `bytes_merkle` is absent): a `derived` body has no stored bytes to cut it by. It is served under the same visibility gate as `content`, and computed in the same statement as `bytes_merkle` (and as `content`, when the body was requested too), so the boundaries always describe the bytes beside them.
+    attr_accessor :byte_blocks
+
+    # Byte identity of the body: proves a cached copy is Temper's bytes without downloading the body again. Bare lowercase hex.  It is the sha256 of the live blocks' `bytes_sha256` values (each the bare lowercase hex sha256 of that block's raw bytes), concatenated in `seq` order with no separator. Get the per-block values and the block boundaries from the `byte-blocks` section of this same read ([`Self::byte_blocks`]). To verify a whole cached body, cut it at those byte lengths in `seq` order, sha256 each piece, concatenate the hex digests, and sha256 that string. To verify one block, compare its sha256 with its `bytes_sha256`. The concatenation of the pieces is exactly the body `content` serves.  Present only when every live block carries its raw bytes, which is when `body_storage` is `verbatim`. It is absent on a `derived` body, which reads back as a reconstruction no stored hash describes, and absent from a server that predates the field. Unlike `body_hash` it moves on every byte change, a heading-only edit included, and stays put across a re-block that keeps the bytes and their block boundaries.  Beside `content` or `byte_blocks` (a read that asked for the `body` or `byte-blocks` section) it is computed in the same statement as them, so all three always describe the same bytes. The rest of the view (`body_storage`, `body_hash`, `updated`) comes from the identity read just before, so a write landing between the two can leave those describing the earlier body: `body_storage` may then read `verbatim` beside an absent `bytes_merkle`, or the reverse. Trust `bytes_merkle` and `byte_blocks` for the bytes beside them. Without either section it is read with the rest of this view, in one statement; a write after the read can move it, exactly as it moves `updated`.
+    attr_accessor :bytes_merkle
+
     # When the caller last changed this resource themselves. Present only on a row read with `changed_by=@me`, the same time `sort=changed_by_me` orders by; absent on every other read.  Not `updated`, which can be a teammate's later change: this counts only the caller's own authored events on the resource, so it never reports another principal's activity.
     attr_accessor :changed_by_me_at
 
@@ -120,6 +126,8 @@ module Temper::Generated
       {
         :'body_hash' => :'body_hash',
         :'body_storage' => :'body_storage',
+        :'byte_blocks' => :'byte_blocks',
+        :'bytes_merkle' => :'bytes_merkle',
         :'changed_by_me_at' => :'changed_by_me_at',
         :'cogmap_id' => :'cogmap_id',
         :'cogmap_name' => :'cogmap_name',
@@ -164,6 +172,8 @@ module Temper::Generated
       {
         :'body_hash' => :'String',
         :'body_storage' => :'BodyStorage',
+        :'byte_blocks' => :'Array<ByteBlock>',
+        :'bytes_merkle' => :'String',
         :'changed_by_me_at' => :'Time',
         :'cogmap_id' => :'String',
         :'cogmap_name' => :'String',
@@ -198,6 +208,8 @@ module Temper::Generated
       Set.new([
         :'body_hash',
         :'body_storage',
+        :'byte_blocks',
+        :'bytes_merkle',
         :'changed_by_me_at',
         :'cogmap_id',
         :'cogmap_name',
@@ -237,6 +249,16 @@ module Temper::Generated
 
       if attributes.key?(:'body_storage')
         self.body_storage = attributes[:'body_storage']
+      end
+
+      if attributes.key?(:'byte_blocks')
+        if (value = attributes[:'byte_blocks']).is_a?(Array)
+          self.byte_blocks = value
+        end
+      end
+
+      if attributes.key?(:'bytes_merkle')
+        self.bytes_merkle = attributes[:'bytes_merkle']
       end
 
       if attributes.key?(:'changed_by_me_at')
@@ -553,6 +575,8 @@ module Temper::Generated
       self.class == o.class &&
           body_hash == o.body_hash &&
           body_storage == o.body_storage &&
+          byte_blocks == o.byte_blocks &&
+          bytes_merkle == o.bytes_merkle &&
           changed_by_me_at == o.changed_by_me_at &&
           cogmap_id == o.cogmap_id &&
           cogmap_name == o.cogmap_name &&
@@ -590,7 +614,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [body_hash, body_storage, changed_by_me_at, cogmap_id, cogmap_name, content, context_name, context_owner_ref, context_ref, context_slug, created, doc_type_name, embedding_status, id, ingest_ended, ingest_state, is_active, kb_context_id, managed_meta, open_meta, origin_uri, originator_profile_id, owner_handle, owner_profile_id, reach, ref, title, updated].hash
+      [body_hash, body_storage, byte_blocks, bytes_merkle, changed_by_me_at, cogmap_id, cogmap_name, content, context_name, context_owner_ref, context_ref, context_slug, created, doc_type_name, embedding_status, id, ingest_ended, ingest_state, is_active, kb_context_id, managed_meta, open_meta, origin_uri, originator_profile_id, owner_handle, owner_profile_id, reach, ref, title, updated].hash
     end
 
     # Builds the object from hash

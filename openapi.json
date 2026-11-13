@@ -7926,7 +7926,7 @@
           "Events"
         ],
         "summary": "Read a context's changes after a position",
-        "description": "A context's changes after a position, in commit order. Each entry is a pointer naming the kind of change, the thing changed (`subject`), the acting entity, the time and the act. No entry carries content: read the subject through its own endpoint, under your own standing. A subject you can no longer read is still pointed at, and its own read refuses it. A change to one of a resource's content blocks names the resource as its `subject` and the block as `block`.\n\nOmit `after` to start: the answer has no entries and a `through` at the present, never a tail of history. Hand `through` back as `after` to resume. A position is opaque and is valid only for the context it was issued for. Every answer says how far it looked (`through`) and whether more exists (`has_more`).\n\n**This is a change hint, not a cache-invalidation guarantee.** The feed never announces an admin act, such as an erasure or a scrub. A consumer that mirrors content must periodically re-read the subjects it holds and drop whatever is refused: that re-read is how erased or scrubbed content leaves a mirror.\n\n**The consumer contract.**\n- Record `through` *before* reading the bodies an answer points at, never after. A change that commits between the bodies read and a later `through` is behind the recorded position, and is lost. A change seen again after an early `through` costs one redundant re-read.\n- An edge entry names the edge (`kb_edges` and the edge id), not its endpoints. To learn which resources it touches, read the edge.\n- An edge appears in the feed of its own home context, not in its endpoints' contexts. An edge homed elsewhere that touches a resource homed here is not in this feed.\n- `resource_departed` is a deletion or a move, and does not say which. Treat it as \"re-resolve this resource\": it may still exist in another context you can read.\n- A scrub of a facet or other property is not announced. Re-read `GET /api/resources/{id}/facets` for the resources you hold on the same periodic cadence, not only on a feed hint.\n- `GET /api/resources?ids=` (up to 256 ids) is the cheap periodic sweep: it returns `updated`, `body_hash` and `body_storage` for exactly the ids you can still read, and leaves out the rest, without downloading a body.",
+        "description": "A context's changes after a position, in commit order. Each entry is a pointer naming the kind of change, the thing changed (`subject`), the acting entity, the time and the act. No entry carries content: read the subject through its own endpoint, under your own standing. A subject you can no longer read is still pointed at, and its own read refuses it. A change to one of a resource's content blocks names the resource as its `subject` and the block as `block`.\n\nOmit `after` to start: the answer has no entries and a `through` at the present, never a tail of history. Hand `through` back as `after` to resume. A position is opaque and is valid only for the context it was issued for. Every answer says how far it looked (`through`) and whether more exists (`has_more`).\n\n**This is a change hint, not a cache-invalidation guarantee.** The feed never announces an admin act, such as an erasure or a scrub. A consumer that mirrors content must periodically re-read the subjects it holds and drop whatever is refused: that re-read is how erased or scrubbed content leaves a mirror.\n\n**The consumer contract.**\n- Record `through` *before* reading the bodies an answer points at, never after. A change that commits between the bodies read and a later `through` is behind the recorded position, and is lost. A change seen again after an early `through` costs one redundant re-read.\n- An edge entry names the edge (`kb_edges` and the edge id), not its endpoints. To learn which resources it touches, read the edge.\n- An edge appears in the feed of its own home context, not in its endpoints' contexts. An edge's home is its source's home *when the edge is asserted*. A later move of the source leaves the edge where it was, so an edge asserted before a move stays in the old context's feed. An edge homed elsewhere that touches a resource homed here is not in this feed.\n- `resource_departed` is a deletion or a move, and does not say which. Treat it as \"re-resolve this resource\": it may still exist in another context you can read.\n- A scrub of a property is not announced. Re-read the properties you hold on the same periodic cadence, not only on a feed hint. Re-read `open_meta` keys with `GET /api/resources?ids=` and `sections=open-meta`. `GET /api/resources/{id}/facets` covers facet asserts only: a key inside `open_meta`, whatever its name, is not a facet assert, and that read returns no row for it.\n- `GET /api/resources?ids=` (up to 256 ids) is the cheap periodic sweep: it returns `updated`, `body_hash` and `body_storage`, and with `sections=open-meta` the `open_meta` tier, for exactly the ids you can still read, and leaves out the rest, without downloading a body.",
         "operationId": "context_changes",
         "parameters": [
           {
@@ -12985,7 +12985,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Reconstituted markdown content",
+            "description": "The body as markdown. Byte-exact when the resource's `body_storage` is `verbatim`; a reconstruction from chunks when it is `derived`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -19436,6 +19436,32 @@
           }
         }
       },
+      "ByteBlock": {
+        "type": "object",
+        "description": "One live block of a verbatim body, as [`ResourceView::byte_blocks`] serves it.",
+        "required": [
+          "seq",
+          "bytes_len",
+          "bytes_sha256"
+        ],
+        "properties": {
+          "bytes_len": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The length in bytes (UTF-8) of the block's raw bytes: where it ends in the body.",
+            "minimum": 0
+          },
+          "bytes_sha256": {
+            "type": "string",
+            "description": "The bare lowercase hex sha256 of the block's raw bytes."
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The block's position in the body. Blocks are served in ascending `seq`."
+          }
+        }
+      },
       "ChangeRoleRequest": {
         "type": "object",
         "description": "Request body for `PATCH /api/teams/{id}/members/{profile_id}`.",
@@ -20197,7 +20223,8 @@
             ]
           },
           "markdown": {
-            "type": "string"
+            "type": "string",
+            "description": "The body. For a `verbatim` resource ([`BodyStorage::Verbatim`]) these are the stored bytes\nunchanged; for a `derived` one, a reconstruction from chunks."
           },
           "open_meta": {
             "description": "Server-side open_meta from kb_resource_manifests. Intentionally\nuntyped — open_meta is the free-form tier. Typed extraction of\nrelationship fields lives in `ResourceRelationships` (see\n`types::graph`), which parses this value on demand and ignores\nanything it doesn't recognize."
@@ -27808,7 +27835,8 @@
           "body",
           "open-meta",
           "edges",
-          "embedding-status"
+          "embedding-status",
+          "byte-blocks"
         ]
       },
       "ResourceSortField": {
@@ -27961,6 +27989,23 @@
                 "type": "null"
               }
             ]
+          },
+          "byte_blocks": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ByteBlock"
+            },
+            "description": "The body's block boundaries and per-block byte hashes, in `seq` order: what a client needs\nto check a whole cached body against [`Self::bytes_merkle`]. The `byte-blocks` section.\n\nAbsent when the section was not requested, and absent when it was but the body is not\nwholly verbatim (exactly when `bytes_merkle` is absent): a `derived` body has no stored\nbytes to cut it by. It is served under the same visibility gate as `content`, and computed\nin the same statement as `bytes_merkle` (and as `content`, when the body was requested\ntoo), so the boundaries always describe the bytes beside them."
+          },
+          "bytes_merkle": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Byte identity of the body: proves a cached copy is Temper's bytes without downloading the\nbody again. Bare lowercase hex.\n\nIt is the sha256 of the live blocks' `bytes_sha256` values (each the bare lowercase hex\nsha256 of that block's raw bytes), concatenated in `seq` order with no separator. Get the\nper-block values and the block boundaries from the `byte-blocks` section of this same read\n([`Self::byte_blocks`]). To verify a whole cached body, cut it at those byte lengths in\n`seq` order, sha256 each piece, concatenate the hex digests, and sha256 that string. To\nverify one block, compare its sha256 with its `bytes_sha256`. The concatenation of the\npieces is exactly the body `content` serves.\n\nPresent only when every live block carries its raw bytes, which is when `body_storage` is\n`verbatim`. It is absent on a `derived` body, which reads back as a reconstruction no stored\nhash describes, and absent from a server that predates the field. Unlike `body_hash` it moves\non every byte change, a heading-only edit included, and stays put across a re-block that\nkeeps the bytes and their block boundaries.\n\nBeside `content` or `byte_blocks` (a read that asked for the `body` or `byte-blocks`\nsection) it is computed in the same statement as them, so all three always describe the\nsame bytes. The rest of the view (`body_storage`, `body_hash`, `updated`) comes from the\nidentity read just before, so a write landing between the two can leave those describing\nthe earlier body: `body_storage` may then read `verbatim` beside an absent `bytes_merkle`,\nor the reverse. Trust `bytes_merkle` and `byte_blocks` for the bytes beside them. Without\neither section it is read with the rest of this view, in one statement; a write after the\nread can move it, exactly as it moves `updated`."
           },
           "changed_by_me_at": {
             "type": [
@@ -28817,6 +28862,22 @@
           "content_hash"
         ],
         "properties": {
+          "bytes_len": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The length in bytes (UTF-8) of this block's raw bytes: its boundary in the body\n`content` serves, which is the blocks' bytes concatenated in `seq` order. Present exactly\nwhen `bytes_sha256` is.",
+            "minimum": 0
+          },
+          "bytes_sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Byte identity of this block: the bare lowercase hex sha256 of its raw bytes, as stored\n(`kb_block_content.content_hash`). Not `content_hash` above, which is the chunk merkle.\n\nA client holding this block's bytes verifies them by comparing their sha256 with this\nvalue. The resource's `bytes_merkle` is the sha256 of these values concatenated in `seq`\norder. Absent when the block carries no raw bytes (a `derived` body, which reads back as a\nreconstruction), and from a server that predates the field. A block a redaction emptied\ncarries the sha256 of the empty string, never a hash of the text it held."
+          },
           "content_hash": {
             "type": "string"
           },

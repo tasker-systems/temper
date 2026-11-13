@@ -19,9 +19,10 @@ module Temper::Generated
     OPEN_META = "open-meta".freeze
     EDGES = "edges".freeze
     EMBEDDING_STATUS = "embedding-status".freeze
+    BYTE_BLOCKS = "byte-blocks".freeze
 
     def self.all_vars
-      @all_vars ||= [BODY, OPEN_META, EDGES, EMBEDDING_STATUS].freeze
+      @all_vars ||= [BODY, OPEN_META, EDGES, EMBEDDING_STATUS, BYTE_BLOCKS].freeze
     end
 
     # Builds the enum from string

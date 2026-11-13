@@ -18,7 +18,7 @@ import re  # noqa: F401
 import json
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
-from typing import Any, ClassVar, Dict, List
+from typing import Any, ClassVar, Dict, List, Optional
 from typing_extensions import Annotated
 from typing import Optional, Set
 from typing_extensions import Self
@@ -28,9 +28,11 @@ class SegmentInfo(BaseModel):
     """
     One landed segment, as `begin`/`append`/`list-blocks` report it — the resume unit.  `content_hash` is the **block merkle** (`kb_block_revisions.block_body_hash`, i.e. `temper_substrate::content::body_hash_from_chunk_hashes` over the block's own chunk hashes) — NOT the whole-segment-text sha256 the client sends inbound as `AppendBlockPayload.content_hash`. The two are deliberately distinct hashes over the same segment: the inbound one is the client's cheap identity check on raw text; this outbound one is the server-computed chunk merkle that already exists as the block's canonical hash. The client re-derives this same merkle from its own packed chunk hashes (not the raw text) to diff against on resume — comparing against the raw-text hash would never match.
     """ # noqa: E501
+    bytes_len: Optional[Annotated[int, Field(strict=True, ge=0)]] = Field(default=None, description="The length in bytes (UTF-8) of this block's raw bytes: its boundary in the body `content` serves, which is the blocks' bytes concatenated in `seq` order. Present exactly when `bytes_sha256` is.")
+    bytes_sha256: Optional[StrictStr] = Field(default=None, description="Byte identity of this block: the bare lowercase hex sha256 of its raw bytes, as stored (`kb_block_content.content_hash`). Not `content_hash` above, which is the chunk merkle.  A client holding this block's bytes verifies them by comparing their sha256 with this value. The resource's `bytes_merkle` is the sha256 of these values concatenated in `seq` order. Absent when the block carries no raw bytes (a `derived` body, which reads back as a reconstruction), and from a server that predates the field. A block a redaction emptied carries the sha256 of the empty string, never a hash of the text it held.")
     content_hash: StrictStr
     seq: Annotated[int, Field(strict=True, ge=0)]
-    __properties: ClassVar[List[str]] = ["content_hash", "seq"]
+    __properties: ClassVar[List[str]] = ["bytes_len", "bytes_sha256", "content_hash", "seq"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -71,6 +73,16 @@ class SegmentInfo(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # set to None if bytes_len (nullable) is None
+        # and model_fields_set contains the field
+        if self.bytes_len is None and "bytes_len" in self.model_fields_set:
+            _dict['bytes_len'] = None
+
+        # set to None if bytes_sha256 (nullable) is None
+        # and model_fields_set contains the field
+        if self.bytes_sha256 is None and "bytes_sha256" in self.model_fields_set:
+            _dict['bytes_sha256'] = None
+
         return _dict
 
     @classmethod
@@ -83,6 +95,8 @@ class SegmentInfo(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
+            "bytes_len": obj.get("bytes_len"),
+            "bytes_sha256": obj.get("bytes_sha256"),
             "content_hash": obj.get("content_hash"),
             "seq": obj.get("seq")
         })

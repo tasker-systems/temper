@@ -15,7 +15,12 @@ export type BodyStorage = "verbatim" | "derived";
 /**
  * Response body for resource content.
  */
-export type ContentResponse = { resource_id: ResourceId, markdown: string, 
+export type ContentResponse = { resource_id: ResourceId, 
+/**
+ * The body. For a `verbatim` resource ([`BodyStorage::Verbatim`]) these are the stored bytes
+ * unchanged; for a `derived` one, a reconstruction from chunks.
+ */
+markdown: string, 
 /**
  * Typed server-side managed_meta from kb_resource_manifests — the closed
  * Property vocabulary. Only the named `temper-*` keys are represented;

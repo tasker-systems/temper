@@ -19,10 +19,11 @@
 #     ignored here — cargo audit does not fail the build on them by default, so
 #     they stay visible as advisories without gating.
 #
-# Last reconciled 2026-11-09 (cargo audit 0.22.2, advisory DB 899077d9 of
-# 2026-11-09): with no ignores, cargo audit reports exactly the five ids below.
-# RUSTSEC-2026-0462 (rmcp) is not among them: rmcp is now 3.9.0, the fixed
-# version. Reconciled before that on 2026-10-31, when zip (0367/0368/0369, lock
+# Last reconciled 2026-11-13 (cargo audit 0.23.0, advisory DB 4ef2df8e of
+# 2026-11-13): with no ignores, cargo audit reports exactly the five ids below.
+# RUSTSEC-2026-0538 (quinn-udp) is not among them: quinn-udp is now 0.5.16, the
+# fixed version. Reconciled on 2026-11-09, when RUSTSEC-2026-0462 (rmcp) went
+# the same way at rmcp 3.9.0, and before that on 2026-10-31, when zip (0367/0368/0369, lock
 # now zip 9.0.5), lopdf (0187, now 0.45.0), quinn-proto (0185, now 0.11.19) and
 # webpki-roots (0381 — the advisory lists the 0.26.11 shim as unaffected) were
 # removed as matching nothing.

@@ -352,6 +352,8 @@ Options:
 ```text
 Show a resource's content
 
+Output formats. `--format json` returns one document whose `content` key is `GET /api/resources/{id}/content`'s markdown unchanged (`--fields content` keeps the envelope and `id`), so `content` is byte-exact when `body_storage` is `verbatim`. `toon` (the default on a terminal) prints the frontmatter, then `---\n`, then the body plus one extra trailing `\n`: it is not byte-exact, so never hash or diff it.
+
 Usage: temper resource show [OPTIONS] <REF>
 
 Arguments:
@@ -385,12 +387,12 @@ Options:
           
           The peer is polymorphic (the 2026-09-02 S6 deferral, landed): resource peers carry their title; blob peers — the `derivation_source` edge `--preserve-source` asserts, say — are addressed by bare id alone, so this section answers "what is this resource derived from" from the resource side. `temper blob relations <blob-id>` remains the blob-side view. Cogmap-ended edges are not rendered here, and the walk surfaces stay node-typed: an edge listing may render a blob, a walk never materializes one.
           
-          [possible values: body, open-meta, edges, embedding-status]
+          [possible values: body, open-meta, edges, embedding-status, byte-blocks]
 
       --without <WITHOUT>
           Drop a section (comma-separated or repeated). `--without body` is the cheap orientation read: everything `show` returns except the reconstructed markdown, and it composes freely with `--with edges`. Naming one section in both `--with` and `--without` is a hard error, not a precedence rule
           
-          [possible values: body, open-meta, edges, embedding-status]
+          [possible values: body, open-meta, edges, embedding-status, byte-blocks]
 
       --fields <FIELDS>
           Subselect top-level response keys (the anchor key `id` is always preserved). Use jq for nested projection
