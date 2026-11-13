@@ -57,6 +57,12 @@ pub enum ApiError {
     },
     #[error("Bad request: {0}")]
     BadRequest(String),
+    /// A write carrying a precondition header its route does not evaluate. `400` under
+    /// [`temper_core::error::PRECONDITION_NOT_HONOURED_CODE`], so a client can tell it from a
+    /// validation refusal without reading the message. Nothing was applied. The message names the
+    /// header and never its value. The producer is `temper-api`'s precondition layer.
+    #[error("Precondition not honoured: {0}")]
+    PreconditionNotHonoured(String),
     /// A `400` that **names every static reason a composition will not run**, under the distinct
     /// code [`temper_core::error::PLAN_REFUSED_CODE`].
     ///
@@ -235,6 +241,10 @@ impl IntoResponse for ApiError {
                 (StatusCode::FORBIDDEN, "SYSTEM_ACCESS_REQUIRED")
             }
             ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, "BAD_REQUEST"),
+            ApiError::PreconditionNotHonoured(_) => (
+                StatusCode::BAD_REQUEST,
+                temper_core::error::PRECONDITION_NOT_HONOURED_CODE,
+            ),
             ApiError::PlanRefused { .. } => (
                 StatusCode::BAD_REQUEST,
                 temper_core::error::PLAN_REFUSED_CODE,
@@ -314,6 +324,10 @@ impl IntoResponse for ApiError {
             }
             ApiError::BadRequest(_) => {
                 tracing::warn!(status_code, error_code = code, message = %bounded(&message), "bad request");
+            }
+            // The message names a header and never its value, so it carries no caller bytes.
+            ApiError::PreconditionNotHonoured(_) => {
+                tracing::warn!(status_code, error_code = code, message = %bounded(&message), "precondition not honoured");
             }
             // The code and status only, never the message: it is serde's account of a composition,
             // which is caller-authored content and can quote it — the `PlanRefused` rule below.
@@ -474,6 +488,9 @@ impl From<ApiError> for temper_core::error::TemperError {
             // Degrades to BadRequest text for the same reason as `PlanRefused` above: the
             // extractor renders it straight to HTTP, and no server-side path converts it.
             ApiError::UnreadablePlan { message, .. } => TemperError::BadRequest(message),
+            // Degrades to BadRequest text for the same reason: the layer renders it straight to
+            // HTTP, and no server-side path converts it.
+            ApiError::PreconditionNotHonoured(s) => TemperError::BadRequest(s),
             ApiError::Conflict(s) => TemperError::Conflict(s),
             ApiError::IngestEnded(s) => TemperError::IngestEnded(s),
             ApiError::ContentIntegrity(s) => TemperError::ContentIntegrity(s),

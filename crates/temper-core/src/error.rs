@@ -102,6 +102,19 @@ pub const INGEST_ENDED_CODE: &str = "INGEST_ENDED";
 /// Spelled here for the same reason as [`FORBIDDEN_DETAIL_CODE`].
 pub const RESOURCE_BUSY_CODE: &str = "RESOURCE_BUSY";
 
+/// The wire `error.code` a write travels under when it carries a precondition header
+/// (`If-Match`, `If-None-Match`, `If-Unmodified-Since`) that its route does not evaluate: a `400`,
+/// with nothing applied.
+///
+/// **A code of its own rather than `BAD_REQUEST`.** A client that sent a precondition needs to
+/// tell "the server will not check this guard here" from "the body is invalid": the first is
+/// fixed by dropping the header, or by not writing unconditionally at all, and the second by
+/// fixing the body. Reusing the generic code would force it to sniff the message. A route that
+/// later honours a header answers a mismatch with its own refusal, never with this code.
+///
+/// Spelled here for the same reason as [`FORBIDDEN_DETAIL_CODE`].
+pub const PRECONDITION_NOT_HONOURED_CODE: &str = "PRECONDITION_NOT_HONOURED";
+
 /// Details from a system access gate rejection (CLI error rendering).
 ///
 /// Distinct from `types::access_gate::SystemAccessDetails` which carries

@@ -1,16 +1,20 @@
-//! A write carrying `If-Match` or `If-Unmodified-Since` is refused with `400`, never applied
-//! unconditionally. See `temper_api::middleware::preconditions`.
+//! A write carrying `If-Match`, `If-None-Match` or `If-Unmodified-Since` is refused with `400`
+//! under `PRECONDITION_NOT_HONOURED`, never applied unconditionally. See
+//! `temper_api::middleware::preconditions`.
 //!
 //! The documented write operations come from [`temper_api::routes::openapi_spec`], so a write route
 //! added to a documented group is swept without an edit. The undocumented groups never enter the
-//! spec, so their write routes are listed in [`UNDOCUMENTED_WRITES`].
+//! spec, so their write routes are listed in [`UNDOCUMENTED_WRITES`], and
+//! `the_undocumented_list_is_what_the_router_mounts` holds that list to the route files' own
+//! source and to the router's own answers.
 //!
-//! Three things are witnessed:
+//! What is witnessed:
 //! - every write, in every route family, refuses each header with `400` and leaves the database
 //!   exactly as it was, for an authenticated caller and an anonymous one;
-//! - the same requests without the header are not refused, and a real create, update, meta write
-//!   and delete land exactly as before;
-//! - reads (`GET`, `HEAD`, `OPTIONS`) ignore both headers, and `If-None-Match` is never examined.
+//! - the same requests without the header reach a mounted route (never the fallback's `404` or a
+//!   `405`) and are not refused, and a real create, update, meta write and delete land as before;
+//! - reads (`GET`, `HEAD`, `OPTIONS`) ignore every policed header;
+//! - the refusal carries CORS and the security headers, and an unmatched path still answers `404`.
 #![cfg(feature = "test-db")]
 
 mod common;
@@ -26,12 +30,35 @@ use temper_core::types::ingest::IngestPayload;
 
 /// The header values sent. Distinctive, so a refusal that echoed one would be caught.
 const IF_MATCH_VALUE: &str = "\"precondition-sentinel-etag\"";
+const IF_NONE_MATCH_VALUE: &str = "\"precondition-sentinel-absent\"";
 const IF_UNMODIFIED_SINCE_VALUE: &str = "Wed, 21 Oct 2015 07:28:00 GMT";
 
-/// Each policed header, with the value sent and the name the refusal must give.
-const POLICED: [(&str, &str); 2] = [
+/// Each policed header, with the value sent.
+const POLICED: [(&str, &str); 3] = [
     ("if-match", IF_MATCH_VALUE),
+    ("if-none-match", IF_NONE_MATCH_VALUE),
     ("if-unmodified-since", IF_UNMODIFIED_SINCE_VALUE),
+];
+
+/// The paths the undocumented groups mount for `GET` only. They are not write routes, and the
+/// router must answer a `POST` to them with `405` (or the refusal, when a header is carried).
+const UNDOCUMENTED_GET_ONLY: &[&str] = &["/api/embed/warm", "/api/auth/slack/callback"];
+
+/// The route files that hold the undocumented groups, and the group builders the route table
+/// names as `Undocumented`. A new undocumented group fails the check until it is listed here.
+const UNDOCUMENTED_SOURCES: &[&str] = &[
+    include_str!("../src/routes/internal.rs"),
+    include_str!("../src/routes/embed_internal.rs"),
+    include_str!("../src/routes/webhook_intake.rs"),
+    include_str!("../src/routes/slack_link_public.rs"),
+];
+const UNDOCUMENTED_GROUPS: &[&str] = &[
+    "internal_routes",
+    "slack_link_internal_routes",
+    "slack_mint_internal_routes",
+    "slack_link_public_routes",
+    "embed_internal_routes",
+    "webhook_intake_routes",
 ];
 
 /// The write routes of the groups that never enter the spec: the internal HMAC groups, the
@@ -159,9 +186,10 @@ fn is_precondition_refusal(body: &str, header: &str) -> bool {
     };
     let named = match header {
         "if-match" => "the If-Match header is not honoured on this route",
+        "if-none-match" => "the If-None-Match header is not honoured on this route",
         _ => "the If-Unmodified-Since header is not honoured on this route",
     };
-    parsed["error"]["code"] == json!("BAD_REQUEST")
+    parsed["error"]["code"] == json!(temper_core::error::PRECONDITION_NOT_HONOURED_CODE)
         && parsed["error"]["message"]
             .as_str()
             .is_some_and(|m| m.contains(named))
@@ -185,8 +213,8 @@ fn assert_refused(route: &str, header: (&str, &str), status: u16, body: &str) {
     );
 }
 
-// FAILS IF: any write route, in any family, applies or even reaches its handler with `If-Match`
-// or `If-Unmodified-Since` present — authenticated or not — or the refusal changes a row.
+// FAILS IF: any write route, in any family, applies or even reaches its handler with a policed
+// header present — authenticated or not — or the refusal changes a row.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn every_write_route_refuses_each_policed_header_and_writes_nothing(pool: PgPool) {
     let app = common::setup_test_app(pool.clone()).await;
@@ -224,7 +252,14 @@ async fn every_write_route_refuses_each_policed_header_and_writes_nothing(pool: 
     );
 }
 
-// FAILS IF: the layer refuses a write that carries neither header.
+/// True when `body` is the app fallback's answer: no route matched the path at all.
+fn is_unmatched(status: u16, body: &str) -> bool {
+    status == 404 && body.contains("No route matches")
+}
+
+// FAILS IF: the layer refuses a write that carries no policed header, or a swept route is not
+// mounted with that method — a hand-listed route whose write method was removed answers the
+// fallback's `404` or a `405`, so the sweep's refusals would prove nothing about it.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn without_the_header_no_write_route_meets_the_refusal(pool: PgPool) {
     let app = common::setup_test_app(pool.clone()).await;
@@ -232,6 +267,10 @@ async fn without_the_header_no_write_route_meets_the_refusal(pool: PgPool) {
     for (method, template) in write_routes() {
         let path = concrete(&template);
         let (status, text) = send(&app, &method, &path, Some(&token), None, &json!({})).await;
+        assert!(
+            status != 405 && !is_unmatched(status, &text),
+            "{method} {template} is not mounted ({status}): {text}"
+        );
         for (header, _) in POLICED {
             assert!(
                 !is_precondition_refusal(&text, header),
@@ -277,7 +316,7 @@ async fn the_internal_app_refuses_too(pool: PgPool) {
     }
 }
 
-// FAILS IF: a read meets the refusal because it carries a policed header (or `If-None-Match`).
+// FAILS IF: a read meets the refusal, or answers differently, because it carries a policed header.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn reads_ignore_the_headers(pool: PgPool) {
     let app = common::setup_test_app(pool.clone()).await;
@@ -295,10 +334,7 @@ async fn reads_ignore_the_headers(pool: PgPool) {
     for (method, template) in reads {
         let path = concrete(&template);
         for verb in [method.as_str(), "HEAD", "OPTIONS"] {
-            let headers = POLICED
-                .iter()
-                .copied()
-                .chain([("if-none-match", IF_MATCH_VALUE)]);
+            let headers = POLICED.iter().copied();
             // The status without any header is the baseline. A HEAD answer has no body, so the
             // status is the only thing that can show a refusal there.
             let (plain, _) = send(&app, verb, &path, Some(&token), None, &json!({})).await;
@@ -336,6 +372,122 @@ async fn reads_ignore_the_headers(pool: PgPool) {
         assert_eq!(
             guarded, plain,
             "GET /api/profile with {} changed its answer",
+            header.0
+        );
+    }
+}
+
+/// The path literals a route file mounts: quoted strings starting with `/` on non-comment lines
+/// above its test module. The same reading `routes::embed_internal`'s own test makes.
+fn mounted_paths(source: &str) -> BTreeSet<String> {
+    source
+        .split("#[cfg(test)]")
+        .next()
+        .expect("source precedes tests")
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with("//"))
+        .flat_map(|line| line.split('"').skip(1).step_by(2))
+        .filter(|literal| literal.starts_with('/'))
+        .map(str::to_string)
+        .collect()
+}
+
+// FAILS IF: an undocumented group gains a route, or loses one, without `UNDOCUMENTED_WRITES` or
+// `UNDOCUMENTED_GET_ONLY` following; a GET-only path starts answering a write; or the route table
+// gains an undocumented group whose file this test does not read.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_undocumented_list_is_what_the_router_mounts(pool: PgPool) {
+    // The table rows are one greppable line each (the audit scripts rely on the same).
+    let table: BTreeSet<String> = include_str!("../src/routes/mod.rs")
+        .lines()
+        .filter_map(|line| line.split("build: Undocumented(").nth(1))
+        .filter_map(|rest| rest.split(')').next())
+        .map(str::to_string)
+        .collect();
+    let named: BTreeSet<String> = UNDOCUMENTED_GROUPS.iter().map(|g| g.to_string()).collect();
+    assert_eq!(table, named, "the route table's undocumented groups");
+
+    let mounted: BTreeSet<String> = UNDOCUMENTED_SOURCES
+        .iter()
+        .flat_map(|source| mounted_paths(source))
+        .collect();
+    let listed: BTreeSet<String> = UNDOCUMENTED_WRITES
+        .iter()
+        .map(|(_, p)| p.to_string())
+        .chain(UNDOCUMENTED_GET_ONLY.iter().map(|p| p.to_string()))
+        .collect();
+    assert_eq!(mounted, listed, "undocumented paths mounted vs listed");
+
+    // The router's own answer settles which listed paths are GET-only: a write without a header is
+    // `405`, and with one it is the refusal, which runs before the method router's fallback.
+    let app = common::setup_test_app(pool.clone()).await;
+    for path in UNDOCUMENTED_GET_ONLY {
+        let (status, text) = send(&app, "POST", path, None, None, &json!({})).await;
+        assert_eq!(status, 405, "POST {path} must be unmounted: {text}");
+        let header = POLICED[0];
+        let (status, text) = send(&app, "POST", path, None, Some(header), &json!({})).await;
+        assert_refused(&format!("POST {path}"), header, status, &text);
+    }
+}
+
+// FAILS IF: the layer moves outside the base layers or CORS — the refusal would then lose
+// `Access-Control-Allow-Origin` and the security headers — or before the fallback, so an
+// unmatched path carrying a policed header would answer `400` instead of `404`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_refusal_carries_cors_and_the_security_headers_and_misses_no_fallback(pool: PgPool) {
+    const ORIGIN: &str = "https://allowed.example";
+    let app = common::setup_test_app_with_config(pool.clone(), |config| {
+        config.cors_origins = vec![ORIGIN.to_string()];
+    })
+    .await;
+
+    for header in POLICED {
+        let response = app
+            .client
+            .post(app.url("/api/ingest"))
+            .header("Origin", ORIGIN)
+            .header(header.0, header.1)
+            .json(&json!({}))
+            .send()
+            .await
+            .expect("request sent");
+        let status = response.status().as_u16();
+        let headers = response.headers().clone();
+        let text = response.text().await.unwrap_or_default();
+        assert_refused(
+            "POST /api/ingest from an allowed origin",
+            header,
+            status,
+            &text,
+        );
+        assert_eq!(
+            headers
+                .get("access-control-allow-origin")
+                .and_then(|v| v.to_str().ok()),
+            Some(ORIGIN),
+            "the refusal must carry CORS; headers: {headers:?}"
+        );
+        assert_eq!(
+            headers
+                .get("x-content-type-options")
+                .and_then(|v| v.to_str().ok()),
+            Some("nosniff"),
+            "the refusal must carry the security headers; headers: {headers:?}"
+        );
+
+        let (status, text) = send(
+            &app,
+            "POST",
+            "/api/no-such-route-anywhere",
+            None,
+            Some(header),
+            &json!({}),
+        )
+        .await;
+        assert!(
+            is_unmatched(status, &text),
+            "an unmatched path with {} must answer the fallback's 404 ({status}): {text}",
             header.0
         );
     }
