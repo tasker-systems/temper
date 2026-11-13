@@ -45,7 +45,7 @@
 
 use axum::body::Bytes;
 use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, Method, StatusCode};
 use axum::Json;
 use serde::Serialize;
 use uuid::Uuid;
@@ -55,6 +55,8 @@ use temper_services::error::{ApiError, ApiResult};
 use temper_services::services::intake_service::{self, AttestationSeen, ProviderEvent, Receipt};
 use temper_services::services::{connection_service, intake_service as intake};
 use temper_services::state::AppState;
+
+use crate::middleware::preconditions;
 
 /// The one refusal message for both "the attestation did not verify" and "no connection carries
 /// this connector". One constant rather than two equal strings: two strings are two things that
@@ -77,6 +79,7 @@ pub struct WebhookAccepted {
 /// silently normalize the bytes the ledger claims to have preserved.
 pub async fn receive(
     State(state): State<AppState>,
+    method: Method,
     headers: HeaderMap,
     body: Bytes,
 ) -> ApiResult<(StatusCode, Json<WebhookAccepted>)> {
@@ -121,6 +124,15 @@ pub async fn receive(
         }
         other => other,
     })?;
+
+    // The precondition refusal runs here: this door's gate is inside the handler, so no layer can
+    // run after it (the route table marks the group `InHandler`). It runs after the connector
+    // resolves, not merely after the attestation verifies, because both failures are one refusal:
+    // checked between them, a header would turn "verified, but no connection" into a 400 and tell
+    // it apart from "not verified". Both steps so far only read; nothing is written before it. A
+    // caller refused at either step gets its 401 exactly as without the header; an accepted one
+    // sending a precondition is refused, not applied unconditionally.
+    preconditions::refuse_unhonoured(&method, &headers)?;
 
     // Observe GitHub's own signature on a receipt for a provisioned GitHub connection, before any
     // later step can refuse or fail it, so each such receipt produces one line. Logging only.

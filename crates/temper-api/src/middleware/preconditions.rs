@@ -7,44 +7,76 @@
 //! at all: the client believes it is protected. The rule here is that a precondition the server
 //! cannot honour is refused with `400` under `PRECONDITION_NOT_HONOURED`, never dropped.
 //!
+//! # Who can see the refusal
+//!
+//! Only a caller the route already admits. An unauthenticated caller learns nothing except from
+//! the designated public routes (`docs/concepts/trust-boundary.md`), so a caller the route's gate
+//! refuses (no token, a bad or expired one, a deactivated account, a machine on a human tier, an
+//! unapproved profile, an unsigned internal call, an unattested webhook) gets exactly the answer it
+//! gets without the header: status, body and `Allow` alike.
+//!
+//! One consequence of axum's routing is admitted rather than refused. Where two groups share a path
+//! (`/api/profile`: the person-only `PATCH` and the machine-admitting `GET`), the method router's
+//! fallback for an unmounted method is the last-merged group's, so it answers behind that group's
+//! stack. A machine sending `PUT /api/profile` with a header is admitted by the status group and
+//! refused `400`, where without one it gets `405`. It learns nothing: `GET` on the same path already
+//! admits it. The integration test pins this.
+//!
 //! # Scope
 //!
-//! [`refuse_unhonoured_preconditions`] is applied once, by `routes::apply_transport_layers`, to
-//! every route of both temper-api app builders (`create_app` and `create_internal_app`), so a new
-//! route there is covered without anyone remembering to add it. Outside it, and honouring none of
-//! these headers: the MCP function (`POST`/`DELETE /mcp`, `POST /oauth/register`, built by
-//! temper-mcp-server) and the Node OAuth functions in `packages/temper-cloud`.
+//! Which route groups are policed is declared per group in the route table
+//! (`routes::Preconditions`), never inferred from the method, and every row must declare it:
 //!
-//! The layer is keyed on the method, not on the route: any method that is not safe (`GET`, `HEAD`,
+//! - **`Refused`**: every group behind a layer gate (the bearer tiers and the three HMAC
+//!   signature tiers). [`refuse_unhonoured_preconditions`] is applied by `routes::mount_group` to
+//!   each of these groups, in both app builders.
+//! - **`InHandler`**: the webhook intake, whose gate (the broker attestation) is inside its
+//!   handler, so no layer can run after it. The handler calls [`refuse_unhonoured`] once the
+//!   attestation verifies and its connector resolves (both are one `401`, which a header must not
+//!   split), before anything is written.
+//! - **`Exempt`**, each with its reason at the row:
+//!   - the nine Vercel crons: none is a client write to a resource, and the scheduler sends no
+//!     precondition, so the host pin and the secret answer exactly as they did before this layer;
+//!   - the Slack link callback: the identity provider's redirect target, `GET` only;
+//!   - `/api/health`: the designated public route, which mounts no write and keeps its own `405`.
+//!
+//! None of the exemptions is a client write to a resource, which is the only thing a conditional
+//! header means. Outside temper-api altogether, and honouring none of these headers: the MCP
+//! function (`POST`/`DELETE /mcp`, `POST /oauth/register`, built by temper-mcp-server), the Node
+//! OAuth functions in `packages/temper-cloud`, and the Swagger routes (`ENABLE_SWAGGER`), which
+//! are merged outside the table and mount `GET` only.
+//!
+//! Within a policed group the method is the test: any method that is not safe (`GET`, `HEAD`,
 //! `OPTIONS`, `TRACE`) is treated as a write, extension methods included. Safe methods pass
 //! untouched with or without the headers. The value is never read: a header that is present is
 //! refused whatever it says, empty, `*` or unparseable alike.
 //!
-//! The method is the whole test, deliberately. A few doors change state on `GET` (the Vercel
-//! crons, which mount one handler on `GET` and `POST`, and the Slack link callback), and their
-//! `GET` is not policed: a cron or an OAuth redirect sends no precondition, and policing a read by
-//! route would make this layer a list of routes, which is the thing that can miss one. Their
-//! `POST` is policed like any other write.
-//!
 //! # Placement
 //!
-//! It is added to the mounted routes before the fallback and the base layers exist. That makes it
-//! outside every tier's auth stack, so the refusal costs no lookup and depends on nothing about the
-//! caller, and inside the security headers, the root span and CORS, so the refusal carries them
-//! like any other answer. An unmatched path still meets the fallback's `404`. A request carrying a
-//! policed header with a method its path does not mount is refused here (`400`), before the method
-//! router's `405`; an anonymous one is refused before authentication's `401`. The integration test
-//! `the_refusal_carries_cors_and_the_security_headers_and_misses_no_fallback` pins the placement.
+//! In a `Refused` group the layer is inside every gate of the tier stack: it runs after
+//! `require_auth`, `refuse_machine`, `require_system_access` and the signature gate, and before
+//! the handler and its extractors, so a refusal reads no row and differs by nothing about the
+//! target. It is added with `Router::layer`, so it also wraps the method router's fallback: an
+//! admitted caller sending a policed header with a method the path does not mount gets `400`, with
+//! the fallback's `Allow`. It sits inside the security headers, the root span and CORS, so the
+//! refusal carries them like any other answer. An unmatched path never reaches it and meets the
+//! fallback's `404`. `tests/unhonoured_precondition_test.rs` pins all of this, the anonymous answers
+//! included.
 //!
 //! # Honouring a header
 //!
 //! A route that starts evaluating one of these headers is listed in `HONOURED`, and from then on
-//! that header reaches its handler on that route. Nothing is listed yet. Each entry owes two
-//! witnesses against its handler: a mismatched precondition is refused with `412` and nothing
-//! applied, and a value the handler cannot parse is refused with `400`, never treated as absent.
+//! that header reaches its handler on that route. Nothing is listed yet. An entry must name a
+//! documented route mounted by a `Refused` group (`routes::tests` holds this): an exempt route is
+//! not policed at all, and an `InHandler` door honours nothing. Each entry owes witnesses against
+//! its handler: a mismatched precondition is refused with `412` and nothing applied; a value the
+//! handler cannot parse is refused with `400`, never treated as absent; a caller who cannot see
+//! the target gets the masked `404`, never `412` (the handler applies visibility before it compares,
+//! or `412` against `404` is an existence oracle); and an unauthenticated caller sending the header
+//! gets the identical `401`.
 
 use axum::extract::{MatchedPath, Request};
-use axum::http::{HeaderName, Method};
+use axum::http::{HeaderMap, HeaderName, Method};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 
@@ -60,16 +92,16 @@ pub const POLICED: [HeaderName; 3] = [
 
 /// A route that evaluates a policed header itself: the method, the route template exactly as it
 /// is mounted (`/api/resources/{id}`), and the header it honours.
-struct Honoured {
-    method: Method,
-    route: &'static str,
-    header: HeaderName,
+pub(crate) struct Honoured {
+    pub(crate) method: Method,
+    pub(crate) route: &'static str,
+    pub(crate) header: HeaderName,
 }
 
 /// The routes whose handlers honour a policed header. Empty: no handler evaluates one yet. An
 /// entry is the whole exemption; the handler it names must then honour the header, because from
 /// here on nothing else refuses it. See the module doc for the witnesses an entry owes.
-const HONOURED: &[Honoured] = &[];
+pub(crate) const HONOURED: &[Honoured] = &[];
 
 /// True for the methods that do not change state, which this layer never inspects.
 fn is_safe(method: &Method) -> bool {
@@ -109,21 +141,39 @@ fn refusal(header: &HeaderName) -> ApiError {
     ))
 }
 
-/// The layer: refuse a write that carries a policed header its route does not honour.
+/// The one decision: refuse a non-safe request carrying a policed header that `route` does not
+/// honour. Shared by the layer and [`refuse_unhonoured`], so the two cannot answer differently.
+fn check(method: &Method, route: Option<&str>, headers: &HeaderMap) -> Result<(), ApiError> {
+    if is_safe(method) {
+        return Ok(());
+    }
+    match POLICED
+        .iter()
+        .find(|header| headers.contains_key(*header) && !is_honoured(method, route, header))
+    {
+        Some(header) => Err(refusal(header)),
+        None => Ok(()),
+    }
+}
+
+/// The layer, for a `Refused` group: refuse a write that carries a policed header its route does
+/// not honour. Runs innermost in the tier stack; see the module doc's placement section.
 pub async fn refuse_unhonoured_preconditions(request: Request, next: Next) -> Response {
-    let method = request.method();
-    if !is_safe(method) {
-        let route = request
-            .extensions()
-            .get::<MatchedPath>()
-            .map(MatchedPath::as_str);
-        if let Some(header) = POLICED.iter().find(|header| {
-            request.headers().contains_key(*header) && !is_honoured(method, route, header)
-        }) {
-            return refusal(header).into_response();
-        }
+    let route = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(MatchedPath::as_str);
+    if let Err(refusal) = check(request.method(), route, request.headers()) {
+        return refusal.into_response();
     }
     next.run(request).await
+}
+
+/// The same refusal, for an `InHandler` door: called by the handler once its own gate has
+/// admitted the caller, before it writes anything. Such a door honours no header (`HONOURED` may
+/// only name a `Refused` route), so the route is not consulted.
+pub fn refuse_unhonoured(method: &Method, headers: &HeaderMap) -> Result<(), ApiError> {
+    check(method, None, headers)
 }
 
 #[cfg(test)]
@@ -268,5 +318,26 @@ mod tests {
                 header
             ));
         }
+    }
+
+    // FAILS IF: the handler-callable check answers differently from the layer: a safe method
+    // refused, a write with a policed header let through, or a refusal under another code.
+    #[test]
+    fn the_handler_check_agrees_with_the_layer() {
+        for header in &POLICED {
+            let mut headers = HeaderMap::new();
+            headers.insert(header.clone(), "*".parse().expect("value"));
+            for method in [Method::GET, Method::HEAD, Method::OPTIONS, Method::TRACE] {
+                assert!(refuse_unhonoured(&method, &headers).is_ok(), "{method}");
+            }
+            for method in [Method::POST, Method::PUT, Method::PATCH, Method::DELETE] {
+                let refused = refuse_unhonoured(&method, &headers).expect_err("refused");
+                assert!(
+                    matches!(refused, ApiError::PreconditionNotHonoured(_)),
+                    "{method}: {refused:?}"
+                );
+            }
+        }
+        assert!(refuse_unhonoured(&Method::POST, &HeaderMap::new()).is_ok());
     }
 }

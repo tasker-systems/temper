@@ -122,6 +122,7 @@ is a stable string; `details` rides only `SYSTEM_ACCESS_REQUIRED` and `PLAN_REFU
 | 403 | `FORBIDDEN` | refused, deliberately message-less (no capability disclosure) | obtain the grant out of band | no |
 | 403 | `FORBIDDEN_DETAIL` | refused, message names the capability | obtain it | no |
 | 404 | `NOT_FOUND` | absent or masked (a probe is not an existence oracle) | infer nothing either way | no |
+| 400 | `PRECONDITION_NOT_HONOURED` | a write carried `If-Match`, `If-None-Match` or `If-Unmodified-Since` on a route that does not evaluate it; nothing was applied. Answered only to a caller the route already admits: an unauthenticated or refused caller gets the answer it gets without the header | resend without the header to write unconditionally | no |
 | 400 | `PLAN_REFUSED` | composition invalid; `details.refusals[]` lists every reason | repair all in one round trip | no |
 | 400, 413, 415, 422 | `UNREADABLE_PLAN` | the body is not a readable composition (malformed JSON, wrong content type, over the door's limit, a wrong type); no `details`, and the message repeats at most 1024 bytes of what failed | fix the body; there is no plan to refuse yet | no |
 | 409 | `INGEST_ENDED` | append or finalize on an ingest that has ended (`cancelled` or `abandoned`); not resumable | start a new upload | no |

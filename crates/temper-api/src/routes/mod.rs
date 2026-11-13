@@ -82,6 +82,26 @@ enum SignatureKind {
     SlackMint,
 }
 
+/// Whether a group's writes are refused for carrying a precondition header the route does not
+/// evaluate (`If-Match`, `If-None-Match`, `If-Unmodified-Since`), and where that refusal runs. A
+/// required field of every row, so a group cannot fall out of the policy, or into an exemption, by
+/// omission: the choice is made at the row, in review, and `tests::preconditions_*` hold it.
+///
+/// The refusal runs after authentication on every group that has one, so a caller the tier refuses
+/// gets exactly the answer it gets without the header. See `middleware::preconditions`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Preconditions {
+    /// The refusal layer is inside every gate of the group's tier stack, so it runs after all of
+    /// them (only a group's own `DefaultBodyLimit`, which gates nothing, sits inside it). Legal only on a tier that has a layer gate: [`Tier::AuthOnly`],
+    /// [`Tier::HumanAuthOnly`], [`Tier::Gated`], [`Tier::HumanGated`], [`Tier::InternalHmac`].
+    Refused,
+    /// The tier has no layer gate; the handler calls `preconditions::refuse_unhonoured` itself,
+    /// right after its own gate succeeds. For a self-gated door that takes writes.
+    InHandler,
+    /// Not policed. The reason is the review record; the audit script asserts it textually.
+    Exempt(&'static str),
+}
+
 /// A group's route declarations. Documented groups ride `OpenApiRouter` and contribute
 /// to the published contract; undocumented groups are plain axum routers and never
 /// enter the spec.
@@ -115,6 +135,7 @@ struct Group {
     build: GroupRoutes,
     body_limit: Option<BodyLimit>,
     serves: Serves,
+    preconditions: Preconditions,
 }
 
 /// The table. One row per group; the ordering below is the merge order in
@@ -122,22 +143,23 @@ struct Group {
 /// `Serves::BothBuilders` and are mounted in this order there too). The rationale a
 /// reviewer needs is at the row; the per-group lore is in the sibling files' docs.
 /// The skip is load-bearing: the audit scripts assert these rows TEXTUALLY
-/// (`key: "<group>", tier: <spelling>` must stay one greppable line), so rustfmt
-/// is not free to re-flow the table into multi-line struct literals.
+/// (`key: "<group>", tier: <spelling>` must stay one greppable line, its `preconditions:`
+/// designation included), so rustfmt is not free to re-flow the table into multi-line struct
+/// literals.
 #[rustfmt::skip]
 fn route_table() -> Vec<Group> {
     use GroupRoutes::*;
     vec![
         // By-design public: a health check discloses nothing and authenticates nobody.
-        Group { key: "public_routes", tier: Tier::Public, build: Documented(public_routes), body_limit: None, serves: Serves::AppOnly },
+        Group { key: "public_routes", tier: Tier::Public, build: Documented(public_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Exempt("by-design public: mounts no write method, so its own 405 is its answer") },
         // Self-service: authenticated, but no system-access gate — a caller managing
         // their own instance is a library caller, not an operator. A person's acts only: the
         // tier refuses a machine before any handler runs.
-        Group { key: "auth_only_routes", tier: Tier::HumanAuthOnly, build: Documented(auth_only_routes), body_limit: None, serves: Serves::AppOnly },
+        Group { key: "auth_only_routes", tier: Tier::HumanAuthOnly, build: Documented(auth_only_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused },
         // The one self-service read a machine keeps: its own profile and entitlements (how an
         // agent learns whether it is approved). Its own group so the machine-admitting AuthOnly
         // tier carries exactly this handler; `/api/profile`'s PATCH sits in `auth_only_routes`.
-        Group { key: "auth_only_status_routes", tier: Tier::AuthOnly, build: Documented(auth_only_status_routes), body_limit: None, serves: Serves::AppOnly },
+        Group { key: "auth_only_status_routes", tier: Tier::AuthOnly, build: Documented(auth_only_status_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused },
         // Default-deny for all data routes. Addition order (INNER → OUTER, so execution
         // runs outermost-first): require_system_access, require_auth, relay_trust,
         // DefaultBodyLimit. Relay-trust runs BEFORE the auth layers — it rejects nothing
@@ -148,49 +170,49 @@ fn route_table() -> Vec<Group> {
         // The inherited 25 MB ceiling is the OUTER layer so the doors that chose their
         // own limits (the blob rows below, `/api/query` inside the group) stay inner
         // and win on their routes — the network door's ruling 3, design §D4.
-        Group { key: "gated_routes", tier: Tier::Gated, build: Documented(gated_routes), body_limit: None, serves: Serves::AppOnly },
+        Group { key: "gated_routes", tier: Tier::Gated, build: Documented(gated_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused },
         // The system-admin surface: the gated stack with the machine refusal, its own row so
         // the operator surface is one auditable set. The tier admits any approved person; the
         // gate that makes these routes admin-only is the `&SystemAdmin` proof each service
         // requires, minted in the handler before dispatch (see `admin.rs` for the membership
         // rule). A machine is refused at the tier, before any lookup.
-        Group { key: "admin_routes", tier: Tier::HumanGated, build: Documented(admin_routes), body_limit: None, serves: Serves::AppOnly },
+        Group { key: "admin_routes", tier: Tier::HumanGated, build: Documented(admin_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused },
         // The two blob doors, at the gated tier with their own body limits INNER to the
         // tier stack so the decisions they chose win on their routes. The commit door's
         // bound is the config's D7 threshold plus multipart overhead — the transport
         // never fires first over a body the handler would legally accept.
-        Group { key: "blob_commit_routes", tier: Tier::Gated, build: Documented(blob_commit_routes), body_limit: Some(BodyLimit::CommitDoor), serves: Serves::AppOnly },
+        Group { key: "blob_commit_routes", tier: Tier::Gated, build: Documented(blob_commit_routes), body_limit: Some(BodyLimit::CommitDoor), serves: Serves::AppOnly, preconditions: Preconditions::Refused },
         // The segment door's bound is the platform ceiling the plan numbers pin
         // (4.5 MB), not the config — the staging ceiling is enforced with its own
         // vocabulary in the service.
-        Group { key: "blob_segment_routes", tier: Tier::Gated, build: Documented(blob_segment_routes), body_limit: Some(BodyLimit::Fixed(blob_doors::BLOB_SEGMENT_MAX_BODY_BYTES)), serves: Serves::AppOnly },
+        Group { key: "blob_segment_routes", tier: Tier::Gated, build: Documented(blob_segment_routes), body_limit: Some(BodyLimit::Fixed(blob_doors::BLOB_SEGMENT_MAX_BODY_BYTES)), serves: Serves::AppOnly, preconditions: Preconditions::Refused },
         // The shape declare POSTs, at the gated tier with their own body limit INNER to the tier
         // stack, so a schema-sized 512 KiB wins over the inherited 25 MiB on these two routes.
         // They share their paths with the list GETs in `gated_routes`; the routers merge by method.
-        Group { key: "shape_declare_routes", tier: Tier::Gated, build: Documented(shape_declare_routes), body_limit: Some(BodyLimit::Fixed(gated::SHAPE_DECLARE_MAX_BODY_BYTES)), serves: Serves::AppOnly },
+        Group { key: "shape_declare_routes", tier: Tier::Gated, build: Documented(shape_declare_routes), body_limit: Some(BodyLimit::Fixed(gated::SHAPE_DECLARE_MAX_BODY_BYTES)), serves: Serves::AppOnly, preconditions: Preconditions::Refused },
         // The three internal HMAC groups — one scheme, three secrets, three routers.
         // Signature gates mount in BOTH builders; losing one mount is not a downgrade
         // to authenticated-but-broad, it is the group served ungated on that surface.
         // The rate-limit layer rides the RECONCILE pair only (the base wiring applied
         // it there and nowhere else) and sits INNER to the signature so an unsigned
         // caller gets the 401 and never spends the signed caller's budget.
-        Group { key: "internal_routes", tier: Tier::InternalHmac(SignatureKind::Reconcile), build: Undocumented(internal_routes), body_limit: None, serves: Serves::BothBuilders },
-        Group { key: "slack_link_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackLink), build: Undocumented(slack_link_internal_routes), body_limit: None, serves: Serves::BothBuilders },
-        Group { key: "slack_mint_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackMint), build: Undocumented(slack_mint_internal_routes), body_limit: None, serves: Serves::BothBuilders },
+        Group { key: "internal_routes", tier: Tier::InternalHmac(SignatureKind::Reconcile), build: Undocumented(internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Refused },
+        Group { key: "slack_link_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackLink), build: Undocumented(slack_link_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Refused },
+        Group { key: "slack_mint_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackMint), build: Undocumented(slack_mint_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Refused },
         // The IdP's PKCE redirect target — carries no bearer and no signature by
         // design; its authentication is the code exchange plus the burned state nonce.
-        Group { key: "slack_link_public_routes", tier: Tier::SelfGated, build: Undocumented(slack_link_public_routes), body_limit: None, serves: Serves::AppOnly },
+        Group { key: "slack_link_public_routes", tier: Tier::SelfGated, build: Undocumented(slack_link_public_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Exempt("the IdP PKCE redirect target: GET only, and the IdP sends no precondition") },
         // Vercel crons — each handler checks EMBED_DISPATCH_SECRET itself, fail-closed
         // when unset. Served by both builders so the internal function keeps its
         // longer maxDuration for the same paths.
-        Group { key: "embed_internal_routes", tier: Tier::SelfGated, build: Undocumented(embed_internal_routes), body_limit: None, serves: Serves::BothBuilders },
+        Group { key: "embed_internal_routes", tier: Tier::SelfGated, build: Undocumented(embed_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Exempt("Vercel crons: none is a client write to a resource, and the scheduler sends no precondition") },
         // Vercel Connect's webhook intake — self-gated on the broker's RS256
         // attestation (a third party's signature against a remote JWKS, not a shared
         // secret), and create_app only: Connect forwards to the public host. The row's
         // body_limit is None because the door sets its own 25 MiB
         // (GITHUB_MAX_WEBHOOK_BYTES) INSIDE the group fn — the table column is not the
         // whole truth for this one door; the limit is not config-derivable at the table.
-        Group { key: "webhook_intake_routes", tier: Tier::SelfGated, build: Undocumented(webhook_intake_routes), body_limit: None, serves: Serves::AppOnly },
+        Group { key: "webhook_intake_routes", tier: Tier::SelfGated, build: Undocumented(webhook_intake_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::InHandler },
     ]
 }
 
@@ -211,6 +233,18 @@ fn mount_group(group: &Group, state: &AppState) -> Router<AppState> {
             router.layer(DefaultBodyLimit::max(blob_commit_body_limit(state)))
         }
         None => router,
+    };
+    // The precondition refusal next, before the tier, so it is inside every gate of the tier stack: it runs
+    // after `require_auth`, `refuse_machine`, `require_system_access` and the HMAC signature, and a
+    // caller one of them refuses meets that refusal exactly as it would without the header.
+    // `Router::layer` (not `route_layer`) so it also wraps the method router's fallback: an
+    // admitted caller sending an unmounted write with a policed header keeps the refusal, with
+    // the fallback's `Allow`.
+    let router = match group.preconditions {
+        Preconditions::Refused => {
+            router.layer(from_fn(preconditions::refuse_unhonoured_preconditions))
+        }
+        Preconditions::InHandler | Preconditions::Exempt(_) => router,
     };
     apply_tier(router, group.tier, state)
 }
@@ -371,12 +405,8 @@ pub fn create_internal_app(state: AppState) -> Router {
 fn apply_transport_layers(app: Router<AppState>, state: AppState) -> Router {
     let cors = temper_services::cors::cors_layer(&state.config.cors_origins);
 
-    // Applied to every mounted route before the fallback exists, so it is OUTER to each tier's
-    // auth stack (a refused precondition costs no lookup) and INNER to the base layers (the
-    // refusal carries the security headers, the root span and CORS like any other answer). An
-    // unmatched path still meets the fallback's 404. See `middleware::preconditions`.
-    let app = app.layer(from_fn(preconditions::refuse_unhonoured_preconditions));
-
+    // No precondition layer here: it runs inside each group's tier stack (`mount_group`), after
+    // authentication. Applied here, it would answer an anonymous caller before its 401.
     temper_services::transport::apply_base_layers(app)
         .layer(axum::middleware::from_fn(root_span))
         .layer(cors)
@@ -427,4 +457,224 @@ pub fn openapi_spec() -> utoipa::openapi::OpenApi {
     crate::openapi::OpenStringEnumAddon.modify(&mut spec);
     crate::openapi::ApidogFolderAddon.modify(&mut spec);
     spec
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use axum::http::{HeaderName, Method};
+
+    use super::*;
+    use crate::middleware::preconditions::{Honoured, HONOURED};
+
+    /// The tiers that apply a layer gate, after which a precondition layer can run.
+    fn has_layer_gate(tier: Tier) -> bool {
+        matches!(
+            tier,
+            Tier::AuthOnly
+                | Tier::HumanAuthOnly
+                | Tier::Gated
+                | Tier::HumanGated
+                | Tier::InternalHmac(_)
+        )
+    }
+
+    fn keys_where(pick: impl Fn(Preconditions) -> bool) -> BTreeSet<&'static str> {
+        route_table()
+            .into_iter()
+            .filter(|g| pick(g.preconditions))
+            .map(|g| g.key)
+            .collect()
+    }
+
+    // FAILS IF: a `Refused` row sits on a tier with no layer gate (a self-gated door or the public
+    // route would answer an anonymous caller 400 instead of its own answer), or a gated row is not
+    // `Refused` (its writes would drop a client's precondition unrefused).
+    #[test]
+    fn preconditions_refused_exactly_on_the_layer_gated_tiers() {
+        for group in route_table() {
+            assert_eq!(
+                group.preconditions == Preconditions::Refused,
+                has_layer_gate(group.tier),
+                "{}: tier {:?} is designated {:?}",
+                group.key,
+                group.tier,
+                group.preconditions
+            );
+        }
+    }
+
+    // FAILS IF: a group is exempted, or moved into the handler, without this list (the reviewed
+    // set) changing with it, or an exemption loses its reason.
+    #[test]
+    fn preconditions_exemptions_are_the_reviewed_set() {
+        assert_eq!(
+            keys_where(|p| matches!(p, Preconditions::Exempt(_))),
+            BTreeSet::from([
+                "embed_internal_routes",
+                "public_routes",
+                "slack_link_public_routes"
+            ]),
+        );
+        assert_eq!(
+            keys_where(|p| p == Preconditions::InHandler),
+            BTreeSet::from(["webhook_intake_routes"]),
+        );
+        for group in route_table() {
+            if let Preconditions::Exempt(reason) = group.preconditions {
+                assert!(!reason.trim().is_empty(), "{}: no reason", group.key);
+            }
+        }
+    }
+
+    // FAILS IF: a documented group that is not `Refused` (today only `public_routes`) gains a
+    // write: it would take a client's precondition and drop it unrefused.
+    #[test]
+    fn preconditions_no_unpoliced_documented_group_mounts_a_write() {
+        for group in route_table() {
+            let GroupRoutes::Documented(build) = group.build else {
+                continue;
+            };
+            if group.preconditions == Preconditions::Refused {
+                continue;
+            }
+            let spec = serde_json::to_value(build().split_for_parts().1).expect("spec");
+            for (path, item) in spec["paths"].as_object().into_iter().flatten() {
+                for method in item.as_object().into_iter().flatten().map(|(m, _)| m) {
+                    assert!(
+                        matches!(method.as_str(), "get" | "head" | "options" | "trace"),
+                        "{}: {method} {path} is a write on an unpoliced group",
+                        group.key
+                    );
+                }
+            }
+        }
+    }
+
+    /// The non-comment lines of a route file's source, above its test module.
+    fn route_code(source: &str) -> String {
+        source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("source")
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The method-router constructors a route file's code calls.
+    fn mounted_methods(code: &str) -> BTreeSet<&'static str> {
+        ["get(", "post(", "put(", "patch(", "delete(", "any(", "on("]
+            .into_iter()
+            .filter(|m| code.contains(m))
+            .collect()
+    }
+
+    // FAILS IF: the undocumented groups that are not `Refused` gain a method or a route without
+    // review: the Slack callback's exemption is for one GET, and the intake's in-handler check is
+    // in one handler, so a second route or a write on either would take a precondition unrefused.
+    // (The cron group is pinned to its nine paths in `embed_internal`'s own tests.) The literals
+    // name no full mount, so `check-openapi-routes.sh` does not read this test as one.
+    #[test]
+    fn preconditions_the_unpoliced_undocumented_doors_are_pinned() {
+        let callback = route_code(include_str!("slack_link_public.rs"));
+        assert_eq!(mounted_methods(&callback), BTreeSet::from(["get("]));
+        assert_eq!(callback.matches("route(").count(), 1);
+        let intake = route_code(include_str!("webhook_intake.rs"));
+        assert_eq!(mounted_methods(&intake), BTreeSet::from(["post("]));
+        assert_eq!(intake.matches("route(").count(), 1);
+        assert!(
+            include_str!("../handlers/webhook_intake.rs")
+                .contains("preconditions::refuse_unhonoured(&method, &headers)?;"),
+            "the intake handler must call the precondition check"
+        );
+    }
+
+    /// Every `(METHOD, route template)` a `Refused`, documented group mounts, read from the group's
+    /// own OpenAPI half (no state, no database).
+    fn refused_documented_operations() -> BTreeSet<(String, String)> {
+        let mut out = BTreeSet::new();
+        for group in route_table() {
+            let (Preconditions::Refused, GroupRoutes::Documented(build)) =
+                (group.preconditions, &group.build)
+            else {
+                continue;
+            };
+            let spec = serde_json::to_value(build().split_for_parts().1).expect("spec");
+            for (path, item) in spec["paths"].as_object().into_iter().flatten() {
+                for method in item.as_object().into_iter().flatten().map(|(m, _)| m) {
+                    out.insert((method.to_uppercase(), path.clone()));
+                }
+            }
+        }
+        out
+    }
+
+    /// The entries that do not name a documented route mounted, with that method, by a `Refused`
+    /// group, or that name a header the layer does not police.
+    fn honoured_violations(entries: &[Honoured]) -> Vec<String> {
+        let refused = refused_documented_operations();
+        entries
+            .iter()
+            .filter(|h| {
+                !refused.contains(&(h.method.as_str().to_string(), h.route.to_string()))
+                    || !crate::middleware::preconditions::POLICED.contains(&h.header)
+            })
+            .map(|h| format!("{} {} {}", h.method, h.route, h.header))
+            .collect()
+    }
+
+    // FAILS IF: an entry in `HONOURED` names an exempt route (not policed, so the entry is a no-op
+    // that reads as a promise), the webhook intake (whose check consults no entry), a misspelt
+    // template, a method the route does not mount, or a header the layer does not police.
+    #[test]
+    fn every_honoured_entry_names_a_route_a_refused_group_mounts() {
+        assert_eq!(honoured_violations(HONOURED), Vec::<String>::new());
+
+        let if_match = axum::http::header::IF_MATCH;
+        let entry = |method: Method, route: &'static str, header: HeaderName| Honoured {
+            method,
+            route,
+            header,
+        };
+        let refused = refused_documented_operations();
+        assert!(
+            refused.contains(&("PATCH".to_string(), "/api/resources/{id}".to_string())),
+            "the gated resource PATCH must be read from the table: {refused:?}"
+        );
+        // The check accepts the one shape of entry it is meant to, and bites on each wrong one.
+        assert!(honoured_violations(&[entry(
+            Method::PATCH,
+            "/api/resources/{id}",
+            if_match.clone()
+        )])
+        .is_empty());
+        for wrong in [
+            entry(Method::POST, "/api/health", if_match.clone()),
+            entry(Method::POST, "/api/embed/dispatch", if_match.clone()),
+            entry(Method::POST, "/api/intake/webhook", if_match.clone()),
+            entry(
+                Method::PATCH,
+                "/api/resources/{resource_id}",
+                if_match.clone(),
+            ),
+            entry(Method::PUT, "/api/resources/{id}", if_match.clone()),
+            entry(
+                Method::PATCH,
+                "/api/resources/{id}",
+                axum::http::header::IF_RANGE,
+            ),
+        ] {
+            assert_eq!(
+                honoured_violations(std::slice::from_ref(&wrong)).len(),
+                1,
+                "{} {} {} must be refused",
+                wrong.method,
+                wrong.route,
+                wrong.header
+            );
+        }
+    }
 }

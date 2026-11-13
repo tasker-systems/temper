@@ -8,22 +8,28 @@
 # applied in exactly one place (apply_tier). The table's rows are data, and this script asserts
 # them — the group set and each row's tier:
 #
-#   GROUP                        TIER                          POSTURE
-#   ---------------------------  ----------------------------  --------------------------------------------------------------
-#   auth_only_routes             HumanAuthOnly                 require_auth + refuse_machine         (JWT — an authenticated person)
-#   auth_only_status_routes      AuthOnly                      require_auth                          (JWT — person or machine: profile GET only)
-#   gated_routes                 Gated                         require_auth + require_system_access  (JWT + system access)
-#   admin_routes                 HumanGated                    gated stack + refuse_machine          (+ &SystemAdmin proof in every service)
-#   public_routes                Public                        (none)                                by-design public: /health
-#   blob_commit_routes           Gated (+ inner body limit)    same stack as gated_routes
-#   blob_segment_routes          Gated (+ inner body limit)    same stack as gated_routes
-#   shape_declare_routes         Gated (+ inner body limit)    same stack as gated_routes
-#   embed_internal_routes        SelfGated                     (none)                                self-gated: EMBED_DISPATCH_SECRET
-#   internal_routes              InternalHmac(Reconcile)       require_internal_signature            HMAC (INTERNAL_RECONCILE_SECRET)
-#   slack_link_internal_routes   InternalHmac(SlackLink)       require_slack_link_signature          HMAC (SLACK_LINK_SECRET)
-#   slack_mint_internal_routes   InternalHmac(SlackMint)       require_slack_mint_signature          HMAC (SLACK_MINT_SECRET)
-#   slack_link_public_routes     SelfGated                     (none)                                by-design public: PKCE+state callback
-#   webhook_intake_routes        SelfGated                     (none)                                self-gated: broker RS256 attestation
+#   GROUP                        TIER                          PRECONDITIONS  POSTURE
+#   ---------------------------  ----------------------------  -------------  --------------------------------------------------------------
+#   auth_only_routes             HumanAuthOnly                 Refused        require_auth + refuse_machine         (JWT — an authenticated person)
+#   auth_only_status_routes      AuthOnly                      Refused        require_auth                          (JWT — person or machine: profile GET only)
+#   gated_routes                 Gated                         Refused        require_auth + require_system_access  (JWT + system access)
+#   admin_routes                 HumanGated                    Refused        gated stack + refuse_machine          (+ &SystemAdmin proof in every service)
+#   public_routes                Public                        Exempt         (none)                                by-design public: /health
+#   blob_commit_routes           Gated (+ inner body limit)    Refused        same stack as gated_routes
+#   blob_segment_routes          Gated (+ inner body limit)    Refused        same stack as gated_routes
+#   shape_declare_routes         Gated (+ inner body limit)    Refused        same stack as gated_routes
+#   embed_internal_routes        SelfGated                     Exempt         (none)                                self-gated: EMBED_DISPATCH_SECRET
+#   internal_routes              InternalHmac(Reconcile)       Refused        require_internal_signature            HMAC (INTERNAL_RECONCILE_SECRET)
+#   slack_link_internal_routes   InternalHmac(SlackLink)       Refused        require_slack_link_signature          HMAC (SLACK_LINK_SECRET)
+#   slack_mint_internal_routes   InternalHmac(SlackMint)       Refused        require_slack_mint_signature          HMAC (SLACK_MINT_SECRET)
+#   slack_link_public_routes     SelfGated                     Exempt         (none)                                by-design public: PKCE+state callback
+#   webhook_intake_routes        SelfGated                     InHandler      (none)                                self-gated: broker RS256 attestation
+#
+# PRECONDITIONS is the row's `preconditions:` designation (routes::Preconditions): Refused applies
+# the If-Match / If-None-Match / If-Unmodified-Since refusal INNERMOST in the tier stack, after
+# every gate; InHandler is the intake handler's own call right after its attestation verifies;
+# Exempt carries its reviewed reason on the row. The designation is part of each pinned row below,
+# and the placement (inside mount_group, never in apply_transport_layers) is asserted after them.
 #
 # On webhook_intake_routes: the caller is Vercel Connect forwarding a third-party system's event.
 # It is not a temper principal, holds no temper token, and never will -- require_auth is not a
@@ -224,20 +230,47 @@ require_row() {
   }
 }
 
-require_row 'public_routes'              'Group { key: "public_routes", tier: Tier::Public, build: Documented(public_routes), body_limit: None, serves: Serves::AppOnly },'
-require_row 'auth_only_routes'           'Group { key: "auth_only_routes", tier: Tier::HumanAuthOnly, build: Documented(auth_only_routes), body_limit: None, serves: Serves::AppOnly },'
-require_row 'auth_only_status_routes'    'Group { key: "auth_only_status_routes", tier: Tier::AuthOnly, build: Documented(auth_only_status_routes), body_limit: None, serves: Serves::AppOnly },'
-require_row 'gated_routes'               'Group { key: "gated_routes", tier: Tier::Gated, build: Documented(gated_routes), body_limit: None, serves: Serves::AppOnly },'
-require_row 'admin_routes'               'Group { key: "admin_routes", tier: Tier::HumanGated, build: Documented(admin_routes), body_limit: None, serves: Serves::AppOnly },'
-require_row 'blob_commit_routes'         'Group { key: "blob_commit_routes", tier: Tier::Gated, build: Documented(blob_commit_routes), body_limit: Some(BodyLimit::CommitDoor), serves: Serves::AppOnly },'
-require_row 'blob_segment_routes'        'Group { key: "blob_segment_routes", tier: Tier::Gated, build: Documented(blob_segment_routes), body_limit: Some(BodyLimit::Fixed(blob_doors::BLOB_SEGMENT_MAX_BODY_BYTES)), serves: Serves::AppOnly },'
-require_row 'shape_declare_routes'       'Group { key: "shape_declare_routes", tier: Tier::Gated, build: Documented(shape_declare_routes), body_limit: Some(BodyLimit::Fixed(gated::SHAPE_DECLARE_MAX_BODY_BYTES)), serves: Serves::AppOnly },'
-require_row 'internal_routes'            'Group { key: "internal_routes", tier: Tier::InternalHmac(SignatureKind::Reconcile), build: Undocumented(internal_routes), body_limit: None, serves: Serves::BothBuilders },'
-require_row 'slack_link_internal_routes' 'Group { key: "slack_link_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackLink), build: Undocumented(slack_link_internal_routes), body_limit: None, serves: Serves::BothBuilders },'
-require_row 'slack_mint_internal_routes' 'Group { key: "slack_mint_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackMint), build: Undocumented(slack_mint_internal_routes), body_limit: None, serves: Serves::BothBuilders },'
-require_row 'slack_link_public_routes'   'Group { key: "slack_link_public_routes", tier: Tier::SelfGated, build: Undocumented(slack_link_public_routes), body_limit: None, serves: Serves::AppOnly },'
-require_row 'embed_internal_routes'      'Group { key: "embed_internal_routes", tier: Tier::SelfGated, build: Undocumented(embed_internal_routes), body_limit: None, serves: Serves::BothBuilders },'
-require_row 'webhook_intake_routes'      'Group { key: "webhook_intake_routes", tier: Tier::SelfGated, build: Undocumented(webhook_intake_routes), body_limit: None, serves: Serves::AppOnly },'
+require_row 'public_routes'              'Group { key: "public_routes", tier: Tier::Public, build: Documented(public_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Exempt("by-design public: mounts no write method, so its own 405 is its answer") },'
+require_row 'auth_only_routes'           'Group { key: "auth_only_routes", tier: Tier::HumanAuthOnly, build: Documented(auth_only_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused },'
+require_row 'auth_only_status_routes'    'Group { key: "auth_only_status_routes", tier: Tier::AuthOnly, build: Documented(auth_only_status_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused },'
+require_row 'gated_routes'               'Group { key: "gated_routes", tier: Tier::Gated, build: Documented(gated_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused },'
+require_row 'admin_routes'               'Group { key: "admin_routes", tier: Tier::HumanGated, build: Documented(admin_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused },'
+require_row 'blob_commit_routes'         'Group { key: "blob_commit_routes", tier: Tier::Gated, build: Documented(blob_commit_routes), body_limit: Some(BodyLimit::CommitDoor), serves: Serves::AppOnly, preconditions: Preconditions::Refused },'
+require_row 'blob_segment_routes'        'Group { key: "blob_segment_routes", tier: Tier::Gated, build: Documented(blob_segment_routes), body_limit: Some(BodyLimit::Fixed(blob_doors::BLOB_SEGMENT_MAX_BODY_BYTES)), serves: Serves::AppOnly, preconditions: Preconditions::Refused },'
+require_row 'shape_declare_routes'       'Group { key: "shape_declare_routes", tier: Tier::Gated, build: Documented(shape_declare_routes), body_limit: Some(BodyLimit::Fixed(gated::SHAPE_DECLARE_MAX_BODY_BYTES)), serves: Serves::AppOnly, preconditions: Preconditions::Refused },'
+require_row 'internal_routes'            'Group { key: "internal_routes", tier: Tier::InternalHmac(SignatureKind::Reconcile), build: Undocumented(internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Refused },'
+require_row 'slack_link_internal_routes' 'Group { key: "slack_link_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackLink), build: Undocumented(slack_link_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Refused },'
+require_row 'slack_mint_internal_routes' 'Group { key: "slack_mint_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackMint), build: Undocumented(slack_mint_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Refused },'
+require_row 'slack_link_public_routes'   'Group { key: "slack_link_public_routes", tier: Tier::SelfGated, build: Undocumented(slack_link_public_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Exempt("the IdP PKCE redirect target: GET only, and the IdP sends no precondition") },'
+require_row 'embed_internal_routes'      'Group { key: "embed_internal_routes", tier: Tier::SelfGated, build: Undocumented(embed_internal_routes), body_limit: None, serves: Serves::BothBuilders, preconditions: Preconditions::Exempt("Vercel crons: none is a client write to a resource, and the scheduler sends no precondition") },'
+require_row 'webhook_intake_routes'      'Group { key: "webhook_intake_routes", tier: Tier::SelfGated, build: Undocumented(webhook_intake_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::InHandler },'
+
+# The precondition refusal's placement. It must be applied in mount_group, keyed on the row's
+# designation and BEFORE apply_tier (so it is innermost, after every gate the tier applies), and
+# never in apply_transport_layers, where it would run before authentication and answer an
+# anonymous caller 400 instead of its 401.
+MOUNT_BODY="$(fn_body mount_group)"
+# Outside mount_group the layer may appear nowhere in the module: not in apply_transport_layers,
+# create_app or create_internal_app, where it would wrap the authentication stacks.
+for f in apply_transport_layers create_app create_internal_app; do
+  if [[ "$(fn_body "$f")" == *"refuse_unhonoured_preconditions"* ]]; then
+    echo "audit-route-auth: FAIL — precondition placement: refuse_unhonoured_preconditions is applied in $f" >&2
+    echo "  There it runs before every tier's authentication, and an unauthenticated caller sending the" >&2
+    echo "  header is answered 400 instead of its 401. Apply it per group, in mount_group." >&2
+    fail=1
+  fi
+done
+# Inside mount_group: the layer must be the Refused arm's own body (between `Preconditions::Refused =>`
+# and the next arm), and that match must come before apply_tier, so the layer is inside the gates.
+PRE_MOUNT="${MOUNT_BODY%%apply_tier(*}"
+REFUSED_ARM="${PRE_MOUNT#*Preconditions::Refused =>}"
+REFUSED_ARM="${REFUSED_ARM%%Preconditions::InHandler*}"
+if [[ "$PRE_MOUNT" != *"Preconditions::Refused =>"* || "$REFUSED_ARM" != *"refuse_unhonoured_preconditions"* ]]; then
+  echo "audit-route-auth: FAIL — precondition placement: mount_group does not apply refuse_unhonoured_preconditions to Refused groups before apply_tier" >&2
+  echo "  Added before the tier it is inside every gate: after require_auth, refuse_machine," >&2
+  echo "  require_system_access and the signature gates; anywhere else it answers callers they refuse." >&2
+  fail=1
+fi
 
 # The tier stacks: apply_tier is the one place a middleware stack is spelled. Every middleware
 # name the postures promise must appear in its body — a name dropped here un-gates every group
