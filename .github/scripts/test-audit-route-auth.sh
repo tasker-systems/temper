@@ -598,6 +598,146 @@ PYEOF2
       "an auth-covered group mounts a route not named handlers::<mod>::<fn>"
 done
 
+# --- (p) the precondition designation and placement ---
+# A self-gated cron row marked Refused would answer an anonymous caller 400 before its own gate; a
+# gated row marked Exempt would drop a client's precondition unrefused. The designation is part of
+# the pinned row, so either flip is a row change.
+FIX="${FIXTURE_DIR}/precondition_designation_flip"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys, re
+p = sys.argv[1]
+s = open(p).read()
+s, n = re.subn(r'(key: "embed_internal_routes".*preconditions: )Preconditions::Exempt\("[^"]*"\)',
+               r'\1Preconditions::Refused', s)
+assert n == 1, n
+open(p, "w").write(s)
+PYEOF
+run_test "embed_internal_routes designation flipped to Refused: fails" "$FIX" 1 \
+    "table row changed"
+
+FIX="${FIXTURE_DIR}/precondition_gated_exempted"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = 'key: "gated_routes", tier: Tier::Gated, build: Documented(gated_routes), body_limit: None, serves: Serves::AppOnly, preconditions: Preconditions::Refused'
+assert old in s
+s = s.replace(old, old.replace('Preconditions::Refused', 'Preconditions::Exempt("x")'), 1)
+open(p, "w").write(s)
+PYEOF
+run_test "gated_routes designation flipped to Exempt: fails" "$FIX" 1 \
+    "table row changed"
+
+# The layer moved back to the transport level: it would run before authentication again.
+FIX="${FIXTURE_DIR}/precondition_at_transport"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+marker = "let cors = temper_services::cors::cors_layer(&state.config.cors_origins);"
+assert marker in s
+s = s.replace(marker, marker + "\n    let app = app.layer(from_fn(preconditions::refuse_unhonoured_preconditions));", 1)
+open(p, "w").write(s)
+PYEOF
+run_test "precondition layer applied in apply_transport_layers: fails" "$FIX" 1 \
+    "refuse_unhonoured_preconditions is applied 2 times"
+
+# The layer applied AFTER apply_tier would be OUTER to the gates, so a refused caller meets it.
+FIX="${FIXTURE_DIR}/precondition_outside_tier"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys, re
+p = sys.argv[1]
+s = open(p).read()
+s, n = re.subn(r"    let router = match group\.preconditions \{.*?\n    \};\n    apply_tier\(router, group\.tier, state\)",
+               "    let router = apply_tier(router, group.tier, state);\n    match group.preconditions {\n        Preconditions::Refused => router.layer(from_fn(preconditions::refuse_unhonoured_preconditions)),\n        _ => router,\n    }",
+               s, count=1, flags=re.S)
+assert n == 1, n
+open(p, "w").write(s)
+PYEOF
+run_test "precondition layer applied after apply_tier: fails" "$FIX" 1 \
+    "does not apply refuse_unhonoured_preconditions to Refused groups before apply_tier"
+
+# The arms swapped: Refused groups get nothing and every other group gets the layer.
+FIX="${FIXTURE_DIR}/precondition_arms_swapped"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys, re
+p = sys.argv[1]
+s = open(p).read()
+s, n = re.subn(r"        Preconditions::Refused => \{\n(.*?)\n        \}\n        Preconditions::InHandler \| Preconditions::Exempt\(_\) => router,",
+               r"        Preconditions::Refused => router,\n        Preconditions::InHandler | Preconditions::Exempt(_) => {\n\1\n        }",
+               s, count=1, flags=re.S)
+assert n == 1, n
+open(p, "w").write(s)
+PYEOF
+run_test "precondition match arms swapped: fails" "$FIX" 1 \
+    "does not apply refuse_unhonoured_preconditions to Refused groups before apply_tier"
+
+# The layer added in an app builder rather than the transport function.
+FIX="${FIXTURE_DIR}/precondition_in_builder"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+marker = "    apply_transport_layers(app, state)\n}\n\n/// The internal/system-only app"
+assert marker in s
+s = s.replace(marker, "    let app = app.layer(from_fn(preconditions::refuse_unhonoured_preconditions));\n" + marker, 1)
+open(p, "w").write(s)
+PYEOF
+run_test "precondition layer applied in create_app: fails" "$FIX" 1 \
+    "refuse_unhonoured_preconditions is applied 2 times"
+
+# A second, outer layer wrapped around apply_tier's result, with the correct arm left in place.
+FIX="${FIXTURE_DIR}/precondition_around_tier"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = "    apply_tier(router, group.tier, state)\n}"
+assert old in s
+s = s.replace(old, "    apply_tier(router, group.tier, state).layer(from_fn(preconditions::refuse_unhonoured_preconditions))\n}", 1)
+open(p, "w").write(s)
+PYEOF
+run_test "precondition layer also wrapped around apply_tier: fails" "$FIX" 1 \
+    "refuse_unhonoured_preconditions is applied 2 times"
+
+# The layer added inside a tier arm, outside a gate.
+FIX="${FIXTURE_DIR}/precondition_in_tier_arm"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = "Tier::AuthOnly => router.layer(from_fn_with_state(state.clone(), auth::require_auth)),"
+assert old in s
+s = s.replace(old, "Tier::AuthOnly => router.layer(from_fn_with_state(state.clone(), auth::require_auth)).layer(from_fn(preconditions::refuse_unhonoured_preconditions)),", 1)
+open(p, "w").write(s)
+PYEOF
+run_test "precondition layer added in an apply_tier arm: fails" "$FIX" 1 \
+    "refuse_unhonoured_preconditions is applied 2 times"
+
+# The match split so the layer rides the Exempt arm and Refused gets nothing.
+FIX="${FIXTURE_DIR}/precondition_on_exempt_arm"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys, re
+p = sys.argv[1]
+s = open(p).read()
+s, n = re.subn(r"        Preconditions::Refused => \{\n(.*?)\n        \}\n        Preconditions::InHandler \| Preconditions::Exempt\(_\) => router,",
+               r"        Preconditions::Refused => router,\n        Preconditions::Exempt(_) => {\n\1\n        }\n        Preconditions::InHandler => router,",
+               s, count=1, flags=re.S)
+assert n == 1, n
+open(p, "w").write(s)
+PYEOF
+run_test "precondition layer on the Exempt arm: fails" "$FIX" 1 \
+    "does not apply refuse_unhonoured_preconditions to Refused groups before apply_tier"
+
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"
 [ "$FAIL" -eq 0 ]

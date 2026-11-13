@@ -151,4 +151,26 @@ mod tests {
             "embed_internal.rs routes vs vercel.json crons"
         );
     }
+
+    // FAILS IF: a route joins (or leaves) this group without review. The group is `Exempt` from
+    // the precondition refusal in the route table, and that exemption was granted for exactly
+    // these nine cron doors; adding a door here would extend it silently.
+    #[test]
+    fn the_precondition_exemption_covers_exactly_the_nine_crons() {
+        let nine: BTreeSet<String> = [
+            "/api/embed/dispatch",
+            "/api/embed/warm",
+            "/api/region/dispatch",
+            "/api/erasure/drain",
+            "/api/sensitivity/sweep",
+            "/api/shape/reconcile",
+            "/api/slack/intents/reap",
+            "/api/as/reap",
+            "/api/internal-calls/health",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        assert_eq!(mounted_paths(), nine);
+    }
 }

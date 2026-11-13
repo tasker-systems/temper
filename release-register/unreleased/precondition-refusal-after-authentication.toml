@@ -1,0 +1,42 @@
+title    = "The 400 PRECONDITION_NOT_HONOURED refusal runs after authentication, so only a caller a route admits ever sees it"
+pr       = "self"
+classes  = ["behavioral"]
+surfaces = ["http"]
+status   = "signal-only"
+body = '''
+What changed: the refusal of If-Match, If-None-Match and If-Unmodified-Since on a write
+(temper_api::middleware::preconditions) ran as one layer outside every route group's
+authentication. It now runs inside each group's middleware stack, after every gate the group
+applies: require_auth, the machine refusal, the system-access gate, and the internal HMAC
+signature gates. Which groups it covers is declared per group in the route table, never
+inferred from the method:
+- refused: every bearer-authenticated group and the three HMAC signature groups;
+- checked in the handler: the webhook intake, right after its broker attestation verifies and
+  before anything is resolved or written;
+- exempt, each with its reason at the table row: the nine Vercel cron doors, the Slack link
+  callback, and /api/health.
+
+Who observes it: a caller a route's gate refuses (no token, a garbage or expired one, a
+deactivated account, a machine on a human-only route, an unapproved profile, an unsigned internal
+call, an unattested webhook) that sends one of these headers again gets exactly the answer it got
+before the refusal existed: the same status, body and Allow as the same request without the
+header. That restores the rule that an unauthenticated caller learns nothing except from the
+designated public routes. The cron doors answer as they did before the refusal existed, so on the
+public host the cron host pin's 404 is again the answer to a header-bearing request. An admitted
+caller is still refused with 400 PRECONDITION_NOT_HONOURED, including for a method the path does
+not mount (with the method router's Allow). Unchanged: reads, an unmatched path's 404, and the
+error envelope.
+
+This supersedes the placement that write-preconditions-refused-unhonoured states (before
+authentication, so an anonymous request got 400 where it got 401, and an unmounted method got 400
+where it got 405); both entries are in this window, so the release carries only this placement.
+
+Why behavioral and not additive: no shape moved and openapi.json is unchanged; the answer to
+the same request changed for callers the gates refuse. Skew holds in both directions, since no
+first-party client sends these headers. Review-owned.
+
+Witnesses: crates/temper-api/tests/unhonoured_precondition_test.rs (anonymous equivalence across
+every probed tier, gate order, intake, unmounted writes, CORS), the route-table tests in
+temper_api::routes, and .github/scripts/audit-route-auth.sh with its bite tests. Release
+relevance: signal-only.
+'''
