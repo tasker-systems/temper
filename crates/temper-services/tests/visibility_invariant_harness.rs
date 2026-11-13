@@ -262,6 +262,35 @@ const FIXED_GRANTS: [GrantSpec; 3] = [
     },
 ];
 
+// Write grants that keep two modify arms live on every seed: the context-grant and cogmap-grant
+// arms of can_modify_resource's container cascade, which the randomized matrix does not reliably
+// reach. They are applied AFTER the randomized matrix (see Plan::generate), replacing any drawn
+// grant on the same pair, so the generator's stream, and every other grant an older seed draws,
+// is unchanged by them.
+const MODIFY_ARM_GRANTS: [GrantSpec; 2] = [
+    // henry's only team is the tombstoned ghost, which confers nothing, so this grant is his only
+    // way to author or to read ctx-shared: both sides of modify⇒visible run through the grant.
+    GrantSpec {
+        subject: Subject::Context(C_SHARED),
+        principal: Principal::Profile(P_HENRY),
+        can_read: true,
+        can_write: true,
+        can_delete: false,
+        can_grant: false,
+    },
+    // A cogmap outside the admin-only regime and joined to no team, so with the resource's own
+    // grants stripped (the arm witness) gina reads and authors it through this grant alone. gina,
+    // not dana, so dana's read-only grant stays the cogmap READ witness.
+    GrantSpec {
+        subject: Subject::Cogmap(M_GRANT),
+        principal: Principal::Profile(P_GINA),
+        can_read: true,
+        can_write: true,
+        can_delete: false,
+        can_grant: false,
+    },
+];
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Anchor {
     Context(usize),
@@ -390,6 +419,12 @@ impl Plan {
             if rng.chance(30) {
                 extra_memberships.push((profile, T_PAYROLL, "member"));
             }
+        }
+
+        // The modify-arm grants, last, after every draw: each replaces any drawn grant on its pair.
+        for fixed in MODIFY_ARM_GRANTS {
+            grants.retain(|g| (g.subject, g.principal) != (fixed.subject, fixed.principal));
+            grants.push(fixed);
         }
 
         Plan {
@@ -1198,6 +1233,20 @@ async fn i1_read_duality(pool: &PgPool, w: &World) -> sqlx::Result<Vec<Violation
 async fn i2_write_implies_read(pool: &PgPool, w: &World) -> sqlx::Result<Vec<Violation>> {
     let mut violations = Vec::new();
 
+    // The exclusion's premise (see modify⇒visible below): no world profile is a system admin.
+    let admins: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT p FROM unnest($1::uuid[]) AS p WHERE is_system_admin(p) ORDER BY 1",
+    )
+    .bind(&w.profiles)
+    .fetch_all(pool)
+    .await?;
+    if !admins.is_empty() {
+        violations.push(format!(
+            "I2: the world holds system admins {admins:?}; modify⇒visible does not yet hold for \
+             an admin on admin-only-regime maps, so exclude that case explicitly before adding one"
+        ));
+    }
+
     for (p_idx, &profile) in w.profiles.iter().enumerate() {
         let who = PROFILE_HANDLES[p_idx];
 
@@ -1249,6 +1298,36 @@ async fn i2_write_implies_read(pool: &PgPool, w: &World) -> sqlx::Result<Vec<Vio
                 violations.push(format!(
                     "I2: can(write) vs can_modify_resource disagree — profile {who}, \
                      resource {id}: can says {write}, can_modify says {modify}"
+                ));
+            }
+        }
+
+        // modify⇒visible: can_modify_resource ⇒ membership in resources_visible_to, the set the
+        // resource read door (GET /api/resources/{id}) answers from. Today this follows from I1
+        // (can(read) ⇔ resources_visible_to) and the two I2 checks above (can(write) ⇒ can(read),
+        // can(write) ⇔ can_modify_resource). It is asserted directly so that a change breaking
+        // any link in that chain fails here, by name: a write refusal that echoes current values
+        // is only safe if no one can modify what they cannot read.
+        //
+        // Excluded case, not reachable from this world: a map in the admin-only regime (the L0
+        // kernel, or a map bound to temper-system or the gating team) is authored by a system
+        // admin alone, and resources_visible_to has no admin arm, so an admin who cannot otherwise
+        // read such a map's nodes could still modify them. That gap is known and tracked to be
+        // closed separately. This world holds no system admin, binds no map to an instance team
+        // and homes nothing in the kernel, so the case cannot arise. No system admin is enough on
+        // its own to rule it out, and that is checked above, so a world that grows an admin must
+        // decide the exclusion here instead of failing on it by surprise.
+        let visible = scalar_set(
+            pool,
+            "SELECT resource_id FROM resources_visible_to($1) ORDER BY 1",
+            profile,
+        )
+        .await?;
+        for (id, modify) in &can_modify {
+            if *modify && !visible.contains(id) {
+                violations.push(format!(
+                    "I2: can_modify_resource without resources_visible_to — profile {who}, \
+                     resource {id}"
                 ));
             }
         }
@@ -2216,6 +2295,119 @@ async fn the_world_exercises_its_arms(pool: PgPool) -> sqlx::Result<()> {
         !sees(P_DANA, R_PERSONAL).await?,
         "negative control broken: dana sees into the owner's personal context"
     );
+
+    // Modify-arm witnesses, seed-independent: the owner home, a team-owned context authored by
+    // direct membership, a context write grant and a cogmap write grant, the last three also
+    // through can_modify_resource's container cascade. Each runs in a rolled-back transaction that
+    // first deletes every grant on the resource and its container except the witness's own fixed
+    // grant (`keep`), so no randomized grant answers for the arm; it then asserts the gate admits
+    // AND that the subject stays readable, so modify⇒visible is witnessed through the arm alone.
+    // These pin admission, not refusal: the resource-level profile and team write-grant arms, and
+    // any widening of a gate past its fixtures, are reached only through the randomized matrix.
+    let none = Uuid::nil();
+    let (r_ctx_eng, r_shared, r_map_grant) = (
+        w.resources[R_CTX_ENG],
+        w.resources[R_SHARED],
+        w.resources[R_MAP_GRANT],
+    );
+    let (c_eng, c_shared, m_grant) = (w.contexts[C_ENG], w.contexts[C_SHARED], w.cogmaps[M_GRANT]);
+    const READ_RESOURCE: &str =
+        "EXISTS (SELECT 1 FROM resources_visible_to($1) v WHERE v.resource_id = $2)";
+    const READ_CONTEXT: &str = "can('kb_profiles', $1, 'read', 'kb_contexts', $2)";
+    const READ_COGMAP: &str = "can('kb_profiles', $1, 'read', 'kb_cogmaps', $2)";
+    for (gate, read, who, subject, strip, keep, arm) in [
+        (
+            "can_modify_resource",
+            READ_RESOURCE,
+            P_OWNER,
+            r_ctx_eng,
+            [r_ctx_eng, c_eng],
+            none,
+            "owner home",
+        ),
+        (
+            "context_authorable_by_profile",
+            READ_CONTEXT,
+            P_GINA,
+            c_eng,
+            [c_eng, c_eng],
+            none,
+            "team-owned context, maintainer",
+        ),
+        (
+            "can_modify_resource",
+            READ_RESOURCE,
+            P_GINA,
+            r_ctx_eng,
+            [r_ctx_eng, c_eng],
+            none,
+            "team-owned context, cascaded",
+        ),
+        (
+            "context_authorable_by_profile",
+            READ_CONTEXT,
+            P_HENRY,
+            c_shared,
+            [c_shared, c_shared],
+            c_shared,
+            "context write grant",
+        ),
+        (
+            "can_modify_resource",
+            READ_RESOURCE,
+            P_HENRY,
+            r_shared,
+            [r_shared, c_shared],
+            c_shared,
+            "context write grant, cascaded",
+        ),
+        (
+            "cogmap_authorable_by_profile",
+            READ_COGMAP,
+            P_GINA,
+            m_grant,
+            [m_grant, m_grant],
+            m_grant,
+            "cogmap write grant",
+        ),
+        (
+            "can_modify_resource",
+            READ_RESOURCE,
+            P_GINA,
+            r_map_grant,
+            [r_map_grant, m_grant],
+            m_grant,
+            "cogmap write grant, cascaded",
+        ),
+    ] {
+        let mut tx = pool.begin().await?;
+        sqlx::query(
+            "DELETE FROM kb_access_grants WHERE subject_id = ANY($1) \
+               AND NOT (subject_id = $2 AND principal_table = 'kb_profiles' AND principal_id = $3)",
+        )
+        .bind(&strip[..])
+        .bind(keep)
+        .bind(w.profiles[who])
+        .execute(&mut *tx)
+        .await?;
+        let (admitted, reads): (bool, bool) =
+            sqlx::query_as(&format!("SELECT {gate}($1, $2), {read}"))
+                .bind(w.profiles[who])
+                .bind(subject)
+                .fetch_one(&mut *tx)
+                .await?;
+        tx.rollback().await?;
+        assert!(
+            admitted,
+            "modify arm broken: {gate} refuses {} via {arm}",
+            PROFILE_HANDLES[who]
+        );
+        assert!(
+            reads,
+            "modify⇒visible broken: {} may modify via {arm} but cannot read the subject",
+            PROFILE_HANDLES[who]
+        );
+    }
 
     // the machine interior arm: a resource homed IN the bridge map is accessible to the map's
     // machine principal regardless of teams or grants.
