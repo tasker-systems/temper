@@ -30,7 +30,7 @@ class ContentResponse(BaseModel):
     Response body for resource content.
     """ # noqa: E501
     managed_meta: Optional[ManagedMeta] = Field(default=None, description="Typed server-side managed_meta from kb_resource_manifests — the closed Property vocabulary. Only the named `temper-*` keys are represented; there is no catch-all. Used by CLI sync pull to reconstruct complete frontmatter (identity/type/home come from the resource row, not here).")
-    markdown: StrictStr
+    markdown: StrictStr = Field(description="The body. For a `verbatim` resource ([`BodyStorage::Verbatim`]) these are the stored bytes unchanged; for a `derived` one, a reconstruction from chunks.")
     open_meta: Optional[Any] = None
     resource_id: UUID = Field(description="A `kb_resources.id` value.")
     __properties: ClassVar[List[str]] = ["managed_meta", "markdown", "open_meta", "resource_id"]

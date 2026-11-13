@@ -202,6 +202,43 @@ pub struct ResourceView {
     /// version skew, as with `ingest_state`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body_storage: Option<BodyStorage>,
+    /// Byte identity of the body: proves a cached copy is Temper's bytes without downloading the
+    /// body again. Bare lowercase hex.
+    ///
+    /// It is the sha256 of the live blocks' `bytes_sha256` values (each the bare lowercase hex
+    /// sha256 of that block's raw bytes), concatenated in `seq` order with no separator. Get the
+    /// per-block values and the block boundaries from the `byte-blocks` section of this same read
+    /// ([`Self::byte_blocks`]). To verify a whole cached body, cut it at those byte lengths in
+    /// `seq` order, sha256 each piece, concatenate the hex digests, and sha256 that string. To
+    /// verify one block, compare its sha256 with its `bytes_sha256`. The concatenation of the
+    /// pieces is exactly the body `content` serves.
+    ///
+    /// Present only when every live block carries its raw bytes, which is when `body_storage` is
+    /// `verbatim`. It is absent on a `derived` body, which reads back as a reconstruction no stored
+    /// hash describes, and absent from a server that predates the field. Unlike `body_hash` it moves
+    /// on every byte change, a heading-only edit included, and stays put across a re-block that
+    /// keeps the bytes and their block boundaries.
+    ///
+    /// Beside `content` or `byte_blocks` (a read that asked for the `body` or `byte-blocks`
+    /// section) it is computed in the same statement as them, so all three always describe the
+    /// same bytes. The rest of the view (`body_storage`, `body_hash`, `updated`) comes from the
+    /// identity read just before, so a write landing between the two can leave those describing
+    /// the earlier body: `body_storage` may then read `verbatim` beside an absent `bytes_merkle`,
+    /// or the reverse. Trust `bytes_merkle` and `byte_blocks` for the bytes beside them. Without
+    /// either section it is read with the rest of this view, in one statement; a write after the
+    /// read can move it, exactly as it moves `updated`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes_merkle: Option<String>,
+    /// The body's block boundaries and per-block byte hashes, in `seq` order: what a client needs
+    /// to check a whole cached body against [`Self::bytes_merkle`]. The `byte-blocks` section.
+    ///
+    /// Absent when the section was not requested, and absent when it was but the body is not
+    /// wholly verbatim (exactly when `bytes_merkle` is absent): a `derived` body has no stored
+    /// bytes to cut it by. It is served under the same visibility gate as `content`, and computed
+    /// in the same statement as `bytes_merkle` (and as `content`, when the body was requested
+    /// too), so the boundaries always describe the bytes beside them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub byte_blocks: Option<Vec<ByteBlock>>,
 
     // ---- the two metadata tiers, and the body ----------------------------------
     /// Typed managed (`temper-*`) frontmatter — the closed Property vocabulary.
@@ -246,6 +283,21 @@ pub struct ResourceView {
     /// cannot read, and it names no team or person.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reach: Option<Reach>,
+}
+
+/// One live block of a verbatim body, as [`ResourceView::byte_blocks`] serves it.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "resource_view.ts"))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct ByteBlock {
+    /// The block's position in the body. Blocks are served in ascending `seq`.
+    pub seq: i32,
+    /// The length in bytes (UTF-8) of the block's raw bytes: where it ends in the body.
+    pub bytes_len: u64,
+    /// The bare lowercase hex sha256 of the block's raw bytes.
+    pub bytes_sha256: String,
 }
 
 impl ResourceView {
@@ -349,6 +401,8 @@ pub enum ResourceSection {
     Edges,
     /// Derived embedding-readiness — [`ResourceView::embedding_status`].
     EmbeddingStatus,
+    /// The verbatim body's block boundaries and byte hashes — [`ResourceView::byte_blocks`].
+    ByteBlocks,
 }
 
 impl ResourceSection {
@@ -360,11 +414,12 @@ impl ResourceSection {
     /// hand-copying it into a fourth place that then drifts.
     ///
     /// **This is the `show` door's vocabulary, not every door's** — see [`Self::LIST`].
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Body,
         Self::OpenMeta,
         Self::Edges,
         Self::EmbeddingStatus,
+        Self::ByteBlocks,
     ];
 
     /// The sections the **show** door accepts — `ALL` minus [`Self::Edges`].
@@ -374,7 +429,12 @@ impl ResourceSection {
     /// accept-and-ignore shape the LIST door's ruling refuses. Accepting the word on
     /// show is the same shape one door over; the refusal now names the door's own
     /// vocabulary rather than answering 200 with less than was asked for.
-    pub const SHOW: [Self; 3] = [Self::Body, Self::OpenMeta, Self::EmbeddingStatus];
+    pub const SHOW: [Self; 4] = [
+        Self::Body,
+        Self::OpenMeta,
+        Self::EmbeddingStatus,
+        Self::ByteBlocks,
+    ];
 
     /// The sections the **list** door accepts — the one definition, read by both the CLI's
     /// `--with`/`--without` parser and the server's `sections=` parse.
@@ -399,6 +459,11 @@ impl ResourceSection {
     /// **[`Self::EmbeddingStatus`] is present because it fills like `open-meta`, not like
     /// `body`**: `embedding_status_batch` is ONE statement for the whole page (`fill_sections`),
     /// so a page of statuses costs what one row costs and carries no body-style unboundedness.
+    ///
+    /// **[`Self::ByteBlocks`] is absent because its payload is a list per row**: a page of
+    /// boundaries scales with rows times blocks. The `bytes_merkle` every row already carries is
+    /// one value, though computing it reads each row's live blocks' stored hashes (an index scan
+    /// per row, no body read) — the per-row cost the list's byte identity was accepted at.
     pub const LIST: [Self; 2] = [Self::OpenMeta, Self::EmbeddingStatus];
 
     /// Parse a section name against a door's accepted set, naming **only that set** in the
@@ -433,6 +498,7 @@ impl ResourceSection {
             Self::OpenMeta => "open-meta",
             Self::Edges => "edges",
             Self::EmbeddingStatus => "embedding-status",
+            Self::ByteBlocks => "byte-blocks",
         }
     }
 }
@@ -565,6 +631,8 @@ mod tests {
             ingest_state: Some(IngestState::Complete),
             ingest_ended: None,
             body_storage: Some(BodyStorage::Derived),
+            bytes_merkle: None,
+            byte_blocks: None,
             managed_meta: ManagedMeta::default(),
             open_meta: None,
             content: None,
@@ -756,6 +824,7 @@ mod tests {
             (ResourceSection::OpenMeta, "open-meta"),
             (ResourceSection::Edges, "edges"),
             (ResourceSection::EmbeddingStatus, "embedding-status"),
+            (ResourceSection::ByteBlocks, "byte-blocks"),
         ] {
             assert_eq!(
                 serde_json::to_value(section).expect("serialize"),
@@ -787,7 +856,13 @@ mod tests {
             .expect_err("`openMeta` is not a section name");
         let msg = err.to_string();
 
-        for valid in ["body", "open-meta", "edges", "embedding-status"] {
+        for valid in [
+            "body",
+            "open-meta",
+            "edges",
+            "embedding-status",
+            "byte-blocks",
+        ] {
             assert!(
                 msg.contains(valid),
                 "the refusal must name `{valid}` so the caller can recover from it alone: {msg}"
@@ -848,7 +923,7 @@ mod tests {
     /// legitimately serves it (MCP's `get_resource`) and would pass every assertion above.
     #[test]
     fn the_show_door_still_accepts_every_section() {
-        let all = SectionSet::parse_csv("body,open-meta,edges,embedding-status")
+        let all = SectionSet::parse_csv("body,open-meta,edges,embedding-status,byte-blocks")
             .expect("show takes every section");
         for section in ResourceSection::ALL {
             assert!(

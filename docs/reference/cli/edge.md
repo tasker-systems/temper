@@ -34,6 +34,8 @@ Assert a new relationship between two resources.
 
 Sends a `POST /api/relationships` request. Returns a `edge_handle` that identifies the relationship chain for subsequent retype/reweight/fold.
 
+The edge is homed in the source's home as it stands when the edge is asserted. A later move of the source does not move the edge: it stays homed, and in that context's change feed, where it was asserted.
+
 Usage: temper edge assert [OPTIONS] --kind <KIND> --polarity <POLARITY> --label <LABEL> <SOURCE> <TARGET>
 
 Arguments:

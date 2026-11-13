@@ -344,3 +344,200 @@ fn block_with_raw(seq: i32, raw: Option<&str>) -> PreparedBlock {
         raw_text: raw.map(str::to_owned),
     }
 }
+
+/// One legacy-shaped block for `text`: the REAL chunker's chunks (so its derived `block_body_hash`
+/// matches what a rewrite of the same text computes) and NO stored bytes — the shape of a block
+/// written before `kb_block_content` existed (migration 20260714000002 has no backfill).
+fn derived_block_for(seq: i32, text: &str) -> PreparedBlock {
+    let chunks = temper_ingest::chunk::chunk_markdown(text)
+        .into_iter()
+        .map(|c| {
+            let mut embedding = vec![0.0_f32; 768];
+            embedding[0] = 1.0;
+            PreparedChunk {
+                chunk_id: ChunkId::from(Uuid::now_v7()),
+                chunk_index: c.chunk_index as i32,
+                content_hash: c.content_hash,
+                content: c.content,
+                embedding: Some(embedding),
+                embedded_with: None,
+                // The production mapping (`content::map_heading`): empty path / depth 0 ⇒ NULL.
+                header_path: (!c.header_path.is_empty()).then_some(c.header_path),
+                heading_depth: (c.heading_depth > 0).then_some(c.heading_depth as i16),
+            }
+        })
+        .collect();
+    PreparedBlock {
+        block_id: BlockId::from(Uuid::now_v7()),
+        seq,
+        role: None,
+        chunks,
+        incorporated: vec![],
+        raw_text: None,
+    }
+}
+
+async fn body_hash(pool: &sqlx::PgPool, id: ResourceId) -> Option<String> {
+    sqlx::query_scalar("SELECT body_hash FROM kb_resources WHERE id = $1")
+        .bind(id.uuid())
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+async fn live_block_ids(pool: &sqlx::PgPool, id: ResourceId) -> Vec<Uuid> {
+    sqlx::query_scalar(
+        "SELECT id FROM kb_content_blocks WHERE resource_id = $1 AND NOT is_folded ORDER BY seq",
+    )
+    .bind(id.uuid())
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+async fn live_chunk_ids(pool: &sqlx::PgPool, id: ResourceId) -> Vec<Uuid> {
+    sqlx::query_scalar(
+        "SELECT c.id FROM kb_chunks c JOIN kb_content_blocks b ON b.id = c.block_id \
+          WHERE b.resource_id = $1 AND NOT b.is_folded AND c.is_current ORDER BY c.id",
+    )
+    .bind(id.uuid())
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_whole_body_update_turns_a_derived_body_verbatim(pool: sqlx::PgPool) {
+    // A resource created before verbatim storage holds blocks with chunks and no bytes, so it
+    // reads `derived`. A whole-body update (body set, no `content_block`) takes the replace-shaped
+    // partition, where a byteless incumbent can never be kept (`compute_replace_partition`'s keep
+    // needs byte equality), so every section is a CREATED block carrying its slice's bytes. The
+    // resource turns `verbatim` and reads back byte-exact, even when the new text is IDENTICAL to
+    // the old (the incumbents' derived hashes match, and they still fold). This is the conversion a
+    // consumer can run on a legacy corpus.
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let ctx = make_context(&pool, owner, "derived-convert").await;
+
+    let section_a = "# Alpha\n\nalpha prose, line one.\n\n";
+    let section_b = "# Beta\n\nbeta prose\r\nwith a CRLF and a trailing newline.\n";
+    let body = format!("{section_a}{section_b}");
+
+    let blocks = [
+        derived_block_for(0, section_a),
+        derived_block_for(1, section_b),
+    ];
+    let mut tx = pool.begin().await.unwrap();
+    let id = fire(
+        &mut tx,
+        SeedAction::ResourceCreate {
+            title: "legacy",
+            origin_uri: "test://legacy",
+            resource_id: None,
+            home: AnchorRef::context(ctx),
+            owner,
+            originator: None,
+            blocks: &blocks,
+            doc_type: Some("concept"),
+            emitter,
+            segmented: false,
+        },
+    )
+    .await
+    .unwrap()
+    .resource()
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    assert_eq!(body_storage(&pool, id).await, "derived", "the legacy shape");
+    let blocks_before = live_block_ids(&pool, id).await;
+    let chunks_before = live_chunk_ids(&pool, id).await;
+    assert_eq!(blocks_before.len(), 2);
+    let hash_before = body_hash(&pool, id).await;
+    let read_before = read_body(&pool, owner, id).await;
+    assert_ne!(
+        read_before, body,
+        "a derived body is a reconstruction, not the bytes"
+    );
+
+    // The identical text, whole-body, through the chunks arm (the CLI's path).
+    update_resource(
+        &pool,
+        UpdateParams {
+            resource: id,
+            body: Some(&body),
+            title: None,
+            origin_uri: None,
+            properties: &[],
+            unset_keys: &[],
+            chunks: Some(incoming_chunks_for_body(&body)),
+            sources: vec![],
+            content_block: None,
+            rehome_to: None,
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(body_storage(&pool, id).await, "verbatim");
+    assert_eq!(
+        read_body(&pool, owner, id).await,
+        body,
+        "the converted body reads back byte-exact, CRLF and trailing newline intact"
+    );
+
+    // `body_hash` is over chunk content hashes grouped into blocks, never bytes: the same text cut
+    // into the same sections gives the same hash, so it does NOT announce the conversion. Read
+    // `body_storage` for that.
+    assert_eq!(body_hash(&pool, id).await, hash_before);
+
+    // Every incumbent folded (none could be kept without bytes); the live blocks are new, and
+    // so are their chunks.
+    let blocks_after = live_block_ids(&pool, id).await;
+    assert!(
+        blocks_after.iter().all(|b| !blocks_before.contains(b)),
+        "no byteless incumbent survives: before {blocks_before:?}, after {blocks_after:?}"
+    );
+    let chunks_after = live_chunk_ids(&pool, id).await;
+    assert!(
+        chunks_after.iter().all(|c| !chunks_before.contains(c)),
+        "the live chunks are minted fresh"
+    );
+
+    // The conversion is one ordinary `resource_reblocked` on the resource's own ledger.
+    let reblocks: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'resource_reblocked' AND e.payload->>'resource_id' = $1::text",
+    )
+    .bind(id.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(reblocks, 1);
+
+    // A second identical rewrite is now the silent no-op (every block kept, bytes equal).
+    update_resource(
+        &pool,
+        UpdateParams {
+            resource: id,
+            body: Some(&body),
+            title: None,
+            origin_uri: None,
+            properties: &[],
+            unset_keys: &[],
+            chunks: Some(incoming_chunks_for_body(&body)),
+            sources: vec![],
+            content_block: None,
+            rehome_to: None,
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        live_block_ids(&pool, id).await,
+        blocks_after,
+        "the no-op keeps every block"
+    );
+}

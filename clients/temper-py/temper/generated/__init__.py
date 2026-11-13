@@ -158,6 +158,7 @@ __all__ = [
     "Bridge",
     "BulkReassignAck",
     "BulkReassignRequest",
+    "ByteBlock",
     "ChangeRoleRequest",
     "CharterBlock",
     "CharterDisposition",
@@ -704,6 +705,7 @@ from temper.generated.models.bound_kind import BoundKind as BoundKind
 from temper.generated.models.bridge import Bridge as Bridge
 from temper.generated.models.bulk_reassign_ack import BulkReassignAck as BulkReassignAck
 from temper.generated.models.bulk_reassign_request import BulkReassignRequest as BulkReassignRequest
+from temper.generated.models.byte_block import ByteBlock as ByteBlock
 from temper.generated.models.change_role_request import ChangeRoleRequest as ChangeRoleRequest
 from temper.generated.models.charter_block import CharterBlock as CharterBlock
 from temper.generated.models.charter_disposition import CharterDisposition as CharterDisposition

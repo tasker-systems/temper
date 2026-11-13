@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional
 from uuid import UUID
 from temper.generated.models.body_storage import BodyStorage
+from temper.generated.models.byte_block import ByteBlock
 from temper.generated.models.embedding_status import EmbeddingStatus
 from temper.generated.models.ingest_ended import IngestEnded
 from temper.generated.models.ingest_state import IngestState
@@ -37,6 +38,8 @@ class ResourceView(BaseModel):
     """ # noqa: E501
     body_hash: Optional[StrictStr] = Field(default=None, description="Content identity of the body's **prose chunks**, as grouped into blocks. It is not a hash of the body's bytes. `kb_resources.body_hash`, bare lowercase hex.  It is a two-level merkle over the chunker's output. Each chunk's `content_hash` is the sha256 of that chunk's text, **trimmed and without its heading line**. A block's hash is the sha256 of its live chunks' hashes concatenated in `chunk_index` order, and this is the sha256 of the live (unfolded) blocks' hashes concatenated in `seq` order.  A \"heading\" here is what the chunker splits on: a line matching `^#{1,6}\\s+.+$`. That is an ATX heading starting at column 0, with no Setext headings, no indented headings, and no awareness of code fences (a `# comment` line inside a fenced block counts as a heading).  On a resource whose blocks already follow its heading sections (every resource created or updated under the blocking policy), the hash does **not** move when an edit only: - changes such a heading's text or level (1 to 6), even on the first line, because the   heading lives in the chunk's `header_path`/`heading_depth`, not in its content; - adds or removes such a heading with no prose under it; - changes whitespace at a chunk's edges, or blank lines between sections.  Such an edit still writes: the stored bytes, the read-back body, and `updated` all change. The hash **does** move when the chunk sequence changes, and also when the same chunks are regrouped into different blocks. That happens on a re-block, or on the first whole-body write to a resource whose blocks predate the blocking policy. It also depends on the chunker's parameters (how it splits an oversized section). So the hash can move with **no** byte change, as well as stay put through one: a moved hash means \"re-read\", never \"the text changed\". It is the merkle of one segmentation, not a content identity.  To detect a body or title edit, read `updated` (or compare the content), never `body_hash`. Neither one sees a property, edge or data-artifact write: see `updated`.  This is the identity segmented ingest echoes at finalize (`expected_body_hash`) and the one the re-block keeps blocks by. The byte-level check of an upload is finalize's `expected_content_hash`. A resource with no prose carries the sha256 of the empty string (`e3b0c442…`), not an absent value. The field is optional only for version skew.")
     body_storage: Optional[BodyStorage] = Field(default=None, description="Do the bytes read back exactly, or only approximately? `Option` purely for version skew, as with `ingest_state`.")
+    byte_blocks: Optional[List[ByteBlock]] = Field(default=None, description="The body's block boundaries and per-block byte hashes, in `seq` order: what a client needs to check a whole cached body against [`Self::bytes_merkle`]. The `byte-blocks` section.  Absent when the section was not requested, and absent when it was but the body is not wholly verbatim (exactly when `bytes_merkle` is absent): a `derived` body has no stored bytes to cut it by. It is served under the same visibility gate as `content`, and computed in the same statement as `bytes_merkle` (and as `content`, when the body was requested too), so the boundaries always describe the bytes beside them.")
+    bytes_merkle: Optional[StrictStr] = Field(default=None, description="Byte identity of the body: proves a cached copy is Temper's bytes without downloading the body again. Bare lowercase hex.  It is the sha256 of the live blocks' `bytes_sha256` values (each the bare lowercase hex sha256 of that block's raw bytes), concatenated in `seq` order with no separator. Get the per-block values and the block boundaries from the `byte-blocks` section of this same read ([`Self::byte_blocks`]). To verify a whole cached body, cut it at those byte lengths in `seq` order, sha256 each piece, concatenate the hex digests, and sha256 that string. To verify one block, compare its sha256 with its `bytes_sha256`. The concatenation of the pieces is exactly the body `content` serves.  Present only when every live block carries its raw bytes, which is when `body_storage` is `verbatim`. It is absent on a `derived` body, which reads back as a reconstruction no stored hash describes, and absent from a server that predates the field. Unlike `body_hash` it moves on every byte change, a heading-only edit included, and stays put across a re-block that keeps the bytes and their block boundaries.  Beside `content` or `byte_blocks` (a read that asked for the `body` or `byte-blocks` section) it is computed in the same statement as them, so all three always describe the same bytes. The rest of the view (`body_storage`, `body_hash`, `updated`) comes from the identity read just before, so a write landing between the two can leave those describing the earlier body: `body_storage` may then read `verbatim` beside an absent `bytes_merkle`, or the reverse. Trust `bytes_merkle` and `byte_blocks` for the bytes beside them. Without either section it is read with the rest of this view, in one statement; a write after the read can move it, exactly as it moves `updated`.")
     changed_by_me_at: Optional[datetime] = Field(default=None, description="When the caller last changed this resource themselves. Present only on a row read with `changed_by=@me`, the same time `sort=changed_by_me` orders by; absent on every other read.  Not `updated`, which can be a teammate's later change: this counts only the caller's own authored events on the resource, so it never reports another principal's activity.")
     cogmap_id: Optional[UUID] = Field(default=None, description="Set when the resource is homed in a cognitive map. Mutually exclusive with the `context_*` fields.")
     cogmap_name: Optional[StrictStr] = Field(default=None, description="Display name of the home cognitive map. `Some` iff `cogmap_id` is `Some`.")
@@ -63,7 +66,7 @@ class ResourceView(BaseModel):
     ref: StrictStr = Field(description="The decorated, self-resolving address: `sluggify(title)-<uuid>`.  Not a column — derived by [`ResourceView::with_derived_refs`] from `title` + `id`. Until this task it was injected render-time by the CLI alone (`temper-cli/src/commands/resource.rs`), so MCP callers never received one even though the shipped skill instructs agents to use it.")
     title: StrictStr
     updated: datetime = Field(description="When the resource's own row last changed: the `occurred_at` of the event that last wrote it. This is not \"when anything about the resource last changed\".  It moves on a body write (every block create, mutate or re-block, including a re-block that changes no byte), a `title` or `origin_uri` change, deletion and erasure.  It does **not** move on a property write (a facet, an `open_meta` key, the stage or any other managed key), an edge assert, re-weight, re-type or fold, a data-artifact commit, a move to another context, or a provenance annotation. To see those, read the context's change feed (`GET /api/events/{context}/changes`, `temper context changes`).")
-    __properties: ClassVar[List[str]] = ["body_hash", "body_storage", "changed_by_me_at", "cogmap_id", "cogmap_name", "content", "context_name", "context_owner_ref", "context_ref", "context_slug", "created", "doc_type_name", "embedding_status", "id", "ingest_ended", "ingest_state", "is_active", "kb_context_id", "managed_meta", "open_meta", "origin_uri", "originator_profile_id", "owner_handle", "owner_profile_id", "reach", "ref", "title", "updated"]
+    __properties: ClassVar[List[str]] = ["body_hash", "body_storage", "byte_blocks", "bytes_merkle", "changed_by_me_at", "cogmap_id", "cogmap_name", "content", "context_name", "context_owner_ref", "context_ref", "context_slug", "created", "doc_type_name", "embedding_status", "id", "ingest_ended", "ingest_state", "is_active", "kb_context_id", "managed_meta", "open_meta", "origin_uri", "originator_profile_id", "owner_handle", "owner_profile_id", "reach", "ref", "title", "updated"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -104,6 +107,13 @@ class ResourceView(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # override the default output from pydantic by calling `to_dict()` of each item in byte_blocks (list)
+        _items = []
+        if self.byte_blocks:
+            for _item_byte_blocks in self.byte_blocks:
+                if _item_byte_blocks:
+                    _items.append(_item_byte_blocks.to_dict())
+            _dict['byte_blocks'] = _items
         # override the default output from pydantic by calling `to_dict()` of managed_meta
         if self.managed_meta:
             _dict['managed_meta'] = self.managed_meta.to_dict()
@@ -119,6 +129,16 @@ class ResourceView(BaseModel):
         # and model_fields_set contains the field
         if self.body_storage is None and "body_storage" in self.model_fields_set:
             _dict['body_storage'] = None
+
+        # set to None if byte_blocks (nullable) is None
+        # and model_fields_set contains the field
+        if self.byte_blocks is None and "byte_blocks" in self.model_fields_set:
+            _dict['byte_blocks'] = None
+
+        # set to None if bytes_merkle (nullable) is None
+        # and model_fields_set contains the field
+        if self.bytes_merkle is None and "bytes_merkle" in self.model_fields_set:
+            _dict['bytes_merkle'] = None
 
         # set to None if changed_by_me_at (nullable) is None
         # and model_fields_set contains the field
@@ -204,6 +224,8 @@ class ResourceView(BaseModel):
         _obj = cls.model_validate({
             "body_hash": obj.get("body_hash"),
             "body_storage": obj.get("body_storage"),
+            "byte_blocks": [ByteBlock.from_dict(_item) for _item in obj["byte_blocks"]] if obj.get("byte_blocks") is not None else None,
+            "bytes_merkle": obj.get("bytes_merkle"),
             "changed_by_me_at": obj.get("changed_by_me_at"),
             "cogmap_id": obj.get("cogmap_id"),
             "cogmap_name": obj.get("cogmap_name"),

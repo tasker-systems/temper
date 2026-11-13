@@ -1,0 +1,21 @@
+title    = "The change-feed contract names the right read for `open_meta`, the edge-home rule and the byte-exact output paths"
+pr       = "self"
+classes  = ["additive"]
+surfaces = ["http", "cli-stdout", "clients"]
+status   = "signal-only"
+body = '''
+Doc only. No field, route, parameter or behavior changes; openapi.json grows by descriptions alone,
+and the three SDKs and the ts-rs bindings are regenerated from it.
+
+- `GET /api/events/{kb_context_id}/changes` and `temper context changes`: a property scrub is
+  re-read through `GET /api/resources?ids=` with `sections=open-meta` for `open_meta` keys;
+  `GET /api/resources/{id}/facets` covers facet asserts only. An edge's home is its source's home
+  when the edge is asserted, and a later move of the source leaves the edge where it was.
+  `temper edge assert` says the same.
+- `GET /api/resources/{id}/content`, `ContentResponse.markdown`, `BodyStorage::Verbatim` and
+  `temper resource show`: the byte-exact paths are `GET /content`'s `markdown` and `content` in
+  `--format json` output; `toon` output adds one trailing newline after the body.
+
+Who observes: a reader of the OpenAPI descriptions, the SDK doc comments and the CLI help.
+Release relevance: signal-only.
+'''

@@ -902,6 +902,8 @@ Never ship code with \"for now\".
             ingest_state: Some(IngestState::Complete),
             ingest_ended: None,
             body_storage: Some(BodyStorage::Derived),
+            bytes_merkle: None,
+            byte_blocks: None,
             managed_meta: ManagedMeta::default(),
             open_meta: Some(open_meta),
             content: None,

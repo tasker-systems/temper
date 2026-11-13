@@ -136,6 +136,7 @@ temper/generated/models/bound_kind.py
 temper/generated/models/bridge.py
 temper/generated/models/bulk_reassign_ack.py
 temper/generated/models/bulk_reassign_request.py
+temper/generated/models/byte_block.py
 temper/generated/models/change_role_request.py
 temper/generated/models/charter_block.py
 temper/generated/models/charter_disposition.py

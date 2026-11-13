@@ -714,7 +714,7 @@ async fn a_closed_finding_on_the_current_revision_does_not_warn(pool: PgPool) {
     let block = only_block(&pool, r).await;
     sweep(&pool).await;
     for emptied in [
-        "UPDATE kb_block_content SET content = '' \
+        "UPDATE kb_block_content SET content = '', content_hash = encode(sha256(''::bytea), 'hex') \
           WHERE block_revision_id = (SELECT current_revision_id FROM kb_content_blocks WHERE id = $1)",
         "UPDATE kb_chunk_content SET content = '' \
           WHERE chunk_id IN (SELECT id FROM kb_chunks WHERE block_id = $1 AND is_current)",

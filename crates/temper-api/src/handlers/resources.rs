@@ -136,7 +136,7 @@ pub async fn get(
     params(("id" = Uuid, Path, description = "Resource ID")),
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "Reconstituted markdown content", body = ContentResponse),
+        (status = 200, description = "The body as markdown. Byte-exact when the resource's `body_storage` is `verbatim`; a reconstruction from chunks when it is `derived`.", body = ContentResponse),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 404, description = "Not found", body = ErrorBody),
         (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 404", body = ErrorBody),
