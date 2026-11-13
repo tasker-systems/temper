@@ -1982,10 +1982,10 @@ export interface paths {
          *     **The consumer contract.**
          *     - Record `through` *before* reading the bodies an answer points at, never after. A change that commits between the bodies read and a later `through` is behind the recorded position, and is lost. A change seen again after an early `through` costs one redundant re-read.
          *     - An edge entry names the edge (`kb_edges` and the edge id), not its endpoints. To learn which resources it touches, read the edge.
-         *     - An edge appears in the feed of its own home context, not in its endpoints' contexts. An edge homed elsewhere that touches a resource homed here is not in this feed.
+         *     - An edge appears in the feed of its own home context, not in its endpoints' contexts. An edge's home is its source's home *when the edge is asserted*. A later move of the source leaves the edge where it was, so an edge asserted before a move stays in the old context's feed. An edge homed elsewhere that touches a resource homed here is not in this feed.
          *     - `resource_departed` is a deletion or a move, and does not say which. Treat it as "re-resolve this resource": it may still exist in another context you can read.
-         *     - A scrub of a facet or other property is not announced. Re-read `GET /api/resources/{id}/facets` for the resources you hold on the same periodic cadence, not only on a feed hint.
-         *     - `GET /api/resources?ids=` (up to 256 ids) is the cheap periodic sweep: it returns `updated`, `body_hash` and `body_storage` for exactly the ids you can still read, and leaves out the rest, without downloading a body.
+         *     - A scrub of a property is not announced. Re-read the properties you hold on the same periodic cadence, not only on a feed hint. Re-read `open_meta` keys with `GET /api/resources?ids=` and `sections=open-meta`. `GET /api/resources/{id}/facets` covers facet asserts only: a key inside `open_meta`, whatever its name, is not a facet assert, and that read returns no row for it.
+         *     - `GET /api/resources?ids=` (up to 256 ids) is the cheap periodic sweep: it returns `updated`, `body_hash` and `body_storage`, and with `sections=open-meta` the `open_meta` tier, for exactly the ids you can still read, and leaves out the rest, without downloading a body.
          */
         get: operations["context_changes"];
         put?: never;
@@ -6110,6 +6110,10 @@ export interface components {
         /** @description Response body for resource content. */
         ContentResponse: {
             managed_meta?: components["schemas"]["ManagedMeta"] | null;
+            /**
+             * @description The body. For a `verbatim` resource ([`BodyStorage::Verbatim`]) these are the stored bytes
+             *     unchanged; for a `derived` one, a reconstruction from chunks.
+             */
             markdown: string;
             /**
              * @description Server-side open_meta from kb_resource_manifests. Intentionally
@@ -21055,7 +21059,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Reconstituted markdown content */
+            /** @description The body as markdown. Byte-exact when the resource's `body_storage` is `verbatim`; a reconstruction from chunks when it is `derived`. */
             200: {
                 headers: {
                     [name: string]: unknown;
