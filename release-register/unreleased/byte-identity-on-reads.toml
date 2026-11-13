@@ -1,4 +1,4 @@
-title    = "Reads serve byte identity (bytes_sha256 per block, bytes_merkle per verbatim body), and a redaction no longer leaves the hash of the text it emptied"
+title    = "Reads serve byte identity (bytes_sha256 per block, bytes_merkle and block boundaries per verbatim body), and a redaction no longer leaves the erased text's hash in the stored block-bytes hash"
 pr       = "self"
 classes  = ["additive", "behavioral"]
 surfaces = ["http", "mcp", "clients", "cli-stdout", "schema"]
@@ -30,8 +30,11 @@ again: `body_hash` is a merkle over chunk prose, not over bytes.
   hash-keyed redaction now set `kb_block_content.content_hash` to sha256('') in the UPDATE that
   empties the bytes. Before, the emptied row kept the sha256 of the erased text. Migration
   20261127000010 recomputes it on rows already emptied and adds a CHECK that an emptied row
-  carries that hash. Chunk hashes and the block and body merkles (which are over chunk hashes)
-  are unchanged, as is the principal act's record in `kb_erased_content`.
+  carries that hash. The person act's survey skips already-emptied rows when it gathers text
+  hashes, and the resource-erasure record says the block hashes were recomputed, not kept. Chunk
+  hashes are unchanged by design, and for a block that is one trimmed chunk a chunk hash equals the
+  old block-bytes hash; the block and body merkles (over chunk hashes) and the principal act's
+  record in `kb_erased_content` are unchanged too.
 
 Who observes it: corpus consumers verifying cached bytes (new fields and section); nobody reads the stored
 block hash today, so the erasure change is visible only in the database.

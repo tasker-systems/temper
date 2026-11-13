@@ -464,3 +464,82 @@ async fn byte_blocks_are_gated_and_absent_on_a_derived_body(pool: PgPool) {
         );
     }
 }
+
+/// A write that lands BETWEEN `show`'s identity read and its body read cannot pair the new bytes
+/// with the old merkle: the merkle and boundaries served beside `content` come from the body's
+/// statement, not the identity read's.
+///
+/// The interleave is deterministic. `resource_reached_via` runs only in the identity statement's
+/// SELECT list (the single-resource door asks for reach), so it is swapped for a VOLATILE wrapper
+/// that, once, rewrites block 0's bytes and then answers as the original. That write commits with
+/// the identity statement, whose STABLE `resource_bytes_merkle` still sees the old snapshot; the
+/// body read that follows sees the new bytes.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_write_between_the_identity_read_and_the_body_read_moves_merkle_and_content_together(
+    pool: PgPool,
+) {
+    let app = common::setup_test_app(pool.clone()).await;
+    let (token, ctx) = auth(&pool, "interleave").await;
+    let id = two_block_resource(&app, &pool, &token, ctx).await;
+    let (_, before) = show(&app, &token, id, "?sections=body,byte-blocks").await;
+    let old_merkle = before["bytes_merkle"]
+        .as_str()
+        .expect("verbatim")
+        .to_owned();
+    let first_len = before["byte_blocks"][0]["bytes_len"].as_u64().unwrap() as usize;
+    let first = before["content"].as_str().unwrap()[..first_len].to_owned();
+    let edited = first.replacen("first segment", "first segment, edited mid-read", 1);
+    assert_ne!(edited, first);
+
+    sqlx::raw_sql(
+        "CREATE TABLE interleave_once (resource uuid, content text);
+         ALTER FUNCTION resource_reached_via(uuid, uuid) RENAME TO resource_reached_via_orig;
+         CREATE FUNCTION resource_reached_via(p_profile uuid, p_resource uuid) RETURNS text
+         LANGUAGE plpgsql VOLATILE AS $$
+         DECLARE v_content text;
+         BEGIN
+             DELETE FROM interleave_once WHERE resource = p_resource RETURNING content INTO v_content;
+             IF v_content IS NOT NULL THEN
+                 UPDATE kb_block_content
+                    SET content = v_content,
+                        content_hash = encode(sha256(convert_to(v_content, 'UTF8')), 'hex')
+                  WHERE block_revision_id = (
+                        SELECT current_revision_id FROM kb_content_blocks
+                         WHERE resource_id = p_resource AND NOT is_folded
+                         ORDER BY seq LIMIT 1);
+             END IF;
+             RETURN resource_reached_via_orig(p_profile, p_resource);
+         END $$;",
+    )
+    .execute(&pool)
+    .await
+    .expect("install the interleaving wrapper");
+    sqlx::query("INSERT INTO interleave_once VALUES ($1, $2)")
+        .bind(id)
+        .bind(&edited)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let (status, view) = show(&app, &token, id, "?sections=body,byte-blocks").await;
+    assert_eq!(status, 200, "{view}");
+    let content = view["content"].as_str().expect("content").to_owned();
+    assert!(
+        content.starts_with(&edited),
+        "the body read saw the interleaved write"
+    );
+    let blocks = view["byte_blocks"].as_array().expect("byte_blocks").clone();
+    let served = view["bytes_merkle"]
+        .as_str()
+        .expect("bytes_merkle")
+        .to_owned();
+    assert_eq!(
+        served,
+        verify_by_boundaries(&content, &blocks),
+        "the merkle and boundaries describe the content beside them"
+    );
+    assert_ne!(
+        served, old_merkle,
+        "and are not the identity read's (pre-write) value"
+    );
+}

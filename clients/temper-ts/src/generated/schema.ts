@@ -10831,8 +10831,12 @@ export interface components {
              *
              *     Beside `content` or `byte_blocks` (a read that asked for the `body` or `byte-blocks`
              *     section) it is computed in the same statement as them, so all three always describe the
-             *     same bytes. Otherwise it is read with the rest of this view, in one statement; a write after
-             *     the read can move it, exactly as it moves `updated`.
+             *     same bytes. The rest of the view (`body_storage`, `body_hash`, `updated`) comes from the
+             *     identity read just before, so a write landing between the two can leave those describing
+             *     the earlier body: `body_storage` may then read `verbatim` beside an absent `bytes_merkle`,
+             *     or the reverse. Trust `bytes_merkle` and `byte_blocks` for the bytes beside them. Without
+             *     either section it is read with the rest of this view, in one statement; a write after the
+             *     read can move it, exactly as it moves `updated`.
              */
             bytes_merkle?: string | null;
             /**

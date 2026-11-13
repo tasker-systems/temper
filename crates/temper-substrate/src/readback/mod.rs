@@ -2375,6 +2375,9 @@ async fn hit_identities_with(
                   -- In the SELECT list, so it runs only for a row the gate below admitted: a
                   -- hash of the bytes is a disclosure about the bytes, and this is the gate the
                   -- body read passes too. STABLE, so it reads this statement's snapshot.
+                  -- O(live blocks) per admitted row: one index scan of that row's blocks and
+                  -- their stored hashes, no body read. The 0.40 ms / 2.32 ms measurements in the
+                  -- doc comment predate it.
                   resource_bytes_merkle(r.id) AS "bytes_merkle?",
                   -- In the SELECT list, so it runs only for a row the gate below admitted: the
                   -- reach function takes "the principal reads it" as its precondition.

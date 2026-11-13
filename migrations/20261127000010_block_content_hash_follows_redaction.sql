@@ -15,19 +15,34 @@
 --     future path that empties content and forgets the hash raises.
 --   * THE HASH IS RECOMPUTED, NOT BLANKED: the column stays NOT NULL and keeps meaning "sha256 of
 --     these bytes", so a served bytes_sha256 is honest about an emptied row.
---   * NOTHING ELSE MOVES. block_body_hash / body_hash are merkles over CHUNK hashes, not over this
---     column, so they stay valid (resource erasure spec: "hashes are kept everywhere, so the
---     merkles stay valid"). No hash enters kb_erased_content from a resource act (D12 rule 0):
---     this migration adds none, and the principal act's record of what it redacted stays its
---     event's `redacted_hashes` and kb_erased_content, never the emptied row. The ledger carries
---     no block-bytes hash at all (BlockContent rides the sidecar only), and replay re-supplies
---     sidecars from the post-erasure rows, so replay stays byte-identical.
+--   * THIS IS THE STORED BLOCK-BYTES HASH ONLY. Chunk hashes (kb_chunks.content_hash, and the chunk
+--     manifests on the ledger) are kept by design (resource erasure spec D2/D3: "hashes are kept
+--     everywhere, so the merkles stay valid"), and for a block whose bytes are one already-trimmed
+--     chunk a chunk hash equals the block-bytes hash. block_body_hash / body_hash are merkles over
+--     those chunk hashes, not over this column, so they stay valid. No hash enters
+--     kb_erased_content from a resource act (D12 rule 0), and this migration adds none. The
+--     block-bytes hash itself never rides an event (BlockContent rides the sidecar only), and
+--     replay re-supplies sidecars from the post-erasure rows, so replay stays byte-identical.
+--   * AN EMPTIED ROW IS NOT A HASH TO ADMIT. principal_erasure_survey_plan gathers the charters'
+--     block-bytes hashes into the act's redacted set and lists the subject's unstruck text hashes;
+--     both now skip rows already emptied, so sha256('') never enters kb_erased_content (where it
+--     would refuse every empty-block write) or a survey as "text". resource_erasure_survey_plan's
+--     record of the act no longer says the block hashes were kept.
 --   * THE BACKFILL IS EXACT: a row whose content is '' and whose hash is not sha256('') is a row a
---     redaction emptied. Nothing else writes '' with another hash.
+--     redaction emptied. Every other writer hashes the bytes it stores (BlockContent::of).
+--   * WRITERS DRAIN FIRST. The table is locked SHARE ROW EXCLUSIVE before anything else, so an act
+--     already writing commits before the backfill reads, and none writes between the backfill and
+--     the CHECK. An act blocked mid-UPDATE on that lock when this commits finishes with the old
+--     body's statement and is refused by the CHECK (23514); it changed nothing and is re-run.
 --
--- Both bodies are their live definitions (pg_get_functiondef: _resource_erasure_apply_redaction
--- after 20261015100020, _erasure_apply_redaction after 20261023100000), changed only as marked.
--- Witness: temper-services tests/block_content_hash_redaction_test.rs.
+-- The four bodies are their live definitions (pg_get_functiondef: _resource_erasure_apply_redaction
+-- after 20261015100020, _erasure_apply_redaction and principal_erasure_survey_plan after
+-- 20261023100000, resource_erasure_survey_plan after 20261009100000), changed only as marked.
+-- Witnesses: temper-substrate tests/block_content_hash_constraint.rs (the backfill and the CHECK),
+-- resource_erasure_act.rs and block_history_scrub.rs (the redactions), and temper-services
+-- erasure_service.rs (the person act).
+
+LOCK TABLE kb_block_content IN SHARE ROW EXCLUSIVE MODE;
 
 CREATE OR REPLACE FUNCTION public._resource_erasure_apply_redaction(p_resource uuid, p_event uuid, p_blocks uuid[] DEFAULT NULL::uuid[])
  RETURNS void
@@ -847,33 +862,1274 @@ BEGIN
 END;
 $function$;
 
+CREATE OR REPLACE FUNCTION public.resource_erasure_survey_plan(p_resource uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    v_exists        uuid;
+    v_n_blocks      integer;
+    v_n_revisions   integer;
+    v_n_chunks      integer;
+    v_n_artifacts   integer;
+    v_n_edges       integer;
+    v_edges         jsonb := '[]'::jsonb;
+    v_charter_of    uuid;
+    v_ingest        text;
+    v_ledger        jsonb := '[]'::jsonb;
+    v_redacted      jsonb := '[]'::jsonb;
+    v_genesis       uuid;
+    v_erased        uuid;
+    v_home_ctx      uuid;
+    v_is_goal       boolean;
+    v_remainder     jsonb := '[]'::jsonb;
+    v_row           record;
+    v_targets       jsonb := '[]'::jsonb;
+    v_a             bigint;
+    v_b             bigint;
+    v_c             bigint;
+BEGIN
+    SELECT id INTO v_exists FROM kb_resources WHERE id = p_resource;
+    IF v_exists IS NULL THEN
+        RAISE EXCEPTION 'resource_erasure_survey_plan: resource % not found', p_resource;
+    END IF;
+
+    -- ── Scope counts, PRE-redaction state (the same discipline the principal plan's per-target
+    --    arms hold: the reads only report what the act will find). ────────────────────────────
+    SELECT count(*) INTO v_n_blocks FROM kb_content_blocks WHERE resource_id = p_resource;
+    SELECT count(*) INTO v_n_revisions FROM kb_block_revisions br
+      JOIN kb_content_blocks b ON b.id = br.block_id
+     WHERE b.resource_id = p_resource;
+    SELECT count(*) INTO v_n_chunks FROM kb_chunks WHERE resource_id = p_resource;
+    SELECT count(*) INTO v_n_artifacts FROM kb_data_artifacts WHERE resource_id = p_resource;
+    SELECT count(*) INTO v_n_edges FROM kb_edges e
+      WHERE NOT e.is_folded
+        AND ((e.source_table = 'kb_resources' AND e.source_id = p_resource)
+          OR (e.target_table = 'kb_resources' AND e.target_id = p_resource));
+
+    -- ── The edges the act folds, each listed so the record's `folded_edges` and the per-edge
+    --     events agree. LIVE edges only: an edge already folded by history is the fold's
+    --     business, not this act's — enumerating it would abort execute against a lawful
+    --     state. `folded_edges` lists only what THIS act folds; a pre-existing fold already
+    --     carries its own event. ────────────────────────────────────────────────────────
+    FOR v_row IN
+        SELECT e.id
+          FROM kb_edges e
+          WHERE NOT e.is_folded
+            AND ((e.source_table = 'kb_resources' AND e.source_id = p_resource)
+              OR (e.target_table = 'kb_resources' AND e.target_id = p_resource))
+          ORDER BY e.id
+    LOOP
+        v_edges := v_edges || to_jsonb(v_row.id);
+    END LOOP;
+
+    -- ── THE TARGETS (D8): what the act will reach, one {target, outcome} per D2 step that
+    --    reaches something, counted PRE-act here because the resource_erased payload is
+    --    appended before the redaction body runs and the act never computes twice (D10). Each
+    --    count reads the row set its step in _resource_erasure_apply_redaction updates, by the
+    --    same predicate. The outcome text is counts and verbs only: never a title, URL, key,
+    --    value or any other content (goal §8 — the record never repeats what it erased). A
+    --    table the act reaches nothing in is not claimed; the husk is always reached. execute
+    --    appends the blob strikes and the ended ingest to this list. ─────────────────────────
+    -- D2 step 1: chunk prose and heading trails.
+    SELECT count(*) INTO v_a FROM kb_chunk_content cc
+      JOIN kb_chunks c ON c.id = cc.chunk_id
+     WHERE c.resource_id = p_resource AND cc.content <> '';
+    SELECT count(*) INTO v_b FROM kb_chunks
+     WHERE resource_id = p_resource AND header_path IS NOT NULL;
+    IF v_a + v_b > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_chunk_content',
+            'outcome', v_a || ' chunk bodies emptied, hashes kept; '
+                       || v_b || ' heading paths nulled');
+    END IF;
+    -- D2 step 2: every revision's bytes.
+    SELECT count(*) INTO v_a FROM kb_block_content bc
+     WHERE bc.block_revision_id IN (
+           SELECT br.id FROM kb_block_revisions br
+             JOIN kb_content_blocks b ON b.id = br.block_id
+            WHERE b.resource_id = p_resource)
+       AND bc.content <> '';
+    IF v_a > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_block_content',
+            'outcome', v_a || ' block revision bodies emptied, their stored hashes recomputed over the empty bytes');
+    END IF;
+    -- D2 step 3: embeddings with their provenance.
+    SELECT count(*) INTO v_a FROM kb_chunks
+     WHERE resource_id = p_resource AND embedding IS NOT NULL;
+    IF v_a > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_chunks.embedding',
+            'outcome', v_a || ' embeddings nulled with embedded_with');
+    END IF;
+    -- D2 step 4: the search vector.
+    SELECT count(*) INTO v_a FROM kb_resource_search_index
+     WHERE resource_id = p_resource AND search_vector <> '';
+    IF v_a > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_resource_search_index',
+            'outcome', v_a || ' search vector emptied');
+    END IF;
+    -- D2 step 5: every artifact's content.
+    SELECT count(*) INTO v_a FROM kb_data_artifact_content dac
+     WHERE dac.artifact_id IN (
+           SELECT da.id FROM kb_data_artifacts da WHERE da.resource_id = p_resource)
+       AND dac.content <> '{}'::jsonb;
+    IF v_a > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_data_artifact_content',
+            'outcome', v_a || ' artifact bodies emptied to {}, hashes kept');
+    END IF;
+    -- D2 step 6: formation watermarks.
+    SELECT count(*) INTO v_a FROM kb_contexts c
+     WHERE c.shape_materialized_event_id IS NOT NULL
+       AND c.id = (SELECT h.anchor_id FROM kb_resource_homes h
+                    WHERE h.resource_id = p_resource AND h.anchor_table = 'kb_contexts');
+    SELECT count(*) INTO v_b FROM kb_cogmaps m
+     WHERE m.shape_materialized_event_id IS NOT NULL
+       AND m.id IN (
+           SELECT r.home_anchor_id FROM kb_cogmap_regions r
+             JOIN kb_cogmap_region_members mem ON mem.region_id = r.id
+            WHERE r.home_anchor_table = 'kb_cogmaps' AND NOT r.is_folded
+              AND mem.member_table = 'kb_resources' AND mem.member_id = p_resource);
+    IF v_a + v_b > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'formation watermarks',
+            'outcome', v_a || ' context and ' || v_b
+                       || ' cogmap shape_materialized_event_id nulled');
+    END IF;
+    -- D2 step 6 (7c, 7d): region centroids holding R — live ones recomputed from the remaining
+    --    members (the zero vector when R was alone), folded ones zeroed. Each count is its act
+    --    statement's predicate, read before the act (see the migration header on concurrent
+    --    materializes). Neither statement skips an already-cleared row, so on an erased resource
+    --    this row still claims the folded regions its member rows point at.
+    SELECT count(*) FILTER (WHERE NOT r.is_folded), count(*) FILTER (WHERE r.is_folded)
+      INTO v_a, v_b
+      FROM kb_cogmap_regions r
+     WHERE EXISTS (SELECT 1 FROM kb_cogmap_region_members mem
+                    WHERE mem.region_id = r.id
+                      AND mem.member_table = 'kb_resources' AND mem.member_id = p_resource);
+    IF v_a + v_b > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_cogmap_regions.centroid',
+            'outcome', v_a || ' live region centroids recomputed from the remaining members; '
+                       || v_b || ' folded region centroids zeroed');
+    END IF;
+    -- D2 step 6 (7b): the home context's telos snapshot.
+    SELECT count(*) INTO v_a FROM kb_contexts c
+     WHERE c.telos_centroid IS NOT NULL
+       AND c.id = (SELECT h.anchor_id FROM kb_resource_homes h
+                    WHERE h.resource_id = p_resource AND h.anchor_table = 'kb_contexts');
+    IF v_a > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_contexts.telos_centroid',
+            'outcome', v_a || ' context telos snapshot nulled');
+    END IF;
+    -- D2 step 7: workflow jobs, every status.
+    SELECT count(*) FILTER (WHERE j.payload <> '{}'::jsonb OR j.last_error IS NOT NULL),
+           count(*) FILTER (WHERE j.status IN ('pending', 'waiting_for_retry', 'in_progress'))
+      INTO v_a, v_b
+      FROM kb_workflow_jobs j WHERE j.resource_id = p_resource;
+    IF v_a + v_b > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_workflow_jobs',
+            'outcome', v_a || ' jobs emptied of payload and last_error; '
+                       || v_b || ' unfinished jobs cancelled to dead');
+    END IF;
+    -- D2 step 7a: the ingestion record and the verdicts.
+    SELECT count(*) INTO v_a FROM kb_ingestion_records ir
+     WHERE ir.resource_id = p_resource AND ir.source_uri <> 'erased:' || p_resource::text;
+    IF v_a > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_ingestion_records.source_uri',
+            'outcome', v_a || ' ingestion record source_uri sentineled, source_hash kept');
+    END IF;
+    SELECT count(*) INTO v_a FROM kb_data_artifact_verdicts v
+     WHERE v.artifact_id IN (
+           SELECT da.id FROM kb_data_artifacts da WHERE da.resource_id = p_resource)
+       AND v.detail IS NOT NULL;
+    IF v_a > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_data_artifact_verdicts.detail',
+            'outcome', v_a || ' verdict details nulled');
+    END IF;
+    -- D2 step 8: projected citation-audit reasons.
+    SELECT count(*) INTO v_a FROM kb_citation_audits ca
+     WHERE ca.block_id IN (
+           SELECT b.id FROM kb_content_blocks b WHERE b.resource_id = p_resource)
+       AND ca.reason IS NOT NULL;
+    IF v_a > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_citation_audits.reason',
+            'outcome', v_a || ' audit reasons nulled');
+    END IF;
+    -- D2 step 9: the husk (always), the property sentinels, the edges, the remote sources.
+    v_targets := v_targets || jsonb_build_object('target', 'kb_resources',
+        'outcome', '1 husk: title and origin_uri sentineled, is_active cleared, erased_at set');
+    SELECT count(*) INTO v_a FROM kb_properties p
+      JOIN _resource_erasure_key_numbers('kb_resources', p_resource) k
+        ON k.property_key = p.property_key
+     WHERE p.owner_table = 'kb_resources' AND p.owner_id = p_resource;
+    SELECT count(*) INTO v_b
+      FROM kb_edges e
+     CROSS JOIN LATERAL _resource_erasure_key_numbers('kb_edges', e.id) k
+      JOIN kb_properties p
+        ON p.owner_table = 'kb_edges' AND p.owner_id = e.id AND p.property_key = k.property_key
+     WHERE (e.source_table = 'kb_resources' AND e.source_id = p_resource)
+        OR (e.target_table = 'kb_resources' AND e.target_id = p_resource);
+    SELECT count(*) INTO v_c
+      FROM kb_content_blocks b
+     CROSS JOIN LATERAL _resource_erasure_key_numbers('kb_content_blocks', b.id) k
+      JOIN kb_properties p
+        ON p.owner_table = 'kb_content_blocks' AND p.owner_id = b.id
+       AND p.property_key = k.property_key
+     WHERE b.resource_id = p_resource;
+    IF v_a + v_b + v_c > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_properties',
+            'outcome', v_a || ' resource-owned, ' || v_b || ' edge-owned and ' || v_c
+                       || ' block-owned rows: keys erased-key-<n>, values erased, folded');
+    END IF;
+    SELECT count(*) INTO v_b FROM kb_edges e
+     WHERE e.label IS NOT NULL
+       AND ((e.source_table = 'kb_resources' AND e.source_id = p_resource)
+         OR (e.target_table = 'kb_resources' AND e.target_id = p_resource));
+    IF v_n_edges + v_b > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_edges',
+            'outcome', v_n_edges || ' edges folded by this act; ' || v_b || ' labels nulled');
+    END IF;
+    --    The remote sources, from the ONE capture step (9e) reads
+    --    (_resource_erasure_remote_originals): the provenance rows it re-points, the exclusive
+    --    originals it deletes, the shared ones it keeps. An exclusive original that is itself
+    --    some captured (block, n)'s sentinel row is re-pointed onto, so it stays cited and is
+    --    not deleted; the count leaves it out for that reason.
+    WITH o AS MATERIALIZED (
+        SELECT * FROM _resource_erasure_remote_originals(p_resource)
+    )
+    SELECT (SELECT count(*) FROM kb_block_provenance bp
+              JOIN o ON o.block_id = bp.block_id AND o.source_id = bp.source_id
+             WHERE bp.source_kind = 'remote'),
+           (SELECT count(DISTINCT o1.source_id) FROM o o1
+              JOIN kb_remote_sources rs ON rs.id = o1.source_id
+             WHERE NOT o1.shared
+               AND NOT EXISTS (
+                   SELECT 1 FROM o o2
+                    WHERE normalize_remote_uri('erased:' || o2.block_id::text || ':' || o2.n::text)
+                          = rs.uri_normalized)),
+           (SELECT count(DISTINCT o1.source_id) FROM o o1 WHERE o1.shared)
+      INTO v_c, v_a, v_b;
+    IF v_c > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_block_provenance',
+            'outcome', v_c || ' remote provenance rows re-pointed to erased:<block_id>:<n> sentinels');
+    END IF;
+    IF v_a + v_b > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_remote_sources',
+            'outcome', v_a || ' exclusive remote sources deleted; '
+                       || v_b || ' shared remote sources kept, named in the remainder');
+    END IF;
+    -- D2 step (9f): the artifact families.
+    SELECT count(*) INTO v_a FROM kb_data_artifacts da
+     WHERE da.resource_id = p_resource
+       AND da.artifact_kind <> 'erased:' || da.asserted_by_event_id::text;
+    IF v_a > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_data_artifacts.artifact_kind',
+            'outcome', v_a || ' artifact families set to erased:<asserted_by_event_id>');
+    END IF;
+
+    -- ── THE REFUSAL FACE (D5), computed here so execute consumes the verdict rather than
+    -- re-deriving it: a charter resource (Q2 — the map-grain act is another task, named), an
+    -- already-erased resource. The ingest state is reported, not refused: an in-flight ingest
+    -- ends with the erasure and execute names it in `targets`. ─────────────────────────────
+    SELECT c.telos_resource_id INTO v_charter_of FROM kb_cogmaps c WHERE c.telos_resource_id = p_resource;
+    SELECT r.ingest_state INTO v_ingest FROM kb_resources r WHERE r.id = p_resource;
+
+    -- ── THE REMAINDER (D8). Each entry is the named, never-struck part. The four shapes: ─────
+
+    -- 1. Blobs related to the resource, live or struck, through a relation edge. The act folds
+    --    their edges and names each blob; it strikes ONLY what the operator listed
+    --    (also_strike_blobs), per row through blob_delete('blob_erased', …) and the byte-delete
+    --    fence. It never infers a strike from a relation.
+    FOR v_row IN
+        SELECT DISTINCT b.id, b.content_hash, b.blob_pathname,
+               EXISTS (SELECT 1 FROM kb_blobs live
+                        WHERE live.id = b.id AND live.content_type IS NOT NULL) AS is_live
+          FROM kb_blobs b
+          JOIN kb_edges e ON NOT e.is_folded
+               AND ((e.source_table = 'kb_blobs' AND e.source_id = b.id
+                      AND e.target_table = 'kb_resources' AND e.target_id = p_resource)
+                 OR (e.target_table = 'kb_blobs' AND e.target_id = b.id
+                      AND e.source_table = 'kb_resources' AND e.source_id = p_resource))
+         ORDER BY b.id
+    LOOP
+        v_remainder := v_remainder || jsonb_build_object(
+            'target', 'kb_blobs',
+            'outcome', 'related blob ' || v_row.id::text || '; hash ' || v_row.content_hash
+                       || '; ' || CASE WHEN v_row.is_live THEN 'live; struck only when the operator lists it'
+                                            ELSE 'already struck' END);
+    END LOOP;
+
+    -- 2. Derivers: resources with a live `derived_from` edge INTO R, or block provenance citing R.
+    --    Named by id, never touched; their citing provenance rows are ids only (no text).
+    FOR v_row IN
+        SELECT DISTINCT e.source_id AS deriver_id
+          FROM kb_edges e
+         WHERE e.is_folded = false AND e.edge_kind = 'leads_to'
+           AND e.label = 'derived_from'
+           AND e.target_table = 'kb_resources' AND e.target_id = p_resource
+           AND e.source_table = 'kb_resources'
+        UNION
+        SELECT DISTINCT b.resource_id
+          FROM kb_block_provenance q
+          JOIN kb_content_blocks b ON b.id = q.block_id
+         WHERE q.source_kind = 'resource' AND q.source_id = p_resource
+     LOOP
+        v_remainder := v_remainder || jsonb_build_object(
+            'target', 'deriver',
+            'outcome', 'resource ' || v_row.deriver_id::text
+                       || ' holds a structural lead (' ||
+                       CASE WHEN EXISTS (SELECT 1 FROM kb_edges e
+                                          WHERE e.is_folded = false AND e.edge_kind = 'leads_to'
+                                            AND e.label = 'derived_from'
+                                            AND e.target_table = 'kb_resources' AND e.target_id = p_resource
+                                            AND e.source_table = 'kb_resources' AND e.source_id = v_row.deriver_id)
+                            THEN 'derived_from edge'
+                            ELSE 'provenance citation' END
+                       || '); never touched; discovery-bound');
+    END LOOP;
+
+    -- 3. Cross-resource ledger text that quotes R (Q1, listed only): events of a quoting type
+    --    whose payload text names R's id AND whose subject arm is NOT R's own. A
+    --    citation_audited event ON one of R's blocks is R's own trail (step (6) reached its
+    --    projected column; its ledger reason rides R's ledger remainder below) — this arm is
+    --    only the events anchored elsewhere. Structurally: the payload text contains R's id,
+    --    and no block of R carries the payload's block_id. Named by event id, never redacted —
+    --    the exception never crosses the resource boundary (Q1).
+    FOR v_row IN
+        SELECT DISTINCT ev.id, et.name
+          FROM kb_events ev
+          JOIN kb_event_types et ON et.id = ev.event_type_id
+         WHERE et.name IN ('citation_audited', 'subscription_delivery_disposed',
+                           'invocation_closed')
+           AND _resource_erasure_quotes(ev.payload::text, p_resource)
+           AND NOT EXISTS (
+               SELECT 1 FROM kb_content_blocks b
+                WHERE b.resource_id = p_resource
+                  AND b.id = (ev.payload->>'block_id')::uuid)
+           AND NOT EXISTS (
+               SELECT 1
+                 FROM _resource_erasure_trail_scope(p_resource) t
+                WHERE t.event_id = ev.id)
+    LOOP
+        v_remainder := v_remainder || jsonb_build_object(
+            'target', 'cross-resource ledger text',
+            'outcome', 'event ' || v_row.id::text || ' (' || v_row.name
+                       || ') may quote the resource; listed only (Q1), never redacted');
+    END LOOP;
+
+    -- 4. Shared remote sources: kb_remote_sources rows R's blocks cite that ANOTHER
+    --    resource's block also cites (live or folded — the row is shared either way), read from
+    --    the ONE capture the act's step (9e) re-points from (_resource_erasure_remote_originals).
+    --    A source R exclusively cites is NOT here: step (9e) deletes it, and replay of the
+    --    redacted payloads never mints it, so the projection agrees by construction. A shared
+    --    one stays and is named by its kb_remote_sources id, never by its URL (D4, D8): the
+    --    record is an admin event outside the trail scope, so nothing could ever redact a URL
+    --    written into it.
+    FOR v_row IN
+        SELECT DISTINCT o.source_id
+          FROM _resource_erasure_remote_originals(p_resource) o
+         WHERE o.shared
+         ORDER BY o.source_id
+    LOOP
+        v_remainder := v_remainder || jsonb_build_object(
+            'target', 'kb_remote_sources.id',
+            'outcome', 'shared remote source ' || v_row.source_id::text
+                       || '; another resource''s block still cites it; named, kept');
+    END LOOP;
+
+    -- 5. Subscription deliveries that may quote R (Q1, listed only; ruled 2026-10-07). A delivery
+    --    is projected only by webhook intake, so it carries three texts: the remote's body (its
+    --    event's payload, bare at version 1, under `body` at 2), `rationale` (copied onto
+    --    subscription_delivery_disposed, which arm 3 lists by event) and `scope_reason` (a
+    --    caller's text, never on the ledger, so no event id can name it). A delivery is named,
+    --    by its id, when any of the three quotes R's id. Never redacted.
+    FOR v_row IN
+        SELECT d.id
+          FROM kb_subscription_deliveries d
+          JOIN kb_events ev ON ev.id = d.event_id
+         WHERE _resource_erasure_quotes(d.rationale, p_resource)
+            OR _resource_erasure_quotes(d.scope_reason, p_resource)
+            OR _resource_erasure_quotes(ev.payload::text, p_resource)
+         ORDER BY d.id
+    LOOP
+        v_remainder := v_remainder || jsonb_build_object(
+            'target', 'kb_subscription_deliveries',
+            'outcome', 'delivery ' || v_row.id::text
+                       || ' may quote the resource in its webhook body, rationale or scope_reason; listed only (Q1), never redacted');
+    END LOOP;
+
+    -- 6. Shapes in R's home for a family R's artifacts used (D4, ruled 2026-10-03, ruling 5;
+    --    20261008100000). A shape's artifact_kind is the home's declaration of a family, not R's
+    --    instance, so the act never touches it (Q1), and it may still name what R's artifacts
+    --    were. Named by shape id, live shapes only. Matched on (home, kind owner, family), the
+    --    family read from the artifact's row OR from the data_artifact_committed event that
+    --    asserted it: step (9f) erases the row's family, so a plan computed on the husk (the
+    --    survey after the act, a cut-1 husk the backfill below rewrote, cut 2's completion pass
+    --    re-deriving) still finds the shapes through the ledger until cut 2 redacts that payload.
+    --    Only R's current home: a shape in a home R was rehomed out of is not named.
+    FOR v_row IN
+        SELECT DISTINCT s.id
+          FROM kb_data_artifacts da
+          JOIN kb_events ev ON ev.id = da.asserted_by_event_id
+          JOIN kb_resource_homes h ON h.resource_id = da.resource_id
+          JOIN kb_data_artifact_shapes s
+               ON NOT s.is_folded
+              AND s.home_anchor_table = h.anchor_table AND s.home_anchor_id = h.anchor_id
+              AND s.kind_owner_table = da.kind_owner_table AND s.kind_owner_id = da.kind_owner_id
+              AND (s.artifact_kind = da.artifact_kind
+                OR s.artifact_kind = ev.payload ->> 'artifact_kind')
+         WHERE da.resource_id = p_resource
+         ORDER BY s.id
+    LOOP
+        v_remainder := v_remainder || jsonb_build_object(
+            'target', 'kb_data_artifact_shapes',
+            'outcome', 'shape ' || v_row.id::text
+                       || ' in the home declares a family the resource''s artifacts used; the home''s, never touched (Q1)');
+    END LOOP;
+
+    -- R's home context, whether R was ever a goal, and R's genesis — inputs to the telos arm
+    -- below. Goal-ness is read from the LEDGER, not from kb_properties: step 9 sentinels and folds
+    -- R's doc_type row, so a plan computed after the act (the survey on the husk, cut 2's
+    -- completion pass re-deriving) would otherwise drop every telos copy without error. "Ever" —
+    -- the created doc_type or any doc_type property event, normalized as the projection
+    -- normalizes it — so a goal later re-typed still names the snapshots it contributed to.
+    -- Cut 2 must read this before it redacts R's trail, or from the recorded resource_erased: both
+    -- arms read paths this plan's own CASE names for redaction (`property_key` and `value`, and
+    -- since 20261008100000 the created arm's `doc_type` too).
+    SELECT h.anchor_id INTO v_home_ctx FROM kb_resource_homes h
+     WHERE h.resource_id = p_resource AND h.anchor_table = 'kb_contexts';
+    v_is_goal := EXISTS (
+        SELECT 1 FROM kb_events ev JOIN kb_event_types et ON et.id = ev.event_type_id
+         WHERE et.name = 'resource_created'
+           AND (ev.payload ->> 'resource_id')::uuid = p_resource
+           AND ev.payload ->> 'doc_type' = 'goal')
+      OR EXISTS (
+        SELECT 1 FROM kb_events ev JOIN kb_event_types et ON et.id = ev.event_type_id
+         WHERE et.name IN ('property_set', 'property_asserted')
+           AND (ev.payload -> 'owner') ->> 'table' = 'kb_resources'
+           AND ((ev.payload -> 'owner') ->> 'id')::uuid = p_resource
+           AND ev.payload ->> 'property_key' = 'doc_type'
+           AND _property_value_normalized('doc_type', ev.payload -> 'value') #>> '{}' = 'goal')
+      -- After cut 2 the act redacts both arms above, so a plan on the husk reads goal-ness from
+      -- the act's own record: it named telos copies only when R was a goal (20261009100000).
+      OR EXISTS (
+        SELECT 1 FROM kb_events ev JOIN kb_event_types et ON et.id = ev.event_type_id
+         CROSS JOIN LATERAL jsonb_array_elements(ev.payload -> 'ledger_remainder') lr
+         WHERE et.name = 'resource_erased' AND ev.payload ->> 'subject_id' = p_resource::text
+           AND lr -> 'paths' ? 'telos_centroid');
+    SELECT ev.id INTO v_genesis
+      FROM kb_events ev JOIN kb_event_types et ON et.id = ev.event_type_id
+     WHERE et.name = 'resource_created' AND (ev.payload ->> 'resource_id')::uuid = p_resource
+     ORDER BY ev.id
+     LIMIT 1;
+    SELECT ev.id INTO v_erased
+      FROM kb_events ev JOIN kb_event_types et ON et.id = ev.event_type_id
+     WHERE et.name = 'resource_erased' AND ev.payload ->> 'subject_id' = p_resource::text
+     ORDER BY ev.id
+     LIMIT 1;
+
+    -- ── THE LEDGER REDACTION (D3, D4; 20261009100000): every path of R's own trail events the act
+    --    rewrites to its class sentinel, in exactly the shape `RedactedEventFields` uses —
+    --    {event, paths}. One definition, _resource_erasure_payload_redaction, which the act runs
+    --    for the payloads it writes. A path already at its sentinel is not listed, so on a husk
+    --    erased under cut 2 this is empty. On a husk erased under cut 1 it is NOT yet the
+    --    completion pass's list: step (9e) has re-pointed that husk's provenance, so the remote-
+    --    source numbering this reads finds no original and the derivation raises. The completion
+    --    pass must number those sources from the ledger. Paths only, never values.
+    SELECT coalesce(jsonb_agg(jsonb_build_object('event', d.event_id, 'paths', d.paths)
+                               ORDER BY d.event_id), '[]'::jsonb)
+      INTO v_redacted
+      FROM _resource_erasure_payload_redaction(p_resource) d;
+
+    -- ── THE LEDGER REMAINDER (D12): the ledger paths carrying R's content that the exception
+    --    cannot reach, in the same {event, paths} shape. Since cut 2 the act reaches R's whole
+    --    trail, so what remains is the telos copies below, anchored on the context (D3's
+    --    exception never crosses the resource boundary).
+    SELECT coalesce(jsonb_agg(jsonb_build_object('event', s.event_id, 'paths', s.paths)
+                               ORDER BY s.event_id), '[]'::jsonb)
+      INTO v_ledger
+      FROM (
+        -- ── The telos copies (ruled 2026-10-04): `ledger_remainder` names the ledger paths
+        --    carrying R's content, not only R's own trail. When R was ever a goal, every telos
+        --    snapshot its current home context's materializations and salience refreshes recorded
+        --    may average R's embedding in. Bounded by R's genesis below and, once R is erased,
+        --    by its `resource_erased` above (ruled 2026-10-04): later snapshots are the context's
+        --    own history, and a re-derive must name the same set the act recorded. Not named: a
+        --    snapshot that a materialize already in flight at the act minted after it (loaded
+        --    before the act, so its telos may still average R in; the region drain repairs the
+        --    stored snapshot, not that ledger copy), and a former home's snapshots. Named, never reached here: the ledger edit is
+        --    cut 2's. Bounded below by R's genesis — R contributed nothing before it existed — and
+        --    otherwise over-inclusive by design: a snapshot minted while R was done or unembedded
+        --    is named too. Not in the trail scope (anchored on the context, not on R), so no
+        --    event appears twice. ────────────────────────────────────────────────────────────
+        SELECT ev.id AS event_id, '["telos_centroid"]'::jsonb AS paths
+          FROM kb_events ev
+          JOIN kb_event_types et ON et.id = ev.event_type_id
+         WHERE v_is_goal
+           AND et.name IN ('region_materialized', 'salience_refreshed')
+           AND ev.producing_anchor_table = 'kb_contexts' AND ev.producing_anchor_id = v_home_ctx
+           AND (v_genesis IS NULL OR ev.id > v_genesis)
+           AND (v_erased IS NULL OR ev.id < v_erased)
+           AND jsonb_typeof(ev.payload -> 'telos_centroid') = 'string'
+       ) s;
+
+    RETURN jsonb_build_object(
+        'resource',        p_resource,
+        'n_blocks',        v_n_blocks,
+        'n_revisions',     v_n_revisions,
+        'n_chunks',        v_n_chunks,
+        'n_artifacts',     v_n_artifacts,
+        'n_edges',         v_n_edges,
+        'edges',           v_edges,
+        'targets',         v_targets,
+        'already_erased',  (SELECT r.erased_at IS NOT NULL FROM kb_resources r WHERE r.id = p_resource),
+        'charter_of',      v_charter_of,
+        'ingest_state',    v_ingest,
+        'fingerprint_available',
+            to_regproc('sensitivity.deriver_fingerprint_matches') IS NOT NULL,
+        'remainder',       v_remainder,
+        'redacted_fields', v_redacted,
+        'ledger_remainder', v_ledger);
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.principal_erasure_survey_plan(p_subject uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    v_exists     uuid;
+    v_governed   uuid[] := '{}';
+    v_resources  uuid[] := '{}';
+    v_hashes     text[] := '{}';
+    v_blob_hash  text[] := '{}';
+    v_targets    jsonb  := '[]'::jsonb;
+    v_strikes    jsonb  := '[]'::jsonb;
+    v_row        record;
+    v_rel        boolean;
+    v_struck     text[] := '{}';
+    v_team  record;
+    v_n     integer;
+    v_text_rem text;
+    v_prof  kb_profiles%ROWTYPE;
+    v_charters   uuid[] := '{}';
+    v_resrows    jsonb  := '[]'::jsonb;
+    v_disp       text;
+    v_counts     jsonb  := jsonb_build_object('erase', 0, 'complete', 0, 'skip', 0, 'charter', 0);
+    v_ctx_erase  uuid[] := '{}';
+    v_ctx_fields jsonb  := '[]'::jsonb;
+    v_trail      uuid[] := '{}';
+    v_retained   jsonb  := _erasure_retention_snapshot();
+    v_kept       text;
+BEGIN
+    SELECT id INTO v_exists FROM kb_profiles WHERE id = p_subject;
+    IF v_exists IS NULL THEN
+        RAISE EXCEPTION 'principal_erasure_execute: subject % not found', p_subject;
+    END IF;
+
+    -- The estate contexts (R1, ruled 2026-10-10): the subject's @me contexts and their personal
+    -- team's contexts, from _erasure_estate_contexts, the ONE definition. Other team contexts and
+    -- map homes are NOT the estate (disposition iii). The act records this set in its event and
+    -- the redaction reads it from there, so the arms no longer re-derive it.
+    v_governed := ARRAY(SELECT _erasure_estate_contexts(p_subject));
+
+    -- ── Scope: the estate, HOME-PURE (ruled 2026-09-11 with Pete — the "scope of
+    -- engagement" ruling) ─────────────────────────────────────────────────────────────
+    -- Everything homed in a governed context wipes with the estate, whoever authored,
+    -- owns or emitted it: writing into someone's PRIVATE context under a grant declares
+    -- the content's scope of engagement — it lives and dies with that estate (the
+    -- terms-of-use documentation states this). The 20260909000025 actor halves are
+    -- dissolved: the owner/originator OR kept reassigned-in-place authorship in reach
+    -- (20260703140000 moves owner_profile_id in place), and the emitted half was already
+    -- subsumed by the governed-home EXISTS it carried. Erasure keeps the resource rows
+    -- live (D3), so a grantee whose prose dies with the estate holds their remaining
+    -- access only against a retired context (arm 13), and their attribution dies by the
+    -- pseudonym break, never by edits.
+    SELECT coalesce(array_agg(DISTINCT h.resource_id), '{}') INTO v_resources
+      FROM kb_resource_homes h
+     WHERE h.anchor_table = 'kb_contexts'
+       AND h.anchor_id = ANY(v_governed);
+
+    -- ── Each estate resource's disposition, in resource-id order: the order the act erases them
+    --    in (2c), which is also the order every person act takes their locks in.
+    --      charter  — a cogmap's telos. Resource erasure refuses it; the act empties its text
+    --                 by hash below and holds it until map-grain erasure (2a).
+    --      erase    — live or soft-deleted: resource erasure runs on it (2b).
+    --      complete — erased, and the ledger still holds paths to rewrite (an erasure from
+    --                 before cut 2): resource erasure's completion pass runs (2f).
+    --      skip     — erased and complete (2f). ──────────────────────────────────────────────
+    FOR v_row IN
+        SELECT r.id,
+               r.erased_at IS NOT NULL AS erased,
+               EXISTS (SELECT 1 FROM kb_cogmaps m WHERE m.telos_resource_id = r.id) AS charter
+          FROM kb_resources r
+         WHERE r.id = ANY(v_resources)
+         ORDER BY r.id
+    LOOP
+        v_disp := CASE
+            WHEN v_row.charter THEN 'charter'
+            WHEN NOT v_row.erased THEN 'erase'
+            WHEN resource_erasure_completion_fields(v_row.id) <> '[]'::jsonb THEN 'complete'
+            ELSE 'skip'
+        END;
+        IF v_disp = 'charter' THEN
+            v_charters := v_charters || v_row.id;
+        END IF;
+        v_resrows := v_resrows || jsonb_build_array(jsonb_build_object(
+            'resource_id', v_row.id, 'disposition', v_disp));
+        v_counts := jsonb_set(v_counts, ARRAY[v_disp], to_jsonb((v_counts->>v_disp)::integer + 1));
+    END LOOP;
+
+    -- The text hashes the act empties BY HASH (D5, ruled 2026-10-10): the charters' chunk and
+    -- verbatim block content hashes. Every other estate resource is emptied row by row by
+    -- resource erasure, which admits no hash to kb_erased_content.
+    SELECT coalesce(array_agg(DISTINCT h), '{}') INTO v_hashes FROM (
+        SELECT c.content_hash AS h FROM kb_chunks c
+         WHERE c.resource_id = ANY(v_charters)
+        UNION
+        SELECT bc.content_hash AS h
+          FROM kb_block_content bc
+          JOIN kb_block_revisions br ON br.id = bc.block_revision_id
+          JOIN kb_content_blocks b ON b.id = br.block_id
+         WHERE b.resource_id = ANY(v_charters)
+           AND bc.content <> ''
+    ) s;
+
+    -- ── The blob pass: HOME-PURE (the 2026-09-12 ruling), WOULD-STRIKE structured ───────
+    -- Scope = every blob row homed in a governed context, WHOEVER committed it, plus the
+    -- subject's own rows (owner/originator/emitted) wherever they home — the subject's
+    -- team- and map-homed rows stay the named remainder (disposition iii). Governed-home
+    -- LIVE rows report would-strike entries; governed-home struck rows report
+    -- already-erased; EVERY other home is the named remainder. released_would_be SIMULATES
+    -- the act's own sequential refcount: the ONE blob_delete live-row predicate (live rows
+    -- with the hash, this one included, <= 1) minus the same-hash rows EARLIER IN THE
+    -- PLAN'S OWN STRIKE SET — execute consumes the entries in order, so those siblings are
+    -- already emptied when the act reaches this row. Run at survey time WITHOUT the hash's
+    -- advisory lock: a PREDICTION, honest about the moment it ran; the wrapper's
+    -- strike-time verdict is authoritative in the act. The enumeration is ORDERED BY id —
+    -- the act strikes in plan order and the survey must walk the SAME sequence when it
+    -- simulates it, so the order cannot be left to the scan.
+    FOR v_row IN
+        SELECT b.id, b.content_hash, b.blob_pathname, b.content_type,
+               (b.home_table = 'kb_contexts' AND b.home_id = ANY(v_governed)) AS governed_home
+          FROM kb_blobs b
+         WHERE (b.home_table = 'kb_contexts' AND b.home_id = ANY(v_governed))
+            OR b.owner_profile_id = p_subject
+            OR b.originator_profile_id = p_subject
+            OR b.asserted_by_event_id IN (
+               SELECT e.id FROM kb_events e
+                 JOIN kb_entities en ON en.id = e.emitter_entity_id
+                WHERE en.profile_id = p_subject)
+          ORDER BY b.id
+    LOOP
+        IF v_row.governed_home AND v_row.content_type IS NOT NULL THEN
+            -- The act's own SEQUENTIAL refcount, simulated: the strike loop consumes the
+            -- plan's rows by id IN ORDER and each blob_delete counts live rows at ITS
+            -- moment, so every same-hash row already in this plan's strike set is emptied
+            -- when the act reaches this row — subtract it (accumulated below, in plan
+            -- order) from the ONE live-row predicate. Two same-hash rows in the estate
+            -- therefore predict released=false then released=true, exactly as the act
+            -- strikes them.
+            v_rel := ((SELECT count(*) FROM kb_blobs live
+                        WHERE live.content_hash = v_row.content_hash
+                          AND live.content_type IS NOT NULL)
+                      - (SELECT count(*) FROM unnest(v_struck) prior
+                          WHERE prior = v_row.content_hash)) <= 1;
+            v_struck := v_struck || ARRAY[v_row.content_hash];
+            v_blob_hash := v_blob_hash || ARRAY[v_row.content_hash];
+            v_targets := v_targets || jsonb_build_array(jsonb_build_object(
+                'target',  'kb_blobs',
+                'would_strike', jsonb_build_object(
+                    'blob_id',           v_row.id,
+                    'content_hash',      v_row.content_hash,
+                    'pathname',          v_row.blob_pathname,
+                    'released_would_be', v_rel)));
+            v_strikes := v_strikes || jsonb_build_array(jsonb_build_object(
+                'blob_id',           v_row.id,
+                'released_would_be', v_rel));
+        ELSIF v_row.governed_home THEN
+            v_targets := v_targets || jsonb_build_array(jsonb_build_object(
+                'target',  'kb_blobs',
+                'outcome', 'already-erased'));
+        ELSE
+            -- The named remainder: independent_obligation-shaped, hash named (D2 vocabulary),
+            -- never admitted to the erased-content set.
+            v_targets := v_targets || jsonb_build_array(jsonb_build_object(
+                'target',  'kb_blobs',
+                'outcome', 'independent_obligation: home governed by a team or map; '
+                           || 'hash ' || v_row.content_hash || ' not struck'));
+        END IF;
+    END LOOP;
+
+    v_hashes := v_hashes || v_blob_hash;
+
+    -- ── Per-target outcomes, read against the PRE-redaction state (the mutations live in
+    -- _erasure_apply_redaction alone; these reads only report what it will find).
+    -- 20260911000000: every read below scopes to GOVERNED homes with the same predicate
+    -- the redaction spells — the record reports "erased" only for rows the act actually
+    -- redacts; a same-hash row in an ungoverned home is nobody's outcome (it is not the
+    -- subject's data and was never a target). ────────────────────────────────────────────
+    SELECT * INTO v_prof FROM kb_profiles WHERE id = p_subject;
+    IF v_prof.tombstoned_at IS NOT NULL THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_profiles.handle',        'outcome','already-erased'),
+            jsonb_build_object('target','kb_profiles.display_name',  'outcome','already-erased'),
+            jsonb_build_object('target','kb_profiles.tombstoned_at', 'outcome','already-erased'));
+    ELSE
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_profiles.handle',        'outcome','sentinel-scrubbed'),
+            jsonb_build_object('target','kb_profiles.display_name',  'outcome','sentinel-scrubbed'),
+            jsonb_build_object('target','kb_profiles.tombstoned_at', 'outcome','tombstoned'));
+        IF v_prof.email IS NOT NULL THEN
+            v_targets := v_targets || jsonb_build_array(
+                jsonb_build_object('target','kb_profiles.email','outcome','erased'));
+        END IF;
+        IF v_prof.preferences <> '{}'::jsonb THEN
+            v_targets := v_targets || jsonb_build_array(
+                jsonb_build_object('target','kb_profiles.preferences','outcome','erased'));
+        END IF;
+    END IF;
+
+    SELECT * INTO v_team FROM kb_teams t WHERE t.personal_of = p_subject;
+    IF FOUND THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_teams.slug',
+                'outcome', CASE WHEN v_team.slug = 'personal-erased-' || p_subject::text
+                                THEN 'already-erased' ELSE 'sentinel-scrubbed' END),
+            jsonb_build_object('target','kb_teams.name',
+                'outcome', CASE WHEN v_team.slug = 'personal-erased-' || p_subject::text
+                                THEN 'already-erased' ELSE 'sentinel-scrubbed' END));
+    END IF;
+
+    -- The Slack stores, matched through a Slack auth link or the vault row's own profile_id (R3):
+    -- a vault row can outlive its link.
+    SELECT count(*) INTO v_n FROM kb_slack_grant_vault v
+     WHERE v.slack_principal_id IN (SELECT _erasure_subject_slack_principals(p_subject));
+    IF v_n > 0 THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_slack_grant_vault.slack_principal_id',
+                'outcome','deleted'));
+    END IF;
+    SELECT count(*) INTO v_n FROM kb_slack_link_intents i
+     WHERE i.slack_principal_id IN (SELECT _erasure_subject_slack_principals(p_subject));
+    IF v_n > 0 THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_slack_link_intents.slack_principal_id',
+                'outcome','deleted'));
+    END IF;
+
+    -- The auth-link identifiers, the entity names, and the subject's own artifact content —
+    -- outcomes read against the PRE-redaction state exactly like every arm above (the
+    -- mutations live in _erasure_apply_redaction alone; these reads only report what it
+    -- will find). The artifact remainder subset is named with the disposition-iii
+    -- vocabulary the blob arm set: another principal's kind namespace on a governed
+    -- resource is an independent obligation, re-named on every run because it stands.
+    SELECT count(*) INTO v_n FROM kb_profile_auth_links l
+     WHERE l.profile_id = p_subject AND l.email IS NOT NULL;
+    IF v_n > 0 THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_profile_auth_links.email',
+                'outcome','erased'));
+    END IF;
+    SELECT count(*) INTO v_n FROM kb_profile_auth_links l
+     WHERE l.profile_id = p_subject
+       AND l.auth_provider_user_id IS DISTINCT FROM 'erased-' || l.id::text;
+    IF v_n > 0 THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_profile_auth_links.auth_provider_user_id',
+                'outcome','sentinel-scrubbed'));
+    END IF;
+    SELECT count(*) INTO v_n FROM kb_entities en
+     WHERE en.profile_id = p_subject
+       AND en.name IS DISTINCT FROM 'erased-' || en.id::text;
+    IF v_n > 0 THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_entities.name',
+                'outcome','sentinel-scrubbed'));
+    END IF;
+
+    -- ── The operational identity arms (R3), read against the pre-redaction state through the
+    --    same selectors the redaction uses. Each is claimed only when the act will change a row, so
+    --    a re-run omits it. ──────────────────────────────────────────────────────────────────────
+    SELECT count(*) INTO v_n FROM kb_entities en
+     WHERE en.profile_id = p_subject AND en.metadata <> '{}'::jsonb;
+    IF v_n > 0 THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_entities.metadata', 'outcome','erased'));
+    END IF;
+    SELECT count(*) INTO v_n FROM kb_team_invitations i
+     WHERE i.id IN (SELECT _erasure_subject_invitations(p_subject))
+       AND i.invited_email IS DISTINCT FROM 'erased-' || i.id::text;
+    IF v_n > 0 THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_team_invitations.invited_email',
+                'outcome', v_n || ' invitation(s) sent by or to the subject; sentinel-scrubbed, '
+                           || 'token replaced, pending ones revoked'));
+    END IF;
+    -- Invitations to an address the subject holds only unverified: perhaps theirs, perhaps not, so
+    -- never touched, and named by count.
+    SELECT count(*) INTO v_n FROM kb_team_invitations i
+     WHERE i.invited_email IS DISTINCT FROM 'erased-' || i.id::text
+       AND i.id NOT IN (SELECT _erasure_subject_invitations(p_subject))
+       AND lower(i.invited_email COLLATE "C") IN (
+           SELECT lower(l.email COLLATE "C") FROM kb_profile_auth_links l
+            WHERE l.profile_id = p_subject AND l.email IS NOT NULL AND NOT l.email_verified);
+    IF v_n > 0 THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_team_invitations.invited_email (unverified address)',
+                'outcome', 'independent_obligation: ' || v_n || ' invitation(s) to an address the '
+                           || 'subject never verified; may be another person''s; not reached'));
+    END IF;
+    -- Unbound refresh tokens are reached by the login provider the doors pass. Without it they
+    -- cannot be attributed, so say so rather than imply none exist.
+    IF _erasure_auth_provider() IS NULL
+       AND EXISTS (SELECT 1 FROM kb_oauth_refresh_tokens t
+                    WHERE t.profile_id IS NULL AND t.revoked_at IS NULL) THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_oauth_refresh_tokens (unbound)',
+                'outcome', 'not checked: the act was not told the login provider, so tokens never '
+                           || 'bound to a profile cannot be attributed'));
+    END IF;
+    SELECT count(*) INTO v_n FROM kb_oauth_flow f
+     WHERE f.id IN (SELECT _erasure_subject_oauth_flows(p_subject));
+    IF v_n > 0 THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_oauth_flow', 'outcome', v_n || ' flow(s) deleted'));
+    END IF;
+    v_kept := _erasure_retained_by(v_retained, 'credential-replay-evidence');
+    SELECT count(*) INTO v_n FROM kb_oauth_refresh_tokens t
+     WHERE t.id IN (SELECT _erasure_subject_refresh_tokens(p_subject))
+       AND (v_kept IS NULL OR t.claims <> '{}'::jsonb);
+    IF v_n > 0 THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_oauth_refresh_tokens',
+                'outcome', CASE WHEN v_kept IS NULL
+                                THEN v_n || ' refresh token(s) revoked and deleted'
+                                ELSE v_n || ' refresh token(s) revoked; claims and hash erased' END));
+    END IF;
+    SELECT count(*) INTO v_n FROM kb_oauth_refresh_replays r
+     WHERE r.profile_id = p_subject
+        OR r.token_id IN (SELECT _erasure_subject_refresh_tokens(p_subject));
+    IF v_n > 0 THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_oauth_refresh_replays',
+                'outcome', CASE WHEN v_kept IS NULL THEN v_n || ' replay record(s) deleted'
+                                ELSE 'retained under policy ' || v_kept END));
+    END IF;
+    SELECT count(*) INTO v_n FROM kb_connections c
+     WHERE c.id IN (SELECT _erasure_subject_connections(p_subject, v_governed))
+       AND (c.revoked_at IS NULL OR c.credential IS NOT NULL OR c.observed_reach IS NOT NULL);
+    IF v_n > 0 THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_connections.credential',
+                'outcome', v_n || ' connection(s) revoked in temper; credential and observed reach '
+                           || 'erased; tokens already minted at the provider are not revoked there'));
+    END IF;
+    SELECT count(*) INTO v_n FROM kb_blob_uploads u
+     WHERE u.id IN (SELECT _erasure_subject_uploads(p_subject, v_governed));
+    IF v_n > 0 THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_blob_upload_segments.bytes',
+                'outcome', v_n || ' staged upload(s) deleted'));
+    END IF;
+    -- The free text about the subject: erased unless a policy keeps its category (R4).
+    SELECT count(*) INTO v_n FROM kb_principal_standing_events s
+     WHERE s.profile_id = p_subject AND s.reason IS NOT NULL;
+    IF v_n > 0 THEN
+        v_kept := _erasure_retained_by(v_retained, 'standing-reasons');
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_principal_standing_events.reason',
+                'outcome', coalesce('retained under policy ' || v_kept, 'erased')));
+    END IF;
+    SELECT count(*) INTO v_n FROM kb_join_requests j
+     WHERE j.requesting_profile_id = p_subject
+       AND (j.message IS NOT NULL OR j.decision_note IS NOT NULL);
+    IF v_n > 0 THEN
+        v_kept := _erasure_retained_by(v_retained, 'join-request-notes');
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_join_requests.message',
+                'outcome', coalesce('retained under policy ' || v_kept, 'erased')));
+    END IF;
+    SELECT count(*) INTO v_n FROM kb_principal_review_requests r
+     WHERE r.profile_id = p_subject
+       AND (r.message IS NOT NULL OR r.decision_note IS NOT NULL);
+    IF v_n > 0 THEN
+        v_kept := _erasure_retained_by(v_retained, 'review-request-notes');
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_principal_review_requests.message',
+                'outcome', coalesce('retained under policy ' || v_kept, 'erased')));
+    END IF;
+    -- The ledger copies a policy keeps: named, never rewritten.
+    v_targets := v_targets || coalesce((
+        SELECT jsonb_agg(jsonb_build_object(
+                   'target',  'kb_events.payload (' || k.cls || ')',
+                   'outcome', 'retained under policy ' || k.policy) ORDER BY k.cls)
+          FROM (SELECT DISTINCT
+                       CASE t.name WHEN 'principal_standing_changed'   THEN 'standing reasons'
+                                   WHEN 'principal_governance_changed' THEN 'governance reasons'
+                                   ELSE 'erasure-refusal details' END AS cls,
+                       _erasure_retained_by(v_retained,
+                           _principal_erasure_path_category(t.name, p.path)) AS policy
+                  FROM kb_events e
+                  JOIN kb_event_types t ON t.id = e.event_type_id
+                  JOIN _principal_erasure_redact_paths() p ON p.event_type = t.name
+                 WHERE t.name IN ('principal_standing_changed', 'principal_governance_changed',
+                                  'principal_erasure_refused')
+                   AND e.payload ->> 'subject_table' = 'kb_profiles'
+                   AND e.payload ->> 'subject_id' = p_subject::text
+                   AND jsonb_typeof(e.payload -> p.path) = 'string') k
+         WHERE k.policy IS NOT NULL), '[]'::jsonb);
+    SELECT count(*) INTO v_n FROM kb_data_artifacts da
+      JOIN kb_data_artifact_content dac ON dac.artifact_id = da.id
+     WHERE da.kind_owner_table = 'kb_profiles'
+       AND da.kind_owner_id = p_subject
+       AND dac.content <> '{}'::jsonb
+       AND da.resource_id = ANY(v_charters);
+    IF v_n > 0 THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_data_artifact_content.content',
+                'outcome','erased'));
+    END IF;
+    SELECT count(*) INTO v_n FROM kb_data_artifacts da
+      JOIN kb_data_artifact_content dac ON dac.artifact_id = da.id
+     WHERE dac.content <> '{}'::jsonb
+       AND (da.kind_owner_table <> 'kb_profiles' OR da.kind_owner_id <> p_subject)
+       AND da.resource_id = ANY(v_charters);
+    IF v_n > 0 THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_data_artifact_content.content (other-kind)',
+                'outcome','independent_obligation: the artifact''s kind is owned by '
+                           || 'another principal; content on a governed resource not '
+                           || 'struck'));
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM kb_chunk_content cc
+                 JOIN kb_chunks c ON c.id = cc.chunk_id
+                WHERE c.content_hash = ANY(v_hashes)
+                  AND c.resource_id IN (
+                      SELECT h.resource_id FROM kb_resource_homes h
+                       WHERE h.anchor_table = 'kb_contexts'
+                         AND h.anchor_id = ANY(v_governed))) THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_chunk_content.content',
+                'outcome', CASE WHEN EXISTS (SELECT 1 FROM kb_chunk_content cc
+                                               JOIN kb_chunks c ON c.id = cc.chunk_id
+                                              WHERE c.content_hash = ANY(v_hashes)
+                                                AND cc.content <> ''
+                                                AND c.resource_id IN (
+                                                    SELECT h.resource_id FROM kb_resource_homes h
+                                                     WHERE h.anchor_table = 'kb_contexts'
+                                                       AND h.anchor_id = ANY(v_governed)))
+                                THEN 'erased' ELSE 'already-erased' END));
+    END IF;
+    IF EXISTS (SELECT 1 FROM kb_block_content
+                WHERE content_hash = ANY(v_hashes)
+                  AND block_revision_id IN (
+                      SELECT br.id FROM kb_block_revisions br
+                        JOIN kb_content_blocks b ON b.id = br.block_id
+                       WHERE b.resource_id IN (
+                             SELECT h.resource_id FROM kb_resource_homes h
+                              WHERE h.anchor_table = 'kb_contexts'
+                                AND h.anchor_id = ANY(v_governed)))) THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_block_content.content',
+                'outcome', CASE WHEN EXISTS (SELECT 1 FROM kb_block_content
+                                              WHERE content_hash = ANY(v_hashes)
+                                                AND content <> ''
+                                                AND block_revision_id IN (
+                                                    SELECT br.id FROM kb_block_revisions br
+                                                      JOIN kb_content_blocks b ON b.id = br.block_id
+                                                     WHERE b.resource_id IN (
+                                                           SELECT h.resource_id FROM kb_resource_homes h
+                                                            WHERE h.anchor_table = 'kb_contexts'
+                                                              AND h.anchor_id = ANY(v_governed))))
+                                THEN 'erased' ELSE 'already-erased' END));
+    END IF;
+
+    -- The text remainder (the attribution ruling, 2026-09-13, on the 2026-09-06 clause):
+    -- prose ATTRIBUTED to the subject by authorship — content blocks whose genesis event
+    -- the subject's entity emitted — in homes outside the governed estate (team and map
+    -- alike). Named for audit with count + hashes (capped at 8, "and N more" beyond),
+    -- never struck, never admitted to v_hashes: nothing in a shared home is the act's to
+    -- strike, and the redaction's reads stay governed-scoped. Attribution is the emitting
+    -- entity, the blob arm's own emitted-half shape; direct authorship only — carried
+    -- attribution is provenance the pseudonym break already covers.
+    v_text_rem := (
+        SELECT 'independent_obligation: home governed by a team or map; '
+               || count(DISTINCT bc.content_hash) || ' text hash(s) not struck'
+               || CASE WHEN count(DISTINCT bc.content_hash) <= 8
+                       THEN ': ' || array_to_string(array_agg(DISTINCT bc.content_hash), ', ')
+                       ELSE ': ' || array_to_string(ARRAY(
+                                   SELECT DISTINCT bc2.content_hash
+                                     FROM kb_block_content bc2
+                                     JOIN kb_block_revisions br2 ON br2.id = bc2.block_revision_id
+                                     JOIN kb_content_blocks b2 ON b2.id = br2.block_id
+                                     JOIN kb_events ge2 ON ge2.id = b2.genesis_event_id
+                                     JOIN kb_entities ge2_en ON ge2_en.id = ge2.emitter_entity_id
+                                    WHERE ge2_en.profile_id = p_subject
+                                      AND bc2.content <> ''
+                                      AND NOT EXISTS (SELECT 1 FROM kb_resource_homes hg2
+                                                       WHERE hg2.resource_id = b2.resource_id
+                                                         AND hg2.anchor_table = 'kb_contexts'
+                                                         AND hg2.anchor_id = ANY(v_governed))
+                                    ORDER BY 1 LIMIT 8), ', ')
+                            || '; and ' || (count(DISTINCT bc.content_hash) - 8) || ' more'
+                  END
+          FROM kb_block_content bc
+          JOIN kb_block_revisions br ON br.id = bc.block_revision_id
+          JOIN kb_content_blocks b ON b.id = br.block_id
+          JOIN kb_events ge ON ge.id = b.genesis_event_id
+          JOIN kb_entities ge_en ON ge_en.id = ge.emitter_entity_id
+         WHERE ge_en.profile_id = p_subject
+           AND bc.content <> ''
+           AND NOT EXISTS (SELECT 1 FROM kb_resource_homes hg
+                            WHERE hg.resource_id = b.resource_id
+                              AND hg.anchor_table = 'kb_contexts'
+                              AND hg.anchor_id = ANY(v_governed))
+        HAVING count(DISTINCT bc.content_hash) > 0);
+    IF v_text_rem IS NOT NULL THEN
+        v_targets := v_targets || jsonb_build_array(jsonb_build_object(
+            'target',  'kb_block_content.content',
+            'outcome', v_text_rem));
+    END IF;
+    IF EXISTS (SELECT 1 FROM kb_chunks
+                WHERE content_hash = ANY(v_hashes)
+                  AND resource_id IN (
+                      SELECT h.resource_id FROM kb_resource_homes h
+                       WHERE h.anchor_table = 'kb_contexts'
+                         AND h.anchor_id = ANY(v_governed))) THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_chunks.embedding',
+                'outcome', CASE WHEN EXISTS (SELECT 1 FROM kb_chunks
+                                              WHERE content_hash = ANY(v_hashes)
+                                                AND embedding IS NOT NULL
+                                                AND resource_id IN (
+                                                    SELECT h.resource_id FROM kb_resource_homes h
+                                                     WHERE h.anchor_table = 'kb_contexts'
+                                                       AND h.anchor_id = ANY(v_governed)))
+                                THEN 'erased' ELSE 'already-erased' END),
+            jsonb_build_object('target','kb_chunks.embedded_with',
+                'outcome', CASE WHEN EXISTS (SELECT 1 FROM kb_chunks
+                                              WHERE content_hash = ANY(v_hashes)
+                                                AND embedding IS NOT NULL
+                                                AND resource_id IN (
+                                                    SELECT h.resource_id FROM kb_resource_homes h
+                                                     WHERE h.anchor_table = 'kb_contexts'
+                                                       AND h.anchor_id = ANY(v_governed)))
+                                THEN 'erased' ELSE 'already-erased' END));
+    END IF;
+    -- The heading trail, arm (4a) of the redaction (20261020100000). Claimed only when the act
+    -- will null one: a chunk with no heading trail never held one, so "already-erased" would
+    -- claim an act that never happened. A re-run of the act therefore omits the target.
+    IF EXISTS (SELECT 1 FROM kb_chunks
+                WHERE content_hash = ANY(v_hashes)
+                  AND header_path IS NOT NULL
+                  AND resource_id IN (
+                      SELECT h.resource_id FROM kb_resource_homes h
+                       WHERE h.anchor_table = 'kb_contexts'
+                         AND h.anchor_id = ANY(v_governed))) THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_chunks.header_path', 'outcome','erased'));
+    END IF;
+    IF EXISTS (SELECT 1 FROM kb_resource_search_index si
+                WHERE si.resource_id IN (SELECT DISTINCT c.resource_id FROM kb_chunks c
+                                          WHERE c.content_hash = ANY(v_hashes)
+                                            AND c.resource_id IN (
+                                                SELECT h.resource_id FROM kb_resource_homes h
+                                                 WHERE h.anchor_table = 'kb_contexts'
+                                                   AND h.anchor_id = ANY(v_governed)))) THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_resource_search_index.search_vector',
+                'outcome', CASE WHEN EXISTS (SELECT 1 FROM kb_resource_search_index si
+                                              WHERE si.resource_id IN (
+                                                    SELECT DISTINCT c.resource_id FROM kb_chunks c
+                                                     WHERE c.content_hash = ANY(v_hashes)
+                                                       AND c.resource_id IN (
+                                                           SELECT h.resource_id FROM kb_resource_homes h
+                                                            WHERE h.anchor_table = 'kb_contexts'
+                                                              AND h.anchor_id = ANY(v_governed)))
+                                              AND si.search_vector <> '')
+                                THEN 'erased' ELSE 'already-erased' END));
+    END IF;
+
+    SELECT count(*) INTO v_n FROM kb_cogmaps m
+     WHERE m.shape_materialized_event_id IS NOT NULL
+       AND m.id IN (
+           SELECT r.home_anchor_id FROM kb_cogmap_regions r
+             JOIN kb_cogmap_region_members mem ON mem.region_id = r.id
+            WHERE r.home_anchor_table = 'kb_cogmaps' AND NOT r.is_folded
+              AND mem.member_table = 'kb_resources'
+              AND mem.member_id = ANY(v_resources));
+    IF v_n > 0 THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_cogmaps.shape_materialized_event_id',
+                'outcome','recompute-marked'));
+    END IF;
+    -- The estate contexts the act erases (R7, ruled 2026-10-10): every one without a
+    -- context_erased event yet. Each gets one, which retires it and replaces its name and slug with
+    -- the sentinels; a re-run finds none left. The context rows' earlier names and slugs on the
+    -- ledger (context_renamed, context_retired, context_restored) are rewritten to the same
+    -- sentinels under the act's own authority: redacted_fields, paths only.
+    v_ctx_erase := _principal_erasure_contexts_to_erase(v_governed);
+    IF cardinality(v_ctx_erase) > 0 THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_contexts.is_active','outcome','retired'),
+            jsonb_build_object('target','kb_contexts.name',     'outcome','sentinel-scrubbed'),
+            jsonb_build_object('target','kb_contexts.slug',     'outcome','sentinel-scrubbed'));
+    END IF;
+    v_ctx_fields := _principal_erasure_redacted_fields(p_subject, v_governed, v_retained);
+    SELECT count(*) INTO v_n
+      FROM jsonb_array_elements(v_ctx_fields) f
+      JOIN kb_events e ON e.id = (f ->> 'event')::uuid
+     WHERE e.producing_anchor_table = 'kb_contexts';
+    IF v_n > 0 THEN
+        v_targets := v_targets || jsonb_build_array(jsonb_build_object(
+            'target',  'kb_events.payload',
+            'outcome', v_n
+                       || ' context event(s) naming an estate context; names and slugs sentinel-scrubbed'));
+    END IF;
+    -- The subject's own admin events (R3): standing and governance reasons, and Slack ids.
+    v_n := jsonb_array_length(v_ctx_fields) - v_n;
+    IF v_n > 0 THEN
+        v_targets := v_targets || jsonb_build_array(jsonb_build_object(
+            'target',  'kb_events.payload',
+            'outcome', v_n
+                       || ' admin event(s) about the subject; reasons and refusal details erased and Slack ids sentinel-scrubbed'));
+    END IF;
+
+    -- What the subject wrote outside the estate (R8, disposition iii): it stays, and the record
+    -- names it by count per carrier class, never by content. A carrier is one of the subject's own
+    -- ledger events (its emitting entity is theirs) still holding the text: outside the trail of
+    -- every estate resource, which resource erasure rewrites, and with no redaction row at the
+    -- path, which an earlier erasure or scrub already rewrote.
+    v_trail := ARRAY(SELECT DISTINCT ts.event_id
+                       FROM unnest(v_resources) AS er(id),
+                            LATERAL _resource_erasure_trail_scope(er.id) ts);
+    v_targets := v_targets || coalesce((
+        SELECT jsonb_agg(jsonb_build_object(
+                   'target',  'kb_events.payload (' || c.cls || ')',
+                   'outcome', 'independent_obligation: authored by the subject outside the estate; '
+                              || c.n || ' event(s) kept')
+                   ORDER BY c.cls)
+          FROM (SELECT s.cls, count(*) AS n
+                  FROM (SELECT CASE
+                                 WHEN t.name IN ('resource_created', 'resource_updated')
+                                      AND jsonb_typeof(e.payload -> 'title') = 'string'
+                                      AND NOT EXISTS (SELECT 1 FROM kb_event_field_redactions r
+                                                       WHERE r.event_id = e.id AND r.path = 'title')
+                                   THEN 'titles'
+                                 -- A doc_type value is a type name, not authored text.
+                                 WHEN t.name IN ('property_set', 'property_asserted')
+                                      AND e.payload ? 'value'
+                                      AND e.payload ->> 'property_key' IS DISTINCT FROM 'doc_type'
+                                      AND NOT EXISTS (SELECT 1 FROM kb_event_field_redactions r
+                                                       WHERE r.event_id = e.id AND r.path = 'value')
+                                   THEN 'property values'
+                                 WHEN t.name = 'relationship_asserted'
+                                      AND NOT _erasure_label_is_kept(e.payload -> 'label')
+                                      AND NOT EXISTS (SELECT 1 FROM kb_event_field_redactions r
+                                                       WHERE r.event_id = e.id AND r.path = 'label')
+                                   THEN 'edge labels'
+                                 WHEN t.name = 'citation_audited'
+                                      AND jsonb_typeof(e.payload -> 'reason') = 'string'
+                                      AND NOT EXISTS (SELECT 1 FROM kb_event_field_redactions r
+                                                       WHERE r.event_id = e.id AND r.path = 'reason')
+                                   THEN 'citation-audit reasons'
+                                 -- A rename the subject made of a context outside the estate: the
+                                 -- estate's own are rewritten by this act.
+                                 WHEN t.name = 'context_renamed'
+                                      AND NOT (e.producing_anchor_id = ANY(v_governed))
+                                      AND jsonb_typeof(e.payload -> 'to_name') = 'string'
+                                      AND NOT EXISTS (SELECT 1 FROM kb_event_field_redactions r
+                                                       WHERE r.event_id = e.id AND r.path = 'to_name')
+                                   THEN 'context names'
+                               END AS cls
+                          FROM kb_events e
+                          JOIN kb_event_types t ON t.id = e.event_type_id
+                          JOIN kb_entities en ON en.id = e.emitter_entity_id
+                         WHERE en.profile_id = p_subject
+                           AND t.name IN ('resource_created', 'resource_updated', 'property_set',
+                                          'property_asserted', 'relationship_asserted',
+                                          'citation_audited', 'context_renamed')
+                           AND NOT (e.id = ANY(v_trail))) s
+                 WHERE s.cls IS NOT NULL
+                 GROUP BY s.cls) c), '[]'::jsonb);
+    SELECT count(*) INTO v_n FROM kb_contexts c
+     WHERE c.shape_materialized_event_id IS NOT NULL
+       AND ( c.id IN (
+               SELECT r.home_anchor_id FROM kb_cogmap_regions r
+                 JOIN kb_cogmap_region_members mem ON mem.region_id = r.id
+                WHERE r.home_anchor_table = 'kb_contexts' AND NOT r.is_folded
+                  AND mem.member_table = 'kb_resources'
+                  AND mem.member_id = ANY(v_resources))
+          -- Every estate context (R1).
+          OR c.id = ANY(v_governed) );
+    IF v_n > 0 THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_contexts.shape_materialized_event_id',
+                'outcome','recompute-marked'));
+    END IF;
+
+    -- The charters held (2a), and the resources already complete (2f), named in the record.
+    v_targets := v_targets || coalesce((
+        SELECT jsonb_agg(jsonb_build_object(
+                   'target',  'kb_resources',
+                   'outcome', 'charter ' || ch || '; held until map-grain erasure (task '
+                              || '01a0e960-0ca2-7f42-b33e-1ed19b024e6b); text emptied; title, '
+                              || 'properties, edges and ledger kept') ORDER BY ch)
+          FROM unnest(v_charters) AS ch), '[]'::jsonb);
+    IF (v_counts->>'skip')::integer > 0 THEN
+        v_targets := v_targets || jsonb_build_array(jsonb_build_object(
+            'target',  'kb_resources',
+            'outcome', (v_counts->>'skip') || ' estate resource(s) already erased and complete; skipped'));
+    END IF;
+
+    RETURN jsonb_build_object(
+        'estate_contexts', (SELECT coalesce(jsonb_agg(g ORDER BY g), '[]'::jsonb) FROM unnest(v_governed) AS g),
+        'estate',          v_counts || jsonb_build_object('total', jsonb_array_length(v_resrows)),
+        'resources',       v_resrows,
+        'charters',        (SELECT coalesce(jsonb_agg(ch ORDER BY ch), '[]'::jsonb) FROM unnest(v_charters) AS ch),
+        'redacted_hashes', to_jsonb(v_hashes),
+        'targets',         v_targets,
+        'already_erased',  (v_prof.tombstoned_at IS NOT NULL),
+        'blob_strikes',    v_strikes,
+        'contexts_to_erase', (SELECT coalesce(jsonb_agg(g ORDER BY g), '[]'::jsonb) FROM unnest(v_ctx_erase) AS g),
+        'redacted_fields',   v_ctx_fields,
+        'retained',          v_retained);
+END;
+$function$;
+
 -- The rows redactions already emptied: their hash becomes the hash of what they now hold.
+-- BACKFILL BEGIN
 UPDATE kb_block_content
    SET content_hash = encode(sha256(''::bytea), 'hex')
  WHERE content = ''
    AND content_hash <> encode(sha256(''::bytea), 'hex');
+-- BACKFILL END
 
+-- One validating ADD under the lock above: a NOT VALID / VALIDATE split buys nothing inside one
+-- transaction. The scan compares each row's content with '', which needs no detoast.
+-- CHECK BEGIN
 ALTER TABLE kb_block_content
     ADD CONSTRAINT ck_kb_block_content_emptied_hash
-        CHECK (content <> '' OR content_hash = encode(sha256(''::bytea), 'hex')) NOT VALID;
-ALTER TABLE kb_block_content VALIDATE CONSTRAINT ck_kb_block_content_emptied_hash;
+        CHECK (content <> '' OR content_hash = encode(sha256(''::bytea), 'hex'));
+-- CHECK END
 
 COMMENT ON CONSTRAINT ck_kb_block_content_emptied_hash ON kb_block_content IS
     'An emptied row (content = '''') carries sha256(''''), never the hash of the bytes it held. Every '
     'redaction sets both in one UPDATE (20261127000010); this refuses a path that forgets the hash.';
 
 COMMENT ON COLUMN kb_block_content.content_hash IS
-    'Bare sha256 hex of content''s bytes (the Rust sha256_hex twin). Served as bytes_sha256 on the '
-    '/blocks read. A redaction empties content and recomputes this in the same statement, so it never '
-    'names erased text.';
+    'Bare sha256 hex of content''s bytes (the Rust sha256_hex twin). Served as bytes_sha256 on reads. '
+    'A redaction empties content and recomputes this in the same statement, so it never names '
+    'erased text. Chunk hashes are a different column and are kept by design.';
 
 SELECT declare_migration(
     20261127000010,
     'additive',
-    'Replaces _resource_erasure_apply_redaction and _erasure_apply_redaction (signatures unchanged) so '
-    'the UPDATE that empties kb_block_content.content also sets content_hash to sha256(''''); backfills '
-    'rows already emptied; adds a CHECK that an emptied row carries that hash; comments the column. No '
-    'column, type or result shape moves. A binary without this change never writes an empty block '
-    'with another hash (only these two functions empty a row), so it is unaffected; the only observable '
-    'change is that an erased row''s stored hash no longer names its old text.'
+    'Replaces _resource_erasure_apply_redaction, _erasure_apply_redaction, '
+    'principal_erasure_survey_plan and resource_erasure_survey_plan (signatures unchanged): the '
+    'UPDATE that empties kb_block_content.content also sets content_hash to sha256(''''); the plans '
+    'skip already-emptied rows when gathering text hashes, and the resource plan''s record no longer '
+    'says block hashes are kept. Backfills rows already emptied and adds a CHECK that an emptied row '
+    'carries that hash, under a SHARE ROW EXCLUSIVE lock. No column, type or result shape moves. A '
+    'binary without this change is unaffected: only these database functions empty a row. An erasure '
+    'blocked mid-statement on the lock when this commits is refused by the CHECK and is re-run.'
 );

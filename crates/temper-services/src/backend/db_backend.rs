@@ -999,9 +999,14 @@ impl DbBackend {
                    bc.content_hash AS "bytes_sha256?",
                    octet_length(bc.content)::bigint AS "bytes_len?"
               FROM kb_content_blocks b
+              -- The revision the block points to (two revisions can share a `created`), so
+              -- the chunk merkle and the bytes below are one revision's. A legacy block with
+              -- no pointer falls back to its newest revision.
               JOIN LATERAL (
                      SELECT block_body_hash FROM kb_block_revisions
-                      WHERE block_id = b.id ORDER BY created DESC LIMIT 1
+                      WHERE block_id = b.id
+                      ORDER BY (id = b.current_revision_id) DESC NULLS LAST, created DESC
+                      LIMIT 1
                    ) r ON true
               -- The current revision's bytes: the ones the verbatim readback serves and
               -- resource_bytes_merkle folds, so a client verifies against what it was served.

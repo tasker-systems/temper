@@ -221,8 +221,12 @@ pub struct ResourceView {
     ///
     /// Beside `content` or `byte_blocks` (a read that asked for the `body` or `byte-blocks`
     /// section) it is computed in the same statement as them, so all three always describe the
-    /// same bytes. Otherwise it is read with the rest of this view, in one statement; a write after
-    /// the read can move it, exactly as it moves `updated`.
+    /// same bytes. The rest of the view (`body_storage`, `body_hash`, `updated`) comes from the
+    /// identity read just before, so a write landing between the two can leave those describing
+    /// the earlier body: `body_storage` may then read `verbatim` beside an absent `bytes_merkle`,
+    /// or the reverse. Trust `bytes_merkle` and `byte_blocks` for the bytes beside them. Without
+    /// either section it is read with the rest of this view, in one statement; a write after the
+    /// read can move it, exactly as it moves `updated`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bytes_merkle: Option<String>,
     /// The body's block boundaries and per-block byte hashes, in `seq` order: what a client needs
@@ -456,8 +460,10 @@ impl ResourceSection {
     /// `body`**: `embedding_status_batch` is ONE statement for the whole page (`fill_sections`),
     /// so a page of statuses costs what one row costs and carries no body-style unboundedness.
     ///
-    /// **[`Self::ByteBlocks`] is absent for the reason `body` is**: the boundaries are a
-    /// per-resource read of every live block, and a page of them scales with the corpus.
+    /// **[`Self::ByteBlocks`] is absent because its payload is a list per row**: a page of
+    /// boundaries scales with rows times blocks. The `bytes_merkle` every row already carries is
+    /// one value, though computing it reads each row's live blocks' stored hashes (an index scan
+    /// per row, no body read) — the per-row cost the list's byte identity was accepted at.
     pub const LIST: [Self; 2] = [Self::OpenMeta, Self::EmbeddingStatus];
 
     /// Parse a section name against a door's accepted set, naming **only that set** in the
