@@ -103,14 +103,15 @@ fn concrete(template: &str) -> String {
     out
 }
 
-/// A digest of every row in every table in `public`. Any insert, update or delete changes it.
+/// A digest of every row in every user table, in every schema (`public` and `sensitivity` both).
+/// Any insert, update or delete changes it.
 async fn database_fingerprint(pool: &PgPool) -> String {
     sqlx::query_scalar::<_, String>(
-        "SELECT md5(string_agg(t.tablename || ':' || (xpath('/row/d/text()', \
+        "SELECT md5(string_agg(t.schemaname || '.' || t.tablename || ':' || (xpath('/row/d/text()', \
              query_to_xml(format('SELECT md5(coalesce(string_agg(x::text, %L ORDER BY x::text), %L)) \
                                   AS d FROM %I.%I x', '|', '', t.schemaname, t.tablename), \
-                          false, true, '')))[1]::text, ',' ORDER BY t.tablename)) \
-           FROM pg_tables t WHERE t.schemaname = 'public'",
+                          false, true, '')))[1]::text, ',' ORDER BY t.schemaname, t.tablename)) \
+           FROM pg_tables t WHERE t.schemaname NOT IN ('pg_catalog', 'information_schema')",
     )
     .fetch_one(pool)
     .await
@@ -223,8 +224,7 @@ async fn every_write_route_refuses_each_policed_header_and_writes_nothing(pool: 
     );
 }
 
-// FAILS IF: the layer refuses a write that carries neither header, or the internal function's
-// app (`create_internal_app`) is built without it.
+// FAILS IF: the layer refuses a write that carries neither header.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn without_the_header_no_write_route_meets_the_refusal(pool: PgPool) {
     let app = common::setup_test_app(pool.clone()).await;
@@ -299,9 +299,17 @@ async fn reads_ignore_the_headers(pool: PgPool) {
                 .iter()
                 .copied()
                 .chain([("if-none-match", IF_MATCH_VALUE)]);
+            // The status without any header is the baseline. A HEAD answer has no body, so the
+            // status is the only thing that can show a refusal there.
+            let (plain, _) = send(&app, verb, &path, Some(&token), None, &json!({})).await;
             for header in headers {
                 let (status, text) =
                     send(&app, verb, &path, Some(&token), Some(header), &json!({})).await;
+                assert_eq!(
+                    status, plain,
+                    "{verb} {template} with {} answered {status}, without it {plain}: {text}",
+                    header.0
+                );
                 for (policed, _) in POLICED {
                     assert!(
                         !is_precondition_refusal(&text, policed),

@@ -6,8 +6,8 @@ status   = "signal-only"
 body = '''
 No handler evaluates If-Match or If-Unmodified-Since, so until now a write carrying either was
 applied as if the header were absent: the client's lost-update guard was silently dropped. Every
-request whose method is not GET, HEAD, OPTIONS or TRACE that carries either header is now refused
-with 400 under the existing BAD_REQUEST envelope, whose message names the header (never its value)
+request to a mounted route whose method is not GET, HEAD, OPTIONS or TRACE that carries either
+header is now refused with 400 (an unmatched path still answers the fallback's 404) under the existing BAD_REQUEST envelope, whose message names the header (never its value)
 and says the route does not honour it. Nothing is applied. The refusal comes from one layer that
 every route of both app builders passes through (temper_api::middleware::preconditions), outside
 the auth stacks, so an anonymous caller is refused the same way.

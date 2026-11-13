@@ -12,6 +12,12 @@
 //! method that is not safe (`GET`, `HEAD`, `OPTIONS`, `TRACE`) is treated as a write. Safe methods
 //! pass untouched with or without the headers, and `If-None-Match` is never examined.
 //!
+//! The method is the whole test, deliberately. A few doors change state on `GET` (the Vercel
+//! crons, which mount one handler on `GET` and `POST`, and the Slack link callback), and their
+//! `GET` is not policed: a cron or an OAuth redirect sends no precondition, and policing a read by
+//! route would make this layer a list of routes, which is the thing that can miss one. Their
+//! `POST` is policed like any other write.
+//!
 //! It sits outside every tier's auth stack, so the refusal costs no lookup and depends on nothing
 //! about the caller: the answer is about the request's shape, not about any resource.
 //!
@@ -99,13 +105,12 @@ mod tests {
 
     #[test]
     fn refusal_names_the_header_and_not_its_value() {
-        for header in &POLICED {
+        for (header, name) in POLICED.iter().zip(["If-Match", "If-Unmodified-Since"]) {
             let message = refusal(header).to_string();
             assert!(
-                message.contains("If-Match") || message.contains("If-Unmodified-Since"),
+                message.contains(&format!("the {name} header is not honoured on this route")),
                 "{message}"
             );
-            assert!(message.contains("not honoured on this route"), "{message}");
         }
     }
 
