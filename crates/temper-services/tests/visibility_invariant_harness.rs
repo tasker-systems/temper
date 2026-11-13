@@ -1253,6 +1253,53 @@ async fn i2_write_implies_read(pool: &PgPool, w: &World) -> sqlx::Result<Vec<Vio
             }
         }
 
+        // modify⇒visible: can_modify_resource ⇒ membership in resources_visible_to, the set the
+        // resource read door (GET /api/resources/{id}) answers from. Today this follows from I1
+        // (can(read) ⇔ resources_visible_to) and the two I2 checks above (can(write) ⇒ can(read),
+        // can(write) ⇔ can_modify_resource). It is asserted directly so that a change breaking
+        // any link in that chain fails here, by name: a write refusal that echoes current values
+        // is only safe if no one can modify what they cannot read.
+        //
+        // Excluded case, not reachable from this world: a map in the admin-only regime (bound to
+        // temper-system or the gating team) is authored by a system admin alone, and
+        // resources_visible_to has no admin arm, so an admin who is not on the gating team could
+        // modify that map's nodes without reading them. That gap is known and tracked to be closed
+        // separately. This world holds no system admin and binds no map to an instance team, so
+        // the case cannot arise; the premise is checked below, so a world that grows an admin
+        // must decide the exclusion here instead of failing on it by surprise.
+        let visible = scalar_set(
+            pool,
+            "SELECT resource_id FROM resources_visible_to($1) ORDER BY 1",
+            profile,
+        )
+        .await?;
+        for (id, modify) in &can_modify {
+            if *modify && !visible.contains(id) {
+                violations.push(format!(
+                    "I2: can_modify_resource without resources_visible_to — profile {who}, \
+                     resource {id}"
+                ));
+            }
+        }
+    }
+
+    // The exclusion's premise: no world profile is a system admin.
+    let admins: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT p FROM unnest($1::uuid[]) AS p WHERE is_system_admin(p) ORDER BY 1",
+    )
+    .bind(&w.profiles)
+    .fetch_all(pool)
+    .await?;
+    if !admins.is_empty() {
+        violations.push(format!(
+            "I2: the world holds system admins {admins:?}; modify⇒visible does not yet hold for \
+             an admin on admin-only-regime maps, so exclude that case explicitly before adding one"
+        ));
+    }
+
+    for (p_idx, &profile) in w.profiles.iter().enumerate() {
+        let who = PROFILE_HANDLES[p_idx];
+
         // context write dispatch: can('write', context) ⇔ context_authorable_by_profile
         let can_write_ctx = point_answers(
             pool,
