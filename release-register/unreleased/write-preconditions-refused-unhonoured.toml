@@ -1,0 +1,20 @@
+title    = "A write carrying If-Match or If-Unmodified-Since is refused with 400 instead of applied unconditionally"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http"]
+status   = "signal-only"
+body = '''
+No handler evaluates If-Match or If-Unmodified-Since, so until now a write carrying either was
+applied as if the header were absent: the client's lost-update guard was silently dropped. Every
+request whose method is not GET, HEAD, OPTIONS or TRACE that carries either header is now refused
+with 400 under the existing BAD_REQUEST envelope, whose message names the header (never its value)
+and says the route does not honour it. Nothing is applied. The refusal comes from one layer that
+every route of both app builders passes through (temper_api::middleware::preconditions), outside
+the auth stacks, so an anonymous caller is refused the same way.
+
+Who observes: a client sending If-Match or If-Unmodified-Since on a write now gets 400 instead of
+an unconditional write. Reads are untouched with or without either header, a Vercel cron's GET
+included, and If-None-Match is never examined. No response shape changes and openapi.json is
+unchanged. A route that later honours one of the headers is listed in the layer's HONOURED table.
+Witnesses: crates/temper-api/tests/unhonoured_precondition_test.rs. Release relevance: signal-only.
+'''
