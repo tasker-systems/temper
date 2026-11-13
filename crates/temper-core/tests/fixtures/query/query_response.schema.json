@@ -113,7 +113,7 @@
       "oneOf": [
         {
           "const": "verbatim",
-          "description": "Every live block carries its raw source bytes; the body reads back byte-for-byte.",
+          "description": "Every live block carries its raw source bytes; the body reads back byte-for-byte.\n\nByte-exact on two paths: `markdown` from `GET /api/resources/{id}/content`, and `content`\nin `temper --format json resource show` (with or without `--fields content`), which is\nthat `markdown` unchanged. The `toon` output of `resource show` is not: it prints the\nfrontmatter, then `---\\n`, then the body plus one extra trailing `\\n`.",
           "type": "string"
         },
         {

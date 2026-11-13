@@ -352,6 +352,8 @@ Options:
 ```text
 Show a resource's content
 
+Output formats. `--format json` returns one document whose `content` key is `GET /api/resources/{id}/content`'s markdown unchanged (`--fields content` keeps the envelope and `id`), so `content` is byte-exact when `body_storage` is `verbatim`. `toon` (the default on a terminal) prints the frontmatter, then `---\n`, then the body plus one extra trailing `\n`: it is not byte-exact, so never hash or diff it.
+
 Usage: temper resource show [OPTIONS] <REF>
 
 Arguments:

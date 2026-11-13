@@ -768,6 +768,12 @@ pub enum ResourceAction {
         r#ref: String,
     },
     /// Show a resource's content
+    ///
+    /// Output formats. `--format json` returns one document whose `content` key is
+    /// `GET /api/resources/{id}/content`'s markdown unchanged (`--fields content` keeps the
+    /// envelope and `id`), so `content` is byte-exact when `body_storage` is `verbatim`. `toon`
+    /// (the default on a terminal) prints the frontmatter, then `---\n`, then the body plus one
+    /// extra trailing `\n`: it is not byte-exact, so never hash or diff it.
     Show {
         /// Resource ref: a UUID or the decorated `slug-<uuid>` form
         r#ref: String,
@@ -1530,9 +1536,12 @@ pub enum ContextAction {
     ///
     /// The consumer contract: record `through` before reading the bodies an answer points at, never
     /// after, or a change that commits in between is lost. An edge entry names the edge, not its
-    /// endpoints, and an edge is in the feed of its own home context only. `resource_departed` is a
-    /// deletion or a move, without saying which. A facet scrub is not announced, so re-read
-    /// `resource facets` periodically. `resource list --ids` is the cheap periodic sweep.
+    /// endpoints, and an edge is in the feed of its own home context only. That home is the
+    /// source's home when the edge is asserted: a later move of the source leaves the edge where
+    /// it was. `resource_departed` is a deletion or a move, without saying which. A property scrub
+    /// is not announced, so re-read what you hold periodically: `open_meta` keys with
+    /// `resource list --ids … --with open-meta`, facet asserts with `resource facets`, which
+    /// covers facet asserts only. `resource list --ids` is the cheap periodic sweep.
     Changes {
         /// Context ref: a UUID or `@me/slug` / `+team-slug/slug`.
         context: String,
@@ -3263,6 +3272,10 @@ pub enum EdgeAction {
     ///
     /// Sends a `POST /api/relationships` request. Returns a `edge_handle`
     /// that identifies the relationship chain for subsequent retype/reweight/fold.
+    ///
+    /// The edge is homed in the source's home as it stands when the edge is asserted. A later
+    /// move of the source does not move the edge: it stays homed, and in that context's change
+    /// feed, where it was asserted.
     Assert {
         /// Source resource ref: a UUID or the decorated `slug-<uuid>` form
         source: String,
