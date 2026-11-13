@@ -393,6 +393,8 @@ fn plan_local_segments(content: &str, budget: usize) -> Vec<LocalSegment> {
             let info = temper_core::types::ingest::SegmentInfo {
                 seq: seg.seq,
                 content_hash: temper_ingest::merkle::block_merkle(&chunk_hashes),
+                bytes_sha256: None,
+                bytes_len: None,
             };
             LocalSegment {
                 text: seg.text,

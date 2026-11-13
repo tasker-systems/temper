@@ -837,9 +837,13 @@ async fn closure_reads_emptied_content_and_a_changed_title_never_a_missing_hash(
     assert_eq!(closed_by(&pool, emptied).await, vec![None]);
     assert_eq!(closed_by(&pool, r).await, vec![None]);
 
-    // Principal erasure's footprint on content (20260911000000:69, :143): the content emptied, its
-    // hash kept in the row and recorded in kb_erased_content.
-    sqlx::query("UPDATE kb_block_content SET content = '' WHERE block_revision_id = $1")
+    // Principal erasure's footprint on content (20260911000000:69, :143): the content emptied, the
+    // row's hash recomputed over the empty bytes (20261127000010), the old hash recorded in
+    // kb_erased_content.
+    sqlx::query(
+        "UPDATE kb_block_content SET content = '', content_hash = encode(sha256(''::bytea), 'hex') \
+          WHERE block_revision_id = $1",
+    )
         .bind(emptied)
         .execute(&pool)
         .await
@@ -862,7 +866,7 @@ async fn closure_reads_emptied_content_and_a_changed_title_never_a_missing_hash(
     .unwrap();
     assert!(
         hash_kept,
-        "the source keeps its hash, so a hash-absence rule would not close"
+        "the source still carries a hash (sha256 of ''), so a hash-absence rule would not close"
     );
     assert_eq!(
         closed_by(&pool, emptied).await,
@@ -1679,7 +1683,10 @@ async fn content_a_scrub_or_principal_erasure_emptied_gives_up_its_digests_after
         .execute(&pool)
         .await
         .expect("the scrub completes");
-    sqlx::query("UPDATE kb_block_content SET content = '' WHERE block_revision_id = $1")
+    sqlx::query(
+        "UPDATE kb_block_content SET content = '', content_hash = encode(sha256(''::bytea), 'hex') \
+          WHERE block_revision_id = $1",
+    )
         .bind(governed)
         .execute(&pool)
         .await

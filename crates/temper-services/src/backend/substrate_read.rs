@@ -696,13 +696,29 @@ async fn fill_sections(
             );
         }
     }
+    // Byte identity rides ONE statement per view: the body's own when the body was asked for,
+    // else a boundaries-and-merkle statement. Either way the merkle it carries replaces the
+    // identity read's value, so `content`, `byte_blocks` and `bytes_merkle` always describe the
+    // same bytes; an intervening write could have made the identity read's value describe others.
+    let want_blocks = sections.contains(ResourceSection::ByteBlocks);
     if sections.contains(ResourceSection::Body) {
         for view in views.iter_mut() {
-            view.content = Some(
-                readback::body(pool, profile_id, view.id)
-                    .await
-                    .map_err(|e| ApiError::from(map_readback_err(e)))?,
-            );
+            let read = readback::body_with_byte_identity(pool, profile_id, view.id)
+                .await
+                .map_err(|e| ApiError::from(map_readback_err(e)))?;
+            view.content = Some(read.content);
+            view.bytes_merkle = read.bytes_merkle;
+            if want_blocks {
+                view.byte_blocks = read.byte_blocks;
+            }
+        }
+    } else if want_blocks {
+        for view in views.iter_mut() {
+            let (bytes_merkle, byte_blocks) = readback::byte_identity(pool, profile_id, view.id)
+                .await
+                .map_err(|e| ApiError::from(map_readback_err(e)))?;
+            view.bytes_merkle = bytes_merkle;
+            view.byte_blocks = byte_blocks;
         }
     }
     Ok(())

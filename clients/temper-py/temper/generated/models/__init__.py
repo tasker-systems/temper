@@ -113,6 +113,7 @@ from temper.generated.models.bound_kind import BoundKind
 from temper.generated.models.bridge import Bridge
 from temper.generated.models.bulk_reassign_ack import BulkReassignAck
 from temper.generated.models.bulk_reassign_request import BulkReassignRequest
+from temper.generated.models.byte_block import ByteBlock
 from temper.generated.models.change_role_request import ChangeRoleRequest
 from temper.generated.models.charter_block import CharterBlock
 from temper.generated.models.charter_disposition import CharterDisposition

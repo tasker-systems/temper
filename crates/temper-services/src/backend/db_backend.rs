@@ -995,12 +995,22 @@ impl DbBackend {
     ) -> Result<BlocksResponse, TemperError> {
         let rows = sqlx::query!(
             r#"
-            SELECT b.seq AS "seq!", r.block_body_hash AS "block_body_hash!"
+            SELECT b.seq AS "seq!", r.block_body_hash AS "block_body_hash!",
+                   bc.content_hash AS "bytes_sha256?",
+                   octet_length(bc.content)::bigint AS "bytes_len?"
               FROM kb_content_blocks b
+              -- The revision the block points to (two revisions can share a `created`), so
+              -- the chunk merkle and the bytes below are one revision's. A legacy block with
+              -- no pointer falls back to its newest revision.
               JOIN LATERAL (
                      SELECT block_body_hash FROM kb_block_revisions
-                      WHERE block_id = b.id ORDER BY created DESC LIMIT 1
+                      WHERE block_id = b.id
+                      ORDER BY (id = b.current_revision_id) DESC NULLS LAST, created DESC
+                      LIMIT 1
                    ) r ON true
+              -- The current revision's bytes: the ones the verbatim readback serves and
+              -- resource_bytes_merkle folds, so a client verifies against what it was served.
+              LEFT JOIN kb_block_content bc ON bc.block_revision_id = b.current_revision_id
              WHERE b.resource_id = $1 AND NOT b.is_folded
              ORDER BY b.seq
             "#,
@@ -1029,6 +1039,8 @@ impl DbBackend {
                 .map(|r| SegmentInfo {
                     seq: r.seq as u32,
                     content_hash: r.block_body_hash,
+                    bytes_sha256: r.bytes_sha256,
+                    bytes_len: r.bytes_len.map(|n| n as u64),
                 })
                 .collect(),
             body_hash,

@@ -1246,7 +1246,7 @@ mod tests {
     /// Since 20261021100000 resource erasure empties the estate row by row and admits no hash to
     /// the erased-content set (D5 of the person-erasure design, ruled Q1): the set gains none.
     #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-    async fn text_content_is_emptied_hashes_kept_and_no_estate_hash_enters_the_set(
+    async fn text_content_is_emptied_chunk_hashes_kept_and_no_estate_hash_enters_the_set(
         pool: sqlx::PgPool,
     ) {
         let (subject, _) = insert_profile(&pool).await;
@@ -1298,7 +1298,14 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(bc, "", "the verbatim bytes are emptied");
-        assert_eq!(bh, world.block_hash, "the block hash is retained");
+        // The stored hash follows the bytes (20261127000010): an emptied row names sha256(""),
+        // never the text it held. The block MERKLE below is over chunk hashes and is kept.
+        assert_eq!(
+            bh,
+            temper_core::hash::sha256_hex(b""),
+            "the stored block hash is recomputed over the emptied bytes"
+        );
+        assert_ne!(bh, world.block_hash, "no hash of the erased bytes survives");
 
         // D3: body_hash is computed over hashes, never bytes — the act does not touch it.
         let (body_hash,): (String,) =

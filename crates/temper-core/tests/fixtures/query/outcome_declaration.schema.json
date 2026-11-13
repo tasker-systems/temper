@@ -35,6 +35,11 @@
                   "const": "embedding-status",
                   "description": "Derived embedding-readiness — [`ResourceView::embedding_status`].",
                   "type": "string"
+                },
+                {
+                  "const": "byte-blocks",
+                  "description": "The verbatim body's block boundaries and byte hashes — [`ResourceView::byte_blocks`].",
+                  "type": "string"
                 }
               ]
             },
