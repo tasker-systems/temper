@@ -1,0 +1,37 @@
+title    = "A write carrying If-Match, If-None-Match or If-Unmodified-Since is refused with 400 PRECONDITION_NOT_HONOURED instead of applied unconditionally"
+pr       = "self"
+classes  = ["additive", "behavioral"]
+surfaces = ["http"]
+status   = "signal-only"
+body = '''
+What changed: no handler evaluates If-Match, If-None-Match or If-Unmodified-Since, so until now a
+write carrying one was applied as if the header were absent. The client's guard was silently
+dropped: a lost-update check, or create-if-absent for If-None-Match: *. Now every request to a
+temper-api route whose method is not GET, HEAD, OPTIONS or TRACE and that carries one of them is
+refused with 400 under the new error code PRECONDITION_NOT_HONOURED, in the existing error
+envelope, and nothing is applied. The message names the header, never its value; the value is
+never read, so *, an empty value and an unparseable date are refused alike. The refusal comes from
+one layer over every route of both temper-api app builders (temper_api::middleware::preconditions).
+The MCP function (/mcp, /oauth/register) and the Node OAuth functions are outside it and still
+honour none of these headers.
+
+Who observes it: a client sending one of these headers on a write gets 400 instead of an
+unconditional write. Because the layer runs before routing's method fallback and before
+authentication, two answers change for a header-bearing request:
+- a method the path does not mount gets 400 where it got 405;
+- an anonymous request gets 400 where it got 401.
+Unchanged: reads with or without these headers, a Vercel cron's GET included, and an unmatched
+path's 404. No first-party client sends any of these headers.
+
+Why additive: the error envelope's code is an open string, and this adds one value to it; no field
+or shape is removed or retyped, and openapi.json is unchanged. Skew holds in both directions. An
+older client meeting the new code reads it as an unrecognised 400 and surfaces the message: a
+refusal it can act on, never a silent apply. A newer client against an older server sees only the
+old behaviour, and no shipped client keys on the code or sends the headers.
+
+Why behavioral: the meaning behind an unchanged shape changed; the same request is now refused
+rather than applied. Review-owned.
+
+Witnesses: crates/temper-api/tests/unhonoured_precondition_test.rs, and the unit cases in
+temper_api::middleware::preconditions. Release relevance: signal-only.
+'''

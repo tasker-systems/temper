@@ -33,7 +33,7 @@ use utoipa::OpenApi;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_swagger_ui::SwaggerUi;
 
-use crate::middleware::{auth, internal_auth, relay_trust, system_access};
+use crate::middleware::{auth, internal_auth, preconditions, relay_trust, system_access};
 use crate::openapi::ApiDoc;
 use admin::admin_routes;
 use auth_only::{auth_only_routes, auth_only_status_routes};
@@ -370,6 +370,12 @@ pub fn create_internal_app(state: AppState) -> Router {
 /// [`create_internal_app`] so both surfaces observe and trace requests identically.
 fn apply_transport_layers(app: Router<AppState>, state: AppState) -> Router {
     let cors = temper_services::cors::cors_layer(&state.config.cors_origins);
+
+    // Applied to every mounted route before the fallback exists, so it is OUTER to each tier's
+    // auth stack (a refused precondition costs no lookup) and INNER to the base layers (the
+    // refusal carries the security headers, the root span and CORS like any other answer). An
+    // unmatched path still meets the fallback's 404. See `middleware::preconditions`.
+    let app = app.layer(from_fn(preconditions::refuse_unhonoured_preconditions));
 
     temper_services::transport::apply_base_layers(app)
         .layer(axum::middleware::from_fn(root_span))
