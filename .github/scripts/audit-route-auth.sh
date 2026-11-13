@@ -250,21 +250,21 @@ require_row 'webhook_intake_routes'      'Group { key: "webhook_intake_routes", 
 # never in apply_transport_layers, where it would run before authentication and answer an
 # anonymous caller 400 instead of its 401.
 MOUNT_BODY="$(fn_body mount_group)"
-# Outside mount_group the layer may appear nowhere in the module: not in apply_transport_layers,
-# create_app or create_internal_app, where it would wrap the authentication stacks.
-for f in apply_transport_layers create_app create_internal_app; do
-  if [[ "$(fn_body "$f")" == *"refuse_unhonoured_preconditions"* ]]; then
-    echo "audit-route-auth: FAIL — precondition placement: refuse_unhonoured_preconditions is applied in $f" >&2
-    echo "  There it runs before every tier's authentication, and an unauthenticated caller sending the" >&2
-    echo "  header is answered 400 instead of its 401. Apply it per group, in mount_group." >&2
-    fail=1
-  fi
-done
-# Inside mount_group: the layer must be the Refused arm's own body (between `Preconditions::Refused =>`
-# and the next arm), and that match must come before apply_tier, so the layer is inside the gates.
+# The layer is applied in exactly one place in the routes module: the body of mount_group's
+# `Preconditions::Refused` arm (cut at the next `Preconditions::` arm), before `apply_tier(`. One
+# occurrence anywhere else (apply_transport_layers, a builder, an apply_tier arm, wrapped around
+# apply_tier's result, or another designation's arm) puts it outside the gates or on the wrong
+# groups. Comment lines are not code and are not counted.
+LAYER_COUNT="$(cat $ROUTES_FILES | grep -v '^[[:space:]]*//' | grep -o 'refuse_unhonoured_preconditions' | wc -l | tr -d ' ')"
 PRE_MOUNT="${MOUNT_BODY%%apply_tier(*}"
 REFUSED_ARM="${PRE_MOUNT#*Preconditions::Refused =>}"
-REFUSED_ARM="${REFUSED_ARM%%Preconditions::InHandler*}"
+REFUSED_ARM="${REFUSED_ARM%%Preconditions::*}"
+if [[ "$LAYER_COUNT" != "1" ]]; then
+  echo "audit-route-auth: FAIL — precondition placement: refuse_unhonoured_preconditions is applied $LAYER_COUNT times in the routes module; exactly one, in mount_group's Refused arm" >&2
+  echo "  Anywhere else (the transport, a builder, a tier arm, around apply_tier) it runs before a gate" >&2
+  echo "  and answers an unauthenticated or refused caller 400 instead of its own answer." >&2
+  fail=1
+fi
 if [[ "$PRE_MOUNT" != *"Preconditions::Refused =>"* || "$REFUSED_ARM" != *"refuse_unhonoured_preconditions"* ]]; then
   echo "audit-route-auth: FAIL — precondition placement: mount_group does not apply refuse_unhonoured_preconditions to Refused groups before apply_tier" >&2
   echo "  Added before the tier it is inside every gate: after require_auth, refuse_machine," >&2

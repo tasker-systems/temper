@@ -131,7 +131,9 @@ pub async fn receive(
     // checked between them, a header would turn "verified, but no connection" into a 400 and tell
     // it apart from "not verified". Both steps so far only read; nothing is written before it. A
     // caller refused at either step gets its 401 exactly as without the header; an accepted one
-    // sending a precondition is refused, not applied unconditionally.
+    // sending a precondition is refused, not applied unconditionally. One refusal comes later and
+    // so is answered 400 when a header is sent: a replayed attestation (step 4), which can only be
+    // presented by a caller that already held a valid one for a provisioned connection.
     preconditions::refuse_unhonoured(&method, &headers)?;
 
     // Observe GitHub's own signature on a receipt for a provisioned GitHub connection, before any

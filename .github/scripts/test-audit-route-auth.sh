@@ -643,7 +643,7 @@ s = s.replace(marker, marker + "\n    let app = app.layer(from_fn(preconditions:
 open(p, "w").write(s)
 PYEOF
 run_test "precondition layer applied in apply_transport_layers: fails" "$FIX" 1 \
-    "refuse_unhonoured_preconditions is applied in apply_transport_layers"
+    "refuse_unhonoured_preconditions is applied 2 times"
 
 # The layer applied AFTER apply_tier would be OUTER to the gates, so a refused caller meets it.
 FIX="${FIXTURE_DIR}/precondition_outside_tier"
@@ -690,7 +690,53 @@ s = s.replace(marker, "    let app = app.layer(from_fn(preconditions::refuse_unh
 open(p, "w").write(s)
 PYEOF
 run_test "precondition layer applied in create_app: fails" "$FIX" 1 \
-    "refuse_unhonoured_preconditions is applied in create_app"
+    "refuse_unhonoured_preconditions is applied 2 times"
+
+# A second, outer layer wrapped around apply_tier's result, with the correct arm left in place.
+FIX="${FIXTURE_DIR}/precondition_around_tier"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = "    apply_tier(router, group.tier, state)\n}"
+assert old in s
+s = s.replace(old, "    apply_tier(router, group.tier, state).layer(from_fn(preconditions::refuse_unhonoured_preconditions))\n}", 1)
+open(p, "w").write(s)
+PYEOF
+run_test "precondition layer also wrapped around apply_tier: fails" "$FIX" 1 \
+    "refuse_unhonoured_preconditions is applied 2 times"
+
+# The layer added inside a tier arm, outside a gate.
+FIX="${FIXTURE_DIR}/precondition_in_tier_arm"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = "Tier::AuthOnly => router.layer(from_fn_with_state(state.clone(), auth::require_auth)),"
+assert old in s
+s = s.replace(old, "Tier::AuthOnly => router.layer(from_fn_with_state(state.clone(), auth::require_auth)).layer(from_fn(preconditions::refuse_unhonoured_preconditions)),", 1)
+open(p, "w").write(s)
+PYEOF
+run_test "precondition layer added in an apply_tier arm: fails" "$FIX" 1 \
+    "refuse_unhonoured_preconditions is applied 2 times"
+
+# The match split so the layer rides the Exempt arm and Refused gets nothing.
+FIX="${FIXTURE_DIR}/precondition_on_exempt_arm"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys, re
+p = sys.argv[1]
+s = open(p).read()
+s, n = re.subn(r"        Preconditions::Refused => \{\n(.*?)\n        \}\n        Preconditions::InHandler \| Preconditions::Exempt\(_\) => router,",
+               r"        Preconditions::Refused => router,\n        Preconditions::Exempt(_) => {\n\1\n        }\n        Preconditions::InHandler => router,",
+               s, count=1, flags=re.S)
+assert n == 1, n
+open(p, "w").write(s)
+PYEOF
+run_test "precondition layer on the Exempt arm: fails" "$FIX" 1 \
+    "does not apply refuse_unhonoured_preconditions to Refused groups before apply_tier"
 
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"
