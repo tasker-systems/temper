@@ -268,9 +268,8 @@ const FIXED_GRANTS: [GrantSpec; 3] = [
 // grant on the same pair, so the generator's stream, and every other grant an older seed draws,
 // is unchanged by them.
 const MODIFY_ARM_GRANTS: [GrantSpec; 2] = [
-    // frank (on sec) cannot read or author ctx-shared through membership, so this grant is his
-    // only authorship of it. Not dana: a grant on the context would also make it readable to
-    // her and hollow the share arm's read witness.
+    // frank cannot author ctx-shared through membership (it belongs to eng, and he is a watcher on
+    // sec, not a member of eng), so this grant is his only authorship of it.
     GrantSpec {
         subject: Subject::Context(C_SHARED),
         principal: Principal::Profile(P_FRANK),
@@ -2300,57 +2299,75 @@ async fn the_world_exercises_its_arms(pool: PgPool) -> sqlx::Result<()> {
     // vacuous on an arm: the owner home, a team-owned context authored by direct membership, a
     // context write grant, and a cogmap write grant (the last two also through the container
     // cascade). Each check runs in a rolled-back transaction that first deletes every grant on the
-    // `strip` subject, so a randomized grant cannot answer for the arm being witnessed.
+    // resource and its container except the witness's own fixed grant on the container (`keep`),
+    // so no randomized grant, profile or team, can answer for the arm being witnessed.
     let none = Uuid::nil();
-    for (gate, who, subject, strip, arm) in [
+    let (r_ctx_eng, r_shared, r_map_grant) = (
+        w.resources[R_CTX_ENG],
+        w.resources[R_SHARED],
+        w.resources[R_MAP_GRANT],
+    );
+    let (c_eng, c_shared, m_grant) = (w.contexts[C_ENG], w.contexts[C_SHARED], w.cogmaps[M_GRANT]);
+    for (gate, who, subject, strip, keep, arm) in [
         (
             "can_modify_resource",
             P_OWNER,
-            w.resources[R_CTX_ENG],
-            w.resources[R_CTX_ENG],
+            r_ctx_eng,
+            [r_ctx_eng, c_eng],
+            none,
             "owner home",
         ),
         (
             "context_authorable_by_profile",
             P_GINA,
-            w.contexts[C_ENG],
-            w.contexts[C_ENG],
+            c_eng,
+            [c_eng, c_eng],
+            none,
             "team-owned context, maintainer",
         ),
         (
             "context_authorable_by_profile",
             P_FRANK,
-            w.contexts[C_SHARED],
-            none,
+            c_shared,
+            [c_shared, c_shared],
+            c_shared,
             "context write grant",
         ),
         (
             "can_modify_resource",
             P_FRANK,
-            w.resources[R_SHARED],
-            w.resources[R_SHARED],
+            r_shared,
+            [r_shared, c_shared],
+            c_shared,
             "context write grant, cascaded",
         ),
         (
             "cogmap_authorable_by_profile",
             P_GINA,
-            w.cogmaps[M_GRANT],
-            none,
+            m_grant,
+            [m_grant, m_grant],
+            m_grant,
             "cogmap write grant",
         ),
         (
             "can_modify_resource",
             P_GINA,
-            w.resources[R_MAP_GRANT],
-            w.resources[R_MAP_GRANT],
+            r_map_grant,
+            [r_map_grant, m_grant],
+            m_grant,
             "cogmap write grant, cascaded",
         ),
     ] {
         let mut tx = pool.begin().await?;
-        sqlx::query("DELETE FROM kb_access_grants WHERE subject_id = $1")
-            .bind(strip)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "DELETE FROM kb_access_grants WHERE subject_id = ANY($1) \
+               AND NOT (subject_id = $2 AND principal_table = 'kb_profiles' AND principal_id = $3)",
+        )
+        .bind(&strip[..])
+        .bind(keep)
+        .bind(w.profiles[who])
+        .execute(&mut *tx)
+        .await?;
         let admitted: bool = sqlx::query_scalar(&format!("SELECT {gate}($1, $2)"))
             .bind(w.profiles[who])
             .bind(subject)
