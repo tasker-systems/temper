@@ -232,7 +232,7 @@ const EDGE_SPECS: [(usize, usize, Anchor, bool); 4] = [
 
 // Seed-independent grants, so the interesting arms exist on EVERY seed. The randomized matrix
 // (below) adds on top of these.
-const FIXED_GRANTS: [GrantSpec; 5] = [
+const FIXED_GRANTS: [GrantSpec; 3] = [
     // r_ancestor_grant to ENG: dana reaches it only through the ancestor walk.
     GrantSpec {
         subject: Subject::Resource(R_ANCESTOR_GRANT),
@@ -251,33 +251,41 @@ const FIXED_GRANTS: [GrantSpec; 5] = [
         can_delete: false,
         can_grant: false,
     },
-    // A write grant on a LIVE context to a profile that cannot author it by membership (dana is
-    // on squad, the context belongs to eng): the context-grant arm of can_modify_resource's
-    // container cascade, so modify⇒visible (I2) holds that arm on every seed.
-    GrantSpec {
-        subject: Subject::Context(C_SHARED),
-        principal: Principal::Profile(P_DANA),
-        can_read: true,
-        can_write: true,
-        can_delete: false,
-        can_grant: false,
-    },
-    // A write grant on a cogmap outside the admin-only regime: the cogmap-grant arm of the same
-    // cascade. gina, not dana, so dana's read-only grant above stays the cogmap READ witness.
-    GrantSpec {
-        subject: Subject::Cogmap(M_GRANT),
-        principal: Principal::Profile(P_GINA),
-        can_read: true,
-        can_write: true,
-        can_delete: false,
-        can_grant: false,
-    },
     // Anchored to the tombstoned team: must confer nothing (I4), duality-covered via I1.
     GrantSpec {
         subject: Subject::Resource(R_CTX_SEC),
         principal: Principal::Team(T_GHOST),
         can_read: true,
         can_write: false,
+        can_delete: false,
+        can_grant: false,
+    },
+];
+
+// Write grants that keep two modify arms live on every seed: the context-grant and cogmap-grant
+// arms of can_modify_resource's container cascade, which the randomized matrix does not reliably
+// reach. They are applied AFTER the randomized matrix (see Plan::generate), replacing any drawn
+// grant on the same pair, so the generator's stream, and every other grant an older seed draws,
+// is unchanged by them.
+const MODIFY_ARM_GRANTS: [GrantSpec; 2] = [
+    // frank (on sec) cannot read or author ctx-shared through membership, so this grant is his
+    // only authorship of it. Not dana: a grant on the context would also make it readable to
+    // her and hollow the share arm's read witness.
+    GrantSpec {
+        subject: Subject::Context(C_SHARED),
+        principal: Principal::Profile(P_FRANK),
+        can_read: true,
+        can_write: true,
+        can_delete: false,
+        can_grant: false,
+    },
+    // A cogmap outside the admin-only regime. gina, not dana, so dana's read-only grant stays the
+    // cogmap READ witness.
+    GrantSpec {
+        subject: Subject::Cogmap(M_GRANT),
+        principal: Principal::Profile(P_GINA),
+        can_read: true,
+        can_write: true,
         can_delete: false,
         can_grant: false,
     },
@@ -411,6 +419,12 @@ impl Plan {
             if rng.chance(30) {
                 extra_memberships.push((profile, T_PAYROLL, "member"));
             }
+        }
+
+        // The modify-arm grants, last, after every draw: each replaces any drawn grant on its pair.
+        for fixed in MODIFY_ARM_GRANTS {
+            grants.retain(|g| (g.subject, g.principal) != (fixed.subject, fixed.principal));
+            grants.push(fixed);
         }
 
         Plan {
@@ -2284,11 +2298,15 @@ async fn the_world_exercises_its_arms(pool: PgPool) -> sqlx::Result<()> {
 
     // The modify arms, each by a seed-independent fixture, so modify⇒visible (I2) is never
     // vacuous on an arm: the owner home, a team-owned context authored by direct membership, a
-    // context write grant, and a cogmap write grant (the last two through the container cascade).
-    for (gate, who, subject, arm) in [
+    // context write grant, and a cogmap write grant (the last two also through the container
+    // cascade). Each check runs in a rolled-back transaction that first deletes every grant on the
+    // `strip` subject, so a randomized grant cannot answer for the arm being witnessed.
+    let none = Uuid::nil();
+    for (gate, who, subject, strip, arm) in [
         (
             "can_modify_resource",
             P_OWNER,
+            w.resources[R_CTX_ENG],
             w.resources[R_CTX_ENG],
             "owner home",
         ),
@@ -2296,17 +2314,20 @@ async fn the_world_exercises_its_arms(pool: PgPool) -> sqlx::Result<()> {
             "context_authorable_by_profile",
             P_GINA,
             w.contexts[C_ENG],
+            w.contexts[C_ENG],
             "team-owned context, maintainer",
         ),
         (
             "context_authorable_by_profile",
-            P_DANA,
+            P_FRANK,
             w.contexts[C_SHARED],
+            none,
             "context write grant",
         ),
         (
             "can_modify_resource",
-            P_DANA,
+            P_FRANK,
+            w.resources[R_SHARED],
             w.resources[R_SHARED],
             "context write grant, cascaded",
         ),
@@ -2314,20 +2335,28 @@ async fn the_world_exercises_its_arms(pool: PgPool) -> sqlx::Result<()> {
             "cogmap_authorable_by_profile",
             P_GINA,
             w.cogmaps[M_GRANT],
+            none,
             "cogmap write grant",
         ),
         (
             "can_modify_resource",
             P_GINA,
             w.resources[R_MAP_GRANT],
+            w.resources[R_MAP_GRANT],
             "cogmap write grant, cascaded",
         ),
     ] {
+        let mut tx = pool.begin().await?;
+        sqlx::query("DELETE FROM kb_access_grants WHERE subject_id = $1")
+            .bind(strip)
+            .execute(&mut *tx)
+            .await?;
         let admitted: bool = sqlx::query_scalar(&format!("SELECT {gate}($1, $2)"))
             .bind(w.profiles[who])
             .bind(subject)
-            .fetch_one(&pool)
+            .fetch_one(&mut *tx)
             .await?;
+        tx.rollback().await?;
         assert!(
             admitted,
             "modify arm broken: {gate} refuses {} via {arm}",
