@@ -268,18 +268,19 @@ const FIXED_GRANTS: [GrantSpec; 3] = [
 // grant on the same pair, so the generator's stream, and every other grant an older seed draws,
 // is unchanged by them.
 const MODIFY_ARM_GRANTS: [GrantSpec; 2] = [
-    // frank cannot author ctx-shared through membership (it belongs to eng, and he is a watcher on
-    // sec, not a member of eng), so this grant is his only authorship of it.
+    // henry's only team is the tombstoned ghost, which confers nothing, so this grant is his only
+    // way to author or to read ctx-shared: both sides of modify⇒visible run through the grant.
     GrantSpec {
         subject: Subject::Context(C_SHARED),
-        principal: Principal::Profile(P_FRANK),
+        principal: Principal::Profile(P_HENRY),
         can_read: true,
         can_write: true,
         can_delete: false,
         can_grant: false,
     },
-    // A cogmap outside the admin-only regime. gina, not dana, so dana's read-only grant stays the
-    // cogmap READ witness.
+    // A cogmap outside the admin-only regime and joined to no team, so with the resource's own
+    // grants stripped (the arm witness) gina reads and authors it through this grant alone. gina,
+    // not dana, so dana's read-only grant stays the cogmap READ witness.
     GrantSpec {
         subject: Subject::Cogmap(M_GRANT),
         principal: Principal::Profile(P_GINA),
@@ -2295,12 +2296,14 @@ async fn the_world_exercises_its_arms(pool: PgPool) -> sqlx::Result<()> {
         "negative control broken: dana sees into the owner's personal context"
     );
 
-    // The modify arms, each by a seed-independent fixture, so modify⇒visible (I2) is never
-    // vacuous on an arm: the owner home, a team-owned context authored by direct membership, a
-    // context write grant, and a cogmap write grant (the last two also through the container
-    // cascade). Each check runs in a rolled-back transaction that first deletes every grant on the
-    // resource and its container except the witness's own fixed grant on the container (`keep`),
-    // so no randomized grant, profile or team, can answer for the arm being witnessed.
+    // Modify-arm witnesses, seed-independent: the owner home, a team-owned context authored by
+    // direct membership, a context write grant and a cogmap write grant, the last three also
+    // through can_modify_resource's container cascade. Each runs in a rolled-back transaction that
+    // first deletes every grant on the resource and its container except the witness's own fixed
+    // grant (`keep`), so no randomized grant answers for the arm; it then asserts the gate admits
+    // AND that the subject stays readable, so modify⇒visible is witnessed through the arm alone.
+    // These pin admission, not refusal: the resource-level profile and team write-grant arms, and
+    // any widening of a gate past its fixtures, are reached only through the randomized matrix.
     let none = Uuid::nil();
     let (r_ctx_eng, r_shared, r_map_grant) = (
         w.resources[R_CTX_ENG],
@@ -2308,9 +2311,14 @@ async fn the_world_exercises_its_arms(pool: PgPool) -> sqlx::Result<()> {
         w.resources[R_MAP_GRANT],
     );
     let (c_eng, c_shared, m_grant) = (w.contexts[C_ENG], w.contexts[C_SHARED], w.cogmaps[M_GRANT]);
-    for (gate, who, subject, strip, keep, arm) in [
+    const READ_RESOURCE: &str =
+        "EXISTS (SELECT 1 FROM resources_visible_to($1) v WHERE v.resource_id = $2)";
+    const READ_CONTEXT: &str = "can('kb_profiles', $1, 'read', 'kb_contexts', $2)";
+    const READ_COGMAP: &str = "can('kb_profiles', $1, 'read', 'kb_cogmaps', $2)";
+    for (gate, read, who, subject, strip, keep, arm) in [
         (
             "can_modify_resource",
+            READ_RESOURCE,
             P_OWNER,
             r_ctx_eng,
             [r_ctx_eng, c_eng],
@@ -2319,6 +2327,7 @@ async fn the_world_exercises_its_arms(pool: PgPool) -> sqlx::Result<()> {
         ),
         (
             "context_authorable_by_profile",
+            READ_CONTEXT,
             P_GINA,
             c_eng,
             [c_eng, c_eng],
@@ -2326,8 +2335,18 @@ async fn the_world_exercises_its_arms(pool: PgPool) -> sqlx::Result<()> {
             "team-owned context, maintainer",
         ),
         (
+            "can_modify_resource",
+            READ_RESOURCE,
+            P_GINA,
+            r_ctx_eng,
+            [r_ctx_eng, c_eng],
+            none,
+            "team-owned context, cascaded",
+        ),
+        (
             "context_authorable_by_profile",
-            P_FRANK,
+            READ_CONTEXT,
+            P_HENRY,
             c_shared,
             [c_shared, c_shared],
             c_shared,
@@ -2335,7 +2354,8 @@ async fn the_world_exercises_its_arms(pool: PgPool) -> sqlx::Result<()> {
         ),
         (
             "can_modify_resource",
-            P_FRANK,
+            READ_RESOURCE,
+            P_HENRY,
             r_shared,
             [r_shared, c_shared],
             c_shared,
@@ -2343,6 +2363,7 @@ async fn the_world_exercises_its_arms(pool: PgPool) -> sqlx::Result<()> {
         ),
         (
             "cogmap_authorable_by_profile",
+            READ_COGMAP,
             P_GINA,
             m_grant,
             [m_grant, m_grant],
@@ -2351,6 +2372,7 @@ async fn the_world_exercises_its_arms(pool: PgPool) -> sqlx::Result<()> {
         ),
         (
             "can_modify_resource",
+            READ_RESOURCE,
             P_GINA,
             r_map_grant,
             [r_map_grant, m_grant],
@@ -2368,15 +2390,21 @@ async fn the_world_exercises_its_arms(pool: PgPool) -> sqlx::Result<()> {
         .bind(w.profiles[who])
         .execute(&mut *tx)
         .await?;
-        let admitted: bool = sqlx::query_scalar(&format!("SELECT {gate}($1, $2)"))
-            .bind(w.profiles[who])
-            .bind(subject)
-            .fetch_one(&mut *tx)
-            .await?;
+        let (admitted, reads): (bool, bool) =
+            sqlx::query_as(&format!("SELECT {gate}($1, $2), {read}"))
+                .bind(w.profiles[who])
+                .bind(subject)
+                .fetch_one(&mut *tx)
+                .await?;
         tx.rollback().await?;
         assert!(
             admitted,
             "modify arm broken: {gate} refuses {} via {arm}",
+            PROFILE_HANDLES[who]
+        );
+        assert!(
+            reads,
+            "modify⇒visible broken: {} may modify via {arm} but cannot read the subject",
             PROFILE_HANDLES[who]
         );
     }
