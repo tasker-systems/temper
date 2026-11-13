@@ -52,6 +52,11 @@ updates:
     schedule:
       interval: weekly
     groups:
+      # sigstore-trust-root, -types and -verify share types across their APIs, so a 0.x bump of one
+      # alone fails to compile. Every update type is grouped (a 0.x minor counts as a major) and the
+      # group sits before `cargo` because the first matching group wins.
+      sigstore:
+        patterns: ["sigstore-*"]
       cargo:
         update-types: ["minor", "patch"]
     commit-message:
