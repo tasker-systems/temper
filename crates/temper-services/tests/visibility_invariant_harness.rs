@@ -232,7 +232,7 @@ const EDGE_SPECS: [(usize, usize, Anchor, bool); 4] = [
 
 // Seed-independent grants, so the interesting arms exist on EVERY seed. The randomized matrix
 // (below) adds on top of these.
-const FIXED_GRANTS: [GrantSpec; 3] = [
+const FIXED_GRANTS: [GrantSpec; 5] = [
     // r_ancestor_grant to ENG: dana reaches it only through the ancestor walk.
     GrantSpec {
         subject: Subject::Resource(R_ANCESTOR_GRANT),
@@ -248,6 +248,27 @@ const FIXED_GRANTS: [GrantSpec; 3] = [
         principal: Principal::Profile(P_DANA),
         can_read: true,
         can_write: false,
+        can_delete: false,
+        can_grant: false,
+    },
+    // A write grant on a LIVE context to a profile that cannot author it by membership (dana is
+    // on squad, the context belongs to eng): the context-grant arm of can_modify_resource's
+    // container cascade, so modify⇒visible (I2) holds that arm on every seed.
+    GrantSpec {
+        subject: Subject::Context(C_SHARED),
+        principal: Principal::Profile(P_DANA),
+        can_read: true,
+        can_write: true,
+        can_delete: false,
+        can_grant: false,
+    },
+    // A write grant on a cogmap outside the admin-only regime: the cogmap-grant arm of the same
+    // cascade. gina, not dana, so dana's read-only grant above stays the cogmap READ witness.
+    GrantSpec {
+        subject: Subject::Cogmap(M_GRANT),
+        principal: Principal::Profile(P_GINA),
+        can_read: true,
+        can_write: true,
         can_delete: false,
         can_grant: false,
     },
@@ -2260,6 +2281,59 @@ async fn the_world_exercises_its_arms(pool: PgPool) -> sqlx::Result<()> {
         !sees(P_DANA, R_PERSONAL).await?,
         "negative control broken: dana sees into the owner's personal context"
     );
+
+    // The modify arms, each by a seed-independent fixture, so modify⇒visible (I2) is never
+    // vacuous on an arm: the owner home, a team-owned context authored by direct membership, a
+    // context write grant, and a cogmap write grant (the last two through the container cascade).
+    for (gate, who, subject, arm) in [
+        (
+            "can_modify_resource",
+            P_OWNER,
+            w.resources[R_CTX_ENG],
+            "owner home",
+        ),
+        (
+            "context_authorable_by_profile",
+            P_GINA,
+            w.contexts[C_ENG],
+            "team-owned context, maintainer",
+        ),
+        (
+            "context_authorable_by_profile",
+            P_DANA,
+            w.contexts[C_SHARED],
+            "context write grant",
+        ),
+        (
+            "can_modify_resource",
+            P_DANA,
+            w.resources[R_SHARED],
+            "context write grant, cascaded",
+        ),
+        (
+            "cogmap_authorable_by_profile",
+            P_GINA,
+            w.cogmaps[M_GRANT],
+            "cogmap write grant",
+        ),
+        (
+            "can_modify_resource",
+            P_GINA,
+            w.resources[R_MAP_GRANT],
+            "cogmap write grant, cascaded",
+        ),
+    ] {
+        let admitted: bool = sqlx::query_scalar(&format!("SELECT {gate}($1, $2)"))
+            .bind(w.profiles[who])
+            .bind(subject)
+            .fetch_one(&pool)
+            .await?;
+        assert!(
+            admitted,
+            "modify arm broken: {gate} refuses {} via {arm}",
+            PROFILE_HANDLES[who]
+        );
+    }
 
     // the machine interior arm: a resource homed IN the bridge map is accessible to the map's
     // machine principal regardless of teams or grants.
