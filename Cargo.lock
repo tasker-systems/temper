@@ -4413,7 +4413,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5420,7 +5420,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "442bc4f672eef040397e65d4ae34ca1b1dc8140b1a35b1246e0b219ce5f4e571"
 dependencies = [
  "jiff",
- "sigstore-types",
+ "sigstore-types 0.15.1",
  "thiserror 2.0.21",
 ]
 
@@ -5436,7 +5436,25 @@ dependencies = [
  "futures-io",
  "jiff",
  "rustls-pki-types",
- "sigstore-types",
+ "sigstore-types 0.15.1",
+ "spki 0.7.3",
+ "thiserror 2.0.21",
+ "x509-cert",
+]
+
+[[package]]
+name = "sigstore-crypto"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c6164a3fe384de936dbf73c7141f56c017a3fe02ec7107e67297e61b235fdd9"
+dependencies = [
+ "aws-lc-rs",
+ "const-oid 0.9.6",
+ "der 0.7.10",
+ "futures-io",
+ "jiff",
+ "rustls-pki-types",
+ "sigstore-types 0.16.0",
  "spki 0.7.3",
  "thiserror 2.0.21",
  "x509-cert",
@@ -5448,8 +5466,8 @@ version = "0.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "22923d7f1a03e21a3313a4a2e6a6485959327a2a084df09b4fff45810e46f08a"
 dependencies = [
- "sigstore-crypto",
- "sigstore-types",
+ "sigstore-crypto 0.15.1",
+ "sigstore-types 0.15.1",
  "thiserror 2.0.21",
 ]
 
@@ -5465,7 +5483,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sigstore-merkle",
- "sigstore-types",
+ "sigstore-types 0.15.1",
  "thiserror 2.0.21",
 ]
 
@@ -5475,13 +5493,28 @@ version = "0.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9a49e390a5f52e0b05f1a17820be5ac747a3890bb9f54156d8a1147508420a7"
 dependencies = [
+ "jiff",
+ "serde",
+ "serde_json",
+ "sigstore-crypto 0.15.1",
+ "sigstore-tuf 0.15.1",
+ "sigstore-types 0.15.1",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "sigstore-trust-root"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6111e00e097bb764b6fe9e6205bce3d582c3594512450ee69837753f759c55e2"
+dependencies = [
  "directories",
  "jiff",
  "serde",
  "serde_json",
- "sigstore-crypto",
- "sigstore-tuf",
- "sigstore-types",
+ "sigstore-crypto 0.16.0",
+ "sigstore-tuf 0.16.0",
+ "sigstore-types 0.16.0",
  "thiserror 2.0.21",
  "tokio",
 ]
@@ -5499,8 +5532,8 @@ dependencies = [
  "jiff",
  "rustls-pki-types",
  "rustls-webpki",
- "sigstore-crypto",
- "sigstore-types",
+ "sigstore-crypto 0.15.1",
+ "sigstore-types 0.15.1",
  "thiserror 2.0.21",
  "tracing",
  "x509-cert",
@@ -5518,8 +5551,28 @@ dependencies = [
  "reqwest 0.13.2",
  "serde",
  "serde_json",
- "sigstore-crypto",
- "sigstore-types",
+ "sigstore-crypto 0.15.1",
+ "sigstore-types 0.15.1",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "sigstore-tuf"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ef81a8257fcb3873e1e85f29d33d642f962c9faa7d69a05ac2c754dcd460301"
+dependencies = [
+ "glob",
+ "hex",
+ "jiff",
+ "reqwest 0.13.2",
+ "serde",
+ "serde_json",
+ "sigstore-crypto 0.16.0",
+ "sigstore-types 0.16.0",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
@@ -5531,6 +5584,21 @@ name = "sigstore-types"
 version = "0.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eec330f1cdb4c7ec6628ef43165c42978480d4213af70567e67e2891ec9072d8"
+dependencies = [
+ "base64 0.23.1",
+ "hex",
+ "jiff",
+ "pem 4.0.0",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "sigstore-types"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4f0e9a87bcaf654b5d3b8540eaf78040cae72eb59157bb1765f56684fb0e3e9"
 dependencies = [
  "base64 0.23.1",
  "hex",
@@ -5558,12 +5626,12 @@ dependencies = [
  "serde_json",
  "serde_json_canonicalizer",
  "sigstore-bundle",
- "sigstore-crypto",
+ "sigstore-crypto 0.15.1",
  "sigstore-merkle",
  "sigstore-rekor",
- "sigstore-trust-root",
+ "sigstore-trust-root 0.15.1",
  "sigstore-tsa",
- "sigstore-types",
+ "sigstore-types 0.15.1",
  "thiserror 2.0.21",
  "tls_codec",
  "tracing",
@@ -6189,8 +6257,8 @@ dependencies = [
  "sha2 0.11.1",
  "shell-words",
  "shlex 2.0.1",
- "sigstore-trust-root",
- "sigstore-types",
+ "sigstore-trust-root 0.16.0",
+ "sigstore-types 0.15.1",
  "sigstore-verify",
  "similar",
  "temp-env",
@@ -7729,7 +7797,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
