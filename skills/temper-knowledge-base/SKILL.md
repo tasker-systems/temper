@@ -77,6 +77,7 @@ tool call against a Temper server, which is authoritative — there is no local 
 | `working-a-goal.md` | Taking up, resuming, advancing, decomposing or closing a goal |
 | `implementation-grounding.md` | Writing a plan, writing code from one, briefing a subagent, or deciding what review a change owes |
 | `data-artifacts.md` | Storing structured data a later session must get back whole |
+| `coordinating-through-records.md` | Agents sharing work through records: claims, heartbeats, outcomes, wakes |
 | `memories.md` | Reading, authoring, correcting or superseding a `memory` |
 
 ## Declared gaps
