@@ -224,10 +224,14 @@ history. A value that changed and changed back would pass, but a fresh `C` per a
 cannot happen on `claim_id`.
 
 {% if surface == "mcp" -%}
-**Spell `expect` exactly.** A misspelled top-level argument (`expects`) is currently ignored
-without an error, and the write lands unguarded.
+**A misspelled argument is refused, never ignored.** A call carrying an argument its tool does not
+declare (`expects` for `expect`) is an error result (`isError: true`) that names the unknown key
+and lists the ones the tool takes. Nothing is written, so correct the spelling and send it again.
+{%- else -%}
+**A misspelled flag is refused, never ignored.** `--expects` for `--expect` is a usage error (exit
+code 2) that suggests the right flag. Nothing is sent.
+{%- endif %}
 
-{% endif -%}
 **Spell the guarded key exactly too.** A misspelled key inside the expectation reads as absent, so
 an absence guard on it always holds.
 
