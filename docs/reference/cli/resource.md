@@ -559,6 +559,12 @@ Options:
       --content-block <CONTENT_BLOCK>
           Which content block the body revise + `--sources` target (a block UUID). Omit to address the resource's sole body block (the default); required to revise a resource that has more than one block. The block must belong to the resource and be non-folded
 
+      --expect <JSON>
+          Write only if these meta values hold now, as a JSON object: '{"open":{"KEY":VALUE},"managed":{"temper-KEY":VALUE}}'. A top-level null means absent, and a key need not be one this write sets. If any does not hold, nothing is written, the exit code is 1, and `--format json` prints code PRECONDITION_FAILED with each failed key and its current value in `details.failed`. Guard on a value unique to you: a current value equal to your own means an earlier attempt of yours landed
+
+      --expect-absent <TIER:KEY>
+          Write only if this key is absent now: `open:<key>` or `managed:<key>`. Repeatable, and combined with --expect; the same as naming the key with null there. A misspelled key reads as absent, so its guard always holds
+
       --invocation <INVOCATION>
           Correlate this act with an open invocation envelope (its ref/UUID from `invocation open`)
 
@@ -737,11 +743,17 @@ Options:
       --embed-threads <N>
           ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
 
-      --invocation <INVOCATION>
-          Correlate this act with an open invocation envelope (its ref/UUID from `invocation open`)
+      --expect <JSON>
+          Write only if these meta values hold now, as a JSON object: '{"open":{"KEY":VALUE},"managed":{"temper-KEY":VALUE}}'. A top-level null means absent, and a key need not be one this write sets. If any does not hold, nothing is written, the exit code is 1, and `--format json` prints code PRECONDITION_FAILED with each failed key and its current value in `details.failed`. Guard on a value unique to you: a current value equal to your own means an earlier attempt of yours landed
 
       --color <COLOR>
           Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+      --expect-absent <TIER:KEY>
+          Write only if this key is absent now: `open:<key>` or `managed:<key>`. Repeatable, and combined with --expect; the same as naming the key with null there. A misspelled key reads as absent, so its guard always holds
+
+      --invocation <INVOCATION>
+          Correlate this act with an open invocation envelope (its ref/UUID from `invocation open`)
 
       --correlation <CORRELATION>
           Stitch this write into an act-grain thread shared with other writes (a bare UUID you mint). Provenance only — it never authorizes. Omit and the event self-roots

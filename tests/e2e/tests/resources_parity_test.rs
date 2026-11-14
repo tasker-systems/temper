@@ -640,8 +640,10 @@ async fn annotate_returns_the_provenance_rows_it_recorded(pool: PgPool) {
 
 // ── update_resource_meta ────────────────────────────────────────────
 
-/// The meta-only path answers `{updated: true, id}` and the write is visible on the
-/// next read. The doc type is `task` because the managed vocabulary is doc-type-scoped
+/// The meta-only path answers `{updated: true, id, view}`, where `view` is the write's own
+/// answer carrying the change, and the write is visible on the next read. The `view` member is a
+/// deliberate change to this pin: the tool now returns what the write left, so a claimant need
+/// not re-read to see it. The doc type is `task` because the managed vocabulary is doc-type-scoped
 /// — `temper-stage` belongs to task/goal, and a session carrying it is refused.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn update_meta_answers_the_ack_and_lands_the_change(pool: PgPool) {
@@ -669,7 +671,18 @@ async fn update_meta_answers_the_ack_and_lands_the_change(pool: PgPool) {
         .await
         .expect("meta update lands"),
     );
-    assert_eq!(ack, json!({ "updated": true, "id": json!(id) }));
+    assert_eq!(ack["updated"], json!(true), "{ack}");
+    assert_eq!(ack["id"], json!(id), "{ack}");
+    assert_eq!(
+        ack.as_object().map(|o| o.len()),
+        Some(3),
+        "exactly updated, id and view: {ack}"
+    );
+    assert_eq!(ack["view"]["id"], json!(id), "{ack}");
+    assert_eq!(
+        ack["view"]["managed_meta"]["temper-stage"], "done",
+        "the view is the write's own answer: {ack}"
+    );
 
     let after = one_text(
         &temper_mcp::tools::resources::get_resource(&svc, &parts, input(json!({ "id": id })))

@@ -21,16 +21,14 @@ who may modify a resource it cannot read gets the 404 GET answers, never a 412. 
 carries current values only to readers, and never an actor, time, event or id.
 
 Clients: the three generated SDKs (temper-ts, temper-py, temper-rb) gain the request field, the
-four schemas and ErrorDetail.precondition. The CLI's cloud translator forwards a command's expect;
-no CLI flag or MCP input sets one yet.
+four schemas and ErrorDetail.precondition. The CLI's cloud translator forwards a command's expect.
+The MCP and CLI doors are entry conditional-meta-writes-mcp-cli.
 
 Why additive: one optional request field on two payloads, one optional error property, one new
 error-code value. openapi.json grows against the 0.6 pin (check-openapi-pin: grew). An older client
 sends no expect and is unaffected.
 
-Why behavioral, and the rollback silence: rolling the API back past this release silently disarms
-conditional writes. An older server does not know `expect`, ignores it, and applies the write
-unconditionally with a 200. DEPLOYING.md says so.
+Why behavioral: a guarded write may now be refused where the same write without the guard lands.
 
 Witnesses: crates/temper-services/tests/meta_precondition_test.rs and
 crates/temper-api/tests/meta_precondition_http_test.rs. Release relevance: signal-only.

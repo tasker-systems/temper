@@ -28,7 +28,8 @@ tools compose, and what a schema cannot warn you about. The server's `tools/list
 **Write a resource**
 - Tool: `create_resource` — a new resource in an existing context; validated, chunked and embedded in one call.
 - Tool: `update_resource` — title or content; only the fields you pass change.
-- Tool: `update_resource_meta` — managed_meta and open_meta only, with no re-chunk or re-embed.
+- Tool: `update_resource_meta` — managed_meta and open_meta only, with no re-chunk or re-embed. Returns `{updated, id, view}`.
+  Both meta writes take `expect` (per-key expected values; `null` is absent) and write nothing when one fails.
 - Tool: `delete_resource` — soft-delete.
 - Tool: `segmented_ingest` — a body too large for one call, or a build that must resume: begin, append, blocks, finalize.
 - Tool: `annotate_resource` — attach provenance sources to a block without touching its text or embeddings.

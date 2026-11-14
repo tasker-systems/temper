@@ -71,6 +71,9 @@ pub fn client_err_to_temper(e: ClientError) -> TemperError {
         ClientError::ResourceBusy { .. } => TemperError::ResourceBusy,
         ClientError::DataArtifactRefusal { message } => TemperError::DataArtifactRefusal(message),
         ClientError::PlanRefused { refusals } => crate::actions::query::refused(refusals),
+        // Core's variant keeps the failed entries, so the JSON payload's `details` carries each
+        // key's current value and `main` can print them; `Api` would keep only the key names.
+        ClientError::PreconditionFailed { failure } => TemperError::PreconditionFailed(failure),
         // The same lift `temper data-artifact ask` makes: the server could not read the body.
         e @ ClientError::UnreadablePlan { .. } => TemperError::BadRequest(e.to_string()),
         // The client's sentence is kept, so a remedy it names (`temper auth login`, or the secret
@@ -527,6 +530,23 @@ mod tests {
             },
             |e| matches!(e, TemperError::PlanRefused { refusals, .. } if refusals.len() == 1),
             "project",
+        );
+        assert_lifts(
+            ClientError::PreconditionFailed {
+                failure: temper_core::types::precondition::PreconditionFailure {
+                    failed: vec![temper_core::types::precondition::FailedExpectation {
+                        tier: temper_core::types::precondition::PreconditionTier::Open,
+                        key: Some("claim_id".into()),
+                        expected: serde_json::Value::Null,
+                        current: serde_json::json!("theirs"),
+                    }],
+                },
+            },
+            |e| {
+                matches!(e, TemperError::PreconditionFailed(f)
+                    if f.failed.len() == 1 && f.failed[0].current == "theirs")
+            },
+            temper_core::error::PRECONDITION_FAILED_CODE,
         );
         assert_lifts(
             ClientError::UnreadablePlan {

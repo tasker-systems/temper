@@ -5,9 +5,14 @@
 //! refusal at once, and `UNREADABLE_PLAN`, its bounded account of a body it could not read.
 //! temper-client types them as [`ClientError::PlanRefused`] and [`ClientError::UnreadablePlan`].
 //! Both tools render them here, so the two doors cannot disagree about what a refusal looks like.
+//!
+//! The meta writes (`update_resource_meta`, `update_resource`) render their conditional-write
+//! refusal here too, [`precondition_failed`], for the same reason: the agent receives the same
+//! typed object the HTTP door puts under `error`, as a tool result's `structuredContent`.
 
 use temper_client::error::ClientError;
-use temper_core::types::error_details::PlanRefusalDetails;
+use temper_core::types::error_details::{ErrorDetail, PlanRefusalDetails};
+use temper_core::types::precondition::PreconditionFailure;
 
 /// What the API refused: the noun the prose names, so an ask's caller is never told about a plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,6 +103,46 @@ pub(crate) fn map_refusable_error(
     }
 }
 
+/// Render a conditional write's refusal: an expectation it carried did not hold, and nothing was
+/// written.
+///
+/// **A tool-execution error, `isError: true`, never a JSON-RPC error.** The refusal carries the
+/// values there now, and rmcp logs every JSON-RPC error at `warn` with its `data` in full, which
+/// would put those values in the host's log stream and trace export. A tool result is logged at
+/// `debug` only. So:
+///
+/// - `structuredContent` is the HTTP door's `error` object ([`ErrorDetail`] with `code`
+///   `PRECONDITION_FAILED` and `precondition` set): an agent branches on
+///   `structuredContent.code` and reads `structuredContent.precondition.failed[*].current`
+///   without parsing English;
+/// - the one text part is [`PreconditionFailure::message`]-based prose naming keys only.
+///
+/// The API logs the refusal (code and key names) at its own door; this hop adds no log line.
+pub(crate) fn precondition_failed(
+    context: &str,
+    failure: PreconditionFailure,
+) -> rmcp::model::CallToolResult {
+    let message = failure.message();
+    let text = format!(
+        "{context}: {message}; nothing was written. `structuredContent.precondition.failed` holds \
+         each failed key with what is there now (a `current` equal to the value you were writing \
+         means an earlier attempt of yours landed). If you cannot see `structuredContent`, read \
+         the resource with `get_resource` and compare"
+    );
+    let detail = ErrorDetail {
+        code: temper_core::error::PRECONDITION_FAILED_CODE.to_string(),
+        message,
+        details: None,
+        precondition: Some(failure),
+    };
+    let mut result =
+        rmcp::model::CallToolResult::error(vec![rmcp::model::ContentBlock::text(text)]);
+    // `ErrorDetail` is plain data; serializing it cannot fail, and if it ever did the agent still
+    // has the key-only text, never a value in a log.
+    result.structured_content = serde_json::to_value(detail).ok();
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,6 +155,36 @@ mod tests {
             detail: "`limit` must be at least 1".to_string(),
             teaches: None,
         }
+    }
+
+    /// **A failed guard is a tool-execution error whose `structuredContent` is the HTTP door's
+    /// `error` object, and whose text carries no value.** FAILS IF it is rendered as a JSON-RPC
+    /// error (which rmcp logs with its data), the structured content is dropped or reshaped, or a
+    /// value reaches the text.
+    #[test]
+    fn a_precondition_refusal_is_a_tool_error_carrying_the_http_error_object() {
+        use temper_core::types::precondition::{FailedExpectation, PreconditionTier};
+        let failure = PreconditionFailure {
+            failed: vec![FailedExpectation {
+                tier: PreconditionTier::Open,
+                key: Some("claim_id".into()),
+                expected: serde_json::Value::Null,
+                current: serde_json::json!("claim-of-someone-else"),
+            }],
+        };
+        let result = precondition_failed("update_resource_meta", failure.clone());
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(result.content.len(), 1);
+        let text = &result.content[0].as_text().expect("a text part").text;
+        assert!(text.contains("open.claim_id"), "{text}");
+        assert!(!text.contains("claim-of-someone-else"), "{text}");
+        let data = result
+            .structured_content
+            .expect("the refusal rides structuredContent");
+        assert_eq!(data["code"], "PRECONDITION_FAILED");
+        assert!(data.get("details").is_none(), "{data}");
+        let back: ErrorDetail = serde_json::from_value(data).expect("typed");
+        assert_eq!(back.precondition, Some(failure));
     }
 
     /// **An ask's refusal and an unreadable ask name the ask, never a plan**, and the refusal

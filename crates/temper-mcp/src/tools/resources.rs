@@ -300,6 +300,21 @@ pub struct UpdateResourceInput {
     /// you mean to state the list in full, silent data loss when you meant to add one.
     #[serde(default)]
     pub open_meta_add: Option<serde_json::Value>,
+    /// Optional per-key **expected meta values**: the write lands only if every one holds now,
+    /// judged under the resource's writer lock in the write's own transaction. Shape:
+    /// `{"open": {"<key>": <value>}, "managed": {"temper-<key>": <value>}}`; a top-level `null`
+    /// means "absent". A key need not be one this call writes. If any does not hold, nothing is
+    /// written and the tool answers an error result (`isError: true`) whose `structuredContent`
+    /// has `code` `PRECONDITION_FAILED` and `precondition.failed` listing each key with what is
+    /// there now. Make guarded values
+    /// unique to you (a claim id): a refusal whose `current` is your own value means an earlier
+    /// attempt of yours landed. Not on `facet`, `doc_type`, or identity keys; a key may not be
+    /// both guarded here and added to in `open_meta_add`. Only the named keys are guarded. A
+    /// misspelled key reads as absent, so an
+    /// absence guard on it always holds. This tool's answer is a read taken after the write, so it
+    /// can already show a later writer's value.
+    #[serde(default)]
+    pub expect: Option<temper_core::types::precondition::MetaExpect>,
     /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level
     /// keys; all optional. `confidence` required when any other authorship field is supplied.
     #[serde(flatten)]
@@ -333,6 +348,18 @@ pub struct UpdateResourceMetaInput {
     /// `descriptor`, `date`, …) are advertised for shape/ranking but not required.
     #[schemars(schema_with = "open_meta_input_schema")]
     pub open_meta: serde_json::Value,
+    /// Optional per-key **expected meta values**: the write lands only if every one holds now,
+    /// judged under the resource's writer lock in the write's own transaction. Shape:
+    /// `{"open": {"<key>": <value>}, "managed": {"temper-<key>": <value>}}`; a top-level `null`
+    /// means "absent". A key need not be one this call writes. If any does not hold, nothing is
+    /// written and the tool answers an error result (`isError: true`) whose `structuredContent`
+    /// has `code` `PRECONDITION_FAILED` and `precondition.failed` listing each key with what is
+    /// there now. Make guarded values
+    /// unique to you (a claim id): a refusal whose `current` is your own value means an earlier
+    /// attempt of yours landed. Not on `facet`, `doc_type`, or identity keys. Only the named keys
+    /// are guarded. A misspelled key reads as absent, so an absence guard on it always holds.
+    #[serde(default)]
+    pub expect: Option<temper_core::types::precondition::MetaExpect>,
     /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level
     /// keys; all optional. `confidence` required when any other authorship field is supplied.
     #[serde(flatten)]
@@ -381,6 +408,9 @@ pub struct DeleteResourceResponse {
 pub struct UpdateResourceMetaResponse {
     pub updated: bool,
     pub id: Uuid,
+    /// The resource as the write left it, both meta tiers filled: the `PUT /meta` answer itself,
+    /// in the shape `GET /api/resources/{id}/meta` answers.
+    pub view: ResourceView,
 }
 
 /// MCP's `list_resources` envelope — the paging state a caller needs to know whether it is looking
@@ -1072,7 +1102,7 @@ pub async fn update_resource(
     };
 
     let request = temper_workflow::types::resource::ResourceUpdateRequest {
-        expect: None,
+        expect: input.expect,
         title: input.title.clone(),
         managed_meta: Some(managed_meta),
         open_meta: input.open_meta,
@@ -1089,35 +1119,40 @@ pub async fn update_resource(
         act: input.act,
     };
 
-    client
-        .resources()
-        .update(input.id, &request)
-        .await
-        .across_auth(|e| match e {
-            // Arm-for-arm from the direct binding: the gate's sentence names the withheld
-            // capability; missing and not-modifiable share the Forbidden face on this path.
-            ClientError::ForbiddenDetail { message } => {
-                rmcp::ErrorData::invalid_params(message, None)
-            }
-            ClientError::Forbidden => rmcp::ErrorData::invalid_params(
-                "Resource not found or not modifiable".to_string(),
-                None,
-            ),
-            ClientError::NotFound { message } => {
-                rmcp::ErrorData::invalid_params(format!("Resource not found: {message}"), None)
-            }
-            // A folded content block under write addressing: the defined gone state, not a
-            // server fault — the row persists as history, the address is not writable.
-            ClientError::Gone { message } => rmcp::ErrorData::invalid_params(message, None),
-            ClientError::ResourceErased { id } => erased_error(id),
-            ClientError::Server {
-                status: 400,
-                message,
-            } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
-            other => {
-                rmcp::ErrorData::internal_error(format!("Failed to update resource: {other}"), None)
-            }
-        })?;
+    // A failed guard is answered as a tool result, never through `across_auth`'s JSON-RPC
+    // errors (see `refusals::precondition_failed`).
+    let answer = match client.resources().update(input.id, &request).await {
+        Err(ClientError::PreconditionFailed { failure }) => {
+            return Ok(super::refusals::precondition_failed(
+                "update_resource",
+                failure,
+            ))
+        }
+        other => other,
+    };
+    answer.across_auth(|e| match e {
+        // Arm-for-arm from the direct binding: the gate's sentence names the withheld
+        // capability; missing and not-modifiable share the Forbidden face on this path.
+        ClientError::ForbiddenDetail { message } => rmcp::ErrorData::invalid_params(message, None),
+        ClientError::Forbidden => rmcp::ErrorData::invalid_params(
+            "Resource not found or not modifiable".to_string(),
+            None,
+        ),
+        ClientError::NotFound { message } => {
+            rmcp::ErrorData::invalid_params(format!("Resource not found: {message}"), None)
+        }
+        // A folded content block under write addressing: the defined gone state, not a
+        // server fault — the row persists as history, the address is not writable.
+        ClientError::Gone { message } => rmcp::ErrorData::invalid_params(message, None),
+        ClientError::ResourceErased { id } => erased_error(id),
+        ClientError::Server {
+            status: 400,
+            message,
+        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        other => {
+            rmcp::ErrorData::internal_error(format!("Failed to update resource: {other}"), None)
+        }
+    })?;
 
     // Return the enriched current state, read back through the same door `get_resource` uses.
     let (enriched, _) = enriched_view(&client, input.id, false).await?;
@@ -1199,7 +1234,7 @@ pub async fn update_resource_meta(
     // the id from the path and the backend dropped caller-supplied hashes (recomputed
     // server-side, Phase 5) — so they carry named placeholders, not claims.
     let payload = temper_core::types::managed_meta::MetaUpdatePayload {
-        expect: None,
+        expect: input.expect,
         resource_id: ResourceId::from(input.id),
         managed_meta: input.managed_meta,
         open_meta: input.open_meta,
@@ -1208,35 +1243,43 @@ pub async fn update_resource_meta(
         act: input.act,
     };
 
-    client
-        .resources()
-        .update_meta(input.id, &payload)
-        .await
-        .across_auth(|e| match e {
-            ClientError::ForbiddenDetail { message } => {
-                rmcp::ErrorData::invalid_params(message, None)
-            }
-            ClientError::Forbidden => rmcp::ErrorData::invalid_params(
-                "Resource not found or not modifiable".to_string(),
-                None,
-            ),
-            ClientError::NotFound { message } => {
-                rmcp::ErrorData::invalid_params(format!("Resource not found: {message}"), None)
-            }
-            ClientError::ResourceErased { id } => erased_error(id),
-            ClientError::Server {
-                status: 400,
-                message,
-            } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
-            other => rmcp::ErrorData::internal_error(
-                format!("Failed to update resource meta: {other}"),
-                None,
-            ),
-        })?;
+    // A failed guard is answered as a tool result, never through `across_auth`'s JSON-RPC
+    // errors (see `refusals::precondition_failed`).
+    let answer = match client.resources().update_meta(input.id, &payload).await {
+        Err(ClientError::PreconditionFailed { failure }) => {
+            return Ok(super::refusals::precondition_failed(
+                "update_resource_meta",
+                failure,
+            ))
+        }
+        other => other,
+    };
+    let view = answer.across_auth(|e| match e {
+        ClientError::ForbiddenDetail { message } => rmcp::ErrorData::invalid_params(message, None),
+        ClientError::Forbidden => rmcp::ErrorData::invalid_params(
+            "Resource not found or not modifiable".to_string(),
+            None,
+        ),
+        ClientError::NotFound { message } => {
+            rmcp::ErrorData::invalid_params(format!("Resource not found: {message}"), None)
+        }
+        ClientError::ResourceErased { id } => erased_error(id),
+        ClientError::Server {
+            status: 400,
+            message,
+        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        other => rmcp::ErrorData::internal_error(
+            format!("Failed to update resource meta: {other}"),
+            None,
+        ),
+    })?;
 
+    // The write's own answer, never a second read: a re-read could show a later writer's
+    // value, and a claimant reads this view to see what its write left.
     let response = UpdateResourceMetaResponse {
         updated: true,
         id: input.id,
+        view,
     };
     Ok(CallToolResult::success(vec![
         rmcp::model::ContentBlock::text(to_text(&response)),

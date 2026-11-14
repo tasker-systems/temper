@@ -1055,6 +1055,26 @@ pub fn map_status_to_error(status: StatusCode, body: &str) -> ClientError {
                 parse_error_field(body, "message").unwrap_or_else(|| "conflict".to_owned());
             ClientError::Conflict { message }
         }
+        // Keyed on the CODE, like every typed arm here: only `PRECONDITION_FAILED` carries
+        // `error.precondition`, and any other 412 stays an unclassified status.
+        412 if parse_error_field(body, "code").as_deref()
+            == Some(temper_core::error::PRECONDITION_FAILED_CODE) =>
+        {
+            match parse_precondition_failure(body) {
+                Some(failure) => ClientError::PreconditionFailed { failure },
+                // The code said a guard failed and the payload did not parse as one. Reporting
+                // the refusal with no entries would read as "refused for nothing"; this is a
+                // contract disagreement, reported as the `PLAN_REFUSED` arm reports its own.
+                None => ClientError::Server {
+                    status: 412,
+                    message: format!(
+                        "server sent {} with an `error.precondition` payload this client could \
+                         not parse — client and server disagree about the refusal contract",
+                        temper_core::error::PRECONDITION_FAILED_CODE
+                    ),
+                },
+            }
+        }
         422 if parse_error_field(body, "code").as_deref() == Some("CONTENT_INTEGRITY") => {
             let message = parse_error_field(body, "message")
                 .unwrap_or_else(|| "content integrity check failed".to_owned());
@@ -1129,6 +1149,18 @@ fn parse_plan_refusals(
     let v: Value = serde_json::from_str(body).ok()?;
     let refusals = v.get("error")?.get("details")?.get("refusals")?;
     serde_json::from_value(refusals.clone()).ok()
+}
+
+/// Parse `error.precondition` from a `PRECONDITION_FAILED` 412 body. `None` when it is absent,
+/// malformed, or lists no failed expectation: a refusal must name what failed.
+fn parse_precondition_failure(
+    body: &str,
+) -> Option<temper_core::types::precondition::PreconditionFailure> {
+    let v: Value = serde_json::from_str(body).ok()?;
+    let precondition = v.get("error")?.get("precondition")?;
+    let failure: temper_core::types::precondition::PreconditionFailure =
+        serde_json::from_value(precondition.clone()).ok()?;
+    (!failure.failed.is_empty()).then_some(failure)
 }
 
 /// Try to extract `{ "error": { "message": "..." } }` from an API error body.
@@ -1398,6 +1430,63 @@ mod tests {
         let result = client.resolve_token();
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), Some(token));
+    }
+
+    /// A `PRECONDITION_FAILED` 412 body, as `ApiError::PreconditionFailed` renders it.
+    fn precondition_failed_body(precondition: &str) -> String {
+        format!(
+            r#"{{"error":{{"code":"PRECONDITION_FAILED","message":"1 precondition failed: open.claim_id","precondition":{precondition}}}}}"#
+        )
+    }
+
+    /// **A failed guard arrives typed, with every entry and its current value, and its `Display`
+    /// names keys only.** FAILS IF the 412 arm is removed (the catch-all makes it `Server`), keyed
+    /// on the status alone, or the variant's `Display` prints a value.
+    #[test]
+    fn a_412_precondition_failed_carries_its_entries_and_displays_no_value() {
+        let body = precondition_failed_body(
+            r#"{"failed":[{"tier":"open","key":"claim_id","expected":null,"current":"claim-of-b"},
+                          {"tier":"managed","key":"temper-stage","expected":"doing","current":"done"}]}"#,
+        );
+        let err = map_status_to_error(status(412), &body);
+        let ClientError::PreconditionFailed { failure } = &err else {
+            panic!("expected PreconditionFailed, got {err:?}");
+        };
+        assert_eq!(failure.failed.len(), 2);
+        assert_eq!(failure.failed[0].key.as_deref(), Some("claim_id"));
+        assert_eq!(failure.failed[0].expected, Value::Null);
+        assert_eq!(failure.failed[0].current, serde_json::json!("claim-of-b"));
+        let shown = err.to_string();
+        assert_eq!(
+            shown,
+            "2 preconditions failed: open.claim_id, managed.temper-stage"
+        );
+        for value in ["claim-of-b", "doing", "done"] {
+            assert!(!shown.contains(value), "Display leaked {value:?}: {shown}");
+        }
+        // Never a transient: the same guard would fail the same way.
+        let relay = HttpClient::new("https://api.example.com", None, TEST_SURFACE, None)
+            .expect("https validates")
+            .with_non_idempotent_attempts(2);
+        assert!(!relay.may_retry(&reqwest::Method::PUT, &err, false, 1));
+    }
+
+    /// A 412 without the code, or with a payload that does not parse (or lists nothing), is not
+    /// passed off as a refusal. FAILS IF the arm accepts an empty or malformed payload as one.
+    #[test]
+    fn a_412_that_is_not_a_readable_precondition_refusal_is_not_one() {
+        let other = r#"{"error":{"code":"SOMETHING_ELSE","message":"no"}}"#;
+        assert!(matches!(
+            map_status_to_error(status(412), other),
+            ClientError::Server { status: 412, .. }
+        ));
+        for precondition in [r#"{"failed":[]}"#, r#"{"failed":"x"}"#, "null"] {
+            let err = map_status_to_error(status(412), &precondition_failed_body(precondition));
+            assert!(
+                matches!(&err, ClientError::Server { status: 412, message } if message.contains("disagree")),
+                "{precondition}: {err:?}"
+            );
+        }
     }
 
     /// A `PLAN_REFUSED` 400 body, as `ApiError::PlanRefused` renders it.

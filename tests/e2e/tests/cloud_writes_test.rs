@@ -311,6 +311,7 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
             temper_cli::commands::resource::update(
                 &cli_config,
                 &temper_cli::commands::resource::UpdateParams {
+                    expect: None,
                     open_meta: None,
                     open_meta_add: None,
                     goal: None,
@@ -484,6 +485,7 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
             temper_cli::commands::resource::update(
                 &cli_config,
                 &temper_cli::commands::resource::UpdateParams {
+                    expect: None,
                     open_meta: None,
                     open_meta_add: None,
                     goal: None,
@@ -655,6 +657,7 @@ async fn cloud_update_body_only_no_managed_meta(pool: sqlx::PgPool) {
             temper_cli::commands::resource::update(
                 &cli_config,
                 &temper_cli::commands::resource::UpdateParams {
+                    expect: None,
                     open_meta: None,
                     open_meta_add: None,
                     goal: None,
@@ -815,6 +818,7 @@ async fn cloud_update_body_at_empty_file_errors_and_does_not_mutate(pool: sqlx::
             temper_cli::commands::resource::update(
                 &cli_config,
                 &temper_cli::commands::resource::UpdateParams {
+                    expect: None,
                     open_meta: None,
                     open_meta_add: None,
                     goal: None,
@@ -980,6 +984,7 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
             temper_cli::commands::resource::update(
                 &cli_config2,
                 &temper_cli::commands::resource::UpdateParams {
+                    expect: None,
                     open_meta: None,
                     open_meta_add: None,
                     goal: None,
@@ -1368,6 +1373,7 @@ async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
             temper_cli::commands::resource::update(
                 &cli_config,
                 &temper_cli::commands::resource::UpdateParams {
+                    expect: None,
                     open_meta: None,
                     open_meta_add: None,
                     goal: None,
@@ -1861,6 +1867,7 @@ async fn cloud_update_admits_a_doctype_the_enum_does_not_name(pool: sqlx::PgPool
             temper_cli::commands::resource::update(
                 &cli_config,
                 &temper_cli::commands::resource::UpdateParams {
+                    expect: None,
                     r#ref: &ref_for_update,
                     type_to: None,
                     context_to: None,

@@ -103,7 +103,7 @@ pub use data_artifact::{
 };
 pub use data_artifact_shape::{EnforcementMode, ShapeDeclareRequest, ShapeView};
 pub use device::DeviceSyncState;
-pub use diagnostics::{Diagnostic, DiagnosticLevel, ErrorPayload};
+pub use diagnostics::{Diagnostic, DiagnosticLevel, ErrorPayload, PayloadDetails};
 pub use element_trail::{ElementEvent, ElementKind, EventTrail};
 pub use event::{EventQuery, EventResponse};
 pub use graph::{EdgeKind, Polarity};

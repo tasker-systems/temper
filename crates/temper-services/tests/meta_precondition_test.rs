@@ -1100,3 +1100,103 @@ async fn a_scrubbed_value_never_surfaces(pool: PgPool) {
     .await
     .expect("the read's value is the current value");
 }
+
+// ── what a writer that states nothing sees ───────────────────────────────────────────────────────
+
+/// **`expect` with a goal clear, on a resource that has no goal**: the guard is judged (a failing
+/// one is refused), a holding one answers 200, and nothing is recorded. "Writes nothing" is judged
+/// on the request's shape, and a goal field counts as a write.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_guarded_goal_clear_on_a_goalless_resource_is_judged_and_records_nothing(pool: PgPool) {
+    let (owner, context) = seed_profile(&pool, "goalless@example.com").await;
+    let resource = create(&pool, owner, context, json!({"lease": "mine"})).await;
+    let be = backend(&pool, owner);
+    let clear_goal = |guard: Value| UpdateResource {
+        open_meta: None,
+        goal: Some(temper_workflow::operations::GoalPatch::Clear),
+        ..patch_open(resource, json!({}), Some(expect(guard)))
+    };
+
+    let n = events(&pool).await;
+    let f = failure(
+        be.update_resource(clear_goal(json!({"open": {"lease": "theirs"}})))
+            .await,
+    );
+    assert_eq!(f.failed[0].current, json!("mine"), "the guard is judged");
+    be.update_resource(clear_goal(json!({"open": {"lease": "mine"}})))
+        .await
+        .expect("a holding guard answers 200");
+    assert_eq!(events(&pool).await, n, "nothing is recorded");
+    assert_eq!(
+        open_tier(&pool, owner, resource).await["lease"],
+        json!("mine")
+    );
+}
+
+/// **A writer that states nothing sees no change.** The same unguarded `PUT /meta` the doors sent
+/// before conditional writes existed records exactly this event list and answers exactly this
+/// shape, pinned literally rather than compared with a guarded write. Every step conditional
+/// writes added to the update path runs only when `expect` is present, so these are the values the
+/// unguarded write produced before.
+///
+/// FAILS IF the unconditional path ever records another event list, or answers with other
+/// top-level members or another open tier. Nested values beyond `open_meta` are not pinned.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_writer_that_states_nothing_sees_no_change(pool: PgPool) {
+    let (owner, context) = seed_profile(&pool, "unguarded@example.com").await;
+    let resource = create(&pool, owner, context, json!({"lease": "mine", "gone": "x"})).await;
+    let be = backend(&pool, owner);
+
+    let n = events(&pool).await;
+    let answer = be
+        .update_resource(put_meta(
+            resource,
+            ManagedMeta::default(),
+            json!({"lease": "next", "gone": null}),
+            None,
+        ))
+        .await
+        .expect("an unguarded write lands")
+        .value;
+    assert_eq!(
+        event_types_since(&pool, n).await,
+        ["property_unset", "property_set"],
+        "the pre-feature event list"
+    );
+    let shape = serde_json::to_value(&answer).unwrap();
+    let mut keys: Vec<&str> = shape
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "body_hash",
+            "body_storage",
+            "context_name",
+            "context_owner_ref",
+            "context_ref",
+            "context_slug",
+            "created",
+            "doc_type_name",
+            "id",
+            "ingest_state",
+            "is_active",
+            "kb_context_id",
+            "managed_meta",
+            "open_meta",
+            "origin_uri",
+            "originator_profile_id",
+            "owner_handle",
+            "owner_profile_id",
+            "ref",
+            "title",
+            "updated",
+        ],
+        "the pre-feature answer shape"
+    );
+    assert_eq!(shape["open_meta"], json!({"lease": "next"}));
+}

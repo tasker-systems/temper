@@ -367,6 +367,7 @@ async fn sources_round_trip_through_cli_api_db(pool: sqlx::PgPool) {
         temp_env::with_vars(cloud_env(&api_url, &token, &global_config), || {
             let sources = [source2_ref];
             let params = temper_cli::commands::resource::UpdateParams {
+                expect: None,
                 open_meta: None,
                 open_meta_add: None,
                 goal: None,
@@ -435,6 +436,7 @@ async fn sources_round_trip_through_cli_api_db(pool: sqlx::PgPool) {
         temp_env::with_vars(cloud_env(&api_url3, &token3, &global_config3), || {
             let sources = [source2_ref3];
             let params = temper_cli::commands::resource::UpdateParams {
+                expect: None,
                 open_meta: None,
                 open_meta_add: None,
                 goal: None,
@@ -838,6 +840,7 @@ async fn content_block_addressing_round_trips_through_cli_api_db(pool: sqlx::PgP
         temp_env::with_vars(cloud_env(&api_url, &token, &global_config), || {
             let sources = [source2_ref];
             let params = temper_cli::commands::resource::UpdateParams {
+                expect: None,
                 open_meta: None,
                 open_meta_add: None,
                 goal: None,
@@ -905,6 +908,7 @@ async fn content_block_addressing_round_trips_through_cli_api_db(pool: sqlx::PgP
         temp_env::with_vars(cloud_env(&api_url, &token, &global_config), || {
             let sources = [source2_ref];
             let params = temper_cli::commands::resource::UpdateParams {
+                expect: None,
                 open_meta: None,
                 open_meta_add: None,
                 goal: None,
